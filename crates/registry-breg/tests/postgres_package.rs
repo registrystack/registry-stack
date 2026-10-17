@@ -2989,7 +2989,7 @@ fn metadata_only_review_source(
         sql_sha256: Vec::new(),
         assertion_sha256: Vec::new(),
         fixture_inventory: Vec::new(),
-        postgres_major: 16,
+        postgres_major: 17,
         row_assertions: Vec::new(),
         final_schema_fingerprint: final_schema_fingerprint.to_owned(),
     };

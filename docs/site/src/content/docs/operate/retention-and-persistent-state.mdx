@@ -176,7 +176,8 @@ that holds no old segments; do not point the new runtime at the old chained file
 
 v0.40.0 does not upgrade v0.39.0 state in place; apply to a new database.
 Fresh installation creates the current schema without converting or discarding earlier audit rows.
-`plan` and `apply` retain their unpublished-audit refusals and leave earlier outboxes untouched.
+A later successor waits for its publication locks before publishing a new active package, and a
+blocked apply leaves the prior package active.
 
 If you retain an earlier PostgreSQL audit-outbox deployment, stop new traffic and keep its runtime
 running until its publisher has delivered every pending audit row. For an earlier database that
@@ -204,9 +205,8 @@ for the Casework state and audit boundary.
 
 {/* Evidence: crates/registry-casework/src/store.rs;
     crates/registry-scheduling/src/store.rs;
-    crates/registry-scheduling/src/store/activation.rs, refuse_to_drop_unpublished_audit();
     crates/registry-schedulingctl/tests/activation_postgres.rs,
-    plan_reports_the_unpublished_audit_apply_refuses();
+    successor_apply_waits_for_publication_locks_before_it_publishes();
     products/casework/CHANGELOG.md;
     products/scheduling/CHANGELOG.md. */}
 

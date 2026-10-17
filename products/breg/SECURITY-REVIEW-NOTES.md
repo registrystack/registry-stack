@@ -8,6 +8,39 @@ security-invariant matrix in `contracts/security-invariant-matrix.yaml` is the
 row-per-invariant baseline; this file is the narrative behind the decisions
 and the residuals the matrix rows do not state.
 
+## Linear Immediate Action policies and target locking
+
+Immediate Action authorization groups compatible effects into one policy per
+action, entity, access profile, and command. The grouped policy requires
+the same action context, effect membership, target record, row boundaries,
+field set, and field values that the individual policies required. Execution
+and replay authorization load each distinct target record once and apply every
+effect-specific check to that loaded row. This keeps policy text and database
+work linear at the documented 128-effect ceiling without widening the set of
+rows or fields an action can use.
+
+Schema reconciliation records a digest of each compiled policy definition in
+the policy comment and preserves the PostgreSQL policy object when the digest
+matches. Exact managed-catalog verification remains the activation boundary.
+Reconciliation keeps a policy whose comment matches, so a policy whose
+expression was altered while it kept that comment is not repaired: catalog
+verification refuses it as drift and activation fails closed. Recovery is an
+operator step: a database administrator clears that policy's comment and
+applies the exact target package again, and reconciliation then replaces the
+policy with its compiled definition. The optimization does not treat the comment
+alone as proof that the enforced expression is correct.
+
+The 128-effect regression compares grouped policy count and text size with the
+effect count, exercises successful execution and replay, and retains refused
+field and target cases. PostgreSQL tests also prove that repeated effects take
+one target lock, unchanged reconciliation preserves policy object identity,
+and an altered policy carrying the expected comment cannot become active.
+
+The generated policy still depends on PostgreSQL's catalog representation and
+expression deparser. The managed-catalog fingerprint and final exact policy
+verification remain required on each supported PostgreSQL major, including
+after a package activation.
+
 ## Activation ledger and unsigned packages
 
 The change removes package signing and trust anchors, moves activation

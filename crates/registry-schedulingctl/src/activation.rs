@@ -216,9 +216,6 @@ pub(crate) fn refusal_code(error: &StoreError) -> &'static str {
             "schedulingctl.activation.supply-identifier-collision"
         }
         StoreError::RetainedHookBindings => "schedulingctl.activation.retained-hook-bindings",
-        StoreError::UnpublishedAuditWouldBeDropped { .. } => {
-            "schedulingctl.activation.unpublished-audit"
-        }
         _ => "schedulingctl.activation.refused",
     }
 }

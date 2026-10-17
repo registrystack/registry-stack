@@ -2,12 +2,15 @@
 
 ## Unreleased
 
+- Apply this release to a fresh database. Scheduling now installs its complete
+  schema as one version 1 baseline and explicitly refuses a database left at a
+  beta schema version with fresh-install recovery guidance.
 - Raw claim owners expire after `retention.claimOwnerRetentionDays` (default 7,
   range 1 through 365) following an appointment's end or cancellation, or a
   hold's expiry, release, or consumption. This default is a placeholder.
-  Apply schema version 13 before starting the updated runtime. The sweep keeps
-  an inert digest and the claim, history, and audit, but the former owner can
-  no longer list, read, act on, observe, or replay a receipt containing the claim.
+  The sweep keeps an inert digest and the claim, history, and audit, but the
+  former owner can no longer list, read, act on, observe, or replay a receipt
+  containing the claim.
 
 - BREAKING: a `taskGrantStatus` entry names its status resource
   `statusResource` (was `caseworkResource`), since any task authority, not

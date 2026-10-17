@@ -6262,7 +6262,7 @@ async fn added_required_target_fingerprint(
     drop_managed_views_for_fingerprint(&transaction).await;
     transaction
         .batch_execute(&format!(
-            "ALTER TABLE registry_data.{table} ADD COLUMN {batch} varchar(16);
+            "ALTER TABLE registry_data.{table} ADD COLUMN {batch} varchar(16) COLLATE pg_catalog.pg_c_utf8;
              ALTER TABLE registry_data.{table} NO FORCE ROW LEVEL SECURITY;
              UPDATE registry_data.{table} SET {batch} = 'reviewed-batch';
              ALTER TABLE registry_data.{table} FORCE ROW LEVEL SECURITY;

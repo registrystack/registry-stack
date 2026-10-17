@@ -189,6 +189,36 @@ fn reviewed_package_whose_receipt_carries_the_retired_proofs_is_refused() {
 }
 
 #[test]
+fn reviewed_migration_receipt_refuses_postgresql_16() {
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::RequiredField);
+    let artifacts = backfill_artifacts("required-field", &previous, &candidate);
+    let mut source = artifacts.source();
+    let mut receipt = serde_json::to_value(&artifacts.receipt).expect("receipt serializes");
+    receipt["postgresMajor"] = serde_json::json!(16);
+    let bytes = canonical(&receipt);
+    source
+        .files
+        .iter_mut()
+        .find(|file| file.path == artifacts.descriptor.rehearsal_receipt_path)
+        .expect("source carries the rehearsal receipt")
+        .bytes = bytes.clone();
+
+    assert_refused(
+        Variant::RequiredField,
+        previous,
+        vec![source],
+        ReviewedMigrationError::Evidence,
+        "a PostgreSQL 16 migration rehearsal receipt",
+    );
+    let report = read_rehearsal_receipt("rehearsal.json", &bytes)
+        .expect_err("the receipt reader refuses PostgreSQL 16");
+    assert_eq!(report.diagnostics().len(), 1, "{report:?}");
+    assert_eq!(report.diagnostics()[0].code, "config.out-of-range");
+    assert_eq!(report.diagnostics()[0].path, "/postgresMajor");
+}
+
+#[test]
 fn reviewed_migration_record_type_references_have_one_positioned_spelling() {
     let previous = compile_variant(Variant::Base);
     let candidate = compile_variant(Variant::RequiredField);

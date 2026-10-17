@@ -112,16 +112,47 @@ async fn concurrent_migrators_apply_each_version_once_and_both_succeed() {
     a.expect("the first concurrent migration");
     b.expect("the second concurrent migration");
     c.expect("the third concurrent migration");
-    assert_eq!(applied_versions(&isolated).await, [1, 2]);
+    assert_eq!(applied_versions(&isolated).await, [1]);
 
     first
         .migrate()
         .await
         .expect("a repeated migration applies nothing");
-    assert_eq!(applied_versions(&isolated).await, [1, 2]);
+    assert_eq!(applied_versions(&isolated).await, [1]);
 
     let runtime = PostgresStore::connect_runtime(&config, &secrets).expect("a runtime store");
     runtime.ready().await.expect("a migrated store is ready");
+}
+
+#[tokio::test]
+async fn a_pre_1_0_beta_schema_is_refused_with_fresh_install_recovery() {
+    let isolated = isolated_schema().await;
+    let config = database(&isolated.reference);
+    let store = PostgresStore::connect_migration(&config, &secrets()).expect("a migration store");
+    isolated
+        .admin
+        .batch_execute(&format!(
+            "CREATE TABLE {schema}.messaging_schema_migrations (
+                     version bigint PRIMARY KEY CHECK (version > 0),
+                     applied_at timestamptz NOT NULL
+                 );
+                 INSERT INTO {schema}.messaging_schema_migrations(version, applied_at)
+                     VALUES (1, now());
+                 CREATE TABLE {schema}.messaging_messages (message_id uuid PRIMARY KEY);",
+            schema = isolated.schema,
+        ))
+        .await
+        .expect("install the identifying shape of the pre-1.0 0001 baseline");
+
+    let refusal = store
+        .migrate()
+        .await
+        .expect_err("the beta schema is never upgraded in place");
+    assert!(matches!(
+        &refusal,
+        StoreError::BetaSchema { versions } if versions == &vec![1]
+    ));
+    assert!(refusal.to_string().contains("fresh database"), "{refusal}");
 }
 
 #[tokio::test]

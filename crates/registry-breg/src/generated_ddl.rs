@@ -24,6 +24,7 @@ use crate::physical_names::{
 };
 
 const RECORD_ID_COLUMN: &str = "record_id";
+const GENERATED_TEXT_COLLATION: &str = "pg_catalog.pg_c_utf8";
 pub(crate) const POSTGIS_EXTENSION_SCHEMA: &str = "registry_spatial_ext";
 pub(crate) const SPATIAL_BBOX_FUNCTION_NAME: &str = "spatial_bbox_geometry";
 
@@ -236,10 +237,10 @@ pub(crate) fn generate_ddl_with_actions(
         let mut columns = vec![
             "record_id uuid NOT NULL".to_owned(),
             "record_revision bigint NOT NULL DEFAULT 1 CHECK (record_revision > 0)".to_owned(),
-            "record_lifecycle text NOT NULL DEFAULT 'active' CHECK (record_lifecycle IN ('active', 'tombstoned'))".to_owned(),
+            format!("record_lifecycle text COLLATE {GENERATED_TEXT_COLLATION} NOT NULL DEFAULT 'active' CHECK (record_lifecycle IN ('active', 'tombstoned'))"),
             "created_at timestamptz NOT NULL DEFAULT transaction_timestamp()".to_owned(),
             "updated_at timestamptz NOT NULL DEFAULT transaction_timestamp()".to_owned(),
-            "active_package_revision text NOT NULL DEFAULT NULLIF(current_setting('registry.active_package_revision', true), '') CHECK (active_package_revision <> '')".to_owned(),
+            format!("active_package_revision text COLLATE {GENERATED_TEXT_COLLATION} NOT NULL DEFAULT NULLIF(current_setting('registry.active_package_revision', true), '') CHECK (active_package_revision <> '')"),
             "PRIMARY KEY (record_id)".to_owned(),
         ];
         for field in entity.fields.values() {
@@ -1030,6 +1031,17 @@ fn column_definition(field: &crate::model::CompiledField, inline_requiredness: b
             sql_type(&field.field_type)
         }
     );
+    if !encrypted
+        && matches!(
+            &field.field_type,
+            FieldTypeSource::String { .. }
+                | FieldTypeSource::Text { .. }
+                | FieldTypeSource::VocabularyCode { .. }
+        )
+    {
+        column.push_str(" COLLATE ");
+        column.push_str(GENERATED_TEXT_COLLATION);
+    }
     let required = field.required && inline_requiredness;
     if required {
         column.push_str(" NOT NULL");
@@ -1586,102 +1598,116 @@ fn immediate_action_target_policies_for_table(
         if action.execution.is_proposal() {
             continue;
         }
-        for effect in action
+        let target_effects = action
             .effects
             .iter()
             .filter(|effect| effect.target.entity_id == target_entity.id)
-        {
-            for grant in action.permissions.iter().filter(|grant| {
-                grant.operations.contains(&Operation::Invoke)
-                    && grant
-                        .targets
-                        .iter()
-                        .any(|target| target.entity_id == target_entity.id)
-            }) {
-                let expression = immediate_action_application_expression(
-                    target_entity,
-                    action,
-                    effect,
+            .collect::<Vec<_>>();
+        let mut emitted_profiles = BTreeSet::new();
+        for grant in action.permissions.iter().filter(|grant| {
+            grant.operations.contains(&Operation::Invoke)
+                && grant
+                    .targets
+                    .iter()
+                    .any(|target| target.entity_id == target_entity.id)
+        }) {
+            if !emitted_profiles.insert(grant.profile_id.as_str()) || target_effects.is_empty() {
+                continue;
+            }
+            let expressions = immediate_action_application_expressions(
+                target_entity,
+                action,
+                &target_effects,
+                &grant.profile_id,
+            );
+            let select_expression = expressions
+                .iter()
+                .map(|(_, expression)| format!("({expression} AND record_lifecycle = 'active')"))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            policies.push(DdlPolicy {
+                name: immediate_action_policy_name(
+                    &action.id,
+                    &target_entity.id,
                     &grant.profile_id,
-                );
-                let bounded_return_row = format!("{expression} AND record_lifecycle = 'active'");
-                let write_context = immediate_action_write_context_expression(
-                    immediate_action_context_expression(),
-                );
-                let lock_context =
-                    immediate_action_lock_context_expression(immediate_action_context_expression());
+                    PolicyCommand::Select,
+                ),
+                command: PolicyCommand::Select,
+                access_profile: grant.profile_id.clone(),
+                applies_to: ordinary_policy_role(target_entity),
+                using_expression: Some(select_expression),
+                check_expression: None,
+            });
+
+            let write_context =
+                immediate_action_write_context_expression(immediate_action_context_expression());
+            let lock_context =
+                immediate_action_lock_context_expression(immediate_action_context_expression());
+            let create_expressions = expressions
+                .iter()
+                .filter(|(operation, _)| *operation == Operation::Create)
+                .map(|(_, expression)| {
+                    format!("({expression} AND record_lifecycle = 'active' AND {write_context})")
+                })
+                .collect::<Vec<_>>();
+            if !create_expressions.is_empty() {
                 policies.push(DdlPolicy {
                     name: immediate_action_policy_name(
                         &action.id,
                         &target_entity.id,
                         &grant.profile_id,
-                        &effect.id,
-                        PolicyCommand::Select,
+                        PolicyCommand::Insert,
                     ),
-                    command: PolicyCommand::Select,
+                    command: PolicyCommand::Insert,
                     access_profile: grant.profile_id.clone(),
                     applies_to: ordinary_policy_role(target_entity),
-                    using_expression: Some(bounded_return_row.clone()),
-                    check_expression: None,
+                    using_expression: None,
+                    check_expression: Some(create_expressions.join(" OR ")),
                 });
-                match effect.operation {
-                    Operation::Create => {
-                        policies.push(DdlPolicy {
-                            name: immediate_action_policy_name(
-                                &action.id,
-                                &target_entity.id,
-                                &grant.profile_id,
-                                &effect.id,
-                                PolicyCommand::Insert,
-                            ),
-                            command: PolicyCommand::Insert,
-                            access_profile: grant.profile_id.clone(),
-                            applies_to: ordinary_policy_role(target_entity),
-                            using_expression: None,
-                            check_expression: Some(format!(
-                                "{bounded_return_row} AND {write_context}"
-                            )),
-                        });
-                    }
-                    Operation::Patch => {
-                        let bounded_current_row = format!(
-                            "{bounded_return_row} AND {write_context} AND record_revision = ({} ->> 'expectedRevision')::bigint",
-                            immediate_action_context_expression()
-                        );
-                        policies.push(DdlPolicy {
-                            name: immediate_action_policy_name(
-                                &action.id,
-                                &target_entity.id,
-                                &grant.profile_id,
-                                &effect.id,
-                                PolicyCommand::Update,
-                            ),
-                            command: PolicyCommand::Update,
-                            access_profile: grant.profile_id.clone(),
-                            applies_to: ordinary_policy_role(target_entity),
-                            using_expression: Some(bounded_current_row),
-                            check_expression: Some(format!(
-                                "{bounded_return_row} AND {write_context}"
-                            )),
-                        });
-                        policies.push(DdlPolicy {
-                            name: immediate_action_lock_policy_name(
-                                &action.id,
-                                &target_entity.id,
-                                &grant.profile_id,
-                                &effect.id,
-                            ),
-                            command: PolicyCommand::Update,
-                            access_profile: grant.profile_id.clone(),
-                            applies_to: ordinary_policy_role(target_entity),
-                            using_expression: Some(format!(
-                                "{bounded_return_row} AND {lock_context}"
-                            )),
-                            check_expression: Some("false".to_owned()),
-                        });
-                    }
-                    _ => {}
-                }
+            }
+            let patch_expressions = expressions
+                .iter()
+                .filter(|(operation, _)| *operation == Operation::Patch)
+                .map(|(_, expression)| expression)
+                .collect::<Vec<_>>();
+            if !patch_expressions.is_empty() {
+                let writable = patch_expressions
+                    .iter()
+                    .map(|expression| {
+                        format!(
+                            "({expression} AND record_lifecycle = 'active' AND {write_context})"
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" OR ");
+                let current = patch_expressions
+                    .iter()
+                    .map(|expression| format!(
+                        "({expression} AND record_lifecycle = 'active' AND {write_context} AND record_revision = ({} ->> 'expectedRevision')::bigint)",
+                        immediate_action_context_expression()
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(" OR ");
+                let lockable = patch_expressions
+                    .iter()
+                    .map(|expression| {
+                        format!("({expression} AND record_lifecycle = 'active' AND {lock_context})")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" OR ");
+                policies.push(DdlPolicy {
+                    name: immediate_action_policy_name(
+                        &action.id,
+                        &target_entity.id,
+                        &grant.profile_id,
+                        PolicyCommand::Update,
+                    ),
+                    command: PolicyCommand::Update,
+                    access_profile: grant.profile_id.clone(),
+                    applies_to: ordinary_policy_role(target_entity),
+                    using_expression: Some(format!("({current}) OR ({lockable})")),
+                    check_expression: Some(writable),
+                });
             }
         }
 
@@ -1743,33 +1769,54 @@ fn immediate_action_target_policies_for_table(
     policies
 }
 
-fn immediate_action_application_expression(
+fn immediate_action_application_expressions(
     target_entity: &CompiledEntity,
     action: &CompiledAction,
-    effect: &CompiledPlanEffect,
+    effects: &[&CompiledPlanEffect],
     profile_id: &str,
-) -> String {
-    [
-        immediate_action_common_expression(target_entity, action, effect, profile_id),
-        target_boundary_expression(
-            immediate_action_context_expression(),
-            "targetRowBoundaries",
-            target_entity,
-            action
-                .permissions
-                .iter()
-                .find(|grant| grant.profile_id == profile_id)
-                .and_then(|grant| {
-                    grant
-                        .targets
-                        .iter()
-                        .find(|target| target.entity_id == target_entity.id)
-                })
-                .map(|target| target.row_boundaries.as_slice())
-                .unwrap_or(&[]),
-        ),
-    ]
-    .join(" AND ")
+) -> Vec<(Operation, String)> {
+    let boundary = target_boundary_expression(
+        immediate_action_context_expression(),
+        "targetRowBoundaries",
+        target_entity,
+        action
+            .permissions
+            .iter()
+            .find(|grant| grant.profile_id == profile_id)
+            .and_then(|grant| {
+                grant
+                    .targets
+                    .iter()
+                    .find(|target| target.entity_id == target_entity.id)
+            })
+            .map(|target| target.row_boundaries.as_slice())
+            .unwrap_or(&[]),
+    );
+    let mut remaining = effects.to_vec();
+    let mut expressions = Vec::new();
+    while let Some(representative) = remaining.first().copied() {
+        let compatible = remaining
+            .iter()
+            .copied()
+            .filter(|candidate| action_effects_can_share_target(representative, candidate))
+            .collect::<Vec<_>>();
+        remaining.retain(|candidate| !action_effects_can_share_target(representative, candidate));
+        expressions.push((
+            representative.operation,
+            [
+                immediate_action_common_expression(
+                    target_entity,
+                    action,
+                    representative,
+                    &compatible,
+                    profile_id,
+                ),
+                boundary.clone(),
+            ]
+            .join(" AND "),
+        ));
+    }
+    expressions
 }
 
 fn immediate_action_link_expression(
@@ -1861,6 +1908,7 @@ fn immediate_action_common_expression(
     target_entity: &CompiledEntity,
     action: &CompiledAction,
     effect: &CompiledPlanEffect,
+    compatible: &[&CompiledPlanEffect],
     profile_id: &str,
 ) -> String {
     let context = immediate_action_context_expression();
@@ -1885,7 +1933,7 @@ fn immediate_action_common_expression(
         format!(
             "(({context} ->> 'purpose') IS NULL OR ({context} ->> 'purpose') = NULLIF(current_setting('registry.purpose', true), ''))"
         ),
-        immediate_action_effect_group_expression(context, action, effect),
+        immediate_action_effect_group_expression(context, compatible),
         format!(
             "{context} ->> 'targetEntityId' = {}",
             quote_literal(&effect.target.entity_id)
@@ -1907,14 +1955,8 @@ fn immediate_action_common_expression(
 
 fn immediate_action_effect_group_expression(
     context: &str,
-    action: &CompiledAction,
-    effect: &CompiledPlanEffect,
+    compatible: &[&CompiledPlanEffect],
 ) -> String {
-    let compatible = action
-        .effects
-        .iter()
-        .filter(|candidate| action_effects_can_share_target(effect, candidate))
-        .collect::<Vec<_>>();
     let allowed_effects = compatible
         .iter()
         .map(|candidate| quote_literal(&candidate.id))
@@ -1948,7 +1990,6 @@ fn immediate_action_effect_group_expression(
                FROM jsonb_array_elements_text({context} -> 'effectIds') AS context_effects(effect_id) \
          ) \
          AND jsonb_typeof({context} -> 'fields') = 'array' \
-         AND ({context} -> 'effectIds') ? {effect_id} \
          AND NOT EXISTS ( \
              SELECT 1 \
                FROM jsonb_array_elements_text({context} -> 'effectIds') AS context_effects(effect_id) \
@@ -1966,7 +2007,6 @@ fn immediate_action_effect_group_expression(
                     ) \
                ) AS selected_fields \
          )",
-        effect_id = quote_literal(&effect.id),
     )
 }
 
@@ -2080,18 +2120,11 @@ fn immediate_action_policy_name(
     action_id: &str,
     target_entity_id: &str,
     profile_id: &str,
-    effect_id: &str,
     command: PolicyCommand,
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"breg/immediate-action-target-rls-policy/v1");
-    for value in [
-        action_id,
-        target_entity_id,
-        profile_id,
-        effect_id,
-        command.as_sql(),
-    ] {
+    hasher.update(b"breg/immediate-action-target-rls-policy/v2");
+    for value in [action_id, target_entity_id, profile_id, command.as_sql()] {
         hasher.update((value.len() as u64).to_be_bytes());
         hasher.update(value.as_bytes());
     }
@@ -2105,26 +2138,6 @@ fn immediate_action_policy_name(
         command.as_sql().to_ascii_lowercase(),
         suffix
     )
-}
-
-fn immediate_action_lock_policy_name(
-    action_id: &str,
-    target_entity_id: &str,
-    profile_id: &str,
-    effect_id: &str,
-) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(b"breg/immediate-action-target-lock-rls-policy/v1");
-    for value in [action_id, target_entity_id, profile_id, effect_id] {
-        hasher.update((value.len() as u64).to_be_bytes());
-        hasher.update(value.as_bytes());
-    }
-    let digest = hasher.finalize();
-    let suffix = digest[..12]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    format!("registry_action_rls_lock_update_{suffix}")
 }
 
 fn immediate_action_link_policy_name(
@@ -2366,6 +2379,15 @@ fn read_path_policy_name(
 }
 
 pub(crate) fn policy_sql(table: &str, policy: &DdlPolicy, role: Option<&str>) -> String {
+    let definition = policy_definition_sql(table, policy, role);
+    format!(
+        "{definition};\nCOMMENT ON POLICY {} ON registry_data.{table} IS {}",
+        quote_identifier(&policy.name),
+        quote_literal(&policy_marker(&definition))
+    )
+}
+
+pub(crate) fn policy_definition_sql(table: &str, policy: &DdlPolicy, role: Option<&str>) -> String {
     let mut sql = format!(
         "CREATE POLICY {} ON registry_data.{table} FOR {}",
         quote_identifier(&policy.name),
@@ -2386,6 +2408,11 @@ pub(crate) fn policy_sql(table: &str, policy: &DdlPolicy, role: Option<&str>) ->
         sql.push(')');
     }
     sql
+}
+
+pub(crate) fn policy_marker(definition: &str) -> String {
+    let digest = Sha256::digest(definition.as_bytes());
+    format!("breg/policy/v1/{}", hex_prefix(&digest, 32))
 }
 
 /// Stable managed identity, independent of the expression being enforced.
@@ -2862,6 +2889,8 @@ pub(crate) fn quote_literal(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::parse_project_json;
     use crate::generated_ddl::{
@@ -2906,10 +2935,81 @@ mod tests {
             .find(|statement| statement.id == "entity.site.table")
             .expect("compiled table DDL exists");
         assert!(
-            create_table
-                .sql
-                .contains(&format!("\"{}\" varchar(32) NOT NULL", field.physical_name)),
+            create_table.sql.contains(&format!(
+                "\"{}\" varchar(32) COLLATE pg_catalog.pg_c_utf8 NOT NULL",
+                field.physical_name
+            )),
             "a fresh database keeps the required column inline"
+        );
+    }
+
+    #[test]
+    fn generated_text_columns_use_the_cross_major_builtin_collation() {
+        let registry = compile_spatial_registry();
+        let entity = &registry.entities()["site"];
+        let code = &entity.fields["code"];
+        let create_table = registry
+            .ddl()
+            .statements
+            .iter()
+            .find(|statement| statement.id == "entity.site.table")
+            .expect("compiled table DDL exists");
+
+        assert!(
+            create_table.sql.contains(&format!(
+                "\"{}\" varchar(32) COLLATE pg_catalog.pg_c_utf8 NOT NULL",
+                code.physical_name
+            )),
+            "authored string columns have an explicit stable collation: {}",
+            create_table.sql
+        );
+        for generated in ["record_lifecycle", "active_package_revision"] {
+            assert!(
+                create_table.sql.contains(&format!(
+                    "{generated} text COLLATE pg_catalog.pg_c_utf8 NOT NULL"
+                )),
+                "generated text columns have an explicit stable collation: {}",
+                create_table.sql
+            );
+        }
+    }
+
+    #[test]
+    fn immediate_action_policies_scale_linearly_with_effects() {
+        fn action_policies(registry: &crate::CompiledRegistry) -> Vec<&super::DdlPolicy> {
+            registry
+                .ddl()
+                .tables
+                .iter()
+                .flat_map(|table| &table.policies)
+                .filter(|policy| policy.name.starts_with("registry_action_rls_"))
+                .collect()
+        }
+
+        let narrow = compile_wide_action_registry(16);
+        let wide = compile_wide_action_registry(128);
+        let narrow = action_policies(&narrow);
+        let wide = action_policies(&wide);
+        assert_eq!(wide.len(), 2, "one SELECT and one UPDATE policy");
+        assert_eq!(
+            wide.iter()
+                .map(|policy| policy.command)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            wide.len(),
+            "an action/entity/profile has at most one policy per command"
+        );
+        let narrow_text = narrow
+            .iter()
+            .map(|policy| format!("{policy:?}").len())
+            .sum::<usize>();
+        let wide_text = wide
+            .iter()
+            .map(|policy| format!("{policy:?}").len())
+            .sum::<usize>();
+        assert!(
+            wide_text <= narrow_text * 9,
+            "eight times as many effects stays linear: {narrow_text} -> {wide_text}"
         );
     }
 
@@ -2988,5 +3088,94 @@ mod tests {
         )
         .expect("spatial source parses");
         compile_project(&project, &[], CompileProfile::Authoring).expect("spatial project compiles")
+    }
+
+    fn compile_wide_action_registry(effect_count: usize) -> crate::CompiledRegistry {
+        let fields = (1..=effect_count)
+            .map(|index| {
+                json!({
+                    "id": format!("flag-{index}"),
+                    "type": "boolean",
+                    "required": true,
+                    "classification": "restricted"
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut record_fields = vec![json!({
+            "id": "jurisdiction",
+            "type": "string",
+            "maximumLength": 64,
+            "required": true,
+            "classification": "restricted"
+        })];
+        record_fields.extend(fields.clone());
+        let mut inputs = vec![json!({
+            "id": "record",
+            "type": "reference",
+            "target": "wide-record",
+            "required": true,
+            "classification": "restricted"
+        })];
+        inputs.extend(fields);
+        let effects = (1..=effect_count)
+            .map(|index| {
+                json!({
+                    "id": format!("patch-{index}"),
+                    "target": {"fromInput": "record"},
+                    "operation": "patch",
+                    "set": {format!("flag-{index}"): {"fromInput": format!("flag-{index}")}}
+                })
+            })
+            .collect::<Vec<_>>();
+        let project = json!({
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": {
+                "id": "wide-action-ddl",
+                "version": "1",
+                "defaultLanguage": "en",
+                "canonicalBaseIri": "https://wide-action-ddl.example.test"
+            },
+            "datasets": [{"id": "test-dataset"}],
+            "recordTypes": [{
+                "id": "wide-record",
+                "primaryDataset": "test-dataset",
+                "route": "wide-records",
+                "mutationMode": "mutable",
+                "fields": record_fields
+            }],
+            "actions": [{
+                "id": "patch-wide",
+                "execution": {"mode": "immediate"},
+                "inputs": inputs,
+                "plan": {"type": "fixed", "effects": effects}
+            }],
+            "accessProfiles": [{
+                "id": "wide-runner",
+                "default": true,
+                "principalClaim": "principal",
+                "requiredScopes": ["registry:wide:patch"],
+                "requiredPurposes": ["wide-patch"],
+                "permissions": {"actions": [{
+                    "action": "patch-wide",
+                    "operations": ["invoke"],
+                    "targets": [{
+                        "recordType": "wide-record",
+                        "rowBoundaries": [{
+                            "field": "jurisdiction",
+                            "claim": "jurisdiction",
+                            "operator": "equals"
+                        }]
+                    }],
+                    "results": (1..=effect_count)
+                        .map(|index| format!("patch-{index}"))
+                        .collect::<Vec<_>>()
+                }]}
+            }]
+        });
+        let bytes = serde_json::to_vec(&project).expect("wide action source serializes");
+        let project = parse_project_json(&bytes).expect("wide action source parses");
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("wide action source compiles")
     }
 }

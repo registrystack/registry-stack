@@ -302,7 +302,7 @@ mod ordering_tests {
             "sqlDigests": [],
             "assertionDigests": [],
             "fixtureInventory": [],
-            "postgresMajor": 16,
+            "postgresMajor": 17,
             "rowAssertions": [],
             "finalSchemaFingerprint": DIGEST,
         });

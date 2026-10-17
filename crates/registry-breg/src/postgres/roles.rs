@@ -9,6 +9,7 @@ use crate::generated_ddl::POSTGIS_EXTENSION_SCHEMA;
 use crate::physical_names::hex_prefix;
 
 use super::catalog::MANAGED_SCHEMAS;
+use super::schema::verify_postgres_version;
 use super::{PostgresKernelError, Result};
 
 const MIN_POSTGIS_MAJOR: u32 = 3;
@@ -133,7 +134,7 @@ pub async fn provision_postgis_prerequisites(
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
 ) -> Result<SqlIdentifier> {
-    verify_postgres_16_or_newer(admin).await?;
+    verify_postgres_version(admin).await?;
     admin
         .batch_execute(&format!(
             "CREATE SCHEMA IF NOT EXISTS {POSTGIS_EXTENSION_SCHEMA};\n\
@@ -156,7 +157,7 @@ pub async fn provision_spatial_bbox_role(
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
 ) -> Result<SqlIdentifier> {
-    verify_postgres_16_or_newer(admin).await?;
+    verify_postgres_version(admin).await?;
     let bbox_role = spatial_bbox_role(runtime_role);
     admin
         .batch_execute(&format!(
@@ -186,7 +187,7 @@ pub async fn verify_postgis(
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
 ) -> Result<()> {
-    verify_postgres_16_or_newer(client).await?;
+    verify_postgres_version(client).await?;
     let bbox_role = spatial_bbox_role(runtime_role);
     verify_postgis_spatial_bbox_role(client, migration_role, runtime_role, &bbox_role).await?;
     let installed = client
@@ -379,24 +380,6 @@ fn postgis_version_supported(version: &str) -> bool {
         return false;
     };
     major > MIN_POSTGIS_MAJOR || (major == MIN_POSTGIS_MAJOR && minor >= MIN_POSTGIS_MINOR)
-}
-
-async fn verify_postgres_16_or_newer(client: &impl GenericClient) -> Result<()> {
-    let version_num: String = client
-        .query_one("SELECT current_setting('server_version_num')", &[])
-        .await?
-        .get(0);
-    let version_num = version_num.parse::<u32>().map_err(|_| {
-        PostgresKernelError::Configuration(
-            "PostgreSQL 16 or newer is required for spatial bbox roles",
-        )
-    })?;
-    if version_num < 160_000 {
-        return Err(PostgresKernelError::Configuration(
-            "PostgreSQL 16 or newer is required for spatial bbox roles",
-        ));
-    }
-    Ok(())
 }
 
 pub async fn verify_btree_gist(client: &impl GenericClient) -> Result<()> {

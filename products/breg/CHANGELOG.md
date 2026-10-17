@@ -4,6 +4,17 @@
 
 - Apply this release to a fresh database; it carries no state migration
   from 0.41.
+- Generated text columns and indexes use PostgreSQL's built-in
+  `pg_catalog.pg_c_utf8` collation, and the managed-catalog fingerprint is
+  stable across PostgreSQL 17 and 18. PostgreSQL 17 is now the minimum for
+  runtime, spatial provisioning, migration receipts, and schema-test receipts.
+  A non-UTF8 database, an unvalidated PostgreSQL 18 NOT NULL constraint, or a
+  managed text collation that differs is refused with recovery guidance.
+- Immediate Action row policies grow linearly with the number of effects, and
+  each distinct target row is loaded and locked once during execution and
+  replay authorization. Unchanged policy definitions retain their PostgreSQL
+  catalog identity; exact catalog verification still refuses a policy changed
+  without updating its compiler marker.
 - `bregctl init --from publicschema` derives a bounded `structured` list for
   a multivalued class property when its range class explicitly declares
   `inline_only: true`. Each generated field is a closed object with a required

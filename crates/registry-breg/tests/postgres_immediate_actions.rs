@@ -33,7 +33,8 @@ use registry_breg::cursor::CursorCodec;
 use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
     begin_record_transaction, initialize_compiled_registry_state_for_test, install_compiled_schema,
-    ClaimContext, PostgresRecordMutationService, PostgresRecordReadService,
+    reconcile_compiled_runtime_acl_for_test, verify_catalog_identity_for_catalog, ClaimContext,
+    ExpectedManagedCatalog, PostgresRecordMutationService, PostgresRecordReadService,
     PostgresRevisionReadService, PostgresSnapshotReadService, RegistryLockKey,
     RegistryStateTestIdentity, RowBoundaryContext,
 };
