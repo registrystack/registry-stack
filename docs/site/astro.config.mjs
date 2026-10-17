@@ -292,7 +292,7 @@ const bregRewriteMoves = [
   ['/explanation/breg-statistical-datasets/', '/configure/breg-statistics/'],
   ['/explanation/membership-read-boundaries/', '/configure/breg-access/'],
   ['/explanation/deriving-a-registry-from-a-model/', '/tutorials/derive-a-registry-from-publicschema/'],
-  ['/explanation/openfn-adaptors/', '/explanation/integration-patterns/'],
+  ['/explanation/openfn-adaptors/', '/start/concepts/'],
   ['/operate/breg-requirements/', '/operate/breg/'],
   ['/operate/breg-mcp/', '/configure/breg-mcp/'],
 ];
@@ -379,8 +379,10 @@ export default defineConfig({
     '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/connect-an-institution-source/'),
     // The FHIR credential tutorial became the worked example of connecting an institution API.
     '/tutorials/issue-fhir-evidence-as-vcs/': internalRedirect('/tutorials/connect-an-institution-source/'),
-    // Retired monorepo lab tutorials redirect to the current integration guidance.
-    '/tutorials/configure-project-fhir-r4/': internalRedirect('/explanation/integration-patterns/'),
+    // Retired monorepo lab tutorials and the integration-patterns page redirect to
+    // the cross-product concepts page.
+    '/explanation/integration-patterns/': internalRedirect('/start/concepts/'),
+    '/tutorials/configure-project-fhir-r4/': internalRedirect('/start/concepts/'),
     '/tutorials/configure-project-snapshot-materialization/': internalRedirect('/decisions/registry-relay-retirement-2026-10-03/'),
     // Problems -> marketing /why
     '/problems/': `${marketing}/why/`,
@@ -509,7 +511,7 @@ export default defineConfig({
           label: 'Start',
           items: [
             { label: 'Overview', link: '/' },
-            { label: 'Glossary', slug: 'reference/glossary' },
+            { label: 'How the products fit together', slug: 'start/concepts' },
           ],
         },
         {
@@ -548,7 +550,6 @@ export default defineConfig({
                 { label: 'Connect an institution API', slug: 'tutorials/connect-an-institution-source' },
                 { label: 'Connect a SQLite extract', slug: 'tutorials/connect-a-sqlite-extract' },
                 { label: 'Compose a BReg lookup', slug: 'tutorials/evidence-from-breg' },
-                { label: 'Integration patterns', slug: 'explanation/integration-patterns' },
               ],
             },
             {
@@ -843,6 +844,8 @@ export default defineConfig({
             { label: 'Changelog', slug: 'changelog' },
             { label: 'Privacy', slug: 'privacy' },
             { label: 'Accessibility', slug: 'accessibility' },
+            // The glossary is a lookup, not a first encounter, so it ends Reference.
+            { label: 'Glossary', slug: 'reference/glossary' },
           ],
         },
       ],
