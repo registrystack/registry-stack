@@ -211,8 +211,59 @@ class PostgresRunnerTests(unittest.TestCase):
         spec.loader.exec_module(ci_changes)
         self.assertEqual(("contracts", "postgres", "immediate-actions"), ci_changes.BREG_CONTRACTS_LANES)
         self.assertFalse(job["strategy"]["fail-fast"])
-        self.assertIn("postgres", job["services"])
-        runs = {step["run"]: step for step in job["steps"] if "run" in step}
+        steps = job["steps"]
+        start_index = next(
+            index for index, step in enumerate(steps)
+            if step.get("name") == "Start PostgreSQL service"
+        )
+        configure_index = next(
+            index for index, step in enumerate(steps)
+            if step.get("name") == "Configure Base Registry Engine test environment"
+        )
+        stop_index = next(
+            index for index, step in enumerate(steps)
+            if step.get("name") == "Stop PostgreSQL service"
+        )
+        self.assertEqual(
+            {
+                "name": "Start PostgreSQL service",
+                "id": "postgres",
+                "uses": "./.github/actions/postgres-service",
+                "with": {
+                    "image": (
+                        "postgis/postgis@sha256:"
+                        "01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6"
+                    ),
+                    "container_name": "registry-stack-breg-contracts-postgres",
+                    "database": "breg",
+                    "database_user": "breg",
+                    "database_password": "breg_test",
+                },
+            },
+            steps[start_index],
+        )
+        self.assertEqual(
+            {
+                "DATABASE_PORT": "${{ steps.postgres.outputs.port }}",
+                "POSTGRES_CONTAINER_ID": "${{ steps.postgres.outputs.container_id }}",
+                "TLS_CA_PEM_PATH": "${{ runner.temp }}/breg-postgres-trusted-ca.pem",
+            },
+            steps[configure_index]["env"],
+        )
+        self.assertEqual(
+            {
+                "name": "Stop PostgreSQL service",
+                "if": "always()",
+                "uses": "./.github/actions/postgres-service",
+                "with": {
+                    "operation": "stop",
+                    "container_id": "${{ steps.postgres.outputs.container_id }}",
+                },
+            },
+            steps[stop_index],
+        )
+        self.assertLess(start_index, configure_index)
+        runs = {step["run"]: step for step in steps if "run" in step}
         contract_commands = (
             "uv run --no-project --with PyYAML==6.0.2 products/breg/scripts/check-contracts.sh",
             "products/breg/scripts/check-client-contract.sh",
@@ -226,6 +277,9 @@ class PostgresRunnerTests(unittest.TestCase):
         )
         for command in contract_commands:
             self.assertEqual("matrix.lane == 'contracts'", runs[command]["if"])
+        contract_indices = [steps.index(runs[command]) for command in contract_commands]
+        self.assertLess(configure_index, min(contract_indices))
+        self.assertGreater(stop_index, max(contract_indices))
         self.assertLess(list(runs).index(contract_commands[2]), list(runs).index(contract_commands[3]))
         # The native Action harness uses a plain administrator connection. The
         # TLS proof changes this shared service to TLS-only for adopter checks.
