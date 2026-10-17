@@ -246,6 +246,11 @@ pub async fn catalog_drift_objects(
         .collect();
     for entity in registry.entities().values() {
         let table = format!("registry_data.{}", entity.physical_table);
+        // A deleted table is already named above; its columns are not named
+        // again, so they do not crowd the bounded inventory.
+        if !actual_objects.contains(&("table".to_owned(), table.clone())) {
+            continue;
+        }
         for field in entity.fields.values().filter(|field| field.required) {
             // A deleted column is drift by the same name as a nullable one.
             if !matches!(
