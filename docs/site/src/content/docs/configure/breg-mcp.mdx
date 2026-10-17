@@ -11,6 +11,9 @@ locale: en
 standards_referenced: []
 ---
 
+import ConfigurationReference from '../../../components/ConfigurationReference.astro';
+import reference from '../../../data/generated/breg-configuration.json';
+
 Configure `breg-mcp` and `breg-review` when a citizen should be able to ask a chat host, such as an
 AI assistant, to read their own Base Registry Engine (BReg) record and prepare a change to it, and
 then confirm that change themselves. This page covers what the registry and the authorization
@@ -249,16 +252,11 @@ addresses the listener may bind:
 
 ### Inbound tokens
 
-| Key | Meaning |
-|---|---|
-| `resource` | The gateway's resource identifier: the exact `https` URL of its `/mcp` endpoint |
-| `issuer` | The issuer every accepted token must name |
-| `jwksSource` | `type: discovery` (default), `type: uri` with `uri`, or `type: static` with `documentRef`, a secret holding the key set |
-| `algorithms` | Accepted signature algorithms: `RS256`, `RS384`, `ES256`, `ES384`, or `EdDSA` |
-| `allowedClients` | The chat-host clients whose tokens are accepted |
-| `requiredScopes` | Scopes every accepted token must carry |
-| `scopeClaim` | The claim holding scopes; defaults to `scope` |
-| `maximumTokenLifetimeSeconds` | The longest token lifetime accepted, from 1 to 86400; defaults to 3600 |
+`resource` is the gateway's own resource identifier, the exact `https` URL of its `/mcp` endpoint,
+and `issuer` is the issuer every accepted token must name. `jwksSource` is `type: discovery` by
+default, `type: uri` with `uri`, or `type: static` with `documentRef`, a secret holding the key
+set. The [breg-mcp keys](#breg-mcp-keys) below list the remaining `resourceServer` keys with their
+defaults and bounds.
 
 `algorithms`, `allowedClients`, and `requiredScopes` each take between 1 and 128 distinct entries. In production, a discovered
 or `jwksSource.uri` key set is fetched under a strict policy that refuses loopback, private-range,
@@ -269,28 +267,21 @@ publishes RFC 9728 protected-resource metadata naming the issuer and the require
 
 ### Registry and exchange
 
-| Key | Meaning |
-|---|---|
-| `registry.baseUrl` | The BReg deployment the gateway acts on |
-| `registry.accessProfile` | The standing agent access profile every call names |
-| `registry.audience` | The registry's RFC 8707 resource, requested in the exchange; must differ from `resourceServer.resource` |
-| `registry.scopes` | 1 to 128 distinct scopes requested for the delegated token |
-| `registry.attemptTimeoutMilliseconds` | The timeout for each registry call, from 100 to 120000; defaults to 10000 |
-| `exchange.tokenEndpoint` | The authorization server's token endpoint |
-| `exchange.clientId` | The gateway's own client; must not appear in `resourceServer.allowedClients` |
-| `exchange.privateKeyRef` | The secret holding that client's private JWK |
-| `exchange.assertionAudience` | Optional client-assertion audience, when the server expects one other than its token endpoint |
+`registry` names the BReg deployment, the standing agent access profile every call names, and the
+registry's RFC 8707 resource requested in the exchange, which must differ from
+`resourceServer.resource`. `exchange` names the authorization server's token endpoint and the
+gateway's own client, which must not appear in `resourceServer.allowedClients`; its private JWK
+lives in a secret named by `privateKeyRef`. The [breg-mcp keys](#breg-mcp-keys) below list each
+key with its defaults and bounds.
 
 ### Service
 
-| Key | Meaning |
-|---|---|
-| `name`, `description` | What `describe_service` tells the chat host about the service |
-| `disclosure` | What the citizen is told about the data the chat host will see |
-| `details.recordType` | The Record type holding the citizen's own record |
-| `application.action` | The proposal-mode Action the gateway Starts |
-| `application.targetInput` | The Action input referring to the citizen's own record |
-| `reviewBaseUrl` | The review page's `publicOrigin`, with no path; the gateway returns `<reviewBaseUrl>/requests/<id>` |
+`name`, `description`, and `disclosure` are what `describe_service` tells the chat host and what
+the citizen is told about the data the chat host will see. `details.recordType` is the Record type
+holding the citizen's own record, `application.action` the proposal-mode Action the gateway
+Starts, and `application.targetInput` the Action input referring to the citizen's own record.
+`reviewBaseUrl` is the review page's `publicOrigin` with no path; the gateway returns
+`<reviewBaseUrl>/requests/<id>`.
 
 `name`, `description`, and `disclosure` are each at most 4096 characters, and none may be blank. `targetInput` takes the stable Action input ID, not its public API name.
 Every editable input uses the required compiler-emitted JSON Schema exactly.
@@ -354,17 +345,13 @@ audit:
 `listener` follows the same rules as the gateway's; set `bind: 127.0.0.1:8115` for loopback.
 `development-loopback` also drops the `Secure` cookie attribute and the `__Host-` cookie prefix.
 
-| Key | Meaning |
-|---|---|
-| `publicOrigin` | The page's own `https` origin, with no path or query. The redirect URI to register is `publicOrigin` followed by `/signin/callback` |
-| `signIn.issuer` | The OpenID Connect issuer the citizen signs in with |
-| `signIn.clientId` | The page's client identifier |
-| `signIn.clientKeyRef` | The secret holding the page's private JWK |
-| `signIn.scopes` | 1 to 16 unique scopes to request besides `openid`, which the page always adds |
-| `registry.baseUrl` | The BReg deployment |
-| `registry.resource` | The registry's RFC 8707 resource, requested at sign-in |
-| `registry.action`, `registry.accessProfile` | The Proposal Action and the review access profile |
-| `registry.targetInput` | The field identifier of the target reference, such as `address` |
+`publicOrigin` is the page's own `https` origin, with no path or query; the redirect URI to register
+is `publicOrigin` followed by `/signin/callback`. `signIn` names the OpenID Connect issuer the
+citizen signs in with, the page's client identifier, the secret holding its private JWK, and the
+scopes to request besides `openid`, which the page always adds. `registry` names the BReg
+deployment, its RFC 8707 resource requested at sign-in, the Proposal Action, the review access
+profile, and the target input. The [breg-review keys](#breg-review-keys) below list each key with
+its defaults and bounds.
 
 `registry.targetInput` takes the field identifier as the project declares it, the same form as
 the gateway's `application.targetInput`.
@@ -375,16 +362,9 @@ authorization server must be reachable at a public address.
 
 ### Rate limits and sessions
 
-Both sections are optional. Each rate takes `requestsPerMinute` and `burst` from 1 to 1000000:
-
-| Key | Default |
-|---|---|
-| `rateLimits.perCitizen` | 120 requests per minute, burst 30, for each signed-in citizen |
-| `rateLimits.globalSignIn` | 600 requests per minute, burst 120, shared by everyone on the sign-in routes |
-| `session.maximumSessions` | 10000, from 1 to 1000000 |
-| `session.maximumPendingSignIns` | 10000, from 1 to 1000000 |
-| `session.maximumLifetimeSeconds` | 3600, from 60 to 86400 |
-| `session.signInLifetimeSeconds` | 600, from 60 to 3600 |
+Both sections are optional. Each rate takes `requestsPerMinute` and `burst`: `perCitizen` limits
+each signed-in citizen and `globalSignIn` is shared by everyone on the sign-in routes. The
+[breg-review keys](#breg-review-keys) below give each default and bound.
 
 `check` and startup refuse a `maximumPendingSignIns` smaller than the sign-ins `globalSignIn` admits within
 `signInLifetimeSeconds`: its burst plus its rate over that lifetime. A session ends at
@@ -426,6 +406,27 @@ configuration; the first `serve` does.
 {/* Evidence: crates/registry-breg-mcp/src/check.rs, run();
     crates/registry-breg-review/src/check.rs, run();
     crates/registry-breg-review/tests/binary.rs. */}
+
+## Configuration keys
+
+Every key each runtime file accepts, with its type, accepted values, defaults, and bounds. A
+`check` run adds the cross-key rules described above.
+
+### breg-mcp keys
+
+{/* Generated from products/breg/generated/mcp-runtime/mcp-runtime.schema.json,
+    through src/data/generated/breg-configuration.json, by
+    docs/site/scripts/generate-breg-configuration.mjs. Run npm run generate from docs/site. */}
+
+<ConfigurationReference contracts={reference.services.filter((contract) => contract.id === 'mcp-runtime')} prefix="breg-service" compact />
+
+### breg-review keys
+
+{/* Generated from products/breg/generated/review-runtime/review-runtime.schema.json,
+    through src/data/generated/breg-configuration.json, by
+    docs/site/scripts/generate-breg-configuration.mjs. Run npm run generate from docs/site. */}
+
+<ConfigurationReference contracts={reference.services.filter((contract) => contract.id === 'review-runtime')} prefix="breg-service" compact />
 
 ## MCP tool reference
 

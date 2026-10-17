@@ -147,15 +147,14 @@ bregctl --format json test ./my-registry \
 Every file is a JSON document or SQL, and every path inside a descriptor is relative to the
 reviewed directory root, starting with `modules/<module-id>/migrations/<migration-id>/`.
 
-- `descriptor.json` starts with `apiVersion:
-  id.registrystack.org/formats/breg/migration-descriptor/v1alpha1` and `kind:
-  BRegMigrationDescriptor`, and holds `id`, `changeClass`, `covers` (each change `code` and `target`
-  from `diff --format json` that is not compatible additive), `recovery` (`exact-target-resume`),
-  `lockTimeoutMilliseconds`, `statementTimeoutMilliseconds`, `steps`, `preAssertions`,
-  `postAssertions`, `rehearsalReceiptPath`, and, for a destructive change, `backupBindingPath`. A
-  descriptor that turns field encryption on, through a `field-encryption-changed` cover or a
+- `descriptor.json` holds the migration's `id` and `changeClass`, the `covers` list (each change
+  `code` and `target` from `diff --format json` that is not compatible additive), its `steps` and
+  assertions, the `rehearsalReceiptPath`, and, for a destructive change only, `backupBindingPath`.
+  A descriptor that turns field encryption on, through a `field-encryption-changed` cover or a
   `field-encryption-backfill` step, also holds `history` (`erase-and-rebaseline` or
   `retain-plaintext-history`); any other descriptor that holds `history` is refused.
+  [Migration descriptor](../../reference/breg-configuration/#migration-descriptor) lists every key
+  with its type, values, and bounds.
 - A step is one of three types, named by `type`, and each has an `id`.
   `transactional-sql` runs one statement from `sqlPath` in its own
   transaction, which also records the step's ledger progress, so a later step or post-assertion
@@ -204,11 +203,10 @@ A destructive descriptor's `backupBindingPath` is `modules/<module-id>/migration
 but that file is not part of the reviewed directory or the package. It names the backup binding
 each environment supplies at activation, because every environment takes its own backup of its
 own database. The binding is a JSON document you write beside the backup, outside the package,
-and pass to `plan` and `apply` as `--backup <backupBindingPath>=<absolute binding file>`. It starts
-with `apiVersion: id.registrystack.org/formats/breg/backup-binding/v1alpha1` and `kind:
-BRegBackupBinding`, and holds exactly these keys: `database`, `priorPackageDigest`,
-`priorSchemaFingerprint`, `backupFile` (the absolute path of the backup), `digest` (`sha256:` and
-the hex digest of the backup), `sizeBytes`, `createdAt`, and `maximumAgeSeconds` (at most 31 days).
+and pass to `plan` and `apply` as `--backup <backupBindingPath>=<absolute binding file>`. It names
+the database, the prior package digest and schema fingerprint, the absolute path of the backup
+file, its `sha256:` digest and size, when it was taken, and how old it may be, at most 31 days.
+[Backup binding](../../reference/breg-configuration/#backup-binding) lists every key it holds.
 A binding that is not such a document is refused with the reader's diagnostics, each with its line
 and column, before any other check.
 

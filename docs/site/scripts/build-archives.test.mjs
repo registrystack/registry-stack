@@ -25,7 +25,12 @@ import {
 } from './build-archives.mjs';
 import { applyArchiveSeo } from './apply-archive-seo.mjs';
 import { treeDigest } from './archive-bundle.mjs';
-import { CONTRACTS as bregContracts } from './generate-breg-configuration.mjs';
+import {
+  CLIENT_CAPABILITIES as bregClientCapabilities,
+  CONTRACTS as bregContracts,
+  SERVICE_CONTRACTS as bregServiceContracts,
+  TOOL_CONTRACTS as bregToolContracts,
+} from './generate-breg-configuration.mjs';
 import { SOURCE as configurationFormatsSource } from './generate-configuration-formats.mjs';
 import { CONTRACTS as evidenceContracts } from './generate-evidence-configuration.mjs';
 import { CONTRACTS as schedulingContracts } from './generate-scheduling-configuration.mjs';
@@ -355,7 +360,14 @@ test('legacy archives retain pinned CLI bytes and generate missing current confi
   };
   await rm(resolve(siteRoot, 'src'), { recursive: true });
   for (const file of [
-    ...[...bregContracts, ...evidenceContracts, ...schedulingContracts].map((contract) => contract.file),
+    ...[
+      ...bregContracts,
+      ...bregToolContracts,
+      ...bregServiceContracts,
+      ...evidenceContracts,
+      ...schedulingContracts,
+    ].map((contract) => contract.file),
+    bregClientCapabilities,
     configurationFormatsSource,
   ]) {
     const destination = resolve(repoRoot, file);

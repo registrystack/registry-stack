@@ -16,6 +16,8 @@ If a rule here conflicts with `design-registry-docs.md`, follow the design doc f
 4. **Scannable beats narrative.** Short sections, descriptive headings, parallel lists, generated tables. A user landing from search should orient in 10 seconds.
 5. **Concise.** A clear sentence beats a clear paragraph. A clear paragraph beats a clear section. Concision cuts words, not the reason for a step, the consequence of a step, or the recovery from a step.
 6. **Scanning is for finding. Procedures are for doing.** Principle 4 governs reference pages, landings, and anything a reader reaches from search. A reader part-way through a procedure with a terminal open is not scanning: that reader needs why the step exists, what it forecloses, and what to do when it fails, even when those cost a sentence each. Trimming a procedure until it scans well is how a page stops working.
+7. **The compiled model is the only catalogue.** A table of keys, codes, fields, or rules is generated from the product's schemas or code by a script under `scripts/`, never typed. When the product cannot produce a catalogue the page needs, the page carries prose and the gap is reported to the product; a hand-typed inventory is a finding in review, because every drift the site has carried started as one.
+8. **Each fact has one home.** A procedure lives on exactly one page and is linked from the others. One explanation page per product answers what you define, what exists at runtime, who owns the result, and how you inspect or recover it. Troubleshooting is one section keyed by diagnostic code, or nothing where the tool already prints the remedy.
 
 ## Voice and tone
 
@@ -41,6 +43,8 @@ If a rule here conflicts with `design-registry-docs.md`, follow the design doc f
 - Sentence case for all headings. `Architecture overview`, not `Architecture Overview`.
 - One topic per page. If the page has two unrelated sections, it is two pages.
 - End a long page with a short `Next` list of 3 to 5 links.
+- Tutorials are chained rings on one project. A product's tutorials thread one small project through them in a fixed order; each ring adds at most three product nouns and ends where the next begins, and a tutorial's `Next` points to the next ring, never to a sibling. Every YAML block on the product's pages is an excerpt of that project or of a diff a tutorial applies, so the tutorial runner can check it; no page prints a whole file to show one block.
+- A reader meets a product noun first in the tool's output or an API response, with one sentence and a glossary link, not in a definitions section ahead of the first command.
 
 ## Frontmatter
 
@@ -114,6 +118,7 @@ Preferred terms.
 | Repo slugs            | `registry-platform`, `registry-manifest`, `registry-evidence`, `registry-breg`, and `registry-discovery`; `solmara-lab` for the external adopter demo (monospace) |
 | Legacy repo paths     | `registry_relay` and `decentralized-evidence-demo` appear only in historical pages or `rename_status` fields. Never in prose on a `current` page without explicit rename context. |
 | Standards             | Use the official acronym after spelling on first use. `DCAT`, `SHACL`, `OGC API Records`, `SD-JWT VC`, `CCCEV`. Never translate. |
+| Base Registry Engine nouns | Six nouns, capitalized as the product prints them: `Record type` (`recordType` in a project file), `Record`, `Action`, `Plan`, `Proposal`, and `ActionReceipt`. Retired and refused by `check:config-vocabulary` on BReg pages: entity and entities as registry nouns, change request, change control, lifecycle action and lifecycle authority. Registry Record v1's `entityTypeIdentifier`, Manifest names, and other products' own vocabulary are not affected. |
 
 ## Choosing examples
 

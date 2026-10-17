@@ -1,0 +1,49 @@
+---
+type QueryKey = {
+  key: string;
+  rust: string[];
+  node: string[];
+  python: string[];
+};
+
+interface Props {
+  keys: QueryKey[];
+}
+
+const { keys } = Astro.props;
+
+if (keys.length === 0) {
+  throw new Error('the Proposal list query keys are empty; run npm run generate');
+}
+
+// Node and Python bind every key to one query argument, so the argument is
+// named once under the table. A per-key binding would need its own column.
+function sharedBinding(language: 'node' | 'python'): string {
+  const names = new Set(keys.flatMap((entry) => entry[language]));
+  if (names.size !== 1) {
+    throw new Error(`the ${language} Proposal query bindings are not one argument: ${[...names].join(', ')}`);
+  }
+  return [...names][0];
+}
+
+const nodeArgument = sharedBinding('node');
+const pythonArgument = sharedBinding('python');
+---
+
+<table>
+  <thead>
+    <tr><th>Query key</th><th>Rust</th></tr>
+  </thead>
+  <tbody>
+    {keys.map((entry) => (
+      <tr>
+        <td><code>{entry.key}</code></td>
+        <td>{entry.rust.map((name) => <div><code>{name}</code></div>)}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>
+
+<p>
+  Node passes these keys in <code>{nodeArgument}</code>; Python passes them in <code>{pythonArgument}</code>.
+</p>

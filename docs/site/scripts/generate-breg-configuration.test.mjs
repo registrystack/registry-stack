@@ -5,7 +5,14 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { collectFields } from './configuration-reference.mjs';
-import { buildBRegConfiguration, generateBRegConfiguration, CONTRACTS } from './generate-breg-configuration.mjs';
+import {
+  buildBRegConfiguration,
+  CONTRACTS,
+  generateBRegConfiguration,
+  proposalQueryKeys,
+  SERVICE_CONTRACTS,
+  TOOL_CONTRACTS,
+} from './generate-breg-configuration.mjs';
 
 test('BReg covers every committed authoring and runtime schema', async () => {
   const root = new URL('../../../products/breg/generated/', import.meta.url);
@@ -46,6 +53,69 @@ test('BReg reference includes module extensions, hook conditions, and runtime de
   assert.ok(runtime.has('eventDestinations.*.deliveryCeilings.maximumAttempts'));
   assert.deepEqual(runtime.get('retention.hookPayloadRetentionDays').defaults, ['7']);
   assert.ok(runtime.get('retention.hookPayloadRetentionDays').constraints.flat().includes('maximum: 30'));
+});
+
+test('BReg tool and service references read the committed schemas they name', async () => {
+  const document = await buildBRegConfiguration();
+  assert.deepEqual(document.tools.map((entry) => entry.id),
+    ['migration-descriptor', 'backup-binding', 'journeys', 'dev-clients']);
+  assert.deepEqual(document.services.map((entry) => entry.id), ['mcp-runtime', 'review-runtime']);
+  const root = new URL('../../../products/breg/generated/', import.meta.url);
+  for (const entry of [...TOOL_CONTRACTS, ...SERVICE_CONTRACTS]) {
+    const schema = JSON.parse(await readFile(new URL(entry.file.split('/generated/')[1], root), 'utf8'));
+    assert.ok(typeof schema.title === 'string' && schema.title.length > 0, entry.file);
+  }
+  for (const entry of [...document.tools, ...document.services]) {
+    assert.ok(['tooling', 'beta'].includes(entry.status), entry.id);
+    assert.equal(entry.field_count, new Set(entry.fields.map((field) => field.key_path)).size, entry.id);
+  }
+  const fields = (group, id) => new Map(document[group].find((entry) => entry.id === id)
+    .fields.map((field) => [field.key_path, field]));
+
+  const descriptor = fields('tools', 'migration-descriptor');
+  assert.deepEqual(descriptor.get('steps[].type').values,
+    ['chunked-backfill', 'field-encryption-backfill', 'transactional-sql']);
+  assert.deepEqual(descriptor.get('recovery').values, ['exact-target-resume']);
+  assert.deepEqual(descriptor.get('history').values, ['erase-and-rebaseline', 'retain-plaintext-history']);
+  assert.deepEqual(descriptor.get('kind').values, ['BRegMigrationDescriptor']);
+  assert.ok(descriptor.has('steps[].objects[].physicalName'));
+
+  const binding = fields('tools', 'backup-binding');
+  assert.deepEqual([...binding.keys()].sort(), ['apiVersion', 'backupFile', 'createdAt', 'database', 'digest',
+    'kind', 'maximumAgeSeconds', 'priorPackageDigest', 'priorSchemaFingerprint', 'sizeBytes']);
+  assert.ok([...binding.values()].every((field) => field.required === 'yes'));
+  assert.ok(binding.get('maximumAgeSeconds').constraints.flat().includes('maximum: 2678400'));
+
+  const journeys = fields('tools', 'journeys');
+  assert.deepEqual(journeys.get('kind').values, ['BRegJourneys']);
+  assert.ok(journeys.has('journeys[].steps[].expect.outcome'));
+  assert.ok(fields('tools', 'dev-clients').has('clients[].accessProfiles'));
+
+  const gateway = fields('services', 'mcp-runtime');
+  assert.deepEqual(gateway.get('resourceServer.algorithms[]').values, ['ES256', 'ES384', 'EdDSA', 'RS256', 'RS384']);
+  assert.deepEqual(gateway.get('resourceServer.maximumTokenLifetimeSeconds').defaults, ['3600']);
+  for (const key of ['registry.audience', 'exchange.privateKeyRef', 'service.reviewBaseUrl']) {
+    assert.ok(gateway.get(key).description, key);
+  }
+  const review = fields('services', 'review-runtime');
+  assert.deepEqual(review.get('session.maximumLifetimeSeconds').defaults, ['3600']);
+  assert.ok(review.get('signIn.scopes').constraints.flat().includes('maxItems: 16'));
+});
+
+test('Proposal list query keys come from the client capability inventory', async () => {
+  const document = await buildBRegConfiguration();
+  const inventory = JSON.parse(await readFile(
+    new URL('../../../products/breg/contracts/client-capabilities.json', import.meta.url), 'utf8'));
+  assert.equal(document.client_proposal_query.file, 'products/breg/contracts/client-capabilities.json');
+  assert.deepEqual(document.client_proposal_query.keys.map((entry) => entry.key),
+    ['action', 'owner', 'target', 'state', 'cursor', 'limit', 'turn']);
+  for (const entry of document.client_proposal_query.keys) {
+    assert.deepEqual(entry, { key: entry.key, ...inventory.queryOptionBindings[entry.key] });
+  }
+  assert.throws(() => proposalQueryKeys({}), /queryOptionBindings/);
+  assert.throws(() => proposalQueryKeys({ queryOptionBindings: {
+    accessProfile: { rust: ['BRegRecordOptions.access_profile'], node: [], python: [] },
+  } }), /no Proposal list query key/);
 });
 
 test('schema defaults preserve false, null, collections, and referenced defaults', () => {

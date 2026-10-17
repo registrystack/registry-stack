@@ -13,6 +13,8 @@ standards_referenced:
 ---
 
 import BRegClientCapabilities from '../../../components/BRegClientCapabilities.astro';
+import BRegProposalQueryKeys from '../../../components/BRegProposalQueryKeys.astro';
+import reference from '../../../data/generated/breg-configuration.json';
 
 The Base Registry Engine (BReg) namespace exposes native registry operations through Rust,
 `@registrystack/client` in Node, and `registry-stack-client` in Python.
@@ -32,6 +34,17 @@ outcomes, errors, attachments, and lifecycle promotion.
     crates/registry-breg-client/src/client.rs,
     crates/registry-breg-client-node/client.d.ts,
     crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi */}
+
+## Proposal list query keys
+
+Each key a Proposal list accepts, and the Rust query member that carries it. Node and Python
+take the keys as one query object, named below the table.
+
+{/* Generated from products/breg/contracts/client-capabilities.json (queryOptionBindings),
+    through src/data/generated/breg-configuration.json, by
+    docs/site/scripts/generate-breg-configuration.mjs. Run npm run generate from docs/site. */}
+
+<BRegProposalQueryKeys keys={reference.client_proposal_query.keys} />
 
 ## Metadata and upgrade compatibility
 
