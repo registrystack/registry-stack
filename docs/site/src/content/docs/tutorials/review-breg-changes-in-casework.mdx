@@ -65,7 +65,9 @@ action_id=correct-address
 
 ## Pair the review context
 
-Preview the pairing; it writes nothing:
+A provider pair checks that the Proposal context your Action exports is the one the Casework
+provider pins. The canonical-review example declares that provider under `contextProviders` in
+`products/casework/examples/canonical-review/casework.yaml`. Preview the pair; it writes nothing:
 
 ```sh
 caseworkctl provider pair "$casework_project" \
@@ -73,10 +75,9 @@ caseworkctl provider pair "$casework_project" \
   --breg-package "$breg_package" --action-id "$action_id"
 ```
 
-A pairing that works reports `"ok": true`, the context `contract` it verified, and the package's
-`registryRevision`. Its `readerAuthority` names the operation `get-review-status` with
-`"sourceWrites": false`: Casework reads review status from your registry and never writes to it.
-Write the pairing:
+A working pair reports `"ok": true`, the verified context `contract`, and the package's
+`registryRevision`. Its `readerAuthority` names `get-review-status` with `"sourceWrites": false`:
+Casework reads review status from your registry and never writes to it. Write the pair:
 
 ```sh
 caseworkctl provider pair "$casework_project" \
@@ -84,27 +85,24 @@ caseworkctl provider pair "$casework_project" \
   --breg-package "$breg_package" --action-id "$action_id" --apply
 ```
 
-The report now says `"applied": true`, and the provider description sits under
-`context-providers/`. If the policy's contract pin does not match the package's export, the command
-exits 1 with `caseworkctl.refused` and "The authored input was refused." Regenerate the export,
-vendor its schema, and update the pin before you retry.
+The report now says `"applied": true`. If the policy's contract pin does not match the package's
+export, the command exits 1 with `caseworkctl.refused`; regenerate the export, vendor its schema,
+and update the pin before you retry.
 
 {/* Evidence: crates/registry-caseworkctl/src/provider_pair.rs, pair and native_export;
-    crates/registry-caseworkctl/src/lib.rs, classify_failure and DOMAIN_REFUSAL_EXIT. */}
+    crates/registry-caseworkctl/src/lib.rs, classify_failure and DOMAIN_REFUSAL_EXIT;
+    products/casework/examples/canonical-review/casework.yaml, contextProviders. */}
 
 ## Check and package
 
-Compare the paired project with the package, inspect the policy, and build the Casework package:
-
 ```sh
 caseworkctl check "$casework_project" --against-breg-package "$breg_package"
-caseworkctl explain "$casework_project"
 caseworkctl package "$casework_project" --output ./paired-casework-package
 ```
 
-A passing check confirms the context contract and the exact schema bytes, and reports the package's
-registry revision. It runs offline: it proves the projects agree, not that either service is
-reachable. Rebuild and recheck whenever the BReg package changes.
+The check confirms the context contract and the exact schema bytes offline: it proves the
+projects agree, not that either service is reachable. Rebuild and recheck whenever the BReg
+package changes.
 
 {/* Evidence: crates/registry-caseworkctl/src/provider_pair.rs, compare;
     crates/registry-caseworkctl/src/lib.rs, against_breg_package;
@@ -117,7 +115,7 @@ runtime configuration binds it to an endpoint and a credential;
 [Review authorities, declared twice](../../configure/breg-actions/#review-authorities-declared-twice)
 shows both halves. Three things in that binding must agree with the Casework producer:
 
-```yaml title="casework.yaml"
+```yaml title="products/casework/examples/canonical-review/casework.yaml"
 trustedProducers:
   facility-registry:
     profile: requester
@@ -188,5 +186,4 @@ covers those states and application; a Casework decision never grants authority 
 
 ## Next
 
-Run your registry for real with [Deploy and serve](../../operate/breg/), and run Casework beside it
-with [Deploy Registry Casework](../../operate/casework/).
+[Author a Casework policy](../../configure/casework/)

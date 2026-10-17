@@ -13,121 +13,116 @@ locale: en
 standards_referenced: []
 ---
 
-If you operate Registry Casework, choose review retention with the policy author, keep the maintenance worker and audit destination healthy, and make sure producers collect results before they expire. Review payloads, protected accountability, short-lived staffing state, and the external journal have different retention boundaries.
+If you operate Registry Casework, this page sets how long a review is kept, what the audit journal
+records, and how a producer collects a result before it is gone. It uses the project from
+[Decide your first ReviewRequest](../../tutorials/first-casework/); the commands read a deployment,
+so none is replayed here.
 
-## What Casework retains
+## Retention windows
 
-Each `ReviewPolicy` declares `terminalRetentionDays` and `accountabilityRetentionDays`. The terminal period is at least one day; accountability is at least as long and at most 3,650 days. Both periods run from the request's terminal settlement. A request still under review has no terminal expiry yet; an overdue clock does not itself erase or cancel it.
+A retention window is how long Casework keeps a part of a review after the request settles. The
+policy author sets two of them per `ReviewPolicy`, in `casework.yaml`:
 
-| State | Retention boundary |
-| --- | --- |
-| Submitted context, result, constraints, notes, drafts, decisions, tasks, history, and clock occurrences | Request terminal time plus `terminalRetentionDays` |
-| Producer result-feed event and completion wake | The same terminal result availability period |
-| Protected deciding identity, private reason, configured outcome, and structured-result digest | Request terminal time plus `accountabilityRetentionDays` |
-| Producer and initiator identities | Raw until payload expiry, then request-bound identity tombstones until accountability expiry |
-| Mutation replay response | Payload erased at terminal expiry; replay metadata persists until accountability expiry |
-| Submission recovery reservation | A fixed recovery deadline: admission time plus the producer's `retention.receiptRetentionDays`; accepted reservation retention follows terminal accountability expiry |
-| Review/staffing cursors and preview snapshots | Their own bounded expiry, separate from review result retention |
-| Audit journal | File rotation/retention settings and your external archive policy |
-
-Current-source business projections are read under the caller's source authority rather than retained as review snapshots. Casework still retains the subject and context binding, policy closure, decisions, and derived task metadata needed for the review. A submitted snapshot is retained review data, so keep its schema and content limited to the purpose.
-
-Each request owns its clock budget. A later request after changes were requested gets a new budget; it does not resume a prior request's clock. Clock erasure follows the request that owns it.
-
-{/* Evidence: crates/registry-casework-core/src/review.rs, ReviewRetentionPolicy;
-    crates/registry-casework/src/review.rs, create_review_request(), settle_review(), and review_producer_tombstone();
-    crates/registry-casework/src/review/maintenance.rs, erase_expired_reviews_at();
-    crates/registry-casework/tests/review_postgres.rs,
-    request_clock_retention_is_independent_for_successive_requests(). */}
-
-## Keep automatic erasure running
-
-Run the normal serving process to enforce the configured retention:
-
-```sh
-casework --runtime-config /etc/registry-casework/runtime.yaml serve
+```yaml
+    retention:
+      terminalRetentionDays: 90
+      accountabilityRetentionDays: 365
 ```
 
-The maintenance loop runs review retention about once a minute. A review pass selects at most 100 eligible requests and skips locked rows, so a backlog drains over several passes. At result expiry it erases private payloads and task/history/clock state, scrubs subject and context fields, and retains bounded metadata for expired-operation recovery. At accountability expiry it removes the protected records and remaining request/replay state. An expired unbound recovery reservation has a separate bounded cleanup.
+- `terminalRetentionDays` keeps the review itself: submitted context, tasks, notes, decisions and
+  the result. It is from 1 to 3,650 days.
+- `accountabilityRetentionDays` keeps the [accountability record](../../reference/glossary/#accountability-record):
+  who decided and the private reason. It is at least as long as the terminal window and at most
+  3,650 days.
 
-Staffing preview and cursor cleanup runs in the same maintenance cycle, with up to 1,000 expired rows per table in an admitted transaction. An unexpired cursor or preview never extends the review's payload retention.
+Both run from the request's terminal settlement; a request still under review has no expiry. Each
+trusted producer also sets how long its admission receipt can be recovered:
 
-Erasure starts only while the audit writer is ready. Successful changes publish minimized audit responses; no-op passes add no domain event. If the writer stops, retention pauses without deleting the selected data. If response publication fails after commit, erasure may already have happened; restoring audit and retrying maintenance does not recreate the data or duplicate an erasure event.
+```yaml
+    retention: {receiptRetentionDays: 30}
+```
 
-Inspect `/ready` and runtime warnings for failed retention, staffing retention, or audit writes. Repair the dependency and let the next bounded pass run. There is no supported command to force immediate per-subject erasure. If you need an earlier terminal boundary, the admitted producer can cancel a review under its existing authority; cancellation starts the configured retention periods rather than deleting the payload immediately.
+{/* Evidence: products/casework/examples/standalone-decision/casework.yaml;
+    crates/registry-casework-core/src/review.rs, ReviewRetentionPolicy;
+    crates/registry-casework/src/review.rs, create_review_request() and settle_review(). */}
 
-{/* Evidence: crates/registry-casework/src/runtime.rs, serve_from_path();
+## Keep erasure running
+
+[Erasure](../../reference/glossary/#erasure) runs inside `casework serve`; there is no separate
+job or command. The maintenance worker runs a retention pass about once a minute, and each pass
+erases at most 100 eligible requests and skips rows another transaction holds, so a backlog drains
+over several passes. Erasure starts only while the audit writer is ready, and each erasure is
+recorded in the audit journal.
+
+{/* Evidence: crates/registry-casework/src/runtime.rs, serve_from_path(), retention_ticks;
+    crates/registry-casework/src/review.rs, REVIEW_RETENTION_BATCH_SIZE;
     crates/registry-casework/src/review/maintenance.rs, erase_expired_reviews_at();
-    crates/registry-casework/src/review/staffing.rs, erase_expired_review_staffing();
-    crates/registry-casework/tests/support/maintenance_audit_regressions.rs;
-    crates/registry-caseworkctl/src/lib.rs, Command. */}
+    crates/registry-casework/tests/support/maintenance_audit_regressions.rs. */}
 
 ## Recover before the result window closes
 
-Have the producer store the accepted request identifier, original idempotency key, exact submitted body, and fixed recovery deadline. A lost admission response is recovered by retrying that same body and key. A changed body under the key is a conflict, not another submission.
+The result carries its own deadline, `availableUntil`: its settlement time plus
+`terminalRetentionDays`. Until then the producer reads it, and a request that is still under
+review answers `202`. After it, the result read answers `410` with no body.
 
-Fetch the immutable result through the producer's authenticated result endpoint or result feed before its availability deadline. A completion delivery is only a payload-free wake to fetch that result; it does not carry a decision, apply a source change, or start another workflow. The producer must authorize any later mutation independently.
+A producer that lost the admission response retries the same body under the same
+`Idempotency-Key` within its receipt window; Casework answers `200` with the request it already
+accepted, rather than `201`. A changed body under that key is refused, not admitted.
 
-After payload expiry, an exact replay can return `idempotency.expired` with HTTP `410`, while a changed request under the same retained key returns `idempotency.key-reused`. Reconcile the original operation with the producer's records rather than selecting a new key to hide uncertainty. The corresponding tombstone is eventually removed at its retention boundary; a forgotten key is not evidence that the operation never happened.
+{/* Evidence: crates/registry-casework/src/http.rs, get_review_result() and create_review_request();
+    crates/registry-review-protocol/src/lib.rs, ReviewResult;
+    crates/registry-casework/src/problem.rs, IdempotencyKeyReused. */}
 
-A serving Supervisor can resolve an authorized accountability event while its protected record remains retained. That record can identify the deciding person and private reason, but does not release the review context or structured result. Ordinary own-decision receipts omit those private fields.
+## Completion destinations
 
-{/* Evidence: crates/registry-review-protocol/src/lib.rs, ReviewRequestAccepted and ReviewResult;
-    crates/registry-casework/src/review.rs, review_accountability() and own_review_decisions();
-    crates/registry-casework/src/runtime.rs, ReviewCompletionDispatcher;
-    crates/registry-casework/src/problem.rs, IdempotencyExpired and IdempotencyKeyReused. */}
+A completion destination is the producer's URL Casework calls when a result is ready. The call
+carries no decision; the producer then reads the result. Each destination is declared under
+`reviewCompletionDestinations` in the [runtime configuration](../casework/#casework-runtime-configuration),
+keyed by the destination id the producer names in `casework.yaml`.
+
+A failed call returns to the queue and is tried again after `retryDelaySeconds` (default 30), up to
+`maximumAttempts` (default 12), each attempt bounded by `attemptTimeoutMilliseconds` (default
+5000). Delivery stops when the attempts run out or the result window closes; the result stays
+readable until `availableUntil`.
+
+{/* Evidence: products/casework/generated/runtime/runtime.schema.json, ReviewCompletionRuntimeConfig;
+    crates/registry-casework/src/runtime.rs, ReviewCompletionDispatcher, lease_one() and finish(). */}
 
 ## Keep the audit file
 
-Casework uses the external journal for admitted operations. A requested mutation writes its request entry before the transaction and its response after commit. An idempotent replay has a minimized terminal response. Background clock, absence, retention, and cursor work uses readiness admission and minimized response entries without a caller request. Entries share a correlation and carry `registry-casework-audit/v1`.
+The [audit journal](../../reference/glossary/#audit-journal) is the file Casework appends one line
+to before each admitted operation and one after it commits. This is the request line of the
+decision in the first tutorial:
 
-The journal pseudonymizes review requests, tasks, grants, teams, queues, and principals. It omits context fields, free-text reasons, structured results, cursor tokens, and preview contents. Retention cleanup may include a generated erased-row count. Protected accountability is a separate database record, not a way to reverse an audit pseudonym. Audit entries are not chained or signed; tamper evidence comes from the archive you operate.
-
-{/* Evidence: crates/registry-casework/src/audit.rs, CASEWORK_AUDIT_SCHEMA, published_audit_record(), and AuditOperation;
-    crates/registry-casework/tests/support/maintenance_audit_regressions.rs;
-    crates/registry-platform-audit/src/writer.rs. */}
-
-Provide at least 32 bytes of audit key material through a declared secret provider. For a mounted file, create it under the runtime user's controls:
-
-```sh
-(umask 077 && openssl rand -hex 32 > /run/secrets/registry-casework/casework-audit-key)
-chmod 0400 /run/secrets/registry-casework/casework-audit-key
+```sh test-skip="reads a deployment's audit journal; the line was observed in the development session's journal"
+rg '"casework.review-decided"' /var/lib/registry-casework/audit.ndjson
 ```
 
-Provision the parent directory first and run the command as the intended owner. Set `audit.hashKeyRef: secret:file/casework-audit-key`. The exact file bytes, including any trailing newline, determine the pseudonyms. Keep the key and its backups protected for as long as you need to recompute references in the archive. A key rotation changes pseudonyms; use a new audit path and record that boundary, as [audit key handover](../advanced/back-up-and-restore/#hand-over-the-casework-audit-key) describes.
+```text test-excerpt
+{"schema":"registry-casework-audit/v1","eventId":"<id>","time":"<time>","phase":"request","correlation":"<id>","record":{"event":"casework.review-decided","principalPseudonym":"<pseudonym>","profileId":"staff"}}
+```
 
-With `destination: file`, the writer seals files when the next entry would exceed `audit.rotateBytes`, then opens a new active file. Defaults are 100 MiB per file and 90 days for sealed files. Ship sealed files before local expiry and archive the final active file when retiring a path. With `destination: stdout`, your collector owns collection and retention. Never restore an older journal over the live archive.
+The journal names people and records only by keyed pseudonym and carries no context, reason or
+result. Its location, key, rotation and local retention are `audit.path`, `audit.hashKeyRef`,
+`audit.rotateBytes` and `audit.retentionDays` in the
+[runtime configuration](../casework/#casework-runtime-configuration). Entries are neither chained
+nor signed, so ship sealed files to an archive you control, and keep the key as long as you need
+to recompute pseudonyms; [audit key handover](../advanced/back-up-and-restore/#hand-over-the-casework-audit-key)
+covers rotation.
 
-{/* Evidence: crates/registry-platform-audit/src/lib.rs, AuditKeyHasher and MIN_AUDIT_SECRET_BYTES;
-    crates/registry-platform-config/src/secrets.rs, validate_file_metadata();
-    crates/registry-platform-audit/src/writer.rs, DEFAULT_AUDIT_RETAIN_DAYS;
+{/* Evidence: crates/registry-casework/src/audit.rs, CASEWORK_AUDIT_SCHEMA and published_audit_record();
+    crates/registry-platform-audit/src/writer.rs;
     crates/registry-casework/src/config.rs. */}
 
-## Recover from audit failure
+A refused audit write fails the operation with `service.unavailable` and `/ready` answers `503`
+until you repair the destination and restart. A database restore can bring back data that was
+already erased; [Back up and restore Casework](../advanced/back-up-and-restore/#restore-registry-casework)
+gives the order of recovery.
 
-A refused file write fails the sensitive operation with `service.unavailable`, stops that writer, and makes `/ready` return `503`. Repair free space, ownership, permissions, or the single-writer path, then restart the process. A response failure can follow a committed database change: retry with the original key/body or inspect the result before choosing another operation.
-
-A blocked stdout collector can stall the writer. After its write deadline, readiness and audited calls fail until the stream drains. Restore the collector; this transient stall can recover without restarting. Keep process health separate from audit readiness when alerting.
-
-For activation, `casework.activation.applied-unaudited` explicitly means apply committed before its audit response failed. Confirm the active package through `caseworkctl status`, restore audit, and record the recovery instead of treating the failed command as a rollback.
-
-{/* Evidence: crates/registry-platform-audit/src/writer.rs, STREAM_WRITE_DEADLINE and AuditUnavailableReason;
-    crates/registry-casework/src/service.rs, ready();
-    crates/registry-caseworkctl/src/lib.rs, activation_failure();
-    crates/registry-casework/tests/support/commit_audit_regressions.rs. */}
-
-## Verify retention and recovery
-
-Include an expiry and lost-response case in your isolated deployment acceptance checks. Use synthetic review data and the intended producer, reviewer, and Supervisor roles. Confirm that producer polling works before expiry, payload reads stop after expiry, accountability remains available only to its authorized audience, and no role recovers context from the journal. Do not alter production timestamps or database rows to test expiry.
-
-A database restore can reintroduce expired data and lose later decisions. Reconcile the lost window before reviewers resume and let maintenance repeat due erasures. [Back up and restore Casework](../advanced/back-up-and-restore/#restore-registry-casework) gives the operational boundary.
-
-{/* Evidence: crates/registry-casework/tests/review_postgres.rs;
-    crates/registry-casework/tests/support/maintenance_audit_regressions.rs;
+{/* Evidence: crates/registry-casework/src/service.rs, ready();
+    crates/registry-platform-audit/src/writer.rs, AuditUnavailableReason;
     products/casework/scripts/test-backup-restore.sh. */}
 
 ## Next
 
-- [Deploy Registry Casework](../casework/)
-- [Author retention in a policy](../../configure/casework/#review-policies-and-producers)
-- [Back up and restore Casework](../advanced/back-up-and-restore/#restore-registry-casework)
+[Registry Casework API](../../reference/apis/registry-casework/)
