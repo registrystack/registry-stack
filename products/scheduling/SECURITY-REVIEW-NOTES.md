@@ -80,7 +80,7 @@ audit entries. The threats this surface answers:
   retention periods before production use. Retention clears an attempt's raw
   caller and key with its receipt (SCHEDULING-SEC-33), expires cursors, and
   clears a claim's raw owner after its terminal window (SCHEDULING-SEC-34).
-  Claim, history, and outbox rows remain (SCHEDULING-DEF-06, recorded in
+  Claim, history, and actionable or uncertain outbox rows remain (SCHEDULING-DEF-06, recorded in
   `RUNTIME-CONFIG.md`).
   Rotated audit files are removed after `audit.retentionDays`, 90 days by
   default, which is equally a placeholder.
@@ -1240,3 +1240,22 @@ a receipt holds are unchanged; a deployment that had set more than 365 days is
 refused at startup and keeps raw caller identifiers for less time once it
 lowers the value. `a_removed_runtime_key_names_the_key_that_replaced_it` and
 the out-of-range cases in `config.rs` pin the name and the bound.
+
+
+## Terminal dispatch metadata retention
+
+The retention tick uses the existing receipt period for delivered reminder
+intents and terminal hook metadata. `PostgresStore::erase_terminal_dispatch`
+bounds each table family to 256 rows and commits dependent deletions together.
+Shared Dispatch rechecks terminal state and cutoff; Hooks requires completed
+payload expiry for dead letters, locks state and shared events with SKIP LOCKED,
+and deletes state, delivery metadata, then unreferenced events. Pending, leased,
+retryable and uncertain work remains. Reminder local, failed and suppressed
+states stay readable. No migration credential or grant change is introduced.
+
+The tests in the `terminal_retention` module in `tests/postgres_commitments.rs` cover cutoff boundaries,
+protected row snapshots, shared siblings, receipt tombstones and repeated
+cleanup. The batch test also injects a real dependent foreign key to require
+rollback of all earlier deletions. Audit entries retain their independent
+retention. Committed claims/history and actionable outbox retention remain
+outside this change; terminal cleanup does not replace payload expiry auditing.

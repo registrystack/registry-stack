@@ -208,6 +208,8 @@ entries:
       - {path: crates/registry-scheduling/src/auth.rs, name: an_unreadable_clock_refuses_to_judge_an_expiry_rather_than_passing_it}
   - id: SCHEDULING-SEC-24
     tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: hook_retention_preserves_replay_and_leases_and_removes_dependents_before_events}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: terminal_retention_is_bounded_and_dependent_failure_rolls_back_the_whole_batch}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: scheduling_observer_hooks_accept_only_the_closed_runtime_contract}
       - {path: crates/registry-scheduling/src/config.rs, name: a_hook_policy_requires_and_accepts_its_deployment_binding}
       - {path: crates/registry-scheduling/src/hooks.rs, name: projections_disclose_only_the_requested_closed_fields}
@@ -275,6 +277,7 @@ entries:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: apply_refuses_the_active_package_and_a_foreign_database_without_writing, features: [postgres-test]}
   - id: SCHEDULING-SEC-33
     tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: reminder_retention_uses_receipt_cutoff_and_preserves_actionable_work_and_tombstones}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_spent_key_forgets_its_raw_caller_after_the_receipt_horizon_and_stays_spent}
       - {path: crates/registry-scheduling/src/store/attempt_key.rs, name: the_attempt_key_reference_is_a_length_prefixed_domain_digest}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: fresh_attempt_storage_preserves_digests_and_refuses_partial_erasure, features: [postgres-test]}
