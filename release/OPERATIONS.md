@@ -334,20 +334,19 @@ Registry Stack organization owners maintain two GitHub Actions organization secr
 for CI pulls: `DOCKERHUB_USERNAME` names the Docker Hub account and
 `DOCKERHUB_READ_TOKEN` contains that account's read-only access token. Grant
 both secrets to this repository. Protected service-container runs pass them
-through the runner's registry credentials support, and protected release build
-jobs authenticate with the pinned Docker login action before any Docker
-Hub-backed build. Keep the token read-only and do not reuse a publish
-credential.
+to the pinned Docker login action before the owned PostgreSQL service action
+starts the exact pinned image. Protected release build jobs use the same login
+action before any Docker Hub-backed build. Keep the token read-only and do not
+reuse a publish credential.
 
 Pull requests and branch-controlled manual runs do not receive these values.
-Their service credential expression resolves to `null`, so the runner omits
-the credential object and continues with anonymous Docker Hub access. This
-also preserves fork pull requests. Branch rehearsals and local release builds
-stay anonymous unless the caller's existing Docker configuration supplies
-credentials. Protected build jobs record that credentials are unavailable and
-skip login when both secrets are absent. A protected build job fails when only
-one value is present so a partially configured credential does not silently
-become the expected authenticated path.
+They skip the login step, so the owned service action continues with anonymous
+Docker Hub access. This also preserves fork pull requests. Branch rehearsals
+and local release builds stay anonymous unless the caller's existing Docker
+configuration supplies credentials. Protected jobs record that credentials
+are unavailable and skip login when both secrets are absent. A protected job
+fails when only one value is present so a partially configured credential does
+not silently become the expected authenticated path.
 
 [Debian's Docker Official Image](https://hub.docker.com/_/debian),
 [PostgreSQL's Docker Official Image](https://hub.docker.com/_/postgres), and

@@ -44,15 +44,23 @@ DOCKER_LOGIN_ACTION = (
 
 
 class DockerHubPullAuthenticationTest(unittest.TestCase):
-    SERVICE_CREDENTIALS = (
-        "${{ github.event_name != 'pull_request' && "
-        "(github.event_name != 'workflow_dispatch' || "
-        "github.ref == 'refs/heads/main') && "
-        "secrets.DOCKERHUB_USERNAME != '' && "
-        "secrets.DOCKERHUB_READ_TOKEN != '' && "
-        "fromJSON(format('{{\"username\":{0},\"password\":{1}}}', "
-        "toJSON(secrets.DOCKERHUB_USERNAME), "
-        "toJSON(secrets.DOCKERHUB_READ_TOKEN))) || null }}"
+    POSTGRES_IMAGE = (
+        "docker.io/library/postgres:17.11@sha256:"
+        "67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675"
+    )
+    POSTGIS_IMAGE = (
+        "postgis/postgis@sha256:"
+        "01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6"
+    )
+    SERVICE_CONSUMERS = (
+        ("ci.yml", "platform-coverage", POSTGRES_IMAGE, "dispatch", "dispatch", "dispatch_test"),
+        ("ci.yml", "casework-postgres", POSTGRES_IMAGE, "casework", "casework", "casework_test"),
+        ("ci.yml", "scheduling-postgres", POSTGRES_IMAGE, "scheduling", "scheduling", "scheduling_test"),
+        ("ci.yml", "messaging-postgres", POSTGRES_IMAGE, "messaging", "messaging", "messaging_test"),
+        ("ci.yml", "coordinator-postgres", POSTGRES_IMAGE, "coordinator", "coordinator", "coordinator_test"),
+        ("ci.yml", "breg-contracts", POSTGIS_IMAGE, "breg", "breg", "breg_test"),
+        ("ci.yml", "breg-wasm", POSTGIS_IMAGE, "breg", "breg", "breg_test"),
+        ("nightly-rust-coverage.yml", "rust", POSTGRES_IMAGE, "dispatch", "dispatch", "dispatch_test"),
     )
 
     def test_manual_ci_run_title_distinguishes_full_and_partial_sweeps(self) -> None:
@@ -62,25 +70,157 @@ class DockerHubPullAuthenticationTest(unittest.TestCase):
         self.assertIn("RegistryStack CI full sweep", run_name)
         self.assertIn("RegistryStack CI partial sweep", run_name)
 
-    def test_docker_hub_service_pulls_use_fork_safe_credentials(self) -> None:
-        for filename in ("ci.yml", "nightly-rust-coverage.yml"):
+    def test_docker_hub_service_pulls_use_fork_safe_login_and_owned_containers(
+        self,
+    ) -> None:
+        for filename, job_name, image, database, user, password in self.SERVICE_CONSUMERS:
             _, document = workflow(filename)
-            for job_name, job in document["jobs"].items():
-                for service_name, service in job.get("services", {}).items():
-                    image = service.get("image", "")
-                    if not (
-                        image.startswith("docker.io/")
-                        or image.startswith("postgis/")
-                    ):
-                        continue
-                    with self.subTest(
-                        workflow=filename,
-                        job=job_name,
-                        service=service_name,
-                    ):
-                        self.assertEqual(
-                            service.get("credentials"), self.SERVICE_CREDENTIALS
-                        )
+            job = document["jobs"][job_name]
+            steps = job["steps"]
+            with self.subTest(workflow=filename, job=job_name):
+                self.assertNotIn("postgres", job.get("services", {}))
+                login_index = next(
+                    index
+                    for index, step in enumerate(steps)
+                    if step.get("name") == "Prepare Docker Hub pull authentication"
+                )
+                start_index = next(
+                    index
+                    for index, step in enumerate(steps)
+                    if step.get("id") == "postgres"
+                )
+                stop_index = next(
+                    index
+                    for index, step in enumerate(steps)
+                    if step.get("name") == "Stop PostgreSQL service"
+                )
+                self.assertLess(login_index, start_index)
+                self.assertLess(start_index, stop_index)
+                login = steps[login_index]
+                self.assertEqual(login["uses"], "./.github/actions/dockerhub-login")
+                self.assertEqual(
+                    login["if"],
+                    "github.event_name != 'pull_request' && "
+                    "(github.event_name != 'workflow_dispatch' || "
+                    "github.ref == 'refs/heads/main')",
+                )
+                self.assertEqual(
+                    login["with"],
+                    {
+                        "username": "${{ secrets.DOCKERHUB_USERNAME }}",
+                        "read_token": "${{ secrets.DOCKERHUB_READ_TOKEN }}",
+                    },
+                )
+                container_name = f"registry-stack-{job_name}-postgres"
+                self.assertEqual(
+                    steps[start_index],
+                    {
+                        "name": "Start PostgreSQL service",
+                        "id": "postgres",
+                        "uses": "./.github/actions/postgres-service",
+                        "with": {
+                            "image": image,
+                            "container_name": container_name,
+                            "database": database,
+                            "database_user": user,
+                            "database_password": password,
+                        },
+                    },
+                )
+                self.assertEqual(
+                    steps[stop_index],
+                    {
+                        "name": "Stop PostgreSQL service",
+                        "if": "always()",
+                        "uses": "./.github/actions/postgres-service",
+                        "with": {
+                            "operation": "stop",
+                            "container_name": container_name,
+                        },
+                    },
+                )
+
+    def test_postgres_service_action_starts_waits_and_stops_owned_container(
+        self,
+    ) -> None:
+        action = yaml.safe_load(
+            (ROOT / ".github/actions/postgres-service/action.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        start, stop = action["runs"]["steps"]
+        self.assertLess(
+            start["run"].index("printf 'container_id=%s"),
+            start["run"].index("for _ in {1..60}"),
+        )
+        self.assertIn("org.registrystack.ci.postgres-service=true", start["run"])
+        self.assertIn("org.registrystack.ci.postgres-service", stop["run"])
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_path = Path(temporary)
+            docker_log = temporary_path / "docker.log"
+            docker_state = temporary_path / "docker-state"
+            github_output = temporary_path / "github-output"
+            docker = temporary_path / "docker"
+            docker.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -eu\n"
+                "printf '%s\\n' \"$*\" >> \"$DOCKER_LOG\"\n"
+                "case \"$1\" in\n"
+                "  run) touch \"$DOCKER_STATE\"; printf '%s\\n' fake-container-id ;;\n"
+                "  inspect) printf '%s\\n' healthy ;;\n"
+                "  port) printf '%s\\n' 127.0.0.1:25433 ;;\n"
+                "  container)\n"
+                "    test -f \"$DOCKER_STATE\" || exit 1\n"
+                "    case \"$*\" in *--format*) printf '%s\\n' true ;; esac\n"
+                "    ;;\n"
+                "  rm) rm \"$DOCKER_STATE\" ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            docker.chmod(0o755)
+            environment = {
+                **os.environ,
+                "PATH": f"{temporary}{os.pathsep}{os.environ['PATH']}",
+                "DOCKER_LOG": str(docker_log),
+                "DOCKER_STATE": str(docker_state),
+                "GITHUB_OUTPUT": str(github_output),
+                "IMAGE": self.POSTGRES_IMAGE,
+                "CONTAINER_NAME": "registry-stack-canary-postgres",
+                "POSTGRES_DB": "canary_db",
+                "POSTGRES_USER": "canary_user",
+                "POSTGRES_PASSWORD": "canary_password",
+            }
+            completed = subprocess.run(
+                ["bash", "-c", start["run"]],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(
+                github_output.read_text(encoding="utf-8"),
+                "container_id=fake-container-id\nport=25433\n",
+            )
+            start_log = docker_log.read_text(encoding="utf-8")
+            self.assertIn("--publish 127.0.0.1::5432", start_log)
+            self.assertIn(self.POSTGRES_IMAGE, start_log)
+
+            completed = subprocess.run(
+                ["bash", "-c", stop["run"]],
+                env={
+                    **environment,
+                    "CONTAINER_NAME": "registry-stack-canary-postgres",
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn(
+                "rm --force registry-stack-canary-postgres",
+                docker_log.read_text(encoding="utf-8"),
+            )
 
     def test_docker_hub_build_pulls_authenticate_when_secrets_are_available(self) -> None:
         consumers = (

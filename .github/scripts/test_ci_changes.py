@@ -1530,12 +1530,22 @@ class CiChangesTest(unittest.TestCase):
     def test_nightly_platform_coverage_has_the_pull_request_database(self) -> None:
         # The nightly platform shard runs the same --all-features build as
         # platform-coverage, whose PostgreSQL tests fail rather than skip
-        # without their database, so it needs the same service and URLs.
+        # without their database, so it needs the same owned service inputs and
+        # URLs. The container names differ because each job owns its cleanup.
         pull_request = self.workflow_jobs["platform-coverage"]
         nightly = yaml.safe_load(
             Path(".github/workflows/nightly-rust-coverage.yml").read_text()
         )["jobs"]["rust"]
-        self.assertEqual(nightly.get("services"), pull_request["services"])
+
+        def service_inputs(job: dict[str, Any]) -> dict[str, str]:
+            step = next(step for step in job["steps"] if step.get("id") == "postgres")
+            return {
+                name: value
+                for name, value in step["with"].items()
+                if name != "container_name"
+            }
+
+        self.assertEqual(service_inputs(nightly), service_inputs(pull_request))
 
         def database_urls(job: dict[str, Any], step_name: str) -> dict[str, str]:
             step = next(step for step in job["steps"] if step.get("name") == step_name)
@@ -2528,11 +2538,11 @@ class CiChangesTest(unittest.TestCase):
             breg_job,
         )
         self.assertIn(
-            "ports:\n          - 5432/tcp",
+            "uses: ./.github/actions/postgres-service",
             breg_job,
         )
         self.assertIn(
-            "DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}",
+            "DATABASE_PORT: ${{ steps.postgres.outputs.port }}",
             breg_job,
         )
         self.assertIn(
@@ -2548,7 +2558,7 @@ class CiChangesTest(unittest.TestCase):
             breg_job,
         )
         self.assertIn(
-            "POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}",
+            "POSTGRES_CONTAINER_ID: ${{ steps.postgres.outputs.container_id }}",
             breg_job,
         )
         self.assertIn(
