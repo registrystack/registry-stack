@@ -748,8 +748,10 @@ verifier's key material, the event destination bindings, the configured review a
 their producer identities for retained submissions, the authentication profile's claim mapping, accepted algorithms, and audience
 against the package this runtime serves, and the field-encryption provider and its stored key. It
 names the first dependency that refuses and stops there. A run that reaches the end lists every
-dependency it checked, then the PostgreSQL advisories from
-[Set a PostgreSQL baseline](#set-a-postgresql-baseline). Advisories never change the exit status.
+dependency it checked, then its advisories: the PostgreSQL advisories from
+[Set a PostgreSQL baseline](#set-a-postgresql-baseline), and the `authentication.insecure-http`
+warning when the runtime file sets `authentication.oidc.allowInsecureHttp: true`. Advisories never
+change the exit status.
 This run is against a local `bregctl dev` session, whose runtime file sets
 `database.pool.maximumConnections: 4` and whose PostgreSQL keeps its default connection settings and has no
 `pg_stat_statements` extension, so it also reports the statement-timings advisory:
@@ -767,7 +769,7 @@ This run is against a local `bregctl dev` session, whose runtime file sets
   authentication       pass
   fieldEncryption      pass
 
-PostgreSQL advisories:
+Advisories:
   information  postgres.connections.budget
     one replica's runtime pool takes at most half of the connections PostgreSQL leaves
     for ordinary roles
