@@ -711,13 +711,14 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'explanation/breg-statistical-datasets',
     'explanation/membership-read-boundaries',
     'explanation/deriving-a-registry-from-a-model',
-    'operate/breg-requirements',
-    'tutorials/build-a-breg-production-candidate',
     'operate/breg',
-    'operate/breg-webhooks',
     'operate/breg-changes',
+    'operate/breg-monitor',
     'operate/breg-retention',
     'operate/breg-data',
+    'operate/breg-webhooks',
+    'operate/breg-requirements',
+    'tutorials/build-a-breg-production-candidate',
     'tutorials/query-breg-client',
     'reference/client-api',
     'reference/breg-client-capabilities',
@@ -739,8 +740,7 @@ test('keeps the BReg guide and references in one adoption path', () => {
       "slug: 'tutorials/first-breg'",
       "label: 'Tutorials'",
       "label: 'Author a registry'",
-      "label: 'Deploy'",
-      "label: 'Operate'",
+      "label: 'Deploy and operate'",
       "label: 'Use from applications'",
       "slug: 'reference/breg-configuration'",
     ],
@@ -792,15 +792,18 @@ test('keeps operating requirements in each product Deploy group, not in Start', 
     ],
     'Evidence Gateway Deploy group',
   );
+  // Base Registry Engine states its requirements at the top of Deploy and
+  // serve, so that page opens its Deploy and operate group; the retired
+  // requirements page stays published until its redirect lands.
   const breg = topLevelSection(sidebarSource, 'Base Registry Engine');
   assertOrdered(
     breg,
     [
-      "label: 'Deploy'",
+      "label: 'Deploy and operate'",
+      "slug: 'operate/breg'",
       "slug: 'operate/breg-requirements'",
-      "slug: 'tutorials/build-a-breg-production-candidate'",
     ],
-    'Base Registry Engine Deploy group',
+    'Base Registry Engine Deploy and operate group',
   );
   for (const slug of ['operate/evidence-requirements', 'operate/breg-requirements']) {
     assert.ok(hasDocForSlug(slug), `${slug} must be a published page`);

@@ -374,7 +374,7 @@ chunks carry.
 Every chunk of an import run rechecks the authority in its own transaction and counts its
 committed items against the authority's volume. Operators open and close authorities with
 `bregctl import-authority`; see
-[Load a governed entity through an import window](../../operate/breg-data/#load-a-governed-entity-through-an-import-window).
+[Load records through an import window](../../operate/breg-data/#load-records-through-an-import-window).
 
 ### The run document
 
@@ -644,7 +644,7 @@ A refusal is an RFC 9457 problem document with `Content-Type: application/proble
 every request the journal records, in its audit record, so an operator can find the refusal without
 the client sending any record value. A request that presents no credential and is refused before
 admission is counted on the metrics listener rather than journaled, so its `traceId` is in the
-request log only; see [Scrape metrics](../../operate/breg/#scrape-metrics).
+request log only; see [Scrape metrics](../../operate/breg-monitor/#scrape-metrics).
 `fieldPath` is present only when one member is at fault, and `detail` stays the registered text
 of the code. On a record or query refusal it takes one of these forms:
 

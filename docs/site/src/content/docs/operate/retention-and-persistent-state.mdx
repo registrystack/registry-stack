@@ -251,6 +251,23 @@ Audit retention uses the shared file writer described in [Audit retention](#audi
 History erasure leaves those files untouched. The database records committed erasure coverage in
 a dedicated table, so deleting an old audit segment does not affect successor-package admission.
 
+Each audited request writes a `request` entry before it touches protected data and a `response`
+entry under the same correlation before it discloses anything or once its mutation commits. A
+failed entry blocks the step that follows it. A request that ends before its outcome is known is
+answered with an `unfinished` entry; an operator command also answers `unfinished` when it is
+refused or finds nothing to do. A crash or a killed process can leave a request entry with no
+response, so read every entry under a correlation. With a `stdout` destination the runtime log
+shares the stream, so while the collector is not reading, a probe can get no answer at all: set a
+timeout on every probe. `bregctl` writes to a sibling file, `<stem>.bregctl.<extension>`, and
+`bregctl dev` keeps its files under `.breg/dev/audit`, including after `bregctl dev stop --remove`.
+
+{/* Evidence: crates/registry-breg/src/audit.rs, unfinished_record;
+    crates/registry-breg/src/correlation.rs, finish_response();
+    crates/registry-breg/src/startup.rs, audit_writer and operational_log_level();
+    crates/registry-breg/src/runtime_config.rs, AuditConfig::destination;
+    crates/registry-platform-audit/src/writer.rs, for_process;
+    crates/registry-bregctl/src/dev/mod.rs. */}
+
 The webhook outbox also has scheduled payload expiry. The runtime
 clears a retained payload on the first successful delivery, and clears an undelivered payload once
 its expiry has passed, which is also the point after which that delivery can no longer be

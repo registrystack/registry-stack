@@ -14,17 +14,10 @@
 # PR 2: tutorials and entry pages
 
 # PR 6: pages the Author tier absorbed, deleted in package 6
+src/content/docs/tutorials/build-a-breg-production-candidate.mdx # PR 6
 src/content/docs/explanation/breg-statistical-datasets.mdx # PR 6
 src/content/docs/explanation/deriving-a-registry-from-a-model.mdx # PR 6
 src/content/docs/explanation/native-field-patterns.mdx # PR 6
-
-# PR 4: Operate
-src/content/docs/operate/breg.mdx # PR 4
-src/content/docs/operate/breg-changes.mdx # PR 4
-src/content/docs/operate/breg-data.mdx # PR 4
-src/content/docs/operate/breg-retention.mdx # PR 4
-src/content/docs/operate/breg-webhooks.mdx # PR 4
-src/content/docs/tutorials/build-a-breg-production-candidate.mdx # PR 4
 
 # PR 5: Reference and src/data
 src/content/docs/reference/breg-api.mdx # PR 5

@@ -1,0 +1,294 @@
+---
+title: Monitor and recover
+description: Size PostgreSQL for a Base Registry Engine registry, rotate issuer keys, scrape metrics, watch the background workers, and recover from the diagnostic codes the tools print.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: how-to
+locale: en
+standards_referenced: []
+tutorial_test:
+  toolset: breg
+  skip: The reader must provide a production PostgreSQL server with a registry activated under split roles, which the gate cannot start.
+---
+
+You run an activated registry. This page lets you size its PostgreSQL server, rotate issuer keys,
+watch the process, and recover from the codes the tools print.
+
+## Set a PostgreSQL baseline
+
+PostgreSQL's defaults are not sized for serving. `doctor` compares the server's settings with what
+the registry needs and prints advisories, which never change its exit status:
+
+```sh test-skip="needs a production PostgreSQL server and an activated registry"
+bregctl doctor --runtime-config /etc/breg/runtime.yaml
+```
+
+On an untuned server, the report ends with two advisories:
+
+```text
+10 dependency checks passed.
+...
+
+PostgreSQL advisories:
+  information  postgres.connections.budget
+    one replica's runtime pool takes at most half of the connections PostgreSQL leaves
+    for ordinary roles
+    poolMaxSize                   4
+    maxConnections                100
+    superuserReservedConnections  3
+    reservedConnections           0
+    usableConnections             97
+  information  postgres.pg-stat-statements.unavailable
+    pg_stat_statements is not installed in this database, so per-statement timings are
+    unavailable when diagnosing load
+```
+
+`breg` logs the same advisories at startup. Set the baseline once, before the registry takes
+traffic, then run `doctor` until only the connection budget remains. On a dedicated host, start
+from these values and adjust them against your own measurements:
+
+| Setting | Starting point | Why |
+| --- | --- | --- |
+| `shared_buffers` | 25% of memory | PostgreSQL's page cache; past 40% it rarely helps. |
+| `effective_cache_size` | `shared_buffers` plus the operating system's file cache | A planner estimate; allocates nothing. |
+| `work_mem` | The 4 MB default | Applies to every sort in every session. |
+| `maintenance_work_mem` | Above the 64 MB default | Speeds `VACUUM` and `CREATE INDEX`. |
+| `random_page_cost` | Toward 1.1 when the database fits in memory | Favors index scans. |
+| `shared_preload_libraries` | `pg_stat_statements` | Records per-statement timings. |
+
+Restart PostgreSQL, then create the extension as an administrator in the registry database:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+```
+
+Without the preload and restart, `doctor` keeps advising:
+
+```text
+  information  postgres.pg-stat-statements.unavailable
+    pg_stat_statements is installed but not loaded through shared_preload_libraries, so
+    per-statement timings are unavailable when diagnosing load
+```
+
+**Budget connections.** Each `breg` replica opens up to `database.pool.maximumConnections`
+connections, and operator commands and monitoring open their own. All must fit in what PostgreSQL
+leaves for ordinary roles. `doctor` sees one replica, so add the others yourself. When one pool may
+take more than half, the advisory becomes a warning:
+
+```text
+  warning  postgres.connections.pool-over-half
+    one replica's runtime pool may take more than half of the connections PostgreSQL
+    leaves for ordinary roles, leaving too few for other replicas, operator tooling, and
+    maintenance
+    poolMaxSize                   60
+```
+
+**Find sessions by name.** In `pg_stat_activity`, runtime sessions report `breg` as their
+`application_name` and operator commands `bregctl`. An `application_name` in the connection URL
+wins, which tells replicas apart.
+
+Runtime sessions start with `jit=off`, because compiling a plan for a short page of records costs
+more than running it, and with `idle_in_transaction_session_timeout` of 120 seconds, so a session
+left idle in an open transaction is ended and replaced. To turn JIT on, add `-c jit=on` to the URL
+`options`.
+
+**Pool in session mode only.** The registry holds session-level advisory locks, so transaction
+pooling is not supported. A pooler that drops startup options drops both settings, so set them on
+the runtime role:
+
+```sql
+ALTER ROLE registry_runtime SET idle_in_transaction_session_timeout = '120s';
+ALTER ROLE registry_runtime SET jit = off;
+```
+
+**Keep maintenance running.** Leave `autovacuum` and `track_counts` on; with either off, `doctor`
+warns. After a large `bregctl data import`, run `ANALYZE` in the registry database.
+
+On a managed service, set the same parameters through the provider's parameter settings; `doctor`
+reads the values the server runs with.
+
+{/* Evidence: crates/registry-breg/src/postgres/baseline.rs, advise() and connection_budget();
+    crates/registry-breg/src/postgres/config.rs, name_session(), with_idle_in_transaction_session_timeout(),
+    with_jit_disabled();
+    crates/registry-breg/src/startup.rs, SERVER_IDLE_IN_TRANSACTION_TIMEOUT and prepare_database_startup();
+    crates/registry-bregctl/src/doctor.rs;
+    crates/registry-breg/tests/postgres_startup.rs,
+    prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays_unavailable_until_preloaded. */}
+
+## Rotate keys and change the issuer
+
+The registry caches the issuer's key set for `jwksCache.cacheTtlSeconds` (600 seconds by default)
+and refetches early when a token names an unknown key. Publish a new key before signing with it,
+and keep the old one published while its tokens are valid. If the issuer is unreachable, a cached
+key stays usable for the cache lifetime plus `outageToleranceSeconds` (900 seconds), counted from
+the last successful fetch. A static JWKS document rotates only by editing it and restarting.
+
+For a compromised key, list its identifier under `authentication.oidc.deniedKids` and restart every
+replica; every token it signed is refused. The trap: once the last denied key leaves the issuer,
+delete `deniedKids` entirely. An empty list refuses the runtime file:
+
+```text
+error config.invalid-value /authentication/oidc/deniedKids
+expected at least one key identifier; next: List at least one key identifier to deny, or delete deniedKids to deny no key.
+```
+
+The runtime trusts one issuer, read at startup, so changing it is a coordinated restart with no
+overlap. First resolve every write whose response was lost: idempotency keys are bound to issuer and
+principal, so a retry under the new issuer is a fresh request and can write twice, as
+[idempotency](../../reference/breg-api/#idempotency) explains. Restart paginated queries from the
+first page.
+
+{/* Evidence: crates/registry-platform-oidc/src/lib.rs, JwksFetcher and tolerated_age();
+    crates/registry-breg/src/runtime_config.rs, JwksCacheConfig and deniedKids validation;
+    crates/registry-breg/src/idempotency.rs, canonical_claim_context();
+    crates/registry-breg/src/cursor.rs, CursorBinding. */}
+
+## Scrape metrics
+
+The API listener never serves metrics. Set `metricsListener.bind` in the runtime file to a loopback
+or private address with a port, different from `listener.bind`. It answers `GET /metrics` in the
+Prometheus text format without authentication, so keep it inside the scraper's network.
+
+```sh test-skip="needs a serving registry with metricsListener set"
+curl -s http://127.0.0.1:9464/metrics
+```
+
+After one readiness probe and two requests without a token, the scrape held these samples (help
+text and histogram lines omitted):
+
+```text
+breg_http_requests_total{route="/ready",method="GET",status="success"} 1
+breg_http_requests_total{route="/v1/records/facilities",method="GET",status="client-error"} 2
+breg_pool_connections{state="maximum-size"} 4
+breg_pool_connections{state="size"} 3
+breg_pool_connections{state="available"} 3
+breg_pool_connections{state="waiting"} 0
+breg_worker_last_success_age_seconds{worker="webhook"} 0.026604833
+breg_worker_last_success_age_seconds{worker="review"} 0.420682917
+breg_worker_last_success_age_seconds{worker="subject-access-log-retention"} 7.509861375
+breg_queue_oldest_pending_age_seconds{queue="webhook-delivery"} 0
+breg_queue_oldest_pending_age_seconds{queue="review-submission"} 0
+breg_queue_oldest_pending_age_seconds{queue="review-application"} 0
+breg_active_package_info{package_digest="sha256:ae245974f8da79cd441669fbe0e2461ceb26e216cd1f7f25a7240fd131d20fee"} 1
+```
+
+No label carries a record identifier, a principal, or a token. `breg_active_package_info` names the
+package this process verified at startup; a replica still showing the old digest after an apply has
+not restarted. Requests without a valid token are counted here but not journaled, so alert on a
+rise in `client-error`, and put the registry behind an upstream rate limit: it has none.
+
+{/* Evidence: crates/registry-breg/src/metrics.rs; crates/registry-breg/src/runtime_config.rs,
+    MetricsListenerConfig; crates/registry-breg/src/auth.rs, authentication_refused();
+    crates/registry-breg/tests/postgres_unauthenticated_refusals.rs. */}
+
+## Watch the background workers
+
+`breg` runs these workers beside its listener. `GET /ready` reflects none of them.
+
+| `worker` | What it does |
+| --- | --- |
+| `webhook` | Delivers events from the [outbox](../../reference/glossary/#outbox) to webhook destinations. |
+| `review` | Submits Proposals for review and reads results. |
+| `attachment-verification` | Sends uploaded files to an external verifier, when enabled. |
+| `subject-access-log-retention` | Drops expired subject access log entries, once a minute. |
+
+`breg_worker_last_success_age_seconds` counts from the last iteration that did not fail, work or no
+work. The first three loop at least once a second, so an age of minutes means a worker fails every
+time or is stuck. `breg_queue_oldest_pending_age_seconds` is how long the oldest due item has
+waited; when it grows while the worker age stays small, the worker cannot keep up or keeps failing
+one item.
+
+The process writes JSON lines on standard output. A failed iteration is a warning with a `code` such
+as `webhook.worker.iteration_failed`, `review.result_lookups.unavailable`, or
+`metrics.queue_sample.failed`, and serving continues. When a worker or the metrics listener panics
+or returns, the process logs a code naming it, such as `review.worker.panicked`, drains requests,
+and exits with status 1. The same code on every restart names the worker to investigate.
+
+{/* Evidence: crates/registry-breg/src/metrics.rs, ProgressWorker, PendingQueue, read_queue_ages();
+    crates/registry-breg/src/startup.rs, OperationalEvent, background_task_stop_code(), SupervisedTask;
+    crates/registry-breg/src/review_store.rs, ReviewWorker;
+    crates/registry-breg/src/attachment_verification_worker.rs;
+    crates/registry-breg/src/subject_access_log.rs, run_retention();
+    crates/registry-platform-hooks/src/delivery/service.rs, WORKER_POLL_INTERVAL. */}
+
+## Troubleshooting
+
+Find the code the command, log, or HTTP problem printed. A `*` stands for any part of the code.
+
+| Code | Meaning | Recovery |
+| --- | --- | --- |
+| `startup.database.connection-refused` | PostgreSQL did not accept the connection. | Check the URL secret, the role, and `database.trustedRootCertificateRef`. |
+| `apply.database.unavailable` | The same, before an apply changed anything. | As above, then retry. |
+| `startup.database.uninitialized` | No package was ever activated. | Run `plan`, then `apply --initial`. |
+| `startup.database.unrecognized` | The database holds state this release does not recognize. | Apply the package to a fresh database. |
+| `startup.database.identity-mismatch` | The database id differs from `identity.databaseId`. | Fix the database URLs or the id. |
+| `apply.database.identity-mismatch` | The same, from `plan` or `apply`. | As above. |
+| `startup.package.not-active` | Another package is active than the one at `package.root`. | Run `bregctl status`; point `package.root` at the active package. |
+| `apply.package.active-mismatch` | The same, from `apply`. | As above, or `apply --initial` on a new database. |
+| `startup.package.refused` | The package failed verification; the message names why. | Restore the package directory you activated. |
+| `startup.instance-claim.mismatch` | The database is a copy, as after a restore. | Adopt it as [back up and restore](../advanced/back-up-and-restore/#after-a-logical-restore) describes. |
+| `startup.runtime-role.can-write` | The runtime role can write registry state. | Run `plan`; it names the object and the fix. |
+| `startup.runtime-role.grants-missing` | The runtime role lost a grant. | Apply the active package again. |
+| `startup.role-mode.changed` | The ledger records split roles; the file names one. | Restore the runtime role. |
+| `apply.successor.roles-differ` | The file names other roles than the active activation. | Apply the active package under the new roles, then the successor. |
+| `startup.audit.refused` | The audit destination or hash key was refused. | Secret files are regular, owned by the running user, mode `0400` or `0600`, with one link. |
+| `startup.cursor.refused` | The cursor secret was refused. | As above. |
+| `startup.oidc.refused` | The issuer's key set could not be loaded. | Check that this host reaches and trusts the issuer. |
+| `authentication.refused` | A token was refused. | Check [what a token must carry](../breg/#what-a-token-must-carry); `aud` may be a list of up to 16 that includes the audience. |
+| `breg.runtime.invalid-metrics-listener` | `metricsListener.bind` is invalid. | See [Scrape metrics](#scrape-metrics). |
+| `postgres.connections.pool-over-half` | One pool may take over half the connections. | Lower the pool or raise `max_connections`. |
+| `postgres.autovacuum.off` | Dead rows accumulate. | Turn it on and run `ANALYZE`. |
+| `postgres.track-counts.off` | Planner statistics go stale. | Turn it on and run `ANALYZE`. |
+| `runtime.not_ready` | `/ready` answers 503. After a successor's apply, the previous process stops serving. | Point `package.root` at the successor and restart. |
+| `*.in-progress` | Another session holds the migration lock. Nothing changed, except that a Proposal detail erasure which committed before the wait stays erased. | Wait, then rerun. |
+| `*.package.refused` | `package.expectedDigest` pins another package; both digests are named. | Deploy the pinned package or update the pin. |
+| `apply.package.refused` | The package does not follow the active one. | Rebuild with `--baseline-package` naming the active package. |
+| `apply.package.digest-mismatch` | The package is not the one `--expected-digest` names. | Pass the digest `plan` reports. |
+| `apply.package.already-active` | This package already serves. | Nothing to do. |
+| `apply.package.empty-plan` | The successor changes nothing. | Keep the active package. |
+| `apply.backup-evidence.refused` | The backup binding is missing, stale, or for another database. | Take a fresh backup; pass it with `--backup`. |
+| `apply.history.coverage-incomplete` | An erasure left history uncovered. | Run [`history rebaseline`](../breg-retention/#restore-snapshot-coverage-after-an-erasure). |
+| `apply.migration.statement-failed` | PostgreSQL refused a statement; the SQLSTATE is named. | Fix the cause and retry, or run `migration reconcile`. |
+| `apply.migration.failed` | The apply failed mid-maintenance. | Retry the same target, or run `migration reconcile`. |
+| `apply.event-destinations.refused` | Destinations and bindings do not match. | Compare `eventDestinations` with `bregctl explain events`. |
+| `startup.event-destinations.refused` | A destination binding was refused. | Check the key file, the origin, and `allowedPrivateCidrs`. |
+| `startup.webhook.retained-bindings` | Pending deliveries need a removed binding. | Restore it until `webhook list` shows them drained. |
+| `startup.instance-id.pending-deliveries` | Pending deliveries carry the previous `identity.instanceId`. | Restore it until they drain. |
+| `migration.review.*` | The reviewed migration directory was refused. | See [write a reviewed migration descriptor](../breg-changes/#write-a-reviewed-migration-descriptor). |
+| `migration.rehearsal.*` | PostgreSQL refused the rehearsal, so `apply` would too. | Correct the SQL or the project. |
+| `source.unavailable` | History no longer covers the snapshot. | Take a fresh reference. |
+| `idempotency.expired` | The write committed; its receipt expired. | Read the record instead. |
+| `history.erase.acknowledgement.required` | `--acknowledge-irreversible` is missing. | Confirm, then add the flag. |
+| `history.rebaseline.live-rows.unverified` | A live row disagrees with its journal head. | Compare suspect records' revisions. |
+| `proposal-retention.mode.retain` | The Action retains Proposal detail. | Nothing to erase. |
+| `proposal-retention.detail.pinned` | The version is pinned. | Check `proposal-retention dry-run`. |
+| `import-authority.already-open` | An authority is already open. | Close it or let it expire. |
+| `import-authority.grant.not-importable` | The profile has no `import` grant. | Grant it in a successor package. |
+| `data.import.ingestion-run.import-authority-required` | No open authority admits the run. | Open one. |
+| `data.import.ingestion-run.import-authority-closed` | The authority closed; committed chunks stay. | Open another; import the rest under a fresh checkpoint. |
+| `data.import.ingestion-run.blocked` | The active package changed. | Start a new run. |
+| `data.import.ingestion-run.cancelled` | The run was cancelled. | Start a new import with a fresh checkpoint. |
+| `data.export.checkpoint.refused` | The output and checkpoint disagree. | Restore both from copies. |
+| `data.*.input.refused` | The input is empty, linked, or too large. | Fix the file. |
+| `data.*.breg-url.refused` | The URL is neither `https` nor loopback `http`. | Use one. |
+| `data.*.access-token.refused` | The token file was refused. | Hold one token in a regular file. |
+
+{/* Evidence: crates/registry-bregctl/src/doctor.rs, startup_diagnostic();
+    crates/registry-bregctl/src/lib.rs, data command failures, import_authority_failure(),
+    instance_claim_failure(); crates/registry-breg/src/migration.rs;
+    crates/registry-breg/src/auth.rs, MAX_AUDIENCES;
+    crates/registry-platform-config/src/secrets.rs, validate_file_metadata();
+    crates/registry-breg/src/startup.rs, DynamicRuntimeReadiness;
+    crates/registry-breg/src/postgres/context.rs, begin_registry_transaction();
+    crates/registry-breg/tests/postgres_startup.rs,
+    live_old_server_drains_apply_and_exact_successor_restart_becomes_ready;
+    crates/registry-breg/src/problem.rs. */}
+
+## Next
+
+- [Change an active registry](../breg-changes/)
+- [Retain, erase, and audit](../breg-retention/)
+- [Runtime configuration reference](../../reference/breg-configuration/)
