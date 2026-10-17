@@ -449,10 +449,11 @@ impl DatabaseConnectionCause {
     #[must_use]
     pub const fn diagnostic_path(self) -> &'static str {
         match self {
-            Self::Unreachable | Self::Authentication | Self::DatabaseMissing | Self::Secret => {
+            Self::Unreachable | Self::Authentication | Self::DatabaseMissing => {
                 "database.runtimeUrlRef"
             }
-            Self::Tls | Self::Timeout | Self::Configuration => "database",
+            // The URL and trust-root references refuse as one class.
+            Self::Tls | Self::Timeout | Self::Configuration | Self::Secret => "database",
         }
     }
 
@@ -478,7 +479,7 @@ impl DatabaseConnectionCause {
                 "the database connection configuration was refused; correct the runtime database settings"
             }
             Self::Secret => {
-                "the database connection secret could not be resolved; verify the reference and enabled secret provider"
+                "a database connection secret could not be resolved; verify database.runtimeUrlRef, database.migrationUrlRef, database.trustedRootCertificateRef, and the enabled secret provider"
             }
         }
     }
@@ -615,6 +616,19 @@ mod tests {
             Duration::from_secs(1),
         )
         .expect("bounds are valid")
+    }
+
+    #[test]
+    fn secret_refusal_covers_every_database_secret_reference() {
+        let cause = DatabaseConnectionCause::Secret;
+        assert_eq!(cause.diagnostic_path(), "database");
+        for reference in [
+            "database.runtimeUrlRef",
+            "database.migrationUrlRef",
+            "database.trustedRootCertificateRef",
+        ] {
+            assert!(cause.message().contains(reference), "{}", cause.message());
+        }
     }
 
     #[test]

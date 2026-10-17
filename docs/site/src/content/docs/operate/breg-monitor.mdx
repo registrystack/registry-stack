@@ -226,7 +226,7 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `startup.database.missing` | The named database does not exist. | Create it, or correct the database name in the URL. |
 | `startup.database.timeout` | The connection timed out. | Check database availability and the pool timeout settings. |
 | `startup.database.configuration-refused` | The runtime file's `database` settings were refused. | Correct them. |
-| `startup.database.secret-refused` | The connection secret could not be resolved. | Check `database.runtimeUrlRef` and enable the secret provider that owns it. |
+| `startup.database.secret-refused` | A connection secret could not be resolved. | Check `database.runtimeUrlRef`, `database.migrationUrlRef`, and `database.trustedRootCertificateRef`, and enable the secret provider that owns them. |
 | `apply.database.unavailable` | The migration database could not be reached before an apply changed anything. | Check the migration URL secret, the role, and `database.trustedRootCertificateRef`, then retry. |
 | `startup.database.uninitialized` | No package was ever activated. | Run `plan`, then `apply --initial`. |
 | `startup.database.unrecognized` | The database holds state this release does not recognize. | Apply the package to a fresh database. |

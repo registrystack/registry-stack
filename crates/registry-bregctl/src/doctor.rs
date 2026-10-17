@@ -570,7 +570,7 @@ mod tests {
             (
                 StartupError::DatabaseConnection(DatabaseConnectionCause::Secret),
                 "startup.database.secret-refused",
-                "database.runtimeUrlRef",
+                "database",
             ),
             (
                 StartupError::DatabaseUnready,
