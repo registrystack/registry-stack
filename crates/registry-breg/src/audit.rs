@@ -780,7 +780,6 @@ fn unfinished_record(attempt: &Value) -> Value {
         "operationId",
         "requestId",
         "traceId",
-        "packageRevision",
         "activationId",
         "actionId",
     ] {
