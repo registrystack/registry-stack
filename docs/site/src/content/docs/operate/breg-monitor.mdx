@@ -234,7 +234,7 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `startup.runtime-role.grants-missing` | The runtime role lost a grant. | Apply the active package again. |
 | `startup.role-mode.changed` | The ledger records split roles; the file names one. | Restore the runtime role. |
 | `apply.successor.roles-differ` | The file names other roles than the active activation. | Apply the active package under the new roles, then the successor. |
-| `startup.audit.refused` | The audit destination or hash key was refused. | Secret files are regular, owned by the running user, mode `0400` or `0600`, with one link. |
+| `startup.audit.refused` | The audit destination or hash key was refused. | Secret files are regular, owned by the running user, mode `0400` or `0600`, with one link. The audit directory and its files are owned by the running user, the directory `0700`. |
 | `startup.cursor.refused` | The cursor secret was refused. | As above. |
 | `startup.oidc.refused` | The issuer's key set could not be loaded. | Check that this host reaches and trusts the issuer. |
 | `authentication.refused` | A token was refused. | Check [what a token must carry](../breg/#what-a-token-must-carry); `aud` may be a list of up to 16 that includes the audience. |
@@ -242,7 +242,7 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `postgres.connections.pool-over-half` | One pool may take over half the connections. | Lower the pool or raise `max_connections`. |
 | `postgres.autovacuum.off` | Dead rows accumulate. | Turn it on and run `ANALYZE`. |
 | `postgres.track-counts.off` | Planner statistics go stale. | Turn it on and run `ANALYZE`. |
-| `runtime.not_ready` | `/ready` answers 503. After a successor's apply, the previous process stops serving. | Point `package.root` at the successor and restart. |
+| `runtime.not_ready` | `/ready` answers 503: the database is unreachable, below PostgreSQL 17, or misconfigured for the runtime role; an apply holds the lock or left maintenance unfinished; a successor's apply replaced this process's package; the issuer's key set cannot be loaded; or the audit writer refused a write. | After a successor's apply, point `package.root` at the successor and restart; after an audit refusal, repair the destination and restart; after a failed apply, retry it or run `migration reconcile`; otherwise fix the database or issuer, or wait for the apply. |
 | `*.in-progress` | Another session holds the migration lock. Nothing changed, except that a Proposal detail erasure which committed before the wait stays erased. | Wait, then rerun. |
 | `*.package.refused` | `package.expectedDigest` pins another package; both digests are named. | Deploy the pinned package or update the pin. |
 | `apply.package.refused` | The package does not follow the active one. | Rebuild with `--baseline-package` naming the active package. |
@@ -259,7 +259,7 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `startup.instance-id.pending-deliveries` | Pending deliveries carry the previous `identity.instanceId`. | Restore it until they drain. |
 | `migration.review.*` | The reviewed migration directory was refused. | See [write a reviewed migration descriptor](../breg-changes/#write-a-reviewed-migration-descriptor). |
 | `migration.rehearsal.*` | PostgreSQL refused the rehearsal, so `apply` would too. | Correct the SQL or the project. |
-| `source.unavailable` | History no longer covers the snapshot. | Take a fresh reference. |
+| `source.unavailable` | A read could not complete: the database is unreachable or has no free connection, an audit record could not be written, or history no longer covers the snapshot. | Check the database and the audit destination; for a snapshot read, take a fresh reference. |
 | `idempotency.expired` | The write committed; its receipt expired. | Read the record instead. |
 | `history.erase.acknowledgement.required` | `--acknowledge-irreversible` is missing. | Confirm, then add the flag. |
 | `history.rebaseline.live-rows.unverified` | A live row disagrees with its journal head. | Compare suspect records' revisions. |

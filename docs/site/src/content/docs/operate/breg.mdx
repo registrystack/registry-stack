@@ -602,8 +602,24 @@ The container serves only a package that activation already recorded. Write a se
 for it, changing exactly four things from the host's: `listener.bind` (to `0.0.0.0:8080`),
 `secretProviders.file.root` (to `/etc/breg/secrets`), `package.root` (to `/var/lib/breg/package`),
 and the database host name in the connection URLs, because the container mounts its own paths and
-reaches the database over its own network. Make UID 65532 the owner of every secret file. Then
-mount the inputs read-only and the audit directory writable:
+reaches the database over its own network.
+
+UID 65532 must own the secrets directory, every secret file in it, and the audit directory, with
+mode `0700` on each directory. The mounted runtime file and package need only be readable by it:
+
+```sh
+chown -R 65532:65532 /srv/registry/container/secrets
+chmod 0700 /srv/registry/container/secrets
+install -d -m 0700 -o 65532 -g 65532 /var/log/breg
+chown -R 65532:65532 /var/log/breg
+```
+
+Startup refuses an audit directory or audit file owned by anyone else, including a directory Docker
+created as root for a missing mount and one a host-run `breg` or `bregctl` left behind. Once the
+container owns `/var/log/breg`, a host-run `bregctl` is refused it in turn, so plan and apply
+[from the image](#activate-from-the-image).
+
+Then mount the inputs read-only and the audit directory writable:
 
 ```sh
 docker run --restart on-failure \
@@ -621,7 +637,8 @@ recurs on every start makes the container restart repeatedly; the restart policy
 how often.
 
 {/* Evidence: release/docker/Dockerfile.breg; crates/registry-breg/src/runtime_config.rs,
-    ListenerConfig; crates/registry-platform-config/src/secrets.rs, validate_file_metadata(). */}
+    ListenerConfig; crates/registry-platform-config/src/secrets.rs, validate_file_metadata();
+    crates/registry-platform-audit/src/writer.rs, validate_directory(), validate_active_metadata(). */}
 
 ### Activate from the image
 
@@ -642,8 +659,9 @@ docker run --rm \
 
 Run `apply` and `status` the same way. These commands connect with the migration credential, so
 mount a secret directory that holds it, and keep that credential out of the serving container's
-secret directory. `apply` writes audit entries beside `audit.path`, which is why the audit
-directory is writable here too.
+secret directory. Give UID 65532 that directory and its files the same way as the serving
+container's. `apply` writes audit entries beside `audit.path`, which is why the audit directory is
+writable here too.
 
 Kubernetes is outside the verified deployment profile. A ConfigMap or Secret volume mounted the
 default way presents each key as a symbolic link, which the runtime refuses for both the runtime
