@@ -39,7 +39,7 @@
     "check:markdown": "markdownlint-cli2",
     "check:style": "node scripts/run-vale.mjs src/content/docs README.md",
     "check:style:fixtures": "node scripts/check-vale-fixtures.mjs",
-    "check:openapi": "redocly lint registry-evidence registry-breg",
+    "check:openapi": "redocly lint registry-evidence registry-evidence-oid4vci registry-breg",
     "check:config-vocabulary": "scripts/check-stale-config-vocabulary.sh",
     "check:tutorial:discovery": "node scripts/run-tutorial.mjs --gate discovery",
     "check:tutorial:discovery:dry-run": "node scripts/run-tutorial.mjs --gate discovery --dry-run",

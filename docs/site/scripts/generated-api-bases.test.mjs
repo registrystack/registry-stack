@@ -40,6 +40,8 @@ test('a generated base and its descendants are recognised', () => {
   assert.equal(isGeneratedApiDir('reference/apis/evidence/operations/createevidence'), true);
   assert.equal(isGeneratedApiPath('/reference/apis/evidence/'), true);
   assert.equal(isGeneratedApiPath('/reference/apis/evidence/operations/gethealth/'), true);
+  assert.equal(isGeneratedApiDir('reference/apis/evidence-oid4vci'), true);
+  assert.equal(isGeneratedApiPath('/reference/apis/evidence-oid4vci/operations/credential/'), true);
   assert.equal(isGeneratedApiDir('reference/apis/casework'), true);
   assert.equal(isGeneratedApiPath('/reference/apis/casework/operations/health/'), true);
   assert.equal(isGeneratedApiDir('reference/apis/scheduling'), true);
