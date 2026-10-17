@@ -117,7 +117,7 @@ and retried at the next rotation or start; it never stops the writer. Each strea
 `path` whose file name ends in one of those suffixes is refused at startup, so no stream can be
 pointed at another's file. The `.seq` file records the next sequence at every start and
 before every rotation, so a restart after retention or a shipper removed every sealed file
-continues the numbering instead of reusing a name. [Read and ship the Registry Evidence audit log](../evidence-audit/) describes
+continues the numbering instead of reusing a name. [Operate the Evidence Gateway audit log](../evidence-audit/) describes
 the entry format and the `stdout` destination.
 
 ### Ship Registry Evidence audit records off host

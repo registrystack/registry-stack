@@ -1043,7 +1043,7 @@ relevant product pages on this site rather than duplicating release notes.
   `stdout` audit destination carries audit entries alone, and `evidencectl audit show` reads
   histories with request-batch entries and names denials, transient failures, and earlier
   operations left without an outcome. See [Audit retention](../operate/retention-and-persistent-state/#audit-retention)
-  and [Read and ship the Evidence Gateway audit log](../operate/evidence-audit/).
+  and [Operate the Evidence Gateway audit log](../operate/evidence-audit/).
 
 {/* Evidence: crates/registry-platform-audit/src/writer.rs, recover_torn_tail and
     reserved_companion_collision; crates/registry-evidence/src/main.rs, install_operational_logging;
@@ -1065,7 +1065,7 @@ relevant product pages on this site rather than duplicating release notes.
   and `fixtures run` accept `--format junit`, and `dev start --name-prefix`
   sets the local issuer container name prefix. Update scripts that read
   `operation` or snake_case fixture keys. See
-  [evidencectl](../reference/evidencectl/#project-workflow).
+  [evidencectl](../reference/cli/evidencectl/).
 
 {/* Evidence: crates/registry-evidencectl/src/report.rs, the exit constants, success(), refused(), and failure();
     crates/registry-evidencectl/src/junit.rs, render();
@@ -1286,7 +1286,7 @@ relevant product pages on this site rather than duplicating release notes.
   are checked for ownership, mode, write access, and a complete final entry,
   without taking the lock. A second writer is not detected; the JSON
   `proofBoundary` says so. See
-  [evidencectl](../reference/evidencectl/#project-workflow).
+  [evidencectl](../reference/cli/evidencectl/).
 
 {/* Evidence: crates/registry-platform-audit/src/writer.rs, FileDestination::check_writable();
     crates/registry-evidence/src/runtime.rs, assemble() and check_dependencies_without_audit_lock();
@@ -1309,7 +1309,7 @@ relevant product pages on this site rather than duplicating release notes.
   deploy the rebuilt candidate together. Only literal reads such as
   `facts["status"]` and `facts.status` are checked, and a `??` fallback
   between names passes when any of them is declared. See
-  [evidencectl](../reference/evidencectl/#project-workflow).
+  [evidencectl](../reference/cli/evidencectl/).
 
 {/* Historical source at 1707b7470760cc90c6e3f190cab77575ad4ae9f1:
     [crates/registry-evidence-authoring/src/derivation.rs](https://github.com/registrystack/registry-stack/blob/1707b7470760cc90c6e3f190cab77575ad4ae9f1/crates/registry-evidence-authoring/src/derivation.rs);
@@ -2023,7 +2023,7 @@ relevant product pages on this site rather than duplicating release notes.
 - Local development can compose BReg, Evidence, and Casework under one shared
   issuer. `evidencectl access client add` adds task-grant and first-party
   exchange modes, and `bregctl examples run` runs the scenarios a project
-  authors in `examples/scenarios.json`. See [evidencectl](../reference/evidencectl/).
+  authors in `examples/scenarios.json`. See [evidencectl](../reference/cli/evidencectl/).
 
 {/* Evidence: crates/registry-evidencectl/src/access.rs, grant_bootstrap_scope;
     crates/registry-bregctl/src/dev/examples.rs, Scenario. */}
@@ -2347,7 +2347,7 @@ relevant product pages on this site rather than duplicating release notes.
 - `evidencectl source add` previews a connection from a stopped local registry
   and performs it with `--apply`, preserving records, revisions, and client
   identities. It requires a matching-version `bregctl` on `PATH`. See
-  [the evidencectl workflow reference](../reference/evidencectl/).
+  [the evidencectl workflow reference](../reference/cli/evidencectl/).
 - Registry Manifest refuses duplicate concept terms on a field after IRI
   expansion and scheme/host case comparison. Remove repeated entries before
   validating or republishing. Valid manifests retain their authored spelling
@@ -2364,7 +2364,7 @@ relevant product pages on this site rather than duplicating release notes.
   clearer recovery information. Evidence authoring validates source origins and
   runtime settings consistently with deployment checks, and bounds child
   diagnostics and version handshakes. See
-  [the evidencectl workflow reference](../reference/evidencectl/) and
+  [the evidencectl workflow reference](../reference/cli/evidencectl/) and
   [change an active registry](../operate/breg-changes/).
 - Release checksums now include SLSA build provenance for the publication
   workflow that assembles `SHA256SUMS`; candidate evidence retains the binding
