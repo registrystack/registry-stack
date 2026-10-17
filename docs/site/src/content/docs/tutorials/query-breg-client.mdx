@@ -1,6 +1,6 @@
 ---
 title: Query a registry from Python and Node
-description: Install the unified Registry Stack client, read and create records in your local registry from Python and Node, page with a continuation, and handle a refused write.
+description: Read, add, and change contacts in your local registry from Python and Node, run an Action and a Proposal, and handle a refusal.
 status: current
 owner: registry-docs
 source_repos:
@@ -14,360 +14,457 @@ standards_referenced:
   - openapi
 tutorial_test:
   toolset: breg
-  after: tutorials/first-breg
-  skip: its program blocks name no file for the runner to write; it needs the first-breg registry running and seeded, but that page ends with dev stop --remove; and workspace binaries report 0.42.0-dev while the assembled packages are 0.42.0, so the version the page reads from breg --version cannot be installed
+  after: tutorials/change-a-registry-with-an-action
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-The unified Registry Stack client gives an application one method for each Base Registry Engine
-operation, in Python and in Node. In this tutorial you install the published package at your
-registry's version, read the record you created in the first tutorial, create a record with an
-idempotency key, page through the collection with a continuation, and inspect a refused write.
-Every step shows both languages; follow the one your application uses, or run both against the
-same registry.
+In about twenty minutes you will have a handful of short programs, in Python and in Node, that
+read the contacts you added in [Create your first registry](../first-breg/) and
+[Change a registry with an Action](../change-a-registry-with-an-action/), add one, change one,
+and register one more. Each step shows both languages: follow the one your
+application uses, or run both against the same registry.
 
 <QuickstartMeta
-  outcome="A Python program and a Node program that read, page, and write your local registry through the unified client and handle a refusal explicitly."
-  time="About 20 minutes after the prerequisite"
+  outcome="Python and Node programs that read, add, and change contacts in your local registry through the Registry Stack client."
+  time="About 20 minutes"
   level="Python or Node application developer"
-  prerequisites={['Python 3.11 or later, or Node 24.11 or later', 'The registry from Create and query your first registry, still running', 'The breg and bregctl binaries on your path']}
+  prerequisites={['Python 3.11 or later, or Node 24.11 or later', 'The running registry from Change a registry with an Action']}
 />
 
-## Before you start
+## Get a token for your programs
 
-Complete [Create and query your first registry](../first-breg/) through **Create and read a contact**
-and leave the registry running. In a terminal in the directory that holds `tutorial-work`, save the
-registry address and the path of a token file; the programs in this tutorial read both:
+In the project directory, request a token for the `editor` test caller and put it, with the
+registry's address, where your programs will read them:
 
-```sh
-registry_url=http://127.0.0.1:8090
-registry_project="$PWD/tutorial-work/project"
-token_file="$PWD/tutorial-work/editor-token"
+```sh test-cwd="tutorial-work/project"
+bregctl dev token editor
+export REGISTRY_URL=http://127.0.0.1:8090
+export REGISTRY_TOKEN="$(sed 's/^Authorization: Bearer //' .breg/dev/secrets/editor.header)"
 ```
 
-`bregctl dev token` writes an authorization-header file; the client wants the bare token.
-The token lasts five minutes. Request a fresh token as the `editor` client now
-and repeat these commands whenever a call fails with status `401`:
-
-```sh
-bregctl dev token editor "$registry_project"
-umask 077
-sed 's/^Authorization: Bearer //' "$registry_project/.breg/dev/secrets/editor.header" \
-  > "$token_file"
+```text test-expect
+bregctl dev token succeeded.
 ```
 
-The command reports the private header-file path. The extracted token stays in a
-file readable only by your user; the programs read it and never print it.
+Use the address `bregctl dev start` reported if it differs. The token lasts five minutes: when a
+program fails with status 401, run these three commands again in the project directory.
 
 ## Install the client
 
-The package version must equal the registry's, and the packages start at v0.26.1.
-Work in a directory of its own and read the version from the `breg` binary rather than typing it:
+The client's version must match the registry's, so read it from `breg` rather than typing it.
+Make a directory beside the project for your programs and install the client there:
 
 ```sh
-mkdir breg-client-query
-cd breg-client-query
+mkdir ../contacts-app
+cd ../contacts-app
 version="$(breg --version | awk '{print $2}')"
 ```
 
-Python, in a virtual environment:
+For Python, in a virtual environment:
 
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install "registry-stack-client==${version}"
+python -m pip install --quiet "registry-stack-client==$version"
 ```
 
-Node, in a package of its own:
+For Node:
 
 ```sh
-npm init -y
-npm install "@registrystack/client@${version}"
+npm install --silent "@registrystack/client@$version"
 ```
 
-Each package selects the native build for Linux amd64, Linux arm64, or macOS arm64; the release
-provides no other platform. The Python wheel uses the Python 3.11 stable ABI, so later Python
-versions import the same file.
+Each package carries a native build for Linux amd64, Linux arm64, and macOS arm64.
 
-{/* Evidence: crates/registry-stack-client-py/README.md, crates/registry-stack-client-node/README.md,
-    release/scripts/assemble-registry-client-wheel.py */}
+## Connect to the registry
 
-## Construct a client and probe the registry
+Every program starts the same way, so put that in one file. Create `registry.py`:
 
-The client takes the registry's base URL and an authorization mode. `static` sends the bearer you
-give it, unchanged, on every call. Create `query_breg.py`:
-
-```python
+```python title="registry.py" test-file
 import os
-from pathlib import Path
 
 from registry_client import breg
 
+PROFILE = "directory-editor"
+
 client = breg.BaseRegistryClient(
     base_url=os.environ["REGISTRY_URL"],
-    authorization={"static": Path(os.environ["REGISTRY_TOKEN_FILE"]).read_text().strip()},
+    authorization={"static": os.environ["REGISTRY_TOKEN"]},
 )
-
-print(client.health()["value"]["status"])
-print(client.ready()["value"]["status"])
+contract = client.registry_contract(access_profile=PROFILE)
 ```
 
-Or create `query-breg.js`. Node methods return promises, so the calls live in an `async` function:
+Or, for Node, `registry.mjs`:
 
-```js
-const fs = require('node:fs');
+```js title="registry.mjs" test-file
+import { breg } from '@registrystack/client';
 
-const { breg } = require('@registrystack/client');
+export const PROFILE = 'directory-editor';
 
-async function main() {
-  const client = new breg.BaseRegistryClient({
-    baseUrl: process.env.REGISTRY_URL,
-    authorization: { static: fs.readFileSync(process.env.REGISTRY_TOKEN_FILE, 'utf8').trim() },
-  });
-
-  console.log((await client.health()).value.status);
-  console.log((await client.ready()).value.status);
-}
-
-main();
+export const client = new breg.BaseRegistryClient({
+  baseUrl: process.env.REGISTRY_URL,
+  authorization: { static: process.env.REGISTRY_TOKEN },
+});
+export const contract = await client.registryContract(PROFILE);
 ```
 
-Run the program you wrote:
+`static` sends the token unchanged with every call. `directory-editor` is the
+[access profile](../../reference/glossary/#access-profile) in `registry.yaml` that grants
+`editor` its reads and changes. The contract is what the registry publishes about itself for that
+profile: its name and version, and the operations and Actions the profile may use.
+
+## Read the contacts
+
+Create `read.py`:
+
+```python title="read.py" test-file
+from registry import PROFILE, client, contract
+
+print(f"{contract.registry_identifier} version {contract.registry_version}")
+
+page = client.list_records("contacts", access_profile=PROFILE)
+for record in sorted(page["value"]["items"], key=lambda r: r["domainData"]["name"]):
+    print(record["domainData"]["name"], record["domainData"]["email"])
+```
 
 ```sh
-REGISTRY_URL="$registry_url" REGISTRY_TOKEN_FILE="$token_file" python query_breg.py
-REGISTRY_URL="$registry_url" REGISTRY_TOKEN_FILE="$token_file" node query-breg.js
+python read.py
 ```
 
-Either prints:
-
-```text
-alive
-ready
+```text test-expect
+local-directory version 0.1.0
+Example contact contact@example.test
+Moving contact new@example.test
+Registered contact registered@example.test
 ```
 
-Every method returns an outcome rather than a bare value: a Python dict, or a Node object, with
-`kind`, `value`, and the trace identifier of the exchange (`trace_id` in Python, `traceId` in
-Node). The following steps append to the Python file, and to the body of `main` in the Node file,
-before its closing brace. Each run repeats the earlier lines and adds the new ones.
+Or create `read.mjs`:
 
-## Read the record you created
+```js title="read.mjs" test-file
+import { PROFILE, client, contract } from './registry.mjs';
 
-The first tutorial created a synthetic contact named `Example contact`. List the `contacts`
-collection and find that name in the returned page, then read its identifier. The `directory-editor` profile
-keeps both calls within the editor's `zone-a` jurisdiction:
+console.log(`${contract.registryIdentifier} version ${contract.registryVersion}`);
 
-```python
-found = client.list_records("contacts", access_profile="directory-editor", top=100)
-record_identifier = next(
-    item["recordIdentifier"] for item in found["value"]["items"]
-    if item["domainData"]["name"] == "Example contact"
-)
-
-record = client.get_record("contacts", record_identifier, access_profile="directory-editor")
-print(record["kind"])
-print(record["value"]["data"]["domainData"]["name"])
-print(record["etag"] is not None)
+const page = await client.listRecords('contacts', { accessProfile: PROFILE });
+const byName = (a, b) => a.domainData.name.localeCompare(b.domainData.name);
+for (const record of page.value.items.toSorted(byName)) {
+  console.log(record.domainData.name, record.domainData.email);
+}
 ```
 
-```js
-  const found = await client.listRecords('contacts', {
-    accessProfile: 'directory-editor',
-    top: 100,
-  });
-  const recordIdentifier = found.value.items.find(
-    item => item.domainData.name === 'Example contact',
-  ).recordIdentifier;
-
-  const record = await client.getRecord('contacts', recordIdentifier, { accessProfile: 'directory-editor' });
-  console.log(record.kind);
-  console.log(record.value.data.domainData.name);
-  console.log(record.etag !== undefined);
+```sh
+node read.mjs
 ```
 
-The run adds three lines (`true` in Node):
-
-```text
-complete
-Example contact
-True
+```text test-expect
+local-directory version 0.1.0
+Example contact contact@example.test
+Moving contact new@example.test
+Registered contact registered@example.test
 ```
 
-`value` is the record document as the registry returned it, with the project's fields under
-`domainData`. `etag` is the strong entity tag a later patch must present. A concealed field is
-absent from `domainData`; use a safe dictionary or property lookup when a field may be unavailable.
-If the seed contact is missing, rerun the first tutorial's `contact` scenario before continuing.
+The first line is the `registry` block of `registry.yaml`: its `id` and the `version` you give your
+project. The others are the contacts from the first two tutorials, each a
+[Record](../../reference/glossary/#registry-record) of the `contact`
+[Record type](../../reference/glossary/#record-type). `contacts` is the Record type's route, and
+each item carries its fields under `domainData`. The list comes back in no particular order, so
+the programs sort it by name.
 
-## Create a record with an idempotency key
+## Add a contact
 
-Writes need a capability binding. The client reads the caller-filtered registry contract and
-selects the create operation by its identifier. The selected binding carries the write route and
-field permissions. The third
-argument is the idempotency key: 1 to 256 visible ASCII characters without a comma or semicolon.
-The registry replays a write it has already applied under the same key, so running the program
-again, in either language, prints the same record instead of creating a second one:
+Create `add_contact.py`, which adds a test contact and prints its identifier:
 
-```python
-contract = client.registry_contract(access_profile="directory-editor")
-binding = contract.select_create("records.contact.create", "directory-editor")
+```python title="add_contact.py" test-file
+from registry import PROFILE, client, contract
 
+create = contract.select_create("records.contact.create", PROFILE)
 created = client.create_record(
-    binding,
-    {"name": "Application contact", "email": "app@example.test", "jurisdiction": "zone-a"},
-    "query-breg-contact-1",
+    create,
+    {"name": "Ada Lovelace", "email": "ada@example.test", "jurisdiction": "zone-a"},
+    "add-ada-lovelace",
 )
-print(created["kind"])
-print(created["value"]["data"]["domainData"]["name"])
-print(created["location"] is not None)
+print(created["value"]["data"]["recordIdentifier"])
 ```
 
-```js
-  const contract = await client.registryContract('directory-editor');
-  const binding = contract.selectCreate('records.contact.create', 'directory-editor');
+Or `add_contact.mjs`:
 
-  const created = await client.createRecord(
-    binding,
-    { name: 'Application contact', email: 'app@example.test', jurisdiction: 'zone-a' },
-    'query-breg-contact-1',
-  );
-  console.log(created.kind);
-  console.log(created.value.data.domainData.name);
-  console.log(created.location !== undefined);
+```js title="add_contact.mjs" test-file
+import { PROFILE, client, contract } from './registry.mjs';
+
+const create = contract.selectCreate('records.contact.create', PROFILE);
+const created = await client.createRecord(
+  create,
+  { name: 'Ada Lovelace', email: 'ada@example.test', jurisdiction: 'zone-a' },
+  'add-ada-lovelace',
+);
+console.log(created.value.data.recordIdentifier);
 ```
 
-The run adds:
+`select_create` finds the create operation in the contract and fails at once if the profile may
+not use it. The last argument, `add-ada-lovelace`, is the idempotency key: send the same request
+under the same key again, after a timeout or a crash, and the registry returns the contact it
+already created instead of adding a second one. Run the program and keep the identifier:
 
-```text
-complete
-Application contact
-True
+```sh
+contact_id="$(python add_contact.py)"
+echo "$contact_id"
 ```
 
-`location` is the URL of the created record. The binding is opaque: the program can select it and
-pass it to a write, and nothing else.
-
-## Page through the collection
-
-`top` asks for one record per page and `select` projects only the `name` field. A page with more
-records behind it carries a continuation. Pass it unchanged to the continuation method and stop
-when the last page has none (`None` in Python, absent in Node):
-
-```python
-page = client.list_records("contacts", access_profile="directory-editor", top=1, select=["name"])
-
-while True:
-    for item in page["value"]["items"]:
-        print(item["domainData"]["name"])
-
-    continuation = page["continuation"]
-    if continuation is None:
-        break
-
-    page = client.continue_list(continuation)
+```text test-expect
+<record-id>
 ```
 
-```js
-  let page = await client.listRecords('contacts', { accessProfile: 'directory-editor', top: 1, select: ['name'] });
+The Node program prints the same identifier, because it sends the same request under the same key:
 
-  while (true) {
-    for (const item of page.value.items) {
-      console.log(item.domainData.name);
-    }
-
-    if (page.continuation === undefined) {
-      break;
-    }
-
-    page = await client.continueList(page.continuation);
-  }
+```sh
+node add_contact.mjs
 ```
 
-The run adds one line per visible contact. In this fresh project, those are the two contacts above.
-A list without `orderby` is sorted by the identifier the registry assigned, so their names can appear
-in either order:
-
-```text
-Example contact
-Application contact
+```text test-expect
+<record-id>
 ```
 
-## Handle a refused write
+```sh
+python read.py
+```
 
-The contact schema requires `name`, `email`, and `jurisdiction`. Try omitting `email`.
-The metadata-selected client refuses this request before acquiring a token or sending a write:
+```text test-expect
+local-directory version 0.1.0
+Ada Lovelace ada@example.test
+Example contact contact@example.test
+Moving contact new@example.test
+Registered contact registered@example.test
+```
 
-```python
+## Change an email with an Action
+
+The project allows one change to an existing contact: the
+[Action](../../reference/glossary/#action) `update-contact-email`, which the registry applies in
+the same request. Create `change_email.py`, which takes a contact's identifier and a new address:
+
+```python title="change_email.py" test-file
+import sys
+
+from registry_client import breg
+
+from registry import PROFILE, client, contract
+
+record_id, email = sys.argv[1], sys.argv[2]
+action = contract.select_action("update-contact-email", PROFILE)
+
 try:
-    client.create_record(
-        binding,
-        {"name": "Incomplete contact", "jurisdiction": "zone-a"},
-        "query-breg-incomplete-1",
+    record = client.get_record("contacts", record_id, access_profile=PROFILE)
+    revision = record["value"]["data"]["revisionIdentifier"]
+    conditions = client.action_target_conditions(action, {"contactId": record_id})
+    outcome = client.invoke_action(
+        action,
+        {"contactId": record_id, "email": email},
+        f"change-email-{record_id}-{revision}",
+        conditions,
     )
 except breg.BaseRegistryClientError as error:
-    print(error.kind)
+    sys.exit(f"refused: {error.kind} ({error.code})")
+
+print(outcome["value"])
 ```
 
-```js
-  try {
-    await client.createRecord(
-      binding,
-      { name: 'Incomplete contact', jurisdiction: 'zone-a' },
-      'query-breg-incomplete-1',
-    );
-  } catch (error) {
-    if (!(error instanceof breg.BaseRegistryClientError)) throw error;
-    console.log(error.kind);
+Or `change_email.mjs`:
+
+```js title="change_email.mjs" test-file
+import { breg } from '@registrystack/client';
+
+import { PROFILE, client, contract } from './registry.mjs';
+
+const [recordId, email] = process.argv.slice(2);
+const action = contract.selectAction('update-contact-email', PROFILE);
+
+try {
+  const record = await client.getRecord('contacts', recordId, { accessProfile: PROFILE });
+  const revision = record.value.data.revisionIdentifier;
+  const conditions = await client.actionTargetConditions(action, { contactId: recordId });
+  const outcome = await client.invokeAction(
+    action,
+    { contactId: recordId, email },
+    `change-email-${recordId}-${revision}`,
+    conditions,
+  );
+  console.log(outcome.value);
+} catch (error) {
+  if (!(error instanceof breg.BaseRegistryClientError)) throw error;
+  console.error(`refused: ${error.kind} (${error.code})`);
+  process.exit(1);
+}
+```
+
+The target conditions are the contact's current state as the registry sees it. The registry makes
+the change only if the contact still matches them, so two programs changing the same contact at
+once cannot overwrite each other unseen. The idempotency key includes the contact's revision: a
+retry of this change reuses it, and the next change gets a new one.
+
+```sh
+python change_email.py "$contact_id" ada@lovelace.example.test
+```
+
+```text test-expect
+{'action': 'update-contact-email', 'applicationId': '<application-id>', 'results': {'contact-email': {'recordId': '<record-id>', 'recordType': 'contact', 'revision': 2}}}
+```
+
+```sh
+node change_email.mjs "$contact_id" ada@analytical.example.test
+```
+
+```text test-expect
+{
+  action: 'update-contact-email',
+  applicationId: '<application-id>',
+  results: {
+    'contact-email': {
+      recordId: '<record-id>',
+      recordType: 'contact',
+      revision: 3
+    }
   }
+}
 ```
 
-The run adds:
+The registry answered each call with an ActionReceipt. It names the Action, gives the change an
+`applicationId`, and lists under each effect of the Action's
+[Plan](../../reference/glossary/#planner), here the single effect `contact-email`, the Record it
+changed and that Record's new revision.
 
-```text
-invalid-request
+When the registry refuses, the client raises `BaseRegistryClientError`, and its `kind` says what
+went wrong. Ask for a contact that does not exist:
+
+```sh test-exit="1"
+python change_email.py 00000000-0000-4000-8000-000000000000 someone@example.test
 ```
 
-A server refusal instead has kind `problem`, with an HTTP status, problem code, and trace identifier.
-Handle that separately from local input validation. The
-[client error reference](../../reference/client-api/#breg-error-contract) describes the error
-members and the failures each kind represents.
+```text test-expect
+refused: not-found (resource.not_found)
+```
 
-{/* Evidence: crates/registry-breg-client-py/src/lib.rs, sdk_error(); crates/registry-breg-client-node/src/lib.rs,
-    client_error() and selection_error(); crates/registry-breg-client-node/client.d.ts,
-    crates/registry-breg-client-node/client.js, crates/registry-breg-client/src/client.rs */}
+The Node program prints the same line. `kind` is what a program branches on; `code` is the
+registry's own reason. An address the Action does not accept, such as an empty one, is refused
+with `invalid-request` before anything is sent. The
+[client capabilities](../../reference/breg-client-capabilities/) reference lists every operation,
+and the [client API reference](../../reference/client-api/#base-registry-engine) every error kind.
 
-## Clean up
+## Register a contact through a Proposal
 
-Deactivate the virtual environment and delete `breg-client-query` when you no longer need it.
-Delete the token file, then stop the registry as the first tutorial's
-[Stop the registry](../first-breg/#stop-or-remove-your-local-session) step shows; stopping with `--remove` also
-discards the records you created.
+The other Action, `register-contact`, changes nothing when it starts. It opens a
+[Proposal](../../reference/glossary/#proposal): a draft you submit, which the registry then
+applies. This project requires no review, so the registry applies it straight after the submit.
+Create `register.py`:
 
-## What you built
+```python title="register.py" test-file
+import time
 
-A Python program and a Node program that construct a client from a base URL and a static bearer,
-probe the registry, read a record by identifier, create a record through a selected capability
-binding with an idempotency key, page through a projected collection with a continuation, and
-inspect a refused write through one error type.
+from registry import PROFILE, client, contract
 
-## Troubleshooting
+action = contract.select_action("register-contact", PROFILE)
+proposal = client.start_proposal(
+    action,
+    {"name": "Grace Hopper", "email": "grace@example.test", "jurisdiction": "zone-a"},
+    "register-grace-hopper",
+)
+print(proposal.identifier, proposal.document["state"])
 
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| `pip` or `npm` finds no matching version | The registry is older than v0.26.1, or `version` does not match `breg --version` | Install a v0.26.1 or later release, start the registry with it, and reinstall at its exact version |
-| `KeyError: 'REGISTRY_URL'` in Python, or `configuration` in Node | `REGISTRY_URL` is not set | Prefix the command with both assignments as shown in [Construct a client and probe the registry](#construct-a-client-and-probe-the-registry) |
-| `KeyError: 'REGISTRY_TOKEN_FILE'` in Python, or a `TypeError` naming the `path` argument in Node | `REGISTRY_TOKEN_FILE` is not set | Prefix the command with both assignments |
-| `problem` with status `401` and code `authentication.refused` | The token is older than five minutes, or the request carried no bearer | Check the token file is not empty, renew it with the `bregctl dev token` command in [Before you start](#before-you-start), and rerun |
-| `transport` with a `connect` transport kind | The registry is not running | Start it again with the first tutorial's `bregctl dev` command and renew the token |
-| `problem` with status `400` and code `query.invalid` | The minimal directory declares no filterable fields | Use the unfiltered, paged list shown above |
-| `metadata-selection` with code `not-found` or `profile-mismatch` | The operation identifier or the profile does not match the project | Use `records.contact.create` with the `directory-editor` profile |
-| `configuration` while constructing the client | The base URL is not HTTPS or loopback HTTP, or carries credentials, a query, or a fragment | Use the loopback `breg url` the first tutorial's report shows |
-| `invalid-request` before a write | A required field is missing or a value violates the served schema | Supply `name`, `email`, and `jurisdiction` within their declared bounds |
-| `problem` with status `404` and code `resource.not_found` | The identifier names no record | Read the identifier from a list result |
+submit = client.prepare_proposal(proposal, "submit", {}, "submit-grace-hopper")
+proposal = client.execute_proposal(submit)
+while proposal.document["state"] != "applied":
+    time.sleep(1)
+    proposal = client.read_proposal(proposal)
+
+print(proposal.document["state"], proposal.document["application"]["resultLinks"][0])
+print(proposal.document["links"]["cancel"]["availability"])
+```
+
+Or `register.mjs`. The Node client takes the inputs and the submit body as JSON text, and returns
+the Proposal's document the same way:
+
+```js title="register.mjs" test-file
+import { setTimeout } from 'node:timers/promises';
+
+import { PROFILE, client, contract } from './registry.mjs';
+
+const action = contract.selectAction('register-contact', PROFILE);
+let proposal = await client.startProposal(
+  action,
+  JSON.stringify({ name: 'Grace Hopper', email: 'grace@example.test', jurisdiction: 'zone-a' }),
+  'register-grace-hopper',
+);
+let document = JSON.parse(proposal.documentJson);
+console.log(proposal.identifier, document.state);
+
+const submit = client.prepareProposal(proposal, 'submit', '{}', 'submit-grace-hopper');
+proposal = await client.executeProposal(submit);
+document = JSON.parse(proposal.documentJson);
+while (document.state !== 'applied') {
+  await setTimeout(1000);
+  proposal = await client.readProposal(proposal);
+  document = JSON.parse(proposal.documentJson);
+}
+
+console.log(document.state, document.application.resultLinks[0]);
+console.log(document.links.cancel.availability);
+```
+
+```sh
+python register.py
+```
+
+```text test-expect
+<proposal-id> draft
+applied {'recordId': '<record-id>', 'recordType': 'contact', 'revision': 1}
+{'available': False, 'observedRevision': 3, 'reason': 'already-applied', 'recovery': 'receipt-only'}
+```
+
+The Proposal started as a `draft`. After the submit, the program reads it until the registry has
+applied it, then prints the Record the registry created. The last line is the availability of the
+Proposal's `cancel` link. A Proposal lists the moves it allows, each with an availability: whether
+the move is open now and, if not, the `reason` and the `recovery`, what you can still do.
+`receipt-only` means the Proposal is finished and only its record of what happened remains.
+
+```sh
+node register.mjs
+```
+
+```text test-expect
+<proposal-id> draft
+applied {
+  recordType: 'contact',
+  recordId: '<record-id>',
+  revision: 1
+}
+{
+  available: false,
+  observedRevision: 3,
+  reason: 'already-applied',
+  recovery: 'receipt-only'
+}
+```
+
+The Node program used the same keys, so the registry handed back the same Proposal rather than
+opening a second one. List the contacts once more:
+
+```sh
+python read.py
+```
+
+```text test-expect
+local-directory version 0.1.0
+Ada Lovelace ada@analytical.example.test
+Example contact contact@example.test
+Grace Hopper grace@example.test
+Moving contact new@example.test
+Registered contact registered@example.test
+```
+
+{/* Evidence: crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi;
+    crates/registry-breg-client-node/client.d.ts; crates/registry-breg-client/src/actions.rs;
+    crates/registry-breg-client/src/proposal.rs; products/breg/examples/minimal/registry.yaml. */}
 
 ## Next
 
-- [Registry Stack client API reference](../../reference/client-api/#base-registry-engine) for every method, outcome shape, and error kind.
-- [Control access per profile](../../configure/breg-access/) for the access profiles and capability bindings a project exposes.
-- [Base Registry Engine API reference](../../reference/breg-api/) for the HTTP contract the client speaks.
-- [Error and status code reference](../../reference/errors/) for the problem codes the registry returns.
+[Extend a registry with a module](../extend-a-registry-with-a-module/)

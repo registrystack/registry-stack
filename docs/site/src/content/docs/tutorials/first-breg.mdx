@@ -1,6 +1,6 @@
 ---
-title: Create and query your first registry
-description: Create a native contact directory, run its governed create/read scenario, and retain or remove the local session.
+title: Create your first registry
+description: Create a contact registry on your machine, start it, add a test contact, and see that only the callers allowed to read it can.
 status: current
 owner: registry-docs
 source_repos:
@@ -17,108 +17,241 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you are evaluating Base Registry Engine (BReg), create a small contact directory,
-start it locally, and run a scenario that creates and reads one synthetic contact.
-Your project includes explicit clients and jurisdiction boundaries.
+In about fifteen minutes you will have a registry running on your machine with one test contact
+in it, readable by your own staff and hidden from staff elsewhere. You write no code: you create
+the registry, check it, start it, add the contact, and read it back.
 
 <QuickstartMeta
-  outcome="A running local directory and a synthetic contact created and read through its governed API."
+  outcome="A running local registry holding one test contact that only the callers allowed to read it can see."
   time="About 15 minutes, plus image downloads"
   level="Local evaluation only"
-  prerequisites={['Matching breg and bregctl binaries', 'Running Docker', 'A shell and an editor']}
+  prerequisites={['Running Docker', 'curl', 'A shell and an editor']}
 />
 
-## Install Base Registry Engine
+## Install breg and bregctl
 
-Install matching `breg` and `bregctl` binaries. The release installer verifies the
-release checksums before installing both binaries into `~/.local/bin`:
+`breg` is the registry server and `bregctl` the command-line tool you drive it with. The
+installer checks the release checksums and puts both in `~/.local/bin`; keep that directory on
+your `PATH`.
 
-```sh test-skip="downloads a release; use matching candidate binaries for a reader run"
+```sh test-skip="downloads a release; the gate uses binaries built from this checkout"
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
 bregctl --version
 ```
 
-Keep that directory on `PATH`. Review the installer before running it on an
-operated host, and pin a reviewed release for deployment.
-
-## Create and inspect your project
+## Create a project
 
 ```sh
 mkdir -p tutorial-work
 bregctl init tutorial-work/project
-bregctl check tutorial-work/project
-bregctl examples list tutorial-work/project
+cd tutorial-work/project
 ```
 
-Open the generated README and `registry.yaml`. The default `minimal-directory`
-project declares the `contact` Record type, its `name`, `email`, and `jurisdiction`
-fields, and the `directory-editor` profile. `dev-clients.yaml` declares `editor`
-and `foreign-editor` with different jurisdiction claims. The project also includes
-journeys, the `contact` scenario and its synthetic input, and a runtime example.
-An existing destination is refused; choose a fresh directory to preserve your work.
+```text test-excerpt
+Initialized a registry project. 9 artifacts written.
+  revision  sha256:<digest>
 
-{/* Evidence: crates/registry-bregctl/src/starters.rs; products/breg/examples/minimal/registry.yaml;
-    products/breg/examples/minimal/dev-clients.yaml;
-    products/breg/examples/minimal/examples/scenarios.json. */}
+  README.md
+  dev-clients.yaml
+  examples/inputs/contact.json
+  examples/inputs/email-update.json
+  examples/inputs/registration.json
+  examples/scenarios.json
+  registry.yaml
+  runtime.example.yaml
+  tests/journeys.yaml
+```
+
+A [project](../../reference/glossary/#registry-project) is a directory of YAML files that
+describes one registry. `registry.yaml` holds what the registry stores and who may read and change
+it, `dev-clients.yaml` names two test callers, and `examples/` holds ready-made requests. Run the
+remaining commands from this directory.
+
+## Check the project
+
+```sh
+bregctl check .
+```
+
+```text test-expect
+Authoring check passed; registry revision sha256:<digest>.
+0 errors, 0 warnings in 3 files
+```
+
+Open `registry.yaml`. It declares one [Record type](../../reference/glossary/#record-type),
+`contact`, with three fields. Each contact you store is a
+[Record](../../reference/glossary/#registry-record) of that type.
+
+```yaml title="registry.yaml" test-excerpt="registry.yaml"
+recordTypes:
+  - id: contact
+    route: contacts
+    primaryDataset: directory
+    mutationMode: mutable
+    display: {label: Contact, description: A named institutional contact.}
+    fields:
+      - {id: name, type: string, required: true, minimumLength: 1, maximumLength: 160, classification: internal}
+      - {id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: internal}
+      - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
+```
+
+Further down, an [access profile](../../reference/glossary/#access-profile) says who may read and
+change contacts. A caller needs the `registry:directory:write` scope, may create, read, list and
+change contacts, and only reaches contacts whose `jurisdiction` equals the `jurisdiction` claim in
+its token:
+
+```yaml title="registry.yaml" test-excerpt="registry.yaml"
+accessProfiles:
+  - id: directory-editor
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: ["registry:directory:write"]
+    requiredPurposes: [directory-administration]
+    permissions:
+      records:
+        - recordType: contact
+          operations: [create, get, list, patch]
+          readableFields: [name, email, jurisdiction]
+          writableFields: [name, email, jurisdiction]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+```
+
+`dev-clients.yaml` gives the test caller `editor` the claim `zone-a` and `foreign-editor` the
+claim `zone-b`.
 
 ## Start the registry
 
-:::caution[Keep local data synthetic]
-The session retains records in a Docker volume and keys in the owner-only
-`.breg/dev/` directory. Keep these values out of version control and support messages.
-:::
-
 ```sh
-bregctl dev start tutorial-work/project
+bregctl dev start
 ```
 
-The command starts PostgreSQL and the local issuer, tests and packages the project,
-activates it, and waits for BReg readiness. Its report identifies service addresses
-and private credential paths. A first image download can take longer than a restart.
-A failed start retains private diagnostics under `.breg/dev/`; read those before
-changing your model. A binary-version mismatch requires matching installations.
+```text test-expect
+bregctl dev succeeded.
+  status          ready
+  project         <project-dir>
+  breg url        http://127.0.0.1:<port>
+  token endpoint  http://127.0.0.1:<port>/oauth2/token
+  audience        urn:breg:dev:<audience>
+  package digest  sha256:<digest>
+  state file      <project-dir>/.breg/dev/state.json
+  runtime config  <project-dir>/.breg/dev/runtime.yaml
 
-## Create and read a contact
+  client editor
+    client id file      <project-dir>/.breg/dev/credentials/editor/client-id
+    assertion key file  <project-dir>/.breg/dev/credentials/editor/assertion-key.jwk
 
-```sh
-bregctl examples run contact tutorial-work/project
+  client foreign-editor
+    client id file      <project-dir>/.breg/dev/credentials/foreign-editor/client-id
+    assertion key file  <project-dir>/.breg/dev/credentials/foreign-editor/assertion-key.jwk
 ```
 
-The scenario uses the authored `editor` client to create its contact and read that
-same record. A repeated run resumes from retained scenario state rather than
-blindly creating another contact. The journey fixtures also exercise concealment
-from the foreign jurisdiction. Inspect `tests/journeys.yaml` to see the permitted
-and refused operations your project tests before activation.
+`bregctl` started PostgreSQL and a local token issuer in Docker, ran the project's tests, and
+started the registry at `breg url`. The first start downloads the images and takes longer. The
+files under `.breg/dev/` are private keys for the two test callers; keep them out of version
+control.
 
-For application integration, obtain caller-filtered metadata and use a matching
-[Registry Stack client](../../tutorials/query-breg-client/). The API's stable record
-identifiers and revision conditions are separate from the contact's domain fields.
+If the start reports that a port is in use, another program holds it. Start again with
+`--breg-port`, `--issuer-port` or `--database-port` set to a free port, and use your `breg url` in
+place of `http://127.0.0.1:8090` below.
 
-{/* Evidence: crates/registry-bregctl/src/dev/examples.rs;
-    products/breg/examples/minimal/tests/journeys.yaml;
-    crates/registry-bregctl/src/dev/mod.rs. */}
-
-## Stop or remove your local session
+## Add a test contact
 
 ```sh
-bregctl dev stop tutorial-work/project
+bregctl examples run contact
 ```
 
-Stopping retains records, credentials, package, and scenario checkpoints. Restart
-with `dev start` to resume. If you edit a retained project incompatibly, the start
-refuses rather than silently replacing its data.
+```text test-excerpt
+bregctl examples run succeeded.
+  project   <project-dir>
+  scenario  contact
+  attempt   <attempt-id>
+```
 
-:::danger[Remove only disposable data]
-Adding `--remove` discards the owned database volume, records, receipts, and
-scenario checkpoints. Keep any data you need before running it. Audit files remain.
-:::
+The `contact` example in `examples/scenarios.json` creates one test contact in `zone-a` as the
+`editor` caller and reads it back. The rest of the output shows the registry's response to each
+step.
+
+## Read the contact as two callers
+
+Get a token for each test caller. Each is valid for five minutes; run the command again when it
+expires.
 
 ```sh
-bregctl dev stop tutorial-work/project --remove
+bregctl dev token editor
+bregctl dev token foreign-editor
 ```
+
+```text test-expect
+bregctl dev token succeeded.
+bregctl dev token succeeded.
+```
+
+Each token is saved, ready to send, as an HTTP header in `.breg/dev/secrets/`. List the contacts
+as `editor`:
+
+```sh
+curl -s -H @.breg/dev/secrets/editor.header http://127.0.0.1:8090/v1/records/contacts
+```
+
+```json test-expect
+{
+  "items": [
+    {
+      "domainData": {
+        "email": "contact@example.test",
+        "jurisdiction": "zone-a",
+        "name": "Example contact"
+      },
+      "recordIdentifier": "<record-id>",
+      "revisionIdentifier": "1"
+    }
+  ],
+  "meta": {
+    "datasetIdentifier": "directory",
+    "entityTypeIdentifier": "contact",
+    "registryIdentifier": "local-directory"
+  },
+  "pageInfo": {
+    "nextCursor": null
+  }
+}
+```
+
+The Record carries a stable identifier and a revision number beside the fields. Now list the same
+contacts as `foreign-editor`, whose token says `zone-b`:
+
+```sh
+curl -s -H @.breg/dev/secrets/foreign-editor.header http://127.0.0.1:8090/v1/records/contacts
+```
+
+```json test-expect
+{
+  "items": [],
+  "meta": {
+    "datasetIdentifier": "directory",
+    "entityTypeIdentifier": "contact",
+    "registryIdentifier": "local-directory"
+  },
+  "pageInfo": {
+    "nextCursor": null
+  }
+}
+```
+
+The registry applied the access profile: the contact exists, and `foreign-editor` cannot see it.
+
+{/* Evidence: crates/registry-bregctl/src/starters.rs; products/breg/examples/minimal/registry.yaml;
+    products/breg/examples/minimal/dev-clients.yaml;
+    products/breg/examples/minimal/examples/scenarios.json;
+    crates/registry-bregctl/src/dev/examples.rs; crates/registry-bregctl/src/dev/mod.rs. */}
+
+## Leave the registry running
+
+The next tutorial continues with this registry and its contact, so leave it running. When you
+are finished with it, run `bregctl dev stop --remove` in this directory to stop it and delete its
+data.
 
 ## Next
 
-- [Author a registry project](../../configure/breg/)
-- [Declare Actions and Proposals](../../configure/breg-change-control/)
-- [Build a production candidate](../build-a-breg-production-candidate/)
+[Change a registry with an Action](../change-a-registry-with-an-action/)

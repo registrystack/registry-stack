@@ -1,6 +1,6 @@
 ---
 title: Derive a registry from PublicSchema
-description: Derive a registry project from the PublicSchema reference model with a starter selection, check and start it, then edit the selection and derive again.
+description: Derive a registry of people and households from the PublicSchema reference model, start it, create a person, and derive it again from an edited selection.
 status: current
 owner: registry-docs
 source_repos:
@@ -17,49 +17,52 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you are a data publisher who finished [Create and query your first registry](../first-breg/), you
-already have `bregctl` installed. This tutorial derives a registry project from PublicSchema, an
-external reference model embedded in the tooling, instead of writing the domain-neutral example
-project. You pick a starter selection of concepts and properties, read what `init` wrote, check and
-start the project, then edit the selection and derive it again.
+If you would rather start your registry from a published data model than type its fields yourself,
+derive one from PublicSchema. In about 20 minutes you will have a registry of people, households,
+and household memberships running on your machine, with one person in it that your operator client
+can read in full and your reader client can read without the sensitive field.
 
 <QuickstartMeta
-  outcome="A project derived from PublicSchema with a starter selection, checked and started, then derived again from an edited selection."
-  time="About 20 minutes"
-  level="Local authoring with synthetic data"
+  outcome="A registry derived from PublicSchema, running locally, holding one person record."
+  time="About 20 minutes, plus image downloads"
+  level="Local evaluation only"
   prerequisites={[
-    { label: 'The binaries from Create and query your first registry', href: '/tutorials/first-breg/#install-base-registry-engine' },
+    { label: 'Matching breg and bregctl binaries', href: '/tutorials/first-breg/' },
     { label: 'Running Docker', href: 'https://docs.docker.com/get-started/get-docker/' },
-    'An editor',
+    'A shell with curl, and an editor',
   ]}
 />
 
-## Before you start
+## Why start from a published model
 
-Open a terminal where you want to create the project, and confirm the binary is on your `PATH`:
+PublicSchema is a published vocabulary for social protection and public-service data: people,
+households, memberships, programmes, and the code lists that describe them. `bregctl` carries a
+copy of PublicSchema 0.3.0, so deriving from it needs no network.
 
-```sh
-bregctl --version
-```
+Starting from the model gives you field names, types, and code lists that other institutions
+already use, so a ministry system or a partner's data maps onto your registry without a round of
+naming meetings. It also settles the mechanical choices the same way every time: each concept you
+select becomes a Record type with an identifier the caller supplies, each property becomes a
+bounded field, an enumeration short enough to read becomes a closed list of codes, and a property
+the model marks sensitive becomes a `restricted` field.
 
-Nothing here needs the `tutorial-work` directory from
-[Create and query your first registry](../first-breg/#install-base-registry-engine); this tutorial
-derives a project of its own. Docker is needed only later, to start the registry.
+The derivation is a starting point, not a governance decision. It cannot know who in your country
+may read a person's marital status, or what a record means in law. Those stay with your
+institution: once derived, the project is ordinary source you edit like any other.
 
-## Derive a project from PublicSchema
+{/* Evidence: crates/registry-linkml/publicschema/PIN.yaml;
+    crates/registry-bregctl/src/init_from_model/resolve.rs, resolve_entity(), field_kind(), and slot_classification(). */}
 
-`bregctl init` writes the domain-neutral example project by default. With `--from publicschema`, it
-derives a project from the PublicSchema 0.3.0 snapshot embedded in the binary instead, guided by a
-selection of concepts and properties. `--starter household` supplies a selection shipped with the
-model: the concepts `Person`, `Household`, and `GroupMembership`, with a subset of their properties.
+## Derive a project
 
-Derive a project from the household starter:
+The `household` starter selects three PublicSchema concepts, `Person`, `Household`, and
+`GroupMembership`, with some of their properties:
 
 ```sh
 bregctl init household-registry --from publicschema --starter household
 ```
 
-```text test-expect
+```text test-excerpt
 Initialized a registry project. 6 artifacts written.
   revision  sha256:<digest>
 
@@ -69,28 +72,21 @@ Initialized a registry project. 6 artifacts written.
   registry.yaml
   runtime.example.yaml
   tests/journeys.yaml
+```
 
-warning[breg.access.profile-higher-classification] recordTypes[id=group-membership].accessProfiles[id=operator].readableFields[field=person]
-  this field is more sensitive than its record type's classification; verify the profile's scope and purpose before disclosing it
-  next: Review the finding, and change the source if the behavior it describes is not intended.
+It then reports eight warnings, of two kinds. One kind says a profile reads a field that is more
+sensitive than its Record type:
+
+```text test-excerpt
 warning[breg.access.profile-higher-classification] recordTypes[id=person].accessProfiles[id=operator].readableFields[field=marital-status]
   this field is more sensitive than its record type's classification; verify the profile's scope and purpose before disclosing it
   next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-collection] recordTypes[id=group-membership].accessProfiles[id=operator].rowBoundaries
-  this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies
-  next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-collection] recordTypes[id=group-membership].accessProfiles[id=reader].rowBoundaries
-  this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies
-  next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-collection] recordTypes[id=household].accessProfiles[id=operator].rowBoundaries
-  this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies
-  next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-collection] recordTypes[id=household].accessProfiles[id=reader].rowBoundaries
-  this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies
-  next: Review the finding, and change the source if the behavior it describes is not intended.
-warning[breg.access.profile-unrestricted-collection] recordTypes[id=person].accessProfiles[id=operator].rowBoundaries
-  this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies
-  next: Review the finding, and change the source if the behavior it describes is not intended.
+```
+
+The other says a profile lists whole collections. The last of those warnings is followed by the
+count and the next steps:
+
+```text test-excerpt
 warning[breg.access.profile-unrestricted-collection] recordTypes[id=person].accessProfiles[id=reader].rowBoundaries
   this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies
   next: Review the finding, and change the source if the behavior it describes is not intended.
@@ -110,19 +106,33 @@ Next:
      it back with --selection to derive a fresh project
 ```
 
-Each warning names the affected path, explains the finding, and gives a next step. `init` compiled
-the project before printing its `revision`, the digest of the compiled model. `check` and `dev`
-repeat that revision and the warnings until you change something. Unlike the domain-neutral
-example, a derived project has no `modules/` directory: every record type lives in `registry.yaml`.
-The rest of this tutorial follows the numbered steps in order.
+`household-registry` is a [registry project](../../reference/glossary/#registry-project): the
+files that define your registry. It declares three
+[Record types](../../reference/glossary/#record-type), `person`, `household`, and
+`group-membership`, and two [access profiles](../../reference/glossary/#access-profile),
+`operator` and `reader`, each naming what its callers may read and change.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, init_from_model::run(), init_from_model::ModelName, and init_from_model::Source::Starter;
+The eight warnings are about those profiles. Both may list whole collections, because the starter
+has no field such as a district to limit them by, and `operator` reads two fields PublicSchema marks
+sensitive. Leave them while you explore; the project's README says how to narrow each one before
+production.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, init_from_model::run() and init_from_model::Source::Starter;
     crates/registry-bregctl/src/init_from_model/{mod,selection}.rs;
     crates/registry-linkml/src/reader.rs, read_bundle(). */}
 
 ## Read what init wrote
 
-Open `household-registry/README.md`. It carries the attribution PublicSchema's license requires:
+Open `household-registry/README.md`. It lists every Record type with the PublicSchema concept it
+came from, its route, and a table of its fields. The `person` table ends with the field the model
+marks sensitive:
+
+```text test-excerpt="household-registry/README.md"
+| `phone-number` | `phone_number` | string, up to 255 characters | `internal` |
+| `marital-status` | `marital_status` | vocabulary-code from `marital-status` | `restricted` |
+```
+
+The README opens with the attribution notice PublicSchema's license requires:
 
 :::note[Keep the attribution notice]
 "The concepts, properties, and code lists in this project are derived from PublicSchema 0.3.0,
@@ -131,111 +141,145 @@ revision e5cfbbc0161e4d2c802d1acd752ec193253f7820
 licensed under CC-BY-4.0 ([https://creativecommons.org/licenses/by/4.0/](https://creativecommons.org/licenses/by/4.0/)).
 The derivation selects, renames, and retypes definitions, so this project is a modified form of
 the model. Keep this notice with the project and with any package built from it."
-
-Carry the same notice into any package you build from this project; CC-BY-4.0 requires it.
 :::
 
-The README lists one section per entity, each naming the PublicSchema concept it came from and a
-field table. The `person` entity, from PublicSchema's `Person`:
+Keep it with the project and with any package you build from it.
 
-| Field | Property | Type | Classification |
-|---|---|---|---|
-| `person-code` | `identifier` | string, 1 to 64 characters | `internal` |
-| `given-name` | `given_name` | string, up to 255 characters | `internal` |
-| `family-name` | `family_name` | string, up to 255 characters | `internal` |
-| `date-of-birth` | `date_of_birth` | date | `internal` |
-| `sex` | `sex` | vocabulary-code from `sex` | `internal` |
-| `preferred-language` | `preferred_language` | string, up to 64 characters | `internal` |
-| `phone-number` | `phone_number` | string, up to 255 characters | `internal` |
-| `marital-status` | `marital_status` | vocabulary-code from `marital-status` | `restricted` |
+`model/selection.yaml` is the input the project was derived from. You edit it in the last step.
 
-`household` and `group-membership` get the same shape lower in the file. The README's "How the
-project was derived" section states the rules that chose these fields and their types;
-[How a registry is derived from a model](../../explanation/deriving-a-registry-from-a-model/)
-explains them and names what the derivation refuses outright.
-
-`household-registry/model/selection.yaml` is the input `init` derived the project from, written back
-into the project. Keep it beside the project and edit it to derive again.
-
-{/* Evidence: crates/registry-bregctl/src/init_from_model/render.rs;
-    crates/registry-linkml/src/publicschema.rs, LICENSE_NOTICE. */}
-
-## Check the project
-
-Run `bregctl check` the way the first next step says:
+Check the project:
 
 ```sh
 bregctl check household-registry
 ```
 
-The report repeats the same revision and the same eight warnings, without the artifact list and the
-next steps that only `init` writes. Both codes are expected: the household starter has no tenancy
-field to bind a row restriction to, so every `operator` and `reader` profile can list a whole
-collection, and the `operator` profile reads the two fields PublicSchema marks sensitive. The
-README's "Access profiles" section names those two fields and says how to narrow either finding
-before you build a production package.
+```text test-excerpt
+Authoring check passed; registry revision sha256:<digest>.
+```
 
-{/* Evidence: crates/registry-bregctl/src/init_from_model/; crates/registry-bregctl/src/lib.rs, check(); crates/registry-breg/src/access.rs. */}
+The same eight warnings follow, each pointing at the line of `registry.yaml` it is about.
+
+{/* Evidence: crates/registry-bregctl/src/init_from_model/render.rs, readme();
+    crates/registry-linkml/src/publicschema.rs, LICENSE_NOTICE. */}
 
 ## Start the registry
 
-Start the project as a registry the same way as
-[Create and query your first registry](../first-breg/#start-the-registry):
-
 ```sh
-bregctl dev household-registry
+bregctl dev start household-registry
 ```
 
-The first start downloads the pinned PostgreSQL image. Once the registry answers, the report shows
-its address, a token endpoint, and one credential per client in `dev-clients.yaml`: an `operator` and
-a `reader`, matching this project's two access profiles.
+```text test-excerpt
+bregctl dev succeeded.
+  status          ready
+```
 
-Before that report, `dev` replayed `household-registry/tests/journeys.yaml` against a throwaway
-database, then activated the package on an empty one, so the registry starts with no records. To
-make the journey's first record by hand, obtain an operator token with `bregctl dev token operator household-registry`,
-then use its protected header file with the
-[record Create contract](../../reference/breg-api/#create):
+The first start downloads PostgreSQL and the local token issuer, so allow a few minutes. Before it
+reports `ready`, `dev` replays the scenarios in `tests/journeys.yaml` against a throwaway database,
+then starts your registry on an empty one. The report also prints the registry's address, `breg
+url`, and one client for each access profile, `operator` and `reader`. If `dev start` stops
+because a port is taken, [Create your first registry](../first-breg/) shows how to pick
+other ports.
 
-```json
+{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, start(). */}
+
+## Create a person
+
+Ask the local issuer for an operator token. `bregctl` writes it as a ready-made `Authorization`
+header to `household-registry/.breg/dev/secrets/operator.header`, a file only you can read:
+
+```sh
+bregctl dev token operator household-registry
+```
+
+```text test-expect
+bregctl dev token succeeded.
+```
+
+Set `registry` to the `breg url` your report printed, then create a person. The API takes field
+names in camel case, `personCode` for the `person-code` field, and every write carries an
+`Idempotency-Key`, so a retry of the same request never creates a second person:
+
+```sh
+registry=http://127.0.0.1:8090
+curl --silent --show-error --fail-with-body \
+  --header @household-registry/.breg/dev/secrets/operator.header \
+  --header 'Content-Type: application/json' \
+  --header 'Idempotency-Key: first-person' \
+  --data '{"data": {"personCode": "P-0001", "givenName": "Ama", "familyName": "Mensah", "dateOfBirth": "1990-04-12", "maritalStatus": "married"}}' \
+  "$registry/v1/records/persons"
+```
+
+```json test-excerpt
 {
-  "data": {
-    "personCode": "person-1",
-    "givenName": "example",
-    "familyName": "example",
-    "dateOfBirth": "2024-01-01",
-    "sex": "not_known",
-    "preferredLanguage": "example",
-    "phoneNumber": "example",
-    "maritalStatus": "never_married"
-  }
+  "domainData": {
+    "dateOfBirth": "1990-04-12",
+    "familyName": "Mensah",
+    "givenName": "Ama",
+    "maritalStatus": "married",
+    "personCode": "P-0001",
+    "phoneNumber": null,
+    "preferredLanguage": null,
+    "sex": null
+  },
+  "recordIdentifier": "<uuid>",
+  "revisionIdentifier": "1"
 }
 ```
 
-The journey file writes those field identifiers in kebab case, `person-code`; the API takes them in
-camel case. This project routes them under `persons` rather than the `records` route of the
-domain-neutral example:
+The response carries the [Record](../../reference/glossary/#registry-record) the registry now
+holds: your fields under `domainData`, an identifier the registry assigned, and revision `1`. Fields you
+did not send are `null`, because the derivation makes no PublicSchema property required.
 
-```text
-$registry_url/v1/records/persons?accessProfile=operator
+{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, token();
+    crates/registry-breg/src/api/mod.rs, router();
+    crates/registry-breg/src/logical_names.rs, default_api_name(). */}
+
+## Read it as a reader
+
+Get a token for the `reader` client:
+
+```sh
+bregctl dev token reader household-registry
 ```
 
-The other routes are `households` and `group-memberships`. Stop the registry with
-`bregctl dev stop household-registry`.
+```text test-expect
+bregctl dev token succeeded.
+```
 
-:::caution
-`bregctl dev stop household-registry --remove` also removes the container and its data volume, so
-every record you created is gone and the next start begins on an empty database.
-:::
+List people under the `reader` access profile:
 
-{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, start(), stop(), and reclaim();
-    crates/registry-bregctl/src/init_from_model/render.rs;
-    crates/registry-breg/src/logical_names.rs, default_api_name(). */}
+```sh
+curl --silent --show-error --fail-with-body \
+  --header @household-registry/.breg/dev/secrets/reader.header \
+  "$registry/v1/records/persons?accessProfile=reader"
+```
+
+```json test-excerpt
+{
+  "domainData": {
+    "dateOfBirth": "1990-04-12",
+    "familyName": "Mensah",
+    "givenName": "Ama",
+    "personCode": "P-0001",
+    "phoneNumber": null,
+    "preferredLanguage": null,
+    "sex": null
+  },
+  "recordIdentifier": "<uuid>",
+  "revisionIdentifier": "1"
+}
+```
+
+The same person comes back without `maritalStatus`. The `reader` profile reads only fields that are
+not `restricted`, and the derivation classified that field `restricted` because PublicSchema marks
+it sensitive.
+
+{/* Evidence: crates/registry-bregctl/src/init_from_model/render.rs, READER_PROFILE and readme();
+    crates/registry-breg/src/access.rs. */}
 
 ## Edit the selection and derive again
 
-`model/selection.yaml` is ordinary input, not a generated file: edit it and derive again to get a
-fresh project from the change. Open `household-registry/model/selection.yaml` and remove
-`marital_status` from `Person`'s properties:
+Open `household-registry/model/selection.yaml` and remove `marital_status` from `Person`:
 
 ```diff lang="yaml" title="household-registry/model/selection.yaml" test-edit
  - concept: Person
@@ -256,9 +300,8 @@ Derive a second project from the edited file, into a new directory:
 bregctl init household-registry-2 --from publicschema --selection household-registry/model/selection.yaml
 ```
 
-The report has a new revision, the same six `breg.access.profile-unrestricted-collection` warnings, and
-one `breg.access.profile-higher-classification` warning left, for `group-membership.person`; removing
-`marital_status` removed the other one:
+The report has a new revision and seven warnings. One sensitive-field warning is left, for the
+membership's link to a person:
 
 ```text test-excerpt
 warning[breg.access.profile-higher-classification] recordTypes[id=group-membership].accessProfiles[id=operator].readableFields[field=person]
@@ -266,80 +309,38 @@ warning[breg.access.profile-higher-classification] recordTypes[id=group-membersh
   next: Review the finding, and change the source if the behavior it describes is not intended.
 ```
 
-The `person` field table in `household-registry-2/README.md`
-no longer lists `marital-status`, and that README's "Access profiles" section now reads in the
-singular. Any other edit, adding a property or removing one, follows the same cycle: change
-`model/selection.yaml`, derive into a new directory, and read the new README.
+Every change to what you derive follows the same cycle: edit `model/selection.yaml`, derive into a
+new directory, and read the new README. To build a selection by answering questions instead, run
+`bregctl init <directory> --from publicschema` at a terminal;
+[The PublicSchema wizard prompts](../../reference/bregctl-publicschema-wizard/) describes each
+question.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, init_from_model::Source::File;
-    crates/registry-bregctl/src/init_from_model/{selection,resolve,render}.rs. */}
+{/* Evidence: crates/registry-bregctl/src/lib.rs, init_from_model::Source::File and init_from_model::Source::Interactive;
+    crates/registry-bregctl/src/init_from_model/{selection,resolve,render,wizard}.rs. */}
 
-## Use the interactive wizard
+## Stop the registry
 
-Without `--starter` or `--selection`, `init --from publicschema` asks its questions at a terminal
-instead of reading a file:
+`--remove` deletes the registry's database with the person you created. Leave it off to keep the
+records for a later `dev start`:
 
-```sh test-exit="1"
-bregctl init household-registry-3 --from publicschema
+```sh
+bregctl dev stop household-registry --remove
 ```
 
-Nine questions follow: what the registry is called, which concepts become entities, which unchosen
-concepts would connect them, which properties become fields, how the entities and routes are named,
-and which code lists the project writes out in full. The last one prints the selection your answers
-describe and asks whether to derive from it. Every prompt goes to standard error, so a script that
-captures standard output still gets a clean report.
-[The PublicSchema wizard prompts](../../reference/bregctl-publicschema-wizard/) records each
-question, what it lists, and what starts ticked.
-
-Without a terminal at all, for example in a script or in CI, the wizard cannot run, and
-`init --from publicschema` alone refuses immediately:
-
-```text test-expect
-bregctl init refused.
-
-  error    init.selection.missing  arguments
-           `init --from publicschema` asks its questions at a terminal; without one,
-           pass `--selection <FILE>` or `--starter <NAME>` (one of `household`)
-
-1 error, 0 findings.
+```text test-excerpt
+bregctl dev succeeded.
+  status          stopped
 ```
 
-Pass `--starter household` or `--selection <FILE>` instead, the way the rest of this tutorial does.
-
-{/* Evidence: crates/registry-bregctl/src/lib.rs, init_from_model::Source::Interactive;
-    crates/registry-bregctl/src/init_from_model/wizard.rs, gather(). */}
-
-## What you built
-
-You derived a project from PublicSchema with a shipped selection, read the attribution and the
-fields `init` chose, checked the project, started it and made its first record by hand, then edited
-the selection and derived a second project with one fewer sensitive field.
-
-## Troubleshooting
-
-[Local registry startup](../first-breg/#start-the-registry) covers the problems common to
-every project: a binary that is not on `PATH`, a port already taken, and a `dev` start that never
-reaches `ready` because Docker is not running.
-
-| Symptom | Next move |
-| --- | --- |
-| `bregctl dev` refuses with `dev.failed` over a reported version | The installed `breg` comes from another release than this `bregctl`. The refusal names the file that answered, the version it reported, and the version this `bregctl` reports. Install both from the same release, or put the matching build first on `PATH`. |
-| `init --from publicschema` refuses with `init.selection.missing` | No terminal is attached, so the wizard cannot ask its questions. Pass `--starter household` or `--selection <FILE>` instead. |
-| `init --from publicschema --selection <FILE>` refuses over the file | `<FILE>` is a symbolic link, or larger than 256 KiB. Point `--selection` at an ordinary file under that size. |
-| `bregctl init refused the model selection.` after you edited `model/selection.yaml` | Each diagnostic under that sentence names the file, line, and column it refers to, and its fix. Compare the indentation of the lines you changed with the rest of the file; a selection names its Record types under `recordTypes`, each with a `properties` list under it. `config.unknown-key` names a key a selection does not have, beside the closest one it does. |
-| `bregctl init refused the model selection.` with `config.wrong-kind` or `config.retired-api-version` | Another `bregctl` release wrote the selection. Replace its first two lines with `apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1` and `kind: BRegModelSelection`, and use `recordTypes` for its selected Record types. Run the check again to locate any other obsolete keys. |
-
-{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, binary() and matching_versions();
-    crates/registry-bregctl/src/init_from_model/mod.rs, MAX_SELECTION_FILE_BYTES and read_selection_file();
-    crates/registry-bregctl/src/init_from_model/selection.rs, SELECTION_FORMAT. */}
+{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, stop() and reclaim(). */}
 
 ## Next
 
-- [How a registry is derived from a model](../../explanation/deriving-a-registry-from-a-model/) for
-  the rules behind the fields, types, and classifications you read.
-- [The PublicSchema wizard prompts](../../reference/bregctl-publicschema-wizard/) for the nine
-  questions and their defaults.
-- [Author a registry project](../../configure/breg/) to add fields and entities beyond the
-  selection.
-- [Query a registry from Python and Node](../query-breg-client/) to make the same requests from an
-  application.
+The next tutorial continues from the contact directory of
+[Create your first registry](../first-breg/), not from this household registry, so create
+that one first if you have not; it takes about fifteen minutes. You can declare the same kind of
+Actions on this project later, as [Declare Actions and Proposals](../../configure/breg-change-control/)
+describes.
+
+- [Change a registry with an Action](../change-a-registry-with-an-action/): change records through
+  a named operation the project declares, instead of a raw write.
