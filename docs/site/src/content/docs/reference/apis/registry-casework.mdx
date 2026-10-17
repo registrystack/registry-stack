@@ -14,129 +14,135 @@ standards_referenced:
 
 import ApiReferenceTable from '../../../../components/ApiReferenceTable.astro';
 
-Registry Casework serves policy-bound review requests, human tasks, decisions, and results.
-The generated [API operations](../casework/) own exact routes, parameters, schemas, and response
-statuses. This manually maintained reference explains authentication and recovery around them.
-The API is current and remains changeable before 1.0; [API stability](../../api-stability/)
-states the versioning contract.
+Look up here how you authenticate to Registry Casework, how a lost response or a stale read
+recovers, and what a refusal carries. Every route, parameter, schema, and status is in the
+[generated Casework API operations](../casework/), rendered from
+[`registry-casework.openapi.json`](https://github.com/registrystack/registry-stack/blob/main/products/casework/generated/registry-casework.openapi.json).
+[API stability](../../api-stability/) states the versioning contract.
 
-{/* Evidence: products/casework/generated/registry-casework.openapi.json;
-    products/casework/scripts/generate_openapi.py. */}
+{/* Evidence: docs/site/astro.config.mjs, caseworkOpenApiSchema;
+    products/casework/generated/registry-casework.openapi.json. */}
 
-## Authentication and context
+## Authentication and profiles
 
-Authenticated calls present `Authorization: Bearer <token>` and one `Registry-Casework-Profile`.
-The profile selects a governed access profile; it does not add scopes to the token.
-Liveness at `/health` and readiness at `/ready` are unauthenticated.
+Every route except `/health`, `/ready`, and `/.well-known/jwks.json` takes
+`Authorization: Bearer <token>`. The producer routes that submit, read, cancel, and collect a
+review request read the access profile from `Registry-Review-Profile`; every other route reads
+`Registry-Casework-Profile`, except the two `/v1/task-grants` service routes, which take none. A
+profile selects authority the token already holds and adds no scope. A refused token is
+`authentication.refused` (401); a profile that does not cover the route is
+`profile.not-authorized` (403).
 
-Current-source human reads and decisions additionally select `Registry-Source-Profile`.
-The read-only context provider forwards the human's bearer for that purpose-specific disclosure.
-Submitted-context tasks require no source profile.
-A status service credential never substitutes for a human display credential.
+Task, history, clock, and note routes also accept `Registry-Source-Profile`, which work whose context
+comes from a context provider requires (`source-profile.required`). Producer, policy, and
+accountability routes refuse it with `source-profile.not-applicable`.
 
-{/* Evidence: crates/registry-casework-core/src/http.rs;
-    crates/registry-casework/src/auth.rs;
-    crates/registry-casework/src/http.rs;
-    crates/registry-casework-core/src/adapter.rs. */}
+{/* Evidence: crates/registry-casework/src/http.rs, HttpContract::profile_header,
+    reject_source_profile, source_profile_optional;
+    crates/registry-casework-core/src/http.rs, CASEWORK_PROFILE_HEADER, SOURCE_PROFILE_HEADER;
+    crates/registry-review-protocol/src/lib.rs, REVIEW_PROFILE_HEADER;
+    crates/registry-casework/src/review.rs, SourceProfileRequired;
+    products/casework/scripts/generate_openapi.py, REVIEW_PROFILE. */}
 
 ## Policy and submission binding
 
-`GET /v1/review-policies` and `GET /v1/review-policies/{policy_id}` describe compiled policy closures.
-A producer submits a `PolicySelection` in `POST /v1/review-requests`, alongside its immutable
-subject, requester reference, and submitted or current-source context.
-The selector requires `id`. Omit `version` and `digest` to select the active policy at admission,
-or supply both to require the exact discovered `identity`. Partial pins and explicit nulls are
-invalid. An exact pin that differs from the active binding is refused with `review.policy-mismatch`.
-Casework validates context against the selected policy and atomically retains its concrete
-`PolicyBinding`, including ID, version, and digest, in the acceptance.
-The accepted producer identity and namespace govern later request, cancellation, history, and result
-access. The submission digest includes the original selector; it is separate from the subject's
-content digest and the accepted policy's digest. Replacing an ID-only selector with the accepted
-binding changes the submitted body and is not recovery.
-
-An authenticated `ReviewResult` repeats those bindings and conveys the review answer.
-The consumer validates correlation and authorizes any business mutation independently.
-A configured payload-free completion wake prompts an authenticated read and carries no decision
-payload or external authority.
+`POST /v1/review-requests` submits a [ReviewRequest](../../glossary/#review-request) whose `policy`
+names an `id`. Omit `version` and `digest` to take the policy active at admission, or send both to
+require that exact `identity` from `GET /v1/review-policies/{policy_id}`; a differing pin is
+`review.policy-mismatch`. Casework retains the binding it accepted, and the ReviewResult repeats it
+with the subject and `submissionDigest`. The consumer checks that correlation and authorizes any
+business change itself.
 
 {/* Evidence: crates/registry-review-protocol/src/lib.rs;
-    crates/registry-casework/src/http.rs;
-    crates/registry-casework/tests/breg_review_journey.rs;
-    crates/registry-casework/tests/review_acceptance_postgres.rs,
-    current_policy_selection_recovers_before_updates_and_requires_live_authority(),
-    concurrent_current_policy_acceptance_freezes_one_binding_and_refuses_incompatible_context(). */}
-
-## Revisions, retries, and expiry
-
-Revisioned mutations send the displayed task or Directory revision in `If-Match`.
-Keyed mutations send an `Idempotency-Key`, bounded to 128 bytes.
-Reuse the original key and exact body after a lost response; a changed body under the same key is
-refused. A fresh key is a fresh operation, not recovery.
-
-Recovery retains the original concrete policy binding even after an active-policy update and
-still requires current producer authority. Producer clients validate acceptance against the
-original selector, subject, and submission digest, then validate results against the accepted
-concrete binding. Results return `202` while pending, `200` while retained,
-and `410` after expiry. A terminal task decision does not require a source-action recovery route;
-Casework performs no source action.
-Human decision receipts and protected accountability have separate disclosure checks.
-
-{/* Evidence: crates/registry-review-protocol/src/lib.rs;
-    crates/registry-review-client/src/client.rs;
-    crates/registry-casework/src/review.rs;
-    crates/registry-casework/src/http.rs;
     crates/registry-casework/tests/review_acceptance_postgres.rs,
     current_policy_selection_recovers_before_updates_and_requires_live_authority(). */}
 
+## Revisions and retries
+
+A task or directory mutation sends the revision you read, quoted, in `If-Match` (`If-Match: "2"`).
+Without it the call is `precondition.required` (428). A decision under a stale revision returned:
+
+```json
+{
+  "status": 412,
+  "code": "precondition.failed",
+  "detail": "The item or directory changed since you loaded it. Reload and try again."
+}
+```
+
+Keyed mutations, `POST /v1/review-requests` among them, send an `Idempotency-Key` of at most 128
+bytes. After a lost response, resend the same key and body: the first submission returned `201`,
+the resend `200` with the same `requestId`. A changed body under that key is
+`idempotency.key-reused`; a fresh key is a fresh operation.
+
+{/* Evidence: crates/registry-casework-core/src/http.rs, IF_MATCH_HEADER,
+    MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES;
+    crates/registry-casework/src/http.rs, if_match_with_minimum, idempotency_key,
+    create_review_request. */}
+
+## Results
+
+`GET /v1/review-requests/{request_id}/result` returns `202` with no body while the review is
+pending, `200` with the ReviewResult once it settles, and `410` with no body after its retention
+ends. `GET /v1/review-results` pages settled results as a resumable feed.
+
+{/* Evidence: crates/registry-casework/src/http.rs, get_review_result, review_result_feed. */}
+
 ## Problems and validation
 
-Refusals use `application/problem+json` with a closed problem code, fixed detail, status, and trace ID.
-The body does not echo submitted values.
-Review validation may add `Registry-Casework-Validation-Path` and
-`Registry-Casework-Validation-Reason`, providing a bounded field path and closed reason.
-Use the trace ID with private operator logs; retain no bearer token or protected request body in a
-support report.
+A refusal is `application/problem+json` with `type`, `title`, `status`, a fixed `detail`, a closed
+`code`, and a `traceId`, and echoes nothing you sent. A decision naming an undeclared outcome
+returned `request.invalid` (400) with these headers:
+
+```text
+registry-casework-validation-path: $.outcome
+registry-casework-validation-reason: outcome-not-declared
+registry-casework-validation-allowed: confirmed,rejected
+```
+
+Producer routes spell the first two `registry-review-validation-path` and
+`registry-review-validation-reason`. Give your operator the `traceId`, never a token or body.
 
 <ApiReferenceTable id="problem-codes" source="casework-api" />
 
 {/* Generated from docs/site/src/data/casework-api.yaml by docs/site/scripts/generate-data.mjs.
     Evidence: crates/registry-casework/src/problem.rs;
-    crates/registry-casework/tests/problem_code_catalogue.rs;
-    docs/site/src/data/casework-api.yaml. */}
+    crates/registry-casework-core/src/http.rs, VALIDATION_ALLOWED_HEADER;
+    crates/registry-review-protocol/src/lib.rs, REVIEW_VALIDATION_PATH_HEADER;
+    crates/registry-casework/tests/problem_code_catalogue.rs. */}
 
-## Route families and authority
+## Route families
 
-- `/v1/review-policies` describes review behavior under authenticated policy access.
-- `/v1/review-requests` and `/v1/review-results` serve the bound producer's request and result lifecycle.
-- `/v1/review-tasks` serves eligible human work, holdings, decisions, drafts, clocks, and supervision.
-- `/v1/review-accountability/{event_id}` resolves retained accountability under separate audited authority.
-- `/v1/directory` manages teams, membership, absences, caseload previews, calendars, and clock recomputation.
-- `/v1/task-grants` serves bounded institutional task authority where a project enables it.
+Review policies: `/v1/review-policies` returns compiled policy closures, and `/v1/casework`
+describes the deployed project.
 
-The generated operations specify the caller and refusal for each route.
-Administrator status grants no review payload or decision authority, and producer status grants no
-human task authority. Source concealment remains effective on open current-source task reads,
-context, lists, decisions, and new notes. Retained decided tasks and settled history, including
-existing notes, use current Casework authority and retention without releasing source context. An
-opaque ID or cursor grants no access.
+Review requests and results: `/v1/review-requests` and `/v1/review-results` serve the producer;
+history, clocks, and notes hang off one request.
 
-{/* Evidence: crates/registry-casework/src/http.rs;
-    products/casework/generated/registry-casework.openapi.json;
-    products/casework/contracts/security-invariant-matrix.yaml. */}
+Review tasks: `/v1/review-tasks` lists eligible work and carries claims, assignment, drafts,
+decisions, holdings, supervision, and, where a project enables them, task grants.
+`/v1/review-accountability/{event_id}` resolves a retained accountability record.
+
+Directory and calendars: `/v1/directory` manages teams, absences, and holidays, and previews then
+applies caseload moves and clock recomputation.
+
+Activation has no HTTP route: [`caseworkctl apply`](../../cli/caseworkctl/apply/) activates a
+package ([Deploy Registry Casework](../../../operate/casework/)).
+
+{/* Evidence: crates/registry-casework/src/http.rs, router();
+    products/casework/generated/registry-casework.openapi.json, describeCasework,
+    listReviewResults, approveReviewTaskGrant, getReviewAccountability, previewReviewCaseload. */}
 
 ## Source of truth
 
-The product generator derives OpenAPI from Rust-owned DTOs, problems, routes, extraction rules,
-and operation contracts. Its drift check refuses generated bytes that differ from those sources.
-The running service serves the described operations, not the OpenAPI document itself.
-The problem table is generated from maintained data checked against the runtime catalogue.
+`generate_openapi.py` derives the OpenAPI document from the Rust DTOs, routes, and operation
+contracts; `check-schemas.sh` refuses a committed document that differs. The service does not
+serve the document. A runtime test holds the problem table's data to the problem catalogue.
 
 {/* Evidence: products/casework/scripts/generate_openapi.py;
-    products/casework/scripts/check-checkpoint.sh;
+    products/casework/scripts/check-schemas.sh;
     crates/registry-casework/tests/problem_code_catalogue.rs. */}
 
 ## Next
 
-- [Author a Casework policy](../../../configure/casework/) for behavior and context requirements.
-- [Deploy Registry Casework](../../../operate/casework/) for activation and readiness.
-- [Client API reference](../../client-api/) for Rust, Node, and Python integration.
+[Client API reference](../../client-api/)

@@ -1,6 +1,6 @@
 ---
 title: Registry Casework overview
-description: What Registry Casework is, how one piece of human work reaches a team and comes back decided, and which page an author, an operator, or an integrator opens first.
+description: What Registry Casework decides, what it never owns, and the first tutorial that takes one review request to a human decision.
 status: current
 owner: registry-docs
 source_repos:
@@ -9,57 +9,62 @@ last_reviewed: "2026-09-20"
 doc_type: explanation
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: casework
 ---
 
-If you need people to review a bounded request before another system continues, Registry Casework
-provides the team inbox, assignments, decisions, and result. Your system keeps the business object
-and authorizes any later change independently.
+If people in your institution must answer or approve something before another system acts on it,
+[Registry Casework](../../reference/glossary/#registry-casework) gives them that review and returns
+their answer to the system that asked.
 
-{/* Evidence: products/casework/README.md;
-    crates/registry-review-protocol/src/lib.rs;
-    crates/registry-casework/tests/breg_review_journey.rs. */}
+## What Casework decides
 
-## Choose how reviewers see context
+Casework runs one lifecycle, and `caseworkctl` prints it:
 
-Use submitted context when your producer can supply an immutable snapshot for the review round.
-Casework stores the admitted snapshot and runs without a source service.
-[Decide your first review request](../../tutorials/first-casework/) takes you from a local starter to
-one human answer and the producer's result.
+```sh
+caseworkctl lifecycle
+```
 
-Use current-source context when the source must decide which fields a reviewer can see now.
-A Base Registry Engine (BReg) Proposal is one such context.
-Casework keeps an exact reference and asks a read-only provider for current disclosure under the
-reviewer's bearer token and selected source profile.
-[Review a Proposal in Casework](../../tutorials/review-breg-changes-in-casework/) explains the
-native Proposal integration and its separate application authority.
+```json test-excerpt
+{
+  "id": "review-request",
+  "label": "Casework review request lifecycle"
+}
+```
 
-Both modes use one model: a `ReviewPolicy` governs a `ReviewRequest`, one or more `ReviewTask`s
-collect human `Decision`s, and the producer receives a `ReviewResult`.
-The accepted policy stays pinned while new policies shape newly admitted requests.
+A system sends Casework a [ReviewRequest](../../reference/glossary/#review-request): the subject to
+review and the policy to review it under. The request stays `reviewing` until a person's decision
+settles it:
 
-{/* Evidence: crates/registry-casework-core/src/review.rs;
-    crates/registry-casework-core/src/adapter.rs;
-    products/casework/examples/standalone-decision/casework.yaml;
-    products/casework/examples/canonical-review/casework.yaml. */}
+```json test-excerpt
+{
+  "event": "settle",
+  "from": "reviewing",
+  "guard": "an answer, which as a non-approving decision settles the request at once regardless of quorum",
+  "to": "answered"
+}
+```
 
-## Decide whether it fits
+A Decision is one reviewer's recorded choice of an outcome the policy declares. Casework counts
+decisions, settles the request, and keeps the result for the system that sent it.
 
-Staff claim and decide eligible tasks. Supervisors assign work and manage caseloads for their
-serving teams. Administrators maintain the Directory and calendars. Trusted producers submit,
-cancel, and read results only inside their admitted binding.
-A profile name or task identifier grants no authority by itself.
+{/* Evidence: crates/registry-casework-core/src/lifecycle.rs, "review-request";
+    crates/registry-review-protocol/src/lib.rs, ReviewCreateRequest and ReviewRequestLifecycle;
+    crates/registry-casework-core/src/review.rs, Decision; products/casework/README.md. */}
 
-Casework serves an API, so your application supplies the staff interface.
-It uses PostgreSQL for retained review state and your OpenID Connect issuer for authentication.
-Its completion wake tells a producer to fetch a result; it grants no authority to apply that result.
+## What Casework never owns
 
-{/* Evidence: crates/registry-casework/src/auth.rs;
-    crates/registry-casework/src/http.rs;
-    products/casework/RUNTIME-CONFIG.md. */}
+The system that sent the request keeps the subject and decides any later change to it. Casework has
+no write or apply authority over that source, and a settled request grants none. When reviewers
+need current data, the source decides what each reviewer may see, under that reviewer's own
+credential.
+
+Casework serves an API, so your application supplies the reviewers' screens. It keeps review state
+in PostgreSQL and verifies tokens from your own OpenID Connect issuer.
+
+{/* Evidence: products/casework/README.md; crates/registry-casework/src/review.rs,
+    preflight_review_disclosure; crates/registry-casework/src/auth.rs. */}
 
 ## Next
 
-- [Decide your first review request](../../tutorials/first-casework/) to try a standalone review.
-- [Author a Casework policy](../../configure/casework/) to define stages, outcomes, routing, and clocks.
-- [Deploy Registry Casework](../../operate/casework/) to activate a reviewed package and recover it.
-- [How Casework works](../../explanation/how-casework-works/) for authority and retention boundaries.
+- [Decide your first ReviewRequest](../../tutorials/first-casework/)
