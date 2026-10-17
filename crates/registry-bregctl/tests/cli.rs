@@ -1057,6 +1057,8 @@ fn init_creates_the_complete_canonical_minimal_project_that_checks_immediately()
         ("README.md", "text/markdown"),
         ("dev-clients.yaml", "text/yaml"),
         ("examples/inputs/contact.json", "application/json"),
+        ("examples/inputs/email-update.json", "application/json"),
+        ("examples/inputs/registration.json", "application/json"),
         ("examples/scenarios.json", "application/json"),
         ("registry.yaml", "text/yaml"),
         ("runtime.example.yaml", "text/yaml"),

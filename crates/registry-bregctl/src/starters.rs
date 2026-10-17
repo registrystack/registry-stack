@@ -61,6 +61,18 @@ const STARTERS: &[Starter] = &[
                     "../../../products/breg/examples/minimal/examples/inputs/contact.json"
                 ),
             ),
+            (
+                "examples/inputs/email-update.json",
+                include_bytes!(
+                    "../../../products/breg/examples/minimal/examples/inputs/email-update.json"
+                ),
+            ),
+            (
+                "examples/inputs/registration.json",
+                include_bytes!(
+                    "../../../products/breg/examples/minimal/examples/inputs/registration.json"
+                ),
+            ),
         ],
     },
     Starter {

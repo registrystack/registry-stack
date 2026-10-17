@@ -9,5 +9,22 @@
       {"id":"create-contact","operation":"create","recordType":"contact","client":"editor","accessProfile":"directory-editor","input":"contact","capture":"contact"},
       {"id":"read-contact","operation":"get","recordType":"contact","client":"editor","accessProfile":"directory-editor","record":"contact"}
     ]
+  }, {
+    "id": "update-contact-email",
+    "description": "Invoke the immediate Action on the contact from the contact scenario and read the result.",
+    "input": "examples/inputs/email-update.json",
+    "steps": [
+      {"id":"invoke","operation":"invoke","recordType":"contact","client":"editor","accessProfile":"directory-editor","action":"update-contact-email","result":"contact-email","input":"email-update","capture":"updated-contact"},
+      {"id":"read-contact","operation":"get","recordType":"contact","client":"editor","accessProfile":"directory-editor","record":"updated-contact"}
+    ]
+  }, {
+    "id": "register-contact",
+    "description": "Start and submit a no-review Proposal, then inspect it after automatic application.",
+    "input": "examples/inputs/registration.json",
+    "steps": [
+      {"id":"start","operation":"start","recordType":"contact","client":"editor","accessProfile":"directory-editor","action":"register-contact","input":"registration","capture":"registration","expect":{"state":"draft"}},
+      {"id":"submit","operation":"submit","recordType":"contact","client":"editor","accessProfile":"directory-editor","action":"register-contact","proposal":"registration","expect":{"state":"submitted"}},
+      {"id":"inspect","operation":"inspect","recordType":"contact","client":"editor","accessProfile":"directory-editor","action":"register-contact","proposal":"registration","expect":{"state":"applied"}}
+    ]
   }]
 }
