@@ -584,22 +584,17 @@ export default defineConfig({
               ],
             },
             {
-              label: 'Deploy',
+              label: 'Deploy and operate',
               collapsed: true,
               items: [
-                { label: 'What you need to run it', slug: 'operate/breg-requirements' },
-                { label: 'Build a production candidate', slug: 'tutorials/build-a-breg-production-candidate' },
-                { label: 'Deploy a registry', slug: 'operate/breg' },
-                { label: 'Bind webhook receivers', slug: 'operate/breg-webhooks' },
-              ],
-            },
-            {
-              label: 'Operate',
-              collapsed: true,
-              items: [
+                { label: 'Deploy and serve', slug: 'operate/breg' },
                 { label: 'Change an active registry', slug: 'operate/breg-changes' },
+                { label: 'Monitor and recover', slug: 'operate/breg-monitor' },
                 { label: 'Retain, erase, and audit', slug: 'operate/breg-retention' },
                 { label: 'Move data in bulk', slug: 'operate/breg-data' },
+                { label: 'Bind webhook receivers', slug: 'operate/breg-webhooks' },
+                { label: 'What you need to run it', slug: 'operate/breg-requirements' },
+                { label: 'Build a production candidate', slug: 'tutorials/build-a-breg-production-candidate' },
               ],
             },
             {

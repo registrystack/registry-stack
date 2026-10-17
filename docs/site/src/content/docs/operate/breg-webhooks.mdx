@@ -11,109 +11,108 @@ persona:
   - operator
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: breg
+  skip: Every command needs your own registry project with an event, and the inspection commands need a deployed registry's runtime file and database.
 ---
 
-You operate an active registry, or are about to activate one as [deploy a registry](../breg/)
-describes, whose project declares events that name a `webhook` destination, and a receiver is
-waiting for them. At the end of this page every destination identifier the package names has a
-binding in the runtime file, the receiver holds the same signing key and has been built against a
-sample request, and you can list and recover deliveries.
+If your registry project declares events that name a `webhook` destination, bind each destination
+to a receiver, give the receiver the signing key, build it against a sample request, and recover
+deliveries that did not arrive. The examples use one event, `contact-created-v1` on the `contact`
+[Record type](../../reference/glossary/#record-type), sent to a destination called
+`contact-events`.
 
-An event is a declaration in the project, a trigger on an entity with a projection of its fields,
-that the runtime delivers after the write commits. A destination is the receiver the declaration
-names by identifier; the package carries only that identifier, and the runtime file binds it to an
-origin, so a module stays deployment-neutral.
-[Send registry events to a webhook](../../tutorials/send-registry-events-to-a-webhook/) walks
-a first delivery on a local registry, and the events section of
-[author a registry project](../../configure/breg/) covers the declaration.
+The project names a destination only by identifier, so the same package runs in any deployment;
+the runtime file binds that identifier to a real receiver. Base Registry Engine (BReg) sends an
+event after the write that caused it commits, through its
+[outbox](../../reference/glossary/#outbox).
+[Send registry events to a webhook](../../tutorials/send-registry-events-to-a-webhook/) shows a
+first delivery on a local registry.
 
 ## Bind each destination
 
-The package refuses to activate until the runtime file binds every destination identifier it
-names, and it refuses extra bindings. Destination URLs and secret references belong in the runtime
-file, never in a module:
+Add an `eventDestinations` block to the runtime file, with one entry per destination the package
+names:
 
-```yaml
+```yaml title="runtime.yaml"
 eventDestinations:
-  record-receiver:
+  contact-events:
     origin: https://receiver.example.org
     path: /events
     networkProfile: production-https
     dnsFamily: dual-stack-strict
     allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/record-webhook-key
-    classificationCeiling: restricted
+    hmacSha256KeyRef: secret:file/contact-events-key
+    classificationCeiling: internal
     deliveryCeilings:
       attemptTimeoutMilliseconds: 1000
       maximumAttempts: 3
-retention:
-  hookPayloadRetentionDays: 7
 ```
 
-The destination's `classificationCeiling` must cover the event's derived classification; a binding
-cannot add fields to a payload. For a receiver on a private network, list the intended canonical
-ranges in `allowedPrivateCidrs`. Use `dnsFamily: ipv4-only` only on an IPv4-only network. Optional
-`tls.caBundleRef` and `tls.clientIdentityRef` name PEM secrets for a private certificate authority
-and mutual TLS. `networkProfile: loopback-development-http` exists for local development only.
-The `production-https` profile refuses `localhost` and every `*.localhost` name during
-configuration validation, including absolute names with a trailing dot. Use the loopback profile
-for a receiver on the same development host.
+`bregctl check <project> --runtime-config runtime.yaml` checks the binding's shape offline. The
+runtime refuses to start when the bindings and the package disagree: every destination the package
+names needs a binding, and a binding for a destination the package does not name is refused.
 
-Native Proposal events use their dedicated value-free lifecycle schema and
-compiled destination binding. Record events derive classification from all
-projected and condition fields. Check the selected event contract independently
-of a human reader's display-field grant.
+Some values need a decision:
 
-{/* Evidence: crates/registry-breg/src/proposal_hooks.rs;
-    crates/registry-breg/src/proposal_events.rs; crates/registry-breg/src/compiler.rs. */}
+- `classificationCeiling` must cover the classification of every field the event sends. A binding
+  cannot add fields to a payload.
+- `production-https` refuses `localhost` and every name under it. Use `loopback-development-http`
+  only for a receiver on a development host.
+- For a receiver on a private network, list its address ranges in `allowedPrivateCidrs`. Use
+  `dnsFamily: ipv4-only` only on a network without IPv6.
+- For a receiver behind a private certificate authority, or one that requires mutual TLS, name the
+  PEM material with `tls.caBundleRef` and `tls.clientIdentityRef`.
+- `deliveryCeilings` may tighten what the package compiled, never widen it. This example tightens
+  both values.
 
-A binding may tighten the compiled ceilings and never widen them; the example tightens both.
-`bregctl explain events <project>` reports the compiled values per delivery: five attempts with a
-five-second timeout each, retried after 1, 2, 4, and 8 seconds, with a dead letter required when
-the attempts run out. Automatic retries keep the event id and idempotency key. Any `2xx`
-acknowledges delivery; redirects, timeouts, and other responses follow the bounded retry policy.
-Activation refuses a rebinding that would leave retained pending or dead-lettered deliveries
-without the binding they were captured under. `bregctl doctor` opens every binding before the
-process starts and reports one it cannot open as `startup.event-destinations.refused`, so run it
-after every change to this block.
+`bregctl --format json explain events <project>` shows what the package compiled for each
+delivery: by default five attempts of five seconds each, retried after 1, 2, 4, and 8 seconds, then
+a dead letter. Retries keep the event id and idempotency key. Any `2xx` response acknowledges a
+delivery; redirects, timeouts, and every other response are retried. The
+[configuration reference](../../reference/breg-configuration/) lists every key, including
+`retention.hookPayloadRetentionDays`.
 
-{/* Evidence: crates/registry-breg/src/event_destination.rs, RawEventDestinationConfig;
-    crates/registry-breg/src/runtime_config.rs;
+Run `bregctl doctor` after every change to this block. It opens each binding, key file included,
+before the runtime starts.
+
+{/* Evidence: crates/registry-breg/src/event_destination.rs, EventDestinations::activate()
+    (InventoryMismatch, DeliveryCeilingWidening), RawEventDestinationConfig, digest_value() for
+    the tls keys; crates/registry-platform-httputil/src/destination.rs,
+    origin_uses_localhost_namespace();
     crates/registry-breg/src/compiler.rs, WEBHOOK_ATTEMPT_TIMEOUT_MS and WEBHOOK_MAXIMUM_ATTEMPTS;
     crates/registry-breg/src/webhook.rs;
-    crates/registry-bregctl/src/doctor.rs. */}
+    crates/registry-bregctl/src/doctor.rs, startup.event-destinations.refused. */}
 
 ## Provision the shared key
 
-Generate the HMAC-SHA-256 key as an owner-only file inside the secret root, as the user that runs
-`breg`, and provision the identical bytes to the receiver through its own secret store:
+Generate the HMAC-SHA-256 key as an owner-only file in the runtime's secret directory, as the user
+that runs `breg`:
 
-```sh
-(umask 077; openssl rand -hex 32 | tr -d '\n' > /etc/breg/secrets/record-webhook-key)
+```sh test-skip="writes into the deployment host's secret directory"
+(umask 077; openssl rand -hex 32 | tr -d '\n' > /var/lib/breg/secrets/contact-events-key)
 ```
 
-The runtime signs with the file's bytes exactly as written, neither trimmed nor decoded, so the
-receiver must load the same 64 characters as its key rather than decode them. The key needs at
-least 32 bytes, and the file must be a regular file with mode `0400` or `0600` owned by the running
-user; `doctor` and startup refuse a binding whose key breaks either rule.
+Give the receiver the same bytes through its own secret store. BReg signs with the file's bytes
+exactly as written, so the receiver loads the 64 characters as its key and does not decode them.
+The key must be at least 32 bytes, and the file a regular file owned by the user that runs `breg`
+with mode `0400` or `0600`; `doctor` and startup refuse anything else.
 
 {/* Evidence: crates/registry-breg/src/event_destination.rs, MIN_HMAC_SHA256_KEY_BYTES;
     crates/registry-platform-config/src/secrets.rs, read_secret_file() and validate_file_metadata(). */}
 
 ## Build the receiver against a sample
 
-Your receiver verifies `X-Registry-Signature` against the exact request bytes and checks
-`X-Registry-Delivery-Time` for freshness before acting. `webhook sample` prints one request for
-an event with placeholder identifiers and a placeholder signature, without a runtime or a
-database, so the receiver can be built before the registry serves:
+`bregctl webhook sample` prints the request one event produces, without a runtime or a database,
+so you can build the receiver before the registry serves:
 
-```sh
-bregctl webhook sample ./my-registry --event record-created-v1
+```sh test-skip="needs your own registry project with an event"
+bregctl webhook sample ./my-registry --event contact-created-v1
 ```
 
 ```text
 Built the sample delivery. The canonical request follows.
-  event  record-created-v1
+  event  contact-created-v1
 
 POST <configured-webhook-request-target> HTTP/1.1
 Accept: application/json
@@ -123,115 +122,143 @@ X-Registry-Delivery-Attempt: 1
 X-Registry-Delivery-Time: 2026-01-01T00:00:00Z
 X-Registry-Event-Generation: 1
 X-Registry-Signature: v1=<computed-at-delivery>
-ce-dataschema: urn:breg:event-schema:generic-registry:record:record-created-v1:sha256:411f35fcbaa498497ac172fdb725d2f583d761a73d903c1647b34dc4af703855
+ce-dataschema: urn:breg:event-schema:local-directory:contact:contact-created-v1:sha256:644104a736a00be2962cf3682f869cc1a6d17b101a2d747927302dddb49d9f34
 ce-id: 00000000-0000-4000-8000-000000000001
-ce-source: urn:registrystack:registry:generic-registry:instance:<configured-instance>
+ce-source: urn:registrystack:registry:local-directory:instance:<configured-instance>
 ce-specversion: 1.0
 ce-time: 2026-01-01T00:00:00Z
-ce-type: record-created-v1
+ce-type: contact-created-v1
 
-{"causation":{"hop":0,"root":"00000000-0000-4000-8000-000000000001"},"data":{"entity":"record","packageRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","recordId":"00000000-0000-4000-8000-000000000002","revision":1,"trigger":"created","values":{"code":"x","status":"draft"}},"dataschema":"urn:breg:event-schema:generic-registry:record:record-created-v1:sha256:411f35fcbaa498497ac172fdb725d2f583d761a73d903c1647b34dc4af703855","id":"00000000-0000-4000-8000-000000000001","source":"urn:registrystack:registry:generic-registry:instance:<configured-instance>","subject":{"recordReference":"hmac-sha256:0000000000000000000000000000000000000000000000000000000000000002","recordRevision":1},"time":"2026-01-01T00:00:00Z","type":"record-created-v1"}
+{"causation":{"hop":0,"root":"00000000-0000-4000-8000-000000000001"},"data":{"packageRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","recordId":"00000000-0000-4000-8000-000000000002","recordType":"contact","revision":1,"trigger":"created","values":{"name":"x"}},"dataschema":"urn:breg:event-schema:local-directory:contact:contact-created-v1:sha256:644104a736a00be2962cf3682f869cc1a6d17b101a2d747927302dddb49d9f34","id":"00000000-0000-4000-8000-000000000001","source":"urn:registrystack:registry:local-directory:instance:<configured-instance>","subject":{"recordReference":"hmac-sha256:0000000000000000000000000000000000000000000000000000000000000002","recordRevision":1},"time":"2026-01-01T00:00:00Z","type":"contact-created-v1"}
 ```
 
-That sample carries `generic-registry`, the registry id `bregctl init` writes into `registry.yaml`;
-your project carries its own id, schema hash, and projected fields. `--format json` returns the
-same request as a document with the method, request target, headers, body, and canonical body. The
-[API reference](../../reference/breg-api/) defines the request shape and the signing input byte
-order. Deduplicate retries by `Idempotency-Key`, use the record revision to order events, and
-acknowledge only after durably recording acceptance.
+The event type, data schema, registry id, and projected field names come from your project.
+`bregctl` fills in the rest: fixed placeholder identifiers, time, and signature, and a synthetic
+value for each projected field (here `"name":"x"`). `--format json` returns the same request as a
+document with the method, request target, headers, body, and canonical body.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, WebhookSampleArgs;
-    crates/registry-bregctl/src/webhook_lifecycle.rs;
+The receiver should:
+
+1. Verify `X-Registry-Signature` against the exact request bytes, in the signing-input order the
+   [API reference](../../reference/breg-api/#events-and-webhooks) defines.
+2. Check `X-Registry-Delivery-Time` for freshness.
+3. Read the Record type from `data.recordType` and the record from `data.recordId`, and order
+   events for one record by `data.revision`.
+4. Deduplicate by `Idempotency-Key`, and answer `2xx` only after it has durably recorded the event.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, WebhookSampleArgs and webhook_sample();
+    crates/registry-bregctl/src/webhook_lifecycle.rs, sample() and synthetic_field_value();
     crates/registry-breg/src/webhook.rs. */}
 
 ## Inspect and recover deliveries
 
-Inspect pending, leased, dead-lettered, and expired deliveries, then replay a dead letter after
-fixing the receiver:
+`webhook list` shows deliveries that are pending, leased, dead-lettered, or expired:
 
-```sh
-bregctl --format json webhook list \
-  --runtime-config /etc/breg/runtime.yaml --limit 50
-
-bregctl webhook replay \
-  --runtime-config /etc/breg/runtime.yaml \
-  --event-id "<eventId>" --delivery-id "<deliveryId>" \
-  --expected-generation "<generation>"
+```sh test-skip="needs a deployed registry's runtime file and database"
+bregctl --format json webhook list --runtime-config /etc/breg/runtime.yaml --limit 50
 ```
 
-The list carries delivery metadata and no record values, and `--limit` accepts 1 to 100. A
-delivery that exhausts its attempts becomes a dead letter with a closed `deadLetterReason` while
-its payload is retained. Older deliveries, and deployments awaiting a schema update, may omit
-that reason. `bindingActive` reports whether the exact captured binding is deployed;
-`replayEligible` is true only while that binding and the retained payload are available.
-Successful delivery erases the payload once no sibling delivery needs it, and retained payloads
-expire after `retention.hookPayloadRetentionDays`, which defaults to 7 and is capped at 30. An empty list is not
-proof of success: completed
-deliveries are excluded, so confirm effects from the receiver's own record. Replay keeps the event
-id and issues a new generation and idempotency key; if the receiver's earlier effect is uncertain,
-check its state before replaying. A replay whose `--expected-generation` no longer matches, whose
-payload has expired, or whose destination is no longer bound is refused with
-`webhook.operation.refused`.
-
-If `doctor` reports `startup.webhook.retained-bindings` after you correct a destination or local
-handler binding, keep the corrected configuration and use `webhook list`. Rows with
-`bindingActive: false` name the retained work that still pins the earlier binding. Restore that
-exact binding until those rows drain, or stop the runtime and discard each eligible row with the
-generation returned by the list:
-
-```sh
-bregctl webhook discard \
-  --runtime-config /etc/breg/runtime.yaml \
-  --event-id "<eventId>" --delivery-id "<deliveryId>" \
-  --expected-generation "<generation>"
+```json
+{
+  "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
+  "kind": "BRegCtlReport",
+  "ok": true,
+  "command": "webhook list",
+  "deliveries": [
+    {
+      "eventId": "<event-id>",
+      "deliveryId": "events.contact.contact-created-v1.webhook",
+      "generation": 1,
+      "state": "dead-lettered",
+      "attempt": 5,
+      "payloadAvailable": true,
+      "payloadExpiresAt": "<expiry-time>",
+      "replayEligible": true,
+      "discardEligible": true,
+      "bindingActive": true,
+      "deadLetterReason": "http-non-success"
+    }
+  ]
+}
 ```
 
-::::danger[Discard prevents every future attempt]
-Discard permanently closes this delivery without sending it under the corrected binding. It does
-not undo a request the receiver may already have accepted. Check the receiver before discarding
-when an earlier effect is uncertain.
-::::
+The list carries delivery metadata and no record values; `--limit` accepts 1 to 100. Delivered
+events are left out, so an empty list does not prove a delivery arrived: confirm that from the
+receiver's own records.
 
-`discardEligible: true` identifies pending work, dead letters with retained payload, and leases
-whose deadline has passed when no proposal receipt is retained. A live lease or any retained
-proposal receipt is refused. A stale generation is also refused, so refresh the list before
-retrying. After discard, the row remains visible as `expired` with a new generation and without
-payload availability. Discarding one delivery leaves the shared payload available while a sibling
-delivery still needs it.
+A delivery that runs out of attempts becomes a dead letter with a `deadLetterReason`, and its
+payload is retained. `replayEligible` stays true while the binding it was captured under is still
+deployed (`bindingActive`) and the payload is retained. Payloads are kept for
+`retention.hookPayloadRetentionDays`, 7 days by default and at most 30, and erased earlier once
+every delivery that needs them has arrived.
 
-Operator commands connect to PostgreSQL directly. When the database uses a private certificate
-authority, set `SSL_CERT_FILE` to its PEM bundle for each command.
+After you fix the receiver, replay the dead letter with the ids and generation from the list:
 
-{/* Evidence: crates/registry-breg/src/webhook.rs, MAX_WEBHOOK_STATUS_RESULTS;
-    crates/registry-breg/src/outbox.rs;
+```sh test-skip="needs a dead letter from a deployed registry"
+bregctl webhook replay --runtime-config /etc/breg/runtime.yaml \
+  --event-id <eventId> --delivery-id <deliveryId> --expected-generation <generation>
+```
+
+```text
+Queued the delivery for replay.
+  event id     <event-id>
+  delivery id  events.contact.contact-created-v1.webhook
+  generation   2
+```
+
+Replay keeps the event id and issues a new generation and idempotency key. If you are not sure
+whether the receiver acted on an earlier attempt, check its state before replaying. A replay whose
+generation is stale, whose payload has expired, or whose destination is no longer bound is refused
+with `webhook.operation.refused`; list again and use the current generation.
+
+### Discard deliveries pinned to an old binding
+
+When you correct a binding while deliveries still wait under the old one, `doctor` reports
+`startup.webhook.retained-bindings`, and those deliveries show `bindingActive: false`. The
+runtime will not start until they are gone: restore the old binding until they drain, or discard
+each one whose `discardEligible` is true:
+
+```sh test-skip="needs a delivery from a deployed registry"
+bregctl webhook discard --runtime-config /etc/breg/runtime.yaml \
+  --event-id <eventId> --delivery-id <deliveryId> --expected-generation <generation>
+```
+
+:::danger[Discard prevents every future attempt]
+A discarded delivery is never sent again, and discard does not undo a request the receiver may
+already have accepted.
+:::
+
+```text
+Discarded the delivery. It cannot be replayed.
+  event id     <event-id>
+  delivery id  events.contact.contact-created-v1.webhook
+  generation   3
+```
+
+The row stays in the list as `expired`, without its payload. A delivery whose lease is still live
+is refused: wait for the lease to expire and list again.
+
+The webhook commands connect to PostgreSQL with the runtime file's database settings. If the
+database presents a certificate from a private certificate authority, name its PEM bundle with
+`database.trustedRootCertificateRef` in the runtime file.
+
+{/* Evidence: crates/registry-breg/src/webhook.rs, MAX_WEBHOOK_STATUS_RESULTS and
+    WebhookOperatorService::from_runtime_config();
+    crates/registry-platform-hooks/src/delivery/service.rs, discard_eligible and binding_active;
+    crates/registry-breg/src/runtime_config.rs, MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS and
+    runtime_database_connection_config();
     crates/registry-bregctl/src/webhook_lifecycle.rs;
     crates/registry-bregctl/src/lib.rs, WebhookListArgs, WebhookReplayArgs, and WebhookDiscardArgs;
-    products/breg/quickstart/run.sh. */}
+    crates/registry-bregctl/src/doctor.rs, startup.webhook.retained-bindings. */}
 
-## Troubleshooting
-
-| Symptom | Next move |
-| --- | --- |
-| Activation refuses the package over destinations | Every destination identifier the package names needs one binding, and no binding may name an identifier the package does not. Compare the `eventDestinations` keys with `bregctl explain events`. |
-| `doctor` reports `startup.event-destinations.refused` | Check the key file's owner, mode, and length, the origin against the network profile, and `allowedPrivateCidrs` for a private receiver. |
-| `doctor` reports `startup.webhook.retained-bindings` | Run `webhook list` under the corrected configuration. Restore the exact captured binding until each row drains, or stop the runtime and discard each row where `discardEligible` is true. Wait for a live lease to expire before retrying discard. |
-| The receiver rejects every signature | The runtime signs the raw file bytes. Load the same characters on the receiver without decoding them, and verify against the exact request bytes in the documented signing-input order. |
-| `doctor` reports `startup.instance-id.pending-deliveries` | Pending deliveries were captured under the event source of a previous `identity.instanceId`, and the worker would dead-letter them under the new one. Restore the instance id that ends the stored source the diagnostic names until `webhook list` shows them drained, then change it. |
-| A webhook never fires | Confirm the destination is bound, the receiver returns `2xx`, and the event's condition matched; use `webhook list` for dead letters. |
-| Replay is refused | Refresh the list and check the generation, `replayEligible`, payload expiry, and the destination binding. |
-| `webhook list`, `replay`, or `discard` reports `webhook.package.refused` | The package at `package.root` is not the one `package.expectedDigest` pins; the message names both digests. Deploy the pinned package or update the pin. |
-
-{/* Evidence: crates/registry-breg/src/webhook.rs, WebhookOperatorService::from_runtime_config;
-    crates/registry-bregctl/tests/cli.rs,
-    webhook_operations_name_both_digests_when_the_active_package_misses_its_pin. */}
+When `doctor` or a webhook command refuses, look up its diagnostic code in
+[monitor and recover](../breg-monitor/).
 
 ## Next
 
-- [Send registry events to a webhook](../../tutorials/send-registry-events-to-a-webhook/) to
-  see one delivery end to end on a local registry.
-- [Author a registry project](../../configure/breg/) for the event declaration, its projection,
-  and its classification.
-- [Base Registry Engine API reference](../../reference/breg-api/) for the delivery request shape,
-  the signing input, and the CloudEvents headers.
-- [Base Registry Engine configuration reference](../../reference/breg-configuration/) for every
-  `eventDestinations` and `retention` key.
+- [Send registry events to a webhook](../../tutorials/send-registry-events-to-a-webhook/) to see one
+  delivery end to end on a local registry.
+- [Author a registry project](../../configure/breg/) for the event declaration, its projection, and
+  its classification.
+- [Base Registry Engine API reference](../../reference/breg-api/#events-and-webhooks) for the
+  delivery request, the signing input, and the CloudEvents headers.

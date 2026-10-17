@@ -1163,7 +1163,7 @@ relevant product pages on this site rather than duplicating release notes.
   starting the upgraded `breg`; the plan classes each new index as compatible
   additive, and its plain `CREATE INDEX` blocks writes to that table until the
   migration commits. See [indexes](../reference/breg-configuration/#indexes)
-  and [deploy a registry](../operate/breg/#troubleshooting).
+  and [monitor and recover](../operate/breg-monitor/#troubleshooting).
 
 {/* Evidence: crates/registry-breg/src/compiler.rs, compile_entities() and unindexed_list_findings();
     crates/registry-breg/src/package.rs, rederive() and load_predecessor_package();
@@ -1178,7 +1178,7 @@ relevant product pages on this site rather than duplicating release notes.
   PostgreSQL ends a session left idle inside an open transaction and the pool
   replaces it. Poolers must run in session mode; one that drops the startup
   options needs the bound set on the runtime role. See
-  [set a PostgreSQL baseline](../operate/breg/#set-a-postgresql-baseline).
+  [set a PostgreSQL baseline](../operate/breg-monitor/#set-a-postgresql-baseline).
 
 {/* Evidence: crates/registry-breg/src/postgres/config.rs, name_session() and with_idle_in_transaction_session_timeout();
     crates/registry-breg/src/startup.rs, SERVER_IDLE_IN_TRANSACTION_TIMEOUT;
@@ -1192,7 +1192,7 @@ relevant product pages on this site rather than duplicating release notes.
   who wants JIT back adds `-c jit=on` to the URL `options`. Poolers must run in
   session mode; one that drops the startup options needs `jit = off` set on the
   runtime role. See
-  [set a PostgreSQL baseline](../operate/breg/#set-a-postgresql-baseline).
+  [set a PostgreSQL baseline](../operate/breg-monitor/#set-a-postgresql-baseline).
 
 {/* Evidence: crates/registry-breg/src/postgres/config.rs, with_jit_disabled() and
     jit_is_disabled_before_operator_options_so_an_operator_can_enable_it;
@@ -1328,7 +1328,7 @@ relevant product pages on this site rather than duplicating release notes.
   `migration.rehearsal.baseline_not_reproducible`. The rehearsal runs over
   empty tables, so it does not prove data-dependent steps. A failure reports
   the SQLSTATE and the object names, never the PostgreSQL message. See
-  [what `test` rehearses](../operate/breg-changes/#what-test-rehearses).
+  [test and package the successor](../operate/breg-changes/#test-and-package-the-successor).
 
 {/* Evidence: crates/registry-breg/src/postgres/rehearsal.rs;
     crates/registry-bregctl/src/test_lifecycle.rs;
@@ -1347,7 +1347,7 @@ relevant product pages on this site rather than duplicating release notes.
   25P03), still reports `apply.migration.failed`, while a compiler or
   reviewed statement that times out is a refused statement with SQLSTATE
   57014. The target stays pinned as before. See
-  [troubleshooting](../operate/breg-changes/#troubleshooting).
+  [troubleshooting](../operate/breg-monitor/#troubleshooting).
 
 {/* Evidence: crates/registry-breg/src/postgres/mod.rs, PostgresKernelError::from_statement_error(), a_server_ended_session_is_a_connection_failure_not_a_refused_statement;
     crates/registry-breg/src/migration.rs, MigrationError::StatementFailed;
@@ -1424,7 +1424,7 @@ relevant product pages on this site rather than duplicating release notes.
   used to accept is now refused, and `test` reports a journaled step whose
   SQL the history journal refuses as
   `migration.rehearsal.history_step_refused`. See
-  [reviewed migration files](../operate/breg-changes/#reviewed-migration-files).
+  [write a reviewed migration descriptor](../operate/breg-changes/#write-a-reviewed-migration-descriptor).
 
 {/* Evidence: crates/registry-breg/src/history_migration.rs, check_reviewed_history_step(), a_reviewed_step_that_changes_any_record_metadata_is_detected;
     crates/registry-breg/src/postgres/interlock.rs, execute_reviewed_chunk();
@@ -1441,7 +1441,7 @@ relevant product pages on this site rather than duplicating release notes.
   request again under its original idempotency key, and
   `bregctl review-recovery close` stops waiting on a review the authority will
   never answer, reporting `operator-closed`. See
-  [operate Base Registry Engine](../operate/breg/#resubmit-or-close-a-review-the-authority-lost).
+  [change an active registry](../operate/breg-changes/#resubmit-or-close-a-review-the-authority-lost).
 
 {/* Historical source at 1d59bbdf5ec547c7d5af5889151bd60a3fa244a7:
     [crates/registry-breg/src/review_store.rs](https://github.com/registrystack/registry-stack/blob/1d59bbdf5ec547c7d5af5889151bd60a3fa244a7/crates/registry-breg/src/review_store.rs);
@@ -1635,7 +1635,7 @@ relevant product pages on this site rather than duplicating release notes.
   label the client announces with the run and the server records, never
   recomputed over the written items. The runtime
   installs a new internal table and a run column on its next apply. See
-  [load a governed entity through an import window](../operate/breg-data/#load-a-governed-entity-through-an-import-window).
+  [load records through an import window](../operate/breg-data/#load-records-through-an-import-window).
 
 - BREAKING: the ingestion-run `blockedReason` gains the value
   `importAuthorityClosed`, and the Rust `BRegIngestionBlockedReason` enum
@@ -1686,7 +1686,7 @@ relevant product pages on this site rather than duplicating release notes.
   the database object identifier alone. The claim is checked at startup and
   on readiness, not per request. A Rust `match` over `StartupError` must
   handle the new variant. See
-  [back up and restore the database](../operate/breg-changes/#back-up-and-restore-the-database).
+  [after a logical restore](../operate/advanced/back-up-and-restore/#after-a-logical-restore).
 
 {/* Evidence: release/notes/v0.35.0.md. */}
 
@@ -1703,7 +1703,7 @@ relevant product pages on this site rather than duplicating release notes.
   activated, such as a first apply run without `--initial`, is not
   unavailable: it reports `apply.package.active_mismatch`, whose message now
   names `--initial`. See
-  [review and apply changes](../operate/breg-changes/#troubleshooting).
+  [monitor and recover](../operate/breg-monitor/#troubleshooting).
 
 {/* Evidence: release/notes/v0.34.0.md. */}
 
@@ -1740,7 +1740,7 @@ relevant product pages on this site rather than duplicating release notes.
 - `bregctl apply` reports a successor package with nothing to apply as
   `apply.package.empty_plan`, with the suggested action
   `correct_package_build`, instead of a package binding refusal. See
-  [review and apply changes](../operate/breg-changes/#troubleshooting).
+  [monitor and recover](../operate/breg-monitor/#troubleshooting).
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, apply_lifecycle_failure() and
     apply_reports_an_empty_successor_plan_as_nothing_to_apply;

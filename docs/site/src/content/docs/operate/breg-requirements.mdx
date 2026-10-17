@@ -37,7 +37,7 @@ on your machine.
   binding file that states the database it came from and the backup file's digest. The product
   restores nothing itself, and it refuses to serve a logically restored copy until an operator
   adopts it, as
-  [back up and restore the database](../breg-changes/#back-up-and-restore-the-database)
+  [back up and restore](../advanced/back-up-and-restore/#after-a-logical-restore)
   describes. That check reads the cluster's system identifier through `pg_control_system()`,
   which PostgreSQL grants to every role; on a managed service that withholds it, the check falls
   back to the database object identifier alone and still starts.

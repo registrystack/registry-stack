@@ -11,60 +11,74 @@ persona:
   - operator
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: breg
+  skip: needs an active registry, its package directory, and an access token for a profile that may write batches
 ---
 
-You operate an active registry, deployed as [deploy a registry](../breg/) describes, and need to
-load many records from a file or copy many records out through the same authenticated routes an
-application uses. At the end of this page an import has committed every chunk and its report says
-it is complete, or an export file holds every page the profile may read, and either run can be
-interrupted and resumed from its checkpoint.
+Use `bregctl data` to load many records from a file into a running registry, or to copy many
+records out of it. Every row goes through the same authenticated routes, grants, validation, and
+audit as a request from an application. An import commits one chunk at a time and an export
+appends one page at a time, each writing a checkpoint, so you can stop a run and continue it
+later.
 
-`data import` and `data export` drive the ordinary authenticated routes, so every row passes the
-same grants, validation, and audit as an interactive client: the import commits its chunks
-through the entity's ingestion-run routes, and the export pages through the list route. Nothing
-here bypasses a profile: an import needs a profile that may create or patch the entity, or one
-that holds `import` on it inside an open import authority, and an export needs one that is
-export-enabled. A chunk is one batch request the import commits as a
-unit; a page is one list response the export appends as a unit; a checkpoint is the file each
-command writes after every unit so a rerun continues where the last one stopped.
+The examples load operators into the facility registry that [author a registry
+project](../../configure/breg/) builds, deployed as [deploy a registry](../breg/) describes.
 
 ## Prepare the inputs
 
-Each command needs the activated package directory and, for the two networked commands, the server
-URL and a file holding one bearer token and nothing else. The token file is an absolute path to a
-regular file; a trailing newline is ignored, and any other whitespace or control character refuses
-it. `--breg-url` must be `https`; `http` is accepted only for a loopback host. Each import line is
-one JSON object naming the operation and the record data:
+You need three things:
 
-```json
-{"operation": "create", "data": {"code": "AA", "label": "First"}}
+- The package directory you activated, for example `/srv/registry/build-1/package`.
+- The registry's URL. It must use `https`, unless the host is loopback.
+- A file holding one bearer token and nothing else, issued to an
+  [access profile](../../reference/glossary/#access-profile) that may write batches of the
+  [Record type](../../reference/glossary/#record-type). A trailing newline is fine; any other
+  whitespace refuses the file.
+
+The Record type must declare `batch` bounds, `maximumItems` (up to 100) and `maximumBytes` for
+one chunk, and the profile's grant on it must include `batch`. The
+[configuration reference](../../reference/breg-configuration/) lists both keys.
+
+Each input line is one JSON object naming the operation and the record's fields:
+
+```json title="operators.jsonl" test-file
+{"operation": "create", "data": {"operatorCode": "OP-101", "status": "active", "jurisdiction": "zone-a"}}
+{"operation": "create", "data": {"operatorCode": "OP-102", "status": "active", "jurisdiction": "zone-a"}}
+{"operation": "create", "data": {"operatorCode": "OP-103", "status": "active", "jurisdiction": "zone-a"}}
+{"operation": "create", "data": {"operatorCode": "OP-104", "status": "inactive", "jurisdiction": "zone-a"}}
+{"operation": "create", "data": {"operatorCode": "OP-105", "status": "active", "jurisdiction": "zone-a"}}
 ```
 
-The input is a regular file of at most 256 MiB holding at most 1,000,000 lines, and a patch line
-carries at most 128 operations. An empty file, a symbolic link, or a file over either bound is
-refused before any network use. Paths given to `--package`, `--input`, `--checkpoint`, and
-`--output` must be absolute.
+A file holds at most 1,000,000 lines and 256 MiB, and a `patch` line at most 128 operations. An
+empty file, a symbolic link, or a file over a bound is refused before any request. Every path you
+pass to `bregctl data` must be absolute.
 
 {/* Evidence: crates/registry-breg/src/data.rs, MAX_DATA_IMPORT_INPUT_BYTES, MAX_INPUT_ITEMS,
     and MAX_PATCH_OPERATIONS;
+    crates/registry-breg/src/compiler.rs, MAX_BATCH_ITEMS;
     crates/registry-bregctl/src/data_lifecycle.rs, read_access_token() and parse_breg_url();
     crates/registry-bregctl/src/lib.rs, DataCommand. */}
 
 ## Validate the input
 
-`data validate` checks every line against the compiled plan without a network, so a shape error
-surfaces before a single request is sent:
+`data validate` checks every line against the package without touching the network, so a shape
+error surfaces before a single request:
 
-```sh
+```sh test-skip="needs an active registry and its package directory"
 bregctl data validate \
   --package /srv/registry/build-1/package \
-  --record-type record --profile operator --operation create \
-  --input /srv/registry/import/records.jsonl
+  --record-type operator --profile operator-editor --operation create \
+  --input /srv/registry/import/operators.jsonl
 ```
 
-The report names the package revision and schema fingerprint it validated against, the entity,
-profile, and operation, the input length and its SHA-256 `inputDigest`, and the item and chunk
-counts the import would use. A line that does not fit the entity's shape or the profile's grants is reported without record
+```text
+Validated the input. 5 items in 3 chunks.
+```
+
+The report goes on to name the package revision, the profile and operation, and the file's
+`input sha256`, which the import window below can pin. A line that does not fit the Record type or
+the profile's grants refuses the file with `data.validate.input.refused`, without echoing record
 values.
 
 {/* Evidence: crates/registry-bregctl/src/data_lifecycle.rs;
@@ -72,104 +86,121 @@ values.
 
 ## Import with a checkpoint
 
-An import commits one bounded chunk at a time as a durable ingestion run: the server holds the
-committed boundary and the receipt of every chunk, while the checkpoint file beside its `.state`
-sidecar names the run the command created, so a rerun with the same checkpoint resumes the same
-run after the last committed chunk and never re-sends a committed one. `--max-chunks` bounds one
-operator run, which lets you watch the first chunks land before committing the rest:
+`data import` commits the file as an ingestion run on the server, one chunk at a time. The
+checkpoint file, and the `.state` file written beside it, name that run. `--max-chunks` stops
+after that many chunks, so you can watch the first ones land:
 
-```sh
+```sh test-skip="needs an active registry and its package directory"
 bregctl data import \
   --package /srv/registry/build-1/package \
   --breg-url https://registry.example.org \
   --access-token-file /srv/registry/private/import-token \
-  --record-type record --profile operator --operation create \
-  --input /srv/registry/import/records.jsonl \
-  --checkpoint /srv/registry/import/records.checkpoint --max-chunks 20
+  --record-type operator --profile operator-editor --operation create \
+  --input /srv/registry/import/operators.jsonl \
+  --checkpoint /srv/registry/import/operators.checkpoint --max-chunks 1
 ```
 
-Run the same command again to continue. The report carries the ingestion run id, the number of
-completed chunks, the number of committed items, and whether the import is complete; a run that
-stops at `--max-chunks` reports it as incomplete, which is the signal to run again. The sidecar
-binds the package revision, schema fingerprint, entity, profile, operation, and run, so a rerun
-with any of them changed is refused rather than resumed. On a rerun the server is authority over
-progress: the command re-reads the run it names and continues from the server's `nextChunkIndex`
-even when the local checkpoint lags or leads it, and a chunk answer lost in transit is recovered
-by re-reading the run and submitting the exact same chunk bytes, which replays the original
-receipt instead of writing again. Do not edit the checkpoint or the sidecar: a checkpoint without
-its sidecar, or one whose contents no longer match, is refused, and `--max-chunks 0` is refused as
-an invalid binding. A sidecar written before ingestion runs (apiVersion v1) is refused rather than
-upgraded, because resuming its committed items under a new run id would duplicate mutations; a run
-that reports `blocked` or `cancelled` refuses new chunks and surfaces as its own error, and the
-run stays inspectable.
+```text
+Imported the input. 2 items committed, and the import is not complete.
+```
+
+Run the same command again, with or without `--max-chunks`, to continue. When the last chunk
+commits, the report says so:
+
+```text
+Imported the input. 5 items committed.
+```
+
+A rerun asks the server where the run stands and sends only the chunks after that point, even
+when the local checkpoint lags behind. A chunk whose answer was lost in transit is sent again with
+the same bytes, and the server returns its original receipt instead of writing twice. Running the
+command once more after the import is complete writes nothing.
+
+Leave the checkpoint and its `.state` file as they are. They bind the package, Record type,
+profile, operation, and run, so a rerun with any of those changed is refused rather than resumed.
+
+:::caution
+Importing lines that already committed again, under a new checkpoint path, creates their records a
+second time.
+:::
 
 {/* Evidence: crates/registry-bregctl/src/data_lifecycle.rs, run_import(),
     load_or_start_ingestion(), submit_ingestion_chunks(), and recover_lost_submission();
     crates/registry-bregctl/src/lib.rs, DataImportArgs;
     crates/registry-bregctl/tests/cli.rs. */}
 
-## Load a governed entity through an import window
+## Load records through an import window
 
-Change control refuses `create` and `batch` as direct writes on an entity it governs, so a
-governed entity receives its initial or additional records through an `import` grant instead. An
-`import` grant is create only and is served only by the ingestion-run routes, so it never changes
-an existing record. It loads nothing on its own: an operator first opens an import authority, a
-window bounded by entity, profile, item volume, expiry, and optionally the input digests a run may
-announce, over the migration connection that no API caller holds. The authority is bound to the activation
-active when it opened.
+When a Record type's `mutationPolicy` sets `create` to `proposal-required`, the registry refuses
+direct creates and batches: each new record needs a
+[Proposal](../../reference/glossary/#proposal). For an initial load, give the loading profile an
+`import` grant instead of `batch`. An `import` grant only creates records, only through ingestion
+runs, and only while an operator holds an import authority open: a window bounded by Record type,
+profile, item count, and expiry. The commands below use the facility template's `directory-entry`
+Record type and `directory-editor` profile, set up that way.
 
-Validate the file, then open the window with the digest the report names. `--expires-in` takes a
-whole number of minutes, hours, or days (`90m`, `12h`, `7d`), defaults to `7d`, and is at most
-`30d`; there is no extension, a longer load opens a second authority. `--input-sha256` may repeat
-up to 16 times; without it any input within the volume is admitted. An input digest is a label the
-client computes over the file it reads and announces with the run, recorded on the run and in its
-audit; the server never receives the file and does not recompute it. A pinned digest therefore
-names the file the operator expects to be loaded, not proof of what the chunks write: the item
-volume is the bound the server enforces.
+Without an open window, the import is refused and no run is created:
 
-```sh
+```text
+bregctl data import refused.
+
+  error    data.import.ingestion-run.import-authority-required  ingestionRun
+```
+
+The window is opened over the migration connection in the runtime configuration, which no API
+caller holds. Validate the file first, then open a window sized to it and pinned to the digest
+`data validate` reported:
+
+```sh test-skip="needs an active registry and its package directory"
 bregctl import-authority open \
-  --runtime-config /etc/registry/runtime.yaml \
-  --record-type record --profile loader --max-items 10000 --expires-in 2d \
-  --input-sha256 <inputDigest from data validate> \
-  --operator-reference change-1482 --reason "District 4 initial load"
+  --runtime-config /etc/breg/runtime.yaml \
+  --record-type directory-entry --profile directory-editor \
+  --max-items 5 --expires-in 2d \
+  --input-sha256 <input sha256 from data validate> \
+  --operator-reference change-1482 --reason "Directory initial load"
 ```
 
-Then run `data import` with the `loader` profile exactly as above. Close the window when the load
-is done, and list authorities to see what is open:
+```text
+Opened the import authority.
 
-```sh
-bregctl import-authority close --runtime-config /etc/registry/runtime.yaml \
-  --authority-id <authorityId> --operator-reference change-1482 --reason "District 4 loaded"
-bregctl import-authority list --runtime-config /etc/registry/runtime.yaml
+  authority id                     <authority-id>
+  status                           open
 ```
 
-One entity holds at most one open authority. It stops admitting work when the operator closes it,
-when its expiry passes, when its committed items reach the volume (`exhausted`), or when another
-activation succeeds (`superseded`). Run `bregctl import-authority close-expired` on a
-schedule, or after an activation, to record the expiries and supersessions no load has observed
-yet. `list` is a read: it takes no Registry lock, so it never holds back a write and still answers
-during an interrupted apply, and it records nothing, but it shows an authority whose expiry or
-package has passed with the status it has reached. The operator reference and reason are
-stored and audited only as keyed hashes, so do not rely on reading them back; every opening,
-close, expiry, exhaustion, and supersession appends one record to the audit journal, and every
-committed chunk's run record names the authority it consumed. Hooks and events fire for imported
-records exactly as for a batch create; pause event destinations for the window if a flood of
-events is a concern.
+`--expires-in` takes whole minutes, hours, or days (`90m`, `12h`, `7d`); the default is `7d`, the
+most is `30d`, and a window cannot be extended. `--input-sha256` may repeat up to 16 times; without
+it, any file within the item count is admitted. The digest is a label the client computes and
+announces; the server never sees the file, so the item count is the bound it enforces. The
+operator reference and reason are stored only as keyed hashes, so you cannot read them back.
 
-A run is created only when an open authority for its entity and profile has room for the whole
-input and, if digests are pinned, one of them is the digest the run announces. Otherwise `data import`
-reports `data.import.ingestion-run.import-authority-required` and no run exists. Every chunk
-rechecks the authority inside its own transaction and counts its items against the volume, so a
-close or expiry during a load stops the next chunk: the run is `blocked` with reason
-`importAuthorityClosed`, `data import` reports
-`data.import.ingestion-run.import-authority-closed`, and the chunks already committed stay. A
-blocked run is final. To load the rest, open a new authority and import only the uncommitted lines
-under a fresh checkpoint path; the run's `committedItems` says how many lines committed. Import is
-create only, so re-running an import of lines that already committed, under a fresh checkpoint or
-a second authority with room, creates their records again.
+Now run `data import` with the `directory-editor` profile, as in the previous section. The window
+ends when its committed items reach the count, which `list` shows as `exhausted`:
 
-{/* Evidence: crates/registry-breg/src/import_authority.rs, MAX_IMPORT_AUTHORITY_WINDOW,
+```sh test-skip="needs an active registry and its package directory"
+bregctl import-authority list --runtime-config /etc/breg/runtime.yaml
+```
+
+```text
+Listed the newest import authorities. 1 authority.
+
+  authority id                     <authority-id>
+  status                           exhausted
+```
+
+A Record type holds at most one open window. A window also ends when you close it with
+`bregctl import-authority close --authority-id <authority-id>`, when it expires, or when another
+package is activated (`superseded`). Run `bregctl import-authority close-expired` on a schedule to
+record the expiries no load has noticed yet. Every opening and ending appends one record to the
+[audit journal](../../reference/glossary/#audit-journal).
+
+Each chunk rechecks the window. When the window ends mid-load, the committed chunks stay and the
+run is `blocked`. A blocked run cannot continue: open a new window and import only the lines the
+run did not commit, under a new checkpoint path.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, MutationPolicySource;
+    crates/registry-breg/src/mutation.rs, apply_current_row();
+    crates/registry-breg/src/compiler.rs, validate_import_grant();
+    crates/registry-breg/src/import_authority.rs, MAX_IMPORT_AUTHORITY_WINDOW,
     MAX_PINNED_INPUT_DIGESTS, admit_run(), and admit_chunk();
     crates/registry-bregctl/src/import_authority_lifecycle.rs, parse_expires_in();
     crates/registry-bregctl/src/data_lifecycle.rs, IngestionRunPrecondition;
@@ -177,111 +208,80 @@ a second authority with room, creates their records again.
 
 ## Resume a load through a durable ingestion run
 
-The checkpoint of an import is a file beside the client, so the process that resumes must reach
-the file the process that started wrote. When that is wrong for your recovery story, drive the
-same chunking as a durable ingestion run over the API instead: the server holds the checkpoint,
-and any caller with the access token and the source file continues it. `data import` drives
-exactly this protocol, so its runs appear in the same listing and answer the same reads. A run
-stores no source rows; reading one returns operational metadata and bounded failure
-classifications only.
+The checkpoint lives beside the client, but the run lives on the server. If the machine that
+started a load is gone, or you are not sure whether a file already loaded, ask the server before
+importing again. List the runs for the file's digest, with a header file holding the
+`Authorization: Bearer` line:
 
-One run covers one input file. Create it on the entity's `ingestion-runs` route: the create or
-patch operation (create for an `import` grant), the profile, the package revision and schema fingerprint, the input length, and
-the item and chunk counts are what `data validate` reports for the same input; the run also
-needs the source digest and the chunking algorithm `greedy-canonical-http-batch-v1`. Submit each
-chunk in order, naming its index, its digest, and the digest of the source prefix it ends at.
-Every submission rechecks the profile against the entity's batch or import grant, so a run id
-alone grants nothing.
+```sh test-skip="needs an active registry and its package directory"
+curl -s -H @/srv/registry/private/import.header \
+  "https://registry.example.org/v1/records/operators/ingestion-runs?inputDigest=<input sha256>"
+```
 
-A run is `open` while chunks are due, `complete` when the last chunk commits, `cancelled` after
-an explicit cancel, and `blocked` once the active package no longer matches its binding or, for
-an `import` run, once its import authority stops admitting chunks. Each failure has one recovery:
+Each run in `runs` reports its `status`, `itemCount`, `committedItems`, and `nextChunkIndex`, but
+never the rows themselves. The list also filters by `status`, and pages with `cursor` and
+`nextCursor`. The status tells you the next move:
 
-| Failure | Next move |
+| Status | Next move |
 | --- | --- |
-| Creating the run answers `503 service.unavailable` | Creation takes no idempotency key, so the run may already exist without its id reaching you. Once the service answers again, list the runs with `status=open` and your `inputDigest`, then resume or cancel the run it returns. Creating again opens a second run. |
-| A response is lost | Reread the run, then submit the same chunk again. An exact replay returns the original receipt and writes nothing new. |
-| The transport drops a submission | Resubmit the chunk the run's `nextChunkIndex` names. |
-| A chunk holds an invalid item or a business refusal | The checkpoint stays where it is. Start a successor run for the remainder; skipping the refused rows is never a default recovery. |
-| Authorization is lost | Progress refuses until the selected profile satisfies the batch route again. |
-| The package or schema changed | The run reports `blocked` with reason `activePackageChanged` and stays inspectable. Start a successor run under the new binding. |
-| The import authority closed, expired, or ran out | The run reports `blocked` with reason `importAuthorityClosed` and stays inspectable. Open a new authority and start a successor run for the remainder. |
-| You stop the load on purpose | Cancel the run. Its counts and audit are preserved. |
+| `open` | Rerun `data import` with the original checkpoint, or continue the run through its routes. |
+| `complete` | The file is loaded. Do not import it again. |
+| `blocked` | Read `blockedReason`, then import the lines after `committedItems` under a new checkpoint. |
+| `cancelled` | Someone stopped the load on purpose. Its counts and audit are kept. |
 
-{/* Evidence: crates/registry-breg/src/ingestion_store.rs, IngestionRunStatus, IngestionBlockedReason, and IngestionAttemptOutcome;
-    crates/registry-breg/src/data.rs, RUN_CHUNK_ALGORITHM_VERSION and ingestion_chunk_idempotency_key(). */}
+A run is blocked with `activePackageChanged` when another package is activated, and with
+`importAuthorityClosed` when its window ends. To continue a run from another machine without its
+checkpoint, drive its routes directly, as the
+[ingestion-run reference](../../reference/breg-api/#ingestion-runs) describes.
+
+{/* Evidence: crates/registry-breg/src/api/ingestion.rs;
+    crates/registry-breg/src/ingestion_store.rs, IngestionRunStatus and IngestionBlockedReason. */}
 
 ## Export with a checkpoint
 
-An export appends one bounded page at a time to the output file, then records the output length,
-digest, record count, and server cursor in its checkpoint. `--field` names each field to export,
-and the profile must be export-enabled for the entity:
+`data export` pages through the list route and appends each page to the output file, then records
+the output length, digest, record count, and server cursor in its checkpoint. Name each field with
+`--field`, using its API name. The profile must have `allowDataExport` on the Record type, and
+`bregctl check` warns when it does, because data already downloaded cannot be recalled:
 
-```sh
+```sh test-skip="needs an active registry and its package directory"
 bregctl data export \
   --package /srv/registry/build-1/package \
   --breg-url https://registry.example.org \
   --access-token-file /srv/registry/private/export-token \
-  --record-type record --profile operator --field code --field label \
-  --output /srv/registry/export/records.jsonl \
-  --checkpoint /srv/registry/export/records.checkpoint --max-pages 50
+  --record-type operator --profile operator-editor \
+  --field operatorCode --field status \
+  --output /srv/registry/export/operators.jsonl \
+  --checkpoint /srv/registry/export/operators.checkpoint
 ```
 
-The first run creates both files and refuses to start when either already exists on its own. A
-rerun streams the checkpointed prefix of the existing output, matches it against the checkpoint,
-length and digest included, and only then requests the next server-validated cursor, so an output
-edited by hand is refused rather than extended. A run stopped between the two writes leaves one
-page the checkpoint never recorded; the rerun discards that page and fetches it again. It refuses
-when the output is shorter than its checkpoint, when the checkpointed prefix no longer matches,
-when more than one page follows the checkpoint, or when anything follows a checkpoint that
-already reports the export complete. The report names the requested fields, the completed page
-count, the record count, the output length, and whether the export is complete. `--max-pages`
-bounds one run the way `--max-chunks` bounds an import, and `--max-pages 0` is refused. Each
-server response is bounded at 2 MiB.
+```text
+Exported the records. 5 records.
+```
+
+Each output line is one record with its `id`, `revision`, and the fields you named.
+`--max-pages` bounds one run the way `--max-chunks` bounds an import; run the same command again
+to continue.
+
+The first run creates both files, and refuses to start when only one of them exists. A rerun
+checks the output against its checkpoint, length and digest included, before it asks for the next
+page, so an output edited by hand is refused rather than extended. A run stopped between appending
+a page and recording it leaves one unrecorded page, which the rerun discards and fetches again.
+Keep each output with its checkpoint, and give every export its own pair.
 
 {/* Evidence: crates/registry-bregctl/src/data_lifecycle.rs, load_or_start_export(),
     resume_existing_export(), and read_export_output_prefix();
-    crates/registry-breg/src/data.rs, MAX_DATA_HTTP_RESPONSE_BYTES;
+    crates/registry-breg/src/access.rs, breg.access.profile-data-export;
     crates/registry-bregctl/src/lib.rs, DataExportArgs. */}
 
-## Troubleshooting
-
-| Symptom | Next move |
-| --- | --- |
-| `--breg-url` is refused | Use `https`, or `http` with a loopback host only. |
-| The token file is refused | It must be an absolute path to a regular file holding one token and nothing else; strip everything but a trailing newline. |
-| The input is refused before any request | Check for an empty file, a symbolic link, more than 256 MiB, more than 1,000,000 lines, or a patch line with more than 128 operations. |
-| An import refuses its checkpoint | The sidecar is missing, or the package, entity, profile, or operation differs from the run that created it. Start a new checkpoint path for a new input. |
-| `data import` prints the diagnostics of its checkpoint or sidecar | Each names the file, line, and member that was refused. `config.wrong-kind`, `config.retired-api-version`, or `config.unsupported-api-version` means another `bregctl` release wrote the file: finish the import with that `bregctl`. Any other code means the file was edited; restore it from a copy you trust. |
-| An import reports the run was cancelled | The named run was cancelled and refuses new chunks; its counts and audit are preserved. Start a new import with a fresh checkpoint path. |
-| An export refuses to start | Exactly one of the output and checkpoint files exists, or the existing output no longer matches its checkpoint. Keep both files together and unedited, or start both afresh. |
-| `data export` prints the diagnostics of its checkpoint | Each names the checkpoint file, line, and member that was refused. `config.wrong-kind`, `config.retired-api-version`, or `config.unsupported-api-version` means another `bregctl` release wrote it: finish the export with that `bregctl`, or remove the output and its checkpoint and export again. Any other code means the checkpoint was edited; restore it from a copy you trust. |
-| `data export` is refused with `data.export.checkpoint.refused` | The output file and its checkpoint no longer describe one another: the output is shorter than the checkpoint, its checkpointed prefix changed, more than one page follows the checkpoint, or the checkpoint belongs to another export. Keep both files and resume from copies you trust. A rerun discards at most the single page an interrupted run left unrecorded. |
-| The report says the run is incomplete | `--max-chunks` or `--max-pages` bounded it. Run the same command again to continue. |
-| A durable ingestion run reports `blocked` | Read the run's `blockedReason`. `activePackageChanged`: the active package no longer matches the binding the run was created under; start a successor run under the new package. `importAuthorityClosed`: see the next row. The blocked run stays inspectable. `data import` surfaces the first as `data.import.ingestion-run.blocked`. |
-| An import reports `data.import.ingestion-run.import-authority-closed` | The run's import authority was closed, expired, reached its volume, or was superseded by an activation. The committed chunks stay. Open a new authority and import only the uncommitted lines under a fresh checkpoint path. |
-| An import reports `data.import.ingestion-run.import-authority-required` | No open authority admits the run: none is open for the entity, it names another profile, it expired, its remaining volume is smaller than the input, or it pins other digests. Check `bregctl import-authority list`, then open one that covers this input. |
-| `import-authority open` reports `import-authority.already-open` | The entity already has an open authority. Close it, or wait for it to expire, before opening another. |
-| `import-authority open` reports `import-authority.grant.not-importable` | The profile holds no `import` grant on the entity in the active package. |
-| `import-authority open`, `close`, or `close-expired` reports `import-authority.in-progress` | Another session held the migration lock past the lock timeout: an apply, an adoption, a `migration reconcile`, or other registry maintenance is running. No authority changed. Wait for it to finish, then run the same command again. |
-| An `import-authority` command reports `import-authority.package.refused` | The package at `package.root` is not the one `package.expectedDigest` pins; the message names both digests. Deploy the pinned package or update the pin. No authority changed. |
-
-{/* Evidence: crates/registry-breg/src/import_authority.rs, begin();
-    crates/registry-breg/src/history_maintenance.rs, lock_registry;
-    crates/registry-breg/tests/postgres_import_authority.rs,
-    a_held_migration_lock_is_reported_and_no_authority_changes;
-    crates/registry-bregctl/src/lib.rs, import_authority_failure(),
-    operator_maintenance_reports_a_held_migration_lock_as_in_progress;
-    crates/registry-bregctl/tests/cli.rs,
-    import_authority_names_both_digests_when_the_active_package_misses_its_pin. */}
+When a command refuses with a diagnostic code, [Monitor and recover](../breg-monitor/) gives the
+next move for each one.
 
 ## Next
 
-- [Base Registry Engine API reference](../../reference/breg-api/) for the batch and list routes
-  these commands drive, the durable ingestion-run routes, and the problems they return.
-- [Query a registry from Python and Node](../../tutorials/query-breg-client/) for the client
-  library that reads the same routes one request at a time.
-- [Control access per profile](../../configure/breg-access/) for the profile grants an import or
-  export must hold.
+- [Base Registry Engine API reference](../../reference/breg-api/) for the batch, list, and
+  ingestion-run routes these commands drive.
+- [Control access and reads](../../configure/breg-access/) for the grants an import or export
+  must hold.
 - [Retain, erase, and audit](../breg-retention/) for the audit journal every imported row is
   recorded in.
