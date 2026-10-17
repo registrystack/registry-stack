@@ -51,7 +51,7 @@ model {
   }
   casework_postgres = database 'Casework PostgreSQL' {
     description 'Owns pinned ReviewRequests, ReviewTasks, immutable Decisions, one terminal ReviewResult and feed event, exact replay receipts, Directory, clocks, grants and bounded retention. Current-source display values are not retained. Runtime and activation credentials have separate database authority.'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/migrations/0001_reviews.sql 'Fresh review-only schema'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-casework/migrations/0100_reviews.sql 'Fresh review-only schema'
   }
   casework_audit_journal = database 'Casework audit journal' {
     technology 'Minimized JSONL / durable file or stdout'

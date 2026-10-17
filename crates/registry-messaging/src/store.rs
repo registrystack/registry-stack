@@ -22,32 +22,28 @@ use tokio_postgres::Config as PgConfig;
 
 use crate::config::{describe_secret_failure, DatabaseConfig};
 
-const MESSAGING_MIGRATION: &str = include_str!("../migrations/0001_messaging.sql");
+const MESSAGING_MIGRATION: &str = include_str!("../migrations/0100_messaging.sql");
 
 /// Every schema version, in the order it is applied. Readiness requires the
-/// applied set to be exactly this list.
-pub(crate) const MIGRATIONS: [(i64, &str); 1] = [(1, MESSAGING_MIGRATION)];
-/// The greatest schema version a pre-1.0 beta release applied. A ledger that
-/// holds more than one version, all within `1..=2`, is a beta schema and is
-/// refused. Every migration after the baseline is therefore numbered above
-/// this value, starting at 3, and the assertion below refuses to compile any
-/// other numbering.
-pub(crate) const PRE_1_0_BETA_SCHEMA_MAX_VERSION: i64 = 2;
+/// applied set to be exactly this list. The 1.0 baseline is version
+/// [`BASELINE_SCHEMA_VERSION`], above every version a pre-1.0 release
+/// applied; each later migration takes the next number.
+pub(crate) const MIGRATIONS: [(i64, &str); 1] = [(100, MESSAGING_MIGRATION)];
+/// The 1.0 baseline schema version. A ledger holding any version below it
+/// was left by a pre-1.0 release, which this release refuses by name.
+const BASELINE_SCHEMA_VERSION: i64 = 100;
 const _: () = assert!(
-    post_baseline_versions_follow_beta(&MIGRATIONS),
-    "Messaging migrations after the baseline must be numbered above PRE_1_0_BETA_SCHEMA_MAX_VERSION"
+    versions_start_at_baseline_and_increase(&MIGRATIONS),
+    "Messaging migrations must start at BASELINE_SCHEMA_VERSION and strictly increase"
 );
 
-/// Whether `migrations` opens with the baseline and numbers every later
-/// version above the pre-1.0 beta range, so no supported ledger reads as a
-/// beta one.
-const fn post_baseline_versions_follow_beta(migrations: &[(i64, &str)]) -> bool {
-    if migrations.is_empty() || migrations[0].0 != 1 {
+const fn versions_start_at_baseline_and_increase(migrations: &[(i64, &str)]) -> bool {
+    if migrations.is_empty() || migrations[0].0 != BASELINE_SCHEMA_VERSION {
         return false;
     }
     let mut index = 1;
     while index < migrations.len() {
-        if migrations[index].0 <= PRE_1_0_BETA_SCHEMA_MAX_VERSION {
+        if migrations[index].0 <= migrations[index - 1].0 {
             return false;
         }
         index += 1;
@@ -55,13 +51,15 @@ const fn post_baseline_versions_follow_beta(migrations: &[(i64, &str)]) -> bool 
     true
 }
 
-/// Whether an applied ledger is one a pre-1.0 beta release left: more than
-/// the baseline, and every version inside the beta range.
-pub(crate) fn is_beta_ledger(applied: &[i64]) -> bool {
-    applied.len() > 1
-        && applied
-            .iter()
-            .all(|version| (1..=PRE_1_0_BETA_SCHEMA_MAX_VERSION).contains(version))
+/// The named refusal for a ledger a pre-1.0 release left: any version below
+/// the 1.0 baseline. It is taken before any pending or newer check.
+pub(crate) fn pre_1_0_schema_refusal(applied: &[i64]) -> Option<StoreError> {
+    applied
+        .iter()
+        .any(|version| *version < BASELINE_SCHEMA_VERSION)
+        .then(|| StoreError::Pre1_0Schema {
+            versions: applied.to_vec(),
+        })
 }
 
 /// Shared advisory-lock key for schema migration and package activation. Its
@@ -79,10 +77,10 @@ pub enum StoreError {
     #[error("the Messaging database schema is not the version this runtime expects")]
     SchemaVersion,
     #[error(
-        "the Messaging database uses a pre-1.0 beta schema (versions {}); this release supports fresh installs only. Create a fresh database and apply the package",
+        "the Messaging database uses a pre-1.0 schema (versions {}); this release supports fresh installs only. Create a fresh database and apply the package",
         schema_versions(versions)
     )]
-    BetaSchema { versions: Vec<i64> },
+    Pre1_0Schema { versions: Vec<i64> },
     #[cfg(feature = "postgres-test")]
     #[error("the Messaging migration lock was not held when it was released")]
     MigrationLock,
@@ -251,9 +249,7 @@ impl PostgresStore {
             .iter()
             .filter_map(|row| row.try_get::<_, i64>(0).ok())
             .collect::<Vec<_>>();
-        if let Some(refusal) =
-            beta_schema_refusal(&applied_versions, baseline_marker_exists(&**client).await?)
-        {
+        if let Some(refusal) = pre_1_0_schema_refusal(&applied_versions) {
             return Err(refusal);
         }
         current.then_some(()).ok_or(StoreError::SchemaVersion)
@@ -316,8 +312,7 @@ async fn apply_migrations(client: &mut deadpool_postgres::Client) -> Result<(), 
         .into_iter()
         .map(|row| row.get::<_, i64>(0))
         .collect::<Vec<_>>();
-    if let Some(refusal) = beta_schema_refusal(&applied, baseline_marker_exists(&***client).await?)
-    {
+    if let Some(refusal) = pre_1_0_schema_refusal(&applied) {
         return Err(refusal);
     }
     if applied
@@ -370,8 +365,7 @@ pub(crate) async fn migrate_in(
         .into_iter()
         .map(|row| row.get::<_, i64>(0))
         .collect::<Vec<_>>();
-    if let Some(refusal) = beta_schema_refusal(&applied, baseline_marker_exists(transaction).await?)
-    {
+    if let Some(refusal) = pre_1_0_schema_refusal(&applied) {
         return Err(refusal);
     }
     if applied
@@ -396,26 +390,6 @@ pub(crate) async fn migrate_in(
         added.push(version);
     }
     Ok(added)
-}
-
-async fn baseline_marker_exists(
-    client: &impl tokio_postgres::GenericClient,
-) -> Result<bool, StoreError> {
-    Ok(client
-        .query_one(
-            "SELECT to_regclass('messaging_activations') IS NOT NULL",
-            &[],
-        )
-        .await?
-        .get(0))
-}
-
-fn beta_schema_refusal(applied: &[i64], baseline_marker_exists: bool) -> Option<StoreError> {
-    ((!baseline_marker_exists && applied == [1]) || is_beta_ledger(applied)).then(|| {
-        StoreError::BetaSchema {
-            versions: applied.to_vec(),
-        }
-    })
 }
 
 fn schema_versions(values: &[i64]) -> String {
@@ -493,37 +467,41 @@ mod tests {
     }
 
     #[test]
-    fn the_only_supported_schema_is_the_fresh_install_baseline() {
-        assert_eq!(MIGRATIONS.len(), 1);
-        assert_eq!(MIGRATIONS[0].0, 1);
-        let refusal = beta_schema_refusal(&[1, 2], false)
-            .expect("a pre-1.0 migration ledger has a named refusal");
-        assert!(matches!(
-            &refusal,
-            StoreError::BetaSchema { versions } if versions == &vec![1, 2]
-        ));
-        let message = refusal.to_string();
-        assert!(message.contains("pre-1.0 beta schema"), "{message}");
-        assert!(message.contains("fresh database"), "{message}");
-        assert!(matches!(
-            beta_schema_refusal(&[1], false),
-            Some(StoreError::BetaSchema { versions }) if versions == vec![1]
-        ));
-        assert!(beta_schema_refusal(&[1], true).is_none());
+    fn the_baseline_is_version_100_and_later_versions_increase() {
+        assert_eq!(MIGRATIONS[0].0, 100);
+        assert!(versions_start_at_baseline_and_increase(&MIGRATIONS));
+        assert!(versions_start_at_baseline_and_increase(&[
+            (100, ""),
+            (101, "")
+        ]));
+        assert!(!versions_start_at_baseline_and_increase(&[(1, "")]));
+        assert!(!versions_start_at_baseline_and_increase(&[
+            (100, ""),
+            (100, "")
+        ]));
     }
 
     #[test]
-    fn a_post_baseline_migration_above_the_beta_range_is_not_a_beta_schema() {
-        let next = PRE_1_0_BETA_SCHEMA_MAX_VERSION + 1;
-        assert!(post_baseline_versions_follow_beta(&[(1, ""), (next, "")]));
-        assert!(!post_baseline_versions_follow_beta(&[
-            (1, ""),
-            (PRE_1_0_BETA_SCHEMA_MAX_VERSION, "")
-        ]));
-        assert!(beta_schema_refusal(&[1, next], true).is_none());
-        assert!(matches!(
-            beta_schema_refusal(&[1, 2], true),
-            Some(StoreError::BetaSchema { versions }) if versions == vec![1, 2]
-        ));
+    fn every_ledger_below_the_baseline_is_a_named_pre_1_0_refusal() {
+        let beta_range: Vec<i64> = (1..=13).collect();
+        for applied in [
+            &[1][..],
+            &[1, 2][..],
+            &beta_range[..],
+            &[19][..],
+            &[1, 100][..],
+        ] {
+            let refusal = pre_1_0_schema_refusal(applied).expect("a pre-1.0 ledger refuses");
+            assert!(matches!(
+                &refusal,
+                StoreError::Pre1_0Schema { versions } if versions == applied
+            ));
+            let message = refusal.to_string();
+            assert!(message.contains("pre-1.0 schema"), "{message}");
+            assert!(message.contains("fresh database"), "{message}");
+        }
+        for applied in [&[][..], &[100][..], &[100, 101][..]] {
+            assert!(pre_1_0_schema_refusal(applied).is_none());
+        }
     }
 }

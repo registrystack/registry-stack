@@ -17,8 +17,8 @@ use uuid::Uuid;
 
 use super::{
     check_policy_publication, current_schema_in, lock_publication, publish_policy,
-    refuse_combined_conflicts, PolicyPublication, PostgresStore, StoreError, MIGRATION_LOCK_KEY,
-    PRE_1_0_BETA_SCHEMA_MAX_VERSION, SCHEDULING_MIGRATION, SCHEMA_VERSIONS,
+    refuse_combined_conflicts, refuse_pre_1_0_schema, PolicyPublication, PostgresStore, StoreError,
+    MIGRATION_LOCK_KEY, SCHEDULING_MIGRATION, SCHEMA_VERSIONS,
 };
 
 /// Said wherever the effective role mode is `single`.
@@ -55,24 +55,16 @@ pub struct SchemaState {
 }
 
 impl SchemaState {
-    /// Refuse a version this release does not know: a newer one belongs to
-    /// a later release, and an unknown older one is a damaged ledger.
+    /// Refuse a version this release does not know: one below the 1.0
+    /// baseline was left by a pre-1.0 release, a newer one belongs to a later
+    /// release, and an unknown one in between is a damaged ledger.
     pub fn check(&self) -> Result<(), StoreError> {
         self.check_against(&SCHEMA_VERSIONS)
     }
 
     fn check_against(&self, known: &[i64]) -> Result<(), StoreError> {
+        refuse_pre_1_0_schema(&self.applied)?;
         let newest = known[known.len() - 1];
-        if self.applied.len() > 1
-            && self
-                .applied
-                .iter()
-                .all(|version| (1..=PRE_1_0_BETA_SCHEMA_MAX_VERSION).contains(version))
-        {
-            return Err(StoreError::BetaSchema {
-                versions: self.applied.clone(),
-            });
-        }
         for version in &self.applied {
             if !known.contains(version) {
                 return Err(if *version > newest {
@@ -258,8 +250,8 @@ impl PostgresStore {
             .execute("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_LOCK_KEY])
             .await?;
 
-        let active = active_activation_in(&*transaction).await?;
         let schema = schema_state_in(&*transaction).await?;
+        let active = active_activation_in(&*transaction).await?;
         let migration_role: String = transaction
             .query_one("SELECT current_user::text", &[])
             .await?
@@ -422,8 +414,8 @@ impl PostgresStore {
         }
         let mut refusals = Vec::new();
 
-        let active = active_activation_in(&*transaction).await?;
         let schema = schema_state_in(&*transaction).await?;
+        let active = active_activation_in(&*transaction).await?;
         let runtime_role: String = transaction
             .query_one("SELECT current_user::text", &[])
             .await?
@@ -819,27 +811,15 @@ async fn deployed_policy_in(
 }
 
 /// The schema versions this database holds and the ones still pending. A
-/// database no migration has touched holds none.
+/// database no migration has touched holds none. A ledger a pre-1.0 release
+/// left is refused by name here, before any caller reads another ledger.
 pub(super) async fn schema_state_in(
     client: &impl GenericClient,
 ) -> Result<SchemaState, StoreError> {
     let state = platform_activation::schema_state(client, &activation_layout(), &SCHEMA_VERSIONS)
         .await
         .map_err(platform_error)?;
-    if state.applied == [1] {
-        let fresh_baseline: bool = client
-            .query_one(
-                "SELECT to_regclass('scheduling_activations') IS NOT NULL",
-                &[],
-            )
-            .await?
-            .get(0);
-        if !fresh_baseline {
-            return Err(StoreError::BetaSchema {
-                versions: state.applied,
-            });
-        }
-    }
+    refuse_pre_1_0_schema(&state.applied)?;
     Ok(SchemaState {
         applied: state.applied,
         pending: state.pending,
@@ -862,7 +842,7 @@ pub(super) async fn apply_migrations_in(
     let state = schema_state_in(&**transaction).await?;
     state.check()?;
     for version in &state.pending {
-        if *version != 1 {
+        if *version != SCHEMA_VERSIONS[0] {
             return Err(StoreError::Corrupt);
         }
         transaction.batch_execute(SCHEDULING_MIGRATION).await?;
@@ -907,64 +887,66 @@ mod tests {
 
     #[test]
     fn a_newer_schema_version_names_the_release_that_applied_it() {
-        let newer = PRE_1_0_BETA_SCHEMA_MAX_VERSION + 1;
         let state = SchemaState {
-            applied: SCHEMA_VERSIONS.iter().copied().chain([newer]).collect(),
+            applied: SCHEMA_VERSIONS.iter().copied().chain([199]).collect(),
             pending: Vec::new(),
         };
         assert!(matches!(
             state.check(),
-            Err(StoreError::SchemaNewer { version }) if version == newer
+            Err(StoreError::SchemaNewer { version: 199 })
         ));
         let damaged = SchemaState {
-            applied: vec![0],
+            applied: vec![100, 102],
             pending: Vec::new(),
         };
-        assert!(matches!(damaged.check(), Err(StoreError::Corrupt)));
-    }
-
-    #[test]
-    fn a_beta_schema_names_the_fresh_install_recovery() {
-        let state = SchemaState {
-            applied: vec![1, 2, 3],
-            pending: Vec::new(),
-        };
-        let refusal = state
-            .check()
-            .expect_err("a pre-1.0 migration ledger is not an accepted baseline");
         assert!(matches!(
-            &refusal,
-            StoreError::BetaSchema { versions } if versions == &vec![1, 2, 3]
+            damaged.check_against(&[100, 101, 103]),
+            Err(StoreError::Corrupt)
         ));
-        let message = refusal.to_string();
-        assert!(message.contains("pre-1.0 beta schema"), "{message}");
-        assert!(message.contains("fresh database"), "{message}");
     }
 
     #[test]
-    fn a_post_baseline_migration_above_the_beta_range_is_not_a_beta_schema() {
-        let next = PRE_1_0_BETA_SCHEMA_MAX_VERSION + 1;
-        let known = [1, next];
-        assert!(crate::store::post_baseline_versions_follow_beta(&known));
-        assert!(!crate::store::post_baseline_versions_follow_beta(&[
-            1,
-            PRE_1_0_BETA_SCHEMA_MAX_VERSION
+    fn the_baseline_is_version_100_and_later_versions_increase() {
+        assert_eq!(SCHEMA_VERSIONS[0], 100);
+        assert!(crate::store::versions_start_at_baseline_and_increase(
+            &SCHEMA_VERSIONS
+        ));
+        assert!(crate::store::versions_start_at_baseline_and_increase(&[
+            100, 101
         ]));
-        let upgraded = SchemaState {
-            applied: known.to_vec(),
-            pending: Vec::new(),
-        };
-        upgraded
-            .check_against(&known)
-            .expect("a ledger holding the baseline and a later migration is accepted");
-        let beta = SchemaState {
-            applied: vec![1, 2, 3],
-            pending: Vec::new(),
-        };
-        assert!(matches!(
-            beta.check_against(&known),
-            Err(StoreError::BetaSchema { versions }) if versions == vec![1, 2, 3]
-        ));
+        assert!(!crate::store::versions_start_at_baseline_and_increase(&[1]));
+        assert!(!crate::store::versions_start_at_baseline_and_increase(&[
+            100, 100
+        ]));
+    }
+
+    #[test]
+    fn every_ledger_below_the_baseline_is_a_named_pre_1_0_refusal() {
+        let beta_range: Vec<i64> = (1..=13).collect();
+        for applied in [vec![1], vec![1, 2], beta_range, vec![19], vec![1, 100]] {
+            let state = SchemaState {
+                applied: applied.clone(),
+                pending: Vec::new(),
+            };
+            let refusal = state
+                .check()
+                .expect_err("a pre-1.0 migration ledger is not an accepted baseline");
+            assert!(matches!(
+                &refusal,
+                StoreError::Pre1_0Schema { versions } if versions == &applied
+            ));
+            let message = refusal.to_string();
+            assert!(message.contains("pre-1.0 schema"), "{message}");
+            assert!(message.contains("fresh database"), "{message}");
+        }
+        for applied in [vec![], vec![100]] {
+            SchemaState {
+                applied,
+                pending: Vec::new(),
+            }
+            .check()
+            .expect("an empty or 1.0 baseline ledger is accepted");
+        }
     }
 
     #[test]

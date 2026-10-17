@@ -556,6 +556,7 @@ pub(crate) fn operator_refusal_diagnostic(code: &str, path: &str, message: &str)
         "casework.activation.schema-newer"=>"Use a Casework release that supports this database schema; preserve the database until then.",
         "casework.activation.already-active"=>"The package is already active. Check caseworkctl status before choosing a different package.",
         "casework.activation.retired-schema"=>"Preserve the old database with the release that wrote it and configure a fresh database.",
+        "casework.activation.beta-schema"=>"This release supports fresh installs only. Preserve the old database with the release that wrote it, create a fresh database, and apply the package.",
         _=>"Follow the named refusal, then run caseworkctl plan --runtime-config FILE before applying.",
     })
 }

@@ -3,8 +3,12 @@
 ## Unreleased
 
 - Apply this release to a fresh database. Scheduling now installs its complete
-  schema as one version 1 baseline and explicitly refuses a database left at a
-  beta schema version with fresh-install recovery guidance.
+  schema as one baseline numbered version 100, above every version a pre-1.0
+  release applied, and later migrations take 101, 102, and onward. A database
+  whose ledger holds any version below 100 is refused by name as a pre-1.0
+  schema at `plan`, `apply`, and startup, with fresh-install recovery
+  guidance. A pre-1.0 binary pointed at a database this release installed
+  sees version 100 and refuses it as newer than that release knows.
 - Prune every delivered outbox intent (confirmation, change, cancellation,
   reminder) and terminal observer delivery metadata in bounded batches using `retention.receiptRetentionDays`. Preserve active and
   uncertain work, dead letters through payload expiry, shared-event siblings,

@@ -71,33 +71,45 @@ pub use activation::{
 };
 pub use attempt_key::attempt_key_reference;
 
-const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0001_scheduling.sql");
-const SCHEMA_VERSIONS: [i64; 1] = [1];
-/// The greatest schema version a pre-1.0 beta release applied. A ledger that
-/// holds more than one version, all within `1..=13`, is a beta schema and is
-/// refused. Every migration after the baseline is therefore numbered above
-/// this value, starting at 14, and the assertion below refuses to compile any
-/// other numbering.
-const PRE_1_0_BETA_SCHEMA_MAX_VERSION: i64 = 13;
+const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0100_scheduling.sql");
+/// Every schema version, in the order it is applied. The 1.0 baseline is
+/// version [`BASELINE_SCHEMA_VERSION`], above every version a pre-1.0 release
+/// applied; each later migration takes the next number.
+const SCHEMA_VERSIONS: [i64; 1] = [100];
+/// The 1.0 baseline schema version. A ledger holding any version below it
+/// was left by a pre-1.0 release, which this release refuses by name.
+const BASELINE_SCHEMA_VERSION: i64 = 100;
 const _: () = assert!(
-    post_baseline_versions_follow_beta(&SCHEMA_VERSIONS),
-    "Scheduling migrations after the baseline must be numbered above PRE_1_0_BETA_SCHEMA_MAX_VERSION"
+    versions_start_at_baseline_and_increase(&SCHEMA_VERSIONS),
+    "Scheduling migrations must start at BASELINE_SCHEMA_VERSION and strictly increase"
 );
 
-/// Whether `versions` opens with the baseline and numbers every later version
-/// above the pre-1.0 beta range, so no supported ledger reads as a beta one.
-const fn post_baseline_versions_follow_beta(versions: &[i64]) -> bool {
-    if versions.is_empty() || versions[0] != 1 {
+const fn versions_start_at_baseline_and_increase(versions: &[i64]) -> bool {
+    if versions.is_empty() || versions[0] != BASELINE_SCHEMA_VERSION {
         return false;
     }
     let mut index = 1;
     while index < versions.len() {
-        if versions[index] <= PRE_1_0_BETA_SCHEMA_MAX_VERSION {
+        if versions[index] <= versions[index - 1] {
             return false;
         }
         index += 1;
     }
     true
+}
+
+/// Refuse, by name, a ledger a pre-1.0 release left: any version below the
+/// 1.0 baseline. It is taken before any pending or newer check.
+fn refuse_pre_1_0_schema(applied: &[i64]) -> Result<(), StoreError> {
+    if applied
+        .iter()
+        .any(|version| *version < BASELINE_SCHEMA_VERSION)
+    {
+        return Err(StoreError::Pre1_0Schema {
+            versions: applied.to_vec(),
+        });
+    }
+    Ok(())
 }
 
 /// Serializes schema migration and package activation on one transaction
@@ -142,10 +154,10 @@ pub enum StoreError {
     #[error("the Scheduling database is not in the state this runtime expects")]
     Corrupt,
     #[error(
-        "the Scheduling database uses a pre-1.0 beta schema (versions {}); this release supports fresh installs only. Create a fresh database and apply the package",
+        "the Scheduling database uses a pre-1.0 schema (versions {}); this release supports fresh installs only. Create a fresh database and apply the package",
         schema_versions(versions)
     )]
-    BetaSchema { versions: Vec<i64> },
+    Pre1_0Schema { versions: Vec<i64> },
     #[error("the Scheduling database belongs to another deployment")]
     DeploymentIdentity,
     /// A commit whose acknowledgment never arrived and whose outcome could
@@ -283,7 +295,7 @@ impl StoreError {
     pub fn is_activation_refusal(&self) -> bool {
         matches!(
             self,
-            Self::BetaSchema { .. }
+            Self::Pre1_0Schema { .. }
                 | Self::SchemaPending { .. }
                 | Self::SchemaNewer { .. }
                 | Self::NotActivated

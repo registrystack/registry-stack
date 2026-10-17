@@ -424,7 +424,7 @@ refusal that reports it offline.
 Package activation moved from `scheduling migrate` and a startup that
 adopted the database and published the policy to `schedulingctl plan`,
 `schedulingctl apply`, and `schedulingctl status` over a database
-activation ledger, `scheduling_activations`, part of the schema version 1
+activation ledger, `scheduling_activations`, part of the schema version 100
 baseline. It changes
 what authorizes the runtime to serve a package, the split between the two
 database credentials, deployment defaults, and audit, so it is
@@ -750,8 +750,9 @@ built for.
 
 **Accepted residual.** The removed-key refusals remain. Installation neither
 creates nor drops an audit outbox. A database an earlier release migrated is
-refused as a pre-1.0 beta schema, with an instruction to apply to a new
-database; no release upgrades that state in place.
+refused as a pre-1.0 schema, because its ledger holds a version below the
+version 100 baseline, with an instruction to apply to a new database; no
+release upgrades that state in place.
 
 ## Fresh task-grant status stays outside the capacity transaction
 
@@ -1031,12 +1032,12 @@ covers that entry point; unit tests pin the 16/17 version boundary.
 
 ## Fresh attempt keys and claim ownership
 
-Threat and enforcement: Installation must not rewrite the identity of a spent attempt or invent a claim owner. The baseline carries the live attempt-reference and owner constraints and no attempt digest backfill or erased-receipt caller rewrite. Fresh creation omits the obsolete audit outbox, and installation never drops an existing one; a database holding an earlier release's schema is refused as a pre-1.0 beta schema and nothing is committed. The stored-policy reader does not discard obsolete windows, same-policy publication does not reconstruct a missing document, and window-head creation does not copy earlier window rows. Capacity transactions, whole owner-pair checks, audit rotation, caller replay, and retention behavior are unchanged.
+Threat and enforcement: Installation must not rewrite the identity of a spent attempt or invent a claim owner. The baseline carries the live attempt-reference and owner constraints and no attempt digest backfill or erased-receipt caller rewrite. Fresh creation omits the obsolete audit outbox, and installation never drops an existing one; a database holding an earlier release's schema is refused as a pre-1.0 schema, because its ledger holds a version below the version 100 baseline, and nothing is committed. The stored-policy reader does not discard obsolete windows, same-policy publication does not reconstruct a missing document, and window-head creation does not copy earlier window rows. Capacity transactions, whole owner-pair checks, audit rotation, caller replay, and retention behavior are unchanged.
 
 Verification: `registry-scheduling/tests/postgres_commitments.rs::rotating_the_audit_key_keeps_existing_claims_with_their_owner` and `registry-schedulingctl/tests/activation_postgres.rs::fresh_claim_storage_refuses_a_partial_owner`. Schema-only dumps of separate fresh
 installations are compared before and after, with no ledger data.
 
-Evidence also includes `a_retained_policy_with_obsolete_windows_is_not_reinterpreted` and `reapplying_a_policy_does_not_reconstruct_a_missing_retained_document` in `postgres_commitments.rs`.
+Evidence also includes `a_retained_policy_with_obsolete_windows_is_not_reinterpreted` and `reapplying_a_policy_does_not_reconstruct_a_missing_retained_document` in `postgres_commitments.rs`. The pre-1.0 refusal is covered by `a_pre_1_0_schema_is_refused_by_migrate_and_readiness` in `postgres_commitments.rs`, `a_pre_1_0_schema_is_refused_by_name_at_plan_apply_and_startup` in `registry-schedulingctl/tests/activation_postgres.rs`, and `every_ledger_below_the_baseline_is_a_named_pre_1_0_refusal` in `crates/registry-scheduling/src/store/activation.rs`.
 
 Residual: v0.40.0 does not upgrade v0.39.0 state in place; apply to a new
 database. No compatibility reader or migration of earlier state is provided.

@@ -249,7 +249,7 @@ async fn a_database_failure_names_the_violated_constraint_without_row_data() {
     let f = Fixture::new(project_value(false, false)).await;
     let violation =
         f.db.execute(
-            "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(1,now())",
+            "INSERT INTO casework_schema_migrations(version,applied_at) VALUES(100,now())",
             &[],
         )
         .await
@@ -257,7 +257,7 @@ async fn a_database_failure_names_the_violated_constraint_without_row_data() {
     assert!(violation
         .as_db_error()
         .and_then(|error| error.detail())
-        .is_some_and(|detail| detail.contains("(version)=(1)")));
+        .is_some_and(|detail| detail.contains("(version)=(100)")));
     assert_eq!(
         StoreError::Postgres(violation).to_string(),
         "the Casework database operation failed (constraint casework_schema_migrations_pkey)"

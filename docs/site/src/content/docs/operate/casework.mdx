@@ -27,7 +27,7 @@ If you operate Registry Casework, deploy a reviewed policy package against Postg
 Submitted-context policies need no source service. Current-source policies also need configured read-only context providers. Request, task, decision, replay, and Directory state live in PostgreSQL; a separate broker or cache is not required. The audit journal lives outside the database.
 
 {/* Evidence: crates/registry-casework/src/{config,runtime,store,auth}.rs;
-    crates/registry-casework/migrations/0001_reviews.sql;
+    crates/registry-casework/migrations/0100_reviews.sql;
     crates/registry-casework/src/audit.rs. */}
 
 ## Install the runtime
