@@ -2,6 +2,7 @@
     clippy::disallowed_methods,
     reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
 )]
+#![cfg(feature = "runtime")]
 // SPDX-License-Identifier: Apache-2.0
 
 use serde_json::{json, Value};
@@ -21,7 +22,6 @@ fn fragment(page: &str, marker: &str) -> Value {
     serde_norway::from_str(fragments[0]).unwrap()
 }
 
-#[cfg(feature = "runtime")]
 #[test]
 fn documented_runtime_config_parses_after_filling_the_package_digest() {
     let page = include_str!("../../../docs/site/src/content/docs/operate/breg.mdx");
