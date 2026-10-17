@@ -9739,3 +9739,403 @@ async fn erased_hold_owners_do_not_hide_the_callers_remaining_hold_ceiling() {
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
     assert_eq!(refused["code"], "capacity.exhausted");
 }
+
+mod terminal_retention {
+    //! Terminal metadata retention preserves actionable work, replay windows,
+    //! shared-event dependencies, and spent-key tombstones.
+    use super::*;
+
+    /// Exercise the runtime retention passes with an explicit clock.
+    /// Receipt retention is seven days in this fixture; owner retention is
+    /// independently thirty days so these checks isolate terminal metadata.
+    async fn retention_tick(fx: &Fixture, now: DateTime<Utc>) {
+        fx.store.erase_expired_cursors(now).await.unwrap();
+        fx.store.erase_expired_claim_owners(now, 30).await.unwrap();
+        fx.store.erase_expired_attempts(now).await.unwrap();
+        fx.store.erase_terminal_dispatch(now, 7).await.unwrap();
+    }
+
+    async fn book(fx: &Fixture, index: i64) -> (String, Value) {
+        let slot = first_slot(fx, OFFERING, 90 + index * 90, 200 + index * 90).await;
+        let booking = json!({"hold": null, "admission": admission(fx, OFFERING, slot)});
+        let (status, appointment) = fx
+            .post(
+                "/v1/appointments",
+                &fx.agent,
+                &format!("canary-retention-{index}"),
+                booking.clone(),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{appointment}");
+        (
+            appointment["appointmentId"].as_str().unwrap().to_owned(),
+            booking,
+        )
+    }
+
+    async fn rows(fx: &Fixture, table: &str) -> Value {
+        fx.admin.query_one(
+        &format!("SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text), '[]'::jsonb) FROM {table} t"),
+        &[],
+    ).await.unwrap().get(0)
+    }
+
+    #[tokio::test]
+    async fn outbox_retention_uses_receipt_cutoff_for_every_purpose_and_preserves_actionable_work_and_tombstones(
+    ) {
+        let fx = fixture().await;
+        let (appointment, booking) = book(&fx, 0).await;
+        let claim = Uuid::parse_str(&appointment).unwrap();
+        let now = pinned_now() + TimeDelta::days(8);
+        let cutoff = now - TimeDelta::days(7);
+        let old = cutoff - TimeDelta::microseconds(1);
+        let recent = cutoff + TimeDelta::microseconds(1);
+        let mut cases = Vec::new();
+        // Suppressed work may have an uncertain in-flight send. Local and failed
+        // intents remain operator-visible rather than being presumed disposable.
+        // Every purpose is terminal dispatch metadata once delivered, so the
+        // receipt cutoff applies to confirmations, changes and cancellations
+        // exactly as it does to reminders.
+        for (purpose, state, attempts, terminal_at, remove) in [
+            ("reminder", "delivered", 1_i32, old, true),
+            ("reminder", "delivered", 1, cutoff, true),
+            ("reminder", "delivered", 1, recent, false),
+            ("confirmation", "delivered", 1, old, true),
+            ("confirmation", "delivered", 1, recent, false),
+            ("change", "delivered", 1, cutoff, true),
+            ("change", "delivered", 1, recent, false),
+            ("cancellation", "delivered", 1, old, true),
+            ("cancellation", "delivered", 1, recent, false),
+            ("cancellation", "pending", 1, old, false),
+            ("reminder", "pending", 0, old, false),
+            ("reminder", "pending", 1, old, false),
+            ("reminder", "pending", 1, now + TimeDelta::minutes(1), false),
+            ("reminder", "local", 1, old, false),
+            ("reminder", "failed", 1, old, false),
+            ("reminder", "suppressed", 1, old, false),
+        ] {
+            let id = Uuid::new_v4();
+            fx.admin
+                .execute(
+                    "INSERT INTO scheduling_outbox
+             (outbox_id,purpose,claim_id,appointment_revision,due_at,delivery_state,
+              attempts,next_attempt_at,payload,created_at,delivered_at)
+             VALUES ($1,$7,$2,1,$3,$4,$5,$6,'{}'::jsonb,$3,
+                     CASE WHEN $4='delivered' THEN $6::timestamptz ELSE NULL END)",
+                    &[&id, &claim, &old, &state, &attempts, &terminal_at, &purpose],
+                )
+                .await
+                .unwrap();
+            cases.push((id, purpose, remove));
+        }
+        let claims = rows(&fx, "scheduling_claims").await;
+        let history = rows(&fx, "scheduling_history").await;
+        let audit = fx.capture.entries();
+        retention_tick(&fx, now).await;
+        assert_eq!(rows(&fx, "scheduling_claims").await, claims);
+        assert_eq!(rows(&fx, "scheduling_history").await, history);
+        assert_eq!(fx.capture.entries(), audit);
+        let (status, problem) = fx
+            .post("/v1/appointments", &fx.agent, "canary-retention-0", booking)
+            .await;
+        assert_eq!(status, StatusCode::GONE);
+        assert_eq!(problem["code"], "idempotency.expired");
+        // Check protected rows first so the baseline failure names missing
+        // terminal cleanup only after the independent preservation checks pass.
+        cases.sort_by_key(|(_, _, remove)| *remove);
+        for (id, purpose, remove) in cases {
+            let exists = fx
+                .admin
+                .query_opt("SELECT 1 FROM scheduling_outbox WHERE outbox_id=$1", &[&id])
+                .await
+                .unwrap()
+                .is_some();
+            assert_eq!(
+                exists, !remove,
+                "{purpose} intent {id}: only delivered rows at or before receipt cutoff are disposable"
+            );
+        }
+        let after = rows(&fx, "scheduling_outbox").await;
+        let tombstones = rows(&fx, "scheduling_attempts").await;
+        retention_tick(&fx, now).await;
+        assert_eq!(rows(&fx, "scheduling_outbox").await, after);
+        assert_eq!(rows(&fx, "scheduling_attempts").await, tombstones);
+    }
+
+    #[tokio::test]
+    async fn hook_retention_preserves_replay_and_leases_and_removes_dependents_before_events() {
+        let fx = hook_fixture().await;
+        let now = pinned_now() + TimeDelta::days(8);
+        let cutoff = now - TimeDelta::days(7);
+        let old = cutoff - TimeDelta::microseconds(1);
+        let recent = cutoff + TimeDelta::microseconds(1);
+        let mut cases = Vec::new();
+        for (index, (state, terminal_at, expired, remove)) in [
+            ("delivered", old, false, true),
+            ("delivered", cutoff, false, true),
+            ("delivered", recent, false, false),
+            ("pending", old, false, false),
+            ("leased", old, false, false),
+            ("dead-lettered", old, false, false),
+            ("dead-lettered", old, true, true),
+            ("expired", old, true, true),
+            ("expired", recent, true, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (appointment, _) = book(&fx, index as i64).await;
+            let event: Uuid = fx
+                .admin
+                .query_one(
+                    "SELECT event_id FROM registry_outbox WHERE record_reference=$1",
+                    &[&format!("/v1/appointments/{appointment}")],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            fx.admin
+                .execute(
+                    "UPDATE registry_outbox SET payload_expires_at=$2,
+             payload=CASE WHEN $3 THEN NULL ELSE payload END WHERE event_id=$1",
+                    &[
+                        &event,
+                        &if expired {
+                            old
+                        } else {
+                            now + TimeDelta::days(1)
+                        },
+                        &expired,
+                    ],
+                )
+                .await
+                .unwrap();
+            fx.admin
+                .execute(
+                    "UPDATE registry_webhook_deliveries SET operator_replay=true WHERE event_id=$1",
+                    &[&event],
+                )
+                .await
+                .unwrap();
+            fx.admin
+            .execute(
+                "UPDATE registry_webhook_delivery_state SET state=$2, attempt=1,
+             next_attempt_at=CASE WHEN $2='pending' THEN $3::timestamptz ELSE NULL END,
+             attempt_started_at=CASE WHEN $2='leased' THEN $4::timestamptz ELSE NULL END,
+             lease_expires_at=CASE WHEN $2='leased' THEN $4::timestamptz + interval '1 minute' ELSE NULL END,
+             lease_token=CASE WHEN $2='leased' THEN $5::uuid ELSE NULL END,
+             delivered_at=CASE WHEN $2='delivered' THEN $3::timestamptz ELSE NULL END,
+             dead_lettered_at=CASE WHEN $2='dead-lettered' THEN $3::timestamptz ELSE NULL END,
+             dead_letter_reason=CASE WHEN $2='dead-lettered' THEN
+                 CASE WHEN $6 THEN 'http-non-success' ELSE 'worker-interrupted' END ELSE NULL END,
+             expired_at=CASE WHEN $6 THEN $3::timestamptz ELSE NULL END,
+             updated_at=$3 WHERE event_id=$1",
+                &[
+                    &event,
+                    &state,
+                    &terminal_at,
+                    &now,
+                    &Uuid::new_v4(),
+                    &expired,
+                ],
+            )
+            .await
+            .unwrap();
+            cases.push((event, remove));
+        }
+        // A pending sibling pins shared payload while its terminal sibling is
+        // pruned. Live restrictive FKs require state -> delivery -> event order.
+        let shared = cases[0].0;
+        fx.admin
+            .execute(
+                "INSERT INTO registry_webhook_deliveries
+         SELECT (jsonb_populate_record(NULL::registry_webhook_deliveries,
+         to_jsonb(d) || '{\"compiled_delivery_id\":\"canary-retained-sibling\"}'::jsonb)).*
+         FROM registry_webhook_deliveries d WHERE event_id=$1",
+                &[&shared],
+            )
+            .await
+            .unwrap();
+        fx.admin
+            .execute(
+                "INSERT INTO registry_webhook_delivery_state
+         (event_id,compiled_delivery_id,generation,state,attempt,next_attempt_at,updated_at)
+         VALUES ($1,'canary-retained-sibling',1,'pending',0,$2,$2)",
+                &[&shared, &old],
+            )
+            .await
+            .unwrap();
+        let mut protected = Vec::new();
+        for (event, remove) in &cases {
+            if !remove {
+                let snapshot: Value = fx.admin.query_one(
+                "SELECT jsonb_build_object('event',to_jsonb(o),'delivery',to_jsonb(d),'state',to_jsonb(s))
+                 FROM registry_outbox o JOIN registry_webhook_deliveries d USING(event_id)
+                 JOIN registry_webhook_delivery_state s USING(event_id,compiled_delivery_id)
+                 WHERE o.event_id=$1",
+                &[event],
+            ).await.unwrap().get(0);
+                protected.push((*event, snapshot));
+            }
+        }
+        let audit = fx.capture.entries();
+        retention_tick(&fx, now).await;
+        for (event, before) in protected {
+            let after: Value = fx.admin.query_one(
+            "SELECT jsonb_build_object('event',to_jsonb(o),'delivery',to_jsonb(d),'state',to_jsonb(s))
+             FROM registry_outbox o JOIN registry_webhook_deliveries d USING(event_id)
+             JOIN registry_webhook_delivery_state s USING(event_id,compiled_delivery_id)
+             WHERE o.event_id=$1",
+            &[&event],
+        ).await.unwrap().get(0);
+            assert_eq!(
+                after, before,
+                "retained hooks keep payload, replay identity, and lease state"
+            );
+        }
+        assert!(fx
+        .admin
+        .query_opt(
+            "SELECT 1 FROM registry_webhook_delivery_state s JOIN registry_outbox o USING(event_id)
+         WHERE s.event_id=$1 AND s.compiled_delivery_id='canary-retained-sibling'
+         AND s.state='pending' AND o.payload IS NOT NULL",
+            &[&shared],
+        )
+        .await
+        .unwrap()
+        .is_some());
+        assert_eq!(
+            fx.capture.entries(),
+            audit,
+            "metadata cleanup preserves audit evidence"
+        );
+        cases.sort_by_key(|(_, remove)| *remove);
+        for (event, remove) in cases {
+            for table in [
+                "registry_webhook_delivery_state",
+                "registry_webhook_deliveries",
+            ] {
+                let count: i64 = fx.admin.query_one(
+                &format!("SELECT count(*) FROM {table} WHERE event_id=$1 AND compiled_delivery_id <> 'canary-retained-sibling'"),
+                &[&event],
+            ).await.unwrap().get(0);
+                assert_eq!(count, i64::from(!remove), "{table} retention for {event}");
+            }
+            let exists = fx
+                .admin
+                .query_opt("SELECT 1 FROM registry_outbox WHERE event_id=$1", &[&event])
+                .await
+                .unwrap()
+                .is_some();
+            assert_eq!(
+                exists,
+                !remove || event == shared,
+                "shared payload survives until its final dependent is gone"
+            );
+        }
+        let remaining = rows(&fx, "registry_outbox").await;
+        let states = rows(&fx, "registry_webhook_delivery_state").await;
+        let deliveries = rows(&fx, "registry_webhook_deliveries").await;
+        retention_tick(&fx, now).await;
+        assert_eq!(rows(&fx, "registry_outbox").await, remaining);
+        assert_eq!(rows(&fx, "registry_webhook_delivery_state").await, states);
+        assert_eq!(rows(&fx, "registry_webhook_deliveries").await, deliveries);
+    }
+
+    #[tokio::test]
+    async fn terminal_retention_is_bounded_and_dependent_failure_rolls_back_the_whole_batch() {
+        let fx = hook_fixture().await;
+        let (appointment, _) = book(&fx, 0).await;
+        let claim = Uuid::parse_str(&appointment).unwrap();
+        let now = pinned_now() + TimeDelta::days(8);
+        let old = now - TimeDelta::days(7) - TimeDelta::seconds(1);
+        fx.admin
+            .execute(
+                "INSERT INTO scheduling_outbox
+         (outbox_id,purpose,claim_id,appointment_revision,due_at,delivery_state,
+          attempts,next_attempt_at,payload,created_at,delivered_at)
+         SELECT gen_random_uuid(),'reminder',$1,1,$2,'delivered',1,$2,'{}'::jsonb,$2,$2
+         FROM generate_series(1,257)",
+                &[&claim, &old],
+            )
+            .await
+            .unwrap();
+        let event: Uuid = fx
+            .admin
+            .query_one("SELECT event_id FROM registry_outbox", &[])
+            .await
+            .unwrap()
+            .get(0);
+        fx.admin
+            .execute(
+                "INSERT INTO registry_webhook_deliveries
+         SELECT (jsonb_populate_record(NULL::registry_webhook_deliveries,
+         to_jsonb(d) || jsonb_build_object('compiled_delivery_id','canary-batch-' || i))).*
+         FROM registry_webhook_deliveries d CROSS JOIN generate_series(1,257) AS i
+         WHERE event_id=$1",
+                &[&event],
+            )
+            .await
+            .unwrap();
+        fx.admin
+            .execute(
+                "INSERT INTO registry_webhook_delivery_state
+         (event_id,compiled_delivery_id,generation,state,attempt,delivered_at,updated_at)
+         SELECT $1,'canary-batch-' || i,1,'delivered',1,$2,$2 FROM generate_series(1,257) AS i",
+                &[&event, &old],
+            )
+            .await
+            .unwrap();
+        // A real dependent FK refuses metadata deletion after state deletion.
+        // The reminder deletion earlier in the same transaction must roll back too.
+        fx.admin
+            .batch_execute(
+                "CREATE TABLE canary_retention_dependency (
+         event_id uuid NOT NULL, compiled_delivery_id text NOT NULL,
+         FOREIGN KEY(event_id,compiled_delivery_id)
+         REFERENCES registry_webhook_deliveries(event_id,compiled_delivery_id))",
+            )
+            .await
+            .unwrap();
+        fx.admin
+            .execute(
+                "INSERT INTO canary_retention_dependency VALUES ($1,'canary-batch-1')",
+                &[&event],
+            )
+            .await
+            .unwrap();
+        let reminders = rows(&fx, "scheduling_outbox").await;
+        let states = rows(&fx, "registry_webhook_delivery_state").await;
+        let deliveries = rows(&fx, "registry_webhook_deliveries").await;
+        // The refusal names its value-free cause, so an operator can tell a
+        // pass that fails on every tick from a transient failure.
+        let refused = fx.store.erase_terminal_dispatch(now, 7).await.unwrap_err();
+        let reported = refused.to_string();
+        assert!(
+            reported.ends_with("SQLSTATE 23503"),
+            "the retention failure names the foreign-key SQLSTATE: {reported}"
+        );
+        assert!(
+            !reported.contains("canary"),
+            "the retention failure carries no row or object values: {reported}"
+        );
+        assert_eq!(rows(&fx, "scheduling_outbox").await, reminders);
+        assert_eq!(rows(&fx, "registry_webhook_delivery_state").await, states);
+        assert_eq!(rows(&fx, "registry_webhook_deliveries").await, deliveries);
+        fx.admin
+            .execute("DELETE FROM canary_retention_dependency", &[])
+            .await
+            .unwrap();
+        assert_eq!(fx.store.erase_terminal_dispatch(now, 7).await.unwrap(), 512);
+        assert_eq!(fx.store.erase_terminal_dispatch(now, 7).await.unwrap(), 2);
+        assert_eq!(fx.store.erase_terminal_dispatch(now, 7).await.unwrap(), 0);
+        let surviving: i64 = fx.admin.query_one(
+        "SELECT count(*) FROM registry_webhook_delivery_state s JOIN registry_outbox o USING(event_id)
+         WHERE s.state='pending' AND o.payload IS NOT NULL", &[],
+    ).await.unwrap().get(0);
+        assert_eq!(
+            surviving, 1,
+            "the original pending hook pins its shared event"
+        );
+    }
+}

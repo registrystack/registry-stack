@@ -1153,7 +1153,7 @@ async fn statistical_http_full_journey_preserves_visibility_release_and_withdraw
         "operationId",
         "requestId",
         "traceId",
-        "packageRevision",
+        "activationId",
         "purposePresent",
         "selectedAccessProfile",
         "authorization",

@@ -1347,6 +1347,13 @@ async fn native_verifier_worker_releases_only_exact_approved_bytes() {
         vec!["text/plain", "application/pdf", "text/plain", "text/plain"]
     );
     let audit = capture.entries();
+    postgres_harness::assert_audit_identity_goldens(&audit);
+    for entry in &audit {
+        assert_eq!(
+            entry["record"]["activationId"],
+            fixture.identity.activation_id
+        );
+    }
     assert!(audit
         .iter()
         .any(|record| record.to_string().contains("approved")));

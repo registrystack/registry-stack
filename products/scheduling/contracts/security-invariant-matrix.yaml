@@ -435,7 +435,10 @@ invariants:
       cannot name actor, credential, capacity, duplicate-key, or cancellation
       reason fields; outbox capture in the appointment transaction; an
       attempt audit entry accepted before egress; and a delivery seam that
-      refuses every proposal.
+      refuses every proposal. Terminal metadata cleanup preserves active and
+      uncertain work, requires completed expiry before dead-letter pruning,
+      and deletes dependent metadata before unreferenced shared events in
+      one bounded transaction. Audit entries remain under their own retention.
     refusal: >-
       Refuse unsupported declarations before startup, fail the appointment
       transaction if its matching event cannot be captured, and record a
@@ -748,7 +751,7 @@ deferred:
       lie under different published opening revisions.
     recordedIn: products/scheduling/SECURITY-REVIEW-NOTES.md
   - id: SCHEDULING-DEF-06
-    subject: Appointment, history, and outbox retention
+    subject: Appointment, history, and actionable outbox retention
     state: deferred
     reason: >-
       Retention windows for committed scheduling data are a product question
@@ -756,7 +759,10 @@ deferred:
       tombstone, and the sweep clears the raw caller and key with them
       (SCHEDULING-SEC-33). The claim owner's raw issuer and subject expire
       separately under claimOwnerRetentionDays (SCHEDULING-SEC-34), but the
-      claim, history, and outbox rows remain. Rotated audit files are removed
+      claim, history, and actionable or uncertain outbox rows remain. Delivered
+      outbox intents of every purpose (confirmation, change, cancellation,
+      reminder) and terminal hook metadata use receiptRetentionDays in bounded
+      transactions, preserving replay through payload expiry. Rotated audit files are removed
       after audit.retentionDays.
     compensatingControl: >-
       The configuration reference says so explicitly rather than implying a

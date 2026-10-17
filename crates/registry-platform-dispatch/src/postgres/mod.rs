@@ -14,6 +14,7 @@
 //! outcome before recovery may take the job over.
 
 mod dispatcher;
+mod retention;
 mod sql;
 mod store;
 mod table;
@@ -23,6 +24,7 @@ pub use dispatcher::{
     CancelOutcome, Claim, DispatchConfig, DispatchOutcome, Dispatcher, LeasedReadError,
     LEASE_FINALIZATION_ALLOWANCE,
 };
+pub use retention::{prune_terminal, RetentionError, MAX_PRUNE_BATCH};
 pub use sql::{Columns, DispatchSql, ExpirySql, SelectSql};
 pub use store::{
     AttemptAudit, ClaimRefusal, Decoded, DispatchConnection, DispatchEvent, DispatchStore,

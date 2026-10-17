@@ -3698,3 +3698,68 @@ recorded by BREG-SEC-179.
 `crates/registry-breg/tests/postgres_proposal_security.rs` proves that a task
 grant with Get authority cannot borrow the supplemental operation from its
 selected profile or from a bound for another Proposal.
+
+## Audit activation identity and sibling payload expiry
+
+Two audit-integrity changes ship together. First (#1693), every request,
+operator, access-log and webhook audit record that carried the activation UUID
+under `packageRevision` now names it `activationId`, and `packageRevision` is
+reserved for `sha256:` package digests. The affected schemas advance as listed
+in [audit identity](contracts/audit-identity.md); historical versions keep
+their historical reading, so a reader branches on the schema. Import authority
+records add `authorityActivationId`, the activation that opened the authority,
+beside the current `activationId`. The `unfinished` response copies only fields
+an attempt record carries, so it preserves the attempt's `activationId` and
+never invents a `packageRevision`.
+
+Second (#1800), webhook payload expiry no longer requires the shared payload to
+be present. Every pending or dead-lettered delivery whose payload horizon has
+passed is expired on its own: a pending delivery becomes `expired`, a
+dead-lettered one keeps its state, and each gains `expired_at` and exactly one
+`payload-expired` terminal audit entry, even when a sibling or a product
+erasure already removed the payload. Before the change a sibling over an
+already-erased payload was never expired, so the journal held no expiry
+entry for it. Claiming still requires a present, unexpired
+payload, so expiry sends nothing.
+
+### Threat
+
+1. An auditor or downstream reader takes an activation UUID for a package
+   digest, or the reverse, and attributes an operation to the wrong package.
+2. A delivery whose payload was erased under it is left without an expiry
+   record, so the journal cannot show that the delivery ended, and retention
+   cannot distinguish it from live work.
+
+### What is preserved
+
+Audit and replay retention are unchanged: no audit entry is removed or
+rewritten, and replay still refuses erased or expired work. Reference-hash
+domain strings, context inputs and their values are unchanged, including
+Review recovery and import authority operator and reason references, so
+existing correlations still match. No migration, credential or grant changes.
+
+### Tests
+
+The PostgreSQL harness checks every captured audit entry against
+`crates/registry-breg/tests/fixtures/audit-identity-goldens.json` and the
+identity value types (`assert_audit_identity_goldens` in
+`crates/registry-breg/tests/support/postgres_harness.rs`), across every
+journey that reads the audit journal. The Evidence-retention tests in
+`crates/registry-breg/tests/postgres_action_evidence_retention.rs` refuse an
+activation under `packageRevision`;
+`a_successor_package_supersedes_an_open_authority` in
+`crates/registry-breg/tests/postgres_import_authority.rs` pins both the
+current and the original activation; and the operator retention journeys in
+`crates/registry-breg/tests/postgres_native_retention.rs` check operator audit
+identity. `real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_bound_audited_and_confined`
+in `crates/registry-breg/tests/postgres_webhook_delivery.rs` expires a pending
+sibling after the shared payload is erased, and a dead-lettered sibling whose
+payload was erased before expiry; each gains `expired_at` and one
+`payload-expired` entry, and the receiver sees no request.
+
+### Accepted residuals
+
+A consumer that parsed the old schemas by field name must branch on the
+schema version; there is no alias. Expiry of a dead-lettered delivery keeps
+its `dead-lettered` state, so an operator distinguishes an expired dead letter
+by `expired_at` and the audit entry, not by state.

@@ -332,8 +332,8 @@ bindings are allowed so retained events captured under an earlier policy can
 finish with their exact original binding. Startup refuses if a retained event's
 binding is no longer available.
 
-`retention.receiptRetentionDays` covers idempotency attempt receipts
-from 1 through 365 days; listing cursors keep their fixed fifteen-minute
+`retention.receiptRetentionDays` covers idempotency attempt receipts and
+terminal dispatch metadata from 1 through 365 days; listing cursors keep their fixed fifteen-minute
 lifetime. `retention.hookPayloadRetentionDays` sets the canonical observer payload's retry and
 dead-letter lifetime from 1 through 30 days.
 `retention.claimOwnerRetentionDays` bounds the raw owner issuer and subject
@@ -345,8 +345,17 @@ columns together and retains a per-claim SHA-256 reference and erasure time.
 The reference grants no authority: the claim is no longer readable, listable,
 or actionable by its former owner, and a receipt containing that claim cannot be observed or replayed even if
 the independent receipt window remains open. Live claims
-keep their owner across audit-key rotation. Claim, history, and reminder outbox
-rows remain; their retention is deferred. `audit.retentionDays` bounds rotated
+keep their owner across audit-key rotation. Claim and history rows remain;
+their retention is deferred. Each retention tick prunes up to 256 delivered
+outbox intents of any purpose (confirmation, change, cancellation, reminder)
+whose delivery time is at or before the receipt-period cutoff,
+and up to 256 terminal observer deliveries whose last transition is at or
+before that cutoff. Observer dead letters and expired deliveries also require
+completed payload expiry and erasure before their metadata ages out. Pending,
+leased, retryable and uncertain work remains, including local, failed and
+suppressed outbox intents. Hook state is removed before delivery metadata;
+a shared event remains until its last delivery is removed. These deletions
+share one transaction and never erase audit entries or spent-key tombstones. `audit.retentionDays` bounds rotated
 audit files. An idempotency receipt past its period is erased, so an
 exact retry after expiry answers `idempotency.expired` with HTTP 410 instead of
 replaying the first answer. The same sweep clears the attempt's raw token

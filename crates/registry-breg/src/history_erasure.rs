@@ -40,7 +40,7 @@ const MAX_REASON_BYTES: usize = 1024;
 pub(crate) const MAX_ERASURE_REVISIONS: i64 = 10_000;
 const AUDIT_OPERATION_ID: &str = "history-erasure-maintenance";
 /// The audit schema of the per-record history erasure entry.
-pub const HISTORY_ERASURE_AUDIT_SCHEMA: &str = "breg-history-erasure-audit/v2";
+pub const HISTORY_ERASURE_AUDIT_SCHEMA: &str = "breg-history-erasure-audit/v3";
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct RecordHistoryErasureTarget<'a> {
@@ -679,7 +679,7 @@ fn history_erasure_request_entry(
             "phase": "attempt",
             "outcome": "started",
             "operationId": AUDIT_OPERATION_ID,
-            "packageRevision": request.expected.activation_id,
+            "activationId": request.expected.activation_id,
             "operatorReference": references.operator,
             "targetReference": references.target,
             "reasonReference": references.reason,
@@ -703,7 +703,7 @@ fn history_erasure_entry(
         "phase": "terminal",
         "outcome": "committed",
         "operationId": AUDIT_OPERATION_ID,
-        "packageRevision": request.expected.activation_id,
+        "activationId": request.expected.activation_id,
         "operatorReference": operator_reference,
         "targetReference": target_reference,
         "reasonReference": reason_reference,

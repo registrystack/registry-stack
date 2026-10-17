@@ -101,3 +101,15 @@ the contract half has no database dependency, so a product that only declares an
 validates hooks takes the crate with default features and links no PostgreSQL
 client. No executor lives in this crate: running a Rhai or WASM handler is a
 later step.
+
+
+### Terminal delivery metadata
+
+Products call `delivery::prune_terminal_deliveries` inside their retention
+transaction with their metadata cutoff. Each call prunes at most 256 deliveries,
+locking state and shared events with `SKIP LOCKED`. Pending and leased rows
+remain. Dead letters require completed payload expiry and erasure before their
+metadata ages out. State rows are deleted before delivery metadata, and an event
+is deleted only after its last delivery is gone. A failure returns the shared
+`RetentionError`, whose cause is the refused bound or the server's SQLSTATE. Audit retention remains the
+product's responsibility; metadata cleanup never substitutes for expiry audits.

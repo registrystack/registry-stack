@@ -241,6 +241,8 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         "expired-before-egress",
     )
     .await;
+    let expired_sibling_id = "case.created.expired-sibling";
+    add_sibling_delivery(&database, &pending_expired, expired_sibling_id).await;
     database
         .admin
         .execute(
@@ -254,17 +256,141 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     let egress_before_expiry = receiver.count().await;
     assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
     assert_eq!(receiver.count().await, egress_before_expiry);
+    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
     assert_eq!(
         delivery_state(&database, &pending_expired).await,
         (1, "expired".to_owned(), 0)
     );
     assert!(!outbox_payload_available(&database, &pending_expired).await);
+    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    let expired_sibling = CapturedEvent {
+        event_id: pending_expired.event_id,
+        compiled_delivery_id: expired_sibling_id.to_owned(),
+        ..pending_expired.clone()
+    };
+    assert_eq!(
+        delivery_state(&database, &expired_sibling).await,
+        (1, "expired".to_owned(), 0),
+        "each sibling must expire after shared payload erasure"
+    );
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &expired_sibling,
+        1,
+        0,
+        "terminal",
+        "payload-expired",
+    )
+    .await;
+
     assert_exact_audit_outcome(
         &database,
         &audit_profile,
         &pending_expired,
         1,
         0,
+        "terminal",
+        "payload-expired",
+    )
+    .await;
+
+    // A dead-lettered sibling whose shared payload was already erased still
+    // owes its own expiry: it keeps its dead-letter state, gains expired_at,
+    // and writes exactly one payload-expired entry, and nothing is sent.
+    let erased_before_expiry = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "delivery-payload-retention-dead-lettered",
+        "dead-lettered-after-erasure",
+    )
+    .await;
+    let dead_lettered_sibling = CapturedEvent {
+        event_id: erased_before_expiry.event_id,
+        compiled_delivery_id: "case.created.dead-lettered-sibling".to_owned(),
+        ..erased_before_expiry.clone()
+    };
+    add_sibling_delivery(
+        &database,
+        &erased_before_expiry,
+        &dead_lettered_sibling.compiled_delivery_id,
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_delivery_state
+                SET state = 'dead-lettered', attempt = 1, next_attempt_at = NULL,
+                    dead_lettered_at = transaction_timestamp(),
+                    dead_letter_reason = 'http-non-success',
+                    updated_at = transaction_timestamp()
+              WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[
+                &dead_lettered_sibling.event_id,
+                &dead_lettered_sibling.compiled_delivery_id,
+            ],
+        )
+        .await
+        .expect("administrator dead-letters the sibling");
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_outbox
+                SET payload = NULL,
+                    payload_expires_at = transaction_timestamp() - interval '1 second'
+              WHERE event_id = $1",
+            &[&erased_before_expiry.event_id],
+        )
+        .await
+        .expect("administrator erases and expires the shared payload");
+    let egress_before_erased_expiry = receiver.count().await;
+    for _ in 0..2 {
+        assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    }
+    assert_eq!(receiver.count().await, egress_before_erased_expiry);
+    let sibling_expiry: (String, bool) = database
+        .admin
+        .query_one(
+            "SELECT state, expired_at IS NOT NULL
+               FROM registry_internal.registry_webhook_delivery_state
+              WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[
+                &dead_lettered_sibling.event_id,
+                &dead_lettered_sibling.compiled_delivery_id,
+            ],
+        )
+        .await
+        .map(|row| (row.get(0), row.get(1)))
+        .expect("administrator can inspect the sibling expiry");
+    assert_eq!(
+        sibling_expiry,
+        ("dead-lettered".to_owned(), true),
+        "a dead-lettered sibling over an erased payload still expires"
+    );
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &dead_lettered_sibling,
+        1,
+        1,
+        "terminal",
+        "payload-expired",
+    )
+    .await;
+    assert_eq!(
+        delivery_state(&database, &erased_before_expiry).await,
+        (1, "expired".to_owned(), 0)
+    );
+    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &dead_lettered_sibling,
+        1,
+        1,
         "terminal",
         "payload-expired",
     )
@@ -2557,6 +2683,14 @@ async fn audit_outcomes(
             &event.event_id.to_string(),
         )
         .expect("test can derive the keyed event reference");
+    let delivery_reference = profile
+        .key_hasher()
+        .audit_reference_hash(
+            "breg-webhook-delivery-v1",
+            &event.package_revision,
+            &event.compiled_delivery_id,
+        )
+        .expect("test can derive the keyed delivery reference");
     database
         .audit_entries()
         .into_iter()
@@ -2564,6 +2698,8 @@ async fn audit_outcomes(
         .filter_map(|entry| entry.get("record").cloned())
         .filter(|record| {
             record.get("eventReference").and_then(Value::as_str) == Some(event_reference.as_str())
+                && record.get("deliveryReference").and_then(Value::as_str)
+                    == Some(delivery_reference.as_str())
                 && record.get("generation").and_then(Value::as_i64) == Some(generation)
                 && record.get("attempt").and_then(Value::as_i64) == Some(attempt)
                 && record.get("phase").and_then(Value::as_str) == Some(phase)

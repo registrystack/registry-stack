@@ -97,10 +97,23 @@ fn assert_retention_audited(database: &TestDatabase, outcomes: &[(&str, Option<u
     let entries = database
         .audit_entries()
         .into_iter()
-        .filter(|entry| entry["schema"] == "breg-evidence-retention-audit/v1")
+        .filter(|entry| entry["schema"] == "breg-evidence-retention-audit/v2")
         .collect::<Vec<_>>();
     assert_eq!(entries.len(), outcomes.len() * 2, "{entries:?}");
     for (pair, (outcome, erased)) in entries.chunks(2).zip(outcomes) {
+        for entry in pair {
+            let record = &entry["record"];
+            assert!(
+                record.get("packageRevision").is_none(),
+                "activation UUID must not masquerade as a package digest"
+            );
+            assert!(uuid::Uuid::parse_str(
+                record["activationId"]
+                    .as_str()
+                    .expect("activationId is present")
+            )
+            .is_ok());
+        }
         assert_eq!(pair[0]["phase"], "request");
         assert_eq!(pair[1]["phase"], "response");
         assert_eq!(pair[0]["correlation"], pair[1]["correlation"]);

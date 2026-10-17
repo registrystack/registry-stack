@@ -34,11 +34,14 @@
 //! schema name, idempotency domain, and delivery source identity.
 
 mod insert;
+mod retention;
 mod seams;
 mod service;
 mod store;
 
 pub use insert::{insert_delivery, DeliveryCapture};
+pub use registry_platform_dispatch::postgres::RetentionError;
+pub use retention::prune_terminal_deliveries;
 pub use seams::{
     DeliveryAuditDisposition, DeliveryAuditOutcome, DeliveryAuditPhase, DeliveryAuditRecord,
     DeliveryConnection, DeliveryError, DeliveryOperationalEvent, DeliverySeams,

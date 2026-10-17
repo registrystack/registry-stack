@@ -51,7 +51,7 @@ const MAX_IDENTIFIER_BYTES: usize = 256;
 const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 const MAX_REASON_BYTES: usize = 1024;
 
-const AUDIT_SCHEMA: &str = "breg-import-authority-audit/v1";
+const AUDIT_SCHEMA: &str = "breg-import-authority-audit/v2";
 const AUDIT_OPERATION_ID: &str = "breg.import_authority";
 const OPERATOR_REFERENCE_DOMAIN: &str = "breg-import-authority-operator-v1";
 const REASON_REFERENCE_DOMAIN: &str = "breg-import-authority-reason-v1";
@@ -336,12 +336,12 @@ fn audit_record(
             other => other.as_str(),
         },
         "operationId": AUDIT_OPERATION_ID,
-        "packageRevision": package_revision,
+        "activationId": package_revision,
         "authorityId": authority.authority_id.to_string(),
         "entityId": authority.entity_id,
         "profileId": authority.profile_id,
         "operation": authority.operation,
-        "activationId": authority.activation_id.to_string(),
+        "authorityActivationId": authority.activation_id.to_string(),
         "maxItems": authority.max_items,
         "committedItems": authority.committed_items,
         "openedAt": authority.opened_at.to_rfc3339(),

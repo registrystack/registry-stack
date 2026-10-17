@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Prune every delivered outbox intent (confirmation, change, cancellation,
+  reminder) and terminal observer delivery metadata in bounded batches using `retention.receiptRetentionDays`. Preserve active and
+  uncertain work, dead letters through payload expiry, shared-event siblings,
+  audit evidence, and spent idempotency keys.
+
 - Raw claim owners expire after `retention.claimOwnerRetentionDays` (default 7,
   range 1 through 365) following an appointment's end or cancellation, or a
   hold's expiry, release, or consumption. This default is a placeholder.

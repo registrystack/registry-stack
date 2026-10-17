@@ -139,9 +139,9 @@ fn classify_change(
             BaseClass::AccessOrDisclosureChange => DiffClassification::AccessChange,
             _ => DiffClassification::Unsupported,
         },
-        Code::EventAdded | Code::EventRemoved | Code::EventChanged => {
-            DiffClassification::Unsupported
-        }
+        Code::EventAdded => DiffClassification::DisclosureWidening,
+        Code::EventRemoved => DiffClassification::DisclosureNarrowing,
+        Code::EventChanged => DiffClassification::AccessChange,
         Code::StatisticalDatasetAdded => DiffClassification::DisclosureWidening,
         Code::StatisticalDatasetRemoved => DiffClassification::DisclosureNarrowing,
         Code::StatisticalDatasetChanged => {
@@ -321,7 +321,11 @@ fn access_change_details(
             .and_then(|e| e.access_profiles.get(member))
             .is_some_and(|profile| !profile.require_consent.is_empty());
     object_details(&before, &after, |field, left, right| {
-        let direction = access_direction(field, left, right);
+        let direction = if change.code == Code::EventChanged {
+            AccessChangeDirection::ReviewRequired
+        } else {
+            access_direction(field, left, right)
+        };
         if !gated {
             (direction, None)
         } else if field == "requireConsent" && right.is_null() {
@@ -770,6 +774,70 @@ mod tests {
 
     const PACKAGE_REVISION: &str =
         "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+
+    #[test]
+    fn event_disclosure_classification_and_apply_gate_agree() {
+        let extra =
+            r#",{"id":"note","type":"string","maximumLength":16,"classification":"internal"}"#;
+        let without = compiled("1", "internal", extra, "", "principal");
+        let event = |destination: &str, projection: &str| {
+            compiled(
+                "1",
+                "internal",
+                extra,
+                &format!(
+                    r#", "hooks":[{{"id":"notify","phase":"after","trigger":"created","projection":{projection},"handler":{{"type":"url","destinationId":"{destination}"}}}}]"#
+                ),
+                "principal",
+            )
+        };
+        let before = event("first-destination", r#"["code"]"#);
+        let after = event("second-destination", r#"["code"]"#);
+        let projected = event("first-destination", r#"["code","note"]"#);
+        assert_class(
+            &without,
+            &before,
+            CompiledRegistryChangeCode::EventAdded,
+            DiffClassification::DisclosureWidening,
+        );
+        assert_class(
+            &before,
+            &without,
+            CompiledRegistryChangeCode::EventRemoved,
+            DiffClassification::DisclosureNarrowing,
+        );
+        for (candidate, field) in [(&after, "destinationId"), (&projected, "projection")] {
+            assert_class(
+                &before,
+                candidate,
+                CompiledRegistryChangeCode::EventChanged,
+                DiffClassification::AccessChange,
+            );
+            let diff = classify_registry_diff(&before, candidate, PACKAGE_REVISION);
+            let event_change = diff
+                .changes
+                .iter()
+                .find(|change| change.change.code == CompiledRegistryChangeCode::EventChanged)
+                .unwrap();
+            assert!(event_change
+                .access_details
+                .iter()
+                .any(|detail| detail.field == field
+                    && detail.direction == AccessChangeDirection::ReviewRequired));
+        }
+        for (baseline, candidate) in [
+            (&without, &before),
+            (&before, &without),
+            (&before, &after),
+            (&before, &projected),
+        ] {
+            let changes = compiled_registry_change_set(baseline, candidate, PACKAGE_REVISION);
+            assert!(
+                crate::package::change_set_to_applicable_migration_plan(&changes).is_ok(),
+                "event disclosure review does not require reviewed migration SQL"
+            );
+        }
+    }
 
     #[test]
     fn disclosure_direction_threat_is_enforced_by_exact_classification_order_negative() {

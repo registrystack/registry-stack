@@ -268,6 +268,12 @@ fields. `state` is the public value `confirmed` or `cancelled`; actor identity,
 task grants, resource and channel identifiers, duplicate keys, and cancellation
 reasons cannot be projected. Retained payloads expire after
 `retention.hookPayloadRetentionDays`. Operator replay is not exposed in this slice.
+Terminal delivery metadata uses `retention.receiptRetentionDays`: every
+delivered outbox intent (confirmation, change, cancellation, reminder) and
+every completed hook delivery ages out in bounded retention batches.
+Dead letters remain through payload expiry and the metadata window. Active,
+retryable and uncertain work, spent idempotency keys, and audit records survive
+this cleanup. See [retention configuration](RUNTIME-CONFIG.md).
 
 ## Phase 1 scope and exclusions
 

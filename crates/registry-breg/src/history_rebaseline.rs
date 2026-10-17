@@ -42,7 +42,7 @@ const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
 const AUDIT_OPERATION_ID: &str = "history-rebaseline-maintenance";
 const BASELINE_SYSTEM_ORIGIN: &str = "breg-coverage-rebaseline-v1";
 /// The audit schema of the coverage rebaseline entry.
-pub const HISTORY_REBASELINE_AUDIT_SCHEMA: &str = "breg-history-rebaseline-audit/v2";
+pub const HISTORY_REBASELINE_AUDIT_SCHEMA: &str = "breg-history-rebaseline-audit/v3";
 
 pub struct HistoryRebaselineRequest<'a> {
     pub expected: &'a ExpectedRegistryIdentity,
@@ -336,7 +336,7 @@ fn history_rebaseline_request_entry(
             "phase": "attempt",
             "outcome": "started",
             "operationId": AUDIT_OPERATION_ID,
-            "packageRevision": request.expected.activation_id,
+            "activationId": request.expected.activation_id,
             "operatorReference": operator_reference,
         }),
     ))
@@ -355,7 +355,7 @@ pub(crate) fn history_rebaseline_entry(
             "phase": "terminal",
             "outcome": "committed",
             "operationId": AUDIT_OPERATION_ID,
-            "packageRevision": request.expected.activation_id,
+            "activationId": request.expected.activation_id,
             "operatorReference": operator_reference,
             "baselinePosition": outcome.baseline_position,
             "verifiedEntityCount": outcome.verified_entity_count,
