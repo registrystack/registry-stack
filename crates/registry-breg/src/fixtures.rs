@@ -237,7 +237,10 @@ pub enum FixtureError {
     ResponseStatusMismatch {
         expected: u16,
         actual: u16,
+        /// A problem code the contract registers for `actual`.
         problem_code: Option<String>,
+        /// That problem's fixed detail text, or for an action refusal its
+        /// refusal code; never an authored label (CFG-SEC-3).
         problem_detail: Option<String>,
     },
     /// A journeys document the shared reader refused: its diagnostics, each
@@ -290,8 +293,10 @@ impl fmt::Display for FixtureError {
                 formatter,
                 "expected HTTP {expected}, received HTTP {actual}"
             )?;
-            if let (Some(code), Some(detail)) = (problem_code, problem_detail) {
-                write!(formatter, "; problem {code}: {detail}")?;
+            match (problem_code, problem_detail) {
+                (Some(code), Some(detail)) => write!(formatter, "; problem {code}: {detail}")?,
+                (Some(code), None) => write!(formatter, "; problem {code}")?,
+                (None, _) => {}
             }
             return Ok(());
         }
@@ -3281,22 +3286,39 @@ async fn execute_schema_test_with_key_source(
     build_schema_test_receipt(&candidate, suite, &successful)
 }
 
+/// The problem code and detail a status mismatch may name. A code is kept
+/// only when the contract registers it for the status, and a detail only when
+/// it is one of that problem's fixed texts. An action refusal's detail is the
+/// project-authored label, which is never repeated (CFG-SEC-3); its refusal
+/// code is named instead when it passes the local identifier grammar.
 async fn response_problem(response: Response<Body>) -> (Option<String>, Option<String>) {
+    let status = response.status().as_u16();
     let Ok(bytes) = to_bytes(response.into_body(), MAX_RESPONSE_BYTES).await else {
         return (None, None);
     };
     let Ok(problem) = serde_json::from_slice::<Value>(&bytes) else {
         return (None, None);
     };
-    let code = problem
-        .get("code")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let detail = problem
-        .get("detail")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    (code, detail)
+    let Some(code) = problem.get("code").and_then(Value::as_str) else {
+        return (None, None);
+    };
+    let Some((_, details)) = problem_contract(status, Some(code)) else {
+        return (None, None);
+    };
+    let detail = if (status, code) == (422, "action.refused") {
+        problem
+            .get("refusalCode")
+            .and_then(Value::as_str)
+            .filter(|refusal| registry_platform_yaml::LocalId::new(*refusal).is_ok())
+            .map(|refusal| format!("refusal code `{refusal}`"))
+    } else {
+        problem
+            .get("detail")
+            .and_then(Value::as_str)
+            .filter(|detail| details.contains(detail))
+            .map(str::to_owned)
+    };
+    (Some(code.to_owned()), detail)
 }
 
 struct SchemaTestRuntime {
@@ -5914,6 +5936,103 @@ mod tests {
             let rendered = format!("{error:?}: {error}");
             assert!(!rendered.contains("claim-canary-value"));
             assert!(!rendered.contains("key-canary-value"));
+        }
+    }
+
+    async fn rendered_status_mismatch(status: u16, body: Value) -> String {
+        let response = Response::builder()
+            .status(status)
+            .header(CONTENT_TYPE, "application/problem+json")
+            .body(Body::from(body.to_string()))
+            .expect("problem response");
+        let (problem_code, problem_detail) = response_problem(response).await;
+        FixtureError::ResponseStatusMismatch {
+            expected: 200,
+            actual: status,
+            problem_code,
+            problem_detail,
+        }
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn status_mismatch_names_a_recognized_problem_and_its_fixed_detail() {
+        assert_eq!(
+            rendered_status_mismatch(
+                412,
+                json!({
+                    "code": "precondition.failed",
+                    "detail": "The mutation precondition failed.",
+                }),
+            )
+            .await,
+            "expected HTTP 200, received HTTP 412; problem precondition.failed: The mutation precondition failed."
+        );
+        // A recognized code whose detail is not the contract's fixed text
+        // keeps the code and drops the detail.
+        assert_eq!(
+            rendered_status_mismatch(
+                412,
+                json!({"code": "precondition.failed", "detail": "detail-canary-value"}),
+            )
+            .await,
+            "expected HTTP 200, received HTTP 412; problem precondition.failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_mismatch_never_repeats_an_authored_refusal_label() {
+        // The `detail` of an action refusal is the project-authored label
+        // (CFG-SEC-3); only its refusal code, a local identifier, is named.
+        let rendered = rendered_status_mismatch(
+            422,
+            json!({
+                "code": "action.refused",
+                "detail": "authored-refusal-canary",
+                "refusalCode": "household-closed",
+            }),
+        )
+        .await;
+        assert_eq!(
+            rendered,
+            "expected HTTP 200, received HTTP 422; problem action.refused: refusal code `household-closed`"
+        );
+        // A refusal code outside the local identifier grammar is not named.
+        let rendered = rendered_status_mismatch(
+            422,
+            json!({
+                "code": "action.refused",
+                "detail": "authored-refusal-canary",
+                "refusalCode": "Refusal.Code-Canary",
+            }),
+        )
+        .await;
+        assert_eq!(
+            rendered,
+            "expected HTTP 200, received HTTP 422; problem action.refused"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_mismatch_names_nothing_from_an_unrecognized_body() {
+        for (status, body) in [
+            (
+                418,
+                json!({"code": "code-canary-value", "detail": "detail-canary-value"}),
+            ),
+            // A registered code under another status is not that problem.
+            (
+                500,
+                json!({
+                    "code": "precondition.failed",
+                    "detail": "The mutation precondition failed.",
+                }),
+            ),
+        ] {
+            assert_eq!(
+                rendered_status_mismatch(status, body).await,
+                format!("expected HTTP 200, received HTTP {status}")
+            );
         }
     }
 
