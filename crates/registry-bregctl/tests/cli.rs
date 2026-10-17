@@ -2450,6 +2450,30 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
         "{production_check:?}"
     );
     assert_reserved_iri_refusal(&json_stdout(&production_check));
+    let production_explain = bregctl(&[
+        "--format",
+        "json",
+        "explain",
+        "model",
+        path(&destination),
+        "--production",
+    ]);
+    assert_eq!(
+        production_explain.status.code(),
+        Some(1),
+        "{production_explain:?}"
+    );
+    assert_reserved_iri_refusal(&json_stdout(&production_explain));
+    let authoring_explain = bregctl(&["--format", "json", "explain", "model", path(&destination)]);
+    assert!(authoring_explain.status.success(), "{authoring_explain:?}");
+    let authoring_explain = json_stdout(&authoring_explain);
+    assert_eq!(authoring_explain["ok"], true, "{authoring_explain}");
+    assert!(
+        !authoring_explain
+            .to_string()
+            .contains("breg.registry.canonical-base-iri-reserved"),
+        "{authoring_explain}"
+    );
     let package = bregctl(&[
         "--format",
         "json",
