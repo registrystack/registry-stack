@@ -91,3 +91,20 @@ test('labels the old evidence-gateway PDP id as a superseded Relay identifier', 
     );
   }
 });
+
+// The delivery front end's metrics table is a hand-written catalogue, so it is
+// held to the HELP lines the service itself renders.
+test('names exactly the metrics the OID4VCI delivery front end renders', () => {
+  const observability = readFileSync(
+    resolve(siteRoot, '../../crates/registry-evidence-oid4vci/src/observability.rs'),
+    'utf8',
+  );
+  const rendered = new Set([...observability.matchAll(/# HELP (evidence_oid4vci_\w+)/g)].map((match) => match[1]));
+  assert.ok(rendered.size > 0, 'expected observability.rs to render HELP lines');
+
+  const page = readFileSync(resolve(docsRoot, 'configure/evidence-oid4vci.mdx'), 'utf8');
+  const metricsSection = page.split(/^## Metrics$/m)[1]?.split(/^## /m)[0] ?? '';
+  const documented = new Set([...metricsSection.matchAll(/^\| `(evidence_oid4vci_\w+)` \|/gm)].map((match) => match[1]));
+
+  assert.deepEqual([...documented].sort(), [...rendered].sort());
+});
