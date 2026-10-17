@@ -243,47 +243,73 @@ class PostgresRunnerTests(unittest.TestCase):
         workflow = yaml.safe_load((SCRIPT_DIR.parents[2] / ".github/workflows/ci.yml").read_text())
         job = workflow["jobs"]["breg-postgres-18"]
         self.assertEqual("needs.changes.outputs.breg_contracts == 'true'", job["if"])
-        service = job["services"]["postgres"]
-        self.assertEqual(
-            "docker.io/library/postgres:18.4@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636",
-            service["image"],
-        )
-        # The runner pulls anonymously when either secret is empty, as on a
-        # pull request from a fork.
-        self.assertEqual(
-            {
-                "username": "${{ secrets.DOCKERHUB_USERNAME }}",
-                "password": "${{ secrets.DOCKERHUB_READ_TOKEN }}",
-            },
-            service["credentials"],
-        )
-        self.assertEqual(
-            {"POSTGRES_DB": "breg", "POSTGRES_USER": "breg", "POSTGRES_PASSWORD": "breg_test"},
-            service["env"],
-        )
-        for required in (
-            '--health-cmd "pg_isready -U breg -d breg"',
-            "--health-interval 10s",
-            "--health-timeout 5s",
-            "--health-retries 5",
-        ):
-            self.assertIn(required, service["options"])
-        self.assertEqual(["5432/tcp"], service["ports"])
+        self.assertNotIn("services", job)
         steps = {step["name"]: step for step in job["steps"]}
-        for removed in (
-            "Check optional Docker Hub credentials",
-            "Log in to Docker Hub for the PostgreSQL 18 image",
-            "Start PostgreSQL 18",
-            "Stop PostgreSQL 18",
+        trusted_event = (
+            "github.event_name != 'pull_request' && "
+            "(github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')"
+        )
+        credential_check = steps["Check optional Docker Hub credentials"]
+        self.assertEqual(trusted_event, credential_check["if"])
+        for username, token, expected_code, expected_output in (
+            ("", "", 0, "configured=false"),
+            ("canary", "", 1, ""),
+            ("", "canary", 1, ""),
+            ("canary", "canary", 0, "configured=true"),
         ):
-            self.assertNotIn(removed, steps)
+            with self.subTest(username=bool(username), token=bool(token)), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "output"
+                environment = os.environ.copy()
+                environment.update(
+                    DOCKERHUB_USERNAME=username,
+                    DOCKERHUB_READ_TOKEN=token,
+                    GITHUB_OUTPUT=str(output),
+                )
+                result = subprocess.run(
+                    ["bash", "-c", credential_check["run"]],
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(expected_code, result.returncode, result.stderr)
+                actual_output = output.read_text(encoding="utf-8").strip() if output.exists() else ""
+                self.assertEqual(expected_output, actual_output)
+        login = steps["Log in to Docker Hub for the PostgreSQL 18 image"]
+        self.assertEqual(
+            f"{trusted_event} && steps.dockerhub.outputs.configured == 'true'",
+            login["if"],
+        )
+        self.assertEqual(
+            "docker/login-action@dbcb813823bdd20940b903addbd779551569679f",
+            login["uses"],
+        )
+        start = steps["Start PostgreSQL 18"]
+        self.assertEqual("postgres", start["id"])
+        command = start["run"]
+        for required in (
+            "docker.io/library/postgres:18.4@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636",
+            "--label org.registrystack.ci.postgres-service=true",
+            "--publish 127.0.0.1::5432",
+            "printf 'container_id=%s\\n' \"${container_id}\" >> \"${GITHUB_OUTPUT}\"",
+            "for _ in $(seq 1 30)",
+            "sleep 2",
+            "docker port \"${container_id}\" 5432/tcp",
+            "printf 'port=%s\\n' \"${port}\" >> \"${GITHUB_OUTPUT}\"",
+        ):
+            self.assertIn(required, command)
         verify = steps["Verify cross-major schema fingerprint and collation"]
         self.assertEqual(
-            "postgresql://breg:breg_test@localhost:${{ job.services.postgres.ports['5432'] }}/breg",
+            "postgresql://breg:breg_test@localhost:${{ steps.postgres.outputs.port }}/breg",
             verify["env"]["BREG_TEST_DATABASE_URL"],
         )
         self.assertIn("schema_fingerprint_rehearsal", verify["run"])
         self.assertIn("-- --test-threads=1", verify["run"])
+        cleanup = steps["Stop PostgreSQL 18"]
+        self.assertEqual("always() && steps.postgres.outputs.container_id != ''", cleanup["if"])
+        self.assertEqual("${{ steps.postgres.outputs.container_id }}", cleanup["env"]["CONTAINER_ID"])
+        self.assertIn("org.registrystack.ci.postgres-service", cleanup["run"])
+        self.assertIn('docker rm --force "${CONTAINER_ID}"', cleanup["run"])
 
 
 if __name__ == "__main__":
