@@ -554,6 +554,7 @@ export default defineConfig({
               label: 'Tutorials',
               collapsed: true,
               items: [
+                { label: 'Change it with an Action', slug: 'tutorials/change-a-registry-with-an-action' },
                 { label: 'Extend with a module', slug: 'tutorials/extend-a-registry-with-a-module' },
                 { label: 'Derive from PublicSchema', slug: 'tutorials/derive-a-registry-from-publicschema' },
                 { label: 'Review changes', slug: 'tutorials/review-registry-changes' },

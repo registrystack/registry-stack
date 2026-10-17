@@ -12,7 +12,6 @@
 # rewrite's findings register), not on a page.
 
 # PR 2: tutorials and entry pages
-src/content/docs/tutorials/derive-a-registry-from-publicschema.mdx # PR 2
 
 # PR 3: Author
 src/content/docs/configure/breg.mdx # PR 3
