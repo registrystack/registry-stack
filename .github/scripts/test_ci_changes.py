@@ -1644,13 +1644,12 @@ class CiChangesTest(unittest.TestCase):
             )["breg_tutorial"]
         )
         # The replay starts `bregctl dev` and no Evidence binary, and
-        # it replays neither composition page. The offline composition proof
-        # owns the Evidence toolset and those pages' commands.
+        # it does not replay the composition page. The offline composition proof
+        # owns the Evidence toolset and that page's commands.
         for path in (
             "crates/registry-evidence/src/source.rs",
             "crates/registry-evidencectl/src/source_cli.rs",
             "docs/site/src/content/docs/tutorials/evidence-from-breg.mdx",
-            "docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx",
             "docs/site/scripts/generate-breg-evidence-starter.mjs",
         ):
             with self.subTest(path=path):
@@ -1803,7 +1802,6 @@ class CiChangesTest(unittest.TestCase):
         # driver of the Docker-backed tutorial replay.
         for path in (
             "docs/site/src/content/docs/tutorials/evidence-from-breg.mdx",
-            "docs/site/src/content/docs/tutorials/deploy-evidence-from-breg.mdx",
             "docs/site/scripts/generate-breg-evidence-starter.mjs",
             "docs/site/scripts/run-tutorial.mjs",
         ):

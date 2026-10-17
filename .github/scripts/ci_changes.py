@@ -288,10 +288,11 @@ BREG_TUTORIAL_INPUTS = (
     "docs/site/package.json",
     "docs/site/scripts/run-tutorial.mjs",
     "docs/site/scripts/tutorial-runner/**",
+    "docs/site/src/content/docs/tutorials/change-a-registry-with-an-action.mdx",
     "docs/site/src/content/docs/tutorials/derive-a-registry-from-publicschema.mdx",
     "docs/site/src/content/docs/tutorials/extend-a-registry-with-a-module.mdx",
     "docs/site/src/content/docs/tutorials/first-breg.mdx",
-    "docs/site/src/content/docs/tutorials/review-registry-changes.mdx",
+    "docs/site/src/content/docs/tutorials/query-breg-client.mdx",
     "docs/site/src/content/docs/tutorials/send-registry-events-to-a-webhook.mdx",
 )
 
