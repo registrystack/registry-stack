@@ -2428,17 +2428,43 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
     assert!(!registry.contains("generic-registry"));
     let initialized_project =
         parse_project_yaml(registry.as_bytes()).expect("derived project parses");
-    compile_project(&initialized_project, &[], CompileProfile::Authoring)
-        .expect("derived project compiles for authoring");
-    let production = compile_project(&initialized_project, &[], CompileProfile::Production)
-        .expect_err("the generated .invalid IRI must be replaced before production");
-    assert!(production.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code == "breg.registry.canonical-base-iri-reserved"
-            && diagnostic.path == "project.project.canonicalBaseIri"
-    }));
+    for profile in [CompileProfile::Authoring, CompileProfile::Production] {
+        compile_project(&initialized_project, &[], profile).expect("derived project compiles");
+    }
 
     let check = bregctl(&["--format", "json", "check", path(&destination)]);
     assert!(check.status.success(), "{check:?}");
+    // The generated `.invalid` IRI runs through local development and schema
+    // tests unchanged; asserting production readiness or building a package
+    // for deployment refuses it until the adopter replaces it.
+    let production_check = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&destination),
+        "--production",
+    ]);
+    assert_eq!(
+        production_check.status.code(),
+        Some(1),
+        "{production_check:?}"
+    );
+    assert_reserved_iri_refusal(&json_stdout(&production_check));
+    let package = bregctl(&[
+        "--format",
+        "json",
+        "package",
+        path(&destination),
+        "--schema-fingerprint",
+        &"0".repeat(64),
+        "--test-receipt",
+        path(&project.path().join("receipt.json")),
+        "--output",
+        path(&project.path().join("build")),
+    ]);
+    assert_eq!(package.status.code(), Some(1), "{package:?}");
+    assert_reserved_iri_refusal(&json_stdout(&package));
+    assert!(!project.path().join("build").exists());
     let journeys =
         fs::read_to_string(destination.join("tests/journeys.yaml")).expect("derived journeys read");
     assert!(journeys.contains("scopes: [registry:household-registry:operate]"));
@@ -2450,6 +2476,17 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
         "\napiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\nkind: BRegModelSelection\n"
     ));
     assert!(selection.contains("concept: GroupMembership"));
+}
+
+fn assert_reserved_iri_refusal(report: &Value) {
+    assert_eq!(report["ok"], false, "{report}");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["code"] == "breg.registry.canonical-base-iri-reserved"
+        }),
+        "{report}"
+    );
 }
 
 #[test]
@@ -2538,13 +2575,9 @@ recordTypes:
         );
     }
     let project = parse_project_yaml(registry.as_bytes()).unwrap();
-    compile_project(&project, &[], CompileProfile::Authoring)
-        .expect("the native project compiles for authoring");
-    assert!(compile_project(&project, &[], CompileProfile::Production)
-        .expect_err("the generated .invalid IRI must be replaced before production")
-        .diagnostics()
-        .iter()
-        .any(|diagnostic| diagnostic.code == "breg.registry.canonical-base-iri-reserved"));
+    for profile in [CompileProfile::Authoring, CompileProfile::Production] {
+        compile_project(&project, &[], profile).expect("the native project compiles");
+    }
     let checked = bregctl(&["check", path(&first)]);
     assert!(checked.status.success(), "{checked:?}");
     let readme = fs::read_to_string(first.join("README.md")).unwrap();

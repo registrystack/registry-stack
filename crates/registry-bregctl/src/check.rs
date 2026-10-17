@@ -303,6 +303,16 @@ fn compile_project(
             return None;
         }
     };
+    // A production check asserts the project is ready to package for
+    // deployment, so it also reports the identity a deployable package must
+    // not carry.
+    if profile == ProfileArg::Production {
+        for refusal in registry_breg::compiler::deployment_diagnostics(&source.project) {
+            outcome
+                .report
+                .push(place(project, &documents, refusal, Severity::Error));
+        }
+    }
     match compile_captured_project(&source, profile, "check") {
         Ok(compiled) => {
             for finding in compiled

@@ -963,6 +963,17 @@ fn exact_journey_client<'a>(
     }
 }
 
+/// The diagnostic codes of a compile refusal, which name why it refused
+/// without carrying a source value.
+fn refusal_codes(failure: &crate::FailureReport) -> String {
+    failure
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 struct CapturedSource {
     files: BTreeMap<String, Vec<u8>>,
     digest: String,
@@ -977,11 +988,12 @@ fn capture(project: &Path, client_bytes: &[u8]) -> Result<CapturedSource> {
         )
     })?;
     let compiled = crate::compile_captured_project(&source, crate::ProfileArg::Production, "dev")
-        .map_err(|_| {
-        anyhow::anyhow!(
-            "registry must compile for a package; run bregctl check --production on the project"
-        )
-    })?;
+        .map_err(|failure| {
+            anyhow::anyhow!(
+                "registry must compile for a package ({}); run bregctl check --production on the project",
+                refusal_codes(&failure)
+            )
+        })?;
     let identity = compiled
         .package()
         .context("local development requires an authored package identity")?;
@@ -1132,8 +1144,10 @@ fn start(args: StartArgs) -> Result<Value> {
         let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
         state
     } else {
-        let compiled = crate::compile(&project, crate::ProfileArg::Production, "dev")
-            .map_err(|_| anyhow::anyhow!("project no longer compiles"))?;
+        let compiled =
+            crate::compile(&project, crate::ProfileArg::Production, "dev").map_err(|failure| {
+                anyhow::anyhow!("project no longer compiles ({})", refusal_codes(&failure))
+            })?;
         let previous = previous.as_ref();
         let issuer_project = requested_issuer
             .clone()
@@ -2858,7 +2872,8 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
         .arg("--test-receipt")
         .arg(root.join("schema-test-receipt.json"))
         .arg("--output")
-        .arg(root.join("build"));
+        .arg(root.join("build"))
+        .arg("--local-development");
     if let Some(baseline) = state.baseline_package() {
         package.arg("--baseline-package").arg(baseline);
     }
