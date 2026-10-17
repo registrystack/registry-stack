@@ -15,9 +15,11 @@ class ProtectedCiWaitTest(TestCase):
         self.run = {
             "id": 123,
             "html_url": "https://github.com/registrystack/registry-stack/actions/runs/123",
-            "event": "push",
+            "event": "schedule",
             "head_sha": self.sha,
             "head_branch": "main",
+            "path": ".github/workflows/ci.yml@refs/heads/main",
+            "repository": {"full_name": "registrystack/registry-stack"},
             "status": "completed",
             "conclusion": "success",
         }
@@ -39,7 +41,11 @@ class ProtectedCiWaitTest(TestCase):
             with self.subTest(conclusion=conclusion):
                 completed = {**self.run, "conclusion": conclusion}
                 with (
-                    mock.patch.object(self.tool, "workflow_runs", side_effect=[[pending], [completed]]),
+                    mock.patch.object(
+                        self.tool,
+                        "workflow_runs",
+                        side_effect=[[], [pending], [], [], [completed], []],
+                    ),
                     mock.patch.object(self.tool, "watch_workflow_run") as watch,
                 ):
                     if conclusion == "success":
@@ -52,7 +58,18 @@ class ProtectedCiWaitTest(TestCase):
     def test_recheck_cannot_substitute_another_branch_success(self):
         pending = {**self.run, "status": "queued", "conclusion": None}
         with (
-            mock.patch.object(self.tool, "workflow_runs", side_effect=[[pending], [{**self.run, "head_branch": "feature"}]]),
+            mock.patch.object(
+                self.tool,
+                "workflow_runs",
+                side_effect=[
+                    [],
+                    [pending],
+                    [],
+                    [],
+                    [{**self.run, "head_branch": "feature"}],
+                    [],
+                ],
+            ),
             mock.patch.object(self.tool, "watch_workflow_run"),
         ):
             with self.assertRaisesRegex(self.tool.ReleasePlanError, "did not succeed"):

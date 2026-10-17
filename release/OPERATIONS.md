@@ -330,13 +330,32 @@ The `dev start` help of `bregctl` and `caseworkctl` and the `dev` help of
 session whose schema requires PostGIS still pulls `postgis/postgis` from
 Docker Hub.
 
+Registry Stack organization owners maintain two GitHub Actions organization secrets
+for CI pulls: `DOCKERHUB_USERNAME` names the Docker Hub account and
+`DOCKERHUB_READ_TOKEN` contains that account's read-only access token. Grant
+both secrets to this repository. Protected service-container runs pass them
+through the runner's registry credentials support, and protected release build
+jobs authenticate with the pinned Docker login action before any Docker
+Hub-backed build. Keep the token read-only and do not reuse a publish
+credential.
+
+Pull requests and branch-controlled manual runs do not receive these values.
+Fork pull requests therefore resolve both service credential expressions to
+empty strings and continue with anonymous Docker Hub access. Branch rehearsals
+and local release builds also stay anonymous unless the caller's existing
+Docker configuration supplies credentials. Protected build jobs record that
+credentials are unavailable and skip login when both secrets are absent. A
+protected build job fails when only one value is present so a partially
+configured credential does not silently become the expected authenticated
+path.
+
 [Debian's Docker Official Image](https://hub.docker.com/_/debian),
 [PostgreSQL's Docker Official Image](https://hub.docker.com/_/postgres), and
 [Mailpit's Docker installation guide](https://mailpit.axllent.org/docs/install/docker/)
 document these upstream image sources. When updating a pin, verify the returned
 manifest's SHA256 at the selected endpoint before changing its immutable digest.
 The strict recipe and gate checks continue to require the recorded repository
-and digest. No registry account is required for these public image pulls.
+and digest.
 
 ### Provision client registries
 

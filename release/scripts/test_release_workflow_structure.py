@@ -38,6 +38,187 @@ def workflow(name: str) -> tuple[str, dict]:
     return text, yaml.safe_load(text)
 
 
+DOCKER_LOGIN_ACTION = (
+    "docker/login-action@dbcb813823bdd20940b903addbd779551569679f"
+)
+
+
+class DockerHubPullAuthenticationTest(unittest.TestCase):
+    SERVICE_USERNAME = (
+        "${{ github.event_name != 'pull_request' && "
+        "(github.event_name != 'workflow_dispatch' || "
+        "github.ref == 'refs/heads/main') && "
+        "secrets.DOCKERHUB_USERNAME || '' }}"
+    )
+    SERVICE_PASSWORD = (
+        "${{ github.event_name != 'pull_request' && "
+        "(github.event_name != 'workflow_dispatch' || "
+        "github.ref == 'refs/heads/main') && "
+        "secrets.DOCKERHUB_READ_TOKEN || '' }}"
+    )
+
+    def test_manual_ci_run_title_distinguishes_full_and_partial_sweeps(self) -> None:
+        _, document = workflow("ci.yml")
+        run_name = document["run-name"]
+        self.assertIn("inputs.full", run_name)
+        self.assertIn("RegistryStack CI full sweep", run_name)
+        self.assertIn("RegistryStack CI partial sweep", run_name)
+
+    def test_docker_hub_service_pulls_use_fork_safe_credentials(self) -> None:
+        for filename in ("ci.yml", "nightly-rust-coverage.yml"):
+            _, document = workflow(filename)
+            for job_name, job in document["jobs"].items():
+                for service_name, service in job.get("services", {}).items():
+                    image = service.get("image", "")
+                    if "postgres" not in image:
+                        continue
+                    with self.subTest(
+                        workflow=filename,
+                        job=job_name,
+                        service=service_name,
+                    ):
+                        self.assertEqual(
+                            service.get("credentials"),
+                            {
+                                "username": self.SERVICE_USERNAME,
+                                "password": self.SERVICE_PASSWORD,
+                            },
+                        )
+
+    def test_docker_hub_build_pulls_authenticate_when_secrets_are_available(self) -> None:
+        consumers = (
+            ("ci.yml", "release-tool"),
+            ("nightly-release.yml", "linux"),
+            ("nightly-release.yml", "images"),
+            ("release-candidate.yml", "build-canonical-binaries"),
+            ("release-candidate.yml", "build-canonical"),
+            ("release-rehearsal.yml", "canonical-linux-binaries"),
+            ("release-rehearsal.yml", "canonical-linux"),
+            ("release-repeatability.yml", "rebuild"),
+            ("mirror-buildkit.yml", "mirror"),
+        )
+        for filename, job_name in consumers:
+            _, document = workflow(filename)
+            steps = document["jobs"][job_name]["steps"]
+            with self.subTest(workflow=filename, job=job_name):
+                login_index = next(
+                    index
+                    for index, step in enumerate(steps)
+                    if step.get("name") == "Prepare Docker Hub pull authentication"
+                )
+                login = steps[login_index]
+                expected_action = (
+                    "./verifier/.github/actions/dockerhub-login"
+                    if filename == "release-repeatability.yml"
+                    else "./.github/actions/dockerhub-login"
+                )
+                self.assertEqual(login["uses"], expected_action)
+                self.assertEqual(
+                    login["with"],
+                    {
+                        "username": "${{ secrets.DOCKERHUB_USERNAME }}",
+                        "read_token": "${{ secrets.DOCKERHUB_READ_TOKEN }}",
+                    },
+                )
+                if filename == "ci.yml":
+                    self.assertEqual(
+                        login["if"],
+                        "github.event_name != 'pull_request' && "
+                        "(github.event_name != 'workflow_dispatch' || "
+                        "github.ref == 'refs/heads/main')",
+                    )
+                elif filename in (
+                    "release-rehearsal.yml",
+                    "release-repeatability.yml",
+                ):
+                    self.assertEqual(login["if"], "github.ref == 'refs/heads/main'")
+
+    def test_docker_hub_login_action_is_fork_safe_and_pinned(self) -> None:
+        action = yaml.safe_load(
+            (ROOT / ".github/actions/dockerhub-login/action.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        check, login = action["runs"]["steps"]
+        self.assertEqual(check["id"], "credentials")
+        self.assertIn("available=false", check["run"])
+        self.assertIn("available=true", check["run"])
+        self.assertIn("exit 1", check["run"])
+        self.assertEqual(login["uses"], DOCKER_LOGIN_ACTION)
+        self.assertEqual(
+            login["if"],
+            "steps.credentials.outputs.available == 'true'",
+        )
+        self.assertEqual(
+            login["with"],
+            {
+                "registry": "docker.io",
+                "username": "${{ inputs.username }}",
+                "password": "${{ inputs.read_token }}",
+            },
+        )
+
+    def test_empty_docker_hub_credentials_select_anonymous_fallback(self) -> None:
+        action = yaml.safe_load(
+            (ROOT / ".github/actions/dockerhub-login/action.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        check = action["runs"]["steps"][0]
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            environment = {
+                **os.environ,
+                "DOCKERHUB_USERNAME": "",
+                "DOCKERHUB_READ_TOKEN": "",
+                "GITHUB_OUTPUT": str(output),
+            }
+            completed = subprocess.run(
+                ["bash", "-c", check["run"]],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(output.read_text(encoding="utf-8"), "available=false\n")
+
+    def test_partial_docker_hub_credentials_fail_closed(self) -> None:
+        action = yaml.safe_load(
+            (ROOT / ".github/actions/dockerhub-login/action.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        check = action["runs"]["steps"][0]
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            for username, read_token in (("canary", ""), ("", "canary")):
+                with self.subTest(username=bool(username), read_token=bool(read_token)):
+                    completed = subprocess.run(
+                        ["bash", "-c", check["run"]],
+                        env={
+                            **os.environ,
+                            "DOCKERHUB_USERNAME": username,
+                            "DOCKERHUB_READ_TOKEN": read_token,
+                            "GITHUB_OUTPUT": str(output),
+                        },
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertIn("must be configured together", completed.stderr)
+
+    def test_operations_names_secret_owner_and_anonymous_fallback(self) -> None:
+        operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")
+        self.assertIn("`DOCKERHUB_USERNAME`", operations)
+        self.assertIn("`DOCKERHUB_READ_TOKEN`", operations)
+        self.assertIn("read-only", operations)
+        self.assertIn("organization secrets", operations)
+        self.assertIn("fork", operations.casefold())
+        self.assertIn("anonymous", operations.casefold())
+
+
 def step_run(document: dict, job: str, name: str) -> str:
     return next(
         step["run"]

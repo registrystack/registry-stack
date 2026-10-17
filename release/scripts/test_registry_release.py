@@ -505,9 +505,11 @@ class RegistryReleaseTest(TestCase):
         active = {
             "id": 77,
             "html_url": "https://github.com/registrystack/registry-stack/actions/runs/77",
-            "event": "push",
-            "head_branch": "main",
+            "event": "merge_group",
+            "head_branch": "gh-readonly-queue/main/pr-123-deadbeef",
             "head_sha": source,
+            "path": ".github/workflows/ci.yml@refs/heads/main",
+            "repository": {"full_name": "registrystack/registry-stack"},
             "status": "in_progress",
             "conclusion": None,
         }
@@ -516,7 +518,14 @@ class RegistryReleaseTest(TestCase):
             mock.patch.object(
                 registry_release,
                 "workflow_runs",
-                side_effect=[[active], [passed]],
+                side_effect=[
+                    [active],
+                    [],
+                    [],
+                    [passed],
+                    [],
+                    [],
+                ],
             ),
             mock.patch.object(registry_release, "watch_workflow_run") as watch,
         ):
@@ -532,6 +541,122 @@ class RegistryReleaseTest(TestCase):
             "protected-main CI",
             verbose=False,
         )
+
+    def test_protected_ci_accepts_only_approved_exact_source_provenance(self) -> None:
+        registry_release = load_registry_release()
+        source = "a" * 40
+        base = {
+            "id": 77,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/77",
+            "head_sha": source,
+            "path": ".github/workflows/ci.yml@refs/heads/main",
+            "repository": {"full_name": "registrystack/registry-stack"},
+            "status": "completed",
+            "conclusion": "success",
+        }
+        accepted = (
+            {
+                **base,
+                "event": "merge_group",
+                "head_branch": "gh-readonly-queue/main/pr-123-deadbeef",
+            },
+            {**base, "event": "schedule", "head_branch": "main"},
+            {
+                **base,
+                "event": "workflow_dispatch",
+                "head_branch": "main",
+                "display_title": "RegistryStack CI full sweep",
+            },
+        )
+        for run in accepted:
+            with self.subTest(event=run["event"]):
+                self.assertTrue(
+                    registry_release.protected_ci_run_is_accepted(
+                        run,
+                        repository="registrystack/registry-stack",
+                        source_sha=source,
+                    )
+                )
+
+        rejected = {
+            "pull request": {**base, "event": "pull_request"},
+            "push": {**base, "event": "push", "head_branch": "main"},
+            "foreign workflow": {
+                **base,
+                "event": "schedule",
+                "path": ".github/workflows/nightly-release.yml",
+            },
+            "foreign repository": {
+                **base,
+                "event": "schedule",
+                "repository": {"full_name": "example/registry-stack"},
+            },
+            "wrong SHA": {**base, "event": "schedule", "head_sha": "b" * 40},
+            "partial manual": {
+                **base,
+                "event": "workflow_dispatch",
+                "head_branch": "main",
+                "display_title": "RegistryStack CI partial sweep",
+            },
+            "failed": {**base, "event": "schedule", "conclusion": "failure"},
+            "cancelled": {**base, "event": "schedule", "conclusion": "cancelled"},
+        }
+        for label, run in rejected.items():
+            with self.subTest(case=label):
+                self.assertFalse(
+                    registry_release.protected_ci_run_is_accepted(
+                        run,
+                        repository="registrystack/registry-stack",
+                        source_sha=source,
+                    )
+                )
+
+    def test_wait_for_ci_accepts_each_approved_successful_event(self) -> None:
+        registry_release = load_registry_release()
+        source = "a" * 40
+        for event in ("merge_group", "schedule", "workflow_dispatch"):
+            run = {
+                "id": 77,
+                "html_url": "https://github.com/registrystack/registry-stack/actions/runs/77",
+                "event": event,
+                "head_branch": (
+                    "gh-readonly-queue/main/pr-123-deadbeef"
+                    if event == "merge_group"
+                    else "main"
+                ),
+                "head_sha": source,
+                "path": ".github/workflows/ci.yml@refs/heads/main",
+                "repository": {"full_name": "registrystack/registry-stack"},
+                "status": "completed",
+                "conclusion": "success",
+            }
+            if event == "workflow_dispatch":
+                run["display_title"] = "RegistryStack CI full sweep"
+
+            def list_runs(
+                _repository: str,
+                _workflow: str,
+                *,
+                event: str,
+                head_sha: str | None = None,
+            ) -> list[dict[str, object]]:
+                return [run] if event == run["event"] and head_sha == source else []
+
+            with (
+                self.subTest(event=event),
+                mock.patch.object(
+                    registry_release,
+                    "workflow_runs",
+                    side_effect=list_runs,
+                ),
+            ):
+                self.assertEqual(
+                    registry_release.wait_for_exact_protected_ci(
+                        "registrystack/registry-stack",
+                        source,
+                    ),
+                    run,
+                )
 
     def test_compact_wait_finds_approval_while_run_is_in_progress(self) -> None:
         registry_release = load_registry_release()

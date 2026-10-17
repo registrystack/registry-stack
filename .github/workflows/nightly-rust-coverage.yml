@@ -61,6 +61,9 @@ jobs:
     services:
       postgres:
         image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        credentials:
+          username: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_USERNAME || '' }}
+          password: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_READ_TOKEN || '' }}
         env:
           POSTGRES_DB: dispatch
           POSTGRES_USER: dispatch

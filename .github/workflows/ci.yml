@@ -1,4 +1,5 @@
 name: RegistryStack CI
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.full && 'RegistryStack CI full sweep' || github.event_name == 'workflow_dispatch' && 'RegistryStack CI partial sweep' || github.event_name }}
 
 on:
   schedule:
@@ -247,6 +248,9 @@ jobs:
     services:
       postgres:
         image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        credentials:
+          username: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_USERNAME || '' }}
+          password: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_READ_TOKEN || '' }}
         env:
           POSTGRES_DB: dispatch
           POSTGRES_USER: dispatch
@@ -773,6 +777,9 @@ jobs:
     services:
       postgres:
         image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        credentials:
+          username: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_USERNAME || '' }}
+          password: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_READ_TOKEN || '' }}
         env:
           POSTGRES_DB: casework
           POSTGRES_USER: casework
@@ -921,6 +928,9 @@ jobs:
     services:
       postgres:
         image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        credentials:
+          username: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_USERNAME || '' }}
+          password: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_READ_TOKEN || '' }}
         env:
           POSTGRES_DB: scheduling
           POSTGRES_USER: scheduling
@@ -1055,6 +1065,9 @@ jobs:
     services:
       postgres:
         image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        credentials:
+          username: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_USERNAME || '' }}
+          password: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_READ_TOKEN || '' }}
         env:
           POSTGRES_DB: messaging
           POSTGRES_USER: messaging
@@ -1131,6 +1144,9 @@ jobs:
     services:
       postgres:
         image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        credentials:
+          username: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_USERNAME || '' }}
+          password: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_READ_TOKEN || '' }}
         env:
           POSTGRES_DB: coordinator
           POSTGRES_USER: coordinator
@@ -1222,6 +1238,9 @@ jobs:
         # PostgreSQL 17 / PostGIS 3.5.2, verified 2026-08-31. Fresh test databases
         # remain extension-free unless a spatial test explicitly installs it.
         image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
+        credentials:
+          username: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_USERNAME || '' }}
+          password: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_READ_TOKEN || '' }}
         env:
           POSTGRES_DB: breg
           POSTGRES_PASSWORD: breg_test
@@ -1392,6 +1411,9 @@ jobs:
         # PostgreSQL 17 / PostGIS 3.5.2, verified 2026-08-31. Fresh test databases
         # remain extension-free unless a spatial test explicitly installs it.
         image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
+        credentials:
+          username: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_USERNAME || '' }}
+          password: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && secrets.DOCKERHUB_READ_TOKEN || '' }}
         env:
           POSTGRES_DB: breg
           POSTGRES_PASSWORD: breg_test
@@ -1622,6 +1644,13 @@ jobs:
         with:
           fetch-depth: 0
           submodules: false
+
+      - name: Prepare Docker Hub pull authentication
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          read_token: ${{ secrets.DOCKERHUB_READ_TOKEN }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0

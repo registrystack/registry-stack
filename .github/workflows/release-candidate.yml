@@ -269,6 +269,12 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Prepare Docker Hub pull authentication
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          read_token: ${{ secrets.DOCKERHUB_READ_TOKEN }}
+
       - name: Restore reusable Cargo cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -325,6 +331,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
           submodules: false
+
+      - name: Prepare Docker Hub pull authentication
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          read_token: ${{ secrets.DOCKERHUB_READ_TOKEN }}
 
       - name: Download canonical Linux core binary shard
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2

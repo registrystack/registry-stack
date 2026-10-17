@@ -1903,13 +1903,20 @@ class CiChangesTest(unittest.TestCase):
                 self.assertTrue(outputs["scheduling_postgres"])
 
     def test_ci_workflow_change_runs_the_complete_matrix(self) -> None:
-        outputs = classify(self.workspace, (".github/workflows/ci.yml",))
-        self.assertCountEqual(outputs["rust_packages"], self.workspace.package_names)
-        self.assertTrue(outputs["docs"])
-        # The workflow does not alter archived bytes; the nightly full sweep
-        # replays the archive job's own recipe.
-        self.assertFalse(outputs["docs_archives"])
-        self.assertTrue(outputs["editors"])
+        for path in (
+            ".github/workflows/ci.yml",
+            ".github/actions/dockerhub-login/action.yml",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertCountEqual(
+                    outputs["rust_packages"], self.workspace.package_names
+                )
+                self.assertTrue(outputs["docs"])
+                # CI plumbing does not alter archived bytes; the nightly full
+                # sweep replays the archive job's own recipe.
+                self.assertFalse(outputs["docs_archives"])
+                self.assertTrue(outputs["editors"])
 
     def test_casework_postgres_job_names_existing_integration_test_targets(self) -> None:
         commands = "\n".join(

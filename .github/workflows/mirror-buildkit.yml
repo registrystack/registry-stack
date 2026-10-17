@@ -46,6 +46,12 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Prepare Docker Hub pull authentication
+        uses: ./.github/actions/dockerhub-login
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          read_token: ${{ secrets.DOCKERHUB_READ_TOKEN }}
+
       - name: Validate mirror request
         shell: bash
         run: |
