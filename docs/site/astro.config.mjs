@@ -568,8 +568,8 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { label: 'Enable SD-JWT VC', slug: 'configure/enable-sd-jwt-vc' },
-                { label: 'Configure OID4VCI', slug: 'configure/evidence-oid4vci' },
-                { label: 'Check OID4VCI interoperability', slug: 'tutorials/run-oid4vci-interoperability-checks' },
+                { label: 'Deliver to a wallet', slug: 'configure/evidence-oid4vci' },
+                { label: 'Check wallet interoperability', slug: 'tutorials/run-oid4vci-interoperability-checks' },
               ],
             },
             { label: 'Configuration reference', slug: 'reference/evidence-configuration' },
