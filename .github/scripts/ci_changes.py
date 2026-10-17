@@ -255,7 +255,6 @@ EVIDENCE_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
     "docs/site/src/content/docs/tutorials/issue-fhir-evidence-as-vcs.mdx",
     "docs/site/src/content/docs/tutorials/prove-an-evidence-project.mdx",
-    "docs/site/src/content/docs/tutorials/refuse-unsafe-evidence-requests.mdx",
     "docs/site/src/content/docs/tutorials/request-evidence-as-sd-jwt-vc.mdx",
     "docs/site/src/content/docs/tutorials/request-evidence-from-an-application.mdx",
     "docs/site/src/content/docs/tutorials/run-oid4vci-interoperability-checks.mdx",
