@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_canonical_json::canonicalize_json;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -54,188 +54,12 @@ struct ExportManifest<'a> {
     source_id: &'a str,
     provenance: BTreeMap<&'static str, &'a str>,
     artifacts: Vec<ExportManifestArtifact<'a>>,
-    dependencies: ExportDependencies,
 }
 
 #[derive(Serialize)]
 struct ExportManifestArtifact<'a> {
     path: &'a str,
     digest: &'a str,
-}
-
-/// Logical field IDs and their exported API names, for explicit offline comparison only.
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ExportDependencies {
-    fields: BTreeMap<String, String>,
-    related_entities: BTreeMap<String, BTreeMap<String, String>>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PriorExport {
-    source_id: String,
-    provenance: BTreeMap<String, String>,
-    artifacts: Vec<PriorArtifact>,
-    dependencies: ExportDependencies,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PriorArtifact {
-    path: String,
-    digest: String,
-}
-
-/// Compare an explicitly supplied export with this compiled project. The manifest
-/// is dependency evidence for a warning, never runtime authority.
-pub fn check_prior_export(
-    registry: &CompiledRegistry,
-    file: &str,
-    bytes: &[u8],
-) -> Result<Vec<Diagnostic>, Box<registry_platform_yaml::Report>> {
-    use registry_platform_yaml::{ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader};
-    let format = FormatSpec {
-        kind: EVIDENCE_SOURCE_EXPORT_KIND,
-        envelope: EnvelopeRule::ApiVersionKind {
-            api_versions: &[ApiVersion::current(EVIDENCE_SOURCE_EXPORT_API_VERSION)],
-            retired_api_versions: &[],
-        },
-        removed_keys: &[],
-    };
-    let prior = Reader::new(file)
-        .decode::<PriorExport>(bytes, &Expect::one(&format))
-        .map_err(Box::new)?
-        .value;
-    let entity_id = prior.provenance.get("entity");
-    if prior.provenance.get("registryId").map(String::as_str) != Some(registry.registry_id())
-        || entity_id.is_none_or(|id| !registry.entities().contains_key(id))
-    {
-        return Ok(vec![refusal(
-            "priorEvidenceExport",
-            "the prior export must name this registry and an existing entity",
-        )]);
-    }
-    if !local_name(&prior.source_id)
-        || prior.artifacts.is_empty()
-        || prior.artifacts.iter().any(|artifact| {
-            artifact.path.is_empty() || !registry_platform_config::is_sha256_label(&artifact.digest)
-        })
-        || prior.dependencies.fields.is_empty()
-    {
-        return Ok(vec![refusal(
-            "priorEvidenceExport",
-            "the prior export dependency inventory is incomplete",
-        )]);
-    }
-    let mut diagnostics = Vec::new();
-    for (entity, fields) in std::iter::once((entity_id.unwrap(), &prior.dependencies.fields))
-        .chain(prior.dependencies.related_entities.iter())
-    {
-        let Some(current) = registry.entities().get(entity) else {
-            return Ok(vec![refusal(
-                "priorEvidenceExport",
-                "a prior export dependency entity is absent from this registry",
-            )]);
-        };
-        for (id, api_name) in fields {
-            if !field(current, id).is_ok_and(|current| &current.api_name == api_name) {
-                diagnostics.push(Diagnostic::finding("breg.evidence-source.field-removed", format!("entities.{entity}.fields.{id}"), "a field or API name used by the prior Evidence export was removed or renamed; regenerate and review that export before deployment"));
-            }
-        }
-    }
-    Ok(diagnostics)
-}
-
-fn export_dependencies(
-    registry: &CompiledRegistry,
-    entity: &CompiledEntity,
-    options: &EvidenceSourceOptions,
-    selected: &BTreeSet<String>,
-) -> Result<ExportDependencies, Diagnostic> {
-    let mut entities =
-        BTreeMap::<String, BTreeSet<String>>::from([(entity.id.clone(), selected.clone())]);
-    // A reviewed SQL implementation is indivisible: all fields of each reached
-    // source relation remain dependencies, as they are for behaviorRevision.
-    for id in selected {
-        if let Some(field) = entity.derived_fields.get(id) {
-            let relation = &entity.derived_relations[&field.derivation_id];
-            let sql = std::str::from_utf8(&relation.sql_bytes)
-                .map_err(|_| refusal("derived", "compiled SQL is not UTF-8"))?;
-            let parsed = pg_query::parse(sql)
-                .map_err(|_| refusal("derived", "compiled SQL could not be read"))?;
-            for (node, _, _, _) in parsed.protobuf.nodes() {
-                if let pg_query::NodeRef::RangeVar(range) = node {
-                    if range.schemaname == "registry_source" {
-                        let source = registry
-                            .entities()
-                            .values()
-                            .find(|source| source.source_relation.sql_name == range.relname)
-                            .ok_or_else(|| {
-                                refusal("derived", "compiled SQL source relation is absent")
-                            })?;
-                        entities.entry(source.id.clone()).or_default().extend(
-                            source
-                                .stored_fields
-                                .iter()
-                                .map(|field| field.logical.id.clone()),
-                        );
-                    }
-                }
-            }
-        }
-    }
-    let reached = entities.keys().cloned().collect::<Vec<_>>();
-    for id in reached {
-        let source = &registry.entities()[&id];
-        if let Some(access) = source.access_profiles.get(&options.access_profile) {
-            entities.entry(id.clone()).or_default().extend(
-                access
-                    .row_boundaries
-                    .iter()
-                    .map(|boundary| boundary.field.clone()),
-            );
-        }
-        for boundary in crate::membership::boundaries(source, &options.access_profile) {
-            entities
-                .entry(id.clone())
-                .or_default()
-                .insert(boundary.field.clone());
-            let member = &registry.entities()[&boundary.membership_entity];
-            for column in [
-                &boundary.membership_key_column,
-                &boundary.principal_column,
-                &boundary.active_column,
-            ] {
-                let field = member
-                    .fields
-                    .values()
-                    .find(|field| &field.physical_name == column)
-                    .ok_or_else(|| {
-                        refusal("access", "compiled membership source field is absent")
-                    })?;
-                entities
-                    .entry(member.id.clone())
-                    .or_default()
-                    .insert(field.id.clone());
-            }
-        }
-    }
-    let mut dependencies = BTreeMap::new();
-    for (entity_id, ids) in entities {
-        let current = &registry.entities()[&entity_id];
-        let mut names = BTreeMap::new();
-        for id in ids {
-            names.insert(id.clone(), field(current, &id)?.api_name.clone());
-        }
-        dependencies.insert(entity_id, names);
-    }
-    let fields = dependencies
-        .remove(&entity.id)
-        .expect("root entity dependencies exist");
-    Ok(ExportDependencies {
-        fields,
-        related_entities: dependencies,
-    })
 }
 
 /// Technical choices only. Questions, permissions, targets and credentials stay with
@@ -747,7 +571,6 @@ pub fn export_evidence_source(
         api_version: EVIDENCE_SOURCE_EXPORT_API_VERSION,
         kind: EVIDENCE_SOURCE_EXPORT_KIND,
         source_id: prefix,
-        dependencies: export_dependencies(registry, entity, options, &all_fields)?,
         provenance: BTreeMap::from([
             ("producer", "bregctl"),
             ("registryId", registry.registry_id()),

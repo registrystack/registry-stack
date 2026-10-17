@@ -231,19 +231,3 @@ mocks. Imported client contracts define the signed processing ceiling; operator
 configuration supplies fixed endpoints, credentials and trust. This is distinct
 from the lookup export described above, and does not grant BReg authority over
 Evidence source access or signing.
-
-### Compare a prior export
-
-Retain `source-export.json` from the deployed export, then run:
-
-```sh
-bregctl check ./registry --prior-evidence-export ./previous-export/source-export.json
-```
-
-The manifest records selected fact and identity fields, and fields consumed by
-reached SQL source relations and read boundaries. The comparison warns with
-`breg.evidence-source.field-removed` when a consumed field is absent or renamed;
-`--deny-warnings` makes that check exit 1. Unrelated changes are silent. A manifest
-for another registry or an absent entity is refused. Regenerate older exports
-that lack the dependency inventory before using this comparison. The inventory
-is advisory authoring evidence and supplies no runtime authority.
