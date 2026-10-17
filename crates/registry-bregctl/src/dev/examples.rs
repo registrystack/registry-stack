@@ -109,6 +109,34 @@ fn optional_local_id<'de, D: Deserializer<'de>>(
     local_id(deserializer).map(Some)
 }
 
+fn local_id_map<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, String>, D::Error> {
+    let map = BTreeMap::<LocalId, LocalId>::deserialize(deserializer)?;
+    Ok(map
+        .into_iter()
+        .map(|(key, value)| (key.into_string(), value.into_string()))
+        .collect())
+}
+
+fn optional_local_id_map<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<BTreeMap<String, String>>, D::Error> {
+    local_id_map(deserializer).map(Some)
+}
+
+#[cfg(feature = "schema")]
+fn local_id_map_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let names = generator.subschema_for::<LocalId>();
+    schemars::json_schema!({
+        "type": "object",
+        "minProperties": 1,
+        "maxProperties": 100,
+        "propertyNames": names.clone(),
+        "additionalProperties": names,
+    })
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -141,15 +169,21 @@ impl Identified for Scenario {
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(transform = step_capture_schema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Step {
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     id: String,
     operation: Operation,
-    #[serde(rename = "recordType", deserialize_with = "local_id")]
-    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
-    entity: String,
+    #[serde(
+        default,
+        rename = "recordType",
+        deserialize_with = "optional_local_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
+    entity: Option<String>,
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     client: String,
@@ -181,6 +215,13 @@ struct Step {
     result: Option<String>,
     #[serde(
         default,
+        deserialize_with = "optional_local_id_map",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "local_id_map_schema"))]
+    capture_results: Option<BTreeMap<String, String>>,
+    #[serde(
+        default,
         deserialize_with = "optional_local_id",
         skip_serializing_if = "Option::is_none"
     )]
@@ -188,6 +229,44 @@ struct Step {
     proposal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     expect: Option<ProposalExpectation>,
+}
+
+/// A flat reader keeps source positions; these conditions mirror the record
+/// and result-capture variants checked by `catalogue_problems`.
+#[cfg(feature = "schema")]
+fn step_capture_schema(schema: &mut schemars::Schema) {
+    schema.insert(
+        "allOf".to_owned(),
+        json!([
+            {
+                "if": {"properties": {"operation": {
+                    "enum": [Operation::Create, Operation::Get, Operation::History]
+                }}},
+                "then": {"required": ["recordType"]}
+            },
+            {
+                "if": {"properties": {"operation": {"const": Operation::Invoke}}},
+                "then": {
+                    "required": ["action", "input"],
+                    "oneOf": [
+                        {
+                            "required": ["recordType", "result", "capture"],
+                            "not": {"required": ["captureResults"]}
+                        },
+                        {
+                            "required": ["captureResults"],
+                            "not": {"anyOf": [
+                                {"required": ["recordType"]},
+                                {"required": ["result"]},
+                                {"required": ["capture"]}
+                            ]}
+                        }
+                    ]
+                },
+                "else": {"not": {"required": ["captureResults"]}}
+            }
+        ]),
+    );
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -395,6 +474,7 @@ fn catalogue_problems(catalogue: &Catalogue, document: &Document) -> Vec<Diagnos
                 "Declare between 1 and 100 steps.",
             );
         }
+        let mut record_capture_aliases = BTreeSet::new();
         for (position, step) in scenario.steps.iter().enumerate() {
             let at = format!("{at}/steps/{position}");
             if step.operation.is_proposal() {
@@ -413,24 +493,91 @@ fn catalogue_problems(catalogue: &Catalogue, document: &Document) -> Vec<Diagnos
                 // Both name something the registry project declares, a governed
                 // action and one of its result effects, so both are held to the
                 // project's identifier grammar when they are decoded.
-                if step.action.is_none() || step.result.is_none() {
+                let singular =
+                    step.result.is_some() || step.capture.is_some() || step.entity.is_some();
+                let several = step.capture_results.is_some();
+                if step.action.is_none()
+                    || singular == several
+                    || (singular
+                        && (step.result.is_none()
+                            || step.capture.is_none()
+                            || step.entity.is_none()))
+                {
                     refuse(
                         &at,
                         "breg.examples.step-members",
-                        "an invoke step must declare `action` and `result`",
-                        "Add `action` with the governed action's id and `result` with one of its disclosed result aliases.",
+                        "an invoke step must declare `action` and either one `recordType`, `result`, and `capture`, or a non-empty `captureResults` mapping",
+                        "Select one disclosed result with `recordType`, `result`, and `capture`, or map disclosed result aliases to capture aliases with `captureResults`.",
                     );
                 }
-            } else if step.action.is_some() || step.result.is_some() {
+                let mut aliases = BTreeSet::new();
+                if step
+                    .capture_results
+                    .as_ref()
+                    .is_some_and(|captures| captures.values().any(|alias| !aliases.insert(alias)))
+                {
+                    refuse(
+                        &format!("{at}/captureResults"),
+                        "breg.examples.capture-results",
+                        "captureResults must assign each result a distinct capture alias",
+                        "Use a distinct capture alias for each result.",
+                    );
+                }
+                if step
+                    .capture_results
+                    .as_ref()
+                    .is_some_and(|captures| captures.is_empty() || captures.len() > 100)
+                {
+                    refuse(
+                        &format!("{at}/captureResults"),
+                        "breg.examples.capture-results",
+                        "captureResults must declare 1 to 100 result captures",
+                        "Declare between 1 and 100 result-to-capture entries.",
+                    );
+                }
+                for alias in step
+                    .capture_results
+                    .iter()
+                    .flat_map(|captures| captures.values())
+                {
+                    if !record_capture_aliases.insert(alias) {
+                        refuse(
+                            &format!("{at}/captureResults"),
+                            "breg.examples.capture-results",
+                            "record capture aliases must be unique within a scenario",
+                            "Use a capture alias that no earlier step declares.",
+                        );
+                    }
+                }
+                if step.capture_results.is_none() {
+                    if let Some(alias) = &step.capture {
+                        if !record_capture_aliases.insert(alias) {
+                            refuse(
+                                &format!("{at}/capture"),
+                                "breg.examples.capture-results",
+                                "record capture aliases must be unique within a scenario",
+                                "Use a capture alias that no earlier step declares.",
+                            );
+                        }
+                    }
+                }
+            } else if step.action.is_some()
+                || step.result.is_some()
+                || step.capture_results.is_some()
+            {
                 refuse(
                     &at,
                     "breg.examples.step-members",
-                    "only an invoke step may declare `action` or `result`",
-                    "Delete `action` and `result`, or set `operation` to invoke.",
+                    "only an invoke step may declare `action`, `result`, or `captureResults`",
+                    "Delete `action`, `result`, and `captureResults`, or set `operation` to invoke.",
                 );
             }
-            if matches!(step.operation, Operation::Create | Operation::Invoke) {
-                if step.input.is_none() || step.capture.is_none() || step.record.is_some() {
+            if step.operation == Operation::Create {
+                if step.entity.is_none()
+                    || step.input.is_none()
+                    || step.capture.is_none()
+                    || step.record.is_some()
+                {
                     refuse(
                         &at,
                         "breg.examples.step-members",
@@ -438,12 +585,43 @@ fn catalogue_problems(catalogue: &Catalogue, document: &Document) -> Vec<Diagnos
                         "Name the payload with `input`, the returned record with `capture`, and delete `record`.",
                     );
                 }
-            } else if step.record.is_none() || step.input.is_some() || step.capture.is_some() {
+                if let Some(alias) = &step.capture {
+                    if !record_capture_aliases.insert(alias) {
+                        refuse(
+                            &format!("{at}/capture"),
+                            "breg.examples.capture-results",
+                            "record capture aliases must be unique within a scenario",
+                            "Use a capture alias that no earlier step declares.",
+                        );
+                    }
+                }
+            } else if step.operation == Operation::Invoke {
+                if step.input.is_none() || step.record.is_some() {
+                    refuse(
+                        &at,
+                        "breg.examples.step-members",
+                        "an invoke step must declare `input` and no `record`",
+                        "Name the payload with `input` and delete `record`.",
+                    );
+                }
+            } else if step.entity.is_none()
+                || step.record.is_none()
+                || step.input.is_some()
+                || step.capture.is_some()
+            {
                 refuse(
                     &at,
                     "breg.examples.step-members",
                     "a read or lifecycle step must declare `record`, and no `input` or `capture`",
                     "Name the captured record with `record`, and delete `input` and `capture`.",
+                );
+            }
+            if record_capture_aliases.len() > 100 {
+                refuse(
+                    &format!("{at}/captureResults"),
+                    "breg.examples.capture-results",
+                    "a scenario may declare at most 100 record captures",
+                    "Keep at most 100 record capture aliases in one scenario.",
                 );
             }
             if !matches!(
@@ -493,7 +671,7 @@ fn validate_reference_fields(
         .operations()
         .iter()
         .find(|o| {
-            o.source_record_type() == step.entity
+            Some(o.source_record_type()) == step.entity.as_deref()
                 && o.access_profile() == step.access_profile
                 && *o.kind() == BRegOperationKind::Create
         })
@@ -534,7 +712,7 @@ fn record<'a>(step: &Step, captures: &'a BTreeMap<String, Capture>) -> Result<&'
                 .context("step lacks a record alias")?,
         )
         .context("record alias is missing; run its prerequisite first")?;
-    if capture.entity != step.entity {
+    if Some(capture.entity.as_str()) != step.entity.as_deref() {
         bail!("record alias belongs to another entity");
     }
     Ok(capture)
@@ -607,14 +785,67 @@ fn action_binding(contract: &BRegMetadata, step: &Step) -> Result<BRegActionBind
             .context("action identifier missing")?,
         &step.access_profile,
     )?;
-    if action
-        .result_effects()
-        .get(step.result.as_deref().context("action result missing")?)
-        != Some(&step.entity)
+    if step.capture_results.is_none() {
+        if action
+            .result_effects()
+            .get(step.result.as_deref().context("action result missing")?)
+            != step.entity.as_ref()
+        {
+            bail!("action capture must select one advertised result of the declared entity");
+        }
+    } else if step
+        .capture_results
+        .iter()
+        .flat_map(|captures| captures.keys())
+        .any(|effect| !action.result_effects().contains_key(effect))
     {
-        bail!("action capture must select one advertised result of the declared entity");
+        bail!("action captures must select advertised results disclosed to this profile");
     }
     Ok(action)
+}
+
+fn declared_action_capture_entities(
+    action: &BRegActionBinding,
+    step: &Step,
+) -> Result<BTreeMap<String, (String, String)>> {
+    let declarations: Vec<(&String, &String)> = if step.capture_results.is_none() {
+        vec![(
+            step.result.as_ref().context("action result missing")?,
+            step.capture.as_ref().context("action capture missing")?,
+        )]
+    } else {
+        step.capture_results
+            .as_ref()
+            .context("action capture results missing")?
+            .iter()
+            .collect()
+    };
+    declarations
+        .into_iter()
+        .map(|(effect, alias)| {
+            let entity = action
+                .result_effects()
+                .get(effect)
+                .context("action capture selects an undisclosed result")?;
+            Ok((alias.clone(), (effect.clone(), entity.clone())))
+        })
+        .collect()
+}
+
+fn extract_invocation_captures(
+    declarations: BTreeMap<String, (String, String)>,
+    results: &BTreeMap<String, (String, uuid::Uuid)>,
+) -> std::result::Result<BTreeMap<String, Capture>, &'static str> {
+    declarations
+        .into_iter()
+        .map(|(alias, (effect, entity))| match results.get(&effect) {
+            Some((actual_entity, id)) if actual_entity == &entity => {
+                Ok((alias, Capture { entity, id: *id }))
+            }
+            Some(_) => Err("action receipt capture entity differs from its authored declaration"),
+            None => Err("successful action did not disclose every configured capture result"),
+        })
+        .collect()
 }
 fn attempts(directory: &Path) -> Result<Vec<Attempt>> {
     let mut result = Vec::new();
@@ -678,6 +909,11 @@ fn inherit_captures(attempt: &mut Attempt, parent: &Attempt, catalogue: &Catalog
             .steps
             .iter()
             .any(|step| !parent.completed.contains_key(&step.id))
+        || scenario
+            .steps
+            .iter()
+            .filter(|step| step.operation == Operation::Invoke)
+            .any(|step| require_retained_invocation_capture(parent, step).is_err())
     {
         bail!(
             "--from-attempt requires a completed population with the same source, package, clients, catalogue and database generation"
@@ -850,7 +1086,7 @@ fn create_binding(metadata: &BRegMetadata, step: &Step) -> Result<BRegCreateBind
         .operations()
         .iter()
         .filter(|o| {
-            o.source_record_type() == step.entity
+            Some(o.source_record_type()) == step.entity.as_deref()
                 && o.access_profile() == step.access_profile
                 && *o.kind() == BRegOperationKind::Create
         })
@@ -870,7 +1106,7 @@ fn route(metadata: &BRegMetadata, step: &Step) -> Result<String> {
         .operations()
         .iter()
         .filter(|o| {
-            o.source_record_type() == step.entity
+            Some(o.source_record_type()) == step.entity.as_deref()
                 && o.access_profile() == step.access_profile
                 && *o.kind() == BRegOperationKind::Get
         })
@@ -905,25 +1141,29 @@ fn retain_invocation(
     step: &Step,
     directory: &Path,
     retained: Value,
-    capture: Option<Capture>,
+    captures: BTreeMap<String, Capture>,
 ) -> Result<()> {
-    if let Some(capture) = capture {
-        attempt.captures.insert(
-            step.capture.clone().context("action capture missing")?,
-            capture,
-        );
-    }
+    attempt.captures.extend(captures);
     retain(attempt, step, directory, retained)
 }
 
 fn require_retained_invocation_capture(attempt: &Attempt, step: &Step) -> Result<()> {
-    if attempt
-        .captures
-        .contains_key(step.capture.as_deref().context("action capture missing")?)
+    let aliases = if step.capture_results.is_none() {
+        vec![step.capture.as_ref().context("action capture missing")?]
+    } else {
+        step.capture_results
+            .as_ref()
+            .context("action capture results missing")?
+            .values()
+            .collect()
+    };
+    if aliases
+        .iter()
+        .all(|alias| attempt.captures.contains_key(alias.as_str()))
     {
         Ok(())
     } else {
-        bail!("successful action did not disclose the configured capture result")
+        bail!("successful action did not disclose every configured capture result")
     }
 }
 
@@ -1007,25 +1247,28 @@ async fn execute(
         if step.operation == Operation::Invoke {
             let action = action_binding(contract, step)?;
             action_inputs(step, &action, input, &declared)?;
-            let alias = step.capture.as_ref().context("action capture missing")?;
-            if let Some(existing) = declared.get(alias) {
-                if !attempt.completed.contains_key(&step.id) || existing.entity != step.entity {
-                    bail!("action capture aliases must be unique and match their declared entity");
+            for (alias, (_, entity)) in declared_action_capture_entities(&action, step)? {
+                let placeholder = Capture {
+                    entity,
+                    id: uuid::Uuid::new_v4(),
+                };
+                if let Some(existing) = declared.get(&alias) {
+                    if !attempt.completed.contains_key(&step.id)
+                        || existing.entity != placeholder.entity
+                    {
+                        bail!(
+                            "action capture aliases must be unique and match their declared entity"
+                        );
+                    }
+                } else {
+                    declared.insert(alias, placeholder);
                 }
-            } else {
-                declared.insert(
-                    alias.clone(),
-                    Capture {
-                        entity: step.entity.clone(),
-                        id: uuid::Uuid::new_v4(),
-                    },
-                );
             }
             continue;
         }
         let kind = step.operation.metadata_kind();
         if !contract.operations().iter().any(|operation| {
-            operation.source_record_type() == step.entity
+            Some(operation.source_record_type()) == step.entity.as_deref()
                 && operation.access_profile() == step.access_profile
                 && *operation.kind() == kind
         }) {
@@ -1076,14 +1319,16 @@ async fn execute(
             )?;
             let alias = step.capture.as_ref().context("create capture missing")?;
             if let Some(existing) = declared.get(alias) {
-                if !attempt.completed.contains_key(&step.id) || existing.entity != step.entity {
+                if !attempt.completed.contains_key(&step.id)
+                    || Some(existing.entity.as_str()) != step.entity.as_deref()
+                {
                     bail!("capture aliases must be unique and match their declared entity");
                 }
             } else {
                 declared.insert(
                     alias.clone(),
                     Capture {
-                        entity: step.entity.clone(),
+                        entity: step.entity.clone().context("create record type missing")?,
                         id: uuid::Uuid::new_v4(),
                     },
                 );
@@ -1143,7 +1388,7 @@ async fn execute(
             results.insert(step.id.clone(), result);
             continue;
         }
-        let mut invocation_capture = None;
+        let mut invocation_captures = BTreeMap::new();
         let mut committed_invocation_error = None;
         let result = if step.operation == Operation::Invoke {
             let action = action_binding(contract, step)?;
@@ -1185,25 +1430,24 @@ async fn execute(
             let request = client.recover_action(&action, &prepared, &inputs, &key)?;
             let response = client.invoke_action(&action, &request, &key).await?;
             let receipt = serde_json::to_value(&response.value)?;
-            match response
+            let declarations = declared_action_capture_entities(&action, step)?;
+            let disclosed = response
                 .value
                 .results()
-                .get(step.result.as_deref().context("action result missing")?)
-            {
-                Some(result) if result.record_type_identifier() == step.entity => {
-                    invocation_capture = Some(Capture {
-                        entity: step.entity.clone(),
-                        id: result.record_identifier(),
-                    });
-                }
-                Some(_) => {
-                    committed_invocation_error =
-                        Some("action receipt capture entity differs from its authored declaration");
-                }
-                None => {
-                    committed_invocation_error =
-                        Some("successful action did not disclose the configured capture result");
-                }
+                .iter()
+                .map(|(effect, result)| {
+                    (
+                        effect.clone(),
+                        (
+                            result.record_type_identifier().to_owned(),
+                            result.record_identifier(),
+                        ),
+                    )
+                })
+                .collect();
+            match extract_invocation_captures(declarations, &disclosed) {
+                Ok(captures) => invocation_captures = captures,
+                Err(error) => committed_invocation_error = Some(error),
             }
             receipt
         } else if step.operation == Operation::Create {
@@ -1246,7 +1490,7 @@ async fn execute(
                 .create_record(&binding, &request, &key, format)
                 .await?;
             let capture = Capture {
-                entity: step.entity.clone(),
+                entity: step.entity.clone().context("create record type missing")?,
                 id: uuid::Uuid::parse_str(&response.value.data.record_identifier)?,
             };
             attempt.captures.insert(
@@ -1288,7 +1532,7 @@ async fn execute(
             result.clone()
         };
         if step.operation == Operation::Invoke {
-            retain_invocation(attempt, step, directory, retained, invocation_capture)?;
+            retain_invocation(attempt, step, directory, retained, invocation_captures)?;
         } else {
             retain(attempt, step, directory, retained)?;
         }
@@ -1425,7 +1669,7 @@ mod tests {
             captures.insert(
                 step.capture.clone().unwrap(),
                 Capture {
-                    entity: step.entity.clone(),
+                    entity: step.entity.clone().unwrap(),
                     id: uuid::Uuid::new_v4(),
                 },
             );
@@ -1524,6 +1768,27 @@ mod tests {
         assert!(inherit_captures(&mut child, &pending, &catalogue).is_err());
         parent.completed.remove(&scenario.steps[0].id);
         assert!(inherit_captures(&mut child, &parent, &catalogue).is_err());
+
+        let catalogue: Catalogue = serde_json::from_value(json!({"scenarios":[{
+            "id":"population","description":"Register two records","input":"examples/input.json",
+            "steps":[{"id":"register","operation":"invoke","client":"writer",
+                "accessProfile":"writer","input":"register","action":"register-pair",
+                "captureResults":{"first":"first","second":"second"}}]}]}))
+        .unwrap();
+        let mut parent = attempt();
+        parent.scenario = "population".to_owned();
+        parent
+            .completed
+            .insert("register".to_owned(), json!({"receipt":"committed"}));
+        parent.captures.insert(
+            "first".to_owned(),
+            Capture {
+                entity: "entry".to_owned(),
+                id: uuid::Uuid::new_v4(),
+            },
+        );
+        let mut child = attempt();
+        assert!(inherit_captures(&mut child, &parent, &catalogue).is_err());
     }
 
     #[test]
@@ -1538,6 +1803,33 @@ mod tests {
         let path = temp.path().join("examples/scenarios.json");
         fs::write(&path, serde_json::to_vec(&valid).unwrap()).unwrap();
         catalogue(&temp.path().canonicalize().unwrap()).unwrap();
+        let mut several = valid.clone();
+        let invocation = several["scenarios"][0]["steps"][0].as_object_mut().unwrap();
+        invocation.remove("recordType");
+        invocation.remove("result");
+        invocation.remove("capture");
+        invocation.insert(
+            "captureResults".to_owned(),
+            json!({"entry":"entry", "audit":"audit"}),
+        );
+        fs::write(&path, serde_json::to_vec(&several).unwrap()).unwrap();
+        catalogue(&temp.path().canonicalize().unwrap())
+            .expect("an invocation can declare several result captures");
+
+        for captures in [
+            json!({}),
+            json!({"entry":"same", "audit":"same"}),
+            json!({"entry":"not.valid"}),
+        ] {
+            let mut invalid = several.clone();
+            invalid["scenarios"][0]["steps"][0]["captureResults"] = captures;
+            fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+            assert!(
+                catalogue(&temp.path().canonicalize().unwrap()).is_err(),
+                "missing, duplicate, and invalid capture declarations are refused"
+            );
+        }
+        fs::write(&path, serde_json::to_vec(&valid).unwrap()).unwrap();
         for field in ["action", "result", "recordType", "capture"] {
             let mut invalid = valid.clone();
             invalid["scenarios"][0]["steps"][0]
@@ -1550,6 +1842,58 @@ mod tests {
                 "{field}"
             );
         }
+        for operation in ["create", "get", "history"] {
+            let mut missing_record_type = json!({"apiVersion":API_VERSION,"kind":KIND,"scenarios":[{
+                "id":"record-step","description":"Exercise one record step","input":"examples/inputs.json",
+                "steps":[{"id":"step","operation":operation,"recordType":"entry","client":"writer",
+                    "accessProfile":"writer","input":"entry","capture":"entry","record":"entry"}]}]});
+            let step = missing_record_type["scenarios"][0]["steps"][0]
+                .as_object_mut()
+                .unwrap();
+            step.remove("recordType");
+            if operation == "create" {
+                step.remove("record");
+            } else {
+                step.remove("input");
+                step.remove("capture");
+            }
+            fs::write(&path, serde_json::to_vec(&missing_record_type).unwrap()).unwrap();
+            assert!(catalogue(&temp.path().canonicalize().unwrap()).is_err());
+        }
+
+        let mut non_invoke = valid.clone();
+        let step = non_invoke["scenarios"][0]["steps"][0]
+            .as_object_mut()
+            .unwrap();
+        step.insert("operation".to_owned(), json!("get"));
+        step.insert("record".to_owned(), json!("entry"));
+        step.insert(
+            "captureResults".to_owned(),
+            json!({"entry":"another-entry"}),
+        );
+        for member in ["input", "capture", "action", "result"] {
+            step.remove(member);
+        }
+        let report = catalogue_refusal(&non_invoke);
+        let diagnostic = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.examples.step-members")
+            .expect("non-invoke captureResults has a focused diagnostic");
+        assert!(diagnostic.message.contains("captureResults"));
+        assert!(diagnostic.suggested_action.contains("captureResults"));
+
+        let mut too_many = several.clone();
+        too_many["scenarios"][0]["steps"][0]["captureResults"] = Value::Object(
+            (0..101)
+                .map(|index| (format!("result{index}"), json!(format!("capture{index}"))))
+                .collect(),
+        );
+        let report = catalogue_refusal(&too_many);
+        assert!(report.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "breg.examples.capture-results"
+                && diagnostic.message.contains("at most 100")
+        }));
         // The action and the disclosed result name a governed action and one of
         // its declared effects, and that grammar admits an underscore. A name
         // this catalogue refuses is an authored action a scenario could never
@@ -1691,6 +2035,11 @@ mod tests {
                     Some(19)
                 ),
                 (
+                    "breg.examples.capture-results",
+                    "/scenarios/0/steps/1/capture",
+                    Some(21)
+                ),
+                (
                     "breg.examples.step-members",
                     "/scenarios/0/steps/2",
                     Some(28)
@@ -1737,13 +2086,18 @@ mod tests {
             "recordType":"entry","client":"writer","accessProfile":"writer","input":"register",
             "capture":"entry","action":"register-entry","result":"entry"}))
         .unwrap();
+        assert!(!serde_json::to_value(&step)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("captureResults"));
         let mut value = attempt();
         value.pending = Some(Pending {
             step: step.id.clone(),
             capsule: json!({"exact":"original bytes"}),
         });
         let capture = Capture {
-            entity: step.entity.clone(),
+            entity: step.entity.clone().unwrap(),
             id: uuid::Uuid::new_v4(),
         };
         retain_invocation(
@@ -1751,7 +2105,7 @@ mod tests {
             &step,
             temp.path(),
             json!({"receipt":true}),
-            Some(capture.clone()),
+            BTreeMap::from([("entry".to_owned(), capture.clone())]),
         )
         .unwrap();
         assert!(value.pending.is_none());
@@ -1761,6 +2115,7 @@ mod tests {
         assert!(reloaded.pending.is_none());
         assert_eq!(reloaded.completed[&step.id], json!({"receipt":true}));
         assert_eq!(reloaded.captures["entry"].id, capture.id);
+        assert!(require_retained_invocation_capture(&reloaded, &step).is_ok());
 
         // A handler is allowed to omit a declared result. That is still a
         // completed invocation whose exact idempotency capsule must not replay.
@@ -1776,7 +2131,7 @@ mod tests {
             &step,
             temp.path(),
             json!({"receipt":"without-result"}),
-            None,
+            BTreeMap::new(),
         )
         .unwrap();
         let reloaded = attempts(temp.path())
@@ -1791,6 +2146,66 @@ mod tests {
             reloaded.completed[&step.id],
             json!({"receipt":"without-result"})
         );
+
+        // Multi-result extraction is all-or-nothing. A valid first result must
+        // not leak into retained state when another configured result is
+        // absent or has the wrong Record type.
+        let step: Step = serde_json::from_value(json!({"id":"register-pair","operation":"invoke",
+            "client":"writer","accessProfile":"writer","input":"register",
+            "action":"register-pair","captureResults":{"first":"first","second":"second"}}))
+        .unwrap();
+        let first_id = uuid::Uuid::new_v4();
+        let declarations = BTreeMap::from([
+            ("first".to_owned(), ("first".to_owned(), "entry".to_owned())),
+            (
+                "second".to_owned(),
+                ("second".to_owned(), "assignment".to_owned()),
+            ),
+        ]);
+        let disclosed = BTreeMap::from([("first".to_owned(), ("entry".to_owned(), first_id))]);
+        assert_eq!(
+            extract_invocation_captures(declarations.clone(), &disclosed).unwrap_err(),
+            "successful action did not disclose every configured capture result"
+        );
+        let disclosed = BTreeMap::from([
+            ("first".to_owned(), ("entry".to_owned(), first_id)),
+            (
+                "second".to_owned(),
+                ("wrong-record-type".to_owned(), uuid::Uuid::new_v4()),
+            ),
+        ]);
+        assert_eq!(
+            extract_invocation_captures(declarations, &disclosed).unwrap_err(),
+            "action receipt capture entity differs from its authored declaration"
+        );
+
+        value.id = uuid::Uuid::new_v4();
+        value.completed.clear();
+        value.captures.clear();
+        value.pending = Some(Pending {
+            step: step.id.clone(),
+            capsule: json!({"exact":"original multi-result bytes"}),
+        });
+        retain_invocation(
+            &mut value,
+            &step,
+            temp.path(),
+            json!({"receipt":"missing-second-result"}),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let reloaded = attempts(temp.path())
+            .unwrap()
+            .into_iter()
+            .find(|attempt| attempt.id == value.id)
+            .unwrap();
+        assert!(reloaded.pending.is_none());
+        assert!(reloaded.captures.is_empty());
+        assert_eq!(
+            reloaded.completed[&step.id],
+            json!({"receipt":"missing-second-result"})
+        );
+        assert!(require_retained_invocation_capture(&reloaded, &step).is_err());
     }
 
     fn copy_tree(from: &Path, to: &Path) {
@@ -2295,7 +2710,26 @@ journeys:
             "--database-port",
             &ports[2],
         ]);
+        child(&owned.project, "register-facility", None, Some("register"));
+        let interrupted = attempts(&owned.project.join(".breg/dev/examples")).unwrap();
+        let population_attempt = interrupted
+            .iter()
+            .find(|attempt| attempt.scenario == "register-facility")
+            .unwrap();
+        assert_eq!(
+            population_attempt.pending.as_ref().unwrap().step,
+            "register"
+        );
+        assert!(population_attempt.captures.contains_key("operator"));
+        assert!(!population_attempt.captures.contains_key("facility"));
+        assert!(!population_attempt.captures.contains_key("assignment"));
+        owned.succeed(&["stop"]);
+        owned.succeed(&[]);
         let population = child(&owned.project, "register-facility", None, None).unwrap();
+        let repeated_population = child(&owned.project, "register-facility", None, None).unwrap();
+        assert_eq!(population["captures"], repeated_population["captures"]);
+        assert!(population["captures"]["facility"]["id"].is_string());
+        assert!(population["captures"]["assignment"]["id"].is_string());
         let parent = population["attempt"].as_str().unwrap().parse().unwrap();
         for step in ["start", "submit", "apply"] {
             child_with_parent(

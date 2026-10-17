@@ -71,7 +71,13 @@ journeys:
           directClaims:
             registry_record_status: active
         request: {type: list}
-        expect: {outcome: success, status: 200, count: 1}
+        expect:
+          outcome: success
+          status: 200
+          count: 1
+          members:
+            example-record:
+              fields: {code: example, status: active}
       # `etagCapture` sends the captured record's ETag as `If-Match`, so a patch
       # fails rather than overwriting a concurrent change.
       - id: retire-record
@@ -103,7 +109,7 @@ journeys:
           directClaims:
             registry_record_status: active
         request: {type: list}
-        expect: {outcome: success, status: 200, count: 0}
+        expect: {outcome: success, status: 200, count: 0, members: {}}
       - id: list-records
         recordType: record
         accessProfile: operator
@@ -112,4 +118,9 @@ journeys:
           scopes: [registry:generic:operate]
           purpose: registry-operations
         request: {type: list}
-        expect: {outcome: success, status: 200, count: 1}
+        expect:
+          outcome: success
+          status: 200
+          members:
+            example-record:
+              fields: {code: example, status: retired}

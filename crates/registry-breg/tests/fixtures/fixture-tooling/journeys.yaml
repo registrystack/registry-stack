@@ -38,7 +38,13 @@ journeys:
           purpose: case-management
           directClaims: {jurisdiction: zone-a}
         request: {type: list}
-        expect: {outcome: success, status: 200, count: 1}
+        expect:
+          outcome: success
+          status: 200
+          count: 1
+          members:
+            first-widget:
+              fields: {label: first, quantity: 1}
       - id: patch-widget
         recordType: widget
         accessProfile: operator

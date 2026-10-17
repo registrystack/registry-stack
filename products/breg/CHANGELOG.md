@@ -4,6 +4,11 @@
 
 - Apply this release to a fresh database; it carries no state migration
   from 0.41.
+- Native adopter tests can capture several disclosed Action results from one
+  resumable `bregctl examples` invocation and assert an exact unordered set of
+  collection member identities plus selected domain field values in journeys.
+  Existing single-result examples and count-only journey assertions remain
+  valid.
 - `bregctl init --from publicschema` derives a bounded `structured` list for
   a multivalued class property when its range class explicitly declares
   `inline_only: true`. Each generated field is a closed object with a required

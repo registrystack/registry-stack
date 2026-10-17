@@ -200,7 +200,7 @@ pub(super) fn validate_step(
     validate_expectation(
         &expect,
         Operation::Invoke,
-        &profile,
+        &profile.readable_fields,
         step.capture.is_some(),
         false,
     )?;
