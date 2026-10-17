@@ -3025,6 +3025,20 @@ impl BaseRegistryClient {
         complete_value(response.value, response.metadata)
     }
     #[napi]
+    pub async fn read_proposal_review_context_batch(
+        &self,
+        binding: &ProposalReviewBinding,
+        ids: Vec<String>,
+    ) -> Result<CompleteOutcome> {
+        let ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
+        let response = self
+            .inner
+            .read_proposal_review_context_batch(&binding.inner, &ids)
+            .await
+            .map_err(client_error)?;
+        complete_value(response.value, response.metadata)
+    }
+    #[napi]
     pub async fn upload_proposal_attachment(
         &self,
         proposal: &Proposal,

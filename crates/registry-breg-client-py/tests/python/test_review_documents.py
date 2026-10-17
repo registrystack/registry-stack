@@ -15,6 +15,8 @@ from registry_breg_client import BaseRegistryClient, BaseRegistryClientError, BR
 class ReviewDocumentTests(unittest.TestCase):
     def test_review_only_context_download_and_local_binding_refusals(self):
         identifier = '00000000-0000-4000-8000-000000000001'
+        concealed_id = '00000000-0000-4000-8000-000000000002'
+        malformed_batch = False
         revision = 'sha256:' + 'a' * 64
         body = b'%PDF-1.7 synthetic review document'
         requests = []
@@ -46,7 +48,12 @@ class ReviewDocumentTests(unittest.TestCase):
             def do_GET(self):
                 requests.append(self.path)
                 attachment = '/attachments/' in self.path
-                payload = body if attachment else json.dumps(metadata if '/registry?' in self.path else context).encode()
+                batch = {'items': [] if malformed_batch else [
+                    {'id': identifier, 'status': 'visible', 'context': context},
+                    {'id': concealed_id, 'status': 'concealed'}]}
+                payload = body if attachment else json.dumps(
+                    metadata if '/registry?' in self.path else batch
+                    if '/proposals/review-context?' in self.path else context).encode()
                 self.send_response(200)
                 for name, value in [('content-type', 'application/pdf' if attachment else 'application/json'),
                                     ('content-length', str(len(payload))), ('cache-control', 'no-store'),
@@ -70,6 +77,24 @@ class ReviewDocumentTests(unittest.TestCase):
             binding = contract.select_proposal_review_context('reviewer', 'correct')
             self.assertIsInstance(binding, BRegProposalReviewBinding)
             observed = client.read_proposal_review_by_id(binding, identifier)['value']
+            batch = client.read_proposal_review_context_batch(binding, [identifier, concealed_id])
+            self.assertEqual(batch['value'], [observed, None])
+            batch_url = urlsplit(requests[-1])
+            self.assertEqual(batch_url.path, '/tenant/v1/proposals/review-context')
+            self.assertEqual(parse_qs(batch_url.query)['ids'], [f'{identifier},{concealed_id}'])
+            self.assertEqual(parse_qs(batch_url.query)['accessProfile'], ['reviewer'])
+            before_batch_refusals = len(requests)
+            for ids in [[], [identifier, identifier]]:
+                with self.assertRaises(BaseRegistryClientError):
+                    client.read_proposal_review_context_batch(binding, ids)
+            with self.assertRaises(BaseRegistryClientError):
+                client.read_proposal_review_context_batch(
+                    contract.select_proposal_review_status('status', 'correct'), [identifier])
+            self.assertEqual(len(requests), before_batch_refusals)
+            malformed_batch = True
+            with self.assertRaises(BaseRegistryClientError):
+                client.read_proposal_review_context_batch(binding, [identifier, concealed_id])
+            malformed_batch = False
             downloaded = client.download_proposal_review_document(binding, observed, 'support')
             self.assertEqual(downloaded['body'], body)
             self.assertEqual(downloaded['media_type'], 'application/pdf')

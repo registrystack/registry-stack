@@ -45,7 +45,8 @@
     "submissionVersion",
     "reviewContextField",
     "effectDigest",
-    "contextSchemaDigest"
+    "contextSchemaDigest",
+    "ids"
   ],
   "queryOptionBindings": {
     "accessProfile": {
@@ -175,6 +176,12 @@
       "rust": ["BaseRegistryClient.download_proposal_review_document.context"],
       "node": ["BaseRegistryClient.downloadProposalReviewDocument.context"],
       "python": ["BaseRegistryClient.download_proposal_review_document.context"]
+    },
+    "ids": {
+      "source": "distinct canonical Proposal IDs for one bounded review-context exchange",
+      "rust": ["BaseRegistryClient.read_proposal_review_context_batch.ids"],
+      "node": ["BaseRegistryClient.readProposalReviewContextBatch.ids"],
+      "python": ["BaseRegistryClient.read_proposal_review_context_batch.ids"]
     },
     "contextSchemaDigest": {
       "source": "exact producer contract in the server-issued Review context",
@@ -486,9 +493,9 @@
     },
     {
       "id": "proposal-review",
-      "rust": ["read_proposal_review_context", "read_proposal_review_status", "read_proposal_review_by_id", "download_proposal_review_document"],
-      "node": ["readProposalReviewContext", "readProposalReviewStatus", "readProposalReviewById", "downloadProposalReviewDocument"],
-      "python": ["read_proposal_review_context", "read_proposal_review_status", "read_proposal_review_by_id", "download_proposal_review_document"]
+      "rust": ["read_proposal_review_context_batch", "read_proposal_review_context", "read_proposal_review_status", "read_proposal_review_by_id", "download_proposal_review_document"],
+      "node": ["readProposalReviewContextBatch", "readProposalReviewContext", "readProposalReviewStatus", "readProposalReviewById", "downloadProposalReviewDocument"],
+      "python": ["read_proposal_review_context_batch", "read_proposal_review_context", "read_proposal_review_status", "read_proposal_review_by_id", "download_proposal_review_document"]
     }
   ]
 }
