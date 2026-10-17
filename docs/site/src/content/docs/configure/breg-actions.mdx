@@ -1,6 +1,6 @@
 ---
-title: Declare Actions and Proposals
-description: Choose generated CRUD, immediate Actions, or durable Proposals, with separate review and application authority.
+title: Actions and Proposals
+description: Declare Actions that change records at once or through a reviewed Proposal, with their Plans, review authorities, and Evidence.
 status: current
 owner: registry-docs
 source_repos:
@@ -9,154 +9,236 @@ last_reviewed: "2026-09-25"
 doc_type: how-to
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: breg
 ---
 
-If you are authoring Base Registry Engine (BReg) writes, use generated CRUD for
-ordinary record maintenance, an immediate Action for atomic effects, and a
-Proposal Action for durable work that applies later.
+If your Base Registry Engine (BReg) registry needs changes beyond field-by-field edits, declare
+them as Actions. Here you see what an Action declares, when it applies at once and when it becomes
+a reviewed Proposal, and how a Plan computes its effects.
+[Change a registry with an Action](../../tutorials/change-a-registry-with-an-action/) runs both.
 
-## Inspect a complete model
+## Start from the facility template
 
 ```sh
-bregctl init ./facility-registry --template facility-registry
-bregctl check ./facility-registry
-bregctl --format json explain actions ./facility-registry
-bregctl --format json explain proposals ./facility-registry
+bregctl init --template facility-registry facility
+bregctl check facility
 ```
 
-Read the generated project's README and `registry.yaml`. `register-facility`
-creates a facility and assignment together. `correct-address` uses a named Rhai
-Function and external review. `deactivate-facility` uses an explicit no-review,
-manual Proposal. Callers cannot select or change an Action's execution mode.
+The template declares three Actions: `register-facility`, `correct-address`, and
+`deactivate-facility`; `bregctl explain actions facility` shows each one compiled.
 
-{/* Evidence: products/breg/examples/facility/registry.yaml;
-    crates/registry-bregctl/src/starters.rs. */}
+## What an Action declares
 
-## Choose a plan and guards
+An [Action](../../reference/glossary/#action) has typed `inputs`, an `execution` mode, a `plan`
+of effects, and optional `commitGuards`. `deactivate-facility` holds all four:
 
-An Action declares `inputs`, `execution`, and `plan`. A fixed plan declares ordered
-effects. A function plan names a local Function and bounds its inputs, writes,
-and refusals. Values come from `fromInput`, an earlier `fromEffect`, or an explicit
-literal `value`; clearing a field is explicit. Forward references and conflicting
-writes refuse compilation. A function computes effects within its write ceiling.
-
-`commitGuards` checks current target facts and revision requirements. Every
-existing target requires current authority, including link-only references.
-All effects, revisions, receipt, audit, and outbox commit atomically.
-
-Require durable work on a Record type independently of grants:
-
-```yaml
-mutationPolicy:
-  patch: proposal-required
+```yaml title="registry.yaml" test-excerpt="facility/registry.yaml"
+  - id: deactivate-facility
+    display:
+      label: Deactivate facility
+      description: Submit a durable deactivation that requires no external review.
+    execution:
+      mode: proposal
+      proposal:
+        review: {type: none}
+        application: {mode: manual}
+        retention: {mode: retain}
+    commitGuards:
+      targets:
+        - {input: facility, revision: unchanged}
+        - {input: facility, field: status, equals: active}
+    inputs:
+      - {id: facility, apiName: facilityId, type: reference, target: facility, required: true, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: facility-status
+          target: {fromInput: facility}
+          operation: patch
+          set:
+            status: {value: inactive}
 ```
 
-Direct Patch and immediate Actions cannot bypass this policy.
+Commit guards are checked when the change commits: here, the facility must be unchanged since
+the Proposal froze it, and still active. The caller never chooses the execution mode.
 
-## Declare Proposal review and application
+Who may run an Action is an access-profile grant, `invoke` for an immediate Action and `start`
+for a Proposal:
 
-```yaml
-execution:
-  mode: proposal
-  proposal:
-    review:
-      type: required
-      authority: casework
-      source: facility-registry
-      policy:
-        id: facility-address-review
-    retention:
-      mode: retain
+```yaml title="registry.yaml" test-excerpt="facility/registry.yaml"
+      actions:
+        - action: correct-address
+          operations: [start]
 ```
 
-Select a policy by ID. The review authority freezes its concrete version and digest
-when it accepts the submission. Add both `version` and `digest` to `policy` when you
-require an exact independently compiled binding. BReg freezes inputs, effects, target
-revisions, Action revision, and effect digest at submission. A later planner or policy
-change cannot silently reinterpret the approved work.
+Other Proposal operations, such as `submit`, `cancel`, or `apply`, are granted separately under
+`permissions.proposals`, so whoever drafts a change need not apply it.
 
-Automatic application is the default. The built-in executor receives restricted
-system authority for that exact frozen submission. It uses no self-HTTP call,
-OAuth executor client, or general record permission. To wait for a separately
-authorized caller, declare `application.mode: manual` inside `proposal`.
-Use `review.type: none` when external review is intentionally unnecessary.
+{/* evidence: crates/registry-breg/src/contract.rs (ActionSource);
+    crates/registry-breg/src/immediate_actions.rs; products/breg/examples/facility/registry.yaml. */}
 
-## Split the powers
+## Immediate Actions return an ActionReceipt
 
-`permissions.actions` grants Invoke or Start. `permissions.proposals` grants
-Get, List, Edit, Submit, Revise, Rebase, Retry, Cancel, Apply, or review operations
-independently, with ownership and target boundaries. List needs its own grant.
-A reader's target context still follows current record disclosure.
-External recovery of automatic application requires a verified human with an
-explicit grant. It never inherits the built-in executor's authority.
+`register-facility` declares `execution: {mode: immediate}`. One request checks the guards,
+writes every effect, and commits the new revisions, the receipt, the audit entry, and any outbox
+events together, or none of them. The answer is an
+[ActionReceipt](../../reference/glossary/#receipt) naming each changed Record and its new revision.
 
-Deployment `reviewAuthorities` binds each logical authority to its endpoint,
-producer identity, selected profile, and credential. Missing optional bindings
-disable only dependent operations. An unavailable authority never means approval.
-Every uncommitted application requires fresh authenticated and unexpired approval
-when review is required. [Connect a review authority](../../tutorials/review-breg-changes-in-casework/)
-explains that boundary.
+A Record type can require a Proposal for an operation:
 
-## Pair Casework review context
+```yaml title="registry.yaml" test-excerpt="facility/registry.yaml"
+    mutationPolicy:
+      patch: proposal-required
+```
 
-A BReg Proposal can require a ReviewPolicy from a separate Casework service.
-Use the Casework policy ID in the BReg review declaration. Add its actual compiled
-version and digest together when you require an exact pin.
-BReg owns the frozen Proposal, sends its bound review request as the trusted producer, and consumes
-only the exact correlated result before its own independently authorized application step.
+With this on `facility`, neither a direct patch nor an immediate Action may patch a facility; only
+a Proposal can. `register-facility` still creates facilities at once.
 
-Expose the Proposal's bounded native review-context contract in the tested BReg package.
-Vendor that exact schema and contract in the Casework policy, then use
-`caseworkctl provider pair` to verify and retain the provider export.
-[Pair BReg review context with Casework](../../tutorials/review-breg-changes-in-casework/) gives the
-preview, apply, and package checks.
-Pairing modifies no BReg grant and activates neither runtime.
+{/* evidence: crates/registry-breg/src/mutation/action.rs (apply_action_effect_group);
+    crates/registry-breg/src/immediate_actions.rs. */}
 
-A Casework Review holds the policy-bound human review, and its immutable Decision
-records the outcome. BReg remains responsible for source application.
-Give the Casework status service only native `get-review-status` authority.
-A human separately selects a profile authorized for `get-review-context`; the provider forwards the
-human's current bearer for that read. Neither read confers Proposal application authority.
-Bind transport and credential references in each product's operator runtime configuration.
-A configured completion destination sends a payload-free wake so the producer can fetch and
-correlate the retained result; it carries no decision payload or application authority.
+## Proposals
 
-{/* Evidence: crates/registry-caseworkctl/src/provider_pair.rs;
-    crates/registry-casework-breg/src/lib.rs;
-    crates/registry-casework/tests/breg_review_journey.rs;
-    products/breg/examples/facility/registry.yaml. */}
+An Action in `proposal` mode creates a [Proposal](../../reference/glossary/#proposal) instead.
+`correct-address` requires review:
 
-## Observe and recover an exact submission
+```yaml title="registry.yaml" test-excerpt="facility/registry.yaml"
+    execution:
+      mode: proposal
+      proposal:
+        review:
+          type: required
+          authority: casework
+          source: facility-registry
+```
 
-Use caller-filtered Action metadata to Start, then use promoted Proposal links
-for transitions. Refetch after a transition. Record ETags and Proposal lifecycle
-conditions are separate.
+A Proposal starts as a `draft` its author can edit. Submitting it freezes the inputs, the
+computed effects and their digest, the target revisions, and the Action revision; review and
+application work on that frozen submission, so a later change to the Plan or policy cannot
+reinterpret it. Revise or Rebase returns it to a new draft, which must be submitted, and
+reviewed, again.
 
-An authorized Get identifies the Proposal, Action revision, submission version,
-effect digest, state, and local application status. Preserve that exact binding.
-Revise or Rebase invalidates the earlier observation; do not follow a successor
-implicitly. Applied work includes retained application evidence. Blocked work
-includes a safe reason, recovery hint, and authorized transitions. `turn` says
-whether the party, an official or nobody acts next.
+A Proposal ends in one of three states:
 
-A Review rejection of the current submission is final: the Proposal moves to
-the terminal `rejected` state with a `rejected` lifecycle event, and Revise is
-no longer offered. Changes requested keep the Proposal `submitted`, record a
-`review-returned` event, and promote Revise. The Proposal's `decision` carries
-the outcome, its time and the reviewer's public reason, if any.
+- `applied`: the registry wrote the frozen effects, under the commit guards as they stand at that
+  moment. With no review it follows submission; with required review it needs current approval of
+  that exact submission.
+- `rejected`: the review authority rejected the submission. This is final. A reviewer who wants
+  another attempt returns it with changes requested instead, which keeps it `submitted` and offers
+  Revise.
+- `cancelled`: a caller with the `cancel` grant withdrew it before it applied.
 
-For an uncertain command, retain and replay its original prepared request and
-idempotency key. A later Get does not establish whether that command executed.
-Replay recovers retained results without replanning. Expired or erased receipts
-refuse execution and keep the key spent.
+Application is automatic, under a restricted system grant for that one submission, unless the
+Action declares `application: {mode: manual}`, as `deactivate-facility` does; then a caller with
+the `apply` grant applies it. The Proposal's `applicationStatus` reports progress: `awaiting-review`, `pending`,
+`applying` while a worker is writing it, then `applied`, or `blocked` with a reason and a
+recovery hint.
 
-{/* Evidence: crates/registry-breg/src/proposal_prepare.rs;
-    crates/registry-breg/src/proposal_store.rs; crates/registry-breg/src/api/proposals.rs;
-    crates/registry-breg/src/runtime_config.rs; crates/registry-breg-client/src/proposal.rs. */}
+{/* evidence: crates/registry-breg/src/proposal_workflow.rs (ProposalState, revise, rebase,
+    cancel, reject, apply); crates/registry-breg/src/mutation/proposal.rs (application status);
+    crates/registry-breg/src/artifacts.rs (proposal_application_status_schema). */}
+
+## Review authorities, declared twice
+
+The project names each review authority it relies on:
+
+```yaml title="registry.yaml" test-excerpt="facility/registry.yaml"
+reviewAuthorities:
+  - id: casework
+    protocol: id.registrystack.org/protocols/review/v1
+    display:
+      label: Casework review authority
+      description: Logical authenticated review authority resolved by deployment configuration.
+```
+
+The deployment binds that `id` to a running service. For local development, the template's
+README gives the `dev-clients.yaml` binding:
+
+```yaml title="README.md" test-excerpt="facility/README.md"
+reviewAuthorities:
+  casework:
+    endpoint: http://127.0.0.1:8100/
+    profile: requester
+    producerId: facility-registry
+    recoveryDays: 30
+    client: requester
+```
+
+In production the same map sits in the runtime configuration (`runtime.yaml`), with a `tokenRef`
+or `privateKeyJwt` credential instead of `client`. A missing binding disables only the operations
+that need it. An unreachable authority never counts as approval.
+
+Registry Casework is one such authority. The registry sends it the frozen submission and applies
+only the correlated result;
+[Review BReg changes in Casework](../../tutorials/review-breg-changes-in-casework/) pairs the two.
+
+{/* evidence: crates/registry-breg/src/runtime_config.rs (RawReviewAuthorityConfig,
+    activate_review_authorities); products/breg/examples/facility/README.md. */}
+
+## Plans and Evidence
+
+A [Plan](../../reference/glossary/#planner) is fixed, like `deactivate-facility`'s, or computed
+by a Rhai Function. `correct-address` names its Function and bounds what it may write:
+
+```yaml title="registry.yaml" test-excerpt="facility/registry.yaml"
+    plan:
+      type: function
+      function: correct-address-plan
+      inputs: [facility, address-line, city, postal-code]
+      writes:
+        - id: facility-address
+          target: {fromInput: facility}
+          operation: patch
+          fields: [address-line, city, postal-code]
+      refusals:
+        - {code: invalid-postal-code, label: Postal code is invalid}
+```
+
+The project's `functions` entry names its script:
+
+```rhai title="plans/correct-address.rhai" test-excerpt="facility/plans/correct-address.rhai"
+fn plan(ctx) {
+    let postal_code = ctx.inputs["postal-code"];
+    postal_code.trim();
+    if postal_code == "" {
+        return #{
+            refusal: #{
+                code: "invalid-postal-code",
+                field: "postal-code"
+            }
+        };
+    }
+```
+
+The planner receives `ctx.inputs`, holding only the inputs the Plan lists. It returns either a
+`refusal`, whose `code` the Action declares, or `effects`: a list of maps, each with the `id` of a
+declared write and its `set` or `clear` fields. The declaration fixes each write's target and
+operation, so the script cannot redirect one. Omitting a write skips it; the caller still needs
+authority over its target.
+
+Effects apply in authored order. A value `fromEffect` must name an earlier `create`, as
+`register-facility`'s assignment names its new facility. Two effects that land on the same Record
+are written together as one revision; two effects that write the same field fail `bregctl check`.
+
+An Action with a Rhai Plan may also declare `evidence`: at most two capabilities, each naming an
+Evidence provider the project declares, a requirement, its subjects, and the outputs it may read.
+The script calls `evidence::resolve("<capability id>", subjects)` once per capability and
+receives only those outputs; a failed call refuses the operation. `commitGuards.evidence`
+instead checks a requirement at commit and never changes the effects. The provider's endpoint and
+credentials belong to the runtime configuration; BReg inherits no Evidence authorization.
+
+{/* evidence: crates/registry-breg/src/action_handler.rs (execute_compiled_handler);
+    crates/registry-breg/src/action_outcome.rs (decode_document, validate_proposed_effects);
+    crates/registry-breg/src/plan.rs (order_plan_effects, order_effect_groups);
+    crates/registry-breg/src/mutation/action.rs (ordered_action_effect_groups);
+    crates/registry-breg/src/immediate_actions.rs (remember_write);
+    crates/registry-breg/src/action_evidence_contracts.rs;
+    crates/registry-breg/src/contract.rs (CommitEvidenceSource). */}
 
 ## Next
 
-- [Inspect a reviewed Proposal](../../tutorials/review-registry-changes/)
-- [Connect a review authority](../../tutorials/review-breg-changes-in-casework/)
+- [Change a registry with an Action](../../tutorials/change-a-registry-with-an-action/)
+- [Control access and reads](../breg-access/)
+- [Review BReg changes in Casework](../../tutorials/review-breg-changes-in-casework/)
 - [Base Registry Engine API reference](../../reference/breg-api/#proposals)
-- [Retain, erase, and audit](../../operate/breg-retention/)

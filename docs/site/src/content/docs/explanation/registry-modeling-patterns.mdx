@@ -1,6 +1,6 @@
 ---
 title: Modeling patterns for registries
-description: Model identifiers, dated relationships, declarations, provenance, and document references with explicit local rules.
+description: Choose field kinds, identifiers, references, dates, and record boundaries for a Base Registry Engine project without adopting another institution's policy by accident.
 status: current
 owner: registry-docs
 source_repos:
@@ -9,236 +9,172 @@ last_reviewed: "2026-09-04"
 doc_type: explanation
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: breg
 ---
 
-If you are designing your own Base Registry Engine (BReg) project, start with the
-questions your registry must answer and the changes callers may make.
-Use Record types for stored facts, references for relationships, and Actions
-when a change needs an explicit plan.
-Keep domain meaning, write policy, and disclosure separate so that adopting a
-record structure does not accidentally adopt another institution's authority.
+If you are designing your own Base Registry Engine (BReg) project, start from the questions your
+registry must answer and the changes callers may make, then choose Record types, fields, and
+references to fit. BReg has no built-in facility, business, or permit model: every pattern here is
+ordinary configuration you can read in a starter and adapt.
 
-## Patterns become ordinary configuration
+## Start from the facility template
 
-BReg has no built-in facility, business, permit, or authority model.
-You declare Record types under `recordTypes`, with fields, references, dataset
-membership, and mutation rules.
-The [minimal directory project](../../tutorials/first-breg/)
-uses ordinary record maintenance without Actions or an external review service.
-The [facility project](../../configure/breg/#start-from-a-complete-project)
-adds atomic registration and durable corrections to the same record model.
-Both are complete projects, with explicit grants and synthetic journeys you can adapt.
+```sh
+bregctl init --template facility-registry facility
+bregctl check facility
+```
 
-{/* Evidence: crates/registry-breg/src/contract.rs, RegistryProject and EntitySource;
-    products/breg/examples/minimal/registry.yaml;
-    products/breg/examples/facility/registry.yaml;
-    crates/registry-breg/tests/refactor_contract.rs,
-    standalone_native_records_need_no_manifest_or_external_products(). */}
+The excerpts below come from the template's `registry.yaml`.
 
-Keep an object separate from its registration when their lifecycles differ.
-A facility can change operator without becoming a different facility.
-A business can hold several permits, and a permit's expiry need not end the business.
-Separate records let you express those changes without replacing the object's identity.
+## Separate an object from its registration
 
-## Identifiers
+Keep a thing separate from its registration when their lifecycles differ. A facility can change
+operator without becoming a different facility, and a permit's expiry need not end the business
+that held it. The template keeps the link in its own
+[Record type](../../reference/glossary/#record-type), written once and never patched:
 
-Keep a scheme identifier, such as a business registration number, separate from
-the server's record ID.
-The issuing scheme determines what the number means and whether it can be reassigned.
-Use strings for values such as `0017` so their leading zeroes survive.
+```yaml test-excerpt="facility/registry.yaml"
+  - id: facility-assignment
+    route: facility-assignments
+    primaryDataset: facility-registry
+    mutationMode: create-only
+```
 
-A permanent identifier can be a field on its holder.
-Use a separate identifier Record type when one holder can have several identifiers,
-or assignments have their own issuer, validity period, or replacement history.
-Choose uniqueness from the scheme's rules: two authorities may both issue `0017`,
-while one shared namespace may prohibit that duplicate regardless of issuer.
-BReg's composite unique constraints can express a key made from several fields.
-Adding a predecessor reference does not by itself make that predecessor inactive.
-Test duplicate assignments and document scheme-specific normalization;
-normalization is not proof that two records describe the same real-world object.
+## Choose a field kind
 
-{/* Evidence: crates/registry-breg/src/contract.rs, ConstraintSource and FieldTypeSource;
-    crates/registry-breg/src/compiler.rs, validate_constraints(). */}
+Pick the narrowest kind that says what the value is. A `string` carries a bounded line such as a
+name or code; `text` carries long prose. A closed list of states is a `vocabulary-code`, so a
+status cannot drift into spelling variants. A `date` is a full calendar day and a `timestamp` an
+instant; `decimal` takes a declared precision for quantities. When several fields share one shape,
+declare it once as a value type and refer to it with `typeRef`:
 
-## Relationships with dates
+```yaml test-excerpt="facility/registry.yaml"
+      - {id: postal-code, apiName: postalCode, typeRef: postal-code, required: true, classification: internal}
+      - {id: status, type: vocabulary-code, vocabulary: facility-status, required: true, classification: internal}
+```
 
-Use a relationship record when the link has information of its own.
-The facility project separates `facility-assignment` from `facility` and
-`operator`, with typed references to both.
-An immediate registration Action creates the facility and its assignment together.
-That starter records the initial assignment; it does not impose a dated transfer policy.
+A `string` or `text` field can also declare `pattern`, a PostgreSQL regular expression the
+database enforces on every write path. It is not anchored for you: `[0-9]{13}` matches any value
+containing thirteen digits, so write `^[0-9]{13}$` when you mean the whole value. A pattern checks
+one row, so a rule that depends on another record belongs in an Action's `commitGuards`. Adding a
+pattern to a running registry checks every existing row first; changing or removing one is a
+reviewed destructive change. Mark a restricted value `encrypted` when a database reader must not
+see it; [Field encryption](../../configure/breg-field-encryption/) explains what that seals.
 
-{/* Evidence: products/breg/examples/facility/registry.yaml;
-    crates/registry-breg/tests/refactor_contract.rs,
-    one_action_family_compiles_both_modes_and_a_neutral_dag(). */}
+The limits on each kind are in the
+[configuration reference](../../reference/breg-configuration/).
 
-For dated assignments, decide separately when a link applies and which concurrent
-links your policy allows.
-One facility might allow one operator, several operators, or one primary operator
-alongside other roles.
-A `temporal` declaration identifies validity boundaries; exclusivity needs a
-separate `temporal-non-overlap` constraint with the appropriate `scopeFields`.
-A date or role field alone does not impose exclusivity.
+{/* Evidence: crates/registry-breg/src/contract.rs, FieldTypeSource, FieldSource;
+    crates/registry-breg/src/package.rs, FieldPatternAdded; products/breg/native-patterns.md. */}
 
-{/* Evidence: crates/registry-breg/src/contract.rs, TemporalSource and ConstraintSource;
+## Identifiers and uniqueness
+
+Keep a scheme identifier, such as a business registration number, separate from the server's
+record ID. The issuing scheme decides what the number means and whether it can be reassigned. Use
+a `string` for values such as `0017`, since a number type loses the leading zeroes.
+
+Use a separate identifier Record type when one holder can have several identifiers, or assignments
+have their own issuer, validity, or replacement history. Derive uniqueness from the scheme's rules: two authorities may both issue `0017`, while a
+shared namespace may forbid the duplicate. A `unique` constraint can span several fields, such as
+issuer and number, and can apply only when a condition holds. Normalization is not proof that two
+records describe the same real-world object.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, ConstraintSource::Unique, UniqueWhenPredicate. */}
+
+## References between Record types
+
+A `reference` field holds the ID of a record of the named Record type, and the database refuses a
+value that names no such record. `inverseName` names the reverse direction, so a facility exposes
+its assignments without a field of its own:
+
+```yaml test-excerpt="facility/registry.yaml"
+      - {id: facility, type: reference, target: facility, required: true, classification: internal, relationship: {inverseName: assignments}}
+      - {id: operator, type: reference, target: operator, required: true, classification: internal, relationship: {inverseName: facilityAssignments}}
+```
+
+Use a relationship record whenever the link has information of its own. A read path follows the
+link in one request; the reader's
+[access profile](../../reference/glossary/#access-profile) still decides what it returns:
+
+```yaml test-excerpt="facility/registry.yaml"
+    readPaths:
+      - {id: operators, through: facility-assignment, to: operator, route: operators}
+```
+
+{/* Evidence: crates/registry-breg/src/generated_ddl.rs, FOREIGN KEY ... ON DELETE RESTRICT;
+    crates/registry-breg/src/contract.rs, ReadPathSource. */}
+
+## Dates and validity
+
+The template records the initial assignment and imposes no dated transfer policy. For dated
+assignments, decide separately when a link applies and which concurrent links your policy allows:
+one operator, several, or one primary beside other roles. A Record type's `temporal` declaration
+names its start and end fields; exclusivity needs a separate `temporal-non-overlap` constraint with
+the right `scopeFields`. A date or role field alone imposes nothing.
+
+Keep effective time separate from recording time: "who operated the facility on June 1?" differs
+from "what had the registry recorded on June 1?". Test adjacent and open-ended periods and a
+correction to an earlier period.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, TemporalSource;
     crates/registry-breg/tests/compiler_contract.rs,
     temporal_validity_compiles_without_non_overlap_constraint(). */}
 
-Keep effective time separate from recording time.
-An assignment that began on June 1 and was entered on June 10 has two relevant dates.
-"Who operated the facility on June 1?" differs from "what had the registry recorded on June 1?"
-Test adjacent and open-ended periods, permitted concurrency, and a correction to
-an earlier period as well as a transfer beginning later.
-
 ## Choose how changes reach records
 
-Ordinary record routes suit contact or directory maintenance when authorized
-callers can create and patch each record directly.
-Use an immediate Action when one authorized operation must commit several effects
-atomically, such as registration and its initial assignment.
-Use a Proposal Action when work needs a durable draft and later application.
+Generated record routes suit directory maintenance where authorized callers patch each record
+directly. An immediate Action commits several effects atomically, such as a facility and its
+first assignment, and a Proposal Action keeps a durable draft for review and later application.
+[Actions and Proposals](../../configure/breg-actions/) explains how to choose.
 
-The facility project keeps two choices independent:
-`deactivate-facility` requires no external review and waits for a separately
-authorized manual Apply; `correct-address` requires independent review and uses
-automatic application.
-A Proposal is useful even when external review is unnecessary.
-Review approval alone never establishes that the source change was applied.
+## Declarations, provenance, and documents
 
-{/* Evidence: products/breg/examples/facility/registry.yaml;
-    products/breg/examples/facility/tests/journeys.yaml;
-    crates/registry-breg/tests/postgres_facility_proposal.rs,
-    canonical_rhai_correction_freezes_reviews_applies_and_recovers_locally(). */}
+Keep a reported claim separate from the object it describes when the claim has its own reporter,
+period, or measurement. An inspection and an operator's declaration can disagree without one
+overwriting the other. Decide whether a correction patches the claim or adds a successor that
+references it.
 
-Choose a fixed plan when its effects can be declared directly.
-Use a named Function when computing the plan needs local logic.
-The Function declares its runtime, source, entrypoint, capabilities, and limits;
-the calling Action bounds its inputs, writes, and refusals.
-The facility address Function computes a bounded patch or returns its declared
-postal-code refusal, within the Action's write ceiling.
+For imported data, retain the source system, source record ID and version, and mapping revision.
+Record-level provenance cannot explain individual values unless you also keep the source content.
 
-{/* Evidence: crates/registry-breg/src/contract.rs, ActionPlanSource and FunctionSource;
-    products/breg/examples/facility/plans/correct-address.rhai;
-    crates/registry-breg/tests/refactor_contract.rs,
-    canonical_address_function_evaluates_valid_inputs_and_declared_refusal(). */}
+For a document stored elsewhere, keep its identity, immutable version, media type, and digest. A
+digest compares bytes; it does not identify the issuer. Permission to read that metadata does not
+grant retrieval of the file. A document submitted with a Proposal uses a bounded attachment slot,
+not a string field:
 
-Use the Record type's `mutationPolicy` when an operation must require a Proposal,
-independently of a caller's grants.
-An immediate Action cannot bypass `proposal-required`.
-Keep current target checks in `commitGuards`, such as an unchanged revision and
-an active facility status.
-[Declare Actions and Proposals](../../configure/breg-actions/) explains
-these choices and the separate review and application powers.
+```yaml test-excerpt="facility/registry.yaml"
+        attachments:
+          - {id: supporting-document, required: false, maximumBytes: 1048576, contentTypes: [application/pdf], classification: restricted}
+```
 
-{/* Evidence: crates/registry-breg/src/contract.rs, MutationPolicySource and CommitGuardsSource;
-    products/breg/examples/facility/registry.yaml;
-    crates/registry-breg/tests/refactor_contract.rs,
-    immediate_mode_cannot_bypass_target_proposal_policy(). */}
-
-## Declarations and observations
-
-Keep a reported claim separate from the object it describes when the claim has
-its own reporter, period, measurement, or supporting material.
-A facility discharge declaration can name a substance, quantity, unit, reporting
-period, and reporter without replacing the facility's current state.
-An inspection observation and an operator's declaration can disagree without one
-automatically overwriting the other.
-
-Decide whether correction means patching an authorized mutable record or adding
-a successor that explicitly references the earlier claim.
-A `create-only` Record type permits creation without later patching; your domain
-rules still determine which claim counts as current and what a replacement means.
-Use a Proposal when the correction needs durable submission or review.
-
-{/* Evidence: crates/registry-breg/src/contract.rs, MutationMode and ActionExecutionSource. */}
-
-## Source provenance
-
-For imported contributions, retain the source system, source record ID and
-version, and mapping revision.
-Keep contributions separate from local authoritative records when sources can
-disagree or reprocessing must remain traceable.
-Decide whether an exact replay is a duplicate and whether a new mapping revision
-creates a new contribution.
-Record-level provenance cannot explain individual values unless you also retain
-the source content or field-level contributions.
-
-## Document references
-
-For an inspection PDF stored elsewhere, retain the object identity and immutable
-version, media type, and calculated digest, with an explicit inspection reference.
-A digest supports a comparison of bytes; it does not identify the issuer or prove
-the document's contents.
-Keep storage, retrieval authorization, and authenticity verification with their
-owning components.
-Permission to read reference metadata does not imply permission to retrieve the file.
-Retain original material when the inspection's history depends on it and explicitly
-relate corrected replacements.
-
-For attachments retained with a Proposal, use the bounded attachment policy in
-[Actions and Proposals](../../reference/breg-api/#proposals) rather than treating
-an ordinary string field as file storage.
-
-{/* Evidence: crates/registry-breg/src/contract.rs, AttachmentSlotSource;
-    products/breg/examples/facility/registry.yaml. */}
-
-## Public authorities and responsibilities
-
-Give an authority its own identity when registrations or permits refer to it.
-Separate the organisation from a dated responsibility for a jurisdiction or service.
-A rename may preserve identity; a merger may create a successor.
-Record those domain rules explicitly rather than inferring succession from names.
-Different authorities can perform different functions in the same jurisdiction,
-so jurisdiction alone is not always a suitable exclusivity scope.
+{/* Evidence: crates/registry-breg/src/contract.rs, AttachmentSlotSource. */}
 
 ## Preserve meaning when values are incomplete
 
-Missing, unknown, not applicable, and withheld values have different meanings.
-Use explicit reason codes when that distinction matters; do not turn every absence
-into zero or `false`.
-"No declaration received" differs from "declared quantity is zero."
-Preserve approximate dates as approximate: a known year is not a known January 1.
-BReg's `date` field represents a full calendar date, so less precise information
-needs a deliberately different representation.
-Keep registered names separate from abbreviations and translated display names
-when those distinctions matter to your queries.
+Missing, unknown, not applicable, and withheld are different answers. Use an explicit reason code
+when the distinction matters, rather than turning absence into zero or `false`: "no declaration
+received" differs from "declared quantity is zero". A known year is not a known January 1; since a
+`date` is a full calendar day, less precise information needs a different representation.
 
 {/* Evidence: crates/registry-breg/src/data.rs, valid_iso_date(). */}
 
-## Adapt a pattern without inheriting policy accidentally
+## Adapt a pattern without inheriting its policy
 
-Keep a small model in the project file when that is sufficient.
-Use modules for definitions that share meaning across projects.
-Module extensions add fields and constraints; they cannot remove an inherited
-constraint or replace an existing field.
-If the shared policy does not fit, change the owning definition rather than
-expecting an extension to relax it.
+Modules share definitions across projects. An extension adds fields and constraints; it cannot
+remove an inherited constraint or replace a field, so change the owning definition when its policy
+does not fit. Review access separately from structure: record reads, Action invocation, and
+Proposal transitions have separate grants, and a classification label is not an authorization
+boundary. Test the model with allowed and refused operations, including a case your policy permits that a
+stricter model might reject.
 
-{/* Evidence: crates/registry-breg/src/contract.rs, RegistryModule and EntityExtensionSource;
-    crates/registry-breg/src/compiler.rs, merge_extension();
+{/* Evidence: crates/registry-breg/src/compiler.rs, merge_extension();
     crates/registry-breg/tests/compiler_contract.rs,
     additive_module_conflicts_fail_instead_of_using_input_precedence(). */}
 
-Review access separately from structure.
-Record reads, Action invocation, and Proposal transitions have separate grants.
-A classification label or caller-supplied query filter is not an authorization boundary.
-Inspect module access contributions and related reads before adopting them.
-The facility project's related operator read uses the selected facility profile;
-its direct operator read has a separately authored grant.
-
-{/* Evidence: products/breg/examples/facility/registry.yaml;
-    products/breg/examples/facility/README.md;
-    crates/registry-breg/src/access.rs, explain_access(). */}
-
-Pair the model with synthetic records, allowed and refused operations, a correction
-journey, and an upgrade case.
-Include a case your policy permits that a stricter model might accidentally reject.
-Review identity, uniqueness, required fields, and permissions separately from
-optional metadata additions.
-
 ## Next
 
-- [Author a registry project](../../configure/breg/) from a complete minimal or facility starter.
-- [Control access per profile](../../configure/breg-access/) for record, Action, and Proposal grants.
-- [Declare Actions and Proposals](../../configure/breg-actions/) for planned writes and review boundaries.
-- [Test with journeys](../../configure/breg-journeys/) for executable allowed, refused, and recovery cases.
+- [Author a registry project](../../configure/breg/)
+- [Control access and reads](../../configure/breg-access/)
+- [Actions and Proposals](../../configure/breg-actions/)
+- [Test with journeys](../../configure/breg-journeys/)

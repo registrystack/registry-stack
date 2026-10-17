@@ -11,113 +11,127 @@ locale: en
 standards_referenced:
   - openapi
   - json-schema
+tutorial_test:
+  toolset: breg
 ---
 
 import ConfigurationReference from '../../../components/ConfigurationReference.astro';
 import reference from '../../../data/generated/breg-configuration.json';
 
-If you are verifying a Base Registry Engine (BReg) project, compile it offline,
-inspect the derived contract, and run its journeys against an isolated database
-with real credentials before packaging it.
+If you are verifying a Base Registry Engine (BReg) project, compile it offline, inspect what the
+compiler derived, and run its journeys against an isolated database before packaging it. Start
+from the facility template in [Author a registry project](../breg/):
+
+```sh
+bregctl init --template facility-registry facility
+```
 
 ## Check the project
 
 ```sh
-bregctl check ./my-registry
-bregctl check ./my-registry --production
+bregctl check facility
 ```
 
-Check reports diagnostics at the document and member that needs repair. An error
-refuses the candidate. An advisory describes a decision to review. Use
-`--deny-warnings` when your reviewed warning policy requires it; do not assume
-that an example always emits a fixed number of warnings.
+```text test-excerpt
+Authoring check passed; registry revision sha256:<digest>.
+```
 
-The command also validates declared local clients and journey files against the
-project. Fix renamed Record type IDs, profile IDs, and operation bindings there
-when changing the model. Unknown or retired keys fail rather than becoming grants.
+An error refuses the project; a warning is a decision to review. Add `--production` for
+production package rules and `--deny-warnings` if your policy requires it. Check also reads `dev-clients.yaml` and the journey
+files under `tests/`, so a renamed Record type, profile, or Action fails there too.
 
 ## Explain what the compiler derived
 
+`bregctl explain <subject> facility` prints one compiled inventory without a database. The
+subjects are `model` (Record types and fields), `access` (what each profile may do), `routes`,
+`queries` (list queries per profile), `actions`, `proposals` (Proposal Actions only), `events`
+(declared deliveries), and `lifecycle` (the engine's Proposal state transitions; it takes no
+project).
+
 ```sh
-bregctl --format json explain model ./my-registry
-bregctl --format json explain routes ./my-registry
-bregctl --format json explain access ./my-registry
-bregctl --format json explain actions ./my-registry
-bregctl --format json explain proposals ./my-registry
+bregctl explain actions facility
 ```
 
-Inspect exact fields, routes, grants, Action mode, plans, guards, and Proposal
-review/application requirements. These commands read no target records and make
-no review decision. They establish the compiled contract, not runtime success.
+```text test-excerpt
+  correct-address (proposal)
+    inputs  facility, address-line, city, postal-code
+    plan function  plans/correct-address.rhai
+    write ceiling: patch facility, fields address-line, city, postal-code
+    commit guard facility: revision unchanged
+```
+
+Add `--format json` for the complete definition and `--production` for production rules. For
+`access`, `--scenario <file>` evaluates synthetic claims against the profiles without verifying
+a token or reading a record. Explain shows the compiled contract, not runtime success.
 
 ## Generate application artifacts
 
 ```sh
-bregctl generate --help
+bregctl generate openapi facility --output facility-openapi
 ```
 
-Choose the needed artifact family and a fresh output directory. Generated JSON
-Schema, OpenAPI, metadata, and project types derive from the same model. Review
-the authored source when a generated contract is wrong; do not hand-edit a copy.
-Every Action input includes its compiler-emitted schema, which the clients and
-MCP gateway use exactly.
+Every artifact family (`bregctl generate --help`) derives from the same model: fix the project,
+never a generated copy.
 
 ## Declare a journey
 
-Start from the generated `tests/journeys.yaml`. It declares
-`apiVersion: id.registrystack.org/formats/breg/journeys/v1` and `kind: BRegJourneys`.
-Each step identifies the Record type or Action, selected access profile, synthetic
-expected claims, request, expected outcome, and optional capture for later steps.
-Use `recordType` for a record step.
+`tests/journeys.yaml` lists journeys, each a sequence of steps. A step names a Record type or Action, a profile, synthetic claims, a request, and the expected
+outcome. The facility journey registers a facility, then reads it as a caller from another
+jurisdiction:
 
-The default directory journey creates a contact, reads it with the editor's
-jurisdiction, then expects a concealed `404 resource.not_found` when a caller
-from another jurisdiction reads that same record. Keep both the success and the
-refusal. Add a regression that represents the user-visible invariant your edit
-changes, rather than a second copy of every configuration member.
-
-Function planning has a separate bounded offline loop:
-
-```sh
-bregctl project action-test ./my-registry --action <action-id> \
-  --input /path/to/input.json --expect /path/to/expected.json
+```yaml title="facility/tests/journeys.yaml" test-excerpt="facility/tests/journeys.yaml"
+      - id: conceal-foreign-facility
+        recordType: facility
+        accessProfile: facility-reader
+        claims:
+          principal: synthetic-foreign-reader
+          scopes: [registry:facility:read]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-b}
+        request: {type: get, recordCapture: facility}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
 ```
 
-This uses logical input IDs without an HTTP envelope. It can check effects or a
-declared refusal; it cannot prove target authority, current guards, or a database
-transaction.
+Keep the success and the refusal; add a step for each invariant your change affects.
+
+A plan Function has an offline loop, with input keyed by authored input ID:
+
+```json title="correction-input.json" test-file
+{"facility": "018f0c3e-7b1a-7c00-8000-000000000001", "address-line": "2 Corrected Road", "city": "Corrected city", "postal-code": "10300"}
+```
+
+```sh
+bregctl project action-test facility --action correct-address --input correction-input.json
+```
+
+```text test-excerpt
+Ran the handler. Returned 1 effect.
+```
+
+`--expect <file>` asserts exact effects or a refusal. This proves the plan, not authority,
+guards, or a transaction.
 
 ## Run with real credentials
 
-Prepare a separate TLS schema-test database and runtime file with migration and
-runtime roles. Bind protected steps to real short-lived credentials whose verified
-claims match the fixture. The fixture's synthetic claims do not authenticate a
-running server. Keep credentials outside the project and version control.
+This needs a separate schema-test database and runtime file with migration and runtime roles. Bind
+each protected step to a real short-lived credential whose claims match the step; synthetic claims
+authenticate nothing. Keep credentials outside the project.
 
-```sh
-bregctl test ./my-registry --runtime-config /path/to/runtime-test.yaml \
+```sh test-skip="needs a PostgreSQL schema-test database and real credentials"
+bregctl test facility --runtime-config /path/to/runtime-test.yaml \
   --credentials /path/to/credentials.yaml --output /path/to/test-receipt.json
 ```
 
-A successful result writes a receipt for the exact candidate and measured catalog.
-A refused step identifies the failure; repair the cause and rerun into a fresh
-receipt path. Package accepts that exact successful receipt and refuses changed
-inputs. [Build a production candidate](../../tutorials/build-a-breg-production-candidate/)
-connects the test and package steps.
-
-For local evaluation, `bregctl dev start` prepares the isolated rehearsal and
-binds the authored local clients. `bregctl examples run` serves resumable example
-scenarios against the retained session. A scenario is an adopter exercise;
-compiler checks and database journeys remain separate proof levels.
+A passing run writes a receipt for that exact candidate; packaging accepts it and refuses changed
+inputs. A refused step names the failure; repair it and rerun into a fresh receipt path.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs; crates/registry-bregctl/src/check.rs;
-    crates/registry-breg/src/fixtures.rs; crates/registry-bregctl/src/dev/examples.rs;
-    products/breg/examples/minimal/tests/journeys.yaml. */}
+    crates/registry-breg/src/fixtures.rs; products/breg/examples/facility/tests/journeys.yaml. */}
 
 ## Journey file keys
 
-Every key `tests/journeys.yaml` accepts, with its type, accepted values, and bounds. A step names
-a Record type or an Action, and `bregctl check` adds the rules a schema cannot state.
+Every key `tests/journeys.yaml` accepts, with its type and bounds. `bregctl check` adds the rules
+a schema cannot state.
 
 {/* Generated from products/breg/generated/tools/journeys.v1.schema.json,
     through src/data/generated/breg-configuration.json, by
@@ -129,4 +143,4 @@ a Record type or an Action, and `bregctl check` adds the rules a schema cannot s
 
 - [Build a production candidate](../../tutorials/build-a-breg-production-candidate/)
 - [Deploy a registry](../../operate/breg/)
-- [Declare Actions and Proposals](../breg-actions/)
+- [Actions and Proposals](../breg-actions/)
