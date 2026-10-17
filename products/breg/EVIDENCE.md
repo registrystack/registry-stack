@@ -176,12 +176,12 @@ Problem Details status, type and code. Other HTTP failures remain failures.
 
 Selectors support bounded nonempty strings, dates, booleans, and UUID/reference
 fields using Evidence's `uuid` type. UUID facts carry JSON Schema `format: uuid`.
-Both require exactly 36 ASCII characters in the hyphenated 8-4-4-4-12 hexadecimal
-form. Same-length malformed values are refused before source access or signing.
+Both require exactly 36 ASCII characters in the hyphenated 8-4-4-4-12 lowercase
+hexadecimal form, the spelling BReg itself returns. Uppercase and other
+same-length malformed values are refused before source access or signing.
 Composite profiles must fit Evidence's aggregate selector bound. String maxima
 allow four UTF-8 bytes per BReg character. Identity values are never normalized
-by the adapter, including UUID letter case. Use the spelling returned by the
-provider. Vocabulary facts retain their enum; vocabulary selectors require a
+by the adapter. Use the spelling returned by the provider. Vocabulary facts retain their enum; vocabulary selectors require a
 reviewed codelist artifact, so this exporter refuses them with adapter guidance.
 
 BReg's unrestricted `int64` selector range exceeds Evidence's exact

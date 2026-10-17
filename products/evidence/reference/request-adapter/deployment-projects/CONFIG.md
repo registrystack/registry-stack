@@ -256,7 +256,7 @@ authority.
 |---|---|
 | `string` | `minimumBytes`, `maximumBytes` |
 | `date` | Canonical `YYYY-MM-DD` |
-| `uuid` | Exactly 36 ASCII characters: hexadecimal groups of 8-4-4-4-12 separated by hyphens, without normalization |
+| `uuid` | Exactly 36 ASCII characters: lowercase hexadecimal groups of 8-4-4-4-12 separated by hyphens; uppercase is refused, without normalization |
 | `integer` | Inclusive `minimum`, `maximum` within the safe integer bound |
 | `boolean` | No additional keys |
 | `controlled-code` | `codelist`, `codelistVersion`, `maximumBytes` |

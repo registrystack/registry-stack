@@ -1364,14 +1364,16 @@ fn codelist_contains_selector_value(codelist: &Codelist, value: &str) -> bool {
     }
 }
 
-// UUID selectors retain the exact hyphenated hexadecimal spelling, including case.
+// UUID selectors take only the RFC 9562 canonical form: lowercase hexadecimal
+// in hyphenated 8-4-4-4-12 groups. One subject has one spelling, so it has one
+// audit pseudonym and matches what a registry source accepts.
 pub(crate) fn canonical_uuid(value: &str) -> bool {
     value.len() == 36
         && value.bytes().enumerate().all(|(index, byte)| {
             if matches!(index, 8 | 13 | 18 | 23) {
                 byte == b'-'
             } else {
-                byte.is_ascii_hexdigit()
+                matches!(byte, b'0'..=b'9' | b'a'..=b'f')
             }
         })
 }

@@ -13374,6 +13374,7 @@ async fn uuid_selector_refuses_malformed_values_before_source_access() {
         "zzzzzzzz-1234-1234-1234-123456789abc",
         "12345678_1234-1234-1234-123456789abc",
         "12345678123412341234123456789abc",
+        "12345678-1234-1234-1234-123456789ABC",
     ] {
         let request = adult_request_with_family_name(value);
         assert_eq!(

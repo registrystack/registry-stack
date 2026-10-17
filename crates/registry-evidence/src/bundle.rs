@@ -5821,5 +5821,8 @@ mod uuid_format_regressions {
         assert!(
             !validator.is_valid(&serde_json::json!({"id": "zzzzzzzz-1234-1234-1234-123456789abc"}))
         );
+        assert!(
+            !validator.is_valid(&serde_json::json!({"id": "12345678-1234-1234-1234-123456789ABC"}))
+        );
     }
 }

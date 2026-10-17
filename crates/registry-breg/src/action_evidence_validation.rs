@@ -156,9 +156,7 @@ pub(crate) fn validate_selector_field(
         {
             Some(SelectorValue::String(value.clone()))
         }
-        (SelectorField::Uuid { .. }, Value::String(value))
-            if value.len() == 36 && uuid::Uuid::parse_str(value).is_ok() =>
-        {
+        (SelectorField::Uuid { .. }, Value::String(value)) if crate::data::valid_uuid(value) => {
             Some(SelectorValue::String(value.clone()))
         }
         (SelectorField::Date { .. }, Value::String(value))

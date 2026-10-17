@@ -391,11 +391,12 @@ mod tests {
             &serde_json::json!("12345678-1234-1234-1234-123456789abc")
         )
         .is_ok());
-        assert!(validate_selector_field(
-            &selector,
-            &serde_json::json!("zzzzzzzz-1234-1234-1234-123456789abc")
-        )
-        .is_err());
+        for refused in [
+            "zzzzzzzz-1234-1234-1234-123456789abc",
+            "12345678-1234-1234-1234-123456789ABC",
+        ] {
+            assert!(validate_selector_field(&selector, &serde_json::json!(refused)).is_err());
+        }
         for kind in [
             crate::contract::FieldTypeSource::Uuid,
             crate::contract::FieldTypeSource::Reference {

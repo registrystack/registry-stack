@@ -330,14 +330,16 @@ impl DefinitionSelector {
     }
 }
 
-// UUID selectors retain the exact hyphenated hexadecimal spelling, including case.
+// UUID selectors take only the RFC 9562 canonical form: lowercase hexadecimal
+// in hyphenated 8-4-4-4-12 groups. One subject has one spelling, so it has one
+// audit pseudonym and matches what a registry source accepts.
 fn canonical_uuid(value: &str) -> bool {
     value.len() == 36
         && value.bytes().enumerate().all(|(index, byte)| {
             if matches!(index, 8 | 13 | 18 | 23) {
                 byte == b'-'
             } else {
-                byte.is_ascii_hexdigit()
+                matches!(byte, b'0'..=b'9' | b'a'..=b'f')
             }
         })
 }
@@ -1385,13 +1387,11 @@ mod uuid_selector_tests {
     fn uuid_metadata_enforces_exact_lexical_values() {
         let field: SelectorField =
             serde_json::from_value(serde_json::json!({"type":"uuid","name":"reference"})).unwrap();
+        assert!(field.accepts(&SelectorValue::String(
+            "12345678-1234-1234-1234-123456789abc".to_owned()
+        )));
         for value in [
-            "12345678-1234-1234-1234-123456789abc",
             "12345678-1234-1234-1234-123456789ABC",
-        ] {
-            assert!(field.accepts(&SelectorValue::String(value.to_owned())));
-        }
-        for value in [
             "zzzzzzzz-1234-1234-1234-123456789abc",
             "12345678_1234-1234-1234-123456789abc",
             "12345678123412341234123456789abc",
