@@ -1097,10 +1097,12 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
             .any(|row| row["taskId"] == id),
         "the supervisor still sees the decided task after BReg applied: {supervised}"
     );
+    // Backdate the whole 30-day retention window so expiry remains after
+    // completion even when the preceding HTTP checks take less than a second.
     admin
         .execute(
-            "UPDATE casework_review_requests SET result_available_until=now()-interval '1 second' \
-             WHERE request_id=$1",
+            "UPDATE casework_review_requests SET terminal_at=now()-interval '31 days', \
+             result_available_until=now()-interval '1 day' WHERE request_id=$1",
             &[&accepted.request_id],
         )
         .await
