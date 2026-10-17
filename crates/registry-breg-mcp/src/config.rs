@@ -142,6 +142,9 @@ pub struct ResourceServerConfig {
     /// through the issuer's OpenID Connect discovery document.
     #[serde(default)]
     pub jwks_source: JwksSource,
+    /// Permit plain HTTP to the declared issuer beyond loopback.
+    #[serde(default)]
+    pub allow_insecure_http: bool,
     /// The asymmetric signature algorithms an accepted token may use.
     #[serde(deserialize_with = "bounded_list")]
     #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 128)))]
@@ -163,6 +166,14 @@ pub struct ResourceServerConfig {
     /// `iat` to its `exp`, in seconds.
     #[serde(default = "default_maximum_token_lifetime")]
     pub maximum_token_lifetime_seconds: BoundedU64<1, MAXIMUM_TOKEN_LIFETIME_SECONDS>,
+}
+
+impl ResourceServerConfig {
+    pub(crate) fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
+        self.allow_insecure_http.then_some(
+            "resourceServer.allowInsecureHttp permits plain HTTP to the configured issuer",
+        )
+    }
 }
 
 fn default_scope_claim() -> ExternalId {
@@ -648,10 +659,11 @@ fn findings(config: &RuntimeConfig, defers: &dyn Fn(&str) -> bool) -> Vec<Findin
             "exchange.privateKeyRef",
             config.exchange.private_key_ref.as_str(),
         ),
-        config
-            .resource_server
-            .jwks_source
-            .check("resourceServer.jwksSource", config.development_loopback()),
+        config.resource_server.jwks_source.check_with_insecure_http(
+            "resourceServer.jwksSource",
+            config.development_loopback(),
+            config.resource_server.allow_insecure_http,
+        ),
     ];
     findings.extend(
         blocks
@@ -693,15 +705,19 @@ fn endpoint_findings(
     ];
     for (pointer, endpoint) in endpoints {
         let url = endpoint.to_url();
-        let secure = url.scheme() == "https" || (development && loopback_host(&url));
+        let issuer_http_opt_in =
+            pointer == "/resourceServer/issuer" && config.resource_server.allow_insecure_http;
+        let secure = url.scheme() == "https"
+            || (development && loopback_host(&url))
+            || (issuer_http_opt_in && url.scheme() == "http");
         if termination_known && !secure {
             findings.push(Finding::new(
                 "breg.mcp-runtime.plain-http-endpoint",
                 pointer,
                 "the endpoint uses plain http, which is accepted only on a loopback host under \
                  listener.tlsTermination development-loopback",
-                "Write an https URL, or run on loopback with listener.tlsTermination \
-                 development-loopback.",
+                "Write an https URL, run on loopback with listener.tlsTermination \
+                 development-loopback, or set resourceServer.allowInsecureHttp: true for the issuer.",
             ));
         } else if url.query().is_some() || url.fragment().is_some() {
             findings.push(Finding::new(
@@ -1441,6 +1457,16 @@ rateLimits:
             &remote,
             "breg.mcp-runtime.plain-http-endpoint",
             "/registry/baseUrl",
+        );
+        let opted_in = document().replace(
+            "  issuer: https://login.example.test",
+            "  issuer: http://login.example.test\n  allowInsecureHttp: true",
+        );
+        let config = load(&opted_in).expect("explicit HTTP issuer opt-in");
+        assert!(config.resource_server.allow_insecure_http);
+        assert_eq!(
+            config.resource_server.insecure_http_startup_diagnostic(),
+            Some("resourceServer.allowInsecureHttp permits plain HTTP to the configured issuer")
         );
     }
 

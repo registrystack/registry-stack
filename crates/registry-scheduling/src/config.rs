@@ -29,8 +29,8 @@ pub use registry_platform_config::{
 };
 use registry_platform_oidc::task_grant::{TaskGrantStatusEndpoint, TaskGrantStatusRegistry};
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery, parse_static_jwks, JwksFetcher, JwksFetcherConfig,
-    OidcDiscoveryConfig, TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy,
+    JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
 };
 use registry_platform_yaml::{
     escape_pointer_segment, Diagnostic, Invalid, LocalId, Report, RetiredApiVersion,
@@ -1021,9 +1021,23 @@ impl RuntimeConfig {
         &self,
         secrets: &SecretResolver,
     ) -> Result<(TokenVerifierConfig, std::sync::Arc<JwksFetcher>), RuntimeConfigError> {
-        let fetcher = match &self.authentication.oidc.provider.jwks_source {
+        let provider = &self.authentication.oidc.provider;
+        if let Some(diagnostic) = self.insecure_http_startup_diagnostic() {
+            tracing::warn!("{diagnostic}");
+        }
+        let network =
+            IssuerNetworkPolicy::new(provider.issuer.as_str(), provider.allow_insecure_http)
+                .map_err(|_| RuntimeConfigError::Oidc)?;
+        let fetcher = match &provider.jwks_source {
             JwksSource::Uri { uri } => {
-                JwksFetcher::new(uri.to_string(), JwksFetcherConfig::defaults())
+                let policy = network
+                    .jwks_fetch_policy(uri.as_str())
+                    .map_err(|_| RuntimeConfigError::Oidc)?;
+                JwksFetcher::new_with_fetch_url_policy(
+                    uri.to_string(),
+                    JwksFetcherConfig::defaults(),
+                    policy,
+                )
             }
             JwksSource::Discovery {} => {
                 let discovery_config = OidcDiscoveryConfig {
@@ -1032,10 +1046,15 @@ impl RuntimeConfig {
                     discovery_timeout: Duration::from_secs(5),
                     max_doc_bytes: 1024 * 1024,
                 };
-                let discovery = fetch_discovery(&discovery_config)
-                    .await
-                    .map_err(|_| RuntimeConfigError::Oidc)?;
-                JwksFetcher::new(discovery.jwks_uri, JwksFetcherConfig::defaults())
+                let (discovery, policy) =
+                    fetch_discovery_for_issuer(&discovery_config, provider.allow_insecure_http)
+                        .await
+                        .map_err(|_| RuntimeConfigError::Oidc)?;
+                JwksFetcher::new_with_fetch_url_policy(
+                    discovery.jwks_uri,
+                    JwksFetcherConfig::defaults(),
+                    policy,
+                )
             }
             JwksSource::Static { document_ref } => {
                 let document = secrets.resolve(document_ref).map_err(|error| {
@@ -1051,6 +1070,16 @@ impl RuntimeConfig {
             }
         };
         Ok((self.verifier_profile(), std::sync::Arc::new(fetcher)))
+    }
+
+    fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
+        self.authentication
+            .oidc
+            .provider
+            .allow_insecure_http
+            .then_some(
+                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer",
+            )
     }
 
     /// The access-token verifier profile this deployment's OIDC settings
@@ -1893,6 +1922,23 @@ holdPolicy:
     /// The code and pointer of a refusal, the pair an operator acts on.
     fn refusal(error: &RuntimeConfigError) -> (String, String) {
         (error.code().to_owned(), error.pointer())
+    }
+
+    #[test]
+    fn runtime_reads_the_explicit_http_issuer_opt_in() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["authentication"]["oidc"]["issuer"] =
+            serde_json::json!("http://identity.example.test");
+        document["authentication"]["oidc"]["allowInsecureHttp"] = serde_json::json!(true);
+        let config = parse_runtime(&document).expect("explicit HTTP issuer opt-in");
+        assert!(config.authentication.oidc.provider.allow_insecure_http);
+        assert_eq!(
+            config.insecure_http_startup_diagnostic(),
+            Some(
+                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer"
+            )
+        );
     }
 
     #[test]

@@ -3054,6 +3054,12 @@ pub struct OidcAuthenticationConfig {
 shared_block_host!(OidcAuthenticationConfig, block = "provider");
 
 impl OidcAuthenticationConfig {
+    pub(crate) fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
+        self.provider.allow_insecure_http.then_some(
+            "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer",
+        )
+    }
+
     /// The exact issuer accepted in `iss`.
     pub fn issuer(&self) -> &str {
         &self.provider.issuer
@@ -3082,9 +3088,13 @@ impl OidcAuthenticationConfig {
             .map_err(|_| ConfigError::Invalid("authentication issuer is invalid"))?;
         let jwks_uri = Url::parse(self.jwks_uri())
             .map_err(|_| ConfigError::Invalid("authentication JWKS URI is invalid"))?;
-        if issuer.scheme() == "http" || jwks_uri.scheme() == "http" {
+        if (issuer.scheme() == "http" || jwks_uri.scheme() == "http")
+            && !self.provider.allow_insecure_http
+        {
             if assurance_profile != AssuranceProfile::Local {
-                return invalid("production and evidence-grade authentication requires HTTPS");
+                return invalid(
+                    "production and evidence-grade authentication requires HTTPS; a declared plain HTTP issuer needs authentication.oidc.allowInsecureHttp: true",
+                );
             }
             // The local permission is for a supervised issuer on this
             // deployment's own loopback: a canonical numeric origin, with the
@@ -3111,9 +3121,25 @@ impl OidcAuthenticationConfig {
                     "a local HTTP authentication JWKS URI cannot use a TLS trust profile",
                 );
             }
-        } else {
+        } else if issuer.scheme() == "https" && jwks_uri.scheme() == "https" {
             validate_https_issuer(self.issuer())?;
             validate_https_url(self.jwks_uri(), false)?;
+        } else {
+            if issuer.scheme() == "https" {
+                validate_https_issuer(self.issuer())?;
+            }
+            if jwks_uri.scheme() == "https" {
+                validate_https_url(self.jwks_uri(), false)?;
+            } else {
+                if jwks_uri.fragment().is_some() {
+                    return invalid("authentication JWKS URI cannot carry a fragment");
+                }
+                if self.tls_trust_profile.is_some() {
+                    return invalid(
+                        "a plain HTTP authentication JWKS URI cannot use a TLS trust profile",
+                    );
+                }
+            }
         }
         self.provider
             .check(
@@ -3239,28 +3265,6 @@ impl OidcAuthenticationConfig {
             return invalid("authority claim names must not shadow registered JWT claims");
         }
         Ok(())
-    }
-
-    pub(crate) fn uses_local_issuer_http(&self, assurance_profile: AssuranceProfile) -> bool {
-        if assurance_profile != AssuranceProfile::Local {
-            return false;
-        }
-        let Ok(issuer) = Url::parse(self.issuer()) else {
-            return false;
-        };
-        let Ok(jwks_uri) = Url::parse(self.jwks_uri()) else {
-            return false;
-        };
-        issuer.scheme() == "http"
-            && jwks_uri.scheme() == "http"
-            && validate_local_issuer_origin(self.issuer()).is_ok()
-            && jwks_uri.host_str() == Some("127.0.0.1")
-            && jwks_uri.port() == issuer.port()
-            && jwks_uri.path().starts_with('/')
-            && jwks_uri.query().is_none()
-            && jwks_uri.fragment().is_none()
-            && jwks_uri.username().is_empty()
-            && jwks_uri.password().is_none()
     }
 }
 
@@ -7997,6 +8001,63 @@ mod tests {
                 "{profile:?} inherited the local HTTP exception"
             );
         }
+    }
+
+    #[test]
+    fn runtime_reads_the_explicit_http_issuer_opt_in() {
+        let config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("strict fixture validates");
+        let mut candidate = serde_json::to_value(config).expect("configuration serializes");
+        candidate["authentication"]["oidc"]["issuer"] =
+            serde_json::json!("http://identity.internal:8080");
+        candidate["authentication"]["oidc"]["jwksSource"] = serde_json::json!({
+            "type": "uri",
+            "uri": "http://identity.internal:8080/oauth2/jwks"
+        });
+        candidate["authentication"]["oidc"]["allowInsecureHttp"] = serde_json::json!(true);
+
+        let parsed = EvidenceConfig::parse_projection(&candidate)
+            .expect("explicit HTTP issuer opt-in parses and validates");
+        assert!(parsed.authentication.oidc.provider.allow_insecure_http);
+        assert_eq!(
+            parsed
+                .authentication
+                .oidc
+                .insecure_http_startup_diagnostic(),
+            Some(
+                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer"
+            )
+        );
+
+        candidate["authentication"]["oidc"]["tlsTrustProfile"] = serde_json::json!("private-ca");
+        let error = EvidenceConfig::parse_projection(&candidate)
+            .expect_err("plain HTTP has no TLS trust profile")
+            .to_string();
+        assert!(
+            error.contains("plain HTTP authentication JWKS URI cannot use a TLS trust profile"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn strict_http_issuer_refusal_names_the_explicit_opt_in() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("strict fixture validates");
+        config.authentication.oidc.provider.issuer =
+            registry_platform_yaml::Url::new("http://identity.internal:8080").expect("valid URL");
+        config.authentication.oidc.provider.jwks_source =
+            registry_platform_config::JwksSource::Uri {
+                uri: registry_platform_yaml::Url::new("http://identity.internal:8080/oauth2/jwks")
+                    .expect("valid URL"),
+            };
+
+        let rendered = config.validate().unwrap_err().to_string();
+        assert!(rendered.contains("authentication.oidc.allowInsecureHttp: true"));
+        assert!(!rendered.contains("identity.internal"));
     }
 
     /// The issuer's trust profile is a logical id the runtime file binds, and

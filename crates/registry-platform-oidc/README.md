@@ -26,24 +26,26 @@ use std::{sync::Arc, time::Duration};
 
 use jsonwebtoken::Algorithm;
 use registry_platform_oidc::{
-    fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
+    fetch_discovery_for_issuer, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
     TokenVerifier, TokenVerifierConfig,
 };
 
 async fn build_verifier() -> Result<TokenVerifier, Box<dyn std::error::Error>> {
-    let discovery = fetch_discovery(
+    let (discovery, jwks_policy) = fetch_discovery_for_issuer(
         &OidcDiscoveryConfig {
             issuer: "https://issuer.example".to_string(),
             jwks_uri_override: None,
             discovery_timeout: Duration::from_secs(5),
             max_doc_bytes: 1024 * 1024,
         },
+        false,
     )
     .await?;
 
-    let fetcher = Arc::new(JwksFetcher::new(
+    let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         discovery.jwks_uri,
         JwksFetcherConfig::defaults(),
+        jwks_policy,
     ));
 
     let config = TokenVerifierConfig::access_token_profile(
@@ -61,9 +63,14 @@ async fn build_verifier() -> Result<TokenVerifier, Box<dyn std::error::Error>> {
 
 ## Security Notes
 
-- `fetch_discovery` and `JwksFetcher::new` use `FetchUrlPolicy::strict`.
-- Use `*_with_policy` constructors only for tests or controlled local
-  development.
+- `fetch_discovery_for_issuer` admits private addresses for the configured issuer and a
+  same-origin `jwks_uri`. It always denies cloud metadata and denies private addresses for a
+  cross-origin `jwks_uri`.
+- Plain HTTP is accepted on IPv4 and IPv6 loopback. Elsewhere it requires the product's explicit
+  `allowInsecureHttp: true` operator setting. The returned JWKS policy carries that decision
+  without weakening the cross-origin private-address rule.
+- `fetch_discovery` and `JwksFetcher::new` retain their strict defaults for callers that do not
+  have an operator-declared issuer policy.
 - Discovery, returned JWKS URI validation, and JWKS refreshes are bound by the
   configured timeout, including DNS validation.
 - Use the named profiles for access-token flows so related ID token and

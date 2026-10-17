@@ -1,0 +1,84 @@
+---
+title: Connect an OIDC issuer
+description: Choose the secure network configuration for a Registry Stack token issuer.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-platform
+last_reviewed: "2026-10-17"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Use this guide when a Registry Stack runtime must fetch OpenID Connect (OIDC) discovery metadata
+or signing keys from an issuer on a public, private, container, or loopback network.
+
+## Choose the issuer connection
+
+Configure the exact issuer origin that you operate or trust. The runtime permits that declared
+origin to resolve to a private address. A `jwks_uri` learned through discovery inherits the private
+address allowance only when it has the same scheme, host, and port as the issuer.
+
+| Deployment | Configuration |
+| --- | --- |
+| Local development on IPv4 or IPv6 loopback | No additional setting |
+| Docker Compose with an HTTP issuer on the container network | `allowInsecureHttp: true` beside the issuer |
+| Kubernetes or a private network with an HTTPS issuer | No additional setting |
+| Hosted issuer on public addresses | No additional setting |
+
+Cloud metadata addresses remain blocked. A cross-origin signing-key endpoint also remains blocked
+when it resolves to a private address, even if the declared issuer is private. Redirects are not
+followed, so an accepted origin cannot redirect a key fetch to a different destination.
+
+{/* Evidence: crates/registry-platform-oidc/src/lib.rs, IssuerNetworkPolicy;
+    crates/registry-platform-httputil/src/lib.rs, FetchUrlPolicy and
+    outbound_client_does_not_follow_redirects. */}
+
+## Permit plain HTTP only when required
+
+IPv4 and IPv6 loopback HTTP keep the local development behavior without another setting. For an
+HTTP issuer elsewhere, set the runtime's `allowInsecureHttp` field beside `issuer`:
+
+```yaml
+authentication:
+  oidc:
+    issuer: http://identity.internal:8080
+    allowInsecureHttp: true
+```
+
+The runtime logs a warning at startup while this setting is active. Keep it limited to a trusted
+private network because bearer tokens and issuer metadata have no transport confidentiality on
+plain HTTP. The setting does not permit cloud metadata access or a cross-origin private
+`jwks_uri`.
+
+## Trust an internal certificate authority
+
+Prefer HTTPS for an in-cluster or private-network issuer. Registry Stack HTTP clients use rustls
+with the operating system's native trust roots. Install the internal certificate authority (CA)
+in the host trust store before starting the runtime.
+
+A distroless image usually has no writable host trust store. Mount a read-only PEM bundle into the
+container and set `SSL_CERT_FILE` in the runtime environment. This variable replaces native-store
+loading for the process, so the bundle must contain the internal CA and every other root the
+runtime needs, including public roots when it also calls public services:
+
+```yaml
+volumeMounts:
+  - name: internal-ca
+    mountPath: /etc/registry-stack/internal-ca.pem
+    subPath: internal-ca.pem
+    readOnly: true
+env:
+  - name: SSL_CERT_FILE
+    value: /etc/registry-stack/internal-ca.pem
+```
+
+Restart the runtime after changing the mounted bundle, then use the product's readiness and doctor
+checks to confirm that discovery and signing-key retrieval succeed. If the issuer is reachable but
+certificate validation fails, confirm that the bundle contains every required root and the issuing
+CA chain, and that `SSL_CERT_FILE` names the mounted file inside the container.
+
+{/* Evidence: Cargo.toml, workspace reqwest features rustls-tls-native-roots;
+    crates/registry-platform-httputil/src/lib.rs, OutboundClientBuilder;
+    crates/registry-caseworkctl/src/dev/mod.rs, SSL_CERT_FILE runtime environment. */}

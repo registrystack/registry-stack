@@ -83,6 +83,7 @@ fn offer_config(
         claims: Default::default(),
         issuer: issuer.to_owned(),
         jwks_uri: format!("{issuer}/oauth2/jwks"),
+        allow_insecure_http: false,
         audiences: vec![audience.to_owned()],
         algorithms: vec![algorithm],
         authorized_clients: Restriction::Unrestricted,
