@@ -220,10 +220,17 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 
 | Code | Meaning | Recovery |
 | --- | --- | --- |
-| `startup.database.connection-refused` | PostgreSQL did not accept the connection. | Check the URL secret, the role, and `database.trustedRootCertificateRef`. |
-| `apply.database.unavailable` | The same, before an apply changed anything. | As above, then retry. |
+| `startup.database.unreachable` | The database could not be reached. | Check its address, the network path, and that the server is up. |
+| `startup.database.tls-refused` | The TLS connection was refused. | Check the server certificate and name; for a private authority, set `database.trustedRootCertificateRef`. |
+| `startup.database.authentication-refused` | PostgreSQL refused the runtime role or its credential. | Check the role and the secret `database.runtimeUrlRef` names. |
+| `startup.database.missing` | The named database does not exist. | Create it, or correct the database name in the URL. |
+| `startup.database.timeout` | The connection timed out. | Check database availability and the pool timeout settings. |
+| `startup.database.configuration-refused` | The runtime file's `database` settings were refused. | Correct them. |
+| `startup.database.secret-refused` | The connection secret could not be resolved. | Check `database.runtimeUrlRef` and enable the secret provider that owns it. |
+| `apply.database.unavailable` | The migration database could not be reached before an apply changed anything. | Check the migration URL secret, the role, and `database.trustedRootCertificateRef`, then retry. |
 | `startup.database.uninitialized` | No package was ever activated. | Run `plan`, then `apply --initial`. |
 | `startup.database.unrecognized` | The database holds state this release does not recognize. | Apply the package to a fresh database. |
+| `startup.database.catalog-drift` | Managed tables, views, sequences, functions, or indexes differ from the active package, or a unique constraint or required-column marker was removed; the message names each. | Restore them from the active package migration, or apply the active package again, then rerun `doctor`. Other shape changes report `startup.database.unready`. |
 | `startup.database.identity-mismatch` | The database id differs from `identity.databaseId`. | Fix the database URLs or the id. |
 | `apply.database.identity-mismatch` | The same, from `plan` or `apply`. | As above. |
 | `startup.package.not-active` | Another package is active than the one at `package.root`. | Run `bregctl status`; point `package.root` at the active package. |
@@ -276,7 +283,8 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `data.*.breg-url.refused` | The URL is neither `https` nor loopback `http`. | Use one. |
 | `data.*.access-token.refused` | The token file was refused. | Hold one token in a regular file. |
 
-{/* Evidence: crates/registry-bregctl/src/doctor.rs, startup_diagnostic();
+{/* Evidence: crates/registry-bregctl/src/doctor.rs, startup_diagnostic() and the catalog-drift diagnostic;
+    crates/registry-breg/src/postgres/config.rs, DatabaseConnectionCause;
     crates/registry-bregctl/src/lib.rs, data command failures, import_authority_failure(),
     instance_claim_failure(); crates/registry-breg/src/migration.rs;
     crates/registry-breg/src/auth.rs, MAX_AUDIENCES;
