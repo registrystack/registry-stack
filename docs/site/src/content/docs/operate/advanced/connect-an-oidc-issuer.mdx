@@ -17,8 +17,11 @@ or signing keys from an issuer on a public, private, container, or loopback netw
 ## Choose the issuer connection
 
 Configure the exact issuer origin that you operate or trust. The runtime permits that declared
-origin to resolve to a private address. A `jwks_uri` learned through discovery inherits the private
-address allowance only when it has the same scheme, host, and port as the issuer.
+origin to resolve to a private address. A signing-key URI you declare in configuration, such as
+`jwksSource: {type: uri, uri: ...}`, inherits the same allowance on any origin, so the runtime may
+reach keys at a container or private address that differs from the issuer's public name. A
+`jwks_uri` learned through discovery inherits the private address allowance only when it has the
+same scheme, host, and port as the issuer.
 
 | Deployment | Configuration |
 | --- | --- |
@@ -27,9 +30,10 @@ address allowance only when it has the same scheme, host, and port as the issuer
 | Kubernetes or a private network with an HTTPS issuer | No additional setting |
 | Hosted issuer on public addresses | No additional setting |
 
-Cloud metadata addresses remain blocked. A cross-origin signing-key endpoint also remains blocked
-when it resolves to a private address, even if the declared issuer is private. Redirects are not
-followed, so an accepted origin cannot redirect a key fetch to a different destination.
+Cloud metadata and link-local addresses remain blocked, declared or not. A cross-origin
+signing-key endpoint learned through discovery also remains blocked when it resolves to a private
+or loopback address, even if the declared issuer is private. Redirects are not followed, so an
+accepted origin cannot redirect a key fetch to a different destination.
 
 {/* Evidence: crates/registry-platform-oidc/src/lib.rs, IssuerNetworkPolicy;
     crates/registry-platform-httputil/src/lib.rs, FetchUrlPolicy and
@@ -49,8 +53,10 @@ authentication:
 
 The runtime logs a warning at startup while this setting is active. Keep it limited to a trusted
 private network because bearer tokens and issuer metadata have no transport confidentiality on
-plain HTTP. The setting does not permit cloud metadata access or a cross-origin private
-`jwks_uri`.
+plain HTTP. The setting covers the issuer's origin and a JWKS URI you configure. It does not
+permit cloud metadata access, and a `jwks_uri` on another origin learned through discovery must
+still use HTTPS and may not resolve to a private address. Evidence accepts it only under the `local` assurance profile:
+`production` and `evidence-grade` bundles require HTTPS for the issuer and signing keys.
 
 ## Trust an internal certificate authority
 

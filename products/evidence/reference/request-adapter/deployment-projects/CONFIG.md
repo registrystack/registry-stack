@@ -181,8 +181,9 @@ and bounded, signing and both audit gates remain fail-closed, and assertions
 are visibly marked `local`. A supervised local issuer may use only the exact
 canonical issuer origin `http://127.0.0.1:<non-zero-port>`, and its JWKS must
 be served from that exact origin at an absolute path with no query or fragment;
-other authentication URLs remain HTTPS. The route is the issuer's to choose;
-the origin is not.
+other authentication URLs remain HTTPS unless the local bundle sets
+`authentication.oidc.allowInsecureHttp: true`. The route is the issuer's to
+choose; the origin is not.
 
 `production` and `evidence-grade` are deployable profiles. Every requirement
 must reference a fixture suite, and the existing complete coverage validation
@@ -198,7 +199,8 @@ artifact, or alternate evaluator is introduced by the assurance profile.
 | `service.trustDomain` | yes | One operator-controlled trust-domain URI for the process. |
 | `issuer.uri` | yes | Legal issuer URI placed in evidence. Governance must authorize the provider to act for it. The key was `issuer.id`; a bundle that still writes `id` there is refused with `config.removed-key`. |
 | `authentication.oidc` | yes | The one OpenID Connect issuer whose access tokens this deployment accepts, and the rules a token from it must satisfy. Evidence accepts no other inbound credential. |
-| `authentication.oidc.issuer`, `authentication.oidc.jwksSource` | yes | Exact HTTPS token issuer and the fixed JWKS endpoint, written `jwksSource: {type: uri, uri: <JWKS URL>}`. `uri` is the only key-source type Evidence accepts; discovery and static key sets are refused. Path-based issuers are supported. The fixed JWKS endpoint may resolve to a public or private HTTPS address; DNS is pinned for each fetch, ambient proxies are disabled, and cloud-metadata destinations remain prohibited. |
+| `authentication.oidc.issuer`, `authentication.oidc.jwksSource` | yes | Exact HTTPS token issuer and the fixed JWKS endpoint, written `jwksSource: {type: uri, uri: <JWKS URL>}`. `uri` is the only key-source type Evidence accepts; discovery and static key sets are refused. Path-based issuers are supported. The fixed JWKS endpoint is declared by the operator, so it inherits the declared issuer's allowance on any origin: it may resolve to a public, private, or loopback address. Cloud-metadata and link-local destinations remain prohibited, DNS is pinned for each fetch, and ambient proxies and redirects are disabled. Evidence never follows a JWKS URI from a discovery document, so the stricter rule for discovered cross-origin endpoints does not arise. |
+| `authentication.oidc.allowInsecureHttp` | no | Permits plain HTTP to the issuer and the JWKS endpoint beyond loopback, under the `local` assurance profile only. Omission is false. `production` and `evidence-grade` bundles require HTTPS for both even when it is set: such a bundle that sets it to `true` is refused with a message naming the key, and so is one that writes a plain HTTP issuer or JWKS URI. When it is in force the runtime logs a warning at startup. |
 | `authentication.oidc.audience` | yes | The one exact audience an inbound token must carry. It is also the resource the deployment advertises in its protected-resource metadata. |
 | `authentication.oidc.tokenTypes` | yes | Non-empty allowlist containing only `at+jwt` and/or `application/at+jwt`. |
 | `authentication.oidc.algorithms` | yes | Non-empty allowlist containing only `EdDSA`, `ES256`, and/or `RS256`. No algorithm fallback is permitted. |
@@ -1770,6 +1772,7 @@ authentication.oidc
 authentication.oidc.actorClaim
 authentication.oidc.algorithms
 authentication.oidc.algorithms[]
+authentication.oidc.allowInsecureHttp
 authentication.oidc.allowedClients
 authentication.oidc.allowedClients[]
 authentication.oidc.assertionIssuers
