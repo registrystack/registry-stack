@@ -24,6 +24,7 @@
     - ['`request.not-found`', '404', 'The requested Casework route does not exist.']
     - ['`request.unprocessable`', '422', 'The request body does not match the Casework contract.']
     - ['`request.unsupported-media-type`', '415', 'Send a JSON request body with Content-Type application/json.']
+    - ['`review.distinct-approver-required`', '403', 'Each approval in this stage must be supplied by a different reviewer.']
     - ['`review.initiator-excluded`', '403', 'You submitted this request, and this review stage excludes the person who submitted it. Another reviewer must take it.']
     - ['`review.initiator-required`', '422', 'This review policy excludes the person who submitted the request, so the request must name its initiator.']
     - ['`review.policy-mismatch`', '409', 'The expected review policy binding does not match the active policy.']
@@ -36,3 +37,5 @@
     - ['`source-profile.not-applicable`', '400', 'Omit the Registry-Source-Profile header for this request.']
     - ['`source-profile.required`', '400', 'Send the Registry-Source-Profile header to select the source profile for this request.']
     - ['`source.bad-gateway`', '502', 'The source returned a response that does not match its registered contract.']
+    - ['`source.version-mismatch`', '502', 'Deploy the same Registry Stack version for Casework and its source.']
+    - ['`source.version-unavailable`', '502', 'The source did not report its engine version. Deploy matching Registry Stack versions.']

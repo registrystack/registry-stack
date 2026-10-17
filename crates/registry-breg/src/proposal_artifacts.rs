@@ -203,6 +203,28 @@ pub(crate) fn append_proposal_openapi(
                 submission,
             );
         }
+        if operation == ProposalOperation::GetReviewContext {
+            let mut batch =
+                operation_document("proposals.get-review-context-batch", "get", &profiles, true);
+            batch["description"] = json!("One bounded transport exchange under each item's current get-review-context authority. Ordered visible or concealed results; operational failures refuse the whole batch. Maximum response is 8 MiB.");
+            batch["parameters"].as_array_mut().unwrap().push(json!({"name":"ids","in":"query","required":true,
+                "description":"One to 100 distinct canonical Proposal UUIDs, in response order.",
+                "style":"form","explode":false,"schema":{"type":"array","minItems":1,"maxItems":100,"uniqueItems":true,"items":{"type":"string","format":"uuid"}}}));
+            batch["responses"]["200"]["content"]["application/json"]["schema"] = json!({
+            "type":"object","additionalProperties":false,"required":["items"],"properties":{"items":{
+                "type":"array","minItems":1,"maxItems":100,"items":{"oneOf":[
+                    {"type":"object","additionalProperties":false,"required":["id","status","context"],"properties":{
+                        "id":{"type":"string","format":"uuid"},"status":{"const":"visible"},"context":review_document_schema(true)}},
+                    {"type":"object","additionalProperties":false,"required":["id","status"],"properties":{
+                        "id":{"type":"string","format":"uuid"},"status":{"const":"concealed"}}}
+                ]}}}});
+            merge_operation(
+                paths,
+                "/v1/proposals/review-context".to_owned(),
+                "get",
+                batch,
+            );
+        }
         merge_operation(paths, path, method, document);
     }
 }

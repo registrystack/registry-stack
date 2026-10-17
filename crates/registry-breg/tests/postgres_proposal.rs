@@ -4646,6 +4646,133 @@ async fn review_context_projects_an_omitted_optional_input_as_null() {
         context["context"]["fields"],
         json!({"proposedName":"optional-omitted","note":null,"relatedName":null})
     );
+    let missing = uuid::Uuid::new_v4().to_string();
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/v1/proposals/review-context",
+            fixture.http.base_url
+        ))
+        .query(&[
+            ("accessProfile", "clerk"),
+            ("ids", &format!("{},{}", submitted.id(), missing)),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::OK,
+        "bounded context exchange is served"
+    );
+    let batch: Value = response.json().await.unwrap();
+    assert_eq!(batch["items"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        batch["items"][0],
+        json!({"id": submitted.id(), "status":"visible", "context": context})
+    );
+    assert_eq!(
+        batch["items"][1],
+        json!({"id": missing, "status":"concealed"})
+    );
+    let before = fixture.audit_capture.entries().len();
+    let excessive = (0..101)
+        .map(|_| uuid::Uuid::new_v4().to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    for ids in [
+        String::new(),
+        format!("{},{}", submitted.id(), submitted.id()),
+        excessive,
+        "not-a-proposal".into(),
+    ] {
+        let response = reqwest::Client::new()
+            .get(format!(
+                "{}/v1/proposals/review-context",
+                fixture.http.base_url
+            ))
+            .query(&[("accessProfile", "clerk"), ("ids", &ids)])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    }
+    assert_eq!(
+        fixture.audit_capture.entries().len(),
+        before,
+        "malformed batches are refused before per-item work"
+    );
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/v1/proposals/review-context",
+            fixture.http.base_url
+        ))
+        .query(&[
+            ("accessProfile", "ungranted-canary"),
+            ("ids", submitted.id()),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        response.json::<Value>().await.unwrap(),
+        json!({"items":[{"id":submitted.id(),"status":"concealed"}]})
+    );
+
+    let second_draft = start(&fixture, "second-visible-canary", "second-start").await;
+    let second_submit = fixture
+        .http
+        .client
+        .prepare_proposal(&second_draft, "submit", json!({}), &key("second-submit"))
+        .unwrap();
+    let second = fixture
+        .http
+        .client
+        .execute_proposal(&second_submit)
+        .await
+        .unwrap()
+        .value;
+    let before = fixture.audit_capture.entries().len();
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/v1/proposals/review-context",
+            fixture.http.base_url
+        ))
+        .query(&[
+            ("accessProfile", "clerk"),
+            ("ids", &format!("{},{}", submitted.id(), second.id())),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let visible: Value = response.json().await.unwrap();
+    assert_eq!(visible["items"][0]["status"], "visible");
+    assert_eq!(visible["items"][1]["status"], "visible");
+    assert_eq!(fixture.audit_capture.entries().len() - before, 4);
+
+    // Admit the first item's complete audit pair and the second item's start.
+    // Refuse the second terminal entry after the first context was prepared.
+    fixture.audit_capture.fail_after(3);
+    let before = fixture.audit_capture.entries().len();
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/v1/proposals/review-context",
+            fixture.http.base_url
+        ))
+        .query(&[
+            ("accessProfile", "clerk"),
+            ("ids", &format!("{},{}", submitted.id(), second.id())),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    let refused = response.text().await.unwrap();
+    assert!(!refused.contains("optional-omitted"));
+    assert!(!refused.contains("second-visible-canary"));
+    assert!(!refused.contains("\"items\""));
+    assert_eq!(fixture.audit_capture.entries().len() - before, 3);
     fixture.finish().await;
 }
 
@@ -6012,3 +6139,6 @@ async fn exact_application_status_exposes_bounded_block_and_human_recovery() {
     drop(service);
     fixture.finish().await;
 }
+
+#[path = "support/review_apply_412.rs"]
+mod review_apply_412;

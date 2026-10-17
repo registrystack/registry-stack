@@ -1,9 +1,9 @@
+mod inbox;
 mod maintenance;
 mod staffing;
 use chrono::{DateTime, TimeDelta, Utc};
 use deadpool_postgres::GenericClient;
 use deadpool_postgres::Transaction;
-use futures::{stream, StreamExt};
 use registry_casework_core::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -48,7 +48,6 @@ impl ReviewTaskListView {
     fn is_own_decisions(self) -> bool {
         matches!(self, Self::OwnDecisions)
     }
-
     fn needs_current_scan_scope(self) -> bool {
         self.request_id().is_some() || self.is_own_decisions()
     }
@@ -117,6 +116,8 @@ pub enum ReviewRuntimeError {
     TaskNotHeld,
     #[error("the caller initiated this review and its stage excludes them")]
     InitiatorExcluded,
+    #[error("a different reviewer must supply each approval")]
+    DistinctApproverRequired,
     #[error("the review policy excludes its initiator, so the request must name one")]
     InitiatorRequired,
     #[error("the review resource revision changed")]
@@ -137,6 +138,10 @@ pub enum ReviewRuntimeError {
     SourceProfileNotApplicable,
     #[error("the source is temporarily unavailable")]
     SourceUnavailable,
+    #[error("the source version differs from Casework")]
+    SourceVersionMismatch,
+    #[error("the source version is unavailable")]
+    SourceVersionUnavailable,
     #[error("the source response is invalid")]
     SourceInvalid,
     #[error(transparent)]
@@ -579,7 +584,8 @@ impl CaseworkService {
         }
         let mut items = Vec::with_capacity(limit + 1);
         let mut examined = 0usize;
-        let mut source_reads = 0usize;
+        let mut source_reads = std::collections::BTreeSet::new();
+        let mut observations = inbox::InboxObservations::default();
         let mut continuation = scan_cursor;
         let mut completed_preflights = 0usize;
         let mut budget_exhausted = false;
@@ -589,58 +595,101 @@ impl CaseworkService {
             && examined < policy.maximum_candidate_scan
             && started.elapsed() < deadline
         {
-            let batch_limit = (policy.maximum_candidate_scan - examined).min(100);
+            let batch_limit = (policy.maximum_candidate_scan - examined).min(
+                if matches!(view, ReviewTaskListView::Reviewer(_)) {
+                    limit - items.len()
+                } else {
+                    100
+                },
+            );
             let page = self
                 .store
                 .review_tasks(actor, queue, view, scan_cursor, batch_limit)
                 .await?;
             let page_next_cursor = page.next_cursor;
             let page_length = page.items.len();
+            let records = self.store.inbox_records(&page.items).await?;
             let mut prepared = Vec::with_capacity(page_length);
             for task in page.items {
-                let record = self.store.review_request_for_task(task.task_id).await?;
+                let record = records
+                    .get(&task.request_id)
+                    .ok_or(ReviewRuntimeError::Corrupt)?
+                    .clone();
                 let source_backed = matches!(
                     record.policy.context,
                     registry_casework_core::ReviewContextPolicy::CurrentSource { .. }
                 );
-                if source_backed && source_reads == policy.maximum_source_reads {
+                if source_backed
+                    && !source_reads.contains(&task.request_id)
+                    && source_reads.len() == policy.maximum_source_reads
+                {
                     budget_exhausted = true;
                     break;
                 }
                 examined += 1;
-                source_reads += usize::from(source_backed);
+                if source_backed {
+                    source_reads.insert(task.request_id);
+                }
                 prepared.push((task, record));
             }
             let prepared_length = prepared.len();
-            let mut checks = stream::iter(prepared)
-                .map(|(task, record)| async move {
-                    let disclosure =
-                        SourceDisclosure::for_task(matches!(task.state, ReviewTaskState::Decided));
-                    let result = tokio::time::timeout_at(
-                        deadline_at,
-                        self.preflight_review_inbox_source(
+            let prepared_records = prepared
+                .iter()
+                .map(|(_, record)| (record.request_id, record.clone()))
+                .collect();
+            let preparation = observations
+                .prepare(
+                    self,
+                    &prepared_records,
+                    source_profile_id,
+                    token,
+                    deadline_at,
+                    true,
+                )
+                .await;
+            match preparation {
+                Err(ReviewRuntimeError::SourceUnavailable)
+                    if !matches!(view, ReviewTaskListView::Reviewer(_))
+                        && started.elapsed() >= deadline =>
+                {
+                    source_timed_out = true;
+                }
+                result => result?,
+            }
+            let ids = prepared
+                .iter()
+                .map(|(task, _)| task.task_id)
+                .collect::<Vec<_>>();
+            let mut current_tasks = self
+                .store
+                .inbox_current_tasks(
+                    actor,
+                    &ids,
+                    matches!(view, ReviewTaskListView::Reviewer(_)),
+                    view.is_supervisory(),
+                )
+                .await?;
+            if matches!(view, ReviewTaskListView::Reviewer(_)) && started.elapsed() >= deadline {
+                return Err(ReviewRuntimeError::SourceUnavailable);
+            }
+            for (task, record) in prepared {
+                let result = if source_timed_out && !observations.complete(&record) {
+                    Err(())
+                } else {
+                    Ok(observations
+                        .display(
                             &record,
-                            disclosure,
                             source_profile_id,
-                            token,
-                        ),
-                    )
-                    .await;
-                    (task, result)
-                })
-                .buffered(policy.maximum_concurrent_source_reads);
-            while let Some((task, result)) = checks.next().await {
+                            task.state != ReviewTaskState::Decided,
+                            true,
+                        )
+                        .map(|_| ()))
+                };
                 let mut disclosed = false;
                 match result {
-                    Ok(Ok(())) => match self
-                        .store
-                        .review_task_by_activity(
-                            actor,
-                            task.task_id,
-                            matches!(view, ReviewTaskListView::Reviewer(_)),
-                            view.is_supervisory(),
-                        )
-                        .await
+                    Ok(Ok(())) => match current_tasks
+                        .remove(&task.task_id)
+                        .ok_or(ReviewRuntimeError::NotFound)
                     {
                         // Ownership and queue can change during source I/O.
                         // Recheck both before releasing the current row.
@@ -718,7 +767,14 @@ impl CaseworkService {
                     break;
                 }
             }
-            drop(checks);
+            if matches!(view, ReviewTaskListView::Reviewer(_)) && items.len() == limit {
+                let next_cursor = page_next_cursor.map(|_| items[limit - 1].task_id);
+                return Ok(ReviewTaskPage {
+                    items,
+                    next_cursor,
+                    status: PageStatus::Complete,
+                });
+            }
             if items.len() > limit {
                 break;
             }
@@ -734,6 +790,18 @@ impl CaseworkService {
             }
             scan_cursor = Some(next_cursor);
             continuation = Some(next_cursor);
+        }
+        if matches!(view, ReviewTaskListView::Reviewer(_))
+            && continuation.is_some()
+            && (budget_exhausted
+                || examined >= policy.maximum_candidate_scan
+                || started.elapsed() >= deadline)
+        {
+            return Err(if source_timed_out {
+                ReviewRuntimeError::SourceUnavailable
+            } else {
+                ReviewRuntimeError::QueryTooBroad
+            });
         }
         let full = items.len() > limit;
         let next_cursor = if full {
@@ -1554,42 +1622,6 @@ impl CaseworkService {
 }
 
 impl PostgresStore {
-    async fn review_task_scan_cursor(
-        &self,
-        actor: &ActorContext,
-        source_profile_id: Option<&str>,
-        context: &str,
-        cursor: Uuid,
-    ) -> Result<Option<Uuid>, ReviewRuntimeError> {
-        let client = self.client().await?;
-        // An existing token never falls back to task-anchor interpretation,
-        // including when its caller, query context or expiry no longer matches.
-        let row = client
-            .query_opt(
-                "SELECT last_task_id,
-                        issuer=$2 AND subject=$3 AND casework_profile_id=$4
-                        AND source_profile_id=$5 AND context=$6 AND expires_at>now()
-                 FROM casework_review_cursors WHERE cursor_id=$1",
-                &[
-                    &cursor,
-                    &actor.principal.issuer,
-                    &actor.principal.subject,
-                    &actor.profile_id,
-                    &source_profile_id.unwrap_or_default(),
-                    &context,
-                ],
-            )
-            .await?;
-        match row {
-            None => Ok(None),
-            Some(row) if row.get::<_, bool>(1) => row
-                .get::<_, Option<Uuid>>(0)
-                .map(Some)
-                .ok_or(ReviewRuntimeError::ResultExpired),
-            Some(_) => Err(ReviewRuntimeError::ResultExpired),
-        }
-    }
-
     async fn issue_review_task_scan_cursor(
         &self,
         actor: &ActorContext,
@@ -1630,6 +1662,42 @@ impl PostgresStore {
         Ok(row.get(0))
     }
 
+    async fn review_task_scan_cursor(
+        &self,
+        actor: &ActorContext,
+        source_profile_id: Option<&str>,
+        context: &str,
+        cursor: Uuid,
+    ) -> Result<Option<Uuid>, ReviewRuntimeError> {
+        let client = self.client().await?;
+        // An existing token never falls back to task-anchor interpretation,
+        // including when its caller, query context or expiry no longer matches.
+        let row = client
+            .query_opt(
+                "SELECT last_task_id,
+                        issuer=$2 AND subject=$3 AND casework_profile_id=$4
+                        AND source_profile_id=$5 AND context=$6 AND expires_at>now()
+                 FROM casework_review_cursors WHERE cursor_id=$1",
+                &[
+                    &cursor,
+                    &actor.principal.issuer,
+                    &actor.principal.subject,
+                    &actor.profile_id,
+                    &source_profile_id.unwrap_or_default(),
+                    &context,
+                ],
+            )
+            .await?;
+        match row {
+            None => Ok(None),
+            Some(row) if row.get::<_, bool>(1) => row
+                .get::<_, Option<Uuid>>(0)
+                .map(Some)
+                .ok_or(ReviewRuntimeError::ResultExpired),
+            Some(_) => Err(ReviewRuntimeError::ResultExpired),
+        }
+    }
+
     async fn review_task_cursor_position(
         &self,
         actor: &ActorContext,
@@ -1651,7 +1719,7 @@ impl PostgresStore {
             CaseworkRole::Staff => "staff",
             CaseworkRole::Supervisor => "supervisor",
             CaseworkRole::Administrator | CaseworkRole::Requester => {
-                return Err(ReviewRuntimeError::Forbidden)
+                return Err(ReviewRuntimeError::Forbidden);
             }
         };
         // The UUID names an immutable scan position, not a claim about the
@@ -1719,7 +1787,7 @@ impl PostgresStore {
             CaseworkRole::Staff => "staff",
             CaseworkRole::Supervisor => "supervisor",
             CaseworkRole::Administrator | CaseworkRole::Requester => {
-                return Err(ReviewRuntimeError::Forbidden)
+                return Err(ReviewRuntimeError::Forbidden);
             }
         };
         let supervisory = view.is_supervisory();
@@ -1936,7 +2004,7 @@ impl PostgresStore {
         task_ids: &[Uuid],
     ) -> Result<Vec<SupervisoryReviewTask>, ReviewRuntimeError> {
         let client = self.client().await?;
-        client
+        let rows = client
             .query(
                 "SELECT t.task_id,t.request_id,t.queue_id,t.revision,t.state,a.event_id,t.staffing_diagnostic
              FROM casework_review_tasks t
@@ -1958,8 +2026,9 @@ impl PostgresStore {
                     &queue,
                 ],
             )
-            .await?
-            .into_iter()
+            .await?;
+        let shortfalls = review_task_staffing_shortfalls(&client, task_ids).await?;
+        rows.into_iter()
             .map(|row| {
                 Ok(SupervisoryReviewTask {
                     task_id: row.get(0),
@@ -1972,7 +2041,18 @@ impl PostgresStore {
                         "decided" | "closed" => SupervisoryReviewTaskState::Decided,
                         _ => return Err(ReviewRuntimeError::Corrupt),
                     },
-                    staffing_diagnostic: staffing_diagnostic_from_row(&row)?,
+                    staffing_diagnostic: {
+                        let retained = staffing_diagnostic_from_row(&row)?;
+                        match row.get::<_, String>(4).as_str() {
+                            "decided" | "closed" => None,
+                            _ if retained == Some(StaffingDiagnostic::NoCoverAvailable) => retained,
+                            _ => shortfalls
+                                .get(&row.get::<_, Uuid>(0))
+                                .copied()
+                                .unwrap_or(false)
+                                .then_some(StaffingDiagnostic::InsufficientDistinctApprovers),
+                        }
+                    },
                     accountability_event_id: row.get(5),
                 })
             })
@@ -1999,7 +2079,7 @@ impl PostgresStore {
             CaseworkRole::Staff => "staff",
             CaseworkRole::Supervisor => "supervisor",
             CaseworkRole::Administrator | CaseworkRole::Requester => {
-                return Err(ReviewRuntimeError::Forbidden)
+                return Err(ReviewRuntimeError::Forbidden);
             }
         };
         let client = self.client().await?;
@@ -2065,6 +2145,11 @@ impl PostgresStore {
                 )?);
             }
         }
+        let shortfalls = review_task_staffing_shortfalls(&client, &[task_id]).await?;
+        current_staffing_diagnostic(
+            &mut task,
+            shortfalls.get(&task_id).copied().unwrap_or(false),
+        );
         Ok(task)
     }
 
@@ -3220,9 +3305,9 @@ impl PostgresStore {
         if stage.exclude_initiator && record.initiator.as_ref() == Some(&actor.principal) {
             return Err(ReviewRuntimeError::InitiatorExcluded);
         }
-        if transaction
+        if let Some(previous) = transaction
             .query_opt(
-                "SELECT 1 FROM casework_review_decisions
+                "SELECT stage_index FROM casework_review_decisions
                  WHERE request_id=$1 AND actor_issuer=$2 AND actor_subject=$3
                    AND (stage_index=$4 OR ($5 AND stage_index<$4)) LIMIT 1",
                 &[
@@ -3234,9 +3319,12 @@ impl PostgresStore {
                 ],
             )
             .await?
-            .is_some()
         {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(if previous.get::<_, i32>(0) == i32::from(stage_index) {
+                ReviewRuntimeError::DistinctApproverRequired
+            } else {
+                ReviewRuntimeError::Forbidden
+            });
         }
         if !active_review_absences(&transaction, &actor.principal, now)
             .await?
@@ -3248,6 +3336,12 @@ impl PostgresStore {
         let held_by_caller = state == "claimed"
             && row.get::<_, Option<String>>(4).as_deref() == Some(actor.principal.issuer.as_str())
             && row.get::<_, Option<String>>(5).as_deref() == Some(actor.principal.subject.as_str());
+        let staffing_diagnostic = review_task_staffing_shortfalls(&transaction, &[task_id])
+            .await?
+            .get(&task_id)
+            .copied()
+            .ok_or(ReviewRuntimeError::Corrupt)?
+            .then_some("insufficient-distinct-approvers");
         if state == "open" || held_by_caller {
             // A retried claim by the current holder under a fresh idempotency
             // key (a client that lost its first response) is still a real
@@ -3263,13 +3357,14 @@ impl PostgresStore {
                          assignment_kind='claim',assignment_owner_issuer=$2,
                          assignment_owner_subject=$3,assigned_by_issuer=NULL,
                          assigned_by_subject=NULL,assignment_absence_ids='{}',
-                         staffing_diagnostic=NULL,revision=revision+1,updated_at=$4
+                         staffing_diagnostic=$5,revision=revision+1,updated_at=$4
                      WHERE task_id=$1",
                     &[
                         &task_id,
                         &actor.principal.issuer,
                         &actor.principal.subject,
                         &now,
+                        &staffing_diagnostic,
                     ],
                 )
                 .await
@@ -3537,6 +3632,16 @@ impl PostgresStore {
         } else {
             "absence-cover"
         };
+        let staffing_diagnostic = if !eligible {
+            Some("no-cover-available")
+        } else {
+            review_task_staffing_shortfalls(&transaction, &[task_id])
+                .await?
+                .get(&task_id)
+                .copied()
+                .ok_or(ReviewRuntimeError::Corrupt)?
+                .then_some("insufficient-distinct-approvers")
+        };
         let next_revision = expected_revision + 1;
         transaction
             .execute(
@@ -3557,7 +3662,7 @@ impl PostgresStore {
                     &actor.principal.issuer,
                     &actor.principal.subject,
                     &cover.absence_ids,
-                    &(!eligible).then_some("no-cover-available"),
+                    &staffing_diagnostic,
                     &next_revision,
                     &now,
                 ],
@@ -5471,9 +5576,8 @@ fn review_task_state(
 fn staffing_diagnostic_from_row(
     row: &Row,
 ) -> Result<Option<StaffingDiagnostic>, ReviewRuntimeError> {
-    // Older runtime versions could retain this notice after task closure.
-    // It describes current unheld work, never a held or terminal task.
-    if row.get::<_, String>("state") != "open" {
+    let state = row.get::<_, String>("state");
+    if state != "open" && state != "claimed" {
         return Ok(None);
     }
     match row
@@ -5481,7 +5585,13 @@ fn staffing_diagnostic_from_row(
         .as_deref()
     {
         None => Ok(None),
-        Some("no-cover-available") => Ok(Some(StaffingDiagnostic::NoCoverAvailable)),
+        Some("no-cover-available") if state == "open" => {
+            Ok(Some(StaffingDiagnostic::NoCoverAvailable))
+        }
+        Some("no-cover-available") => Ok(None),
+        Some("insufficient-distinct-approvers") => {
+            Ok(Some(StaffingDiagnostic::InsufficientDistinctApprovers))
+        }
         Some(_) => Err(ReviewRuntimeError::Corrupt),
     }
 }
@@ -6199,6 +6309,8 @@ fn map_reviewer_conflict(error: tokio_postgres::Error) -> ReviewRuntimeError {
 
 fn map_review_source_error(error: ReviewContextError) -> ReviewRuntimeError {
     match error {
+        ReviewContextError::VersionMismatch => ReviewRuntimeError::SourceVersionMismatch,
+        ReviewContextError::VersionUnavailable => ReviewRuntimeError::SourceVersionUnavailable,
         ReviewContextError::Unavailable => ReviewRuntimeError::SourceUnavailable,
         ReviewContextError::Invalid | ReviewContextError::Unsupported => {
             ReviewRuntimeError::SourceInvalid
@@ -6405,6 +6517,10 @@ fn review_service_error(error: ReviewRuntimeError) -> crate::ServiceError {
         ReviewRuntimeError::Store(error) => error.into(),
         ReviewRuntimeError::SourceUnavailable => ReviewContextError::Unavailable.into(),
         ReviewRuntimeError::SourceInvalid => ReviewContextError::Invalid.into(),
+        ReviewRuntimeError::SourceVersionMismatch => ReviewContextError::VersionMismatch.into(),
+        ReviewRuntimeError::SourceVersionUnavailable => {
+            ReviewContextError::VersionUnavailable.into()
+        }
         ReviewRuntimeError::NotFound | ReviewRuntimeError::ResultExpired => {
             crate::ServiceError::NotFound
         }
@@ -6434,6 +6550,54 @@ fn invalid_provider_display(
         .unwrap_or_else(|| "invalid".into());
     tracing::warn!(review_policy=%policy.identity.id,validation_reason=%reason,"Casework context provider returned invalid display");
     ReviewRuntimeError::SourceInvalid
+}
+
+// Derive the notice from current Directory and pinned stage authority. This
+// set query returns only booleans, never the people used to calculate them.
+async fn review_task_staffing_shortfalls(
+    client: &impl GenericClient,
+    task_ids: &[Uuid],
+) -> Result<std::collections::BTreeMap<Uuid, bool>, ReviewRuntimeError> {
+    let rows = client.query(
+        "SELECT t.task_id, t.state IN ('open','claimed') AND (
+            SELECT count(*) FROM (
+                SELECT m.issuer,m.subject FROM casework_queue_service q
+                JOIN casework_memberships m ON m.team_id=q.team_id
+                WHERE q.queue_id=t.queue_id
+                  AND EXISTS(SELECT 1 FROM jsonb_array_elements(r.policy_snapshot->'dependencies'->'accessProfiles') p
+                    WHERE (s.stage->'decidingProfiles') ? (p->>'id')
+                      AND p->>'role'=m.membership_kind)
+                  AND (NOT COALESCE((s.stage->>'excludeInitiator')::boolean,false)
+                    OR r.initiator_issuer IS NULL
+                    OR (m.issuer,m.subject)<>(r.initiator_issuer,r.initiator_subject))
+                  AND NOT EXISTS(SELECT 1 FROM casework_absences a
+                    WHERE a.person_issuer=m.issuer AND a.person_subject=m.subject
+                      AND a.starts_at<=now() AND now()<a.ends_at)
+                  AND NOT EXISTS(SELECT 1 FROM casework_review_decisions d
+                    WHERE d.request_id=t.request_id AND d.actor_issuer=m.issuer AND d.actor_subject=m.subject
+                      AND (d.stage_index=t.stage_index OR
+                        (COALESCE((s.stage->>'excludePreviousStageReviewers')::boolean,false) AND d.stage_index<t.stage_index)))
+                UNION SELECT d.actor_issuer,d.actor_subject FROM casework_review_decisions d
+                    WHERE d.request_id=t.request_id AND d.stage_index=t.stage_index AND d.decision='approve'
+            ) people
+        ) < (s.stage->>'requiredApprovals')::integer
+        FROM casework_review_tasks t JOIN casework_review_requests r ON r.request_id=t.request_id
+        CROSS JOIN LATERAL (SELECT r.policy_snapshot->'stages'->t.stage_index AS stage) s
+        WHERE t.task_id=ANY($1)",
+        &[&task_ids]).await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect())
+}
+
+fn current_staffing_diagnostic(task: &mut ReviewTask, shortfall: bool) {
+    if task.state == ReviewTaskState::Decided {
+        task.staffing_diagnostic = None;
+    } else if task.staffing_diagnostic != Some(StaffingDiagnostic::NoCoverAvailable) {
+        task.staffing_diagnostic =
+            shortfall.then_some(StaffingDiagnostic::InsufficientDistinctApprovers);
+    }
 }
 
 #[cfg(test)]

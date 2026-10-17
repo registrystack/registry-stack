@@ -29,7 +29,7 @@ class TypingContractTests(unittest.TestCase):
         classes = {node.name: node for node in module.body if isinstance(node, ast.ClassDef)}
         self.assertNotIn("AssignmentContext", classes)
         alias = next(node.value for node in module.body if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "StaffingDiagnostic")
-        self.assertEqual(ast.unparse(alias), "Literal['no-cover-available']")
+        self.assertEqual(ast.unparse(alias), "Literal['no-cover-available', 'insufficient-distinct-approvers']")
         for name in ("_ReviewTaskOptional", "_SupervisoryReviewTaskOptional"):
             fields = {node.target.id: ast.unparse(node.annotation) for node in classes[name].body if isinstance(node, ast.AnnAssign)}
             self.assertEqual(fields["staffingDiagnostic"], "StaffingDiagnostic")

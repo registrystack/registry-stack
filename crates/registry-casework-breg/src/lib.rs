@@ -5,7 +5,8 @@ mod served;
 use async_trait::async_trait;
 pub use config::*;
 use registry_breg_client::{
-    BRegProposalReviewDocument, BaseRegistryClient, BaseRegistryClientError, BearerToken,
+    BRegProposalReviewBinding, BRegProposalReviewDocument, BaseRegistryClient,
+    BaseRegistryClientError, BearerToken,
 };
 use registry_casework_core::*;
 pub use served::{unserved_capabilities, SERVED_CAPABILITIES, TASK_GRANT_CONTEXT_ISSUE};
@@ -47,22 +48,60 @@ impl BregContextProvider {
         {
             return Err(ReviewContextError::ContractChanged);
         }
-        let metadata = client
-            .registry_contract(Some(profile))
-            .await
-            .map_err(map_error)?
-            .value;
+        let binding = self.read_binding(client, profile, display).await?;
+        self.read_bound(client, identity, &binding, display).await
+    }
+
+    async fn read_binding(
+        &self,
+        client: &BaseRegistryClient,
+        profile: &str,
+        display: bool,
+    ) -> Result<BRegProposalReviewBinding, ReviewContextError> {
+        let (version, metadata) = client
+            .registry_contract_and_engine_version(Some(profile))
+            .await;
+        // A successful but incompatible peer may not decode at all. Name the
+        // lockstep mismatch before interpreting its document, without releasing
+        // a subject or echoing an untrusted header into diagnostics.
+        if version.is_some() || metadata.is_ok() {
+            check_peer_version(
+                version.as_deref(),
+                registry_platform_buildinfo::DISPLAY_VERSION,
+            )?;
+        } else if matches!(
+            metadata,
+            Err(BaseRegistryClientError::Protocol { status: 200, .. })
+        ) {
+            return Err(ReviewContextError::VersionUnavailable);
+        }
+        let metadata = metadata.map_err(map_error)?.value;
         // Current caller-visible metadata selects only the exact purpose and action.
         // The reply binds the exported context contract, independently of unrelated
         // changes to the registry package.
-        let binding = if display {
+        if display {
             metadata.select_proposal_review_context(profile, &self.export.action_id)
         } else {
             metadata.select_proposal_review_status(profile, &self.export.action_id)
         }
-        .map_err(|_| ReviewContextError::Concealed)?;
+        .map_err(|_| ReviewContextError::Concealed)
+    }
+
+    async fn read_bound(
+        &self,
+        client: &BaseRegistryClient,
+        identity: &ReviewContextIdentity,
+        binding: &BRegProposalReviewBinding,
+        display: bool,
+    ) -> Result<BRegProposalReviewDocument, ReviewContextError> {
+        if identity.contract != self.export.contract
+            || identity.subject.source != self.export.source_namespace
+            || identity.subject.subject_type != "proposal"
+        {
+            return Err(ReviewContextError::ContractChanged);
+        }
         let document = client
-            .read_proposal_review_by_id(&binding, &identity.subject.id)
+            .read_proposal_review_by_id(binding, &identity.subject.id)
             .await
             .map_err(|error| match error {
                 // A context reply without the owning closed contract is not
@@ -73,6 +112,14 @@ impl BregContextProvider {
                 error => map_error(error),
             })?
             .value;
+        self.validate_bound(identity, document)
+    }
+
+    fn validate_bound(
+        &self,
+        identity: &ReviewContextIdentity,
+        document: BRegProposalReviewDocument,
+    ) -> Result<BRegProposalReviewDocument, ReviewContextError> {
         if document.subject.source != identity.subject.source
             || document.subject.subject_type != identity.subject.subject_type
             || document.subject.id != identity.subject.id
@@ -91,6 +138,32 @@ impl BregContextProvider {
         Ok(document)
     }
 }
+impl BregContextProvider {
+    fn display_observation(
+        &self,
+        identity: &ReviewContextIdentity,
+        document: BRegProposalReviewDocument,
+    ) -> Result<HumanDisplayObservation, ReviewContextError> {
+        let fields = document.context.fields.ok_or(ReviewContextError::Invalid)?;
+        let schema = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&self.export.schema)
+            .map_err(|_| ReviewContextError::Invalid)?;
+        if !schema
+            .is_valid(&serde_json::to_value(&fields).map_err(|_| ReviewContextError::Invalid)?)
+        {
+            return Err(ReviewContextError::Invalid);
+        }
+        let display_reference = Some(document.context.reference);
+        Ok(HumanDisplayObservation {
+            identity: identity.clone(),
+            reviewable: document.reviewable,
+            display_reference,
+            fields,
+        })
+    }
+}
+
 #[async_trait]
 impl ReviewContextProvider for BregContextProvider {
     fn provider_id(&self) -> &str {
@@ -110,23 +183,74 @@ impl ReviewContextProvider for BregContextProvider {
         let document = self
             .read(&client, request.identity, request.source_profile_id, true)
             .await?;
-        let fields = document.context.fields.ok_or(ReviewContextError::Invalid)?;
-        let schema = jsonschema::JSONSchema::options()
-            .with_draft(jsonschema::Draft::Draft202012)
-            .compile(&self.export.schema)
-            .map_err(|_| ReviewContextError::Invalid)?;
-        if !schema
-            .is_valid(&serde_json::to_value(&fields).map_err(|_| ReviewContextError::Invalid)?)
-        {
-            return Err(ReviewContextError::Invalid);
+        self.display_observation(request.identity, document)
+    }
+    async fn human_display_batch(
+        &self,
+        identities: &[ReviewContextIdentity],
+        source_profile_id: &str,
+        credential: EphemeralCredential<'_>,
+    ) -> Vec<Result<HumanDisplayObservation, ReviewContextError>> {
+        if identities.len() > 100 {
+            return vec![Err(ReviewContextError::Invalid); identities.len()];
         }
-        let display_reference = Some(document.context.reference);
-        Ok(HumanDisplayObservation {
-            identity: request.identity.clone(),
-            reviewable: document.reviewable,
-            display_reference,
-            fields,
-        })
+        let token = match BearerToken::new(credential.expose().to_owned()) {
+            Ok(token) => token,
+            Err(_) => return vec![Err(ReviewContextError::Denied); identities.len()],
+        };
+        let valid = |identity: &ReviewContextIdentity| {
+            identity.contract == self.export.contract
+                && identity.subject.source == self.export.source_namespace
+                && identity.subject.subject_type == "proposal"
+        };
+        if !identities.iter().any(valid) {
+            return vec![Err(ReviewContextError::ContractChanged); identities.len()];
+        }
+        let client = self.client.with_bearer_token(token);
+        // Metadata is current and caller-visible for this invocation only.
+        // Every subject still passes its own current disclosure read.
+        let ids = identities
+            .iter()
+            .filter(|identity| valid(identity))
+            .map(|identity| identity.subject.id.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let documents = match self.read_binding(&client, source_profile_id, true).await {
+            Ok(binding) => client
+                .read_proposal_review_context_batch(&binding, &ids)
+                .await
+                .map(|reply| {
+                    ids.iter()
+                        .copied()
+                        .zip(reply.value)
+                        .collect::<std::collections::BTreeMap<_, _>>()
+                })
+                .map_err(|error| match error {
+                    BaseRegistryClientError::InvalidRequest { .. } => {
+                        ReviewContextError::ContractChanged
+                    }
+                    error => map_error(error),
+                }),
+            Err(error) => Err(error),
+        };
+        identities
+            .iter()
+            .map(|identity| {
+                if !valid(identity) {
+                    return Err(ReviewContextError::ContractChanged);
+                }
+                match &documents {
+                    Ok(documents) => documents
+                        .get(identity.subject.id.as_str())
+                        .and_then(|document| document.clone())
+                        .ok_or(ReviewContextError::Concealed)
+                        .and_then(|document| self.validate_bound(identity, document))
+                        .and_then(|document| self.display_observation(identity, document)),
+                    Err(error) => Err(*error),
+                }
+            })
+            .collect()
     }
     async fn service_status(
         &self,
@@ -168,5 +292,35 @@ fn map_error(error: BaseRegistryClientError) -> ReviewContextError {
             status: 500..=599, ..
         } => ReviewContextError::Unavailable,
         _ => ReviewContextError::Invalid,
+    }
+}
+
+fn check_peer_version(actual: Option<&str>, expected: &str) -> Result<(), ReviewContextError> {
+    match actual {
+        Some(actual) if actual == expected => Ok(()),
+        Some(_) => Err(ReviewContextError::VersionMismatch),
+        None => Err(ReviewContextError::VersionUnavailable),
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    #[test]
+    fn lockstep_accepts_exact_release_and_dev_identity_without_normalization() {
+        for version in ["1.2.3", "1.2.3-dev"] {
+            assert_eq!(check_peer_version(Some(version), version), Ok(()));
+        }
+        for actual in ["1.2.2", "1.2.3-dev", "1.2.3+other"] {
+            assert_eq!(
+                check_peer_version(Some(actual), "1.2.3"),
+                Err(ReviewContextError::VersionMismatch)
+            );
+        }
+        assert_eq!(
+            check_peer_version(None, "1.2.3"),
+            Err(ReviewContextError::VersionUnavailable)
+        );
     }
 }

@@ -2971,7 +2971,8 @@ async fn supervisory_request_lookup_precedes_pagination_and_conceals_inaccessibl
             result["items"][0],
             json!({
                 "taskId": expected_task, "requestId": target.request_id,
-                "queue": "review", "revision": 1, "state": "open"
+                "queue": "review", "revision": 1, "state": "open",
+                "staffingDiagnostic": "insufficient-distinct-approvers"
             })
         );
         found.push(*expected_task);
@@ -4652,3 +4653,9 @@ async fn no_cover_notice_crosses_the_real_router_and_native_client_without_ident
     server.abort();
     idp.stop().await;
 }
+
+#[path = "support/distinct_approvers.rs"]
+mod distinct_approvers;
+
+#[path = "support/inbox_pagination_http.rs"]
+mod inbox_pagination_http;

@@ -47,6 +47,10 @@ fn identity(export: &BregContextExport) -> ReviewContextIdentity {
 fn response(value: Value) -> ResponseTemplate {
     ResponseTemplate::new(200)
         .insert_header(
+            "registry-engine-version",
+            registry_platform_buildinfo::DISPLAY_VERSION,
+        )
+        .insert_header(
             "traceparent",
             "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
         )
@@ -590,4 +594,146 @@ async fn display_fields_must_match_the_exported_schema() {
             .unwrap_err(),
         ReviewContextError::Invalid
     );
+}
+
+#[path = "support/peer_version.rs"]
+mod peer_version;
+
+#[tokio::test]
+async fn batch_reuses_caller_metadata_but_rechecks_each_subject_and_each_invocation() {
+    let server = MockServer::start().await;
+    let export = export();
+    let first = identity(&export);
+    let mut second = first.clone();
+    second.subject.id = "00000000-0000-4000-8000-000000000002".into();
+    let provider = provider(&server, export);
+    mocks(&server, "reviewer", "human-bearer", true, DIGEST).await;
+    let items = [&first, &second].into_iter().map(|identity| json!({
+        "id":identity.subject.id,"status":"visible","context":{
+            "id":identity.subject.id,"actionId":"correct-address","actionRevision":DIGEST,
+            "submissionVersion":1,"revision":1,"effectDigest":DIGEST,
+            "subject":{"source":"source","subjectType":"proposal","id":identity.subject.id,"version":"1","digest":DIGEST},
+            "context":{"reference":"native-proposal","contract":identity.contract,"fields":{"reference":"REF-42"}},
+            "reviewable":true
+        }
+    })).collect::<Vec<_>>();
+    Mock::given(method("GET"))
+        .and(path("/v1/proposals/review-context"))
+        .and(query_param("accessProfile", "reviewer"))
+        .and(query_param(
+            "ids",
+            format!("{},{}", first.subject.id, second.subject.id),
+        ))
+        .and(header("authorization", "Bearer human-bearer"))
+        .respond_with(response(json!({"items":items})))
+        .mount(&server)
+        .await;
+    for _ in 0..2 {
+        let observations = provider
+            .human_display_batch(
+                &[first.clone(), second.clone()],
+                "reviewer",
+                EphemeralCredential::new("human-bearer"),
+            )
+            .await;
+        assert_eq!(observations.len(), 2);
+        assert_eq!(observations[0].as_ref().unwrap().identity, first);
+        assert_eq!(observations[1].as_ref().unwrap().identity, second);
+    }
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.url.path() == "/v1/registry")
+            .count(),
+        2,
+        "one caller-visible metadata read per batch, refreshed for every invocation"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r.url.path().starts_with("/v1/proposals/"))
+            .count(),
+        2,
+        "one bounded subject exchange per invocation, not one per identity"
+    );
+    assert!(requests
+        .iter()
+        .all(|r| r.headers.get("authorization").unwrap() == "Bearer human-bearer"));
+}
+
+#[tokio::test]
+async fn batch_refuses_substitution_and_preserves_per_item_concealment() {
+    for case in [
+        "concealed",
+        "short",
+        "reordered",
+        "wrong-action",
+        "wrong-subject",
+        "unknown-status",
+        "extra-member",
+    ] {
+        let server = MockServer::start().await;
+        let export = export();
+        let first = identity(&export);
+        let mut second = first.clone();
+        second.subject.id = "00000000-0000-4000-8000-000000000002".into();
+        let provider = provider(&server, export);
+        mocks(&server, "reviewer", "human-bearer", true, DIGEST).await;
+        let mut items = [&first, &second].into_iter().map(|identity| json!({
+            "id":identity.subject.id,"status":"visible","context":{
+                "id":identity.subject.id,"actionId":"correct-address","actionRevision":DIGEST,
+                "submissionVersion":1,"revision":1,"effectDigest":DIGEST,
+                "subject":{"source":"source","subjectType":"proposal","id":identity.subject.id,"version":"1","digest":DIGEST},
+                "context":{"reference":"native-proposal","contract":identity.contract,"fields":{"reference":"REF-42"}},
+                "reviewable":true
+            }
+        })).collect::<Vec<_>>();
+        match case {
+            "concealed" => items[0] = json!({"id":first.subject.id,"status":"concealed"}),
+            "short" => {
+                items.pop();
+            }
+            "reordered" => items.swap(0, 1),
+            "wrong-action" => items[0]["context"]["actionId"] = json!("other-action"),
+            "wrong-subject" => {
+                items[0]["context"]["subject"]["version"] = json!("2");
+                items[0]["context"]["submissionVersion"] = json!(2);
+            }
+            "unknown-status" => items[0]["status"] = json!("future"),
+            "extra-member" => items[0]["private-canary"] = json!(true),
+            _ => unreachable!(),
+        }
+        Mock::given(method("GET"))
+            .and(path("/v1/proposals/review-context"))
+            .and(query_param("accessProfile", "reviewer"))
+            .and(header("authorization", "Bearer human-bearer"))
+            .respond_with(response(json!({"items":items})))
+            .mount(&server)
+            .await;
+        let values = provider
+            .human_display_batch(
+                &[first, second],
+                "reviewer",
+                EphemeralCredential::new("human-bearer"),
+            )
+            .await;
+        assert_eq!(values.len(), 2);
+        match case {
+            "concealed" => {
+                assert_eq!(values[0], Err(ReviewContextError::Concealed));
+                assert!(values[1].is_ok());
+            }
+            "wrong-subject" => {
+                assert_eq!(values[0], Err(ReviewContextError::BindingMoved));
+                assert!(values[1].is_ok());
+            }
+            _ => assert!(
+                values
+                    .iter()
+                    .all(|value| matches!(value, Err(ReviewContextError::ContractChanged))),
+                "{case}"
+            ),
+        }
+    }
 }

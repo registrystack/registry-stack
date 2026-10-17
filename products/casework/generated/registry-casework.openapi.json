@@ -2035,6 +2035,32 @@
           }
         ]
       },
+      "ProblemReviewDistinctApproverRequired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "review.distinct-approver-required"
+              },
+              "detail": {
+                "const": "Each approval in this stage must be supplied by a different reviewer."
+              },
+              "status": {
+                "const": 403
+              },
+              "title": {
+                "const": "Distinct approver required"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/review/distinct-approver-required"
+              }
+            }
+          }
+        ]
+      },
       "ProblemReviewInitiatorExcluded": {
         "allOf": [
           {
@@ -2342,6 +2368,58 @@
               },
               "type": {
                 "const": "https://id.registrystack.org/problems/registry-casework/source-profile/required"
+              }
+            }
+          }
+        ]
+      },
+      "ProblemSourceVersionMismatch": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "source.version-mismatch"
+              },
+              "detail": {
+                "const": "Deploy the same Registry Stack version for Casework and its source."
+              },
+              "status": {
+                "const": 502
+              },
+              "title": {
+                "const": "Source version mismatch"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/source/version-mismatch"
+              }
+            }
+          }
+        ]
+      },
+      "ProblemSourceVersionUnavailable": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "source.version-unavailable"
+              },
+              "detail": {
+                "const": "The source did not report its engine version. Deploy matching Registry Stack versions."
+              },
+              "status": {
+                "const": 502
+              },
+              "title": {
+                "const": "Source version unavailable"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/source/version-unavailable"
               }
             }
           }
@@ -3979,7 +4057,7 @@
           },
           "staffingDiagnostic": {
             "$ref": "#/components/schemas/StaffingDiagnostic",
-            "description": "Present when an assignment or absence recompute found no eligible cover."
+            "description": "Bounded notice about unavailable cover or too few distinct approvers."
           },
           "stageId": {
             "type": "string"
@@ -4339,7 +4417,8 @@
       },
       "StaffingDiagnostic": {
         "enum": [
-          "no-cover-available"
+          "no-cover-available",
+          "insufficient-distinct-approvers"
         ],
         "type": "string"
       },
@@ -5761,11 +5840,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -6022,11 +6111,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -6309,11 +6408,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -6484,13 +6593,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -6675,11 +6787,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -6845,13 +6967,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -7036,11 +7161,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -7221,13 +7356,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -7412,11 +7550,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -7589,13 +7737,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -7780,11 +7931,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -7947,13 +8108,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -8138,11 +8302,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -8305,13 +8479,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -8496,11 +8673,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -8663,13 +8850,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -8854,11 +9044,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -9021,13 +9221,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -9212,11 +9415,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -9379,13 +9592,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -9570,11 +9786,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -9854,11 +10080,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -10186,11 +10422,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -10376,13 +10622,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -10567,11 +10816,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -10851,11 +11110,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -11112,11 +11381,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -11386,11 +11665,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -11581,13 +11870,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -11772,11 +12064,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12043,11 +12345,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12220,13 +12532,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12411,11 +12726,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12695,11 +13020,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13000,11 +13335,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13190,13 +13535,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13381,11 +13729,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13639,11 +13997,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13921,11 +14289,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14336,11 +14714,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14751,11 +15139,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15166,11 +15564,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15474,11 +15882,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -15792,11 +16210,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -16076,11 +16504,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -16276,13 +16714,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -16467,11 +16908,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -16657,13 +17108,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -16848,11 +17302,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -17132,11 +17596,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -17346,13 +17820,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -17537,11 +18014,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -17737,13 +18224,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -17928,11 +18418,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -18111,13 +18611,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -18302,11 +18805,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -18577,11 +19090,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -18775,13 +19298,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -18966,11 +19492,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -19156,13 +19692,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -19347,11 +19886,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -19631,11 +20180,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -19829,13 +20388,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -20020,11 +20582,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -20184,13 +20756,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -20375,11 +20950,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -20659,11 +21244,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -20800,13 +21395,16 @@
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewDistinctApproverRequired"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewInitiatorExcluded"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.initiator-excluded",
+            "description": "Problem: operation.not-authorized, profile.not-authorized, profile.not-human, review.distinct-approver-required, review.initiator-excluded",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -20991,11 +21589,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -21249,11 +21857,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceBadGateway"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceVersionUnavailable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem: source.bad-gateway",
+            "description": "Problem: source.bad-gateway, source.version-mismatch, source.version-unavailable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"

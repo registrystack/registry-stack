@@ -635,6 +635,7 @@ async fn review_context_requires_record_grant_and_current_membership() {
         )
         .await;
     let path = format!("/v1/proposals/{id}/review-context?accessProfile=task-reviewer");
+    let batch_path = format!("/v1/proposals/review-context?accessProfile=task-reviewer&ids={id}");
     let record_path = format!("/v1/records/targets/{target}?accessProfile=task-reviewer");
     assert_eq!(
         send(&reader, Method::GET, &record_path, Value::Null, None, None)
@@ -649,6 +650,10 @@ async fn review_context_requires_record_grant_and_current_membership() {
         "absent membership released current Record: {value}"
     );
     assert!(!value.to_string().contains("current-name-canary"));
+    let (batch_code, batch, _) =
+        send(&reader, Method::GET, &batch_path, Value::Null, None, None).await;
+    assert_eq!(batch_code, StatusCode::OK);
+    assert_eq!(batch, json!({"items":[{"id":id,"status":"concealed"}]}));
     let membership = create(
         &fixture.http,
         "memberships",
@@ -673,6 +678,13 @@ async fn review_context_requires_record_grant_and_current_membership() {
         "current-name-canary"
     );
     assert_review_contract(&fixture.registry, &value);
+    let (batch_code, batch, _) =
+        send(&reader, Method::GET, &batch_path, Value::Null, None, None).await;
+    assert_eq!(batch_code, StatusCode::OK);
+    assert_eq!(
+        batch,
+        json!({"items":[{"id":id,"status":"visible","context":value}]})
+    );
     assert_eq!(
         value["context"]["fields"]["changes"],
         json!([{
@@ -818,6 +830,10 @@ async fn review_context_requires_record_grant_and_current_membership() {
         "committed membership revocation disclosed context: {value}"
     );
     assert!(!value.to_string().contains("current-name-canary"));
+    let (batch_code, batch, _) =
+        send(&reader, Method::GET, &batch_path, Value::Null, None, None).await;
+    assert_eq!(batch_code, StatusCode::OK);
+    assert_eq!(batch, json!({"items":[{"id":id,"status":"concealed"}]}));
     assert_eq!(
         reqwest::Client::new()
             .get(format!("{}{}", reader.base_url, saved_download))
@@ -883,6 +899,10 @@ async fn review_context_requires_record_grant_and_current_membership() {
         .await
         .unwrap()
         .contains("frozen-review-document"));
+    let (batch_code, batch, _) =
+        send(&reader, Method::GET, &batch_path, Value::Null, None, None).await;
+    assert_eq!(batch_code, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!batch.to_string().contains("current-name-canary"));
     drop(reader);
     fixture.finish().await;
 }

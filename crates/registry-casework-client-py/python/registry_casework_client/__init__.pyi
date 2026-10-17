@@ -127,7 +127,7 @@ class HolidaySetDocument(TypedDict):
 class HolidaySetRevisionInput(TypedDict):
     document: HolidaySetDocument
 
-StaffingDiagnostic: TypeAlias = Literal["no-cover-available"]
+StaffingDiagnostic: TypeAlias = Literal["no-cover-available", "insufficient-distinct-approvers"]
 
 DirectoryTargetPurpose: TypeAlias = Literal["assignment", "absence-person", "absence-cover"]
 
@@ -353,7 +353,7 @@ KnownCaseworkProblemCode: TypeAlias = Literal[
     "request.not-found",
     "request.unprocessable",
     "request.unsupported-media-type",
-    "review.initiator-excluded",
+    "review.distinct-approver-required", "review.initiator-excluded",
     "review.initiator-required",
     "review.query-too-broad",
     "review.policy-mismatch",
@@ -365,6 +365,8 @@ KnownCaseworkProblemCode: TypeAlias = Literal[
     "source-profile.not-applicable",
     "source-profile.required",
     "source.bad-gateway",
+    "source.version-mismatch",
+    "source.version-unavailable",
 ]
 # A newer Casework service can answer a code this release does not name, so the
 # attribute widens the closed catalogue the way the Node typings do.

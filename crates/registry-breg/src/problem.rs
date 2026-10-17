@@ -38,6 +38,7 @@ pub enum ProblemCode {
     PreconditionFailed,
     PreconditionRequired,
     ProposalRejected,
+    ProposalReviewResultMismatch,
     ProposalSubmissionExpired,
     QueryCursorInvalid,
     QueryInvalid,
@@ -74,6 +75,7 @@ impl ProblemCode {
         Self::PreconditionFailed,
         Self::PreconditionRequired,
         Self::ProposalRejected,
+        Self::ProposalReviewResultMismatch,
         Self::ProposalSubmissionExpired,
         Self::QueryCursorInvalid,
         Self::QueryInvalid,
@@ -111,6 +113,7 @@ impl ProblemCode {
         Self::PreconditionFailed,
         Self::PreconditionRequired,
         Self::ProposalRejected,
+        Self::ProposalReviewResultMismatch,
         Self::ProposalSubmissionExpired,
         Self::QueryCursorInvalid,
         Self::QueryInvalid,
@@ -146,6 +149,7 @@ impl ProblemCode {
             Self::PreconditionFailed => "precondition.failed",
             Self::PreconditionRequired => "precondition.required",
             Self::ProposalRejected => "proposal.rejected",
+            Self::ProposalReviewResultMismatch => "proposal.review_result_mismatch",
             Self::ProposalSubmissionExpired => "proposal.submission_expired",
             Self::QueryCursorInvalid => "query.cursor_invalid",
             Self::QueryInvalid => "query.invalid",
@@ -183,7 +187,7 @@ impl ProblemCode {
             | Self::IngestionReceiptErased
             | Self::ProposalSubmissionExpired
             | Self::StatisticalDatasetVersionWithdrawn => 410,
-            Self::PreconditionFailed => 412,
+            Self::PreconditionFailed | Self::ProposalReviewResultMismatch => 412,
             Self::UnsupportedMediaType => 415,
             Self::ActionRefused | Self::StatisticalDatasetReleaseRefused => 422,
             Self::PreconditionRequired => 428,
@@ -243,6 +247,7 @@ impl ProblemCode {
             Self::LookupUnresolved => "The lookup did not resolve exactly one record.",
             Self::MutationConflict => "The mutation conflicts with current state.",
             Self::PreconditionFailed => "The mutation precondition failed.",
+            Self::ProposalReviewResultMismatch => "The current review result does not match the retained approval.",
             Self::PreconditionRequired => "The mutation precondition is required.",
             Self::ProposalRejected => {
                 "The review rejected this Proposal, and a rejection is final. A review result of changes-requested is what lets a Proposal be revised for another attempt."

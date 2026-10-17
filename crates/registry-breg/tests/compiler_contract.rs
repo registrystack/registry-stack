@@ -4758,6 +4758,7 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
             "precondition.failed",
             "precondition.required",
             "proposal.rejected",
+            "proposal.review_result_mismatch",
             "proposal.submission_expired",
             "query.cursor_invalid",
             "query.invalid",

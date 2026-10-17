@@ -1020,7 +1020,7 @@ pub struct ReviewTask {
     pub revision: i64,
     pub eligible_profiles: Vec<String>,
     pub state: ReviewTaskState,
-    /// Present when an assignment or absence recompute found no eligible cover.
+    /// Bounded notice about unavailable cover or too few distinct approvers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "crate::StaffingDiagnostic"))]
     pub staffing_diagnostic: Option<crate::StaffingDiagnostic>,
