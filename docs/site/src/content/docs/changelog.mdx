@@ -1955,7 +1955,7 @@ relevant product pages on this site rather than duplicating release notes.
 - BReg ships WebAssembly action handlers enabled by default, field encryption
   for restricted fields, and durable resumable ingestion runs. Existing Rhai
   and declarative action handlers keep working. See
-  [field encryption for restricted fields](../explanation/breg-field-encryption/)
+  [field encryption for restricted fields](../configure/breg-field-encryption/)
   and the [BReg client capabilities](../reference/breg-client-capabilities/).
 
 {/* Evidence: crates/registry-breg/Cargo.toml, features;
@@ -2325,7 +2325,7 @@ relevant product pages on this site rather than duplicating release notes.
   `bregState`, `proposalVersion`, and `effectDigest`; ordinary field API names
   cannot reuse those names. Structured fields also accept an array schema root
   with declared `items`. See
-  [declare change requests and actions](../configure/breg-change-control/).
+  [declare change requests and actions](../configure/breg-actions/).
 - The unified Node.js client's Base Registry Engine namespace adds exact-JSON
   metadata, record, and lifecycle methods. Serialized JSON avoids silent
   rounding at the JavaScript number boundary, and unsupported values refuse.

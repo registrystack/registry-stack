@@ -386,7 +386,7 @@ configured prefix and never derive their authority from request headers.
 | `retention` | Optional `receiptRetentionDays` (default 7, 1 to 365): how long the response to a successful write stays available to an exact retry. The key stays spent after that; see [Drop expired idempotency responses](../breg-retention/#drop-expired-idempotency-responses). Optional `hookPayloadRetentionDays` (default 7, 1 to 30): how long a captured webhook payload is kept for pending or dead-letter delivery; see [Bind webhook receivers](../breg-webhooks/). |
 | `eventDestinations` | One binding per webhook destination the package declares; see [Bind webhook receivers](../breg-webhooks/). |
 | `evidenceProviders` | One binding per Evidence provider the package declares, keyed by provider ID: `baseUrl`, `trustBindingId`, `trustedJwksRef`, `revokedKeyIds`, optional `caBundleRef`, and exactly one of `tokenRef` or a refreshing `privateKeyJwt` credential. The script cannot replace these bindings; see [Governed registry actions](../../explanation/governed-registry-actions/). |
-| `fieldEncryption` | Key custody for encrypted fields; declare it when the project encrypts a field. The optional `provider` binding's `type` member selects the custodian. `type: transit` requires `unixSocketPath`, `mount`, and `keyName`, with an optional `attemptTimeoutMilliseconds` (default 5000, at most 30000). `type: local-file` requires `dekRef`, a `secret:file/<name>` reference to one base64 data-key file, and is for local assurance only. The model and its limits are in [Field encryption for restricted fields](../../explanation/breg-field-encryption/). |
+| `fieldEncryption` | Key custody for encrypted fields; declare it when the project encrypts a field. The optional `provider` binding's `type` member selects the custodian. `type: transit` requires `unixSocketPath`, `mount`, and `keyName`, with an optional `attemptTimeoutMilliseconds` (default 5000, at most 30000). `type: local-file` requires `dekRef`, a `secret:file/<name>` reference to one base64 data-key file, and is for local assurance only. The model and its limits are in [Field encryption for restricted fields](../../configure/breg-field-encryption/). |
 | `attachmentStorage` | PostgreSQL by default, or an operator-bound S3-compatible backend for Proposal attachments; see [Attachment storage](../../reference/breg-configuration/#attachment-storage). |
 | `attachmentVerification` | Optional asynchronous HTTP verifier; content stays quarantined until approved. Configure it before the first attachment upload; see [External attachment verification](../../reference/breg-configuration/#external-attachment-verification). |
 | `operationalTimeouts` | Optional HTTP request, record lock, migration lock, migration statement, and shutdown grace bounds. |
@@ -903,7 +903,7 @@ plaintext. The apply seals the stored values through the engine-executed backfil
 reviewed migration declares, and the history choice the project authored in that migration
 decides what happens to the plaintext the database retains. The two choices and their trade-offs
 are in
-[Field encryption for restricted fields](../../explanation/breg-field-encryption/); this section
+[Field encryption for restricted fields](../../configure/breg-field-encryption/); this section
 is the operator path around the apply, which [Change an active registry](../breg-changes/)
 prepares and applies.
 
