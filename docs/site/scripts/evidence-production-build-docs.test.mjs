@@ -11,10 +11,12 @@ async function page(path) {
   return readFile(resolve(siteRoot, path), 'utf8');
 }
 
-// These tutorials describe deployments this repository cannot replay: they need
-// a real Vault or OpenBao, a deployment repository, and a target host. This file
-// is therefore a drift check on the pages themselves, and it is deliberately a
-// small one.
+// The Evidence tutorial gate replays the build page up to the production
+// listener, and the Transit and Compose pages describe deployments this
+// repository cannot replay: they need a real Vault or OpenBao, a deployment
+// repository, and a target host. This file is therefore a drift check on the
+// pages themselves, on the parts the gate cannot reach, and it is deliberately
+// a small one.
 //
 // One test decides whether an assertion belongs here: if a page lost this, would
 // an adopter be left less safe, with nothing else noticing? A token that reaches
@@ -78,4 +80,24 @@ test('the maintained Compose adapter keeps Evidence deployment inputs explicit',
   assert.match(runtime, /type: transit/u);
   assert.match(runtime, /unixSocketPath: \/run\/registry-evidence\/transit-proxy\.sock/u);
   assert.doesNotMatch(runtime, /privateKeyRef/u);
+});
+
+test('the Compose tutorial runs the candidate the adapter mounts, under an activated authority', async () => {
+  const [tutorial, compose, runtime] = await Promise.all([
+    page('src/content/docs/tutorials/integrate-evidence-candidate-with-docker-compose.mdx'),
+    readFile(resolve(repoRoot, 'docker/compose/docker-compose.yaml'), 'utf8'),
+    readFile(resolve(repoRoot, 'docker/compose/runtime.docker.yaml'), 'utf8'),
+  ]);
+
+  // The approved bundle is mounted read-only where the runtime reads it. A page
+  // that names another path sends the adopter to edit package.root or the mount
+  // until the service starts, and away from the bundle that was approved.
+  const mount = compose.match(/\$\{EVIDENCE_CANDIDATE_DIR[^}]*\}:([^:\s]+):ro/u);
+  assert.ok(mount, 'docker-compose.yaml mounts EVIDENCE_CANDIDATE_DIR read-only');
+  const bundlePath = mount[1];
+  assert.ok(runtime.includes(`\n  root: ${bundlePath}\n`), `runtime.docker.yaml reads ${bundlePath}`);
+  assert.ok(tutorial.includes(`\`${bundlePath}\``), `the Compose tutorial names ${bundlePath}`);
+  // A packaged candidate serves only under the target authority activated for
+  // it; without the step the page leaves the adopter no reviewed way to start.
+  assert.match(tutorial, /evidence authority activate/u);
 });
