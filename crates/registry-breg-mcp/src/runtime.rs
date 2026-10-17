@@ -119,9 +119,7 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
         JwksSource::Uri { uri } => JwksFetcher::new_with_fetch_url_policy(
             uri.to_string(),
             JwksFetcherConfig::defaults(),
-            network
-                .jwks_fetch_policy(uri.as_str())
-                .map_err(|error| StartupError::ResourceServer(error.to_string()))?,
+            network.declared_jwks_fetch_policy(),
         ),
         JwksSource::Discovery {} => {
             let (discovery, policy) = fetch_discovery_for_issuer(

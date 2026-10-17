@@ -2,11 +2,14 @@
 
 ## Unreleased
 
-- BREAKING: token-verifying runtimes use one issuer network policy. A configured issuer and
-  its same-origin discovery `jwks_uri` may resolve to private addresses, while cloud metadata
-  and cross-origin private key endpoints remain refused. Plain HTTP beyond IPv4 or IPv6
-  loopback requires `allowInsecureHttp: true` and emits a startup warning. Evidence
-  and its OID4VCI adapter no longer accept a cross-origin private HTTPS `jwks_uri`. Casework
+- BREAKING: token-verifying runtimes use one issuer network policy. Endpoints the operator
+  declares, the issuer and a configured JWKS URI, may resolve to private or loopback
+  addresses on any origin. A discovery `jwks_uri` inherits that allowance only on the
+  issuer's own origin; a discovered cross-origin key endpoint on a private or loopback
+  address is refused. Cloud metadata and link-local addresses are always refused, and a
+  policy refusal at startup names its remedy. Plain HTTP beyond IPv4 or IPv6 loopback
+  requires `allowInsecureHttp: true` and emits a startup warning; a discovered cross-origin
+  endpoint must use HTTPS even with that setting. Casework
   also gains `deniedKids` and `maximumTokenLifetimeSeconds` for immediate signing-key refusal
   and an operator-bounded token lifetime.
 
