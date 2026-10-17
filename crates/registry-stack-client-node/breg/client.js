@@ -225,6 +225,7 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['startProposal'], ['readProposal'], ['readProposalSubmission'], ['getProposal'], ['listProposals'], ['executeProposal'],
   ['downloadProposalAttachment'], ['uploadProposalAttachment'], ['deleteProposalAttachment'],
   ['readProposalReviewStatus'], ['readProposalReviewContext'],
+  ['readProposalReviewContextBatch', [1], [1]],
   ['readProposalReviewById'], ['downloadProposalReviewDocument', [1], [1]],
   ['getRecordJson', [2]], ['listRecordsJson', [1]], ['continueListJson', [0], [0]],
   ['getGeoJsonRecordJson', [2]], ['listGeoJsonRecordsJson', [1]],

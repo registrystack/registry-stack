@@ -913,6 +913,7 @@ export declare class BaseRegistryClient {
   downloadProposalAttachment(proposal: BRegProposal, slot: string): Promise<RawOutcome>
   readProposalReviewStatus(proposal: BRegProposal): Promise<CompleteOutcome<BRegProposalReviewDocument>>
   readProposalReviewContext(proposal: BRegProposal): Promise<CompleteOutcome<BRegProposalReviewDocument>>
+  readProposalReviewContextBatch(binding: BRegProposalReviewBinding, ids: string[]): Promise<CompleteOutcome<Array<BRegProposalReviewDocument | null>>>
   readProposalReviewById(binding: BRegProposalReviewBinding, id: string): Promise<CompleteOutcome<BRegProposalReviewDocument>>
   downloadProposalReviewDocument(binding: BRegProposalReviewBinding, context: BRegProposalReviewDocument, field: string): Promise<RawOutcome>
   uploadProposalAttachment(proposal: BRegProposal, slot: string, contentType: string, bytes: Buffer, key: string): Promise<BRegProposal>

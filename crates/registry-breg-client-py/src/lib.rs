@@ -2757,6 +2757,24 @@ impl BaseRegistryClient {
             .map_err(|error| sdk_error(py, error))?;
         complete_value(py, &response.value, &response.metadata)
     }
+    fn read_proposal_review_context_batch<'py>(
+        &self,
+        py: Python<'py>,
+        binding: PyRef<'_, ProposalReviewBinding>,
+        ids: Vec<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let binding = binding.inner.clone();
+        let response = py
+            .detach(|| {
+                let ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
+                self.runtime.block_on(
+                    self.inner
+                        .read_proposal_review_context_batch(&binding, &ids),
+                )
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &response.value, &response.metadata)
+    }
     fn upload_proposal_attachment(
         &self,
         py: Python<'_>,
