@@ -14,11 +14,6 @@
 # BReg rewrite, PR 5: Reference and src/data
 src/content/docs/reference/bregctl-publicschema-wizard.mdx # quotes the wizard's own prompts, which still say entity (crates/registry-bregctl/src/init_from_model/wizard.rs); cleared when the product renames them
 
-# Evidence and Casework rewrite: Casework pages
-src/content/docs/start/casework.mdx # review round
-src/content/docs/explanation/how-casework-works.mdx # review round
-src/content/docs/tutorials/first-casework.mdx # review round
-
 # Evidence and Casework rewrite: Start and Reference
 src/content/docs/index.mdx # bounded question
 src/content/docs/reference/glossary.mdx # authoring workspace, bounded question, review round

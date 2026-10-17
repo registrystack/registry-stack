@@ -200,7 +200,7 @@ or `schedulingctl apply` with this release's runtime configuration pointing at t
 
 The new release writes directly to the shared per-process writer. Its audit entries are not
 chained. Collect the service files and operator companion files, and use append-only storage for
-tamper evidence. See [earlier database and audit state](../casework/#earlier-database-and-audit-state)
+tamper evidence. See [keep the audit file](../casework-retention/#keep-the-audit-file)
 for the Casework state and audit boundary.
 
 {/* Evidence: crates/registry-casework/src/store.rs;

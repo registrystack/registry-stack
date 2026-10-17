@@ -661,7 +661,7 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'start/casework' },
-            { label: 'Decide your first review request', slug: 'tutorials/first-casework' },
+            { label: 'Decide your first ReviewRequest', slug: 'tutorials/first-casework' },
             { label: 'Review a Proposal in Casework', slug: 'tutorials/review-breg-changes-in-casework' },
             { label: 'How Casework works', slug: 'explanation/how-casework-works' },
             { label: 'Author a policy', slug: 'configure/casework' },
