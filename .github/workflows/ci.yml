@@ -2213,7 +2213,9 @@ jobs:
         with:
           node-version: 24.11.0
           cache: npm
-          cache-dependency-path: crates/registry-casework-client-node/package-lock.json
+          cache-dependency-path: |
+            crates/registry-casework-client-node/package-lock.json
+            docs/site/package-lock.json
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
@@ -2223,8 +2225,47 @@ jobs:
       - name: Execute the canonical Casework developer journey
         # The maintained submitted-review journey owns its disposable Docker
         # database and verifies public binaries plus Rust/Node/Python facades.
-        # Broad site tutorial migration remains separate from this replacement.
         run: products/casework/scripts/check-review-journeys.sh
+
+      - name: Install docs dependencies
+        working-directory: docs/site
+        # The tutorial runner needs only pure-JS packages. Skipping install
+        # scripts keeps the Vale postinstall's unauthenticated GitHub
+        # download, which shared runner addresses get refused on, out of
+        # this job.
+        run: npm ci --ignore-scripts
+
+      - name: Test the tutorial runner
+        working-directory: docs/site
+        run: npm run test:tutorial:runner
+
+      - name: Check tutorial command drift
+        working-directory: docs/site
+        run: npm run check:tutorial:casework:dry-run
+
+      - name: Build the Registry Casework toolset under test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked \
+            -p registry-casework -p registry-caseworkctl \
+            -p registry-breg --features registry-breg/runtime \
+            -p registry-bregctl --bins
+
+      - name: Execute the Registry Casework tutorials from a reader directory
+        shell: bash
+        env:
+          CASEWORK_BIN: ${{ github.workspace }}/target/debug/casework
+          CASEWORKCTL_BIN: ${{ github.workspace }}/target/debug/caseworkctl
+          BREG_BIN: ${{ github.workspace }}/target/debug/breg
+          BREGCTL_BIN: ${{ github.workspace }}/target/debug/bregctl
+        run: |
+          set -euo pipefail
+          # `caseworkctl dev` and `bregctl dev` each run PostgreSQL in a
+          # disposable container of their own, which the runner stops when
+          # the journey ends, so the replay stays on the Docker runner rather
+          # than inside a clean read-only container.
+          node docs/site/scripts/run-tutorial.mjs --gate casework
 
   messaging-tutorial:
     name: Registry Messaging tutorial from source
