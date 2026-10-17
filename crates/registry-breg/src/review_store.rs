@@ -2038,7 +2038,7 @@ pub async fn run_one_submission(
             }
         }
         Err(_) => {
-            client
+            let updated = client
                 .execute(
                     "UPDATE registry_internal.registry_proposal_review_submissions
                         SET state='uncertain',lease_until=NULL,last_error_code='remote-uncertain',
@@ -2055,6 +2055,11 @@ pub async fn run_one_submission(
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
+            if updated == 1 {
+                tracing::warn!(
+                    "BReg review handoff recorded remote-uncertain; retry the same submission to recover its acceptance"
+                );
+            }
         }
     }
     Ok(true)

@@ -173,7 +173,12 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     )?;
     if canonical_review {
         fs::create_dir_all(stage.path().join("schemas"))?;
-        fs::write(stage.path().join("schemas/correct-address.schema.json"), include_bytes!("../../../products/casework/examples/canonical-review/schemas/correct-address.schema.json"))?;
+        fs::write(
+            stage.path().join("schemas/correct-address.schema.json"),
+            include_bytes!(
+                "../../../products/casework/examples/canonical-review/schemas/correct-address.schema.json"
+            ),
+        )?;
         fs::write(
             stage.path().join("README.md"),
             include_bytes!("../../../products/casework/examples/canonical-review/README.md"),
@@ -364,7 +369,7 @@ fn check_holiday_sets(
             if error.kind() == std::io::ErrorKind::NotFound
                 && fs::symlink_metadata(&directory).is_err() =>
         {
-            return Ok(())
+            return Ok(());
         }
         Err(_) => {
             diagnostics.push(unreadable_holiday_input(&directory_shown));
@@ -863,8 +868,25 @@ pub(super) fn doctor(path: &Path) -> Result<Value> {
     plan.refusals
         .retain(|refusal| refusal.code != "casework.activation.already-active");
     inputs.config.audit.destination()?.check_writable()?;
+    let shortfalls = if plan.active.is_some() {
+        runtime.block_on(store.review_staffing_shortfalls(inputs.package.project()))?
+    } else {
+        Vec::new()
+    };
+    let diagnostics = shortfalls
+        .into_iter()
+        .map(|queue| {
+            Diagnostic::warning(
+            "casework.staffing.insufficient-distinct-approvers",
+            format!("queues.{queue}"),
+            "The serving team has fewer available distinct reviewers than a review stage requires.",
+            "Add eligible reviewers to the serving team or review the stage's requiredApprovals.",
+        )
+        })
+        .collect::<Vec<_>>();
+
     Ok(
-        json!({"ok":plan.refusals.is_empty(),"command":"doctor","runtimeConfig":path,"packageDigest":inputs.package.digest(),"activation":plan,"checks":{"configuration":"ready","package":"ready","database":"ready","audit":"ready"}}),
+        json!({"ok":plan.refusals.is_empty(),"diagnostics":diagnostics,"command":"doctor","runtimeConfig":path,"packageDigest":inputs.package.digest(),"activation":plan,"checks":{"configuration":"ready","package":"ready","database":"ready","audit":"ready"}}),
     )
 }
 

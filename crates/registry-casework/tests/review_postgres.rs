@@ -7066,6 +7066,22 @@ async fn source_context_task_inbox_honors_the_configured_source_read_budget() {
         task_ids.push(task_id(&fixture, created.accepted.request_id, 0).await);
     }
 
+    assert!(
+        matches!(
+            bounded_service
+                .review_tasks(
+                    &fixture.reviewer_a,
+                    Some("staff"),
+                    "human-bearer",
+                    None,
+                    None,
+                    10
+                )
+                .await,
+            Err(ReviewRuntimeError::QueryTooBroad)
+        ),
+        "ordinary queues refuse the whole page when the source budget cannot fill it"
+    );
     let first = bounded_service
         .review_tasks(
             &fixture.reviewer_a,
@@ -7073,7 +7089,7 @@ async fn source_context_task_inbox_honors_the_configured_source_read_budget() {
             "human-bearer",
             None,
             None,
-            10,
+            1,
         )
         .await
         .expect("first bounded task page");
@@ -7086,7 +7102,7 @@ async fn source_context_task_inbox_honors_the_configured_source_read_budget() {
             "human-bearer",
             None,
             Some(cursor),
-            10,
+            1,
         )
         .await
         .expect("second bounded task page");
@@ -7321,11 +7337,13 @@ async fn supervisory_request_lookup_binds_scan_checkpoints_and_conceals_bounded_
         read(Some(requests[0]), Some(checkpoint), Some("staff")).await,
         Err(ReviewRuntimeError::ResultExpired)
     ));
-    let resumed = read(Some(requests[0]), Some(checkpoint), None)
-        .await
-        .unwrap();
-    assert!(resumed.items.is_empty());
-    assert_ne!(resumed.next_cursor, Some(checkpoint));
+    assert!(
+        matches!(
+            read(Some(requests[0]), Some(checkpoint), None).await,
+            Err(ReviewRuntimeError::SourceProfileRequired)
+        ),
+        "request-level reuse reaches the final hidden slot in this bounded page"
+    );
     let unfiltered = read(None, None, None).await.unwrap().next_cursor.unwrap();
     assert!(matches!(
         read(Some(requests[0]), Some(unfiltered), None).await,
@@ -7519,6 +7537,22 @@ async fn review_task_scan_checkpoints_bind_scope_and_preserve_hidden_candidate_p
                 }
             };
             fixture.source_revoked.store(true, Ordering::SeqCst);
+            if !supervisory {
+                assert!(matches!(
+                    read(
+                        actor.clone(),
+                        source_profile,
+                        Some("review"),
+                        None,
+                        supervisory,
+                        None
+                    )
+                    .await,
+                    Err(ReviewRuntimeError::QueryTooBroad)
+                ));
+                continue;
+            }
+
             let first = read(
                 actor.clone(),
                 source_profile,
@@ -7821,6 +7855,9 @@ async fn source_context_task_inbox_reports_a_first_read_deadline_without_losing_
             Ok(Err(ReviewRuntimeError::SourceUnavailable))
         ));
     }
+    // Recovery observes a healthy source even if the bounded attempt expired
+    // during its database work before reaching the one-shot source barrier.
+    fixture.source_read_blocked.store(false, Ordering::SeqCst);
     let recovered = fixture
         .service_v2
         .review_tasks(
@@ -8047,13 +8084,14 @@ async fn review_task_lists_recheck_queue_after_source_io() {
                     "requestId": request_id,
                     "queue": "intake",
                     "revision": 1,
-                    "state": "open"
+                    "state": "open",
+                    "staffingDiagnostic": "insufficient-distinct-approvers"
                 }],
                 "status": "complete"
             });
             if index + 1 < tasks.len() {
                 expected["nextCursor"] = json!(task_id);
-                expected["status"] = json!("budget-exhausted");
+                // One request observation covers both checked slots, so this page is complete.
             }
             assert_eq!(serde_json::to_value(&page).unwrap(), expected);
             if let Some(cursor) = page.next_cursor {
@@ -8131,13 +8169,6 @@ async fn review_task_lists_recheck_queue_after_source_io() {
                     .await
             });
             fixture.source_read_started.notified().await;
-            if source_read_budget == 2 {
-                // Rearm before releasing A. With concurrency one, B blocks
-                // only after A has passed its current-scope check and is added.
-                fixture.source_read_blocked.store(true, Ordering::SeqCst);
-                fixture.source_read_continue.notify_one();
-                fixture.source_read_started.notified().await;
-            }
             fixture
                 .database
                 .execute(
@@ -8148,23 +8179,9 @@ async fn review_task_lists_recheck_queue_after_source_io() {
                 .expect("move only the last budgeted candidate during its source read");
             fixture.source_read_continue.notify_one();
             let result = pending.await.unwrap();
-            let mut page = if (queue.is_some() || !destination_served) && source_read_budget == 1 {
-                assert!(matches!(result, Err(ReviewRuntimeError::ResultExpired)));
-                service
-                    .supervisory_review_tasks(
-                        &fixture.supervisor,
-                        Some("staff"),
-                        "human-bearer",
-                        queue,
-                        Some(request_id),
-                        None,
-                        1,
-                    )
-                    .await
-                    .expect("a refetch finds candidates after the moved first task")
-            } else {
-                result.expect("retain matching work with a usable continuation")
-            };
+            // All slots share one current observation. A moved slot is skipped
+            // without exhausting the source budget for the remaining slots.
+            let mut page = result.expect("retain matching work with a usable continuation");
             let expected_tasks = tasks
                 .iter()
                 .copied()
@@ -8177,13 +8194,14 @@ async fn review_task_lists_recheck_queue_after_source_io() {
                         "requestId": request_id,
                         "queue": if *task_id == moved { "intake" } else { "review" },
                         "revision": 1,
-                        "state": "open"
+                        "state": "open",
+                        "staffingDiagnostic": "insufficient-distinct-approvers"
                     }],
                     "status": "complete"
                 });
                 if index + 1 < expected_tasks.len() {
                     expected["nextCursor"] = json!(task_id);
-                    if source_read_budget == 1 || queue.is_some() || !destination_served {
+                    if queue.is_some() || !destination_served {
                         expected["status"] = json!("budget-exhausted");
                     }
                 }

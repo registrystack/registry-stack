@@ -259,16 +259,37 @@ An authorized task read or supervisory row can show `staffingDiagnostic: no-cove
 
 ### Size the review queue reads
 
-The `inbox` policy in `casework.yaml` bounds each task-list, next-task and holdings read, including unfiltered reads. These operations complete the candidate scan and current disclosure before sorting and paging. They intentionally refuse the whole read when a scan budget is exhausted; they do not return the partial pages supported by supervision and own decisions.
+The `inbox` policy in `casework.yaml` bounds each task-list, next-task, and holdings read.
+Ordinary due-date and subject-order queries select bounded database pages before reading current
+source visibility. Candidates concealed by the source still consume the scan budget, but an
+ordinary page does not scan the whole queue.
 
-Defaults are `maximumCandidateScan: 100`, `maximumSourceReads: 25` and `pageDeadlineMilliseconds: 2000`. Candidates later concealed by the source still consume the budgets. A current-source queue can therefore reach its source-read limit before its candidate limit. A smaller page size or visible-reference filter does not reduce the candidate scan. An exact subject or queue selector can narrow it before disclosure.
+Live-reference filtering and reference sorting require a complete bounded scan because their keys
+come from current source reads. An exact subject or queue selector narrows candidates before
+disclosure. A smaller page size helps ordinary queries; it does not reduce a live-reference scan.
 
-For a query expected to examine N candidates, allow at least N candidate scans and enough source reads for its current-source candidates. Measure the complete scan against representative source latency and leave time for database work within the deadline. Both count limits are bounded by 10,000 and the deadline by 30,000 ms; raising the candidate limit alone does not raise the other limits. Prefer narrower queues or exact-subject reads when the full scan cannot fit. Exhausted count budgets return `review.query-too-broad`; a source call that reaches the deadline can instead report source unavailability.
+Defaults are `maximumCandidateScan: 100`, `maximumSourceReads: 25`, and
+`pageDeadlineMilliseconds: 2000`.
+Multiple task slots for one request reuse one source observation within that page.
+Each new page repeats current source and Directory checks.
+An ordinary continuation charges its anchor observation to the same source budget and sizes the
+remaining page accordingly; a one-observation budget cannot advance past a current-source anchor.
+BReg human contexts use one bounded HTTP batch per chunk under the original caller and source
+profile. Each subject still passes its own current BReg disclosure and audit checks.
+Ordinary reads refuse the whole page when they exhaust the candidate, source, or time budget.
+Supervision and own-decision feeds retain their bounded partial-page statuses and opaque
+continuations; follow their cursor without changing the caller, profile, or query.
+
+Measure representative source latency before raising budgets.
+Count limits are at most 10,000 and the deadline at most 30,000 ms.
+For `review.query-too-broad`, narrow the query or reduce an ordinary page's limit.
+A source deadline can instead report source unavailability.
+Restart a walk after a cursor expires or its anchor leaves your current authority or ownership scope.
 
 {/* Evidence: crates/registry-casework-core/src/config.rs, InboxPolicy;
     crates/registry-casework/src/review/staffing.rs, review_staffing_tasks();
-    crates/registry-casework/tests/review_acceptance_postgres.rs,
-    live_read_budget_requires_narrowing_and_exact_subject_narrows_before_scan(). */}
+    crates/registry-casework/src/review/inbox.rs;
+    crates/registry-casework/tests/support/inbox_pagination.rs. */}
 
 ### Check readiness with doctor
 
@@ -278,7 +299,7 @@ Run the operator preflight as the runtime user:
 caseworkctl doctor --runtime-config /etc/registry-casework/runtime.yaml
 ```
 
-Doctor checks configuration, the package, database activation constraints, and audit-path writability. It accepts an unchanged already-active package. It does not open a listener, prove live issuer/provider access, or bootstrap the Directory. Use `/ready` on the running process and authenticated task reads for those distinct checks.
+Doctor checks configuration, the package, database activation constraints, and audit-path writability. It accepts an unchanged already-active package. It also warns when current serving-team membership cannot supply the distinct reviewers a stage requires; add eligible members and rerun doctor to confirm the warning clears. It does not open a listener, prove live issuer/provider access, or bootstrap the Directory. Use `/ready` on the running process and authenticated task reads for those distinct checks.
 
 If doctor refuses, correct the named input, grants, package, or audit path, then rerun it. For an audit failure during service, the change may already be committed when the response fails. Retry the original mutation with its original body and idempotency key, or inspect its result before choosing another operation.
 
@@ -309,7 +330,7 @@ Current-source contract changes need matching producer exports and Casework sche
 | `review.policy-mismatch` on admission | Reconcile the producer's exact pin with the deployed policy before a fresh submission. Preserve the original body and key for recovery. |
 | Current-source task is concealed or unavailable | Check the human's source profile, exact context binding, and required provider purpose. Never substitute the status credential for human display. |
 | `source.bad-gateway` on a display read | Correct the provider/schema mismatch. The warning identifies the policy and validation reason without source values. |
-| `review.query-too-broad` | The list, next-task or holdings read exceeded its complete-scan budget, or a caseload preview exceeded 100 tasks. Narrow the queue or exact subject, inspect the policy budgets, or split the caseload through separately authorized assignments. No partial staffing result was returned. |
+| `review.query-too-broad` | The list, next-task or holdings read exceeded its page or live-reference scan budget, or a caseload preview exceeded 100 tasks. Narrow the queue or exact subject, inspect the policy budgets, or split the caseload through separately authorized assignments. No partial staffing result was returned. |
 | `precondition.failed` on a mutation or preview apply | Refresh the task or Directory state and obtain a new preview where required. |
 | `service.unavailable` and `/ready` returns `503` | Check the database and audit writer. For a failed file writer, repair its path/space/permissions and restart; inspect whether the original operation committed. |
 | `casework.activation.retired-schema` or schema-newer refusal | Preserve the database and use a supported release/database pairing. Never alter the migration ledger to bypass the refusal. |

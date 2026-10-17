@@ -16,6 +16,54 @@ struct AbsenceDeleteReplay {
     cover: IssuerPrincipal,
 }
 impl PostgresStore {
+    /// Advisory queue names only. Directory identities never leave this check.
+    pub async fn review_staffing_shortfalls(
+        &self,
+        project: &CaseworkProject,
+    ) -> Result<Vec<String>, StoreError> {
+        let client = self.client().await?;
+        let mut shortfalls = BTreeSet::new();
+        for policy in &project.review_policies {
+            for stage in &policy.stages {
+                let kinds = project
+                    .access_profiles
+                    .iter()
+                    .filter(|profile| stage.deciding_profiles.contains(&profile.id))
+                    .filter_map(|profile| match profile.role {
+                        CaseworkRole::Staff => Some("staff"),
+                        CaseworkRole::Supervisor => Some("supervisor"),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let queues = std::iter::once(stage.queue.as_str())
+                    .chain(
+                        policy
+                            .routing
+                            .iter()
+                            .filter(|rule| {
+                                rule.when.stage.as_ref().is_none_or(|id| id == &stage.id)
+                            })
+                            .map(|rule| rule.queue.as_str()),
+                    )
+                    .collect::<BTreeSet<_>>();
+                for queue in queues {
+                    let available: i64 = client.query_one(
+                        "SELECT count(DISTINCT (m.issuer,m.subject))
+                         FROM casework_queue_service q JOIN casework_memberships m ON m.team_id=q.team_id
+                         WHERE q.queue_id=$1 AND m.membership_kind=ANY($2)
+                           AND NOT EXISTS(SELECT 1 FROM casework_absences a
+                             WHERE a.person_issuer=m.issuer AND a.person_subject=m.subject
+                               AND a.starts_at<=now() AND now()<a.ends_at)",
+                        &[&queue,&kinds]).await?.get(0);
+                    if available < i64::from(stage.required_approvals) {
+                        shortfalls.insert(queue.to_owned());
+                    }
+                }
+            }
+        }
+        Ok(shortfalls.into_iter().collect())
+    }
+
     pub async fn directory_targets(
         &self,
         actor: &ActorContext,

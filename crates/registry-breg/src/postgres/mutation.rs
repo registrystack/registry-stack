@@ -1862,6 +1862,7 @@ impl PostgresRecordMutationService {
                         Some(IngestionServiceError::RequestInvalid),
                     ),
                     MutationError::PreconditionFailed
+                    | MutationError::ProposalReviewResultMismatch
                     | MutationError::Conflict
                     | MutationError::ProposalRejected
                     | MutationError::AuthorizationRefused

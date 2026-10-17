@@ -502,7 +502,7 @@ impl PostgresRecordMutationService {
                         .await
                         .map_err(|_| MutationError::Unavailable)??;
                         if result_id.is_some_and(|result_id| fresh.result_id() != result_id) {
-                            return Err(MutationError::PreconditionFailed);
+                            return Err(MutationError::ProposalReviewResultMismatch);
                         }
                         (Some(fresh), evidence)
                     }

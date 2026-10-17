@@ -263,7 +263,7 @@ CREATE TABLE casework_review_tasks (
     assigned_by_issuer text CHECK (assigned_by_issuer IS NULL OR octet_length(assigned_by_issuer) BETWEEN 1 AND 2048),
     assigned_by_subject text CHECK (assigned_by_subject IS NULL OR octet_length(assigned_by_subject) BETWEEN 1 AND 2048),
     assignment_absence_ids uuid[] NOT NULL DEFAULT '{}',
-    staffing_diagnostic text CHECK (staffing_diagnostic IS NULL OR staffing_diagnostic = 'no-cover-available'),
+    staffing_diagnostic text CHECK (staffing_diagnostic IS NULL OR staffing_diagnostic IN ('no-cover-available','insufficient-distinct-approvers')),
     deadline_at timestamptz,
     revision bigint NOT NULL CHECK (revision > 0),
     created_at timestamptz NOT NULL,
@@ -619,7 +619,7 @@ CREATE INDEX casework_review_staffing_preview_expiry_idx
 CREATE TABLE casework_review_staffing_cursors (
  cursor_id uuid PRIMARY KEY, issuer text NOT NULL, subject text NOT NULL,
  profile_id text NOT NULL, context_digest text NOT NULL, snapshot_digest text NOT NULL,
- position integer NOT NULL CHECK(position >= 0), expires_at timestamptz NOT NULL
+ position integer NOT NULL CHECK(position >= 0), position_key jsonb, expires_at timestamptz NOT NULL
 );
 CREATE INDEX casework_review_staffing_cursor_expiry_idx ON casework_review_staffing_cursors(expires_at,cursor_id);
 

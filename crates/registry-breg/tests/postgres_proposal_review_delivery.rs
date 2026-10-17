@@ -1351,3 +1351,6 @@ async fn native_submission_remote_refusal_warns_the_operator_without_values() {
     drop(client);
     fixture.finish().await;
 }
+
+#[path = "support/review_uncertain_log.rs"]
+mod review_uncertain_log;

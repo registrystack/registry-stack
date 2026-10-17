@@ -137,6 +137,20 @@ so reordering a map changes neither the served policy nor its digest.
 | F8 | `atRisk: {workingDaysBefore: N}`, reminder `workingDaysBefore: N` | `atRisk: {before: {workingDays: N}}`, `reminders: {REMINDER_ID: {before: {workingDays: N}}}` |
 | F9 | routing `when: {activity: review}` | removed; a rule applies whenever a task is created, and one naming a `stage` matches only that stage's tasks |
 
+## Distinct approvals and source versions
+
+Each approval in a stage must come from a different eligible person.
+A repeat claim after that person's decision returns `403 review.distinct-approver-required`.
+The bounded `insufficient-distinct-approvers` task notice identifies a staffing shortfall without
+listing team members. `caseworkctl doctor` warns when current serving-team membership cannot staff
+a configured stage; offline `check` cannot inspect live Directory membership.
+
+Deploy the BReg context provider and BReg at exactly the same Registry Stack version.
+The provider checks `Registry-Engine-Version` before reading subjects, including when incompatible
+metadata cannot decode. `source.version-mismatch` names an incompatible peer;
+`source.version-unavailable` means the peer did not supply a usable version.
+Neither refusal echoes the peer's header or source data.
+
 ## Current-source BReg review
 
 The canonical project pins a BReg Proposal review-context export. Its
@@ -234,15 +248,20 @@ release source context: `/v1/review-tasks/{taskId}/context` still asks the sourc
 and answers not found when the source conceals the subject. Adding a new note
 also retains the current source-visibility check.
 
-The list, next-task and holdings reads deliberately complete a bounded scan
-before returning globally ordered results. This includes unfiltered queues:
+List, next-task and holdings reads ordered by due date or subject select a
+bounded SQL page before current-source reads. Their opaque continuation binds
+the caller, profiles and query, and rechecks the anchor's current authority.
+Live-reference filtering or sorting still completes a bounded scan before
+returning globally ordered results; a smaller page cannot reduce that scan.
 `inbox.maximumCandidateScan` defaults to 100, `maximumSourceReads` to 25 and
-`pageDeadlineMilliseconds` to 2000. Exceeding a scan or source-read budget
-refuses the whole read with `review.query-too-broad`; a provider timeout can
-instead report source unavailability. Page size and reference filtering do
-not reduce that scan. Narrow the queue or exact subject, or size the policy
-budgets for the expected candidate set and measured source latency. These
-three reads do not return partial budget-exhausted pages.
+`pageDeadlineMilliseconds` to 2000. Source observations are shared by task
+slots belonging to the same request for this invocation only. Continuation
+anchor validation consumes the same source-observation budget as candidates.
+Exceeding a scan or source-observation budget refuses the whole ordinary read
+with `review.query-too-broad`; a provider timeout reports source unavailability.
+Narrow the queue or exact subject, reduce an ordinary page size, or size the
+budgets for the candidate page and measured source latency. These three reads
+do not return partial budget-exhausted pages.
 
 Caseload preview deliberately selects all of the source officer's claimed
 tasks, optionally restricted to one queue, with a maximum of 100 tasks. It

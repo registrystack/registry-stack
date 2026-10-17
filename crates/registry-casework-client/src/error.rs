@@ -60,6 +60,7 @@ pub enum CaseworkProblemCode {
     RequestNotFound,
     RequestUnprocessable,
     RequestUnsupportedMediaType,
+    ReviewDistinctApproverRequired,
     ReviewInitiatorExcluded,
     ReviewInitiatorRequired,
     ReviewPolicyMismatch,
@@ -71,6 +72,8 @@ pub enum CaseworkProblemCode {
     ServiceUnavailable,
     SourceProfileNotApplicable,
     SourceProfileRequired,
+    SourceVersionMismatch,
+    SourceVersionUnavailable,
     SourceBadGateway,
     /// An unrecognized problem code from a newer Casework service.
     Unknown(String),
@@ -81,7 +84,7 @@ impl CaseworkProblemCode {
     ///
     /// `Unknown` is absent: it carries whatever a newer Casework service
     /// answered, so it names no registered code.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 37] = [
         Self::AbsenceCoverCycle,
         Self::AbsenceInvalidPeriod,
         Self::AbsenceOverlap,
@@ -104,6 +107,7 @@ impl CaseworkProblemCode {
         Self::RequestNotFound,
         Self::RequestUnprocessable,
         Self::RequestUnsupportedMediaType,
+        Self::ReviewDistinctApproverRequired,
         Self::ReviewInitiatorExcluded,
         Self::ReviewInitiatorRequired,
         Self::ReviewPolicyMismatch,
@@ -116,6 +120,8 @@ impl CaseworkProblemCode {
         Self::SourceProfileNotApplicable,
         Self::SourceProfileRequired,
         Self::SourceBadGateway,
+        Self::SourceVersionMismatch,
+        Self::SourceVersionUnavailable,
     ];
 
     #[must_use]
@@ -146,6 +152,7 @@ impl CaseworkProblemCode {
             Self::ReviewQueryTooBroad => REVIEW_QUERY_TOO_BROAD_PROBLEM,
             Self::ReviewPolicyMismatch => REVIEW_POLICY_MISMATCH_PROBLEM,
             Self::ReviewResultExpired => REVIEW_RESULT_EXPIRED_PROBLEM,
+            Self::ReviewDistinctApproverRequired => "review.distinct-approver-required",
             Self::ReviewInitiatorExcluded => REVIEW_INITIATOR_EXCLUDED_PROBLEM,
             Self::ReviewInitiatorRequired => REVIEW_INITIATOR_REQUIRED_PROBLEM,
             Self::ReviewSubmissionConflict => REVIEW_SUBMISSION_CONFLICT_PROBLEM,
@@ -154,6 +161,8 @@ impl CaseworkProblemCode {
             Self::ServiceUnavailable => SERVICE_UNAVAILABLE_PROBLEM,
             Self::SourceProfileNotApplicable => SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM,
             Self::SourceProfileRequired => SOURCE_PROFILE_REQUIRED_PROBLEM,
+            Self::SourceVersionMismatch => "source.version-mismatch",
+            Self::SourceVersionUnavailable => "source.version-unavailable",
             Self::SourceBadGateway => SOURCE_BAD_GATEWAY_PROBLEM,
             Self::Unknown(code) => code,
         }
@@ -186,6 +195,7 @@ impl CaseworkProblemCode {
             REVIEW_QUERY_TOO_BROAD_PROBLEM => Self::ReviewQueryTooBroad,
             REVIEW_POLICY_MISMATCH_PROBLEM => Self::ReviewPolicyMismatch,
             REVIEW_RESULT_EXPIRED_PROBLEM => Self::ReviewResultExpired,
+            "review.distinct-approver-required" => Self::ReviewDistinctApproverRequired,
             REVIEW_INITIATOR_EXCLUDED_PROBLEM => Self::ReviewInitiatorExcluded,
             REVIEW_INITIATOR_REQUIRED_PROBLEM => Self::ReviewInitiatorRequired,
             REVIEW_SUBMISSION_CONFLICT_PROBLEM => Self::ReviewSubmissionConflict,
@@ -194,6 +204,8 @@ impl CaseworkProblemCode {
             SERVICE_UNAVAILABLE_PROBLEM => Self::ServiceUnavailable,
             SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM => Self::SourceProfileNotApplicable,
             SOURCE_PROFILE_REQUIRED_PROBLEM => Self::SourceProfileRequired,
+            "source.version-mismatch" => Self::SourceVersionMismatch,
+            "source.version-unavailable" => Self::SourceVersionUnavailable,
             SOURCE_BAD_GATEWAY_PROBLEM => Self::SourceBadGateway,
             _ => Self::Unknown(value.to_owned()),
         }
@@ -217,6 +229,7 @@ impl CaseworkProblemCode {
             Self::ProfileNotAuthorized
             | Self::ProfileNotHuman
             | Self::OperationNotAuthorized
+            | Self::ReviewDistinctApproverRequired
             | Self::ReviewInitiatorExcluded => 403,
             Self::RequestInvalid
             | Self::RequestLimitOutOfRange
@@ -234,6 +247,8 @@ impl CaseworkProblemCode {
             Self::RequestUnprocessable | Self::ReviewInitiatorRequired => 422,
             Self::ReviewQueryTooBroad => 422,
             Self::PreconditionRequired => 428,
+            Self::SourceVersionMismatch => 502,
+            Self::SourceVersionUnavailable => 502,
             Self::SourceBadGateway => 502,
             Self::RuntimeFailure => 500,
             Self::ServiceUnavailable => 503,
@@ -322,6 +337,7 @@ impl CaseworkProblemCode {
                 "Unsupported media type",
                 "Send a JSON request body with Content-Type application/json.",
             ),
+            Self::ReviewDistinctApproverRequired => ("Distinct approver required", "Each approval in this stage must be supplied by a different reviewer."),
             Self::ReviewInitiatorExcluded => (
                 "Review initiator excluded",
                 "You submitted this request, and this review stage excludes the person who submitted it. Another reviewer must take it.",
@@ -360,6 +376,8 @@ impl CaseworkProblemCode {
                 "Source profile required",
                 "Send the Registry-Source-Profile header to select the source profile for this request.",
             ),
+            Self::SourceVersionMismatch => ("Source version mismatch", "Deploy the same Registry Stack version for Casework and its source."),
+            Self::SourceVersionUnavailable => ("Source version unavailable", "The source did not report its engine version. Deploy matching Registry Stack versions."),
             Self::SourceBadGateway => (
                 "Invalid source response",
                 "The source returned a response that does not match its registered contract.",

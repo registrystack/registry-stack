@@ -415,3 +415,18 @@ have separate retention scopes. Expired or erased receipts cannot execute again.
 The [standalone examples](examples/README.md) identify the focused
 PostgreSQL proofs. The [metadata contract](metadata.md) owns client discovery
 and promoted-link validation.
+
+### Bounded review-context reads
+
+A caller with the existing `get-review-context` grant can request up to 100
+distinct canonical Proposal UUIDs in one exchange:
+`GET /v1/proposals/review-context?accessProfile=<profile>&ids=<uuid>,<uuid>`.
+The ordered `items` contain the requested `id` and either `status: visible`
+with the ordinary `context` document, or `status: concealed` with no document.
+Unknown and currently unauthorized Proposals have the same concealed result.
+Every item retains its own current Proposal and Record disclosure checks,
+transaction, and paired audit entries. Batch transport adds no authority.
+Operational failures refuse the entire batch; the aggregate response is bounded
+at 8 MiB. Use smaller batches when contexts approach that bound.
+The native Rust client validates cardinality, order, IDs, Action binding and
+closed item shapes before releasing any document.
