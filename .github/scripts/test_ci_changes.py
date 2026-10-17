@@ -285,6 +285,7 @@ class CiChangesTest(unittest.TestCase):
             "evidence-contracts",
             "discovery-contracts",
             "breg-contracts",
+            "breg-postgres-18",
             "breg-wasm",
             "evidence-tutorials",
             "docs",
@@ -300,7 +301,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertEqual(expected, direct)
         slots = sum(self.static_matrix_slots(self.workflow_jobs[name]) for name in direct)
         self.assertLessEqual(slots, 15)
-        self.assertEqual(14, slots)
+        self.assertEqual(15, slots)
 
     def test_deferred_ci_work_keeps_its_selector_and_explicit_status_guard(
         self,
@@ -437,6 +438,7 @@ class CiChangesTest(unittest.TestCase):
             "evidence-contracts",
             "discovery-contracts",
             "breg-contracts",
+            "breg-postgres-18",
             "breg-wasm",
             "identifiers",
             "config-conformance",
@@ -477,6 +479,7 @@ class CiChangesTest(unittest.TestCase):
                 "discovery-contracts",
                 "evidence-contracts",
                 "breg-contracts",
+                "breg-postgres-18",
                 "breg-wasm",
                 "identifiers",
                 "casework-postgres",
@@ -504,6 +507,7 @@ class CiChangesTest(unittest.TestCase):
                 "evidence-contracts",
                 "evidence-fuzz",
                 "breg-contracts",
+                "breg-postgres-18",
                 "breg-wasm",
                 "identifiers",
                 "casework-postgres",
@@ -570,7 +574,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(34, len(final_needs))
+        self.assertEqual(35, len(final_needs))
         # Platform line coverage publishes from main and the nightly sweep;
         # it does not hold the merge queue.
         self.assertNotIn("platform-coverage", final_needs)
