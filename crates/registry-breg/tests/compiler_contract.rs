@@ -10,8 +10,8 @@ use std::path::PathBuf;
 
 use registry_breg::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
 use registry_breg::compiler::{
-    compile_project, compile_project_with_assets, module_digest, module_digest_with_assets,
-    CompileProfile,
+    compile_project, compile_project_with_assets, deployment_diagnostics, module_digest,
+    module_digest_with_assets, CompileProfile,
 };
 use registry_breg::contract::{
     parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml, Classification,
@@ -478,7 +478,7 @@ fn plural_projection_refuses_duplicate_and_dangling_membership() {
 }
 
 #[test]
-fn production_refuses_a_reserved_canonical_base_iri() {
+fn deployment_refuses_a_reserved_canonical_base_iri_that_compilation_accepts() {
     for iri in [
         "https://invalid",
         "https://household-registry.example.invalid",
@@ -489,14 +489,23 @@ fn production_refuses_a_reserved_canonical_base_iri() {
     ] {
         let mut project = multi_dataset_project();
         project.project.canonical_base_iri = iri.to_owned();
-        let failure = compile_project(&project, &[], CompileProfile::Production)
-            .expect_err("a production package cannot publish a reserved IRI");
-        let diagnostic = failure
+        let diagnostics = deployment_diagnostics(&project);
+        assert_eq!(diagnostics.len(), 1, "{iri}");
+        assert_eq!(
+            diagnostics[0].code,
+            "breg.registry.canonical-base-iri-reserved"
+        );
+        assert_eq!(diagnostics[0].path, "project.project.canonicalBaseIri");
+        // Local development and schema tests compile the placeholder
+        // unchanged; only deployment tooling refuses it.
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("authoring accepts the placeholder IRI");
+        let production = compile_project(&project, &[], CompileProfile::Production)
+            .expect_err("the shared fixture omits production package identity");
+        assert!(production
             .diagnostics()
             .iter()
-            .find(|diagnostic| diagnostic.code == "breg.registry.canonical-base-iri-reserved")
-            .expect("the reserved production IRI is named");
-        assert_eq!(diagnostic.path, "project.project.canonicalBaseIri");
+            .all(|diagnostic| diagnostic.code != "breg.registry.canonical-base-iri-reserved"));
     }
 
     for iri in [
@@ -505,12 +514,7 @@ fn production_refuses_a_reserved_canonical_base_iri() {
     ] {
         let mut project = multi_dataset_project();
         project.project.canonical_base_iri = iri.to_owned();
-        let failure = compile_project(&project, &[], CompileProfile::Production)
-            .expect_err("the shared fixture omits production package identity");
-        assert!(failure
-            .diagnostics()
-            .iter()
-            .all(|diagnostic| diagnostic.code != "breg.registry.canonical-base-iri-reserved"));
+        assert!(deployment_diagnostics(&project).is_empty(), "{iri}");
     }
 }
 

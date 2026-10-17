@@ -176,19 +176,7 @@ fn operator_project(session: &Session) {
     ] {
         let target = session.project.join(relative);
         fs::create_dir_all(target.parent().unwrap()).unwrap();
-        let mut bytes = fs::read(fixture.join(relative)).unwrap();
-        if relative == "registry.yaml" {
-            let source = String::from_utf8(bytes).unwrap();
-            let placeholder = "canonicalBaseIri: https://generic-registry.example.invalid";
-            assert_eq!(source.matches(placeholder).count(), 1);
-            bytes = source
-                .replace(
-                    placeholder,
-                    "canonicalBaseIri: https://generic-registry.example.test",
-                )
-                .into_bytes();
-        }
-        write(&target, &bytes);
+        write(&target, &fs::read(fixture.join(relative)).unwrap());
     }
     session.success(&["project", "lock", session.project.to_str().unwrap()]);
 }

@@ -626,6 +626,12 @@ struct PackageArgs {
     /// One printable line recorded in the published package as REVISION.
     #[arg(long, value_name = "TEXT")]
     revision: Option<String>,
+
+    /// `bregctl dev` packages for its own loopback session, which serves a
+    /// freshly initialized project's placeholder identity unchanged, so the
+    /// deployment identity refusals do not apply.
+    #[arg(long, hide = true)]
+    local_development: bool,
 }
 
 #[derive(Debug, Args)]
@@ -4917,7 +4923,12 @@ fn package(args: &PackageArgs) -> Result<PackageSuccessReport, Refusal> {
         None => package_lifecycle::receipt_schema_fingerprint(&args.test_receipt)
             .map_err(|error| package_lifecycle_refusal(error, &args.candidate.project))?,
     };
-    let prepared = prepare_candidate(&args.candidate, schema_fingerprint, "package")?;
+    let prepared = prepare_candidate(
+        &args.candidate,
+        schema_fingerprint,
+        "package",
+        !args.local_development,
+    )?;
     let receipt = package_lifecycle::validate_test_receipt(
         &args.test_receipt,
         &prepared,
@@ -4960,7 +4971,7 @@ fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, Refusal> {
         unreachable!("clap requires --credentials and --output unless --fingerprint-only is set")
     };
     let output = test_lifecycle::preflight_output(output).map_err(test_lifecycle_failure)?;
-    let candidate = capture_candidate(&args.candidate, "test", true)?;
+    let candidate = capture_candidate(&args.candidate, "test", true, false)?;
     let outcome = match test_lifecycle::run(TestLifecycleRequest {
         candidate,
         runtime_config: &args.runtime_config,
@@ -5008,7 +5019,7 @@ fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, Refusal> {
 /// Measure the fresh-install schema fingerprint a reviewed migration declares
 /// as its target, without the fixture run or receipt of a full schema test.
 fn measure_schema_fingerprint(args: &TestArgs) -> Result<SchemaFingerprintReport, Refusal> {
-    let candidate = capture_candidate(&args.candidate, "test", false)?;
+    let candidate = capture_candidate(&args.candidate, "test", false, false)?;
     let measurement =
         test_lifecycle::measure(candidate, &args.runtime_config).map_err(test_lifecycle_failure)?;
     Ok(SchemaFingerprintReport {
@@ -5070,16 +5081,20 @@ fn prepare_candidate(
     args: &PackageCandidateArgs,
     schema_fingerprint: String,
     command: &'static str,
+    deployment: bool,
 ) -> Result<PreparedPackage, Refusal> {
-    capture_candidate(args, command, false)?
+    capture_candidate(args, command, false, deployment)?
         .prepare(schema_fingerprint)
         .map_err(|error| candidate_package_error(command, error).into())
 }
 
+/// Capture and compile the candidate project. A `deployment` capture also
+/// applies the refusals for identity a deployable package must not carry.
 fn capture_candidate(
     args: &PackageCandidateArgs,
     command: &'static str,
     rehearse_successor: bool,
+    deployment: bool,
 ) -> Result<CapturedPackageCandidate, Refusal> {
     let capture_failure = |diagnostic| {
         source_failure(
@@ -5092,6 +5107,9 @@ fn capture_candidate(
     let selected_project = canonicalize_project_path(&args.project).map_err(&capture_failure)?;
     let source = capture_resolved_project_source(&selected_project).map_err(capture_failure)?;
     let compiled = compile_captured_project(&source, ProfileArg::Production, command)?;
+    if deployment {
+        refuse_deployment_identity(&source, command)?;
+    }
     let identity = compiled.package().ok_or_else(|| {
         candidate_failure(
             command,
@@ -7735,6 +7753,32 @@ fn compile_captured_project(
     )
 }
 
+/// Refuse project identity that a package for deployment must not carry,
+/// reported as the compiler's own refusals are.
+fn refuse_deployment_identity(
+    source: &CapturedProjectSource,
+    command: &'static str,
+) -> Result<(), FailureReport> {
+    let diagnostics = registry_breg::compiler::deployment_diagnostics(&source.project);
+    if diagnostics.is_empty() {
+        return Ok(());
+    }
+    Err(FailureReport {
+        ok: false,
+        command,
+        diagnostics: diagnostics
+            .into_iter()
+            .map(|diagnostic| {
+                tool_diagnostic(
+                    diagnostic,
+                    DiagnosticArtifact::RegistryProject,
+                    SuggestedAction::CorrectAuthoringSource,
+                )
+            })
+            .collect(),
+    })
+}
+
 fn compiler_findings(compiled: &CompiledRegistry) -> Vec<registry_platform_yaml::Diagnostic> {
     compiled
         .findings()
@@ -8562,13 +8606,6 @@ pub(crate) fn retained_native_fixture_files() -> BTreeMap<String, Vec<u8>> {
         }],
     )
     .expect("retained native module lock renders");
-    let project = String::from_utf8(project)
-        .expect("retained native project is UTF-8")
-        .replace(
-            "canonicalBaseIri: https://generic-registry.example.invalid",
-            "canonicalBaseIri: https://generic-registry.example.test",
-        )
-        .into_bytes();
     BTreeMap::from([
         ("registry.yaml".to_owned(), project),
         (
@@ -9720,6 +9757,7 @@ fn write_files_with_before_publish(
             "a generated artifact could not be written",
         )
     };
+    // The caller selects the parent directory, so resolve its aliases once.
     // The leaf is never canonicalized: every stage, write, cleanup, and
     // publication uses the strict parent descriptor below.
     let parent_path = output
@@ -14425,6 +14463,7 @@ accessProfiles:
             },
             "package",
             false,
+            true,
         )
         .unwrap_or_else(|_| panic!("capture includes governed journeys through the selected root"));
         assert_eq!(
@@ -14438,6 +14477,46 @@ accessProfiles:
         candidate
             .prevalidate()
             .expect("the captured initial candidate is complete");
+    }
+
+    #[test]
+    fn only_a_deployment_capture_refuses_the_reserved_placeholder_iri() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().canonicalize().unwrap().join("project");
+        assert!(init(&project).is_ok());
+        let registry_path = project.join("registry.yaml");
+        let registry = fs::read_to_string(&registry_path).unwrap();
+        let authored = "canonicalBaseIri: https://directory.example.gov";
+        assert_eq!(registry.matches(authored).count(), 1);
+        fs::write(
+            &registry_path,
+            registry.replace(
+                authored,
+                "canonicalBaseIri: https://directory.example.invalid",
+            ),
+        )
+        .unwrap();
+        let args = PackageCandidateArgs {
+            project: project.clone(),
+            baseline_package: None,
+            reviewed_migrations: None,
+        };
+
+        // `bregctl dev` compiles and `bregctl test` captures the placeholder
+        // unchanged.
+        compile(&project, ProfileArg::Production, "dev")
+            .unwrap_or_else(|_| panic!("the dev compile accepts the placeholder"));
+        assert!(capture_candidate(&args, "test", false, false).is_ok());
+
+        let Err(Refusal::Tool(refused)) = capture_candidate(&args, "package", false, true) else {
+            panic!("a deployment capture refuses the placeholder");
+        };
+        let codes = refused
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(codes, ["breg.registry.canonical-base-iri-reserved"]);
     }
 
     #[test]
