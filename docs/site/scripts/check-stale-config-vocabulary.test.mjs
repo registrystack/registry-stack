@@ -61,7 +61,7 @@ test('a retired word on a BReg page outside the baseline fails', async () => {
       const result = await runGate(root);
       assert.equal(result.code, 1, result.output);
       assert.match(result.output, /configure\/breg-access\.mdx:2: Each entity has fields\./u);
-      assert.match(result.output, /retired BReg vocabulary found outside the pending-rewrite baseline/u);
+      assert.match(result.output, /retired vocabulary found outside the pending-rewrite baseline/u);
     },
   );
 });
@@ -88,7 +88,7 @@ test('a retired word on a baselined page passes with a reported count', async ()
       assert.equal(result.code, 0, result.output);
       assert.match(
         result.output,
-        /pending rewrite: src\/content\/docs\/configure\/breg-access\.mdx: 2 line\(s\) with retired BReg vocabulary/u,
+        /pending rewrite: src\/content\/docs\/configure\/breg-access\.mdx: 2 line\(s\) with retired vocabulary/u,
       );
     },
   );
@@ -144,6 +144,31 @@ test('retired type names in camel case fail on any page', async () => {
       },
     );
   }
+});
+
+test('retired Evidence and Casework spellings fail on any page', async () => {
+  const lines = {
+    'src/content/docs/start/evidence.mdx': 'Open the authoring workspace.\n',
+    'src/content/docs/explanation/how-evidence-works.mdx': 'Each definition answers one bounded question.\n',
+    'src/content/docs/explanation/how-casework-works.mdx': 'Casework owns the review round.\n',
+  };
+  for (const [page, text] of Object.entries(lines)) {
+    await withFixture({ pages: { [page]: text } }, async (root) => {
+      const result = await runGate(root);
+      assert.equal(result.code, 1, result.output);
+      assert.match(result.output, new RegExp(`${page.replace(/[./]/gu, '\\$&')}:1:`, 'u'));
+    });
+  }
+});
+
+test('an approved specification page keeps the words it was approved with', async () => {
+  await withFixture(
+    { pages: { 'src/content/docs/spec/rs-arc-g.mdx': 'Casework holds one review round.\n' } },
+    async (root) => {
+      const result = await runGate(root);
+      assert.equal(result.code, 0, result.output);
+    },
+  );
 });
 
 test('the existing stale configuration patterns still fail', async () => {
