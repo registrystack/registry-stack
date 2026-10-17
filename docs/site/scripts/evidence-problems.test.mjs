@@ -46,3 +46,62 @@ test('every Evidence problem row matches the status, title, and detail in proble
     );
   }
 });
+
+// Rows of the client kind table whose header is `| Kind | Problem codes | Python |`,
+// held to the Rust client's problem mapping and the Python exception classes.
+function pageKinds() {
+  const lines = page.split('\n');
+  const header = lines.findIndex((line) => /^\|\s*Kind\s*\|\s*Problem codes\s*\|\s*Python\s*\|$/.test(line.trim()));
+  assert.notEqual(header, -1, 'reference/evidence-problems.mdx should carry the Kind | Problem codes | Python table');
+  const kinds = new Map();
+  for (const line of lines.slice(header + 2)) {
+    if (!line.startsWith('|')) break;
+    const [kind, codes, python] = line.slice(1).split('|').map((cell) => cell.trim());
+    const name = kind.match(/^`([^`]+)`$/)?.[1];
+    assert.ok(name, `client kind table row has a Kind cell that is not one backticked kind: ${kind}`);
+    kinds.set(name, {
+      codes: [...codes.matchAll(/`([^`]+)`/g)].map((match) => match[1]),
+      python: python.match(/^`([^`]+)`$/)?.[1],
+    });
+  }
+  return kinds;
+}
+
+// The kind crates/registry-evidence-client/src/problem.rs map_problem() gives a
+// registered problem: the statuses of its Denied arm, its one NotAvailable code,
+// and Protocol for every other registered code.
+function clientKindOf() {
+  const source = read('../../../crates/registry-evidence-client/src/problem.rs');
+  const denied = source.match(/\(([\d |]+), Some\(code\)\) => EvidenceClientError::Denied/);
+  assert.ok(denied, 'problem.rs map_problem() should carry the Denied arm this test reads');
+  const deniedStatuses = new Set(denied[1].split('|').map((status) => Number(status.trim())));
+  const notAvailable = source.match(/\((\d{3}), Some\(EVIDENCE_NOT_AVAILABLE\)\) => EvidenceClientError::NotAvailable/);
+  assert.ok(notAvailable, 'problem.rs map_problem() should carry the NotAvailable arm this test reads');
+  const notAvailableCode = source.match(/const EVIDENCE_NOT_AVAILABLE: &str = "([^"]+)";/)?.[1];
+  assert.ok(notAvailableCode, 'problem.rs should declare EVIDENCE_NOT_AVAILABLE');
+  return (code, status) => {
+    if (deniedStatuses.has(status)) return 'denied';
+    if (status === Number(notAvailable[1]) && code === notAvailableCode) return 'not-available';
+    return 'protocol';
+  };
+}
+
+test('the Evidence client kind table maps every contract code to the kind the Rust client reports', () => {
+  const kindOf = clientKindOf();
+  const expected = new Map();
+  for (const [code, { status }] of Object.entries(contract)) {
+    const kind = kindOf(code, status);
+    expected.set(kind, [...(expected.get(kind) ?? []), code].sort());
+  }
+  const actual = new Map([...pageKinds()].map(([kind, row]) => [kind, [...row.codes].sort()]));
+  assert.deepEqual(Object.fromEntries(actual), Object.fromEntries(expected));
+});
+
+test('the Evidence client kind table names the Python exception each kind raises', () => {
+  const source = read('../../../crates/registry-evidence-client-py/src/lib.rs');
+  for (const [kind, row] of pageKinds()) {
+    const python = source.match(new RegExp(`"${kind}" => (\\w+)::new_err`))?.[1];
+    assert.ok(python, `registry-evidence-client-py exception_for_kind() has no arm for ${kind}`);
+    assert.equal(row.python, python, `${kind} in evidence-problems.mdx names the wrong Python exception`);
+  }
+});
