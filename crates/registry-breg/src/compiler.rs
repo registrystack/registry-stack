@@ -2579,7 +2579,7 @@ fn validate_entity_fields(
                 errors.push(Diagnostic::error(
                     "breg.field.decimal-bounds-invalid",
                     format!("recordTypes[id={}].fields[id={}]", entity.id, field.id),
-                    "decimal precision, scale, or canonical bounds are invalid; minimum and maximum must carry exactly scale fractional digits",
+                    "decimal precision, scale, or canonical bounds are invalid; precision must be 1 to 38, scale must not exceed precision, minimum and maximum must carry exactly scale fractional digits within precision, and minimum must not exceed maximum",
                 ));
             }
             FieldTypeSource::Reference { target, .. } if !entities.contains_key(target) => {
