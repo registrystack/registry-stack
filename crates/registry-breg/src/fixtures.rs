@@ -725,6 +725,11 @@ struct ExpectationSource {
     #[serde(default, deserialize_with = "members::count")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<BoundedU32<0, 100>>"))]
     count: Option<usize>,
+    /// Exact unordered collection membership. Omission keeps the historical
+    /// shape-only collection check; an empty list explicitly expects no rows.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(length(max = 100)))]
+    members: Option<UniqueList<CollectionMemberExpectationSource>>,
     #[serde(default)]
     problem_code: Option<String>,
     #[serde(default)]
@@ -736,11 +741,53 @@ struct ExpectationSource {
     field_id: Option<String>,
 }
 
+#[derive(Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct CollectionMemberExpectationSource {
+    #[serde(deserialize_with = "members::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
+    record_capture: String,
+    #[serde(default, deserialize_with = "members::http_object")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "members::http_object_schema")
+    )]
+    fields: Map<String, Value>,
+}
+
+impl PartialEq for CollectionMemberExpectationSource {
+    fn eq(&self, other: &Self) -> bool {
+        self.record_capture == other.record_capture
+    }
+}
+
+impl Eq for CollectionMemberExpectationSource {}
+
+impl std::hash::Hash for CollectionMemberExpectationSource {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&self.record_capture, state);
+    }
+}
+
 impl ExpectationSource {
     /// Copy the expected fields from the document, as
     /// [`ActionSource::fill_bodies`] does for request bodies.
     fn fill_bodies(&mut self, body: &dyn Fn(&str) -> Option<Value>) {
         fill_object(&mut self.fields, body("/fields"));
+        if let Some(members) = self.members.take() {
+            let mut members = members.into_vec();
+            for (index, member) in members.iter_mut().enumerate() {
+                fill_object(
+                    &mut member.fields,
+                    body(&format!("/members/{index}/fields")),
+                );
+            }
+            self.members = Some(
+                UniqueList::new(members)
+                    .expect("filling member fields preserves unique record captures"),
+            );
+        }
     }
 }
 
@@ -1248,7 +1295,7 @@ pub fn validate_fixture_journeys(
                     validate_expectation(
                         &step.expect,
                         operation,
-                        &profile,
+                        &profile.readable_fields,
                         capture.is_some(),
                         !step.capture_results.is_empty(),
                     )?;
@@ -1315,17 +1362,12 @@ pub fn validate_fixture_journeys(
                         _ => entity,
                     };
                     let expect = internalize_expectation(&step.expect, response_entity)?;
-                    validate_expectation(
+                    validate_collection_member_references(
                         &expect,
                         operation,
-                        profile,
-                        capture.is_some(),
-                        !step.capture_results.is_empty(),
+                        &response_entity.id,
+                        &capture_sources,
                     )?;
-                    if !step.capture_results.is_empty() {
-                        return Err(FixtureError::JourneyShapeRefused);
-                    }
-                    let capture_result_entities = BTreeMap::new();
                     let response_readable_field_ids = match &request {
                         ActionSource::ReadPath { path, .. } => profile
                             .read_paths
@@ -1335,8 +1377,28 @@ pub fn validate_fixture_journeys(
                             .ok_or(FixtureError::LogicalReferenceRefused)?,
                         _ => profile.readable_fields.clone(),
                     };
+                    let expected_response_fields = match &request {
+                        ActionSource::Query { select, .. }
+                        | ActionSource::ReadPath { select, .. }
+                            if !select.is_empty() =>
+                        {
+                            select.iter().cloned().collect()
+                        }
+                        _ => response_readable_field_ids.clone(),
+                    };
+                    validate_expectation(
+                        &expect,
+                        operation,
+                        &expected_response_fields,
+                        capture.is_some(),
+                        !step.capture_results.is_empty(),
+                    )?;
+                    if !step.capture_results.is_empty() {
+                        return Err(FixtureError::JourneyShapeRefused);
+                    }
+                    let capture_result_entities = BTreeMap::new();
                     let response_readable_fields =
-                        externalize_field_set(response_entity, &response_readable_field_ids)?;
+                        externalize_field_set(response_entity, &expected_response_fields)?;
                     let action = externalize_action(&request, registry, entity)?;
                     let expect = externalize_expectation(&expect, response_entity)?;
                     (
@@ -2340,6 +2402,22 @@ fn internalize_expectation(
         status: expectation.status,
         fields: internalize_data(response_entity, &expectation.fields)?,
         count: expectation.count,
+        members: expectation
+            .members
+            .as_ref()
+            .map(|members| {
+                let members = members
+                    .iter()
+                    .map(|member| {
+                        Ok(CollectionMemberExpectationSource {
+                            record_capture: member.record_capture.clone(),
+                            fields: internalize_data(response_entity, &member.fields)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, FixtureError>>()?;
+                UniqueList::new(members).map_err(|_| FixtureError::JourneyShapeRefused)
+            })
+            .transpose()?,
         problem_code: expectation.problem_code.clone(),
         refusal_code: expectation.refusal_code.clone(),
         entity_id: expectation.entity_id.clone(),
@@ -2503,6 +2581,22 @@ fn externalize_expectation(
         status: expectation.status,
         fields: externalize_data(response_entity, &expectation.fields)?,
         count: expectation.count,
+        members: expectation
+            .members
+            .as_ref()
+            .map(|members| {
+                let members = members
+                    .iter()
+                    .map(|member| {
+                        Ok(CollectionMemberExpectationSource {
+                            record_capture: member.record_capture.clone(),
+                            fields: externalize_data(response_entity, &member.fields)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, FixtureError>>()?;
+                UniqueList::new(members).map_err(|_| FixtureError::JourneyShapeRefused)
+            })
+            .transpose()?,
         problem_code: expectation.problem_code.clone(),
         refusal_code: expectation.refusal_code.clone(),
         entity_id: expectation.entity_id.clone(),
@@ -2513,7 +2607,7 @@ fn externalize_expectation(
 fn validate_expectation(
     expectation: &ExpectationSource,
     operation: Operation,
-    profile: &AccessProfileSource,
+    readable_fields: &BTreeSet<String>,
     captures: bool,
     captures_results: bool,
 ) -> Result<(), FixtureError> {
@@ -2534,13 +2628,24 @@ fn validate_expectation(
         return Err(FixtureError::JourneyShapeRefused);
     }
     if operation == Operation::Invoke {
-        if !expectation.fields.is_empty() || expectation.count.is_some() {
+        if !expectation.fields.is_empty()
+            || expectation.count.is_some()
+            || expectation.members.is_some()
+        {
             return Err(FixtureError::JourneyShapeRefused);
         }
     } else if expectation
         .fields
         .keys()
-        .any(|field| !profile.readable_fields.contains(field) || field.len() > MAX_IDENTIFIER_BYTES)
+        .any(|field| !readable_fields.contains(field) || field.len() > MAX_IDENTIFIER_BYTES)
+        || expectation.members.as_ref().is_some_and(|members| {
+            members.iter().any(|member| {
+                member.fields.keys().any(|field| {
+                    !readable_fields.contains(field) || field.len() > MAX_IDENTIFIER_BYTES
+                }) || canonical_size(&Value::Object(member.fields.clone()))
+                    .map_or(true, |size| size > MAX_RESPONSE_BYTES)
+            })
+        })
         || canonical_size(&Value::Object(expectation.fields.clone()))? > MAX_RESPONSE_BYTES
     {
         return Err(FixtureError::LogicalReferenceRefused);
@@ -2563,11 +2668,31 @@ fn validate_expectation(
                 return Err(FixtureError::JourneyShapeRefused);
             }
             if operation == Operation::Import {
-                if expectation.count.is_some() || !expectation.fields.is_empty() || captures {
+                if expectation.count.is_some()
+                    || expectation.members.is_some()
+                    || !expectation.fields.is_empty()
+                    || captures
+                {
                     return Err(FixtureError::JourneyShapeRefused);
                 }
-            } else if matches!(operation, Operation::List | Operation::Batch) {
-                if expectation.count.is_none() || !expectation.fields.is_empty() || captures {
+            } else if operation == Operation::List {
+                if expectation.count.is_none() && expectation.members.is_none()
+                    || !expectation.fields.is_empty()
+                    || captures
+                    || expectation.members.as_ref().is_some_and(|members| {
+                        expectation
+                            .count
+                            .is_some_and(|count| count != members.len())
+                    })
+                {
+                    return Err(FixtureError::JourneyShapeRefused);
+                }
+            } else if operation == Operation::Batch {
+                if expectation.count.is_none()
+                    || expectation.members.is_some()
+                    || !expectation.fields.is_empty()
+                    || captures
+                {
                     return Err(FixtureError::JourneyShapeRefused);
                 }
             } else if operation == Operation::Invoke {
@@ -2591,6 +2716,7 @@ fn validate_expectation(
                 })
                 || !expectation.fields.is_empty()
                 || expectation.count.is_some()
+                || expectation.members.is_some()
                 || captures
                 || captures_results
                 || problem_contract(expectation.status, expectation.problem_code.as_deref())
@@ -2598,6 +2724,35 @@ fn validate_expectation(
             {
                 return Err(FixtureError::JourneyShapeRefused);
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_collection_member_references(
+    expectation: &ExpectationSource,
+    operation: Operation,
+    response_entity: &str,
+    captures: &BTreeMap<String, CaptureSource>,
+) -> Result<(), FixtureError> {
+    let Some(members) = &expectation.members else {
+        return Ok(());
+    };
+    if operation != Operation::List || members.len() > 100 {
+        return Err(FixtureError::JourneyShapeRefused);
+    }
+    let mut referenced = BTreeSet::new();
+    for member in members {
+        if !referenced.insert(member.record_capture.as_str()) {
+            return Err(FixtureError::DuplicateIdentifier);
+        }
+        let source = captures
+            .get(&member.record_capture)
+            .ok_or(FixtureError::LogicalReference(
+                LogicalReferenceRefusal::CaptureSource,
+            ))?;
+        if source.entity.as_deref() != Some(response_entity) {
+            return Err(FixtureError::LogicalReferenceRefused);
         }
     }
     Ok(())
@@ -4035,7 +4190,7 @@ async fn accept_response(
         .await
         .map_err(|_| FixtureError::ResponseTooLarge)?;
     let document = parse_json_strict(&bytes).map_err(|_| FixtureError::ResponseShapeRefused)?;
-    assert_response(step, status, &document)?;
+    assert_response_with_observations(step, status, &document, observations)?;
     if matches!(step.expect.outcome, ExpectedOutcome::Refusal) {
         let header_trace =
             response_trace_id(&headers).map_err(|_| FixtureError::ResponseShapeRefused)?;
@@ -4130,10 +4285,20 @@ fn capture_immediate_action_results(
     Ok(())
 }
 
+#[cfg(test)]
 fn assert_response(
     step: &ValidatedStep,
     status: StatusCode,
     document: &Value,
+) -> Result<(), FixtureError> {
+    assert_response_with_observations(step, status, document, &BTreeMap::new())
+}
+
+fn assert_response_with_observations(
+    step: &ValidatedStep,
+    status: StatusCode,
+    document: &Value,
+    observations: &BTreeMap<String, Observation>,
 ) -> Result<(), FixtureError> {
     if status.as_u16() != step.expect.status {
         return Err(FixtureError::ExpectationMismatch);
@@ -4281,6 +4446,10 @@ fn assert_response(
                     .get("pageInfo")
                     .and_then(Value::as_object)
                     .ok_or(FixtureError::ResponseShapeRefused)?;
+                let expected_count = step
+                    .expect
+                    .count
+                    .or_else(|| step.expect.members.as_ref().map(|members| members.len()));
                 if page_info.len() != 1
                     || !page_info.get("nextCursor").is_some_and(|cursor| {
                         cursor.is_null()
@@ -4288,18 +4457,50 @@ fn assert_response(
                                 !value.is_empty() && value.len() <= MAX_BINDING_BYTES
                             })
                     })
-                    || Some(items.len()) != step.expect.count
+                    || (step.expect.members.is_some()
+                        && !page_info.get("nextCursor").is_some_and(Value::is_null))
+                    || expected_count.is_some_and(|count| items.len() != count)
                     || (include_count
                         && object.get("count").and_then(Value::as_u64)
-                            != step
-                                .expect
-                                .count
-                                .and_then(|count| u64::try_from(count).ok()))
+                            != expected_count.and_then(|count| u64::try_from(count).ok()))
                 {
                     return Err(FixtureError::ExpectationMismatch);
                 }
-                for item in items {
-                    assert_record_shape(item, &step.response_readable_fields, &Map::new())?;
+                if let Some(members) = &step.expect.members {
+                    let mut expected = BTreeMap::new();
+                    for member in members {
+                        let record_id = match &observations
+                            .get(&member.record_capture)
+                            .ok_or(FixtureError::ExpectationMismatch)?
+                            .kind
+                        {
+                            ObservationKind::Record { record_id, .. } => record_id,
+                            _ => return Err(FixtureError::ExpectationMismatch),
+                        };
+                        if expected
+                            .insert(record_id.as_str(), &member.fields)
+                            .is_some()
+                        {
+                            return Err(FixtureError::ExpectationMismatch);
+                        }
+                    }
+                    for item in items {
+                        let record_id = item
+                            .get("recordIdentifier")
+                            .and_then(Value::as_str)
+                            .ok_or(FixtureError::ResponseShapeRefused)?;
+                        let fields = expected
+                            .remove(record_id)
+                            .ok_or(FixtureError::ExpectationMismatch)?;
+                        assert_record_shape(item, &step.response_readable_fields, fields)?;
+                    }
+                    if !expected.is_empty() {
+                        return Err(FixtureError::ExpectationMismatch);
+                    }
+                } else {
+                    for item in items {
+                        assert_record_shape(item, &step.response_readable_fields, &Map::new())?;
+                    }
                 }
             }
             ActionSource::Batch { .. } => {
@@ -5835,13 +6036,20 @@ mod tests {
             status: 200,
             fields: Map::new(),
             count: None,
+            members: None,
             problem_code: None,
             refusal_code: None,
             entity_id: None,
             field_id: None,
         };
         assert_eq!(
-            validate_expectation(&expectation, Operation::Import, &profile, false, false),
+            validate_expectation(
+                &expectation,
+                Operation::Import,
+                &profile.readable_fields,
+                false,
+                false,
+            ),
             Ok(())
         );
     }
@@ -6123,6 +6331,138 @@ journeys:
         assert_receipt_substitutions_are_refused(&bytes, &candidate, &suite);
         assert_public_receipt_negatives(&bytes, &fixture, &suite);
         assert_closed_response_negatives(&suite, &candidate).await;
+    }
+
+    #[test]
+    fn collection_member_expectations_require_distinct_prior_captures_of_the_target_type() {
+        let fixture = package_fixture(DIGEST_A);
+        let source = String::from_utf8(JOURNEY_SOURCE.to_vec()).unwrap();
+
+        let exact_duplicate = source.replace(
+            "count: 1\n          members:\n            - recordCapture: first-widget\n              fields: {label: first, quantity: 1}",
+            "count: 2\n          members:\n            - recordCapture: first-widget\n              fields: {label: first, quantity: 1}\n            - recordCapture: first-widget\n              fields: {label: first, quantity: 1}",
+        );
+        let Err(FixtureError::JourneyDocument(report)) =
+            validate_fixture_journeys(exact_duplicate.as_bytes(), fixture.package.registry())
+        else {
+            panic!("the shared reader must refuse an exact duplicate member declaration");
+        };
+        assert!(report.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "config.duplicate-item"
+                && diagnostic.path == "/journeys/0/steps/2/expect/members/1"
+        }));
+
+        let duplicate = source.replace(
+            "count: 1\n          members:\n            - recordCapture: first-widget\n              fields: {label: first, quantity: 1}",
+            "count: 2\n          members:\n            - recordCapture: first-widget\n              fields: {label: first}\n            - recordCapture: first-widget\n              fields: {quantity: 1}",
+        );
+        let Err(FixtureError::JourneyDocument(report)) =
+            validate_fixture_journeys(duplicate.as_bytes(), fixture.package.registry())
+        else {
+            panic!("the shared reader must refuse repeated member capture identities");
+        };
+        assert!(report
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "config.duplicate-item"));
+
+        let missing = source.replace(
+            "recordCapture: first-widget",
+            "recordCapture: missing-widget",
+        );
+        assert!(matches!(
+            validate_fixture_journeys(missing.as_bytes(), fixture.package.registry()),
+            Err(FixtureError::StepFailed { error, .. })
+                if *error == FixtureError::LogicalReference(LogicalReferenceRefusal::CaptureSource)
+        ));
+
+        let wrong_operation = source.replacen(
+            "fields: {jurisdiction: zone-a, label: first, note: initial, quantity: 1}",
+            "fields: {jurisdiction: zone-a, label: first, note: initial, quantity: 1}\n          members: []",
+            1,
+        );
+        assert!(matches!(
+            validate_fixture_journeys(wrong_operation.as_bytes(), fixture.package.registry()),
+            Err(FixtureError::StepFailed { error, .. })
+                if *error == FixtureError::JourneyShapeRefused
+        ));
+
+        let selected_label = source
+            .replace(
+                "request: {type: list}",
+                "request: {type: query, select: [label]}",
+            )
+            .replace(
+                "fields: {label: first, quantity: 1}",
+                "fields: {label: first}",
+            );
+        let selected_suite =
+            validate_fixture_journeys(selected_label.as_bytes(), fixture.package.registry())
+                .expect("member fields selected by a query validate");
+        let identifier = uuid::Uuid::new_v4().to_string();
+        let observations = BTreeMap::from([(
+            "first-widget".to_owned(),
+            Observation {
+                kind: ObservationKind::Record {
+                    record_id: identifier.clone(),
+                    etag: "\"breg-selected\"".to_owned(),
+                },
+            },
+        )]);
+        let over_disclosed = json!({
+            "items": [{
+                "recordIdentifier": identifier,
+                "revisionIdentifier": "1",
+                "domainData": {"label": "first", "quantity": 1}
+            }],
+            "pageInfo": {"nextCursor": null},
+            "meta": {
+                "registryIdentifier": "fixture-registry",
+                "datasetIdentifier": "fixture-registry",
+                "entityTypeIdentifier": "widget"
+            }
+        });
+        assert_eq!(
+            assert_response_with_observations(
+                &selected_suite.journeys[0].steps[2],
+                StatusCode::OK,
+                &over_disclosed,
+                &observations,
+            ),
+            Err(FixtureError::ExpectationMismatch)
+        );
+        let paged = json!({
+            "items": [{
+                "recordIdentifier": identifier,
+                "revisionIdentifier": "1",
+                "domainData": {"label": "first"}
+            }],
+            "pageInfo": {"nextCursor": "another-page"},
+            "meta": {
+                "registryIdentifier": "fixture-registry",
+                "datasetIdentifier": "fixture-registry",
+                "entityTypeIdentifier": "widget"
+            }
+        });
+        assert_eq!(
+            assert_response_with_observations(
+                &selected_suite.journeys[0].steps[2],
+                StatusCode::OK,
+                &paged,
+                &observations,
+            ),
+            Err(FixtureError::ExpectationMismatch)
+        );
+
+        let unselected_quantity = source.replace(
+            "request: {type: list}",
+            "request: {type: query, select: [label]}",
+        );
+        assert!(matches!(
+            validate_fixture_journeys(unselected_quantity.as_bytes(), fixture.package.registry()),
+            Err(FixtureError::StepFailed { error, .. })
+                if *error == FixtureError::LogicalReferenceRefused
+        ));
     }
 
     #[test]
@@ -7067,6 +7407,65 @@ journeys:
             assert_response(&suite.journeys[0].steps[2], StatusCode::OK, &malformed_list,).is_err()
         );
 
+        let list = &suite.journeys[0].steps[2];
+        let observations = BTreeMap::from([(
+            "first-widget".to_owned(),
+            Observation {
+                kind: ObservationKind::Record {
+                    record_id: identifier.to_owned(),
+                    etag: "\"breg-first\"".to_owned(),
+                },
+            },
+        )]);
+        let collection = |items: Vec<Value>| {
+            json!({
+                "items": items,
+                "pageInfo": {"nextCursor": null},
+                "meta": {
+                    "registryIdentifier": "fixture-registry",
+                    "datasetIdentifier": "fixture-registry",
+                    "entityTypeIdentifier": "widget"
+                }
+            })
+        };
+        let member = |id: &str, label: &str| {
+            json!({
+                "recordIdentifier": id,
+                "revisionIdentifier": "1",
+                "domainData": {
+                    "jurisdiction": "zone-a",
+                    "label": label,
+                    "note": "initial",
+                    "quantity": 1
+                }
+            })
+        };
+        assert_response_with_observations(
+            list,
+            StatusCode::OK,
+            &collection(vec![member(identifier, "first")]),
+            &observations,
+        )
+        .expect("the exact captured member and declared values match");
+        for changed in [
+            collection(Vec::new()),
+            collection(vec![
+                member(identifier, "first"),
+                member("123e4567-e89b-12d3-a456-426614174001", "extra"),
+            ]),
+            collection(vec![member(
+                "123e4567-e89b-12d3-a456-426614174001",
+                "first",
+            )]),
+            collection(vec![member(identifier, "wrong")]),
+        ] {
+            assert_eq!(
+                assert_response_with_observations(list, StatusCode::OK, &changed, &observations,),
+                Err(FixtureError::ExpectationMismatch),
+                "missing, extra, wrong-identity, and wrong-value members are refused"
+            );
+        }
+
         let malformed_batch = json!({
             "results": [{"operation": "create"}, {"operation": "create"}],
             "snapshot": "breg1_00000000-0000-4000-8000-000000000001"
@@ -7268,7 +7667,7 @@ journeys:
                     .map_err(|_| FixtureError::ResponseTooLarge)?;
                 let document =
                     parse_json_strict(&bytes).map_err(|_| FixtureError::ResponseShapeRefused)?;
-                assert_response(step, status, &document)?;
+                assert_response_with_observations(step, status, &document, &observations)?;
                 if !step.capture_results.is_empty() {
                     capture_immediate_action_results(step, &document, &mut observations)?;
                 }

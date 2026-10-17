@@ -14,13 +14,14 @@ pub(super) fn validate_step(
     if step.action.is_none()
         || step.record.is_some()
         || step.result.is_some()
+        || step.capture_results.is_some()
         || start && (step.capture.is_none() || step.input.is_none() || step.proposal.is_some())
         || !start && (step.proposal.is_none() || step.capture.is_some())
         || edits && step.input.is_none()
         || !start && !edits && step.operation != Operation::Revise && step.input.is_some()
     {
         refuse(at, "breg.examples.step-members", "the Proposal step members do not match its operation",
-            "Declare action; start also needs input and capture; other steps need proposal, with input for edit or rebase and optionally revise. Delete record and result.");
+            "Declare action; start also needs input and capture; other steps need proposal, with input for edit or rebase and optionally revise. Delete record, result, and captureResults.");
     }
     if let Some(expect) = &step.expect {
         if expect.problem_code.is_some() != expect.status.is_some()
@@ -349,7 +350,7 @@ mod tests {
             problems.push(code.to_owned())
         });
         assert!(problems.is_empty());
-        let mut injected = value;
+        let mut injected = value.clone();
         injected["approval"] = json!(true);
         assert!(serde_json::from_value::<Step>(injected).is_err());
         let mut invalid = step;
@@ -358,5 +359,15 @@ mod tests {
             problems.push(code.to_owned())
         });
         assert_eq!(problems, ["breg.examples.step-members"]);
+
+        let mut invalid: Step = serde_json::from_value(value).unwrap();
+        invalid.capture_results = Some(BTreeMap::from([("entry".to_owned(), "entry".to_owned())]));
+        let mut diagnostic = None;
+        validate_step(&invalid, "/step", &mut |_, code, _, action| {
+            diagnostic = Some((code.to_owned(), action.to_owned()))
+        });
+        let (code, action) = diagnostic.expect("Proposal captureResults is refused");
+        assert_eq!(code, "breg.examples.step-members");
+        assert!(action.contains("captureResults"));
     }
 }

@@ -14,6 +14,12 @@ bregctl dev start .
 bregctl examples run register-facility .
 ```
 
+The registration scenario retains both Action results in one atomic step as
+`facility` and `assignment`, then reads both records. `captureResults` maps each
+caller-visible Action result alias to the local capture alias later steps use.
+The older `recordType`, `result`, and `capture` form remains available when a
+scenario needs one Action result.
+
 Keep the returned `attempt` UUID. The next scenario uses its typed captures:
 
 ```sh

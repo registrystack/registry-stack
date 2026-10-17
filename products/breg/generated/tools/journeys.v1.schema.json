@@ -394,6 +394,24 @@
       },
       "type": "object"
     },
+    "CollectionMemberExpectationSource": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "default": {},
+          "description": "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.",
+          "type": "object",
+          "x-registry-foreign": "breg-http-api"
+        },
+        "recordCapture": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "recordCapture"
+      ],
+      "type": "object"
+    },
     "DirectClaimSource": {
       "anyOf": [
         {
@@ -424,6 +442,15 @@
           "description": "A body of the registry's own HTTP API, carried as written: the registry reads its members, and null clears a field.",
           "type": "object",
           "x-registry-foreign": "breg-http-api"
+        },
+        "members": {
+          "description": "Exact unordered collection membership. Omission keeps the historical\nshape-only collection check; an empty list explicitly expects no rows.",
+          "items": {
+            "$ref": "#/$defs/CollectionMemberExpectationSource"
+          },
+          "maxItems": 100,
+          "type": "array",
+          "uniqueItems": true
         },
         "outcome": {
           "$ref": "#/$defs/ExpectedOutcome"
