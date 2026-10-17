@@ -5393,13 +5393,9 @@ const MAXIMUM_FETCH_SET_FACT_INPUTS: usize = 16;
 /// source request already carries.
 const MAXIMUM_ACQUISITION_MILLISECONDS: u64 = 30_000;
 
-/// The complete bounded evidence-data acquisition profile for one requirement.
-///
-/// Each named source remains one immutable HTTP request. `search-then-fetch`
-/// and `search-then-fetch-set` are the only multi-call forms, and each names
-/// every call it may make in configuration, so the acquisition ceiling stays
-/// fixed at read time without introducing a general workflow or
-/// source-planning model.
+/// What a `search-then-fetch` acquisition answers when the fetch finds no
+/// record for the one the search resolved: a dependency failure by default, or
+/// `unavailable` when the fetched record is optional.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FetchNoMatchPolicy {
@@ -5414,6 +5410,13 @@ impl FetchNoMatchPolicy {
     }
 }
 
+/// The complete bounded evidence-data acquisition profile for one requirement.
+///
+/// Each named source remains one immutable HTTP request. `search-then-fetch`
+/// and `search-then-fetch-set` are the only multi-call forms, and each names
+/// every call it may make in configuration, so the acquisition ceiling stays
+/// fixed at read time without introducing a general workflow or
+/// source-planning model.
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum AcquisitionConfig {

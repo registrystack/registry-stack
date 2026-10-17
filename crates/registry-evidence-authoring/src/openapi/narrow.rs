@@ -42,7 +42,6 @@ const MAX_LENGTH_CEILING: u64 = 65_536;
 const MAX_PROPERTIES: usize = 64;
 /// The largest enumeration the closed subset admits.
 const MAX_ENUM_MEMBERS: usize = 256;
-/// The byte length of a canonical hyphenated UUID.
 /// The smallest string bound derived from a sample. Below this a bound says
 /// more about the one response that was read than about the source.
 const SAMPLE_STRING_FLOOR: u64 = 16;
