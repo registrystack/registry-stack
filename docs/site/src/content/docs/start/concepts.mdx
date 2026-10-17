@@ -1,0 +1,97 @@
+---
+title: How the products fit together
+description: What you define, what exists when Registry Stack runs, what each product owns, what none of them owns, and where the stack sits beside an exchange layer.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-20"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+If you have not chosen a product yet, this page shows what each one does and how they combine.
+
+## What every registry needs
+
+Every registry holds data behind an API with permissions and accounts for every change. It shares
+answers with other services rather than copies of its records. It supports the people who review
+requests and the people who must be informed.
+
+Registry Stack offers a base for a registry that does not exist yet, and components an existing
+registry adds without being replaced. The usual first component shares limited data securely: an
+[Evidence Gateway](../../reference/glossary/#evidence-gateway) answers one question from your
+records with a signed [assertion](../../reference/glossary/#assertion) instead of the record.
+
+{/* Evidence: README.md, "What It Includes"; AGENTS.md, product list. */}
+
+## The stack in four questions
+
+- **What you define.** Each product reads a project you keep in version control: YAML files and,
+  for some products, small Rhai scripts. Tooling checks, tests, and packages it offline.
+- **What exists when it runs.** Each product runs as its own service with its own deployment
+  contract, and each one is optional.
+- **What a product owns.** Its own state, its audit record, and who may call its API.
+- **What no product owns.** Legal authority, data ownership, eligibility, and institutional
+  approval, which stay with the responsible institutions.
+
+{/* Evidence: README.md, "What It Includes"; AGENTS.md, "Registry Stack Agent Guidance". */}
+
+## What each product does
+
+| Product | What you define | What exists when it runs | What it owns |
+|---|---|---|---|
+| [Base Registry Engine (BReg)](../breg-quickstart/) | A [registry project](../../reference/glossary/#registry-project): [Record types](../../reference/glossary/#record-type), [Actions](../../reference/glossary/#action), [access profiles](../../reference/glossary/#access-profile) | A REST API over a PostgreSQL database | Records, revision history, [Proposals](../../reference/glossary/#proposal), the [audit journal](../../reference/glossary/#audit-journal) |
+| [Evidence Gateway](../evidence-quickstart/) | An Evidence project: assertion definitions, sources, fixtures | A service that answers each [requirement](../../reference/glossary/#requirement) from a packaged bundle | Signing, minimum disclosure, its audit trail |
+| [Registry Casework](../casework/) | A [ReviewPolicy](../../reference/glossary/#review-policy) | [ReviewTasks](../../reference/glossary/#review-task) for authorized people | Decisions and the [ReviewResult](../../reference/glossary/#review-result) |
+| [Registry Scheduling](../../reference/apis/registry-scheduling/) | Offerings over supply the operator anchored | Holds and appointments, each made under a task grant | Its capacity ledger |
+| [Registry Render](../registry-render/) | A template package | A rendered document, byte-stable for the same inputs | Rendering and its audit entries |
+| [Registry Discovery](../../explanation/discovery-as-an-index/) | An operator-approved origin list | One immutable index of provider descriptions | The index, never trust in a provider |
+| [Registry Manifest](../../products/registry-manifest/) | A manifest of what a registry exposes | Static artifacts from its renderers | Validation and rendering of metadata |
+
+<DocsetProduct product="registry-messaging">
+
+[Registry Messaging](../messaging/) sends one message from a reviewed template through an
+operator-connected provider. It owns its dispatch queue and receipts. Why to send, and
+to whom, stay with the caller.
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-coordinator">
+
+[Registry Coordinator](../coordinator/) runs a reviewed workflow package of calls to other
+products' public APIs. A run keeps its progress, including each wait, across outages and restarts.
+It owns run state, never product authority or product data.
+
+</DocsetProduct>
+
+{/* Evidence: AGENTS.md, per-product paragraphs; README.md, "What It Includes";
+    products/breg/README.md; products/evidence/README.md; products/casework/README.md;
+    products/scheduling/README.md; products/render/README.md; products/discovery/README.md;
+    products/manifest/README.md; products/messaging/README.md; products/coordinator/README.md. */}
+
+## How products compose
+
+Products compose over their public APIs, and none inherits another's permissions. Evidence Gateway
+may read a BReg route as a source with its own credentials and gains none of that route's
+authorization. Casework may show reviewers a BReg Proposal, and BReg still decides whether to
+apply it. No product writes to another product's database.
+
+{/* Evidence: AGENTS.md, "The products compose without merging their boundaries" and the
+    Scheduling, Messaging, and Coordinator paragraphs. */}
+
+## Where the stack sits
+
+Where a country already runs an exchange layer or integration bus, such as X-Road or a
+GovStack-style exchange, Registry Stack sits behind it. Registry Stack adds the registry-facing
+surface behind that layer; it does not implement the exchange layer itself or claim conformance to
+it.
+
+{/* Evidence: README.md, "What It Includes"; AGENTS.md, "Registry Stack Agent Guidance". */}
+
+## Next
+
+- [Evidence Gateway overview](../evidence-quickstart/)
+- [BReg overview](../breg-quickstart/)
+- [Registry Casework overview](../casework/)
