@@ -196,7 +196,7 @@ its release does not know. To return to the previous release:
 Because the release rule holds in both directions, rolling back one product means rolling back
 every product that must match it: Casework refuses a BReg that went back without it.
 
-{/* Evidence: crates/registry-casework/src/store.rs, refuse_newer_schema();
+{/* Evidence: crates/registry-casework/src/store.rs, refuse_unsupported_schema();
     crates/registry-bregctl/src/package_lifecycle.rs, PACKAGE_DIRECTORY (the package child of
     --output); crates/registry-breg/src/instance_claim.rs, module docs (a logical copy keeps its
     original's claim; v0.35.0 ships instance-claim adopt);
