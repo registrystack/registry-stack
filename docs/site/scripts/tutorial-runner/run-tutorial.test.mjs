@@ -130,6 +130,65 @@ test('the breg toolset refuses a relative binary path', async () => {
   });
 });
 
+async function fakeBregBinaries(dir) {
+  for (const name of ['breg', 'bregctl']) {
+    await writeFile(join(dir, name), `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*"\n`);
+    await chmod(join(dir, name), 0o755);
+  }
+  return { BREG_BIN: join(dir, 'breg'), BREGCTL_BIN: join(dir, 'bregctl') };
+}
+
+// A directory holding a packed npm package and a stand-in wheel, as
+// release/scripts/assemble-registry-client-packages.py leaves its output.
+async function fakeClientPackages(dir) {
+  const packages = join(dir, 'packages');
+  const source = join(dir, 'client-source');
+  await mkdir(packages);
+  await mkdir(source);
+  await writeFile(join(source, 'package.json'), JSON.stringify({ name: '@registrystack/client', version: '0.0.0-tutorial', main: 'index.js' }));
+  await writeFile(join(source, 'index.js'), "module.exports = 'assembled';\n");
+  await execFileAsync('npm', ['pack', '--ignore-scripts', '--pack-destination', packages], { cwd: source });
+  await writeFile(join(packages, 'registry_stack_client-0.0.0-py3-none-any.whl'), '');
+  return packages;
+}
+
+test('the breg toolset serves the client packages to a journey that installs them, by their published names', async () => {
+  const body =
+    '## Install\n\n' +
+    fence(
+      'sh',
+      'npm init -y >/dev/null\nnpm install "@registrystack/client@0.0.0-tutorial" >/dev/null\n' +
+        "node -p \"require('@registrystack/client')\"\n" +
+        'printf \'%s %s\\n\' "$PIP_NO_INDEX" "$(basename "$PIP_FIND_LINKS")"',
+    ) +
+    fence('text test-expect', 'assembled\n1 packages');
+  await withPage(body, async ({ dir, page }) => {
+    const { code, output } = await run(['--toolset', 'breg', page], {
+      ...(await fakeBregBinaries(dir)),
+      REGISTRY_CLIENT_PACKAGES_DIR: await fakeClientPackages(dir),
+    });
+    assert.equal(code, 0, output);
+    assert.match(output, /tutorial PASS/u);
+  });
+});
+
+test('the breg toolset neither needs nor serves the client packages to a journey that does not install them', async () => {
+  const body = '## Work\n\n' + fence('sh', 'printf \'[%s]\\n\' "${PIP_FIND_LINKS:-}"') + fence('text test-expect', '[]');
+  await withPage(body, async ({ dir, page }) => {
+    const { code, output } = await run(['--toolset', 'breg', page], { ...(await fakeBregBinaries(dir)), REGISTRY_CLIENT_PACKAGES_DIR: 'relative' });
+    assert.equal(code, 0, output);
+  });
+});
+
+test('the breg toolset refuses client packages named by a relative path', async () => {
+  const body = '## Install\n\n' + fence('sh', 'python -m pip install "registry-stack-client==${version}"');
+  await withPage(body, async ({ dir, page }) => {
+    const { code, output } = await run(['--toolset', 'breg', page], { ...(await fakeBregBinaries(dir)), REGISTRY_CLIENT_PACKAGES_DIR: 'packages' });
+    assert.equal(code, 2, output);
+    assert.match(output, /REGISTRY_CLIENT_PACKAGES_DIR must be an absolute path: packages/u);
+  });
+});
+
 test('the harness sets no shell variable a page could use or clobber', async () => {
   const body =
     '## Work\n\n' +
@@ -277,6 +336,45 @@ test('an excerpt that is not there fails after the journey, and a missing file s
     assert.match(output, /the excerpt at line 7 \(Read\) failed/u);
     assert.match(output, /nowhere\.yaml/u);
     assert.doesNotMatch(output, /^never$/mu);
+  });
+});
+
+test('a test-retry fence runs again until the output the page shows arrives', async () => {
+  const counted = (meta) =>
+    '## Read\n\n' + fence(meta, "echo x >>count\nprintf 'run %s\\n' \"$(wc -l <count | tr -d ' ')\"") + fence('text test-expect', 'run 3');
+  await withPage(counted('sh test-retry="5"'), async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 0, output);
+    assert.match(output, /^again \(1\/5\)\nagain \(2\/5\)\nrun 3$/mu);
+    assert.doesNotMatch(output, /again \(3\/5\)/u);
+    assert.match(output, /expect line 12: ok/u);
+    const plan = await run(['--dry-run', page]);
+    assert.match(plan.output, /run {3}line 7 \(Read\): echo x >>count \(again for up to 5s until its output arrives\)/u);
+  });
+  await withPage(counted('sh'), async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /expected:\n {2}run 3\nactual:\n {2}run 1/u);
+  });
+});
+
+test('a test-retry fence whose output never arrives fails after the journey, and a failing run stops it', async () => {
+  const never = '## Read\n\n' + fence('sh test-retry="2"', "echo '{\"deliveries\": []}'") + fence('json test-excerpt', '{"status": "received"}');
+  await withPage(never, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /^again \(2\/2\)$/mu);
+    assert.doesNotMatch(output, /again \(3\/2\)/u);
+    assert.match(output, /excerpt line 11: the output of the sh fence at line 7 does not contain it/u);
+  });
+  const failing =
+    '## Read\n\n' + fence('sh test-retry="5"', 'echo x >>count\ntest "$(wc -l <count)" -lt 2\necho first') + fence('text test-expect', 'never') + fence('sh', 'echo after');
+  await withPage(failing, async ({ page }) => {
+    const { code, output } = await run([page]);
+    assert.equal(code, 1, output);
+    assert.match(output, /^again \(1\/5\)$/mu);
+    assert.doesNotMatch(output, /^after$/mu);
+    assert.match(output, /the sh fence at line 7 \(Read\) failed/u);
   });
 });
 

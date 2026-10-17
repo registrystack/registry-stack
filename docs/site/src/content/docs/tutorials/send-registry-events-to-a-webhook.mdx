@@ -1,11 +1,11 @@
 ---
 title: Send registry events to a webhook
-description: Add a native contact event, cause a committed delivery, and inspect the supervised receiver acceptance receipt.
+description: Declare a contact event, create a contact, and read the signed delivery the local receiver received.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-13"
+last_reviewed: "2026-10-17"
 doc_type: tutorial
 persona:
   - data publisher
@@ -13,32 +13,38 @@ locale: en
 standards_referenced: []
 tutorial_test:
   toolset: breg
+  after: tutorials/extend-a-registry-with-a-module
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you are evaluating Base Registry Engine (BReg) event delivery, add a committed
-contact event to a local directory, run its create/read scenario, and inspect the
-supervised receiver's value-redacted receipt.
+In about fifteen minutes your registry will tell another system each time a contact is created:
+the event declared, a contact added, and the signed delivery read back from a local receiver.
 
 <QuickstartMeta
-  outcome="A signed contact-created delivery accepted by the local receiver."
-  time="About 15 minutes, plus image downloads"
+  outcome="A signed contact-created delivery received by the local receiver."
+  time="About 15 minutes"
   level="Local evaluation only"
-  prerequisites={['Matching breg and bregctl binaries', 'Running Docker', 'A shell and an editor']}
+  prerequisites={['The project from Extend a registry with a module', 'Running Docker', 'An editor']}
 />
 
-## Create a directory with an event
+## Declare the event
 
-```sh
-mkdir -p tutorial-work
-bregctl init tutorial-work/webhooks
+In the project directory, ask which events the registry sends today:
+
+```sh test-cwd="tutorial-work/project"
+bregctl explain events .
 ```
 
-Open `tutorial-work/webhooks/registry.yaml` and add this `hooks` member to the
-`contact` Record type, beside `fields`:
+```text test-excerpt
+Event deliveries:
+  No event deliveries declared.
+```
 
-```diff lang="yaml" title="tutorial-work/webhooks/registry.yaml" test-edit
+None: a registry sends nothing until a Record type declares it. Open `registry.yaml` and add a
+`hooks` list to the `contact` Record type, right after its `mutationMode` line:
+
+```diff lang="yaml" title="registry.yaml" test-edit
      mutationMode: mutable
 +    hooks:
 +      - id: contact-created-v1
@@ -50,66 +56,89 @@ Open `tutorial-work/webhooks/registry.yaml` and add this `hooks` member to the
 +          destinationId: contact-events
 ```
 
-The projection authorizes only `name` to leave the registry. The destination is a
-logical ID; development binds it to its supervised HMAC-verifying receiver.
+The hook fires once a new contact is committed. Its projection lets only `name` leave the
+registry. `contact-events` is a destination name, not an address: an operator binds it to a URL,
+and the local registry binds it to a receiver of its own.
+
+Check the project and ask again:
 
 ```sh
-bregctl check tutorial-work/webhooks
-bregctl --format json explain events tutorial-work/webhooks
+bregctl check .
+bregctl explain events .
 ```
 
-Inspect the event ID, projection, derived classification, and destination before
-starting. Repair a named diagnostic before proceeding.
+```text test-excerpt
+Event deliveries:
+  events.contact.contact-created-v1.webhook
+    phase         after
+    handler type  url
+    destination   contact-events
+    projected fields  name
+```
 
-## Start and cause a delivery
+## Create a contact
 
-:::caution[Use synthetic records]
-The local receiver retains projected values in the owner-only `.breg/dev/` state.
-Keep that directory out of version control and support messages.
-:::
+Start the registry with the hook in place:
 
 ```sh
-bregctl dev start tutorial-work/webhooks
-bregctl examples run contact tutorial-work/webhooks
+bregctl dev start
 ```
 
-The scenario creates and reads its synthetic contact. Delivery happens after
-commit. Give the worker time to attempt delivery before inspecting the receiver.
-A repeated scenario resumes retained work; it does not create a fresh event each time.
+```text test-excerpt
+webhook receiver  http://127.0.0.1:<port>/events
+events file       <project-dir>/.breg/dev/events.jsonl
+```
 
-## Inspect acceptance
+The receiver verifies each delivery's signature before it keeps it, in `.breg/dev/events.jsonl`.
+That file holds projected values, so use test records only. Add the test contact again:
 
 ```sh
-bregctl --format json dev events tutorial-work/webhooks
+bregctl examples run contact
 ```
 
-The report identifies the event, destination, generation, attempt, and accepted
-receipt. Projected values are omitted unless you explicitly add `--include-payload`.
-An empty report can mean delivery is still pending; inspect the runtime diagnostics
-and the queue with `bregctl webhook list --help` before creating another record.
+The registry commits the contact first, then delivers the event from its own queue.
 
-Acceptance means the receiver accepted that attempt. An adopting service owns
-durable inbox storage, processing, retention, and reconciliation. Its retry and
-operator-replay handling must deduplicate the event before an external effect.
-[Operate BReg webhooks](../../operate/breg-webhooks/) covers the separate outbox.
+## Read the delivery
 
-## Stop the session
-
-```sh
-bregctl dev stop tutorial-work/webhooks
+```sh test-retry="10"
+bregctl --format json dev events
 ```
 
-This retains records and receiver receipts for inspection. To discard this
-synthetic session, use `dev stop --remove`; that removes its owned database and
-receipt journal. Keep any required evidence before removing it.
+```json test-excerpt
+{
+  "deliveryId": "events.contact.contact-created-v1.webhook",
+  "destinationId": "contact-events",
+  "eventType": "contact-created-v1",
+  "attempt": 1,
+  "status": "received"
+}
+```
 
-{/* Evidence: crates/registry-bregctl/src/dev/events.rs;
-    crates/registry-bregctl/src/dev/mod.rs;
-    products/breg/examples/minimal/examples/scenarios.json;
-    products/breg/examples/webhook-receiver/receiver.py. */}
+`"status": "received"` means the receiver verified the signature and kept the first attempt. The
+report leaves out the projected `name`; add `--include-payload` to see it.
+
+If `deliveries` is empty, the first delivery has not arrived yet or the registry is still
+retrying; run the command again after a few seconds. On a deployed registry,
+`bregctl webhook list` shows the deliveries still waiting or failed, as
+[Bind webhook receivers](../../operate/breg-webhooks/) describes.
+
+The local receiver proves only that an attempt arrived. A real receiving service stores each
+event before acting on it. A retry resends an event with the same `idempotencyKey`; an operator
+replay resends it with the same `eventId` and a new key. Check both before acting.
+
+When you are finished, `bregctl dev stop --remove` stops the registry and deletes its test data.
+
+{/* Evidence: crates/registry-bregctl/src/dev/events.rs, Receiver, verify and report;
+    crates/registry-bregctl/src/dev/mod.rs, CHANGED_INPUTS and reclaimed;
+    crates/registry-bregctl/src/webhook_lifecycle.rs, list_with;
+    crates/registry-platform-hooks/src/delivery/service.rs, DeliveryStatusKind and
+    idempotency_key_is_stable_across_retries_and_changes_on_replay_generation;
+    crates/registry-bregctl/src/explain_report.rs, events;
+    products/breg/EVENTS-AND-WEBHOOKS.md;
+    products/breg/examples/minimal/registry.yaml;
+    products/breg/examples/minimal/examples/scenarios.json. */}
 
 ## Next
 
-- [Operate BReg webhooks](../../operate/breg-webhooks/)
-- [Base Registry Engine event contract](../../reference/breg-api/#events-and-webhooks)
-- [Declare Actions and Proposals](../../configure/breg-change-control/)
+[Serve a lookup to Evidence](../evidence-from-breg/), or run a registry for real with
+[Deploy and serve](../../operate/breg/).

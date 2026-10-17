@@ -192,7 +192,7 @@ A BReg publisher can turn record-derived counts into a release readable by profi
 
 The runtime cannot update or delete release tables. A migration-owned PostgreSQL function records a withdrawal and deletes its content atomically. Audit gates cover request attempts and returned bytes and contain references and lifecycle metadata, never cell values or unit counts.
 
-Suppression and deterministic rounding accept inference through totals, interval arithmetic, zeros, differencing, and auxiliary information. They supply no cumulative privacy budget. See [live counts and statistical releases](../breg-statistical-datasets/) before deciding which populations may be released.
+Suppression and deterministic rounding accept inference through totals, interval arithmetic, zeros, differencing, and auxiliary information. They supply no cumulative privacy budget. See [publish statistics](../../configure/breg-statistics/#review-what-a-release-discloses) before deciding which populations may be released.
 
 {/* Evidence: crates/registry-breg/src/compiler/statistics.rs;
     crates/registry-breg/src/postgres/statistics.rs;

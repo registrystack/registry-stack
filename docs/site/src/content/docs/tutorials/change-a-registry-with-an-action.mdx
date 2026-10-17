@@ -1,0 +1,288 @@
+---
+title: Change a registry with an Action
+description: Change a contact's email at once with one Action, create a contact through a Proposal with another, and read what the registry returns for each.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-10-17"
+doc_type: tutorial
+persona:
+  - data publisher
+locale: en
+standards_referenced: []
+tutorial_test:
+  toolset: breg
+  after: tutorials/first-breg
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+In about ten minutes you will change the registry from
+[Create your first registry](../first-breg/) in the two ways it allows: one change takes effect
+the moment it is asked for, the other is prepared first and then applied by the registry. You will
+read the record the registry returns for each, and finish with three contacts in the registry.
+
+<QuickstartMeta
+  outcome="One contact changed through an immediate Action and one created through a Proposal, with the registry's record of each."
+  time="About 10 minutes"
+  level="Local evaluation only"
+  prerequisites={['The running registry from Create your first registry']}
+/>
+
+## Return to your project
+
+Open a terminal in the directory that holds `tutorial-work`, go to the project, and list the
+ready-made examples:
+
+```sh test-cwd="tutorial-work/project"
+bregctl examples list
+```
+
+```text test-expect
+bregctl examples list succeeded.
+  project  <project-dir>
+
+  contact
+    Create and read one synthetic directory contact.
+    input  examples/inputs/contact.json
+    create-contact: create as editor/directory-editor
+    read-contact: get as editor/directory-editor
+
+  update-contact-email
+    Create one contact, change its email with the immediate Action, and read the result.
+    input  examples/inputs/email-update.json
+    create-contact: create as editor/directory-editor
+    invoke: invoke as editor/directory-editor
+    read-contact: get as editor/directory-editor
+
+  register-contact
+    Start and submit a no-review Proposal, then inspect it after automatic application.
+    input  examples/inputs/registration.json
+    start: start as editor/directory-editor
+    submit: submit as editor/directory-editor
+    inspect: inspect as editor/directory-editor
+
+  contact attempt <attempt-id>
+```
+
+You ran `contact` in the first tutorial; its attempt is the last line. The other two use the
+project's Actions.
+
+## Read the two Actions
+
+Besides creating and editing Records field by field, a project can declare an
+[Action](../../reference/glossary/#action): a named change with typed inputs and a fixed list of
+effects. Open `registry.yaml` and find `actions`:
+
+```yaml title="registry.yaml" test-excerpt="registry.yaml"
+actions:
+  - id: update-contact-email
+    display: {label: Update contact email, description: Replace one contact's email address as soon as the Action is invoked.}
+    execution: {mode: immediate}
+    inputs:
+      - {id: contact, apiName: contactId, type: reference, target: contact, required: true, classification: internal}
+      - {id: email, type: string, required: true, minimumLength: 1, maximumLength: 254, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: contact-email
+          target: {fromInput: contact}
+          operation: patch
+          set:
+            email: {fromInput: email}
+```
+
+`update-contact-email` takes a contact and an email address. Its `plan` is its
+[Plan](../../reference/glossary/#planner): the one effect it has, a patch of that contact's
+`email`. `execution: {mode: immediate}` means the registry makes the change in the same request
+that invokes the Action.
+
+```yaml title="registry.yaml" test-excerpt="registry.yaml"
+  - id: register-contact
+    display: {label: Register contact, description: Create one contact through a Proposal that applies on submit without external review.}
+    execution:
+      mode: proposal
+      proposal:
+        review: {type: none}
+        retention: {mode: retain}
+```
+
+`register-contact` creates a contact, but in `proposal` mode. Starting it creates a
+[Proposal](../../reference/glossary/#proposal): a draft the caller can edit, submit, or cancel,
+which the registry keeps. `review: {type: none}` means nobody has to approve it, so the registry
+applies it once it is submitted.
+
+The access profile grants each Action separately. A caller may invoke `update-contact-email` only on
+contacts in its own jurisdiction:
+
+```yaml title="registry.yaml" test-excerpt="registry.yaml"
+      actions:
+        - action: update-contact-email
+          operations: [invoke]
+          targets:
+            - recordType: contact
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          results: [contact-email]
+```
+
+## Change a contact's email
+
+```sh
+bregctl examples run update-contact-email
+```
+
+```text test-excerpt
+bregctl examples run succeeded.
+  project   <project-dir>
+  scenario  update-contact-email
+  attempt   <attempt-id>
+```
+
+The example creates a contact with the email `old@example.test`, invokes the Action as `editor`
+with `new@example.test`, and reads the contact back. The registry answered the invoke with an
+[ActionReceipt](../../reference/glossary/#action):
+
+```json test-excerpt
+{
+  "action": "update-contact-email",
+  "applicationId": "<application-id>",
+  "results": {
+    "contact-email": {
+      "recordId": "<record-id>",
+      "recordType": "contact",
+      "revision": 2
+    }
+  }
+}
+```
+
+An ActionReceipt names the Action, gives this change an `applicationId`, and lists, for each
+effect in the Plan, the Record it changed and that Record's new revision. The contact read
+afterwards is at that revision, with the new address:
+
+```json test-excerpt
+{
+  "domainData": {
+    "email": "new@example.test",
+    "jurisdiction": "zone-a",
+    "name": "Moving contact"
+  },
+  "revisionIdentifier": "2"
+}
+```
+
+## Register a contact through a Proposal
+
+```sh
+bregctl examples run register-contact
+```
+
+```text test-excerpt
+bregctl examples run succeeded.
+  project   <project-dir>
+  scenario  register-contact
+  attempt   <attempt-id>
+```
+
+The example takes the Proposal through three steps as `editor`, and the output shows its state
+after each. Starting it creates a draft that is the caller's turn to work on:
+
+```json test-excerpt
+{
+  "actionId": "register-contact",
+  "revision": 1,
+  "state": "draft",
+  "turn": "party"
+}
+```
+
+Submitting it freezes the inputs. Because no review is required, the registry schedules the
+application itself:
+
+```json test-excerpt
+{
+  "applicationStatus": {
+    "automaticRetry": {
+      "attempts": 0,
+      "maximumAttempts": 3,
+      "scheduled": true
+    },
+    "mode": "automatic",
+    "state": "pending"
+  },
+  "revision": 2,
+  "state": "submitted"
+}
+```
+
+Read again a moment later, the Proposal is applied, and `application` links the contact it
+created:
+
+```json test-excerpt
+{
+  "application": {
+    "applicationId": "<application-id>",
+    "effectDigest": "<effect-digest>",
+    "resultLinks": [
+      {
+        "recordId": "<record-id>",
+        "recordType": "contact",
+        "revision": 1
+      }
+    ],
+    "submissionVersion": 1
+  },
+  "applicationStatus": {
+    "mode": "automatic",
+    "state": "applied"
+  },
+  "state": "applied",
+  "turn": "nobody"
+}
+```
+
+Every response also carries `links`: the operations on the Proposal, and whether the caller may
+use each one now. Once applied, `edit`, `submit` and `cancel` all report `already-applied`.
+
+## Read the new contact
+
+The token from the first tutorial has probably expired, so get a fresh one:
+
+```sh
+bregctl dev token editor
+```
+
+```text test-expect
+bregctl dev token succeeded.
+```
+
+```sh
+curl -s -H @.breg/dev/secrets/editor.header http://127.0.0.1:8090/v1/records/contacts
+```
+
+The list now holds three contacts. Among them is the one the Proposal created:
+
+```json test-excerpt
+{
+  "domainData": {
+    "email": "registered@example.test",
+    "jurisdiction": "zone-a",
+    "name": "Registered contact"
+  },
+  "recordIdentifier": "<record-id>",
+  "revisionIdentifier": "1"
+}
+```
+
+The registry is still running with three contacts. The next tutorial reads and changes these
+contacts from Python and Node.
+
+{/* Evidence: products/breg/examples/minimal/registry.yaml;
+    products/breg/examples/minimal/examples/scenarios.json;
+    crates/registry-bregctl/src/dev/examples.rs. */}
+
+## Next
+
+[Query a registry from Python and Node](../query-breg-client/)

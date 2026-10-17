@@ -11,6 +11,13 @@ apis:
     root: openapi/registry-coordinator.openapi.json
   registry-evidence:
     root: openapi/registry-evidence.openapi.json
+  # The facility template's compiled document. The compiler emits no operation
+  # summaries yet, a recorded product gap, so their absence warns rather than
+  # failing the docs lint.
+  registry-breg:
+    root: openapi/registry-breg.openapi.json
+    rules:
+      operation-summary: warn
 rules:
   no-empty-servers: off
   no-unused-components: warn

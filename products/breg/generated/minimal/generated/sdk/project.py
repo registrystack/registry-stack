@@ -45,7 +45,38 @@ ContactProjection = TypedDict("ContactProjection", {
     "jurisdiction": NotRequired[str],
 })
 
-_definitions: dict[str, Any] = {"actions": {}, "records": {"contact": {"route": "contacts", "titleField": None}}, "relationships": {}}
+RegisterContactInput = TypedDict("RegisterContactInput", {
+    "name": str,
+    "email": str,
+    "jurisdiction": str,
+})
+
+RegisterContactInputProjection = TypedDict("RegisterContactInputProjection", {
+    "name": NotRequired[str],
+    "email": NotRequired[str],
+    "jurisdiction": NotRequired[str],
+})
+
+RegisterContactRefusal = EngineReason
+
+RegisterContactResult = Proposal[RegisterContactInputProjection]
+
+UpdateContactEmailInput = TypedDict("UpdateContactEmailInput", {
+    "contactId": str,
+    "email": str,
+})
+
+UpdateContactEmailInputProjection = TypedDict("UpdateContactEmailInputProjection", {
+    "contactId": NotRequired[str],
+    "email": NotRequired[str],
+})
+
+UpdateContactEmailRefusal = EngineReason
+
+UpdateContactEmailResultLinks = TypedDict("UpdateContactEmailResultLinks", {"contact-email": NotRequired[RecordReference]})
+UpdateContactEmailResult = TypedDict("UpdateContactEmailResult", {"action": Literal["update-contact-email"], "applicationId": str, "results": UpdateContactEmailResultLinks})
+
+_definitions: dict[str, Any] = {"actions": {"register-contact": {"conditionInputs": [], "mode": "proposal", "refusals": []}, "update-contact-email": {"conditionInputs": ["contactId"], "mode": "immediate", "refusals": []}}, "records": {"contact": {"route": "contacts", "titleField": None}}, "relationships": {}}
 
 
 class NativeMetadata(Protocol):
@@ -132,3 +163,9 @@ class ProjectClient:
     def execute(self, attempt: Any) -> Proposal[Any]:
         native = self._native.execute_proposal(attempt)
         return Proposal(native, native.document)
+
+    def register_contact(self, inputs: RegisterContactInput, key: str) -> RegisterContactResult:
+        return cast(RegisterContactResult, self._invoke("register-contact", inputs, key))
+
+    def update_contact_email(self, inputs: UpdateContactEmailInput, key: str) -> UpdateContactEmailResult:
+        return cast(UpdateContactEmailResult, self._invoke("update-contact-email", inputs, key))

@@ -13,6 +13,7 @@ import {
   RETIRED_RELAY_ROUTES,
 } from '../src/lib/relay-retirement-redirects.mjs';
 import { flattenSidebarGroups } from '../src/lib/sidebar.mjs';
+import { docsetPublishesBregOpenApi } from './fetch-openapi.mjs';
 
 const siteRoot = resolve(import.meta.dirname, '..');
 const configSource = readFileSync(resolve(siteRoot, 'astro.config.mjs'), 'utf8');
@@ -51,6 +52,13 @@ const coordinatorRedirects = new Function(
   'productRoutes',
   `${coordinatorRoutesSource}; ${coordinatorRedirectsSource.replace(/^export /, '')}; return coordinatorRedirects;`,
 )(productRoutes);
+const bregRewriteRedirectsSource = configSource.match(/export function bregRewriteRedirects[\s\S]*?^}\n/m)?.[0];
+const bregRewriteMovesSource = configSource.match(/const bregRewriteMoves = \[[\s\S]*?\n\];/)?.[0];
+assert.ok(bregRewriteRedirectsSource && bregRewriteMovesSource,
+  'could not isolate the Base Registry Engine rewrite redirects');
+const bregRewriteRedirects = new Function(
+  `${bregRewriteMovesSource}; ${bregRewriteRedirectsSource.replace(/^export /, '')}; return bregRewriteRedirects;`,
+)();
 const homepageSource = readFileSync(resolve(siteRoot, 'src/content/docs/index.mdx'), 'utf8');
 const sidebarSource = configSource.match(/sidebar: \[([\s\S]*?)\n      \],\n    \}\),/)?.[1];
 
@@ -97,7 +105,20 @@ const coordinatorOpenApiSchema = {
   schema: './openapi/registry-coordinator.openapi.json',
   sidebar: { label: 'API operations', collapsed: true },
 };
+// BReg's operations fill their own createOpenAPISidebarGroup() placeholder,
+// which the plugin replaces with the generated group.
+const bregOpenApiSidebarGroup = {
+  label: 'API operations (facility template)',
+  collapsed: true,
+  items: [{ label: 'Generated tag', items: [] }],
+};
+const bregOpenApiSchema = {
+  base: 'reference/apis/breg',
+  schema: './openapi/registry-breg.openapi.json',
+  sidebar: { group: bregOpenApiSidebarGroup, label: 'API operations (facility template)', collapsed: true },
+};
 const apiSchemaFactory = new Function(
+  'hasBregOpenApi',
   'hasCasework',
   'hasScheduling',
   'hasMessaging',
@@ -106,9 +127,11 @@ const apiSchemaFactory = new Function(
   'schedulingOpenApiSchema',
   'messagingOpenApiSchema',
   'coordinatorOpenApiSchema',
+  'bregOpenApiSchema',
   `return ${apiConfigSource};`,
 );
 const apiSchemas = apiSchemaFactory(
+  true,
   true,
   true,
   true,
@@ -117,8 +140,11 @@ const apiSchemas = apiSchemaFactory(
   schedulingOpenApiSchema,
   messagingOpenApiSchema,
   coordinatorOpenApiSchema,
+  bregOpenApiSchema,
 );
-const generatedAPI = apiSchemas.map((schema) => ({
+assert.ok(apiSchemas.includes(bregOpenApiSchema), 'the current docset registers the BReg OpenAPI schema');
+// Schemas without their own group stand in for the openAPISidebarGroups slices.
+const generatedAPI = apiSchemas.filter((schema) => !schema.sidebar.group).map((schema) => ({
   ...schema.sidebar,
   items: [{ label: 'Generated tag', items: [] }],
 }));
@@ -136,6 +162,8 @@ const sidebarFactory = new Function(
   'hasBregServices',
   'hasCoordinator',
   'selectedDocset',
+  'hasBregOpenApi',
+  'bregOpenApiSidebarGroup',
   `return [${sidebarSource}];`,
 );
 const sidebarArguments = [
@@ -160,7 +188,8 @@ const everyProductDocset = {
     'registry-coordinator': {},
   },
 };
-const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true, true, everyProductDocset);
+const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true, true, everyProductDocset,
+  true, bregOpenApiSidebarGroup);
 
 const messagingPageRoutes = [
   '/start/messaging/',
@@ -312,6 +341,8 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       // A docset that carries the Coordinator after Messaging and without
       // Scheduling, so the Coordinator operations follow a skipped schema.
       { id: 'v0.41.0', status: 'archived', availability: 'candidate', path: '/v/0.41.0/', products: { 'registry-casework': { ref: 'v0.41.0' }, 'registry-messaging': { ref: 'v0.41.0' }, 'registry-coordinator': { ref: 'v0.41.0' } } },
+      // The first archive that publishes the Base Registry Engine facility API.
+      { id: 'v0.42.0', status: 'archived', availability: 'candidate', path: '/v/0.42.0/', products: {} },
     ],
   };
   for (const [id, env, hasCasework, hasScheduling, hasRender, hasMessaging, hasBregServices, hasCoordinator] of [
@@ -321,8 +352,10 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false, false, false, false, false],
     ['v0.31.0', {}, true, false, false, true, true, false],
     ['v0.41.0', {}, true, false, false, true, false, true],
+    ['v0.42.0', {}, false, false, false, false, false, false],
   ]) {
     const context = resolveDocsetBuildContext(docsets, { DOCS_DOCSET: id, ...env });
+    const hasBregOpenApi = docsetPublishesBregOpenApi(context.selectedDocset, docsets.current);
     assert.equal(context.hasCasework, hasCasework, id);
     assert.equal(context.hasScheduling, hasScheduling, id);
     assert.equal(context.hasRender, hasRender, id);
@@ -338,6 +371,8 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       context.hasBregServices,
       context.hasCoordinator,
       context.selectedDocset,
+      hasBregOpenApi,
+      bregOpenApiSidebarGroup,
     );
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Casework'), hasCasework, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Scheduling'), hasScheduling, id);
@@ -349,7 +384,12 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     const docsetBreg = docsetSidebar.find((item) => item.label === 'Base Registry Engine');
     assert.ok(docsetBreg, id);
     assert.equal(docsetBreg.items.some((item) => item.label === 'Citizen chat assistant'), hasBregServices, id);
+    // The BReg facility API is published by the current docset and by release
+    // docsets from v0.42.0 onward, archived or not.
+    assert.equal(hasBregOpenApi, id === 'latest' || id === 'v0.42.0', id);
+    assert.equal(docsetBreg.items.includes(bregOpenApiSidebarGroup), hasBregOpenApi, id);
     const docsetSchemas = apiSchemaFactory(
+      hasBregOpenApi,
       context.hasCasework,
       context.hasScheduling,
       context.hasMessaging,
@@ -358,15 +398,17 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       schedulingOpenApiSchema,
       messagingOpenApiSchema,
       coordinatorOpenApiSchema,
+      bregOpenApiSchema,
     );
     assert.equal(
       docsetSchemas.length,
-      1 + Number(hasCasework) + Number(hasScheduling) + Number(hasMessaging) + Number(hasCoordinator),
+      1 + Number(hasCasework) + Number(hasScheduling) + Number(hasMessaging) + Number(hasCoordinator) +
+        Number(hasBregOpenApi),
       id,
     );
     // Each product group seats the operations of its own schema, whichever
     // products come before it in this docset.
-    const docsetAPI = docsetSchemas.map((schema) => ({ ...schema.sidebar, base: schema.base, items: [] }));
+    const docsetAPI = docsetSchemas.filter((schema) => !schema.sidebar.group).map((schema) => ({ ...schema.sidebar, base: schema.base, items: [] }));
     const docsetAPISidebar = sidebarFactory(
       cliReferenceSidebar,
       sidebarArguments[1],
@@ -381,6 +423,8 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       context.hasBregServices,
       context.hasCoordinator,
       context.selectedDocset,
+      hasBregOpenApi,
+      bregOpenApiSidebarGroup,
     );
     const docsetMessaging = docsetAPISidebar.find((item) => item.label === 'Registry Messaging');
     if (hasMessaging) {
@@ -527,7 +571,7 @@ test('starts with only Start expanded and all secondary groups collapsed', () =>
 test('requires at most two groups to reach a hand-authored page', () => {
   function walk(items, parents = []) {
     for (const item of items) {
-      if (generatedAPI.includes(item)) continue;
+      if (generatedAPI.includes(item) || item === bregOpenApiSidebarGroup) continue;
       if (!item.items) continue;
       const path = [...parents, item.label];
       assert.ok(path.length <= 2, `sidebar adds a third group: ${path.join(' / ')}`);
@@ -548,7 +592,6 @@ test('keeps consumer and wallet-provider guidance in separate Evidence groups', 
     'configure/request-an-access-token',
     'tutorials/verify-an-assertion-as-a-consumer',
     'tutorials/manage-evidence-verifier-trust',
-    'explanation/openfn-adaptors',
   ]);
   assert.deepEqual(wallet.items.map((item) => item.slug), [
     'configure/enable-sd-jwt-vc',
@@ -664,40 +707,33 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'start/breg-quickstart',
     'tutorials/first-breg',
     'explanation/configuration-defined-registry',
+    'tutorials/change-a-registry-with-an-action',
     'tutorials/extend-a-registry-with-a-module',
     'tutorials/derive-a-registry-from-publicschema',
-    'tutorials/review-registry-changes',
-    'tutorials/send-registry-events-to-a-webhook',
+    'tutorials/query-breg-client',
     'configure/breg',
-    'configure/breg-access',
-    'configure/breg-change-control',
-    'configure/breg-journeys',
     'explanation/registry-modeling-patterns',
-    'explanation/governed-registry-actions',
-    'explanation/native-field-patterns',
-    'explanation/breg-field-encryption',
-    'explanation/breg-statistical-datasets',
+    'configure/breg-access',
+    'configure/breg-actions',
+    'configure/breg-field-encryption',
     'configure/breg-statistics',
-    'explanation/membership-read-boundaries',
-    'explanation/deriving-a-registry-from-a-model',
-    'operate/breg-requirements',
-    'tutorials/build-a-breg-production-candidate',
+    'configure/breg-journeys',
     'operate/breg',
-    'operate/breg-webhooks',
     'operate/breg-changes',
+    'operate/breg-monitor',
     'operate/breg-retention',
     'operate/breg-data',
-    'tutorials/query-breg-client',
-    'reference/client-api',
+    'operate/breg-webhooks',
     'reference/breg-client-capabilities',
-    'explanation/esignet-authentication-over-breg',
-    'explanation/openfn-adaptors',
-    'tutorials/first-citizen-mcp',
-    'configure/breg-mcp',
-    'operate/breg-mcp',
-    'reference/breg-configuration',
+    'reference/client-api',
     'reference/breg-api',
     'reference/bregctl-publicschema-wizard',
+    'explanation/esignet-authentication-over-breg',
+    'tutorials/send-registry-events-to-a-webhook',
+    'tutorials/evidence-from-breg',
+    'tutorials/review-breg-changes-in-casework',
+    'configure/breg-mcp',
+    'reference/breg-configuration',
   ]);
   for (const slug of slugs) {
     assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the BReg journey`);
@@ -707,23 +743,23 @@ test('keeps the BReg guide and references in one adoption path', () => {
     [
       "slug: 'tutorials/first-breg'",
       "label: 'Tutorials'",
-      "label: 'Model a registry'",
-      "label: 'Deploy'",
-      "label: 'Operate'",
+      "label: 'Author a registry'",
+      "label: 'Deploy and operate'",
       "label: 'Use from applications'",
+      "label: 'Compose'",
       "slug: 'reference/breg-configuration'",
     ],
     'Base Registry Engine',
   );
 
   // The homepage names the doors into the path, not every room: the overview,
-  // the first tutorial, the bridge to a deployable package, and the tutorial
+  // the first tutorial, the deployment page, and the tutorial
   // an application developer arrives for. Requiring every BReg slug there
   // produced an eleven-link wall that read as a feature list, not a way in.
   for (const slug of [
     'start/breg-quickstart',
     'tutorials/first-breg',
-    'tutorials/build-a-breg-production-candidate',
+    'operate/breg',
     'tutorials/query-breg-client',
   ]) {
     const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -761,21 +797,24 @@ test('keeps operating requirements in each product Deploy group, not in Start', 
     ],
     'Evidence Gateway Deploy group',
   );
+  // Base Registry Engine states its requirements at the top of Deploy and
+  // serve, so that page opens its Deploy and operate group; the separate
+  // requirements page it absorbed redirects there.
   const breg = topLevelSection(sidebarSource, 'Base Registry Engine');
   assertOrdered(
     breg,
     [
-      "label: 'Deploy'",
-      "slug: 'operate/breg-requirements'",
-      "slug: 'tutorials/build-a-breg-production-candidate'",
+      "label: 'Deploy and operate'",
+      "slug: 'operate/breg'",
+      "slug: 'operate/breg-changes'",
     ],
-    'Base Registry Engine Deploy group',
+    'Base Registry Engine Deploy and operate group',
   );
-  for (const slug of ['operate/evidence-requirements', 'operate/breg-requirements']) {
+  for (const slug of ['operate/evidence-requirements', 'operate/breg']) {
     assert.ok(hasDocForSlug(slug), `${slug} must be a published page`);
   }
 
-  for (const retired of ['start/evaluate-evidence', 'start/evaluate-breg']) {
+  for (const retired of ['start/evaluate-evidence', 'start/evaluate-breg', 'operate/breg-requirements']) {
     assert.equal(hasDocForSlug(retired), false, `${retired} must not be a published page`);
     assert.doesNotMatch(sidebarSource, new RegExp(retired));
   }
@@ -785,8 +824,22 @@ test('keeps operating requirements in each product Deploy group, not in Start', 
   );
   assert.match(
     configSource,
-    /'\/start\/evaluate-breg\/': internalRedirect\('\/operate\/breg-requirements\/'\)/,
+    /'\/start\/evaluate-breg\/': internalRedirect\('\/operate\/breg\/'\)/,
   );
+  assert.equal(bregRewriteRedirects((path) => path)['/operate/breg-requirements/'], '/operate/breg/');
+});
+
+test('redirects each page the Base Registry Engine rewrite retired and its Markdown twin to one target', () => {
+  assert.match(configSource, /\.\.\.bregRewriteRedirects\(internalRedirect\),/);
+  const redirects = bregRewriteRedirects((path) => `/dev${path}`);
+  const routes = Object.keys(redirects).filter((route) => route.endsWith('/'));
+  assert.equal(routes.length, 14);
+  for (const route of routes) {
+    assert.equal(redirects[`${route.slice(0, -1)}.md`], redirects[route], route);
+    assert.equal(hasDocForSlug(route.slice(1, -1)), false, `${route} must not be a published page`);
+  }
+  assert.equal(redirects['/explanation/governed-registry-actions.md'], '/dev/configure/breg-actions/');
+  assert.equal(Object.keys(redirects).length, 2 * routes.length);
 });
 
 test('redirects the retired Server webhook, history, and event pages to their merged pages', () => {

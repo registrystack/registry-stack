@@ -4,6 +4,7 @@ use registry_breg::{
     contract::{parse_project_yaml, ModuleAssetSource, RegistryProject},
     model::{CompiledActionExecution, CompiledPlanValue, CompiledProposalReview},
 };
+use std::collections::BTreeSet;
 const MINIMAL: &[u8] = include_bytes!("../../../products/breg/examples/minimal/registry.yaml");
 const PROJECT: &[u8] = include_bytes!("../../../products/breg/examples/facility/registry.yaml");
 const FUNCTION: &[u8] =
@@ -34,7 +35,23 @@ fn standalone_native_records_need_no_manifest_or_external_products() {
     let project = parse_project_yaml(MINIMAL).expect("minimal project reads");
     let model = compile(&project).expect("minimal standalone project compiles");
     assert!(model.manifest_projection().is_none());
-    assert!(model.actions().actions.is_empty());
+    let actions = &model.actions().actions;
+    assert_eq!(
+        actions
+            .iter()
+            .map(|action| action.id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["register-contact", "update-contact-email"])
+    );
+    for action in actions {
+        match (&action.id[..], &action.execution) {
+            ("update-contact-email", CompiledActionExecution::Immediate) => {}
+            ("register-contact", CompiledActionExecution::Proposal { proposal }) => {
+                assert!(matches!(proposal.review, CompiledProposalReview::None));
+            }
+            (id, _) => panic!("unexpected execution mode for {id}"),
+        }
+    }
     assert!(!model.ddl().script().contains("registry_request_"));
     assert_eq!(model.entities()["contact"].api_name, "Contact");
     assert_eq!(

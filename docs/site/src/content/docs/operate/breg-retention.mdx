@@ -5,519 +5,392 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-07"
+last_reviewed: "2026-10-17"
 doc_type: how-to
 persona:
   - operator
 locale: en
 standards_referenced: []
+tutorial_test:
+  toolset: breg
+  checkout: true
+  skip: Every command needs an active registry on your own PostgreSQL and the migration credential from its runtime file.
 ---
 
-You operate an active registry under an institutional retention policy, hold the migration
-credential, and need to erase retained history or Proposal detail, restore snapshot coverage
-after an erasure, or retain the audit stream. Maintenance uses the migration interlock and writes
-minimized audit entries separately from the database transaction. Reports carry counts rather than
-values. The erasure and attachment cleanup commands remove bytes that nothing restores. The next section says
-exactly what each one destroys.
+You run an active registry under an institutional retention policy and hold its migration
+credential. This page shows you how to erase retained record history and Proposal detail, restore
+snapshot coverage afterwards, drop expired Evidence and idempotency material, and keep the audit
+journal.
+
+Every command here reads the runtime file and connects to PostgreSQL directly with the migration
+credential, so run it from the operator host. The erasures and the rebaseline take the registry's
+migration lock: run them while no activation is in progress. A database whose certificate a
+private authority issued is trusted through `database.trustedRootCertificateRef` in the same runtime
+file. Every path you pass must be absolute. Reports carry counts, never record values.
+
+The examples use the record types and Actions of the facility template.
 
 ## What cannot be undone
 
 | Command | Removes for good | Leaves in place |
 | --- | --- | --- |
-| `history erase` | The retained revisions of one record up to a revision number, the correction context and retained outbox payloads that referenced them, and the cached idempotency responses that could replay them. | The current record, every later revision, the audit journal, and each spent idempotency key, so a retry answers `409 idempotency.conflict`. The key keeps the raw issuer, principal value, and key it was sent under until `idempotency-retention erase-expired` drops its receipt. |
-| `proposal-retention erase` | Eligible payload detail of one Proposal submission version: frozen snapshots, draft input, application reasons, Review payloads, held idempotency responses, and attachment references. Unresolved remote recovery keeps the exact request and acceptance it still needs; external content deletion can remain pending. | The value-free lifecycle rows of that Proposal, record history, and each spent idempotency key, so a retry answers `409 idempotency.conflict`. The key keeps the raw issuer, principal value, and key it was sent under until `idempotency-retention erase-expired` drops its receipt. |
-| `proposal-retention cleanup-attachments` | Unreferenced external attachment bytes awaiting deletion, including abandoned uploads and objects recreated after an earlier confirmed deletion. | Live attachment references, Proposal detail, and durable deletion tombstones. |
-| `evidence-retention erase-expired` | The signed Evidence responses and verification context a governed action retained, once their 24-hour window has closed. | Every retained assertion still inside its window, and the action receipts that used them. |
-| `idempotency-retention erase-expired` | The held responses of spent idempotency keys whose receipt horizon has passed, and the raw issuer, principal value, and key each was sent under. | Every spent key, as a digest of its caller and key with its request binding and times, kept indefinitely, so a retry is still refused rather than executed. |
+| `history erase` | The retained revisions of one record up to a revision number, the correction context and outbox payloads that referenced them, and the held responses that could replay them. | The current record, every later revision, the audit journal, and each spent idempotency key. |
+| `proposal-retention erase` | The payload detail of one Proposal submission version: frozen snapshots, draft input, application reasons, Review payloads, held responses, and attachment references. | The Proposal's value-free state history, record history, and each spent idempotency key. |
+| `proposal-retention cleanup-attachments` | Unreferenced attachment bytes in external storage that are waiting for deletion. | Live attachment references, Proposal detail, and deletion tombstones. |
+| `evidence-retention erase-expired` | The signed Evidence responses and verification context an Action kept, once their 24-hour window has closed. | Assertions still inside their window, and the receipts of the Actions that used them. |
+| `idempotency-retention erase-expired` | Held responses past their horizon, with the raw issuer, principal value, and key each was sent under. | Every spent key, as a digest, so a retry is still refused rather than run. |
 
-`history rebaseline`, `proposal-retention list`, and `proposal-retention dry-run` remove nothing:
-the rebaseline writes one baseline commit, and the others only read. A saved export or a snapshot
-reference is not a way back either:
-an erased revision is gone from the registry, and a snapshot reference that named it can no longer
-be served.
+A saved export or a snapshot reference is not a way back: an erased revision is gone from the
+registry, and a reference that named it can no longer be served. A package change removes nothing
+from history either. A successor that drops a field leaves the old values in every earlier
+revision, and `bregctl diff` reports each one as `diff.history.removed-values-retained`. Only
+`history erase` removes them, and it removes whole revisions of one record, not one field.
 
-A package change removes nothing from history either. A successor that drops a field or an entity
-leaves the removed values in every revision snapshot recorded before it, and `bregctl diff`
-reports each such removal as `diff.history.removed-values-retained`. `history erase` is the only
-command that removes them, and it removes whole revisions of one record, not one field.
-
-Every command on this page reads the runtime file and connects to PostgreSQL directly with the
-migration credential, and the erasures and the rebaseline take the exclusive registry
-lock, so run them from the operator host while no activation is in progress. When the database
-uses a private certificate authority, set
-`SSL_CERT_FILE` to its PEM bundle for each command. Paths given to `--runtime-config`,
-`--request-file`, and `--output` must be absolute.
+Backups, replicas, saved exports, and copies already delivered to consumers or to an external
+verifier keep their own copies. Registry erasure cannot reach them.
 
 {/* Evidence: crates/registry-breg/src/history_erasure.rs;
     crates/registry-breg/src/proposal_retention.rs;
     crates/registry-breg/src/idempotency.rs, tombstone_erased_cached_responses and lock_and_load();
-    crates/registry-bregctl/src/lib.rs, HistoryCommand and ProposalRetentionCommand;
-    products/breg/quickstart/run.sh. */}
+    crates/registry-breg/src/history_maintenance.rs, lock_registry;
+    crates/registry-bregctl/src/lib.rs, HistoryCommand and ProposalRetentionCommand. */}
 
 ## Erase retained history
 
-The migration authority can erase the retained revisions of one record up to a revision number.
-This is irreversible maintenance, not an API permission, and it does not remove the current
-record. Apply the institution's live-data removal policy separately.
+`history erase` removes the retained revisions of one record up to a revision number. It is
+maintenance under the migration credential, not an API permission, and it does not remove the
+current record: apply your live-data removal policy separately.
 
-Write an owner-only JSON request file (mode `0600`) so identifiers and reasons never appear in
-process arguments:
+Write the request to an owner-only file (mode `0600`), so the record identifier and the reason never
+appear in process arguments. `recordType` names the record type, and `eraseThroughRevision` is the
+last revision to erase:
 
-```json
+```json title="erasure.json" test-file
 {
-  "entityId": "membership-record",
-  "recordId": "00000000-0000-4000-8000-000000000001",
-  "eraseThroughRevision": 2,
-  "operatorReference": "approved-maintenance-001",
-  "reason": "approved-retention-request"
+  "recordType": "operator",
+  "recordId": "92f1b1e6-348c-4045-9acc-a0dc85877136",
+  "eraseThroughRevision": 1,
+  "operatorReference": "ticket-4821",
+  "reason": "Data subject request: remove the superseded contact details"
 }
 ```
 
 :::danger[History erasure is irreversible]
-Confirm the record and the approved revision boundary before running the command, and account for
-backups, saved exports, and copies already delivered to consumers. A saved snapshot reference
-cannot restore erased bytes. There is no dry run. Erasing baseline data also makes snapshot
-coverage unavailable until [`history rebaseline`](#restore-snapshot-coverage-after-an-erasure)
-restores it, and that command holds a write lock on every entity table until it has verified
-every live row, so plan the erasure for a window in which writes can wait.
+No command restores erased revisions and there is no dry run, so confirm the record and the revision boundary against the approved request before you run it.
 :::
 
-**`history erase` refuses to run without `--acknowledge-irreversible`, because erasure cannot be
-undone and no command restores the erased revisions.**
+The command refuses to run without `--acknowledge-irreversible`:
 
-```sh
+```sh test-skip="needs an active registry and its migration credential"
+chmod 600 /srv/registry/private/erasure.json
 bregctl history erase \
   --runtime-config /etc/breg/runtime.yaml \
   --request-file /srv/registry/private/erasure.json \
   --acknowledge-irreversible
 ```
 
-One transaction erases at most 10,000 revisions, scrubs affected correction context and retained
-outbox payloads, and replaces affected cached idempotency responses with refusal tombstones, so a
-retried mutation key cannot replay an erased body. The result and the audit record carry counts,
-not values. A refusal names its cause without naming the record, and a request file that is not
-owner-only is refused before any connection is opened. Snapshot references at or after the
-earliest erased commit become unavailable, including every later
-snapshot; erasing baseline data makes all snapshot coverage unavailable. Nothing re-baselines the
-registry on its own: run `history rebaseline` when snapshot reads of current state must work again.
-Live reads and writes continue.
+```text
+Erased the requested history. 1 commit affected.
+  package revision               sha256:1d38a738597da4a8254a53f3cb5ad6889243374134eb9c0c4dda1768fd78750b
+  coverage ready                 true
+  unavailable after position     0
+  affected commits               1
+  erased revisions               1
+  erased commit members          1
+  scrubbed change contexts       0
+  scrubbed outbox payloads       0
+  scrubbed cached responses      1
+  scrubbed Proposal targets      0
+  scrubbed Proposal submissions  0
+  removed descriptors            0
+```
 
-An erasure of revisions committed after the coverage baseline does not hold back the next
-package: `bregctl apply` accepts a successor when the only gap in coverage is a committed erasure recorded in the
-database's dedicated history-erasure coverage table. Erasing baseline data, or any gap without
-that committed coverage record, still refuses every successor package until `history rebaseline`
-restores coverage. Audit-file retention does not change this decision. The
-refusal is `apply.history.coverage-incomplete`, and it leaves maintenance state unchanged, so
-apply the same package again once the rebaseline completes.
+One run erases at most 10,000 revisions in one transaction. It replaces each held response that
+could replay an erased revision with a refusal, so a retry of that key answers
+`409 idempotency.conflict` instead of returning the erased body. A request file that is not
+owner-only is refused before any connection opens. Live reads and writes continue.
 
-{/* Evidence: crates/registry-breg/src/history_erasure.rs;
-    crates/registry-bregctl/src/history_erasure_lifecycle.rs;
+Snapshot references at or after the earliest erased commit become unavailable, and erasing a
+record's baseline data makes all snapshot coverage unavailable. The next package still activates
+when the only gap is an erasure the database recorded as committed. Any other gap refuses a
+successor with `apply.history.coverage-incomplete` until you restore coverage; apply the same
+package again afterwards.
+
+{/* Evidence: crates/registry-bregctl/src/history_erasure_lifecycle.rs, RawHistoryErasureRequest
+    (recordType) and load_erasure_request;
     crates/registry-bregctl/src/lib.rs, HistoryEraseArgs;
-    crates/registry-breg/src/history_rebaseline.rs;
-    crates/registry-breg/src/history_migration.rs, verify_every_live_row_matches_its_journal_head;
-    crates/registry-breg/tests/postgres_history_rebaseline.rs, rebaseline_verifies_more_live_rows_than_one_commit_indexes;
+    crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS;
     crates/registry-breg/src/postgres/interlock.rs, history_coverage_admits_successor;
-    crates/registry-breg/tests/postgres_history_erasure.rs;
-    crates/registry-breg/tests/postgres_history_migration.rs;
-    products/breg/scripts/test-historical-workflow.sh. */}
+    crates/registry-breg/tests/postgres_history_erasure.rs. */}
 
 ## Restore snapshot coverage after an erasure
 
-After an erasure, a snapshot reference for current state is refused until the migration authority
-re-establishes a covered position. `history rebaseline` is that command, and it runs under the
-same interlock as the erasure: the configured migration role, bounded timeouts, the exclusive
-registry lock, a ready registry, and minimized audit entries.
+After an erasure, a snapshot reference for the current state is refused until `history rebaseline`
+writes a new baseline. Its request file is owner-only too and carries the operator reference
+alone:
 
-Write an owner-only JSON request file (mode `0600`) carrying the operator reference alone:
-
-```json
+```json title="rebaseline.json" test-file
 {
-  "operatorReference": "approved-maintenance-002"
+  "operatorReference": "ticket-4821"
 }
 ```
 
-```sh
+:::caution[The rebaseline is a whole-registry read outage]
+Every API read and write waits until the run commits, and a request that waits past `operationalTimeouts.httpRequestMilliseconds` fails, so plan it as a maintenance window.
+:::
+
+```sh test-skip="needs an active registry and its migration credential"
 bregctl history rebaseline \
   --runtime-config /etc/breg/runtime.yaml \
   --request-file /srv/registry/private/rebaseline.json
 ```
 
-One transaction proves the retained journal head of every live row still reproduces that row,
-installs one baseline commit at the head, and moves the coverage baseline to it. It restores
-nothing that was erased: references taken before the new baseline stay unavailable, because the
-bytes they named are gone. Take a fresh reference afterwards. The command refuses when coverage
-is already complete, when the registry is not ready, when a retained journal head is not indexed
-by a commit, and when a live row has no retained journal head that reproduces it. The result and
-the audit record carry counts and positions, not values.
+```text
+Rebaselined the history. 4 records verified.
+```
 
-The transaction has no live-row limit. It reads each entity's live rows, their journal heads, and
-the retained heads in the same record-identifier range in pages of 1,000 records, and it proves
-each entity holds exactly one retained journal head per live row. Memory stays flat as the
-registry grows, and each statement is bounded by one page of records and their retained
-revisions, which is not a fixed cost: a page of records that carry thousands of revisions each
-reads far more than an average page, and the last statement for each entity counts every
-retained head past its last live row.
+The run proves that the retained revision at the head of every live record still reproduces that
+record, then installs one baseline commit at the head. It restores nothing that was erased:
+references taken before the new baseline stay unavailable, so take a fresh one afterwards. A
+second run refuses with `history.rebaseline.coverage.complete`, because there is nothing left to
+rebaseline.
 
-The run is a read outage for the whole registry. To read rows under forced row security, the
-migration role lifts that force on every entity table before the first page, and lifting it takes
-each table exclusively until the transaction commits or rolls back. API reads and writes of every
-entity wait for the whole run, and a request that waits past
-`operationalTimeouts.httpRequestMilliseconds` fails. The migration role deliberately has no
-`BYPASSRLS` authority, which is what would let it read without that lock. Plan the run as a
-maintenance window:
+The outage comes from row security. The migration role has no authority to bypass it, so the run
+lifts forced row security on every record table and holds each table exclusively until the
+transaction ends. The run grows with the number of live records and retained revisions. To size the
+window, restore a recent backup to a scratch database, erase there, and time the rebaseline; allow
+at least twice that. Set `operationalTimeouts.migrationLockMilliseconds` long enough to wait out
+in-flight requests, and `operationalTimeouts.migrationStatementMilliseconds` long enough for one
+scan of the whole revision journal.
 
-- Size the window from a rehearsal. Restore a recent backup to a scratch database, erase there,
-  and time `history rebaseline` against it. The run grows with the number of live rows and
-  retained revisions across all entities; allow at least twice the rehearsed time.
-- Stop or drain API traffic for the window, or announce that reads and writes fail during it.
-- Set `operationalTimeouts.migrationLockMilliseconds` long enough to wait out in-flight requests
-  at the start. Set `operationalTimeouts.migrationStatementMilliseconds` long enough for one scan
-  of the whole revision journal: before the entity tables are locked, one statement proves every
-  retained journal head is indexed by a commit. Every later statement reads one page, so the same
-  timeout must also cover the page whose records hold the most retained revisions; the rehearsal
-  shows whether it does.
+When a live record changed outside the server's write path, the journal never saw the change, and
+the run refuses with `history.rebaseline.live-rows.unverified` without naming the record. Read the
+revisions of the records you suspect with `GET /v1/records/{route}/{recordId}/revisions`.
 
-`history.rebaseline.live-rows.unverified` reports one live row that its journal head does not
-reproduce, and names neither the entity nor the record, because operator refusals here carry no
-values. It stops at the first entity whose live rows and journal heads do not line up, and inside
-an entity at the first record identifier whose values differ, so a run that gets further has
-already proved every earlier entity. To find the row, read the revisions of the records you
-suspect with `GET /v1/records/{route}/{recordId}/revisions`, or compare live rows with their
-journal heads directly under the migration role you already hold. The usual cause is a live row
-that changed outside the server's write path, so the journal never recorded the change.
-
-{/* Evidence: crates/registry-breg/src/history_rebaseline.rs;
-    crates/registry-breg/src/history_migration.rs, MAX_HISTORY_MIGRATION_COMMIT_MEMBERS;
-    crates/registry-bregctl/src/history_rebaseline_lifecycle.rs;
-    crates/registry-bregctl/src/lib.rs, HistoryRebaselineArgs;
+{/* Evidence: crates/registry-breg/src/history_rebaseline.rs, CoverageComplete and
+    set_force_row_security;
+    crates/registry-breg/src/history_migration.rs, verify_every_live_row_matches_its_journal_head;
+    crates/registry-bregctl/src/history_rebaseline_lifecycle.rs, RawHistoryRebaselineRequest;
+    crates/registry-breg/src/runtime_config.rs, RawOperationalTimeouts;
     crates/registry-breg/tests/postgres_history_rebaseline.rs. */}
 
 ## Erase Proposal detail
 
-Proposal detail and application receipts have separate retention from record
-history. An Action whose `execution.proposal.retention.mode` is `operator-erase`
-permits eligible terminal detail erasure. `retain` refuses it. List retained
-work, then count the exact submission's proposed erasure:
+Proposal detail has its own retention, separate from record history. An Action whose
+`execution.proposal.retention.mode` is `operator-erase` lets you erase the detail of a finished
+Proposal; `retain`, the mode the facility template uses, refuses it. A Proposal is eligible once it
+is cancelled, applied, or rejected. A current draft or submitted version stays pinned. The outputs
+below come from a copy of the facility template with `deactivate-facility` switched to
+`operator-erase`.
 
-```sh
-bregctl --format json proposal-retention list \
-  --runtime-config /etc/breg/runtime.yaml --action-id correct-address --limit 50
-bregctl --format json proposal-retention dry-run \
-  --runtime-config /etc/breg/runtime.yaml --action-id correct-address \
-  --proposal-id '<proposal-uuid>' --submission-version '<version>'
+List the retained Proposals of an Action:
+
+```sh test-skip="needs an active registry and its migration credential"
+bregctl proposal-retention list \
+  --runtime-config /etc/breg/runtime.yaml \
+  --action-id deactivate-facility
 ```
 
-Inspect eligibility, current/pinned state, retention mode, and payload counts.
-Use the returned cursor with `--after-cursor` for a bounded continuation.
-A refused or pinned submission remains intact; resolve its current lifecycle
-under its ordinary authority before considering erasure again.
+```text
+Listed the retained Proposals. 1 request.
 
-:::danger[Erasure cannot be undone]
-Erasure removes the selected submission's retained payload detail and attachment
-access. It preserves value-free lifecycle and spent-key evidence. Review the
-exact dry run and your retention decision before erasing. Expired or erased
-receipts cannot execute the command again.
+  {"actionId":"deactivate-facility","proposalId":"a491e8e0-27a6-4945-b78b-30e4dfc20cf3","submissionVersion":1,"proposalState":"cancelled","current":true,"retentionMode":"operator-erase","pinned":false,"eligibleForErasure":true,"detailErased":false,"contractFingerprint":null,"effectDigest":null}
+```
+
+Preview the erasure of one exact submission version. The dry run counts what would go and erases
+nothing:
+
+```sh test-skip="needs an active registry and its migration credential"
+bregctl proposal-retention dry-run \
+  --runtime-config /etc/breg/runtime.yaml \
+  --action-id deactivate-facility \
+  --proposal-id a491e8e0-27a6-4945-b78b-30e4dfc20cf3 \
+  --submission-version 1
+```
+
+```text
+Previewed the erasure. The request is eligible for erasure. Nothing was erased.
+  action                deactivate-facility
+  proposal id           a491e8e0-27a6-4945-b78b-30e4dfc20cf3
+  submission version    1
+  retention mode        operator-erase
+  pinned                false
+  eligible for erasure  true
+  erasure               {"proposalSnapshots":0,"targetSnapshots":0,"reviewSubmissionRequests":0,"reviewAcceptedBindings":0,"reviewResultPayloads":0,"applicationReasons":0,"idempotencyResults":2,"draftInputs":1,"attachmentReferences":0}
+```
+
+:::danger[Proposal erasure is irreversible]
+The erasure removes the submission's payload detail and attachment access for good, so check the dry run against your retention decision first.
 :::
 
-```sh
-bregctl --format json proposal-retention erase \
-  --runtime-config /etc/breg/runtime.yaml --action-id correct-address \
-  --proposal-id '<proposal-uuid>' --submission-version '<version>'
+Run the same selection with `erase`:
+
+```sh test-skip="needs an active registry and its migration credential"
+bregctl proposal-retention erase \
+  --runtime-config /etc/breg/runtime.yaml \
+  --action-id deactivate-facility \
+  --proposal-id a491e8e0-27a6-4945-b78b-30e4dfc20cf3 \
+  --submission-version 1
 ```
 
-Record history and other retained submissions have separate scopes. Identical
-attachment bytes remain while another authorized retained reference needs them.
-Configure backup, replication, and external verifier retention independently.
-Registry erasure cannot remove another service's copy.
+```text
+Erased the retained Proposal.
+  action              deactivate-facility
+  proposal id         a491e8e0-27a6-4945-b78b-30e4dfc20cf3
+  submission version  1
+  retention mode      operator-erase
+  erased              {"proposalSnapshots":0,"targetSnapshots":0,"reviewSubmissionRequests":0,"reviewAcceptedBindings":0,"reviewResultPayloads":0,"applicationReasons":0,"idempotencyResults":2,"draftInputs":1,"attachmentReferences":0}
+```
+
+Listing again shows `"detailErased":true`. A pinned version, or an Action in `retain` mode, is
+refused and left intact: finish the Proposal under its ordinary authority first. Identical
+attachment bytes stay while another retained reference needs them. A Review still waiting on
+remote recovery keeps the exact request and acceptance that recovery needs.
+
+{/* Evidence: crates/registry-breg/src/proposal_retention.rs, detail_is_pinned (draft, submitted),
+    the cancelled/applied/rejected draft-input rule, RetainMode, and ActiveDetailPinned;
+    crates/registry-breg/src/proposal_store.rs, Proposal states;
+    crates/registry-bregctl/src/lib.rs, ProposalRetentionCommand and ProposalRetentionExactArgs. */}
 
 ## Retry external attachment cleanup
 
-External deletion failure leaves durable cleanup work. A revoked scoped download
-can coexist with physical deletion still pending. Inspect and retry cleanup:
+When external storage fails to delete an attachment, the registry keeps the deletion as durable
+work. A download can already be revoked while the bytes still wait to be deleted.
 
-```sh
-bregctl --format json proposal-retention cleanup-attachments \
+:::caution[Cleanup removes attachment bytes for good]
+The command deletes unreferenced objects from external storage with no copy kept, so confirm that your storage retention policy allows it first.
+:::
+
+```sh test-skip="needs an active registry and its migration credential"
+bregctl proposal-retention cleanup-attachments \
   --runtime-config /etc/breg/runtime.yaml
 ```
 
-Repeat while deletions remain pending, and retain periodic absence checks for
-external deletion tombstones. Restore a refused backend or identity binding
-before retrying. Cleanup does not make active or retained work eligible for detail
-erasure. Review the separately configured storage and bucket retention policy.
+```text
+Retried unreferenced attachment cleanup.
+  pending external deletions    0
+  external deletion tombstones  0
+```
+
+Run it again while deletions remain pending. If the storage backend or its identity binding is
+refused, fix that first. Cleanup does not make any Proposal eligible for detail erasure, and your
+bucket's own retention policy still applies.
 
 {/* Evidence: crates/registry-breg/src/proposal_retention.rs;
     crates/registry-breg/src/attachment_store.rs;
-    crates/registry-bregctl/src/lib.rs, ProposalRetentionCommand and ProposalRetentionExactArgs. */}
+    crates/registry-bregctl/src/lib.rs, ProposalRetentionCommand. */}
 
 ## Erase expired Evidence uses
 
-A governed action that calls a verified Evidence capability retains what it accepted. For an action
-that declares `evidence`, each accepted assertion is stored beside the applied action: the
-signed response bytes, the verification context, the capability, the contract fingerprint, the trust
-binding, the assertion identifier, its issue, observation, and validity times, the moment the
-registry accepted it, and the declared maximum observation age. Subject and selector values are
-never retained. The runtime role holds an insert-only grant on that state, so no request path reads
-or deletes what it wrote.
+An Action that declares `evidence` keeps each assertion it accepted: the signed response bytes,
+the verification context, and the times that bound it. Subject and selector values are never kept.
+Each kept assertion expires 24 hours after the registry accepted it. Erasing record history does
+not cover it, and nothing removes expired rows on its own, so schedule this command.
 
-This is a separate retention scope with its own clock. Each retained assertion expires 24 hours
-after the registry accepted it, erasing record history does not cover it, and nothing removes the
-expired rows on its own. Schedule the erasure on the operator host, under the migration authority
-and the exclusive registry lock the rest of this page uses.
-
-:::caution[Erased assertions cannot be restored]
-The erasure removes the retained signed responses and verification context for good, and takes no
-copy first. Export what the institution's retention policy requires to keep before the window
-closes. The action receipts that used the assertions stay replayable, so the registry can still
-account for what it decided.
+:::danger[Erased assertions cannot be restored]
+The command deletes the signed responses and verification context without taking a copy, so export what your retention policy requires before each window closes.
 :::
 
-```sh
+```sh test-skip="needs an active registry and its migration credential"
 bregctl evidence-retention erase-expired \
   --runtime-config /etc/breg/runtime.yaml \
-  --before 2026-01-01T00:00:00Z
+  --before 2026-10-16T00:00:00Z
 ```
 
-The command removes every row whose 24-hour window closed at or before the cutoff, and no row still
-inside its window: a cutoff later than the database transaction time reaches only expired material,
-and a cutoff in the future is refused. Both paths must be absolute. The report carries a count and
-no values. The run verifies the expected registry identity, catalog, and readiness while it holds
-the registry transaction lock through the deletion, and the configured runtime credential cannot
-perform the deletion at all. Unlike `proposal-retention erase`, which erases one exact proposal
-version, this erasure works from the time boundary alone.
+```text
+Erased expired action Evidence.
+  erased  0
+```
+
+The command removes every assertion whose window closed at or before `--before`, and none still
+inside its window. A cutoff in the future is refused. The receipts of the Actions that used the
+assertions stay replayable, so the registry can still account for what it decided. The runtime
+credential cannot run this deletion.
 
 {/* Evidence: crates/registry-breg/src/action_evidence_client.rs,
     ACTION_EVIDENCE_RETENTION_SECONDS;
-    crates/registry-breg/src/action_evidence_maintenance.rs, erase_expired;
-    crates/registry-breg/src/mutation/action.rs, erase_expired_action_evidence;
-    crates/registry-bregctl/src/lib.rs, EvidenceRetentionEraseArgs;
-    products/breg/immediate-actions.md. */}
+    crates/registry-breg/src/action_evidence_maintenance.rs, erase_expired and
+    malformed_or_future_boundaries_fail_before_configuration_io;
+    crates/registry-bregctl/src/lib.rs, EvidenceRetentionEraseArgs. */}
 
 ## Drop expired idempotency responses
 
-A successful write holds its response so that a retry with the same `Idempotency-Key` returns it
-instead of writing again. A key is spent per caller across every write: the configured issuer, the
-principal value, and the key find it, so the same key on another write answers
-`409 idempotency.conflict`, and nothing about it depends on `audit.hashKeyRef`. Only
-successes are held; a refused or failed attempt spends nothing. The held response stays available
-for `retention.receiptRetentionDays` after the write commits, 7 days unless the runtime
-configuration chooses another value between 1 and 365. A horizon is fixed when the write commits,
-so changing the setting applies to later writes only.
+A successful write holds its response, so a retry with the same `Idempotency-Key` returns it
+instead of writing again. Only successes are held. A key is spent per caller across every write,
+and stays spent for good.
 
-Past the horizon an exact retry answers `410 idempotency.expired` and never executes, whether or not
-the held response is still stored. A key whose held response `history erase` or
-`proposal-retention erase` removed answers `409 idempotency.conflict` to every retry instead, on
-either side of the horizon. The key itself stays spent for good. The drop removes the held response
-and the raw issuer, principal value, and key, and keeps a digest of them with the request binding
-and times, so every key answers as it did before the drop: the same caller's exact retry of a key
-no erasure reached answers `410 idempotency.expired`, a changed retry answers
-`409 idempotency.conflict`, any retry of an erased key answers `409 idempotency.conflict`, and
-another caller's identical key is that caller's own fresh key. Schedule the drop on the operator
-host, under the migration authority and the exclusive registry lock the rest of this page uses:
+The held response stays available for `retention.receiptRetentionDays` after the write commits:
+7 days unless the runtime file sets a value from 1 to 365. The horizon is fixed at commit, so a
+changed setting applies to later writes only. Past it, an exact retry answers
+`410 idempotency.expired` and never runs. A key whose response an erasure removed answers
+`409 idempotency.conflict` on either side of the horizon.
 
-```sh
+Until the drop runs, a spent key also keeps the raw issuer, principal value, and key it was sent
+under, beside the history it produced. Schedule the drop to match the horizon:
+
+```sh test-skip="needs an active registry and its migration credential"
 bregctl idempotency-retention erase-expired \
   --runtime-config /etc/breg/runtime.yaml \
-  --before 2026-01-01T00:00:00Z
+  --before 2026-10-16T00:00:00Z
 ```
 
-The command drops every receipt whose horizon passed at or before the cutoff, and none still
-inside its horizon: a cutoff later than the database transaction time reaches only expired
-receipts, and a cutoff in the future is refused. A receipt whose held response `proposal-retention
-erase` already removed is dropped the same way, so its raw caller and key are cleared too. The runtime configuration path must be absolute.
-The report carries a count and no values, and a second run with the same cutoff drops nothing. The
-run verifies the expected registry identity, catalog, and readiness while it holds the registry
-transaction lock, and the configured runtime credential cannot perform it.
+```text
+Dropped expired held idempotency responses; the keys stay spent.
+  erased  0
+```
 
-Until its receipt is dropped, a spent key keeps the raw issuer, principal value, and key it was sent
-under, beside the record history it produced. Nothing clears them earlier, so schedule the drop to
-match `retention.receiptRetentionDays`. The digest row that keeps the key spent is never deleted:
-an immediate action's results and application hang off it, and revision history reads their
-provenance from them. `history erase` replaces the held responses that could replay erased
-revisions with refusal tombstones; it does not forget that the key was spent.
+The drop removes held responses whose horizon passed at or before `--before`, together with the
+raw caller and key, and keeps a digest with the request binding and times. Every key then answers
+as before: an exact retry `410`, a changed retry or an erased key `409`. A cutoff in the future is
+refused, and a second run with the same cutoff drops nothing.
 
-{/* Evidence: crates/registry-breg/src/idempotency.rs, IdempotencyPolicy, lock_and_load(), and
-    drop_expired_receipts();
-    crates/registry-breg/src/idempotency.rs, KEY_SCOPE_MUTATION and resolve_binding();
-    crates/registry-breg/src/proposal_retention.rs, idempotency_results;
+{/* Evidence: crates/registry-breg/src/idempotency.rs, DEFAULT_RECEIPT_RETENTION_DAYS,
+    MAX_RECEIPT_RETENTION_DAYS, lock_and_load(), and drop_expired_receipts();
     crates/registry-breg/src/idempotency_retention.rs, erase_expired;
     crates/registry-breg/src/runtime_config.rs, RetentionConfig;
     crates/registry-bregctl/src/lib.rs, IdempotencyRetentionEraseArgs;
     crates/registry-breg/tests/postgres_mutation.rs,
-    real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent and
-    real_postgres_receipt_sweep_clears_the_raw_caller_of_every_expired_spent_key. */}
+    real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent. */}
 
 ## Keep the audit journal
 
-Each audited request writes one `request` entry before protected I/O and at least one `response`
-entry before disclosure or after a mutation commits. The entries share a correlation and contain
-keyed references and closed vocabulary, not raw record values. A refusal can have only a response
-entry. The file destination acknowledges an append after fsync; `stdout` flushes each line and
-provides best-effort delivery. A failed request entry blocks protected I/O, and a failed response
-entry blocks disclosure. A request that ends before its outcome is known, because it failed, timed
-out, or its caller went away, or an operator command that exits early, still answers its request
-entry. A runtime read or mutation answers with a `response` entry whose record `phase` is
-`unfinished`, carrying only the operation and request it answers; an operator command answers with a
-`terminal` response whose `outcome` is `unfinished`. An operator command also answers `unfinished`
-when it is refused, or when it stops with nothing to do, such as a `history rebaseline` with no
-history to rebaseline, so an `unfinished` outcome does not always mean the outcome was unknown.
+The runtime file's `audit` block chooses where the journal goes. The starter project's example
+writes a file:
 
-A `stdout` destination stalls when its collector stops reading the stream.
-Once the writer has held one entry for 5 seconds, the request waiting on that entry is refused as
-audit unavailable, later audited requests are refused at once, and readiness fails.
-A request that reaches `operationalTimeouts.httpRequestMilliseconds` before those 5 seconds pass
-answers `504` with `request.timeout` instead.
-When the collector takes the entry, the writer accepts entries again with no restart.
-The stream still receives the held entry, so it can carry an entry for a request that was refused.
-
-The runtime log does not name a stall, and it shares standard output with a `stdout` audit
-destination.
-At the default `BREG_LOG` level of `info`, the runtime writes one log record for each request and
-each probe before the answer leaves, and while the collector is not reading, that record waits
-with no deadline.
-A refused request or a probe, `/health` included, can therefore get no answer at all until the
-collector reads again.
-The refusal holds either way: protected I/O and disclosure stay blocked as for any failed entry.
-Set a timeout on every probe and treat a probe that gets no answer as failed.
-The `file` destination accepts entries whatever the collector does.
-The runtime log waits on the collector under either destination, so run the runtime under a
-collector that does not block standard output when it stops reading.
-
-{/* Evidence: crates/registry-platform-audit/src/writer.rs, STREAM_WRITE_DEADLINE,
-    AuditUnavailableReason::Stalled, StreamEvent::WrittenAfterRefusal,
-    a_stalled_stream_refuses_the_append_at_the_deadline_and_later_ones_at_once, and
-    readiness_follows_a_stall_and_returns_once_the_stream_drains;
-    crates/registry-breg/src/startup.rs, audit_writer, request_timeout(), timeout_problem(), and
-    operational_log_level();
-    crates/registry-breg/src/runtime_config.rs, RawOperationalTimeouts;
-    crates/registry-breg/src/correlation.rs, finish_response();
-    crates/registry-breg/src/api/mod.rs, authenticated_router() and probe_routes();
-    crates/registry-breg/src/main.rs, initialize_logging_filter(). */}
-
-This pairing is a property of a running process, and a request may be answered more than once, so
-read every response under a correlation. A process that crashes, is killed, exits, or shuts its
-runtime down while a write is in flight, or a destination that already stopped accepting entries,
-can leave a request entry without a response.
-
-Operator commands follow the same rule. `evidence-retention erase-expired` records the cutoff it
-was given in its request entry and the number of assertions it erased in its response;
-`idempotency-retention erase-expired` records its cutoff and the number of receipts it dropped
-the same way.
-`proposal-retention erase` deletes the external attachment objects before it records its response,
-which states how many objects still wait for deletion; when that deletion pass itself fails, the
-count is `null` and the command reports the failure. If the erasure committed but its response
-entry could not be written, the command reports `proposal-retention.erasure.unaudited`: the detail is
-gone, so restore the audit destination and reconcile the erased request against the database. An
-event delivery's attempt is recorded inside the transaction that leases it, before its request
-leaves. If that lease transaction does not commit, no request leaves and the attempt is answered
-`worker-interrupted`, so an attempt entry does not prove a request was sent. An attempt's terminal
-outcome is recorded only once the delivery's state has committed. When that commit fails and whether
-it committed cannot be read back, the attempt is answered `worker-interrupted` with disposition
-`unknown`, which claims no delivery state; read the delivery's state to learn it. Lease-expiry
-recovery answers the attempt again if its lease survived. An operator replay is recorded as a request
-before the reset and a response once it commits or is refused, or `replay-unfinished` when its
-commit failed and whether the reset committed cannot be read back; read the delivery's state before
-replaying it again.
-
-A crash or a killed process can also tear the file's final line itself, leaving it without its
-closing newline. The next open of that destination, by the runtime or a `bregctl` companion command
-on its own sibling file, moves the torn bytes to the owner-only side file `<audit.path>.torn`,
-truncates the active file to its last complete line, and logs the side file's path and byte count.
-No acknowledged entry is lost, because an entry is acknowledged only after it is synced. Archive the
-side file with the sealed files and remove it: the writer never overwrites it, so a second torn line
-is refused until the first side file is moved. Do not edit the active file to repair it, since that
-is the same external change the writer already treats as a fault (see
-[Audit retention](../retention-and-persistent-state/#audit-retention)).
-
-A mutation can already be committed when its response entry fails. Use the operation's idempotent
-retry where one exists. Ingestion-run creation has none, and it returns no run id when this
-happens: once the runtime serves again, list the open ingestion runs for the input's digest and
-resume or cancel the one you find. An operator rerun of `history erase`, `history rebaseline`, or
-`migration reconcile` finds the state the first run committed instead of replaying its result, so
-read what that rerun reports before doing anything else.
-
-Configure the stream in the runtime file:
-
-```yaml
+```yaml title="runtime.example.yaml" test-excerpt="products/breg/examples/minimal/runtime.example.yaml"
 audit:
   hashKeyRef: secret:file/audit-key
-  destination: file
-  path: /var/lib/breg/audit/breg.jsonl
-  rotateBytes: 104857600
-  retentionDays: 90
+  path: /var/log/breg/audit.jsonl
 ```
 
-The file path is absolute and belongs to one process. Give each runtime instance its own path;
-`bregctl` maintenance uses a sibling such as `breg.bregctl.jsonl` on the operator host. Collect
-those companion streams as well as the service stream. Local development keeps its files under
-`.breg/dev/audit`, including after `bregctl dev stop --remove`.
+The destination is `file` unless you set `destination: stdout`. The file rotates at `rotateBytes`,
+100 MiB by default, and sealed segments older than `retentionDays`, 90 by default, are removed when
+the writer opens or rotates. Give each runtime instance its own absolute path. Operator commands
+write to a sibling file, `audit.bregctl.jsonl` here, on the operator host; collect it with the
+service's stream.
 
-The writer rotates at `rotateBytes` and removes sealed segments older than `retentionDays` when it
-opens or rotates. Ship sealed segments to append-only storage before expiry and verify receipt in
-your log pipeline. Do not rename, truncate, or replace the active file or its lock while the writer
-runs. See [Audit retention](../retention-and-persistent-state/#audit-retention) for shipping and
-recovery. The log has no hash chain or signature; tamper evidence and completeness depend on that
-external storage. Database backups do not contain these streams.
+Entries carry keyed references and closed vocabulary, never raw record values, and they have no hash
+chain or signature. Ship sealed segments to append-only storage before they expire, and never
+edit the active file. Database backups do not contain the journal. How the writer stalls and
+recovers a torn line is in [Audit retention](../retention-and-persistent-state/#audit-retention),
+and how entries pair up is in
+[Base Registry Engine retention](../retention-and-persistent-state/#base-registry-engine-retention).
 
-:::caution[Upgrading from database audit]
-Archive any audit records your retention policy requires before upgrading. The database audit
-tables and the `bregctl audit` command group are removed; the upgrade does not export their data.
-Choose a fresh audit path when changing from another audit format, and preserve old segments
-outside the new writer's retention directory.
-:::
+{/* Evidence: crates/registry-breg/src/runtime_config.rs, RawAuditConfig and
+    AuditConfig::destination;
+    crates/registry-platform-audit/src/writer.rs, for_process;
+    crates/registry-breg/src/audit.rs;
+    products/breg/examples/minimal/runtime.example.yaml. */}
 
-{/* Evidence: crates/registry-breg/src/audit.rs, unfinished_record;
-    crates/registry-breg/src/runtime_config.rs, AuditConfig;
-    crates/registry-platform-audit/src/writer.rs, AuditRequest;
-    crates/registry-breg/src/proposal_retention.rs, ErasureUnaudited, retention_outcome_record,
-    and pendingExternalDeletions;
-    crates/registry-platform-hooks/src/delivery/service.rs, WorkerInterrupted;
-    crates/registry-breg/src/action_evidence_maintenance.rs, EVIDENCE_RETENTION_AUDIT_SCHEMA;
-    crates/registry-platform-hooks/src/delivery/seams.rs, record_audit;
-    crates/registry-breg/src/postgres/schema.rs;
-    crates/registry-bregctl/src/dev/mod.rs. */}
-
-## Troubleshooting
-
-| Symptom | Next move |
-| --- | --- |
-| A saved snapshot returns `503 source.unavailable` | Retained history no longer covers it, after an erasure or an incompatible successor. Take a fresh reference. |
-| A fresh snapshot reference is refused after an erasure | Coverage ends before the erased commit. Run `history rebaseline` to cover the current state again; earlier references stay unavailable. Reads and writes of every entity wait while it runs; see [the outage note](#restore-snapshot-coverage-after-an-erasure). |
-| `history rebaseline` reports `history.rebaseline.live-rows.unverified` | A live row and its journal head disagree, and the refusal names no record. Read the revisions of the records you suspect, or compare live rows with their journal heads under the migration role. |
-| `history erase` reports `history.erase.acknowledgement.required` | The command was run without `--acknowledge-irreversible`. Confirm the record and the revision boundary, then run it again with the flag. Nothing was read or erased. |
-| `history.erase.request-file.refused` or `history.rebaseline.request-file.refused` | The request file must be an absolute path to an owner-only regular file, not a symbolic link, holding the documented fields and nothing else. |
-| `history erase`, `history rebaseline`, or `field-encryption erase-history` reports `history.erase.in-progress`, `history.rebaseline.in-progress`, or `field-encryption.erase-history.in-progress` | Another session held the migration lock past the lock timeout: an apply, an adoption, a `migration reconcile`, or other registry maintenance is running. Wait for it to finish, then run the same command again. An erasure or a rebaseline changed nothing; `erase-history` keeps the records it already erased and can be run again. |
-| `proposal-retention`, `evidence-retention erase-expired`, or `idempotency-retention erase-expired` reports `proposal-retention.in-progress`, `evidence-retention.in-progress`, or `idempotency-retention.in-progress` | Another session held the migration lock past the lock timeout: an apply, an adoption, a `migration reconcile`, or other registry maintenance is running. Wait for it to finish, then run the same command again. An Evidence erasure erased nothing, and an idempotency drop dropped nothing. A Proposal-detail erasure that committed before its external-deletion retry waited stays erased; `proposal-retention dry-run` shows whether it did. |
-| `proposal-retention`, `evidence-retention erase-expired`, or `idempotency-retention erase-expired` reports `proposal-retention.package.refused`, `evidence-retention.package.refused`, or `idempotency-retention.package.refused` | The package at `package.root` is not the one `package.expectedDigest` pins; the message names both digests. Deploy the pinned package or update the pin. Nothing was erased. |
-| `proposal-retention erase` is refused | The Action's Proposal retention mode is `retain`, or the version is pinned. Run the dry run for the exact version first. |
-| `evidence-retention erase-expired` removes nothing | No retained assertion has passed its 24-hour window yet, or the cutoff precedes every expiry. The count is the whole report. |
-| A retry answers `410 idempotency.expired` | The key was spent by a successful write whose receipt horizon has passed. The write committed; read the record or its history instead of retrying, and send a fresh key only for a new write. |
-| Readiness or an operation reports audit unavailable | Check destination permissions, free space, and the single-writer lock. Repair the destination and restart a stopped writer. With a `stdout` destination, check that its collector is reading the stream: a stalled writer resumes with no restart once it is, and until then a request or probe can go unanswered instead of refused. For a mutation whose response failed after commit, inspect its receipt or domain history before retrying. |
-| An operator command cannot reach PostgreSQL | Check the migration URL secret, the role names, and `SSL_CERT_FILE` for a private authority. |
-
-{/* Evidence: crates/registry-breg/src/history_maintenance.rs, lock_registry;
-    crates/registry-breg/tests/postgres_history_rebaseline.rs,
-    erasure_and_rebaseline_report_a_held_migration_lock_and_change_nothing;
-    crates/registry-bregctl/src/lib.rs,
-    history_maintenance_reports_a_held_migration_lock_as_in_progress;
-    crates/registry-breg/src/proposal_retention.rs, begin_verified_transaction();
-    crates/registry-breg/src/action_evidence_maintenance.rs, erase_in_transaction();
-    crates/registry-breg/tests/postgres_native_retention.rs;
-    crates/registry-breg/tests/postgres_action_evidence_retention.rs,
-    retention_reports_a_held_migration_lock_and_erases_nothing;
-    crates/registry-bregctl/src/lib.rs,
-    operator_maintenance_reports_a_held_migration_lock_as_in_progress;
-    crates/registry-bregctl/tests/cli.rs,
-    proposal_retention_names_both_digests_when_the_active_package_misses_its_pin,
-    evidence_retention_names_both_digests_when_the_active_package_misses_its_pin, and
-    idempotency_retention_names_both_digests_when_the_active_package_misses_its_pin. */}
+When a command on this page is refused or waits on the migration lock, see
+[Monitor and recover](../breg-monitor/#troubleshooting).
 
 ## Next
 
-- [Retention and persistent state](../retention-and-persistent-state/) for the retention
-  procedures of the other Registry Stack runtimes.
+- [Retention and persistent state](../retention-and-persistent-state/) for the retention of the
+  other Registry Stack runtimes and the audit writer's behavior.
 - [Harden a production deployment](../../security/hardening-checklist/) for the controls around
   the migration credential and the secret root these commands rely on.
 - [Security overview](../../security/) for how audit integrity and data minimization fit the
   stack's security model.
-- [Change an active registry](../breg-changes/) for the backup every activation needs and the
-  audit records reconciliation writes.
+- [Change an active registry](../breg-changes/) for the backup every activation needs.

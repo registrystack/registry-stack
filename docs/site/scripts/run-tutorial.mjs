@@ -26,7 +26,10 @@
 // test-background fence runs beside the journey until its ready URL answers,
 // and stays running until the next background fence starts or its page ends
 // (tutorial-runner/background.mjs). test-cwd moves the shell to a directory
-// under the reader directory before its fence runs.
+// under the reader directory before its fence runs. A test-retry fence runs
+// again, once a second, until the blocks below it match its output or its
+// seconds are up (tutorial-runner/again.mjs); they are checked against its
+// last output.
 //
 // The toolset puts the product binaries under test on PATH and stops any
 // service the journey left running, whether it passed or failed. Any process
@@ -61,6 +64,7 @@ const USAGE = 'usage: run-tutorial.mjs [--dry-run] [--keep-failed] [--toolset br
 const DOCS_ROOT = process.env.TUTORIAL_DOCS_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '../src/content/docs');
 const APPLY_EDIT = join(dirname(fileURLToPath(import.meta.url)), 'tutorial-runner/apply-edit.mjs');
 const BACKGROUND = join(dirname(fileURLToPath(import.meta.url)), 'tutorial-runner/background.mjs');
+const AGAIN = join(dirname(fileURLToPath(import.meta.url)), 'tutorial-runner/again.mjs');
 
 function usageError(message) {
   console.error(`${message}\n${USAGE}`);
@@ -101,6 +105,7 @@ function printPlan(steps, checkout) {
     if (step.cwd) notes.push(`in ${step.cwd}`);
     if (step.exit !== undefined) notes.push(`expects exit ${step.exit}`);
     if (step.background) notes.push(`in the background until ${step.background} answers`);
+    if (step.retry) notes.push(`again for up to ${step.retry}s until its output arrives`);
     const note = notes.length > 0 ? ` (${notes.join(', ')})` : '';
     if (step.kind === 'run') console.log(`run   ${where(step)}: ${step.code.split('\n')[0]}${note}`);
     else if (step.kind === 'skip') console.log(`skip  ${where(step)}: ${step.reason}`);
@@ -131,6 +136,10 @@ function printPlan(steps, checkout) {
 // group and output file of the one running now; `backgrounds` lists every
 // group started, for the cleanup after a journey that stopped early.
 //
+// A retry fence runs in a `while` loop whose condition is again.mjs, which
+// counts the re-runs in a file beside the fence's output. A failing run stops
+// the journey on any attempt, as it would the first time.
+//
 // The script names every harness file by its literal path and sets no shell
 // variable, so a page's own variables neither see nor clobber the harness.
 async function journeyScript(pages, outDir, readerDir) {
@@ -138,6 +147,7 @@ async function journeyScript(pages, outDir, readerDir) {
   const node = quote(process.execPath);
   const stopBackground = `${node} ${quote(BACKGROUND)} stop ${file('background')}`;
   const lines = ['set -euo pipefail', "trap 'exit 130' HUP INT TERM"];
+  const all = pages.flat();
   let index = 0;
   for (const [pageIndex, steps] of pages.entries()) {
     lines.push(`printf 'page %s\n' ${pageIndex} >${file('current')}`, '(');
@@ -183,6 +193,18 @@ async function journeyScript(pages, outDir, readerDir) {
         lines.push(`printf '%s\\n' "$!" >>${file('backgrounds')}`, 'set +m');
         lines.push(`${node} ${quote(BACKGROUND)} ready ${quote(step.background)} ${file('background')} >>${out} 2>&1`);
         lines.push(`printf 'ready: %s\\n' ${quote(step.background)}`);
+      } else if (step.kind === 'run' && step.retry) {
+        const stem = String(index).padStart(3, '0');
+        const request = join(outDir, `${stem}.retry.json`);
+        const blocks = all
+          .filter((block) => block.runIndex === index)
+          .map(({ kind, format, text }) => ({ kind, format, text }));
+        await writeFile(request, JSON.stringify({ retry: step.retry, attempts: join(outDir, `${stem}.attempts`), blocks }));
+        const run = `{\n${step.code}\n} >${out} 2>&1 </dev/null`;
+        lines.push(`printf '\\n%s\\n' ${quote(`==> ${where(step)}`)}`);
+        lines.push(run);
+        lines.push(`while ${node} ${quote(AGAIN)} ${quote(request)} ${out}; do`, run, 'done');
+        lines.push(`cat ${out}`);
       } else if (step.kind === 'run' && step.exit === undefined) {
         lines.push(`printf '\\n%s\\n' ${quote(`==> ${where(step)}`)}`);
         lines.push(`{\n${step.code}\n} >${out} 2>&1 </dev/null`);
@@ -330,7 +352,7 @@ async function replay(pages, toolset, checkout, keepFailed = false) {
   let prepared = false;
   let inherited = new Map();
   try {
-    const toolsetEnv = await toolset.prepare({ repoRoot: REPO_ROOT, binDir, workRoot });
+    const toolsetEnv = await toolset.prepare({ repoRoot: REPO_ROOT, binDir, workRoot, steps });
     prepared = true;
     if (checkout) {
       await copyCheckout(REPO_ROOT, readerDir);

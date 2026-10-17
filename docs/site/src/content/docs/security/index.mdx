@@ -120,12 +120,13 @@ Neither the model's instructions nor a tool argument can widen that decision.
 
 What the assistant says in conversation is outside these controls; the review page shows the
 canonical draft BReg holds, not the assistant's summary of it.
-BReg does not yet tie a Proposal's target to the requester's own record. For this pair of
-services, the gateway derives the target, the review page reads the target under the citizen's own
-token before it offers submission and again before it submits, and a reviewer checks the request
-where review is required. The review page's read covers the gap only when the review access
-profile limits that read to the citizen's own record, as the reference project's profile does.
-Any other client must not rely on BReg for it.
+BReg ties a Proposal's target to the requester only through the `targets` row boundaries its
+access profile declares. The reference project binds the target's owner field to the caller's
+subject, and BReg checks that boundary on every Start, edit, and submit. For this pair of
+services, the gateway also derives the target from the citizen's own Record, the review page reads
+the target under the citizen's own token before it offers submission and again before it submits,
+and a reviewer checks the Proposal where review is required. A profile that declares no such
+boundary gets none of this from BReg.
 A delegated token that leaks stays valid at BReg until it expires, so the authorization server
 must keep exchanged token lifetimes short.
 [What the design guarantees](../configure/breg-mcp/#what-the-design-guarantees) states each
@@ -134,6 +135,8 @@ property with its enforcement point.
 {/* Evidence: products/breg/TASK_GRANTS.md;
     crates/registry-breg-mcp/src/gateway.rs; crates/registry-breg-mcp/src/contract.rs;
     crates/registry-breg/src/api/proposals.rs; crates/registry-breg/src/compiler.rs;
+    crates/registry-breg/src/postgres/proposal_context.rs, authorizes_snapshot;
+    crates/registry-breg/src/postgres/context.rs, snapshot_matches_boundaries;
     crates/registry-breg-review/src/registry.rs;
     crates/registry-breg-mcp/clippy.toml; products/breg/scripts/check-mcp-gateway-boundary.sh. */}
 

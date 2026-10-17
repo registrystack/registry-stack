@@ -35,7 +35,7 @@ Use the adopter guides for authoring, local evaluation, and operation.
 
 - [Build a registry with Base Registry Engine](../../docs/site/src/content/docs/explanation/configuration-defined-registry.mdx)
 - [Create and query your first registry](../../docs/site/src/content/docs/tutorials/first-breg.mdx)
-- [Review changes before updating a registry](../../docs/site/src/content/docs/tutorials/review-registry-changes.mdx)
+- [Change a registry with an Action](../../docs/site/src/content/docs/tutorials/change-a-registry-with-an-action.mdx)
 - [Query a spatial registry from QGIS](../../docs/site/src/content/docs/tutorials/query-a-spatial-registry-from-qgis.mdx)
 - [Author a registry project](../../docs/site/src/content/docs/configure/breg.mdx)
 - [Deploy and operate a registry](../../docs/site/src/content/docs/operate/breg.mdx)

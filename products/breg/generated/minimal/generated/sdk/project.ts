@@ -16,16 +16,36 @@ export interface Contact {
   readonly "jurisdiction": string;
 }
 
+export interface RegisterContactInput {
+  readonly "name": string;
+  readonly "email": string;
+  readonly "jurisdiction": string;
+}
+
+export type RegisterContactRefusal = EngineReason;
+export type RegisterContactResult = Proposal<RegisterContactInput, RegisterContactRefusal>;
+
+export interface UpdateContactEmailInput {
+  readonly "contactId": string;
+  readonly "email": string;
+}
+
+export type UpdateContactEmailRefusal = EngineReason;
+export interface UpdateContactEmailResult { readonly action: "update-contact-email"; readonly applicationId: string; readonly results: {
+  readonly "contact-email"?: RecordReference<Contact>;
+} }
 export interface ProjectRecords {
   "contact": Contact;
 }
 export interface ProjectActions {
+  "register-contact": { input: RegisterContactInput; result: RegisterContactResult };
+  "update-contact-email": { input: UpdateContactEmailInput; result: UpdateContactEmailResult };
 }
 export interface ProjectRelationships {
   "contact": {
   };
 }
-const definitions: ProjectDefinitions = {"actions":{},"records":{"contact":{"route":"contacts","titleField":null}},"relationships":{}};
+const definitions: ProjectDefinitions = {"actions":{"register-contact":{"conditionInputs":[],"mode":"proposal","refusals":[]},"update-contact-email":{"conditionInputs":["contactId"],"mode":"immediate","refusals":[]}},"records":{"contact":{"route":"contacts","titleField":null}},"relationships":{}};
 
 interface ProjectDefinitions {
   records: Readonly<Record<string, {route: string; titleField: string | null}>>;

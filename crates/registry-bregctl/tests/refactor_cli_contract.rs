@@ -380,6 +380,13 @@ fn statistical_route_inspection_matches_generated_client_contract() {
         .unwrap()
         .unwrap()
         .to_json_value();
+    // The added required fields are outside the canonical Actions' plans.
+    source.as_object_mut().unwrap().remove("actions");
+    let editor = source["accessProfiles"][0]["permissions"]
+        .as_object_mut()
+        .unwrap();
+    editor.remove("actions");
+    editor.remove("proposals");
     source["recordTypes"][0]["fields"]
         .as_array_mut()
         .unwrap()

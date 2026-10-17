@@ -1,137 +1,115 @@
 ---
-title: How a configured registry works
-description: How native Record types, Actions, and Proposals compile into storage, authority, durable work, history, and events.
+title: How a registry works
+description: What you define in a Base Registry Engine project, what exists once it runs, who owns the result, and how you inspect it or recover from a failed change.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-04"
+last_reviewed: "2026-10-17"
 doc_type: explanation
 locale: en
 standards_referenced:
   - openapi
-  - json-schema
-  - json-ld
 ---
 
-If you are designing an institutional registry with Base Registry Engine (BReg),
-one governed project supplies its storage, API, permissions, and write behavior.
-The runtime stays domain-neutral while the project declares your Record types,
-Actions, and durable Proposals.
+If you are deciding whether Base Registry Engine (BReg) can hold your institution's registry, four
+questions settle most of it: what you define, what exists once the registry runs, who owns the
+result, and how you inspect it or recover when a change goes wrong.
 
-## What you write
+## What do I define?
 
-`registry.yaml` declares identity, datasets, Record types and fields, references,
-access profiles, Actions, and events. Modules reuse governed assets. Project-local
-value types and named Functions share types and plan code without introducing a
-second configuration format. Stable IDs identify definitions; labels,
-descriptions, and safe titles present them to readers.
+You define a [project](../../reference/glossary/#registry-project): YAML files you keep in version
+control. It declares three things.
 
-Journey fixtures declare permitted and refused API behavior. Local clients and
-resumable scenarios support evaluation. Deployment configuration separately binds
-PostgreSQL, issuer, secrets, listeners, review authorities, and destinations.
-Operator credentials stay outside the authored package.
+- **Record types.** The kinds of thing the registry holds, such as a facility or a licensed
+  practitioner, with their fields, bounds, references to other Record types, and the routes that
+  read and write them.
+- **Actions.** Named operations with typed inputs and a plan of effects. A plan is either written
+  out as fixed effects or computed by a small function, and it can only write the fields its
+  Action declares.
+- **Access profiles.** Who may do what: which token claims a caller needs, which operations and
+  fields a profile grants, and which rows it reaches, for example only facilities in the caller's
+  jurisdiction.
 
-## What the server compiles
+BReg has no built-in domain. A facility exists because a project declares the Record type
+`facility`, not because the engine knows what a facility is. From the project, `bregctl` compiles
+the database schema, the HTTP routes, an OpenAPI document, and the metadata a client reads, all
+from the same source, so they cannot disagree.
 
-Record types become typed PostgreSQL storage with reference, uniqueness, revision,
-and optional temporal constraints. Generated routes expose only configured
-operations. Schemas, OpenAPI, metadata, and typed project clients derive from the
-same contract. An Action input's compiler-emitted JSON Schema is required and is
-copied exactly into MCP tools.
-
-The shared Registry Record envelope keeps record identity and revision separate
-from domain fields. Its independently versioned `entityTypeIdentifier` names the
-Record type. Action receipts and Proposals use distinct response shapes.
-
-## How access works
-
-The issuer owns identity and tokens. BReg verifies a token, selects one access
-profile, and checks its operation, field, and row grants before record I/O.
-Profiles grant records, Actions, and Proposals separately. A local client, a
-reference, a filter, a metadata descriptor, or a review result creates no grant.
-
-Concealment hides inaccessible records and work. Proposal List requires its own
-authority and conceals work before filtering or counting. Human review context
-also obeys current record disclosure. A service review-status grant is limited
-to the named authority's frozen work and carries no display values.
-
-### Local clients and their tokens
-
-The development command provisions a local issuer and registers explicitly
-authored clients. The default directory uses two clients with distinct
-jurisdictions against the same editor profile. Their scopes and claims satisfy
-that project's grants; registering another client adds no registry authority.
-Operated deployments supply their own issuer and credentials.
-
-## Three ways to write
-
-Generated CRUD maintains individual records under explicit permissions and
-concurrency conditions. An immediate Action accepts typed inputs and applies an
-ordered plan atomically, including multi-record effects. A Proposal Action starts
-a durable draft and later freezes a plan for application.
-
-Action execution mode is governed configuration. Fixed plans declare effects;
-named Functions calculate effects inside an explicit write ceiling. Guards check
-required current facts at commit. A Record type can require Proposals for an
-operation independently of profile grants, so an immediate Action cannot bypass
-that boundary.
-
-Submission freezes inputs, targets and revisions, effects and digest, Action
-revision, attachments, and the external policy binding. An external authority owns
-review decisions. BReg owns applying the exact frozen plan and never reruns changed
-code to reinterpret it. Review-required application needs fresh authenticated,
-unexpired approval.
-
-Automatic application is the default under the built-in executor's restricted
-system grant. Explicit manual mode uses independent caller Apply authority.
-External recovery of automatic work needs a verified human and an explicit grant.
-No executor OAuth client or self-HTTP endpoint is needed.
-
-An authorized Proposal Get reports the exact frozen binding and local application
-status. Applied work carries retained evidence; blocked work carries safe recovery
-information and authorized links. Revise or Rebase makes an earlier binding stale.
-Observation does not reconcile an uncertain command: retain its original prepared
-request and key for exact recovery.
-
-## History, time, and erasure
-
-Writes preserve revisions and audit, and optional validity intervals describe when
-facts apply. Snapshot reads reproduce a retained committed state under current
-authority. History, Proposal detail, attachments, Evidence uses, and idempotency
-responses have distinct retention scopes. Erasure cannot be undone; expired or
-erased receipts keep their keys spent and cannot execute again.
-
-## From project to production
-
-Offline compilation precedes real-PostgreSQL journey testing. A successful exact
-receipt permits packaging. The operator reviews and activates that same package
-with separate migration authority. Deployment identity and database values remain
-environment-specific. Incompatible open work cannot be silently reinterpreted
-by activation; preserve inspection and recovery or resolve the work first.
-
-## Events
-
-Committed record and Proposal transitions produce governed outbox work. Delivery
-is authenticated, bounded, retried, and inspected independently of the source
-transaction. A receiver owns durable acceptance, deduplication, and any external
-effect. Delivery grants no authority to read or mutate BReg.
-
-## Where the product stops
-
-BReg owns its PostgreSQL source of record. It carries no built-in institutional
-domain, issues no identity tokens, and evaluates no external review policy.
-Optional review or Evidence dependencies disable only operations requiring them;
-they never widen authority or block unrelated configured operations.
-
-{/* Evidence: crates/registry-breg/src/contract.rs; crates/registry-breg/src/compiler.rs;
-    crates/registry-breg/src/proposal_prepare.rs; crates/registry-breg/src/proposal_store.rs;
-    crates/registry-breg/src/runtime_config.rs; crates/registry-breg-client/src/proposal.rs;
+{/* Evidence: crates/registry-breg/src/contract.rs, RegistryProject, ActionPlanSource, and FunctionSource;
+    crates/registry-breg/src/compiler.rs; crates/registry-breg/src/access.rs;
     products/breg/examples/facility/registry.yaml. */}
+
+## What exists at runtime?
+
+Once a project is packaged and activated, `breg` serves it from a PostgreSQL database the registry
+owns. Four kinds of thing accumulate.
+
+- **Records.** One per facility, practitioner, or person. Every write keeps the earlier revision, so
+  you can read what a Record said before it changed.
+- **ActionReceipts.** When an immediate Action runs, every effect commits in one transaction and
+  the caller gets an ActionReceipt listing what changed.
+- **[Proposals](../../reference/glossary/#proposal).** An Action in proposal mode does not change
+  anything when it starts. It saves a draft; submitting freezes the exact inputs, target revisions,
+  and effects. An outside review authority may approve or reject it, and the registry then applies
+  that frozen plan, either automatically or when someone with the separate apply grant asks. The
+  registry never reruns changed code to reinterpret a submission.
+- **The [audit journal](../../reference/glossary/#audit-journal).** Every request the registry admits
+  is recorded, in a file or log stream kept apart from the database. Ship it to append-only storage
+  and it becomes evidence nobody can quietly edit.
+
+The facility template shows the three ways a change reaches a Record. Operators are created and
+patched through ordinary routes. `register-facility` is an immediate Action that creates a facility
+and its operator assignment together. A facility's address can only change through a Proposal:
+`correct-address` is reviewed in Casework and applied automatically, and `deactivate-facility`
+needs no review but waits for someone allowed to apply it. A review approval alone never changes a
+Record; only applying the Proposal does.
+
+{/* Evidence: crates/registry-breg/src/mutation/action.rs; crates/registry-breg/src/proposal_prepare.rs;
+    crates/registry-breg/src/proposal_store.rs; crates/registry-breg/src/audit.rs;
+    crates/registry-breg/src/artifacts.rs, BRegActionReceiptV1;
+    products/breg/examples/facility/registry.yaml. */}
+
+## Who owns the result?
+
+Your institution does. The Records live in a database you run, under a project you wrote and
+review. Your OpenID Connect provider issues the tokens; BReg verifies them and issues none.
+
+The registry refuses whatever the project does not allow. A caller whose profile does not grant an
+operation, a field, or a row gets the same answer as for something that does not exist, so a
+refusal does not reveal what is there. If a Record type says a change requires a Proposal, no
+immediate Action and no profile grant can skip it. And nothing outside the project changes a
+Record: every write arrives through a route, an Action, or a Proposal the project declares, under a
+profile that grants it.
+
+Other products keep their own authority. A review in Casework decides; BReg applies. An Evidence
+assertion or a webhook delivery grants nothing in the registry.
+
+{/* Evidence: crates/registry-breg/src/auth.rs, RegistryAuthenticator; crates/registry-breg/src/access.rs;
+    crates/registry-breg/src/contract.rs, MutationPolicySource;
+    crates/registry-breg/tests/refactor_contract.rs, immediate_mode_cannot_bypass_target_proposal_policy(). */}
+
+## How do I inspect or recover it?
+
+Before anything runs, `bregctl explain` reads the project and prints what it compiles to: the
+model, who may do what, the routes, and each Action with its inputs, effects, commit checks, and
+the profiles that may start, review, or apply it.
+
+Once a registry is deployed, `bregctl status` reports which package is active and the history of
+activations the database records, and `bregctl doctor` checks that the database, token issuer, and
+other dependencies the registry needs are reachable, without starting it.
+
+When a change fails or its outcome is unknown, the record of what happened is the way back.
+Resending an immediate Action with the same `Idempotency-Key` returns the original ActionReceipt
+instead of running it twice. A Proposal carries links to the steps the caller may take next, such
+as retry, revise, or cancel, and says why one is unavailable. Revising opens a new draft and leaves
+the frozen earlier submission as it was. Record revisions show what each Record looked like before
+every write.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, explain(), status(), and DoctorArgs;
+    crates/registry-breg/src/idempotency.rs; crates/registry-breg/src/lifecycle.rs;
+    crates/registry-breg/src/history_store.rs. */}
 
 ## Next
 
 - [Author a registry project](../../configure/breg/)
-- [Control access per profile](../../configure/breg-access/)
-- [Declare Actions and Proposals](../../configure/breg-change-control/)
-- [Deploy a registry](../../operate/breg/)

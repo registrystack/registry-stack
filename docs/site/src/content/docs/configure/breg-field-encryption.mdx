@@ -1,0 +1,179 @@
+---
+title: Encrypt a field
+description: Seal a restricted field so the database holds only ciphertext, bind the key the runtime needs, and turn encryption on for a field that already holds data.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-10-17"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+If your registry holds a national identifier, a licence number, or another value your rules call
+restricted, encrypt that field. The database then stores only ciphertext, and Base Registry Engine
+(BReg) decrypts the value only when it answers a caller allowed to read it.
+
+## Declare the field
+
+Set `encrypted: true` on the field in `registry.yaml`. The compiler accepts it only when the
+field's `classification` is `restricted` and its type is `string`, `text`, `date`, `decimal`, or
+`structured`. A sealed value has a size ceiling: an encrypted `string` or `text` field may declare
+a `maximumLength` of at most 16,384 characters, and a `structured` field a `maximumBytes` of at
+most 64 KiB. A [Record type](../../reference/glossary/#record-type) may hold up to 128 encrypted
+fields. The facility template encrypts no field, so `bregctl check` on your own project is where
+these rules first show up.
+
+The database cannot compare ciphertext, so `bregctl check` refuses an encrypted field anywhere the
+database would need the value: as a filterable, sortable, or row-boundary field in an access
+profile, in a storage constraint or authored index, in a native `pattern`, in an event projection
+or event condition, in derived SQL or a statistical dataset, in an Action's commit guard, or in a
+Proposal's review context.
+
+To find a record by an encrypted value, add a `lookup` block to the field. BReg stores a blind
+index beside the ciphertext: an HMAC-SHA-256 of the value after the `normalization` steps you list
+(`trim`, `collapse-whitespace`, `remove-separators`, `uppercase`, `lowercase`, in your order, at
+most eight). Set `unique: true` to make the index unique; a second record with the same normalized
+value is refused as a conflict. Expose the lookup through a selector profile and the access
+profile's `lookups` grant. A `structured` field cannot declare a lookup.
+
+The index answers equality and nothing else, and it shows a database reader which rows hold a
+value and which rows share one, without the value itself. Keep the normalization narrow: for an
+identifier, `trim` and `remove-separators` usually say what "the same value" means;
+`uppercase` and `lowercase` follow Unicode case rules that can make unexpected values collide.
+
+The [BReg configuration reference](../../reference/breg-configuration/) lists every member and
+bound.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs, the `field.encrypted` checks
+    (breg.field.encrypted-classification-invalid, encrypted-type-unsupported,
+    encrypted-size-bound-exceeds-seal-limit, encrypted-pattern-refused,
+    encrypted-lookup-type-unsupported, encrypted-lookup-normalization-too-long),
+    breg.record-type.encrypted-fields-too-many, breg.access-profile.processing-encrypted,
+    breg.access-profile.row-boundary-encrypted, breg.constraint.field-encrypted,
+    breg.index.fields-encrypted, breg.event.projection-encrypted, breg.event.when-encrypted,
+    breg.selector-profile.encrypted-lookup-required; crates/registry-breg/src/contract.rs,
+    MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
+    MAX_ENCRYPTED_FIELDS_PER_ENTITY, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS, NormalizationStep,
+    FieldLookupSource; crates/registry-breg/src/derived_sql.rs, refuse_encrypted_columns();
+    crates/registry-breg/src/compiler/statistics.rs, breg.statistical-dataset.field-encrypted;
+    crates/registry-breg/src/immediate_actions.rs,
+    breg.action.commit_guards.targets-field-encrypted;
+    crates/registry-breg/tests/field_encryption_contract.rs,
+    native_proposal_context_refuses_encrypted_record_fields();
+    crates/registry-platform-crypto/src/field_encryption.rs, blind_index_hmac();
+    crates/registry-breg/src/postgres/read.rs, lookup_sql();
+    crates/registry-breg/tests/postgres_field_encryption.rs,
+    blind_index_lookup_resolves_normalized_equality() and
+    blind_index_unique_violation_maps_to_conflict(). */}
+
+## Give the runtime its key
+
+The deployment project's `runtime.yaml` names the key under `fieldEncryption.provider`. With
+`type: transit`, BReg generates one data-encryption key per registry database and has HashiCorp
+Vault or OpenBao Transit wrap it, reached through a local Unix socket (`unixSocketPath`, `mount`,
+`keyName`); the database stores only the wrapped key. With `type: local-file`, `dekRef` names a
+`secret:file/<name>` holding a base64 key, and startup refuses it unless the same file sets
+`identity.databaseInitializationEnvironment` to `local`. [Deploy a registry](../../operate/breg/)
+shows the block.
+
+Each value is sealed with AES-256-GCM under a key derived from that data key, bound to its
+registry, Record type, field, and record, so ciphertext copied to another row does not open.
+One key version is active, and BReg cannot rotate it. If you lose the wrapping key, you lose the
+data: escrow it before the first encrypted field goes live, as the
+[hardening checklist](../../security/hardening-checklist/) describes.
+
+Startup refuses to serve when an active package declares an encrypted field and the key cannot be
+unwrapped; there is no plaintext fallback. The [threat model](../../explanation/threat-model/#field-encryption-draws-a-boundary-inside-the-database)
+covers the cryptography and its FIPS posture.
+
+{/* Evidence: crates/registry-breg/src/field_encryption.rs, RawFieldEncryptionConfig,
+    RawFieldEncryptionProvider, FieldEncryptionService::activate() and open_existing(), and the
+    module comment on one key version; crates/registry-breg/src/startup.rs,
+    FieldEncryptionCustody and the `databaseInitializationEnvironment` check;
+    crates/registry-platform-crypto/src/field_encryption.rs, seal_field(), FieldAad, and
+    FIELD_ENCRYPTION_ALGORITHM; crates/registry-breg/tests/postgres_field_encryption.rs,
+    missing_field_encryption_provider_refuses_startup() and aad_binds_the_record_row(). */}
+
+## What a reader sees
+
+Encryption does not change who may read a field; the access profile does. A caller whose profile
+lists the field in `readableFields` receives the plaintext value in record, list, history, and
+revision reads. A caller whose profile does not list it gets a response without the field, as with
+any unreadable field, and a request that selects it explicitly is refused. No API response
+carries ciphertext. Someone reading the database directly sees ciphertext and the blind index.
+
+If a stored value cannot be opened, the read answers HTTP `503` with
+`runtime.field_encryption.unavailable`; Record types without encrypted fields keep serving.
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, record reads select `readable_fields`,
+    field_encryption_refusal(), field_encryption_unavailable(), and opened_held_body();
+    crates/registry-breg/src/postgres/read.rs, the `selected_fields` subset check and
+    open_row_members(); crates/registry-breg/src/postgres/{history_read,revision_read}.rs;
+    crates/registry-breg/src/problem.rs, RuntimeFieldEncryptionUnavailable;
+    crates/registry-breg/tests/postgres_field_encryption.rs,
+    encrypted_fields_round_trip_and_store_only_envelopes(),
+    revision_and_history_reads_decrypt_at_the_response_edge(), and
+    tampered_envelope_fails_closed_and_sibling_entity_serves(). */}
+
+## Proposals cannot change an encrypted field
+
+A Proposal stores its before and after values for review, and those must not hold plaintext. A
+Proposal may target a record that has encrypted fields, but its Plan may not set or clear one.
+`bregctl check` does not catch this. The runtime refuses when it evaluates the Plan at Proposal
+submission, with HTTP `400` `request.invalid`, before it locks or stores any target. If a
+restricted value must go through review, keep that field unencrypted. Callers granted the field in
+`writableFields` can still create and patch it directly.
+
+{/* Evidence: crates/registry-breg/src/proposal_prepare.rs, resolve_targets() and prepare(),
+    both returning MutationError::InvalidRequest when a mutation's field has `encryption`;
+    crates/registry-breg/src/mutation/proposal.rs, execute_proposal(), ProposalOperation::Submit;
+    crates/registry-breg/src/api/mod.rs, mutation_problem() and invalid_request();
+    crates/registry-breg/src/proposal_prepare/tests.rs,
+    encrypted_participation_is_refused_before_targets_resolve();
+    crates/registry-breg/tests/postgres_field_encryption.rs,
+    patch_replaces_the_envelope_and_test_op_is_refused(). */}
+
+## Encrypt a field that already holds data
+
+Adding `encrypted: true` to an existing field is a reviewed migration. Its descriptor declares a
+step with `type: field-encryption-backfill`, which seals existing values chunk by chunk without
+authored SQL, and one `history` choice:
+
+- `erase-and-rebaseline` erases retained history so no plaintext copy remains in the database.
+  Erasure removes whole record revisions, not only the field's past values.
+- `retain-plaintext-history` encrypts from now on and leaves earlier revisions readable in
+  plaintext to anyone with database access. Use it only as a recorded risk acceptance.
+
+A descriptor without a choice is refused, and so is one that declares `history` for any other
+change. Every field of one Record type encrypted in the same package shares one backfill step.
+Backups taken before the migration still hold plaintext until you retire or re-encrypt them.
+
+`bregctl field-encryption preflight` reports, without values, how many rows, revisions, and
+retained copies each covered field affects, and which records would collide on a unique lookup.
+[Change an active registry](../../operate/breg-changes/) walks through preflight, apply, and
+`erase-history`.
+
+Three package changes are refused: removing encryption, changing the `lookup` of an encrypted
+field, and adding a required encrypted field to an existing Record type. For the last, add the
+field as optional, fill it through authorized writes, then make it required in a later package.
+
+{/* Evidence: crates/registry-breg/src/migration_plan.rs,
+    ReviewedMigrationStepDescriptor::FieldEncryptionBackfill, ReviewedFieldEncryptionHistory,
+    validate_descriptor_shape() (breg.migration.history),
+    descriptor_covers_field_encryption_flip(), and validate_field_encryption_step_grouping();
+    crates/registry-breg/src/package.rs, CompiledRegistryChangeCode::explanation() for
+    FieldEncryptionChanged, FieldLookupChanged, and FieldAddedRequired;
+    crates/registry-breg/src/field_encryption_backfill.rs,
+    FieldEncryptionBackfillPreflightReport, MAX_NAMED_DUPLICATE_RECORDS, and
+    erase_field_encryption_history(); crates/registry-breg/src/postgres/interlock.rs,
+    field_encryption_duplicate_preflight(); crates/registry-bregctl/src/lib.rs,
+    FieldEncryptionCommand. */}
+
+## Next
+
+- [Control access and reads](../breg-access/) to decide who reads the field.
+- [Declare Actions and Proposals](../breg-actions/) for writes that go through review.
+- [Threat model](../../explanation/threat-model/) for what encryption defends against.
+- [Known limitations](../../explanation/known-limitations/) for the full list of BReg limits.

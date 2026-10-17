@@ -19,6 +19,7 @@ export const GENERATED_API_BASES = [
   'reference/apis/scheduling',
   'reference/apis/messaging',
   'reference/apis/coordinator',
+  'reference/apis/breg',
 ];
 
 /** True when a dist-relative page directory is a generated API route. */

@@ -1,38 +1,27 @@
 ---
 title: PublicSchema wizard prompts
-description: The nine questions bregctl init --from publicschema asks at a terminal, what each one lists, what starts ticked, and how cancellation and a missing terminal are reported.
+description: The nine questions bregctl init --from publicschema asks at a terminal, what each one lists and starts ticked, how a property becomes a field, what the derivation refuses, and how cancellation and a missing terminal are reported.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-07"
+last_reviewed: "2026-10-17"
 doc_type: reference
 locale: en
 standards_referenced: []
 ---
 
-`bregctl init <DEST> --from publicschema`, given neither `--starter` nor `--selection`, asks for a
-selection at a terminal. The answers become the same `BRegModelSelection` document a starter ships or
-`--selection` reads, so nothing downstream can tell the three apart. This page records the nine
-questions in the order they are asked.
+`bregctl init <DEST> --from publicschema`, given neither `--starter` nor `--selection`, asks nine
+questions at a terminal. Your answers become the same `BRegModelSelection` document a starter ships
+or `--selection` reads, and the derivation treats all three alike.
 
-## Contract status
-
-`bregctl` is pre-1.0 adopter tooling and sits outside any frozen runtime contract. These prompts can
-change before a compatibility promise covers them. The page is hand-written from
-`crates/registry-bregctl/src/init_from_model/wizard.rs`, not generated.
-
-Every prompt, every line printed beside one, and the review are written to standard error. Standard
-output carries only the final report, so a script that captures standard output still gets a clean
-result even when the command runs at a terminal. A prompt is raised only when both standard input
-and standard error are terminals.
-
-Nothing is written to disk until the last question is answered. The selection is resolved against
-the embedded model before the review, so a refusal the model forces is reported before you are asked
-to confirm.
+The questions need standard input and standard error to be terminals. Prompts go to standard error;
+standard output carries only the final report. The selection is resolved before the review, so a
+refusal comes before you confirm, and nothing is written until you do. The wording is pre-1.0
+tooling text and can change.
 
 {/* Evidence: crates/registry-bregctl/src/init_from_model/wizard.rs, gather() and confirm_selection();
-    crates/registry-bregctl/src/lib.rs, init_from_model::Source::Interactive. */}
+    crates/registry-bregctl/src/init_from_model/mod.rs, Source::Interactive and is_terminal. */}
 
 ## Registry identifier
 
@@ -40,118 +29,153 @@ to confirm.
 registry in its IRIs, scopes, and the catalogue`. There is no default.
 
 An answer must be 1 to 64 characters, start with a lowercase letter, and use only `a-z`, `0-9`, `-`,
-and `_`. The prompt applies the same grammar to the five names the project derives from the answer,
-the publisher (`-authority`), the data service (`-api`), the public service (`-service`), and the
-`-operator` and `-reader` principals, so a length that fits the identifier but not its derived names
-is refused at the prompt rather than by the compiler afterwards. A refusal is shown inline and the
-question is asked again.
+and `_`. The project appends `-authority`, `-api`, `-service`, `-operator`, and `-reader` to name
+what it derives, and each result must fit too, so the identifier can be at most 54 characters.
 
 ## Registry title
 
 `Registry title`, with the help line `the name a reader sees; enter to keep the default`. The default
-is the identifier read back in words, so `household-registry` offers `Household Registry`. Enter
-alone keeps it. A title that is empty or only whitespace is refused.
+is the identifier read back in words: `household-registry` offers `Household Registry`. An empty
+title is refused.
 
 ## Which concepts become entities?
 
-A multi-select with the help line `space to toggle, type to filter, enter to confirm`. At least one
-concept must be chosen.
+A multi-select with the help line `space to toggle, type to filter, enter to confirm`. Each chosen
+concept becomes a Record type. Choose at least one; nothing starts ticked.
 
-The list holds every concept that is not abstract and carries at least one property the derivation
-could keep, ordered by the schema file that defines the concept and then by concept name. An option
-reads as the concept's label, its schema file in parentheses, and the first sentence of its
-description cut to 60 characters: `Person (publicschema-identity): The unique individual human
-being who is a subject of record…`.
-
-Nothing starts ticked.
+The list holds every concept that is not abstract and has a property the derivation can keep, by
+schema file, then name. An option shows the label, schema file, and first sentence of the
+description cut to 60 characters: `Person (publicschema-identity): The unique individual human being
+who is a subject of record…`.
 
 ## Which concepts connect what you chose?
 
 A multi-select with the help line `space to toggle, type to filter, enter to confirm; enter alone
-adds none`.
+adds none`. Nothing starts ticked, and none is a legitimate answer.
 
-The list holds the concepts you did not choose that carry at least two single-valued properties
-pointing at concepts you did. Each option names those properties and what they point at:
-`Group Membership (publicschema-misc): group is a Household, person is a Person`. Concepts whose
-every link fits exactly one chosen concept come first, then the rest by concept name, and each
-concept's links read in property order. Nothing starts ticked, and enter alone adds none; a registry
-of unrelated collections is a legitimate answer.
+It lists the unchosen concepts with at least two single-valued properties pointing at your choices,
+reaching two of them when you chose several: `Group Membership (publicschema-misc): group is a
+Household, person is a Person`. Concepts whose every link fits one chosen concept come first.
 
-The prompt is skipped when the model offers no such concept. When you chose two or more concepts and
-some of them have nothing in the model to connect them, one line is printed first naming those
-concepts, or saying that nothing in the model connects any of them to one another. That line is
-printed whether or not a prompt follows.
+The prompt is skipped when no concept qualifies. When some of two or more chosen concepts have
+nothing to connect them, one line naming them is printed first.
 
 ## Which properties of `<Title>` become fields?
 
-One multi-select per chosen concept, in the order the concepts were chosen, with connectors last.
-The help line is `space to toggle, type to filter, enter to confirm`, and at least one property must
-be chosen.
+One multi-select per chosen concept, connectors last, with the help line `space to toggle, type to
+filter, enter to confirm`. Choose at least one property.
 
-The list holds every property the derivation can turn into a field for this selection. An option
-names the property, the shape its field takes, `sensitive` or `restricted` where the model rates it
-so, and how many of the systems the model tracks already record it:
-`date_of_birth: date (6 of 6 systems)`.
+An option names the property, the shape its field takes, `sensitive` or `restricted` where the
+model rates it so, and how many tracked systems record it: `date_of_birth: date (6 of 6 systems)`.
+It starts ticked when the model requires it, when at least 60% of those systems record it, or when
+it is a single-valued reference to a chosen concept.
 
-An option starts ticked when any of three things holds:
+Properties the derivation cannot carry are not offered. One line before the prompt, opening `Not
+offered for <Title>:`, names each with the derivation's reason.
 
-- The model marks the property required.
-- At least 60% of the systems the model tracks already record it.
-- It is a single-valued reference to another concept you chose, which is usually why the concept
-  carrying it was chosen at all.
+{/* Evidence: crates/registry-bregctl/src/init_from_model/wizard.rs, ask_registry(), default_title(), ask_concepts(), concept_options(), summary(), DESCRIPTION_BUDGET, ask_connectors(), connector_options(), unconnected_line(), ask_properties(), property_offer(), property_label(), ticked(), refers_to_chosen(), TICKED_CONVERGENCE_SHARE, and withheld_line();
+    crates/registry-bregctl/src/init_from_model/resolve.rs, registry_identifier_refusal(), identifier_refusal(), DERIVED_REGISTRY_SUFFIXES, connectors(), and property_support(). */}
 
-A property the derivation cannot carry is not offered. Those properties are named on one line
-before the prompt, opening `Not offered for <Title>:`, each with the derivation's own sentence
-saying why and what to do instead.
+### How a property becomes a field
+
+A property becomes a field of the same name in kebab case, prefixed `declared-` when it would shadow
+a system column such as `id` or `revision`. No derived field is required. Each Record type also
+gains a required, unique identifier field of 1 to 64 characters.
+
+| The prompt shows | Field |
+| --- | --- |
+| `text` | `string`, at most 255 characters |
+| `URI` | `string`, at most 2048 characters |
+| `whole number` | `int64` |
+| `decimal number` | `decimal`, precision 18, scale 6 |
+| `date` | `date` |
+| `date and time` | `timestamp` |
+| `yes or no` | `boolean` |
+| `reference` | `reference` to the chosen Record type |
+| `code from a code list` | `vocabulary-code` when the list is kept in full, otherwise `string` sized to the longest code, 64 to 128 characters |
+
+The remaining shapes become `structured` fields:
+
+| The prompt shows | Holds | Bounds |
+| --- | --- | --- |
+| `structured value carried inline` | An unchosen concept's scalar and enumerated properties | 16384 bytes |
+| `structured value` | A GeoJSON geometry | 65536 bytes |
+| `list of` a scalar or code | `{ "values": [...] }` | 50 items, 4096 bytes |
+| `list of structured values carried inline` | `{ "values": [...] }` of flat objects of an `inline_only: true` class, required members kept | 50 items, 16384 bytes |
+
+Every structured schema is closed. A property rated sensitive or restricted becomes a `restricted`
+field, a structured field takes the highest rating it carries, and every other field is `internal`.
+The wizard leaves every Record type `internal`.
+
+{/* Evidence: the mapping is a Rust match, not data. crates/registry-bregctl/src/init_from_model/resolve.rs, field_id(), reserved_field_id(), resolve_entity(), IDENTIFIER_MAX_LENGTH, field_kind(), scalar_kind(), bespoke_kind(), geometry_schema(), code_max_length(), list_of(), object_schema(), value_object_schema(), slot_classification(), LIST_MAX_ITEMS, LIST_MAX_BYTES, OBJECT_MAX_BYTES, GEOMETRY_MAX_BYTES, DECIMAL_PRECISION, and DECIMAL_SCALE;
+    crates/registry-bregctl/src/init_from_model/wizard.rs, shape(), scalar_shape(), and assemble();
+    crates/registry-breg/src/logical_names.rs, reserved_logical_name();
+    crates/registry-linkml/src/publicschema.rs, bespoke_type(), inline_only(), and sensitivity(). */}
 
 ## Which entity does `<Concept>.<property>` point at?
 
 A single select with the help line `type to filter, arrows to move, enter to select`, listing the
-entity identifiers of the chosen concepts whose kind fits the property, in the order chosen.
+default identifiers of the chosen concepts that fit, in the order chosen.
 
-It is asked only where more than one chosen concept fits a single-valued reference, and only after
-every concept's properties are settled, because a property may point at a concept chosen after the
-one carrying it. Where exactly one concept fits, the reference is settled without a question.
+It is asked only where several chosen concepts fit a single-valued reference, after every concept's
+properties are settled, because a property may point at a concept chosen later.
 
 ## Keep the default identifiers and routes?
 
 A yes-or-no question defaulting to yes, with the help line `they name the collection routes, the
-record identifiers, and the fields a client reads`. One line per entity precedes it, showing what
-that entity would be called: `person: route persons, identifier field person-code`.
+record identifiers, and the fields a client reads`. One line per Record type precedes it: `person:
+route persons, identifier field person-code`.
 
-Answering yes keeps every default and asks nothing more. Answering no asks three questions per
-entity, in turn, each with the help line `enter to keep the default`:
+No asks three questions per Record type, each with the help line `enter to keep the default`:
 
 | Question | Default |
 | --- | --- |
 | `Entity identifier for <Concept>` | The concept in kebab case |
-| `Collection route for <Concept>` | The plural of the entity identifier answered before it |
-| `Identifier field for <Concept>` | The entity identifier with `-code` appended |
+| `Collection route for <Concept>` | The plural of that identifier |
+| `Identifier field for <Concept>` | That identifier with `-code` appended |
 
-Each answer is held to the identifier grammar. An entity identifier or a route another entity of the
-same run already carries is refused inline with `` `<value>` is already taken by another entity ``,
-because the resolver refuses such a selection and the prompt refuses it while you are still there to
-answer again. An answer left at its default is left out of the written selection.
+Each answer is held to the identifier grammar. An identifier or route an earlier Record type already
+carries is refused with `` `<value>` is already taken by another entity ``. A default answer is left
+out of the written selection.
 
 ## Which code lists should the project list in full?
 
 A multi-select with the help line `space to toggle, enter to confirm; an unticked list is carried as
-a bounded code instead`, listing every enumeration a chosen property draws on, by model name, with
-its size: `Marital Status (6 values)`.
+a bounded code instead`, listing each enumeration a chosen property draws on: `Marital Status (6
+values)`. It is skipped when there is none.
 
-An enumeration of at most 300 values starts ticked, which is the size rule the derivation applies to
-a selection that says nothing. The prompt is skipped when no chosen property draws on an
-enumeration. Only an answer that differs from the size rule is written into the selection's
-`vocabularies` list.
+An enumeration of at most 300 values starts ticked, the derivation's own default. Only an answer
+that differs is written into the selection's `vocabularies` list. Ticking one of more than 1024
+values is refused.
 
 ## Derive the project from this selection?
 
-The selection your answers describe is printed as YAML, followed by one line naming any entity no
-field connects to another, and then a yes-or-no question defaulting to yes, with the help line
-`the document above is written into the project beside what it derives`.
+The selection is printed as YAML, then one line naming any Record type no field connects to another,
+then a yes-or-no question defaulting to yes, with the help line `the document above is written into
+the project beside what it derives`. No writes nothing and reports `init.selection.cancelled`.
 
-Answering yes derives the project. Answering no writes nothing and reports
-`init.selection.cancelled`.
+{/* Evidence: crates/registry-bregctl/src/init_from_model/wizard.rs, ask_target(), reference_questions(), ask_naming(), ask_entity_naming(), identifier_validator(), ask_vocabularies(), vocabulary_options(), vocabulary_overrides(), confirm_selection(), and unlinked_line();
+    crates/registry-bregctl/src/init_from_model/resolve.rs, kebab_case(), pluralize(), INLINE_VOCABULARY_THRESHOLD, and resolve();
+    crates/registry-manifest-core/src/lib.rs, MAX_CODELIST_CONCEPTS. */}
+
+## What the derivation refuses
+
+These properties are withheld from the property question, and refused in a selection file:
+
+- Many values of a concept whose class is not marked `inline_only: true`. Model the relationship as
+  its own Record type with a reference back.
+- An `inline_only` class that a chosen concept fits or a `target` names.
+- An `inline_only` class that is abstract, has concrete descendants, carries an identifier, or has a
+  member that is not a scalar or enumeration. Author that field in the derived project instead.
+- One value of an unchosen concept with no scalar property to carry. Choose that concept.
+- A value type with no field type.
+
+A selection file is also refused when it repeats or misnames a concept, property, identifier,
+route, field, `target`, classification, or enumeration, or was written against another snapshot
+version or revision. Each refusal
+names the entry it concerns.
+
+{/* Evidence: crates/registry-bregctl/src/init_from_model/resolve.rs, field_kind(), value_object_schema(), object_schema(), property_support(), resolve(), and resolve_entity(). */}
 
 ## Cancelling, and running without a terminal
 
@@ -159,18 +183,18 @@ Answering yes derives the project. Answering no writes nothing and reports
 | --- | --- |
 | Esc or `Ctrl+C` at any prompt, or no at the review | `init.selection.cancelled`: `cancelled at a prompt; nothing was written` |
 | A prompt cannot be raised for any other reason | `init.selection.prompt`: `a question could not be asked`, followed by the library's own message |
-| No terminal on standard input or standard error | `init.selection.missing`: `` `init --from publicschema` asks its questions at a terminal; without one, pass `--selection <FILE>` or `--starter <NAME>` `` |
+| No terminal on standard input or standard error | `init.selection.missing`: `` `init --from publicschema` asks its questions at a terminal; without one, pass `--selection <FILE>` or `--starter <NAME>` (one of `household`) `` |
 
-Nothing is written in any of the three cases, so there is nothing to undo. Pass `--starter` or
-`--selection` to derive without a terminal.
+Nothing is written in any of the three cases. Pass `--starter` or `--selection` to derive without a
+terminal.
 
-{/* Evidence: crates/registry-bregctl/src/init_from_model/wizard.rs, ask_registry(), ask_concepts(), ask_connectors(), ask_properties(), ask_target(), ask_naming(), ask_vocabularies(), TICKED_CONVERGENCE_SHARE, and cancelled();
-    crates/registry-bregctl/src/init_from_model/resolve.rs, registry_identifier_refusal(), identifier_refusal(), property_support(), and INLINE_VOCABULARY_THRESHOLD. */}
+{/* Evidence: crates/registry-bregctl/src/init_from_model/wizard.rs, prompt_error() and cancelled();
+    crates/registry-bregctl/src/init_from_model/mod.rs, Source::Interactive and starter_names. */}
 
 ## Next
 
 - [Derive a registry from PublicSchema](../../tutorials/derive-a-registry-from-publicschema/) to run
-  the same derivation from a shipped selection instead.
-- [How a registry is derived from a model](../../explanation/deriving-a-registry-from-a-model/) for
-  the rules the answers feed.
-- `bregctl init --help` for every other flag `init` accepts.
+  the same derivation from a shipped starter.
+- [Author a registry project](../../configure/breg/) to change what the derivation wrote.
+- [Base Registry Engine configuration reference](../breg-configuration/) for the keys of the written
+  project and `model/selection.yaml`.

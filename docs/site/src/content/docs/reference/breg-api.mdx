@@ -1,11 +1,11 @@
 ---
 title: Base Registry Engine API reference
-description: Routes, the Registry Record envelope, headers, query options, mutations, history reads, Proposals, Actions, problem codes, and the event and webhook contract.
-status: draft
+description: Routes, the Registry Record envelope, headers, query options, mutations, ingestion runs, history reads, Proposals, Actions, problem codes, and the event and webhook contract.
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: "2026-10-17"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -22,75 +22,73 @@ import EventReferenceTable from '../../../components/EventReferenceTable.astro';
 import configuration from '../../../data/generated/breg-configuration.json';
 import { eventConfiguration } from '../../../lib/breg-event-reference.mjs';
 
-Lookup reference for the HTTP API a compiled Base Registry Engine (BReg) package serves and for the
-events it emits. Every registry serves the same route shapes; the entity routes, fields, profiles, and
-actions come from your project. The contract is not frozen before `v1.0.0`;
-[API stability and versioning](../api-stability/) states what `v1.0.0` promises.
+Look up here the HTTP API and events a compiled Base Registry Engine (BReg) package serves. Every
+registry serves the same route shapes over the Record types, fields, profiles, and Actions your
+project declares. [API stability and versioning](../api-stability/) states what `v1.0.0` promises.
 
-For the authoring grammar, use [author a registry project](../../configure/breg/).
-For deployment and recovery, use [deploy a registry](../../operate/breg/).
-For receivers, delivery, and replay, use
-[bind webhook receivers](../../operate/breg-webhooks/).
-For every YAML key, use the [configuration reference](../breg-configuration/).
-A running server publishes its own OpenAPI document at `/openapi.json`; the schemas there are
-the exact ones its package compiled.
+For the request and response schemas of each operation, use the
+[API operations viewer](../apis/breg/), rendered from the facility template's compiled OpenAPI
+document. A running server publishes its own document at `/openapi.json`, filtered to the caller's
+routes, with the exact schemas its package compiled.
+
+For what Actions and Proposals are and how to declare them, use [Actions and Proposals](../../configure/breg-actions/).
+For deployment and recovery, use [deploy a registry](../../operate/breg/). For receivers and
+replay, use [bind webhook receivers](../../operate/breg-webhooks/). For every YAML key, use the
+[configuration reference](../breg-configuration/).
+
+{/* Evidence: docs/site/astro.config.mjs, bregOpenApiSchema (base reference/apis/breg);
+    crates/registry-breg/src/api/mod.rs, route_set() serves /openapi.json. */}
 
 ## Authentication and profile selection
 
-Every request except the health and readiness probes carries `Authorization: Bearer <token>`;
-a request without a verified token is refused with `401 authentication.refused` before any
-profile is selected. The token is a JWT signed by the configured issuer with the configured
-algorithm. It must carry
-`iss`, `aud`, and `exp`, and its scopes come from the claim named by `scopeClaim`, split on
-`scopeSeparator`; both are required settings. The principal and purpose claims are the ones named
-under `authorityClaims`.
+Every request except `/health`, `/healthz`, and `/ready` carries `Authorization: Bearer <token>`.
+The token is a JWT from the configured issuer that carries `iss`, `aud`, and `exp`. Its scopes come
+from the claim named by `scopeClaim`, split on `scopeSeparator`; the principal and purpose claims are
+the ones named under `authorityClaims`. A missing or rejected token answers
+`401 authentication.refused` before any profile is selected.
 
-Each route has one default access profile. A caller selects another with the `accessProfile`
-query option. A profile grants access when the token satisfies its `requiredScopes`,
-`requiredPurposes`, and `principalClaim`, and when the profile grants the operation on that
-Record type. Row boundaries on the grant compare a record field with a token claim.
-Reads conceal records outside that boundary; mutations recheck authority over their
-targets and prospective values before committing.
+Each route has one default access profile; select another with the `accessProfile` query option. A
+profile admits the caller when the token satisfies its `requiredScopes`, `requiredPurposes`, and
+`principalClaim`, and the profile grants the operation on that Record type.
 
-A missing or invalid token returns `401 authentication.refused`. Unknown or
-ungranted profiles and operations return `404 resource.not_found`, as do Record
-reads outside the caller's boundary. Proposal owner and scope refusals are also
-concealed. An admitted mutation can return `412 precondition.failed` when its
-current target authority, prospective row boundary, or revision precondition
-fails. That response contains no protected values and commits no effects.
+An unknown route, an unsupported method, an unknown or ungranted profile, and an ungranted
+operation all answer the same `404 resource.not_found`. Reads conceal records outside the caller's
+boundary; see [Read refusals](#read-refusals). A mutation rechecks authority over its targets and
+prospective values and answers `412 precondition.failed` when that fails, with no protected values
+and no effects.
 
 {/* Evidence: crates/registry-breg/src/auth.rs;
-    crates/registry-breg/src/api/mod.rs, router();
+    crates/registry-breg/src/api/mod.rs, probe_routes(), authenticated_router(), not_found(), refuse_head();
     crates/registry-breg/src/query.rs, access_profile;
     crates/registry-breg/src/contract.rs, ProjectAccessProfileSource and PermissionsSource;
-    crates/registry-breg/src/api/proposals.rs, proposal_problem;
     crates/registry-breg/tests/postgres_mutation.rs, real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic. */}
 
 ## Routes
 
-`{route}` is the configured Record type route, `{readPath}` a declared read
-path, and `{action}` an Action ID. Unknown paths, ungranted operations, and
-unsupported methods use the same concealed refusal. Read routes accept GET;
-only health/readiness probes also answer HEAD.
+Placeholders use the router's snake_case form. `{route}` is the Record type's configured route,
+`{record_id}` a record UUID, `{read_path}` a declared read path, `{action}` an Action ID, and
+`{transition}` one of the promoted Proposal transitions. Read routes answer GET only; only the
+probes also answer HEAD.
 
 <ApiReferenceTable id="routes" />
 
-{/* Evidence: crates/registry-breg/src/api/mod.rs; crates/registry-breg/src/api/proposals.rs;
-    crates/registry-breg/src/api/actions.rs; crates/registry-breg/src/proposal_artifacts.rs. */}
+A successful `GET /v1/registry` carries a `Registry-Engine-Version` header with the engine release
+that served it, the value `breg --version` prints. The concealed 404 does not carry it.
 
-A successful `GET /v1/registry` response carries a `Registry-Engine-Version` header with the
-engine release that served it, the value `breg --version` prints. It grants nothing, and the
-concealed 404 does not carry it. Casework reads it to hold its BReg sources to its own release, as
-[Change the active Casework package](../../operate/casework/#change-the-active-package)
-describes.
-
-{/* Evidence: crates/registry-breg/src/api/mod.rs, registry_metadata();
+{/* Evidence: crates/registry-breg/src/api/mod.rs, route_set(), probe_routes(), entity_schema() (the /v1/schemas handler), registry_metadata();
+    crates/registry-breg/src/compiler.rs, route_shape();
+    crates/registry-breg/src/api/proposals.rs, list() and ProposalListQuery;
+    crates/registry-breg/src/postgres/proposal.rs, list_proposals_in();
+    crates/registry-breg/src/api/actions.rs; crates/registry-breg/src/immediate_actions.rs;
+    crates/registry-breg/src/api/attachments.rs, mutate();
+    crates/registry-breg/src/api/ingestion.rs, routes(), parse_list_query(), create_run_answer(), list_runs_answer();
+    crates/registry-breg/src/api/access_log.rs;
+    crates/registry-breg/src/api/gis.rs;
     crates/registry-breg/tests/startup_http.rs. */}
 
 ## Record envelope
 
-Reads, creates, patches, tombstones, revisions, and snapshots return one shape, the Registry
-Record envelope:
+Reads, creates, patches, tombstones, revisions, and snapshots return the Registry Record envelope:
 
 ```json
 {
@@ -115,43 +113,35 @@ Record envelope:
 | --- | --- | --- |
 | `data.recordIdentifier` | string, UUID | Stable identity of the record. |
 | `data.revisionIdentifier` | string, `^[1-9][0-9]*$` | Revision counter, starting at `1`. Compare as a string. |
-| `data.domainData` | object | The entity's fields under their `apiName`, narrowed to the grant's `readableFields` and to `$select`. |
-| `data.snapshot` | string | Present on mutation responses: an opaque token for `:snapshot` reads, at most 4096 bytes. |
-| `meta.*` | strings | Registry, dataset, and entity identifiers from the compiled package. |
+| `data.domainData` | object | The record's fields under their `apiName`, narrowed to the grant's `readableFields` and to `$select`. |
+| `data.snapshot` | string | On mutation responses only: an opaque token for `:snapshot` reads, at most 4096 bytes. |
+| `meta.registryIdentifier`, `meta.datasetIdentifier`, `meta.entityTypeIdentifier` | strings | The registry, dataset, and Record type IDs from the compiled package. |
 
-Every field is served, read, filtered, and written under its `apiName`. A field id in kebab-case
-becomes its camelCase `apiName`, so `household-code` is `householdCode`, unless the field sets
-`apiName` itself; the field id is never accepted in its place.
-
-A field name that would collide with an envelope member is refused at compile time, so
-`domainData` never contains `data`, `meta`, `items`, `pageInfo`, `nextCursor`, `@context`,
-`@id`, `@type`, or any of the identifier members named in the table.
-
-Response headers:
+Fields travel under their `apiName`: by default the camelCase form of the field ID, so
+`household-code` is `householdCode`. The field ID is never accepted in its place.
 
 | Header | Value |
 | --- | --- |
 | `Content-Type` | `application/json`, or `application/ld+json` when the request sent `Accept: application/ld+json`. The JSON-LD form adds `@context` pointing at `https://id.registrystack.org/contexts/registry-record/v1`. |
 | `ETag` | `"breg-hmac-sha256:<64 hex>"`, a strong validator of the current revision. Send it back in `If-Match`. |
-| `Link` | `<https://id.registrystack.org/profiles/registry-record/v1>; rel="profile"`, then `</v1/schemas/{entity}>; rel="describedby"`. |
-| `Location` | On `201 Created`: `/v1/records/{route}/{recordId}`. |
+| `Link` | `<https://id.registrystack.org/profiles/registry-record/v1>; rel="profile"`, then `</v1/schemas/{record_type_id}>; rel="describedby"`. |
+| `Location` | On `201 Created`: `/v1/records/{route}/{record_id}`. |
 
-Field values are encoded by type. The generated JSON Schema for each entity carries the same
-rules, with an optional field spelled as `anyOf` of the type and `null`.
+Each Record type's generated JSON Schema carries these encodings.
 
 <ApiReferenceTable id="field-encodings" />
 
 {/* Evidence: crates/registry-breg/src/artifacts.rs, record_member_schema() and field_schema();
     crates/registry-breg/src/api/mod.rs, exact_read() and exact_mutation();
+    crates/registry-breg/src/record_profile.rs, link_header_value();
     crates/registry-breg/src/compiler.rs, reserved_logical_name();
     products/breg/acceptance/registry-record-conformance/registry.yaml. */}
 
 ## Collections and paging
 
-A collection read returns the matching records as `items`, a `pageInfo` object, and the same
-`meta` as a single record. Only a single-record response wraps the record in `data`; a collection
-member carries `recordIdentifier`, `revisionIdentifier`, and `domainData` directly, so the field
-path is `items[0].domainData`, not `items[0].data.domainData`:
+A collection read returns `items`, `pageInfo`, and the same `meta` as a single record. Collection
+members carry `recordIdentifier`, `revisionIdentifier`, and `domainData` directly, so the field path
+is `items[0].domainData`, not `items[0].data.domainData`:
 
 ```json
 {
@@ -161,54 +151,54 @@ path is `items[0].domainData`, not `items[0].data.domainData`:
 }
 ```
 
-`nextCursor` is `null` on the last page. To continue, send the cursor as `$skiptoken` with no
-other query option except `accessProfile`. The cursor is signed with the secret named by the
-runtime `cursor.secretRef`, binds the whole original query, and expires after
-`cursor.maximumAgeSeconds`; a cursor that fails
-any of those checks returns `400 query.cursor_invalid`. With `$count`, the response carries the
-matching total beside the page.
+`nextCursor` is `null` on the last page. To continue, send it as `$skiptoken` with no other option
+except `accessProfile`. The cursor is signed with the runtime `cursor.secretRef`, binds the whole
+original query, and expires after `cursor.maximumAgeSeconds`; a cursor that fails any of those
+checks answers `400 query.cursor_invalid`. With `$count`, the response carries the matching total.
 
 {/* Evidence: crates/registry-record/src/lib.rs, RegistryRecordCollectionResponse and RegistryRecord;
-    crates/registry-record/tests/contract.rs, product_extensions_are_preserved_at_every_open_level();
     crates/registry-breg/src/query.rs, ParsedReadQueryMode;
     crates/registry-breg/src/api/mod.rs, cursor_invalid();
     crates/registry-breg/src/runtime_config.rs, CursorConfig. */}
 
 ## Query options
 
-Options apply only where the grant permits them: `$select` draws from `readableFields`,
-`$filter` from `filterableFields`, `$orderby` from `sortableFields`, and `$count` needs
-`allowCount`. Anything else returns `400 query.invalid`, whose `fieldPath` names the parameter,
-such as `$select` or `$filter`. An unknown field and a field the grant withholds return the same
-problem, and the field itself is never named.
+Options apply only where the grant permits them: `$select` draws from `readableFields`, `$filter`
+from `filterableFields`, `$orderby` from `sortableFields`, and `$count` needs `allowCount`. Anything
+else answers `400 query.invalid` with `fieldPath` naming the parameter. An unknown field and a
+withheld field return the same problem, and the field itself is never named.
 
 <ApiReferenceTable id="query-options" />
-
-A filter is an expression over field names and literals:
 
 ```text
 $filter=status eq 'active' and (region in ('north','east') or startswith(label,'Depot'))
 $filter=not contains(label,'closed') and validFrom ge 2026-01-01
-```
-
-Strings are single quoted, numbers and dates are bare, and `null` compares with `eq` and `ne`.
-Literals must fit the field type. A bounding box is four CRS84 degrees, west, south, east, north:
-
-```text
 bbox=30.0,-2.1,30.9,-1.8
 ```
 
+Strings are single quoted, numbers and dates are bare, and `null` compares with `eq` and `ne`.
+Literals must fit the field type.
+
 {/* Evidence: crates/registry-breg/src/query.rs, parse_filter(), MAX_SELECTED_FIELDS, MAX_IN_VALUES, MAX_FILTER_PREDICATES, MAX_FILTER_DEPTH, MAX_FILTER_NODES, MAX_LITERAL_BYTES, MAX_OPAQUE_VALUE_BYTES, MAX_QUERY_PAYLOAD_BYTES, MAX_BBOX_PARAMETER_BYTES, and MAX_TOP. */}
+
+## Read refusals
+
+A read never reveals whether a record outside the caller's boundary exists. Row boundaries,
+membership boundaries, and consent requirements all answer the same way, and each read re-evaluates
+them against current data.
+
+<ApiReferenceTable id="read-refusals" />
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, authorize_read_path_route() and concealed();
+    crates/registry-breg/tests/http_read_only.rs, relationship_route_uses_path_grant_not_direct_target_rights();
+    crates/registry-breg/tests/postgres_membership_access.rs, real_postgres_membership_reads_recheck_live_membership_and_hide_processing_inputs();
+    crates/registry-breg/tests/postgres_consent_access.rs, hidden_or_empty() and real_postgres_consent_gates_every_read_operation_on_id_and_on_reference(). */}
 
 ## Mutations
 
 Every write needs `Content-Type: application/json`, except a patch, which needs
-`application/json-patch+json`. A write body that is refused answers `400 request.invalid`, and its
-`fieldPath` names the member at fault as a JSON Pointer into the body: `/data` for a field the
-grant does not let you write, whether it exists or not, and `/data/householdCode` for a missing
-required field or a wrong value of a field you may write. A body over the entity's byte bound or
-one that is not JSON has no single member at fault and carries no `fieldPath`; see
-[Problem documents](#problem-documents).
+`application/json-patch+json`. A refused body answers `400 request.invalid`; see
+[Problem documents](#problem-documents) for its `fieldPath`.
 
 ### Create
 
@@ -218,14 +208,14 @@ one that is not JSON has no single member at fault and carries no `fieldPath`; s
 {"data": {"code": "SITE-001", "label": "North depot", "location": {"type": "Point", "coordinates": [30.5234, -1.9441]}}}
 ```
 
-The response is `201 Created` with the envelope, `ETag`, and `Location`. Required fields
-missing from the body, values outside their type bounds, a reference to a missing target, and a
-violated `unique` constraint are refused before anything is written.
+The response is `201 Created` with the envelope, `ETag`, and `Location`. Missing required fields,
+values outside their type bounds, a reference to a missing target, and a violated `unique`
+constraint are refused before anything is written.
 
 ### Patch
 
-`PATCH /v1/records/{route}/{recordId}` takes a JSON Patch document whose paths start at
-`/data/`, followed by the field's `apiName`:
+`PATCH /v1/records/{route}/{record_id}` takes a JSON Patch document whose paths are `/data/`
+followed by the field's `apiName`:
 
 ```json
 [
@@ -234,30 +224,27 @@ violated `unique` constraint are refused before anything is written.
 ]
 ```
 
-`If-Match` is required and must carry the `ETag` of the revision you read; a stale value returns
-`412 precondition.failed` and a missing one `428 precondition.required`. A field outside
-`writableFields`, an envelope member, or a path that does not start with `/data/` is refused with
-`fieldPath` `/0/path` for the first operation, `/1/path` for the second, and so on; a wrong value
-for a field you may write is `/1/value`.
-The response is the new revision's envelope with `data.snapshot`.
+`If-Match` must carry the `ETag` of the revision you read: a stale value answers
+`412 precondition.failed` and a missing one `428 precondition.required`. The response is the new
+revision's envelope with `data.snapshot`.
 
 ### Tombstone
 
-`DELETE /v1/records/{route}/{recordId}` with `If-Match` writes a final revision that marks the
-record tombstoned and returns that revision's envelope. A tombstoned record stays readable through
-its revisions and disappears from live collection reads. The route exists only when the entity
-sets `tombstone: true`.
+`DELETE /v1/records/{route}/{record_id}` with `If-Match` writes a final revision that marks the
+record tombstoned and returns that revision's envelope. The record stays readable through its
+revisions and leaves live collection reads. The route exists only when the Record type sets
+`tombstone: true`.
 
 ### Batch
 
-`POST /v1/records/{route}:batch` applies several items to one entity in one transaction, bounded
-by the entity's `batch.maximumItems` and `batch.maximumBytes`:
+`POST /v1/records/{route}:batch` applies several items to one Record type in one transaction,
+bounded by its `batch.maximumItems` and `batch.maximumBytes`:
 
 ```json
 {
   "items": [
     {"operation": "create", "data": {"code": "SITE-002", "label": "East depot"}},
-    {"operation": "patch", "id": "2d7e5e0c-…", "ifMatch": "\"breg-hmac-sha256:…\"", "patch": [{"op": "replace", "path": "/data/label", "value": "West depot"}]}
+    {"operation": "patch", "recordId": "2d7e5e0c-…", "ifMatch": "\"breg-hmac-sha256:…\"", "patch": [{"op": "replace", "path": "/data/label", "value": "West depot"}]}
   ],
   "changeContext": {
     "kind": "correction",
@@ -268,81 +255,62 @@ by the entity's `batch.maximumItems` and `batch.maximumBytes`:
 }
 ```
 
-The response is `{"snapshot": "…", "results": [...]}` where each result carries `operation`,
-`id`, `revision`, `etag`, and `data`. Note that the result items keep the older identifier
-spelling rather than the Registry Record envelope.
+The response is `{"snapshot", "results"}`. Each result carries `operation`, `id`, `revision`,
+`etag`, and `data`.
 
-`changeContext` is optional and shared by the whole batch; an item-level override is refused. A
+`changeContext` is optional and covers the whole batch; an item-level override is refused. A
 `correction` requires a nonempty `reasonCode`. `reasonCode` holds at most 64 UTF-8 bytes,
-`reasonText` at most 4 KiB, and `sourceReferences` at most 16 entries of 256 bytes each.
-Temporal non-overlap constraints are checked on the final state of the batch, so two interval
-edits can be sent in either order. One stale `ifMatch` or one violated constraint rolls back every
-item.
+`reasonText` at most 4 KiB, and `sourceReferences` at most 16 entries of 256 bytes each. Temporal
+non-overlap constraints are checked on the final state of the batch. One stale `ifMatch` or one
+violated constraint rolls back every item.
 
 ### Idempotency
 
 Send `Idempotency-Key` (1 to 256 visible ASCII bytes, without a comma or semicolon) on any create,
-patch, tombstone, batch, Proposal transition, or immediate Action. Proposal transitions and immediate Actions
-require the header.
+patch, tombstone, or batch. Proposal starts and transitions, attachment changes, immediate Actions,
+and statistics publications require it.
 
-- Keys are per verified caller, in one key space shared by every write that caller sends. The
-  configured token issuer, the principal value, and the key find a spent key, so two callers that
-  send the same key never meet, and the same key under another principal is that principal's own
-  request. A key one caller spent on one write answers `409 idempotency.conflict` on any other
-  write, statistics publication and withdrawal included, because the binding names the route,
-  method, and target record.
-- Only successes are held. A refused or failed attempt spends nothing, so correct the request and
-  retry it with the same key.
-- A repeat of the same request under the same key returns the held response without writing
-  again, for `retention.receiptRetentionDays` after the first attempt committed (7 days by
-  default).
-- The same key with a different request returns `409 idempotency.conflict`. The binding covers the
-  request body and the package activation, selected access profile, and verified claims it ran
-  under, so a byte-identical body can also return `409` when the first attempt committed under a
-  different package, profile, or claims.
-- After the horizon, the same request returns `410 idempotency.expired` and is never executed: the
-  key stays spent although its held response is gone. Once the operator drops the expired receipt,
-  the registry keeps a digest of the caller and key instead of the raw values, and the answers stay
-  the same. The first attempt committed, so read the record instead of retrying.
+- Keys are scoped to the verified issuer and principal; two callers never share one.
+- A spent key answers `409 idempotency.conflict` on any different request: the binding names the
+  route, method, target, body, package activation, profile, and verified claims.
+- Only successes spend a key. Correct a refused request and retry with the same key.
+- An exact repeat returns the held response without writing, for
+  `retention.receiptRetentionDays` after the commit (7 days by default), then answers
+  `410 idempotency.expired` and is never executed; read the record instead.
 
-{/* Evidence: crates/registry-breg/src/api/mod.rs, patch_dispatch(), tombstone_dispatch(), and precondition_required();
-    crates/registry-breg/src/api/mod.rs, valid_idempotency_key() and MAX_IDEMPOTENCY_KEY_BYTES;
-    crates/registry-breg/src/idempotency.rs, IdempotencyPolicy, resolve_binding(), and lock_and_load();
-    crates/registry-breg/src/idempotency.rs, KEY_SCOPE_MUTATION and SpentKeyCaller;
-    crates/registry-breg/src/postgres/statistics.rs, IdempotencyKeyDomain::Caller;
-    crates/registry-breg/src/mutation/proposal.rs;
-    crates/registry-breg/src/postgres/mutation.rs;
+{/* Evidence: crates/registry-breg/src/api/mod.rs, patch_dispatch(), tombstone_dispatch(), precondition_required(), valid_idempotency_key(), and MAX_IDEMPOTENCY_KEY_BYTES;
+    crates/registry-breg/src/problem_location.rs, batch item members operation, recordId, ifMatch, patch;
     crates/registry-breg/src/artifacts.rs, batch_response_schema;
+    crates/registry-breg/src/idempotency.rs, IdempotencyPolicy, resolve_binding(), KEY_SCOPE_MUTATION, and SpentKeyCaller;
+    crates/registry-breg/src/api/proposals.rs, missing_idempotency_key();
+    crates/registry-breg/src/api/attachments.rs, mutate();
     crates/registry-breg/tests/postgres_temporal_corrections.rs;
-    crates/registry-breg/tests/postgres_mutation.rs,
-    real_postgres_idempotency_keys_are_scoped_per_caller and
+    crates/registry-breg/tests/postgres_mutation.rs, real_postgres_idempotency_keys_are_scoped_per_caller and
     real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent. */}
 
 ## Ingestion runs
 
-An ingestion run is the durable account of one bulk import that the client drives one bounded
-chunk at a time. The client keeps the source file; the run keeps the checkpoint. A run binds the
-active package revision, schema fingerprint, entity, selected access profile, create-or-patch
-operation, input digest, chunking algorithm, and the expected item and chunk counts. No server
-worker advances a run: only a chunk submission moves the checkpoint, and every operation rechecks
-the caller's authority against the compiled batch route. A run identifier locates a run and
-grants nothing. Runs are visible to the caller that created them, and another caller's run and
-an unknown run are the same concealed 404. A run stores its creator as the configured token
-issuer and the verified principal, and every list, read, chunk, receipt, and cancel decision
-compares those, so rotating `audit.hashKeyRef` hides no run from its creator.
+An ingestion run is the durable checkpoint of one bulk load that the client drives one chunk at a
+time. The client keeps the source; the server keeps the checkpoint and never recomputes the source.
+Only a chunk submission advances a run, and every operation rechecks the caller's authority against
+the compiled batch route. A run is visible only to the issuer and principal that created it;
+another caller's run and an unknown run answer the same 404. Run responses carry operational
+metadata only, never source rows or record values. Every ingestion response carries
+`Cache-Control: no-store`.
 
-A run response carries operational metadata and bounded failure classifications only: never
-source rows, committed record values, or chunk bodies.
+The ingestion routes refuse an `Idempotency-Key` header with `400 request.invalid`. The server
+derives each chunk's attempt key from the run ID, input digest, chunk index, and chunk digest, so
+resubmitting the exact chunk is always safe. For the procedure, see
+[load records through an import window](../../operate/breg-data/#load-records-through-an-import-window).
 
-{/* Evidence: crates/registry-breg/src/ingestion_store.rs, IngestionRunStatus, IngestionRefusal,
-    and IngestionRunRecord created_issuer and created_subject;
-    crates/registry-breg/src/postgres/mutation.rs, created_by();
-    crates/registry-breg/src/data.rs, ingestion_route() and ingestion_chunk_idempotency_key();
-    crates/registry-breg/src/api/mod.rs, router(). */}
+{/* Evidence: crates/registry-breg/src/api/ingestion.rs, create_run(), submit_chunk(), ingestion_response();
+    crates/registry-breg/src/ingestion_store.rs, IngestionRunRecord created_issuer and created_subject;
+    crates/registry-breg/src/data.rs, ingestion_route() and ingestion_chunk_idempotency_key(). */}
 
 ### Create a run
 
-`POST /v1/records/{route}/ingestion-runs` with the binding:
+`POST /v1/records/{route}/ingestion-runs`, `Content-Type: application/json`, a body of at most
+4 KiB with exactly these members:
 
 ```json
 {
@@ -358,165 +326,128 @@ source rows, committed record values, or chunk bodies.
 }
 ```
 
-The response is `201 Created` with the run document. `inputDigest` is the SHA-256 of the whole
-source as 64 lowercase hexadecimal characters. The chunking contract is
-`greedy-canonical-http-batch-v1`; a run refuses any other algorithm, so its remaining source
-bytes are never reinterpreted under a different chunking contract.
+| Member | Rule |
+| --- | --- |
+| `operation` | `create` or `patch`. A profile that holds `import` announces `create`. |
+| `profileId`, `packageRevision`, `schemaFingerprint` | Nonempty strings that must match the selected profile and the active package. |
+| `inputDigest` | SHA-256 of the whole source, 64 lowercase hexadecimal characters. |
+| `inputLength`, `itemCount`, `chunkCount` | Integers from 1 to 2^53 − 1. |
+| `chunkAlgorithmVersion` | Exactly `greedy-canonical-http-batch-v1`. |
 
-A profile that holds `import` on the entity announces `"operation": "create"` here; an import
-grant has no other write route. Its run is created only while the entity holds an open import
-authority for that profile: unexpired, opened under the activation now active, with remaining
-volume that covers the whole announced `itemCount`, and, when the authority pins input digests,
-listing this `inputDigest`. Otherwise the answer is `412 precondition.failed` and no run exists.
-`inputDigest` is the caller's label for its source, recorded with the run; the server never
-receives the source and does not recompute it, so a pinned digest does not prove which items the
-chunks carry.
-Every chunk of an import run rechecks the authority in its own transaction and counts its
-committed items against the authority's volume. Operators open and close authorities with
-`bregctl import-authority`; see
-[Load a governed entity through an import window](../../operate/breg-data/#load-a-governed-entity-through-an-import-window).
+The answer is `201 Created` with `{"run": <run document>}`. An import run is created only while the
+Record type holds an open import authority for the profile whose remaining volume covers
+`itemCount` and, when the authority pins digests, lists this `inputDigest`; otherwise the answer is
+`412 precondition.failed` and no run exists.
+
+{/* Evidence: crates/registry-breg/src/api/ingestion.rs, parse_create_run_body(), MAX_RUN_DOCUMENT_BYTES, MAXIMUM_JAVASCRIPT_SAFE_INTEGER, create_run_schema();
+    crates/registry-breg/src/data.rs, CHUNK_ALGORITHM_VERSION. */}
 
 ### The run document
 
-Every run response is one document:
-
 | Member | Meaning |
 | --- | --- |
-| `runId` | The run identifier. |
+| `runId` | The run identifier, a lowercase UUID. |
 | `status` | `open`, `complete`, `cancelled`, or `blocked`. |
-| `blockedReason` | Present when the run is `blocked`: `activePackageChanged` or `importAuthorityClosed`. |
-| `recordType`, `operation`, `profileId` | The bound Record type, its create-or-patch operation, and the selected profile. |
+| `blockedReason` | `null`, or `activePackageChanged` or `importAuthorityClosed` while `blocked`. |
+| `recordType`, `operation`, `profileId` | The bound Record type, operation, and profile. |
 | `packageRevision`, `schemaFingerprint` | The binding the run was created under. |
-| `inputDigest`, `inputLength`, `itemCount`, `chunkCount` | The announced source: digest, byte length, item count, and chunk count. |
-| `chunkAlgorithmVersion` | The chunking contract the chunks follow. |
-| `maximumItems`, `maximumBytes` | The compiled batch bounds every chunk stays inside. |
-| `nextChunkIndex` | The checkpoint: the chunk index the next submission must name. |
-| `committedItems`, `committedPrefixDigest` | The items committed so far and the digest of the source prefix they cover. |
-| `lastAttempt` | `null` before the first attempt, otherwise `{"outcome", "chunkIndex"}`. |
+| `inputDigest`, `inputLength`, `itemCount`, `chunkCount`, `chunkAlgorithmVersion` | The announced source. |
+| `maximumItems`, `maximumBytes` | The batch bounds every chunk stays inside, fixed at creation. |
+| `nextChunkIndex` | The chunk index the next submission must name. |
+| `committedItems`, `committedPrefixDigest` | Items committed so far and the prefix digest of the last committed chunk; the SHA-256 of empty input before the first. |
+| `lastAttempt` | `null`, or `{"outcome", "chunkIndex"}`. |
 | `createdAt`, `updatedAt` | RFC 3339 timestamps. |
 | `complete` | `true` when `status` is `complete`. |
 
-An open run whose binding no longer matches the active package reports `blocked` with
-`blockedReason` `activePackageChanged`. A blocked run is retained and inspectable, and it
-never reinterprets its remaining bytes under a new binding: continue in a successor run created
-under the new package. An import run whose authority was closed, expired, exhausted, or
-superseded by a package activation reports `blocked` with `blockedReason` `importAuthorityClosed`
-at the next chunk, which commits nothing and answers `409 ingestion.run_blocked`; continue the
-uncommitted remainder in a successor run under a new authority.
+`lastAttempt.outcome` is `committed`, `replayed`, `invalidItem`, `refused`, `bindingChanged`,
+`importAuthorityClosed`, `chunkMismatch`, `runNotOpen`, or `unavailable`. `invalidItem` and
+`refused` leave the checkpoint where it was: continue the remainder in a successor run.
 
-`lastAttempt.outcome` classifies the last submission as `committed`, `replayed`, `invalidItem`,
-`refused`, `bindingChanged`, `importAuthorityClosed`, `chunkMismatch`, `runNotOpen`, or
-`unavailable`. `bindingChanged` is the attempt that blocked a run on a package activation, and
-`importAuthorityClosed` the attempt that blocked it on its import authority. `invalidItem` and
-`refused` leave the checkpoint where it was; the corrective move is a successor run, not a retry
-with different bytes and not a skipped row.
+A run whose binding no longer matches the active package reports `blocked` with
+`activePackageChanged`. An import run whose authority closed, expired, or ran out of volume reports
+`blocked` with `importAuthorityClosed` at its next chunk, which commits nothing and answers
+`409 ingestion.run_blocked`. A blocked run stays readable and never resumes; continue in a successor
+run.
 
-{/* Evidence: crates/registry-breg/src/ingestion_store.rs, IngestionRunRecord and IngestionAttemptOutcome;
-    crates/registry-breg/src/data.rs, RUN_CHUNK_ALGORITHM_VERSION. */}
+{/* Evidence: crates/registry-breg/src/api/ingestion.rs, ingestion_run_schema();
+    crates/registry-breg/src/ingestion_store.rs, IngestionRunStatus, IngestionAttemptOutcome, and empty_digest_hex(). */}
 
-### Submit chunks
+### Submit a chunk
 
-`POST /v1/records/{route}/ingestion-runs/{runId}/chunks` submits the chunk the run's
-`nextChunkIndex` names:
+`POST /v1/records/{route}/ingestion-runs/{run_id}/chunks`, `Content-Type: application/json`, with
+exactly these members:
 
-| Member | Meaning |
+| Member | Rule |
 | --- | --- |
-| `chunkIndex` | The chunk position, which must equal `nextChunkIndex`. |
-| `items` | The chunk's items, canonicalized into one batch body. |
-| `digest` | The SHA-256 of that canonical batch body, 64 lowercase hexadecimal characters. |
-| `prefixDigest` | The SHA-256 of every source byte through the end of the chunk, 64 lowercase hexadecimal characters. |
+| `chunkIndex` | Nonnegative integer. A fresh chunk must equal `nextChunkIndex`. |
+| `items` | 1 to `maximumItems` batch items, each the object the `:batch` route accepts, all with the run's operation. |
+| `digest` | SHA-256 of the canonical JSON of `{"items": [...]}`, 64 lowercase hexadecimal characters. That canonical body must fit in `maximumBytes`. |
+| `prefixDigest` | SHA-256 of the source bytes from the start through the end of this chunk's last item. On the last chunk it must equal `inputDigest`. |
 
-These members must match the run's committed prefix exactly: a divergent chunk index, chunk
-digest, prefix digest, or binding is refused, and nothing is written. The ingestion routes take
-no `Idempotency-Key` header because the server derives the attempt key from the run id, the
-input digest, the chunk index, and the chunk digest, so resubmitting the exact chunk is safe
-whether the first response was lost or the transport dropped it. A chunk's records, revisions,
-audit, receipt, and the checkpoint advance commit in one transaction.
+The chunking algorithm is greedy: each chunk takes as many consecutive source items as fit in
+`maximumItems` and `maximumBytes`, and every remaining chunk must still hold at least one item.
 
-{/* Evidence: crates/registry-breg/src/ingestion_store.rs, IngestionChunkBinding and IngestionChunkCommit;
-    crates/registry-breg/src/data.rs, canonical_chunk_body() and ingestion_chunk_idempotency_key(). */}
+A committed chunk answers `200` with `{"run", "receipt"}`. Its records, revisions, audit, receipt,
+and checkpoint advance commit in one transaction. A chunk index below `nextChunkIndex` is a replay:
+when its `digest` and `prefixDigest` equal the stored ones, the answer is the stored receipt with
+`replayed: true` and nothing is written. Any other mismatch of index, digest, prefix digest, count,
+or operation answers `409 ingestion.chunk_mismatch` and writes nothing.
 
-### List and read runs
-
-`GET /v1/records/{route}/ingestion-runs` lists the caller's runs: `limit` (default 25, at most
-100), the keyset `cursor` from a previous page's `nextCursor`, and optional `status` and
-`inputDigest` filters.
-`GET /v1/records/{route}/ingestion-runs/{runId}` returns one run document with `nextChunkIndex`,
-so a restarting client rebuilds its plan from API state alone and never resends a committed
-chunk.
-
-{/* Evidence: crates/registry-breg/src/ingestion_store.rs, MAX_RUN_PAGE_SIZE and DEFAULT_RUN_PAGE_SIZE. */}
-
-### Cancel and recover
-
-`POST /v1/records/{route}/ingestion-runs/{runId}/cancel` cancels an open or blocked run. The
-counts, the committed prefix, and the audit stay exactly as they were.
-
-`GET /v1/records/{route}/ingestion-runs/{runId}/chunks/{chunkIndex}/receipt` returns the stored
-batch response the named chunk's commit produced, so a lost response is recoverable without
-re-sending the chunk. A receipt is erased with the record history it describes; a later read
-then answers `410 ingestion.receipt_erased`, and the chunk's counts stay in the run.
-
-{/* Evidence: crates/registry-breg/src/ingestion_store.rs, StoredChunkReceipt and IngestionBlockedReason;
-    crates/registry-breg/src/data.rs, ingestion_route(). */}
-
-### Recovery
-
-| Failure | Recovery |
+| Receipt member | Meaning |
 | --- | --- |
-| Response lost after a chunk commit | Reread the run and submit the same chunk again. An exact replay returns the original receipt and writes nothing new. |
-| Transport interruption | Resubmit the chunk `nextChunkIndex` names. |
-| An invalid item or a business refusal | The checkpoint stays where it is. Start a successor run for the remainder. Row skipping is never a default recovery. |
-| Authorization lost | Progress refuses: every operation rechecks the selected profile against the compiled batch route. |
-| Package or schema binding changed | The run reports `blocked` with reason `activePackageChanged` and stays inspectable. Start a successor run under the new binding. |
-| Operator stop | Cancel the open or blocked run. Counts and audit are preserved. |
+| `chunkIndex`, `digest` | The committed chunk. |
+| `replayed` | `true` when this answer replays an earlier commit. |
+| `erased` | Always `false` in a served receipt. |
+| `batch` | The `{"snapshot", "results"}` answer the chunk committed, projected to the fields the run's profile can read now. |
 
-A run drives the same compiled batch route one chunk at a time, so an existing direct batch
-client keeps its contract unchanged.
+`GET /v1/records/{route}/ingestion-runs/{run_id}/chunks/{chunk_index}/receipt` returns the same
+receipt without resending the chunk. A receipt is erased with the record history it describes;
+then the read, and an exact replay of that chunk, answer `410 ingestion.receipt_erased`. The
+chunk's counts stay in the run.
 
-{/* Evidence: crates/registry-breg/src/data.rs, ingestion_route(). */}
+{/* Evidence: crates/registry-breg/src/api/ingestion.rs, parse_chunk_body(), valid_digest(), submit_chunk_schema(), ingestion_chunk_receipt_schema(), chunk_receipt();
+    crates/registry-breg/src/data.rs, plan_chunks() and canonical_chunk_body();
+    crates/registry-breg/src/mutation.rs, terminal-chunk check chunk_binding.prefix_digest != run.input_digest;
+    crates/registry-breg/src/postgres/mutation.rs, submit_ingestion_chunk_in() and receipt_json();
+    crates/registry-breg-client/src/ingestion.rs, BREG_INGESTION_CHUNK_ALGORITHM_VERSION. */}
+
+### List, read, and cancel
+
+The list and read routes are in the [routes table](#routes). A restarting client rebuilds its
+plan from the run document alone and never resends a committed chunk.
+
+`POST /v1/records/{route}/ingestion-runs/{run_id}/cancel` takes an empty body with no
+`Content-Type` and cancels an `open` or `blocked` run, answering `200` with `{"run"}`. A `complete`
+or `cancelled` run answers `409 ingestion.run_not_open`. The counts, committed prefix, receipts, and
+audit stay.
+
+{/* Evidence: crates/registry-breg/src/api/ingestion.rs, cancel handler and body_is_empty();
+    crates/registry-breg/src/ingestion_store.rs, cancel_run() status IN ('open', 'blocked'). */}
 
 ## History reads
 
-Every write appends a revision; nothing is updated in place. Three route families read that
-history, each under its own grant operation.
+`GET /v1/records/{route}/{record_id}/revisions` returns a collection of the record's revisions,
+at most 100 per read, and `.../revisions/{revision}` returns one. Revisions show stored field
+values only; derived fields and read paths are not evaluated over history. Correction context from
+a batch appears only when the `revisions` grant lists `provenanceFields` (from `kind`,
+`reasonCode`, `reasonText`, `sourceReferences`) and every revision that batch produced is visible
+to the caller.
 
-### Revisions
+A temporal Record type, one with `temporal.startField` and `temporal.endField`, gains `:current`,
+the records whose interval contains now, and `:as-of`, the records whose interval contains `asOf`.
+Intervals include the start and exclude the end; a null end is open. `asOf` is a UTC RFC 3339
+timestamp such as `2026-06-05T00:00:00Z`.
 
-`GET /v1/records/{route}/{recordId}/revisions` returns a collection of the record's revisions,
-and `.../revisions/{revision}` returns one. A read covers at most 100 revisions. Revisions show
-stored field values only; derived fields and read paths are not evaluated over history.
+`GET /v1/records/{route}:snapshot` without `snapshot` captures the latest committed state and
+returns its token with the page, so paging stays consistent while writes continue. With
+`snapshot`, it reproduces that earlier state. `validAt` filters by effective time inside the
+snapshot and is refused on a non-temporal Record type; it takes a calendar date for a `date` start
+field and a UTC RFC 3339 timestamp for a `timestamp` one. `asOf` and `recordedAsOf` are refused
+on this route.
 
-Correction context from a batch is absent unless the `revisions` grant lists
-`provenanceFields`, drawn from `kind`, `reasonCode`, `reasonText`, and `sourceReferences`, and
-even then only when every revision that batch produced is visible to the caller.
-
-### Effective time
-
-A temporal entity, one with `temporal.startField` and `temporal.endField`, gains two collection
-routes. `:current` returns the records whose interval contains the current instant, and
-`:as-of` returns the records whose interval contains `asOf`. Intervals include the start and
-exclude the end, and a null end is open. `asOf` is a UTC RFC 3339 timestamp such as
-`2026-06-05T00:00:00Z` for either field type.
-
-### Snapshots
-
-`GET /v1/records/{route}:snapshot` reproduces a collection as the registry recorded it. Without
-`snapshot`, it captures the latest committed state once and returns the token with the page, so
-a client can page consistently while writes continue. With `snapshot`, it reproduces that earlier
-state. `validAt` adds an effective-time filter inside the snapshot and is refused on a
-non-temporal entity. Its value follows the start field's type: a calendar date such as
-`2026-06-05` for a `date` field, a UTC RFC 3339 timestamp for a `timestamp` field.
-`recordedAsOf` is not an option.
-
-A snapshot token is a bookmark, not a credential: the caller needs the `snapshot` operation on
-the route, and today's row boundaries apply. Historical queries use stored fields only.
-
-History starts at an exact empty or verified baseline, and a saved token never falls back to
-current data. A snapshot whose history is unavailable, whose field metadata no longer matches, or
-whose database budget of two seconds is exhausted returns `503 source.unavailable`. One query
-resolves at most 64 originating schema descriptors. A retained-history erasure makes every
-snapshot at or after the earliest erased commit unavailable, including later ones.
+A snapshot token grants nothing: the caller needs the `snapshot` operation, and current row
+boundaries apply. A snapshot whose history was erased, whose field metadata no longer matches, or
+whose two-second database budget runs out answers `503 source.unavailable`.
 
 {/* Evidence: crates/registry-breg/src/api/mod.rs, revision_dispatch();
     crates/registry-breg/src/query.rs, ParsedSnapshotQuery;
@@ -527,102 +458,54 @@ snapshot at or after the earliest erased commit unavailable, including later one
 
 ## Proposals
 
+An Action with `execution.mode: proposal` starts a durable Proposal at
+`POST /v1/actions/{action}/proposals`. The routes are in the [routes table](#routes);
+[Actions and Proposals](../../configure/breg-actions/#proposals) explains the model.
+
 <ApiReferenceTable id="proposal-transitions" />
 
-An Action with `execution.mode: proposal` creates a distinct durable Proposal.
-The Action descriptor promotes Start; the Proposal promotes its currently
-permitted transitions. The execution mode is fixed by the package.
-
-| Resource | Contract |
-| --- | --- |
-| `/v1/actions/{action}/proposals` | Start a draft for the selected Action under Start authority. |
-| `/v1/proposals` | List only under explicit List authority, with concealment before filtering or counting. Pages take `limit` (1 to 100, default 50) and the `cursor` from a previous page's `nextCursor`. `turn=party`, `official` or `nobody` keeps only Proposals waiting on that turn. A page may hold fewer than `limit` items; keep paging while `nextCursor` is present. |
-| `/v1/proposals/{proposal_id}` | Read the Proposal under current ownership, target, and disclosure grants. |
-| `/v1/proposals/{proposal_id}/submissions/{submission_version}` | Read one exact submission under the same Get authority: its frozen `effectDigest`, its `review` result, its `decision` when one was made, and its `application` outcome as separate members. Only the current submission reports application progress. Answers 410 `proposal.submission_expired` once the result window has lapsed and no application receipt remains. |
-| Promoted transition links | Edit, Submit, Revise, Rebase, Retry, Cancel, and Apply only when currently authorized. |
-| Promoted review and attachment links | Separate review-status, review-context, slot read/upload, and verification authority. |
-
-Use the metadata and current representation to bind method, path, selected
-profile, operation, and lifecycle condition. Clients validate origin and registry
-base before promoting a link and refuse credential-bearing redirects. Lifecycle
-conditions are distinct from record ETags. Refetch after every transition.
-
-Submission freezes the Action revision, inputs, effects, target revisions,
-review policy binding, attachments, and effect digest. Apply uses that exact
-frozen plan and rechecks commit guards. Review-required application needs fresh
-authenticated unexpired approval. Changed planner code cannot alter accepted work.
-
-Automatic application is the default. A restricted built-in system grant binds
-the exact frozen submission; no executor OAuth client or self-HTTP route is
-configured. Explicit `application.mode: manual` uses separately granted caller
-Apply authority. External Apply or Retry of automatic work requires a verified
-human and an explicit grant. Missing optional authority bindings disable only
-dependent operations.
+A Proposal read carries an `ETag`. Every transition, attachment upload, and attachment removal
+requires `If-Match` with that value and answers `428 precondition.required` without it. The
+Proposal `ETag` is distinct from a record `ETag` and is bound to the caller's profile, principal,
+purpose, and target scope as well as the Proposal revision, so refetch after every transition and
+never reuse another caller's value. Follow only the transition and attachment links the current
+representation promotes.
 
 ### Observe an exact submission
 
-An authorized Proposal Get carries `id`, `actionId`, `actionRevision`,
-`submissionVersion`, `revision`, `state`, `turn`, and `effectDigest` when frozen.
-`applicationStatus` describes local progress, safe blocked reason and recovery
-hint, and automatic retry information where applicable. Applied work includes
-retained `application` evidence. Inputs and attachments follow separate disclosure.
-
-`state` is `draft`, `submitted`, `applied`, `cancelled` or `rejected`. A Review
-that rejects the current submission ends the Proposal in `rejected`; no
-transition leaves it, and every command link reads `review-rejected` with
-recovery `receipt-only`. A changes-requested result keeps it `submitted` and
-promotes Revise. `turn` is `party`, `official` or `nobody`: whose move the
-Proposal waits on, derived when it is read. Once the reviewer decided the
-current submission, `decision` carries `status`, `decidedAt` and, when the
-reviewer wrote one for the subject, `publicReason`, the only reviewer text BReg
-serves. The same Get authority that reads the Proposal reads its review state
-and decision; there is no separate grant to withhold them.
-
-The `apply` link's availability names the Review state: `pending-review` with
-`refresh` while a decision is awaited, `dependency-outage` with `retry` while
-delivery is failing, `review-changes-requested` with `revise`, and
-`review-ended` with `revise` for an expired approval, a review submission that
-failed for good, an `answered` result, or a provider end.
-
-Preserve the exact Action revision, submission version, and digest while waiting.
-Revise or Rebase makes the earlier binding stale. Do not silently follow its
-successor. A later observation cannot establish whether an earlier uncertain
-Start or Submit executed; recover the original prepared command with its original
-idempotency key. Expired or erased receipts cannot execute again.
+`GET /v1/proposals/{proposal_id}/submissions/{submission_version}` reads one exact submission under
+the Proposal Get authority: its frozen `effectDigest`, its `review` result, its `decision`, and its
+`application` outcome as separate members. Only the current submission reports application
+progress. Once its result window has lapsed and no application receipt remains, it answers
+`410 proposal.submission_expired`; the Proposal stays readable.
 
 ### Proposal attachments
 
-Slot descriptors carry requiredness, byte limit, content types, classification,
-verification, and caller-authorized links. Submission binds the exact content
-digest and verification. Changed content cannot inherit approval. Scope downloads
-to the current Proposal grant. Review context contains no raw attachment bytes.
-Retention and external deletion are independent from record-history erasure.
+`GET`, `PATCH`, and `DELETE /v1/proposals/{proposal_id}/attachments/{slot_id}` read, upload, and
+remove one slot's bytes. Slot descriptors on the Proposal carry requiredness, byte limit, content
+types, classification, verification, and the links the caller may follow. Submission binds the
+exact content digest; changed content needs a new submission and fresh review.
 
-{/* Evidence: crates/registry-breg/src/api/proposals.rs;
-    crates/registry-breg/src/proposal_prepare.rs; crates/registry-breg/src/proposal_store.rs;
-    crates/registry-breg/src/proposal_artifacts.rs; crates/registry-breg-client/src/proposal.rs;
+{/* Evidence: crates/registry-breg/src/api/proposals.rs, json_response() ETag, If-Match check, precondition_required();
+    crates/registry-breg/src/mutation/proposal.rs, proposal_etag();
+    crates/registry-breg/src/api/attachments.rs, upload(), remove(), download(), mutate();
+    crates/registry-breg/src/proposal_store.rs; crates/registry-breg/src/proposal_artifacts.rs;
+    crates/registry-breg-client/src/proposal.rs;
     products/breg/examples/facility/registry.yaml. */}
 
 ## Immediate actions
 
-An Action with `execution.mode: immediate` invokes one atomic ordered plan.
-Select its caller-filtered descriptor and use its advertised Invoke and any
-required target-condition routes. Input names are exact `apiName` values. Each
-input requires its compiler-emitted JSON Schema; clients and MCP use that schema
-without a partial field-type fallback. The current metadata owns the request
-envelope, conditions, bounds, and result contract.
+An Action with `execution.mode: immediate` runs one atomic plan at `POST /v1/actions/{action}` with
+`Idempotency-Key`. Input names are exact `apiName` values, validated against the compiler-emitted
+JSON Schema in the Action descriptor. When the descriptor advertises target conditions, read them
+first at `POST /v1/actions/{action}/target-conditions`. Invoke requires Action authority over every
+target. Effects, revisions, audit, receipt, and outbox commit together or not at all; resend the
+original request with its original key when the outcome is uncertain. See
+[Actions and Proposals](../../configure/breg-actions/) for the model.
 
-Invoke requires Action authority for every target, including existing link-only
-references. Commit guards recheck current target facts and concurrency. A
-Proposal-required Record type remains protected. Record effects, revisions,
-audit, receipt, and outbox commit together; failure creates no partial effect.
-Use the original prepared command and idempotency key for uncertain execution.
-
-{/* Evidence: crates/registry-breg/src/api/actions.rs; crates/registry-breg/src/mutation.rs;
+{/* Evidence: crates/registry-breg/src/api/actions.rs; crates/registry-breg/src/immediate_actions.rs; crates/registry-breg/src/mutation.rs;
     crates/registry-breg/tests/postgres_mutation.rs;
-    crates/registry-breg-client/src/metadata.rs; crates/registry-breg-client/src/actions.rs;
-    crates/registry-breg-mcp/src/contract.rs;
-    products/breg/examples/facility/registry.yaml. */}
+    crates/registry-breg-client/src/metadata.rs; crates/registry-breg-client/src/actions.rs. */}
 
 ## Problem documents
 
@@ -640,31 +523,29 @@ A refusal is an RFC 9457 problem document with `Content-Type: application/proble
 }
 ```
 
-`traceId` is a 32-character hexadecimal value that also appears in the server's request log and, for
-every request the journal records, in its audit record, so an operator can find the refusal without
-the client sending any record value. A request that presents no credential and is refused before
-admission is counted on the metrics listener rather than journaled, so its `traceId` is in the
-request log only; see [Scrape metrics](../../operate/breg/#scrape-metrics).
-`fieldPath` is present only when one member is at fault, and `detail` stays the registered text
-of the code. On a record or query refusal it takes one of these forms:
+Branch on `code`. `type` is the same code with each dot read as a path segment under
+`https://id.registrystack.org/problems/registry-breg/`. `detail` is the registered text of the code.
+`traceId` is 32 hexadecimal characters that also appear in the request log and, for every journaled
+request, in its audit record. A request refused before admission for presenting no credential is
+counted on the metrics listener rather than journaled; see
+[scrape metrics](../../operate/breg-monitor/#scrape-metrics).
+
+`fieldPath` is present only when one member is at fault:
 
 | Refusal | `fieldPath` |
 | --- | --- |
 | Create body | `/data` for a missing `data` member or a field you may not write, known or not; `/data/<apiName>` for a missing required field or a wrong value of a field you may write. |
-| Patch document | `/<n>` for operation `n`, `/<n>/op`, `/<n>/path` for a path outside `/data/` or a field you may not write or read, known or not, and `/<n>/value`. |
+| Patch document | `/<n>` for operation `n`, `/<n>/op`, `/<n>/path` for a path outside `/data/` or a field you may not write, known or not, and `/<n>/value`. |
 | Batch body | `/items`, `/changeContext`, `/items/<n>`, `/items/<n>/operation`, `/items/<n>/recordId`, `/items/<n>/ifMatch`, `/items/<n>/patch`, and the create and patch forms above under `/items/<n>` and `/items/<n>/patch`. |
 | Header | `Idempotency-Key` when it is missing or malformed; `If-Match` when a batch request sends one, because each batch item carries its own `ifMatch`. |
-| Query | The parameter: `$select`, `$filter`, `$orderby`, `$top`, `$count`, `$skiptoken`, `bbox`, `accessProfile`, `asOf`, `snapshot`, `validAt`, or `requestHistoryAfterProposalVersion`. A revision route takes none of them except `accessProfile`, and names the first other one you sent, in a fixed order. |
+| Query | The parameter: `$select`, `$filter`, `$orderby`, `$top`, `$count`, `$skiptoken`, `bbox`, `accessProfile`, `asOf`, `snapshot`, or `validAt`; on statistics routes also `from`, `to`, or `status`. A revision route takes none but `accessProfile` and names the first other one you sent. |
 
-A name you sent is never echoed: an unknown member or parameter and one your grant withholds stop
-at the same location, so the two answers are identical. A body over its byte bound, a body that is
-not JSON, a member beside `data` or `items`, a query parameter the API does not define, and a query
-string that is empty, over 16 KiB, or not `name=value` pairs with valid percent-encoding carry no
-`fieldPath`, and neither do lookup bodies, ingestion runs and chunks, attachments, and the feature
-API.
+A name you sent is never echoed: an unknown member and a withheld one stop at the same location.
+An oversized or non-JSON body, an undefined query parameter, a malformed query string, and the
+lookup, ingestion, attachment, and GIS routes carry no `fieldPath`.
 
-A direct Record Create, Patch, or Batch that reaches PostgreSQL and violates an authored
-row-local constraint keeps `code: mutation.conflict` and may carry one complete declared location:
+A direct create, patch, or batch that violates an authored row-local constraint answers
+`409 mutation.conflict` and may add the declared location:
 
 ```json
 {
@@ -676,53 +557,32 @@ row-local constraint keeps `code: mutation.conflict` and may carry one complete 
 }
 ```
 
-`compare` carries `left` and `right`. `int-range` and `vocabulary` carry `field` instead.
-These members are present only when the selected access profile can read every referenced field.
-Otherwise, all constraint members are absent. Action and Proposal effects have no selected Record
-response profile at this layer, so their constraint conflicts also stay generic.
-The response uses declared Record type, constraint, and field identifiers only. It never carries a
-submitted value, a PostgreSQL constraint name, or a database message. An explicit constraint `id`
-is the stable application mapping key; an omitted `id` uses the compiler-derived identity, which
-changes when the declaration changes. `unique` and `temporal-non-overlap` conflicts stay generic
-because identifying either could reveal another row.
-
-`type` is the published identifier for the code, and `code` is the same fact in the short form a
-program branches on: the type is the code with each dot read as a path segment, under
-`https://id.registrystack.org/problems/registry-breg/`. Branch on `code`; resolve `type` when you
-want the published description of a refusal you have not seen before.
+`compare` carries `left` and `right`; `int-range` and `vocabulary` carry `field`. The members appear
+only when the selected profile can read every referenced field, and never on Action or Proposal
+effects. They hold declared identifiers only, never a submitted value or database message. An
+explicit constraint `id` is the stable key to map on; an omitted one is compiler-derived and
+changes with the declaration. `unique` and `temporal-non-overlap` conflicts stay generic.
 
 <ApiReferenceTable id="problem-codes" />
 
 {/* Evidence: crates/registry-breg/src/api/mod.rs, fixed_problem(), lookup_unresolved(), cursor_invalid(), precondition_required(), invalid_request_at(), and invalid_query_at();
-    crates/registry-breg/src/problem_location.rs, RequestLocation;
-    crates/registry-breg/src/query.rs, QUERY_PARAMETERS;
+    crates/registry-breg/src/problem_location.rs, RequestLocation and STATISTICS_QUERY_PARAMETERS;
+    crates/registry-breg/src/query.rs, QueryBuilder::apply();
     crates/registry-breg/src/mutation.rs, admit_submitted_names() and map_field_database_error();
     crates/registry-breg/src/correlation.rs, row_local_constraint_response();
     crates/registry-breg/tests/postgres_mutation.rs, record_and_query_refusals_name_only_fixed_members_and_admitted_fields() and real_postgres_row_local_constraint_problems_name_only_readable_declarations();
-    crates/registry-breg/src/auth.rs;
-    crates/registry-breg/src/problem.rs, ProblemCode;
+    crates/registry-breg/src/problem.rs, ProblemCode code() and status();
     crates/registry-breg/src/artifacts.rs, problem_schema. */}
 
 ## Events and webhooks
 
 <ConfigurationReference contracts={eventConfiguration(configuration)} />
 
-Record hooks belong to `recordTypes[].hooks`. They declare `phase: after`, a
-`created`, `patched`, or `tombstoned` trigger, exact field projection, optional
-field conditions, and one URL or local handler. A create-only Record type cannot
-emit Patch or Tombstone hooks. Conditions and projection use logical field IDs;
-the highest classification of all referenced fields bounds destination disclosure.
-
-Proposal hooks belong to `actions[].execution.proposal.hooks`. They select native
-transitions and use the dedicated closed Proposal event schema. Their binding
-identifies the Action revision, Proposal, submission, effect digest, transition,
-and application authority. They do not reuse a record's field projection.
-
-Capture commits atomically with the source operation. Outbound work is dispatched
-after commit, so later package or record edits never recompute its captured content.
-Deployment `eventDestinations` supplies exact URL, network/TLS policy, HMAC key,
-classification ceiling, and operational bounds. Deployment may narrow the compiled
-contract but cannot widen it.
+Record hooks live under `recordTypes[].hooks`; Proposal hooks under
+`actions[].execution.proposal.hooks`. Capture commits with the source operation and delivery
+follows the commit, so later edits never change a captured event. The deployment's
+`eventDestinations` supplies the URL, network and TLS policy, HMAC key, classification ceiling, and
+limits; it may narrow the compiled contract but never widen it.
 
 ### HTTP request
 
@@ -732,19 +592,21 @@ contract but cannot widen it.
 <EventReferenceTable id="payload" />
 <EventReferenceTable id="proposal-payload" />
 
-Delivery uses the shared CloudEvents envelope and exact canonical bytes. Registry,
-instance, event contract, event identity, and captured payload remain bound across
-retry. Operator replay retains event identity and increments its delivery generation.
-The current runtime OpenAPI, generated event schema, and destination contract own
-the exact headers and payload for a configured event.
+A Proposal event's `id` is derived from its Action, Proposal, revision, and transition, so the same
+transition always carries the same event identity.
 
 ### Signature
 
-Verify the HMAC signature against the exact received body and signed headers in
-constant time. Validate expected source, type, schema, content, and delivery-time
-skew before durable acceptance. Bound `X-Registry-Delivery-Time`, not the original
-event time. The receiver's skew policy is independent of BReg's retry horizon.
-Use the retained durable receiver example as a concrete independent implementation.
+`X-Registry-Signature` is `v1=` followed by the unpadded base64url HMAC-SHA-256 of the signing
+input, under a key of at least 32 bytes. The signing input is the bytes `breg-webhook-signature-v1`
+followed by these fields in order, each as an unsigned 64-bit big-endian length and then its bytes:
+the version `1.0`, `ce-id`, `ce-source`, `ce-type`, `ce-time`, `ce-dataschema`,
+`X-Registry-Event-Generation`, `X-Registry-Delivery-Attempt`, `X-Registry-Delivery-Time`, the method,
+the request target (the destination's configured path), `Content-Type`, `Idempotency-Key`, and the
+exact body. The body is at most 1 MiB and the other fields together at most 32 KiB.
+
+Compare in constant time, then check the expected source, type, schema, and the freshness of
+`X-Registry-Delivery-Time`, not of `ce-time`, before accepting durably.
 
 ### Delivery, retry, and replay
 
@@ -752,40 +614,32 @@ Use the retained durable receiver example as a concrete independent implementati
 <EventReferenceTable id="retry-replay" />
 <EventReferenceTable id="states" />
 
-Delivery is bounded outbox work. Pending attempts retry under the captured binding;
-dead letters retain value-free inspection and eligible operator replay. A receiver
-commits durable acceptance and deduplicates before triggering an external effect.
-An acknowledgement establishes acceptance, not completion of that effect.
-
 ### Operator commands
 
 <EventReferenceTable id="operator-fields" />
 <EventReferenceTable id="commands" />
 
-Use `bregctl webhook list` with the absolute runtime configuration to inspect
-value-free pending/dead-letter metadata. Replay or discard requires the exact event,
-delivery, and expected generation. Replay creates a new delivery generation;
-discard stops future attempts and cannot undo earlier receiver acceptance.
-Use each command's `--help` for its exact flags.
+Replay and discard name the exact event, delivery, and expected generation. Replay starts a new
+generation; discard stops future attempts and cannot undo an earlier acceptance. Each command's
+`--help` lists its flags.
 
 {/* Evidence: crates/registry-breg/src/proposal_hooks.rs;
-    crates/registry-breg/src/proposal_events.rs; crates/registry-breg/src/outbox.rs;
-    crates/registry-breg/src/event_destination.rs;
-    crates/registry-platform-crypto/src/delivery_signature.rs;
+    crates/registry-breg/src/proposal_events.rs, insert_proposal_lifecycle_event();
+    crates/registry-breg/src/mutation/proposal.rs, reference = format!("/v1/proposals/{proposal_id}");
+    crates/registry-breg/src/outbox.rs, capture_envelope();
+    crates/registry-breg/src/event_destination.rs, RawEventDestinationConfig path and request_target();
+    crates/registry-platform-crypto/src/delivery_signature.rs, signing_input(), sign_v1(), MIN_HMAC_SHA256_KEY_BYTES, MAX_BODY_BYTES, MAX_METADATA_BYTES;
+    crates/registry-platform-httputil/src/destination.rs;
     products/breg/generated/event-schemas/proposal-lifecycle.schema.json;
-    products/breg/examples/webhook-receiver/receiver.py;
     crates/registry-bregctl/src/lib.rs, WebhookCommand. */}
 
 ## Spatial adapter
 
-An entity with a `crs84-point` field and a `geojson.geometryField` is also served under
-`/v1/gis` for desktop GIS clients. The adapter exposes `/v1/gis`, `/v1/gis/api`,
-`/v1/gis/conformance`, `/v1/gis/collections`, `/v1/gis/collections/{collection}`, and
-`/v1/gis/collections/{collection}/items` with `bbox`, `limit` (at most 10000), and `cursor`.
-It answers with GeoJSON feature collections under the same profile, grant, and row-boundary rules
-as the record routes, and it declares the profile
-`breg-gis-bounded-crs84-point-bbox-v1`. It does not declare OGC API Features
-conformance, compute collection extents, or add a query engine of its own.
+A Record type with a `crs84-point` field and a `geojson.geometryField` is also served under
+`/v1/gis` for desktop GIS clients, with `bbox`, `limit` (at most 10000), and `cursor` on the item
+route. It answers GeoJSON feature collections under the same profile, grant, and row-boundary rules
+as the record routes and declares the profile `breg-gis-bounded-crs84-point-bbox-v1`. It makes no
+OGC API Features conformance claim and computes no collection extents.
 
 {/* Evidence: crates/registry-breg/src/api/gis.rs;
     products/breg/acceptance/spatial-service-sites/README.md. */}
@@ -794,13 +648,19 @@ conformance, compute collection extents, or add a query engine of its own.
 
 <ApiReferenceTable id="statistical-dataset-routes" />
 
-Every statistical operation requires an authenticated profile. Select it with `accessProfile`; a released-data reader can have no record permissions. `/v1/registry` advertises only the selected profile's dataset operations.
+Every statistical operation requires a profile selected with `accessProfile`; a released-data
+reader needs no record permissions.
 
-Live counts use the profile's ordinary list predicates. Releases contain transformed cells, a definition digest, and version metadata. Document reads from the live, released-series, latest-version, and exact-version routes send `Cache-Control: no-store`, `Vary: authorization, accept`, and `Repr-Digest` for the exact JSON or CSV bytes. The release listing omits `Repr-Digest` because it returns version headers rather than a statistical document. The version header's `contentDigest` identifies canonical stored JSON. A withdrawn version's header omits it, because a digest of the deleted document would let a reader confirm guessed cell values. No strong ETag is issued.
+Document reads from the live, series, latest-version, and exact-version routes send
+`Cache-Control: no-store`, `Vary: authorization, accept`, and `Repr-Digest` for the exact JSON or
+CSV bytes. The release listing omits `Repr-Digest`. A version header's `contentDigest` identifies
+the canonical stored JSON; a withdrawn version's header omits it. No strong `ETag` is issued.
 
-CSV columns are `period,periodStart,periodEnd,<dimension field IDs...>,value,status`. A suppressed value is blank; an exact or rounded zero remains zero with its corresponding status. Totals round independently. See [live counts and statistical releases](../../explanation/breg-statistical-datasets/) for the inference risks.
-
-Unknown datasets and unavailable profile grants are concealed as 404. Invalid ranges return 400 `query.invalid`; ineligible publication or repeated withdrawal returns 422 `statistical_dataset.release_refused` with `refusalCode`. Package or stale-computation conflicts return 409 `statistical_dataset.version_conflict`. A directly requested withdrawn version returns 410 `statistical_dataset.version_withdrawn` with `reasonCode`. An out-of-domain source value refuses the whole computation as 500 `statistical_dataset.domain_violation`, without echoing the value. Deadline exhaustion returns 504 `request.timeout`.
+CSV columns are `period,periodStart,periodEnd,<dimension field IDs...>,value,status`. A suppressed
+value is blank; a zero stays zero with its status. Totals round independently; see
+[publish statistics](../../configure/breg-statistics/#review-what-a-release-discloses) for the
+inference risks. Unknown datasets and ungranted profiles answer the concealed 404, and invalid
+ranges `400 query.invalid`.
 
 {/* Evidence: crates/registry-breg/src/api/statistics.rs;
     crates/registry-breg/src/postgres/statistics.rs;
@@ -808,9 +668,8 @@ Unknown datasets and unavailable profile grants are concealed as 404. Invalid ra
 
 ## Sources
 
-The implementation and generated schemas in the same source checkout are the source of truth.
-Configuration fields are schema-generated; route, query, problem, and protocol tables are
-maintained data checked against that implementation.
+Configuration fields are schema-generated; the route, query, problem, and protocol tables are
+maintained data checked against the implementation.
 
 {/* Route, query, problem, and request tables generated from docs/site/src/data/breg-api.yaml,
     protocol tables from docs/site/src/data/breg-events.yaml, by
@@ -820,6 +679,6 @@ maintained data checked against that implementation.
 
 - [Deploy a registry](../../operate/breg/) for runtime configuration and erasure.
 - [Bind webhook receivers](../../operate/breg-webhooks/) for destinations, the signing key, and replay.
-- [Author a registry project](../../configure/breg/) for Record types, profiles, Actions, and Proposals.
+- [Actions and Proposals](../../configure/breg-actions/) for the Action and Proposal model.
 - [Base Registry Engine configuration reference](../breg-configuration/) for every project, module, and runtime key.
-- [Create and query your first registry](../../tutorials/first-breg/) to see the envelope and headers in a running server.
+- [Create your first registry](../../tutorials/first-breg/) to see these responses from a running server.

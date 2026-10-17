@@ -1,55 +1,39 @@
 ---
 title: Authenticate citizens with eSignet over Base Registry Engine (BReg)
-description: How the eSignet Base Registry Engine provider turns a governed population registry lookup into a verified OpenID Connect login, what it discloses, and where its boundaries lie.
+description: How a Base Registry Engine (BReg) registry grants the eSignet BReg provider one governed lookup, what it verifies on each call, and what each refusal means.
 status: current
 owner: registry-docs
 source_repos: [registry-stack, esignet-relay-authenticator]
-last_reviewed: "2026-09-09"
+last_reviewed: "2026-10-17"
 doc_type: explanation
 locale: en
 standards_referenced: [govstack-digital-registries, universal-dpi-safeguards]
 ---
 
-You run a population or civil registry on Base Registry Engine (BReg) and you want citizens to sign
-in to public services with [eSignet](https://docs.esignet.io/), the open-source identity and
-authentication service from the MOSIP project. The eSignet BReg provider is the piece that connects
-the two. It lets eSignet resolve a verified identifier against your registry through one governed
-lookup, and release only the demographic claims each citizen approves. This page explains what the
-provider does, what your registry must grant it, and what it deliberately leaves out. It is the
-adopter-facing account of
-[registrystack/esignet-relay-authenticator v0.3.0](https://github.com/registrystack/esignet-relay-authenticator/releases/tag/v0.3.0).
+If you run a population registry on Base Registry Engine (BReg) and an
+[eSignet](https://docs.esignet.io/) deployment, the
+[eSignet BReg provider](https://github.com/registrystack/esignet-relay-authenticator) lets citizens
+sign in to public services against your registry.
+eSignet keeps the login, the consent screen, and the signed
+[OpenID Connect](https://openid.net/specs/openid-connect-core-1_0.html) (OIDC) tokens.
+Your registry answers one governed lookup and releases only the fields each citizen approves.
+On the registry side that takes one selector profile, one access profile, one runtime entry, and
+one client at your issuer, for the provider version your deployment runs.
 
-{/* TODO[evidence]: provider behaviour (challenge verifier interface, PSUT derivation, claim
-mapping, error codes, build outputs) lives in the separate registrystack/esignet-relay-authenticator
-repository and cannot be anchored from this one. Re-verify the statements below against that
-repository's README, docs/esignet-configuration.md, and docs/breg-lookup-contract.md at the next
-release tag. */}
+{/* TODO[evidence]: provider statements on this page (challenge before any call, token request and
+cache, account check, consent intersection, the pairwise subject, error mapping, configuration keys
+and environment variables, the demo verifier) live in the separate
+registrystack/esignet-relay-authenticator repository and cannot be anchored from this one. They were
+checked on 2026-10-17 against esignet-relay-authenticator v0.6.1: its README,
+docs/esignet-configuration.md, docs/breg-lookup-contract.md, provider/config.go, provider/http.go,
+and provider/types.go. Re-verify at each provider release. */}
 
-## Who owns what
+## How a sign-in reaches your registry
 
-eSignet owns the login experience and the OpenID Connect (OIDC) surface: the relying-party
-registration, the authorization and token endpoints, the consent screen, and the signing and optional
-encryption of ID Tokens and UserInfo responses. Relying parties talk to eSignet only. They never see
-BReg.
-
-BReg owns the registry: the population records, the access profiles that decide which client may
-read which fields, the revision history, and the audit journal. It knows nothing about eSignet as a
-product. From its side, the provider is one more client with one narrow grant.
-
-The provider obtains a short-lived access token from the OAuth issuer your deployment configures.
-It authenticates as a registered `private_key_jwt` client and fixes the BReg resource and scopes in
-its own configuration, so a login request cannot widen them.
-
-The provider itself is a Go module compiled into the eSignet host. eSignet selects it by setting the
-authentication provider to `breg` and pointing it at one YAML configuration file. The provider
-contributes three things: it verifies the citizen's challenge, it performs the governed lookup, and it
-derives the claims and the pairwise subject that eSignet then signs. Everything else stays with
-eSignet.
-
-## The login flow
-
-A login takes two round trips into your registry at most, and none until the citizen has proved
-possession of their identifier.
+Relying parties talk only to eSignet, which runs the OIDC endpoints and the consent screen and
+signs the ID Token and UserInfo response.
+The provider, a Go module compiled into the eSignet host, verifies the citizen's challenge, looks
+the citizen up in your registry, and hands eSignet the claims to sign.
 
 ```mermaid
 sequenceDiagram
@@ -59,224 +43,257 @@ sequenceDiagram
     participant I as OAuth issuer
     participant B as BReg
 
-    C->>E: Enter identifier, receive challenge
-    C->>E: Submit challenge response
+    C->>E: Identifier and challenge response
     E->>P: Verify challenge
     P->>I: private_key_jwt client_credentials
     I-->>P: Short-lived access token
-    P->>B: Lookup account-check fields only
+    P->>B: Lookup account-check fields
     B-->>P: uin, status
-    E->>C: Consent screen (requested claims)
-    C->>E: Approve a subset
+    C->>E: Approve requested claims
     E->>P: Fetch approved claims
-    P->>B: Lookup approved fields only
-    B-->>P: Selected domain data
-    P-->>E: Claims plus pairwise subject
+    P->>B: Lookup approved fields
+    B-->>P: Domain data
+    P-->>E: Claims and pairwise subject
     E-->>C: Signed ID Token and UserInfo
 ```
 
-The order matters for data protection:
+The citizen's tokens never reach your registry.
+The provider authenticates as a `private_key_jwt` client to the OAuth issuer your registry already
+trusts.
+It asks for a fixed resource and scope set and caches each access token, for five minutes by default.
+BReg trusts one issuer only, so the provider's client must be registered there.
+An ID Token is addressed to the relying party, not to your registry, and BReg refuses it.
 
-1. **Challenge first.** The provider verifies the citizen's one-time code or other challenge before
-   any registry call. A wrong code never reaches BReg or the token issuer, so the registry is not an oracle for
-   guessing identifiers.
-2. **Account check with the smallest projection.** After a correct challenge, the provider looks up
-   the identifier and asks BReg for only the fields named in `account_check_fields`, typically the
-   identifier and a status field. Which records resolve at all is the access profile's decision: a
-   profile scoped to active records makes inactive ones unresolvable, and the provider reports that
-   as a denied subject.
-3. **Fresh consent every time.** eSignet shows the consent screen on every login. The provider
-   installs no remembered consent, so a citizen who approved their birthdate last month is asked
-   again today.
-4. **Second lookup limited to the approved intersection.** The provider computes the intersection of
-   the claims the citizen approved, the claims named in `claim_map`, and the fields the access profile
-   provisions. It asks BReg for exactly that set. If the intersection is empty, it makes no call at
-   all.
-5. **Only domain data becomes claims.** The provider reads the record's domain data and ignores
-   envelope metadata such as revision numbers, timestamps, and links.
+On every call BReg verifies the token's signature, issuer, type, lifetime, and audience, and that
+its `azp` or `client_id` is in `allowedClients`.
+[What a token must carry](../../operate/breg/#what-a-token-must-carry) lists each requirement.
+The token must then satisfy the profile the provider names in `accessProfile`, because naming a
+profile grants nothing.
+Three claims decide that:
 
-Authentication state between the challenge and consent steps is held server-side for five minutes and
-bound to the relying party, the client, and the transaction. A context that expires or is presented
-by a different party fails with a dedicated error code rather than a silent retry.
+- The principal claim, here `registry_principal`, recorded in the audit journal as the caller.
+- The required scope, here `registry:esignet:lookup`, which you grant to the provider's client alone.
+- The row claim, here `registry_eligible_status`, which lists the statuses the provider may resolve.
 
-## The governed lookup
+{/* Evidence: crates/registry-breg/src/auth.rs, authenticate_request, accepted_audience,
+matched_client_id, required_direct_string; crates/registry-breg/src/runtime_config.rs,
+access_token_profile; crates/registry-platform-oidc/src/lib.rs, access_token_profile;
+crates/registry-breg/src/api/mod.rs, authorize_profile_claims, verified_row_boundaries. */}
 
-The provider reaches your registry through a single fixed BReg operation: a lookup on the route you
-name, with the selector you name, under the access profile you grant. On the wire that is a `POST`
-to the route's `:lookup` operation, with `accessProfile` and `$select` query parameters and a JSON
-body carrying the selector and the verified identifier.
+A token that misses any of these gets a refusal, never a narrower answer.
+The provider adds its own safeguards:
 
-```http
-POST /v1/records/population:lookup?accessProfile=esignet-source&$select=uin,status
-Authorization: Bearer <access token>
-Content-Type: application/json
-Accept: application/json
+1. It verifies the challenge before it calls the issuer or your registry.
+2. Its first lookup asks only for `account_check_fields`, usually the identifier and a status.
+3. eSignet asks for consent on every sign-in.
+   The second lookup asks only for approved claims the provider maps and provisions, and an empty
+   set makes no call.
+4. The OIDC `sub` claim is a keyed hash of the relying party, the client, and the identifier.
+   Each relying party sees a different subject, which does not reveal the identifier.
 
-{"selector":"by-uin","values":{"uin":"<verified identifier>"}}
+## Grant the provider one lookup
+
+The examples use a `person` Record type on the `population` route with a `uin` identifier field.
+
+### Declare the lookup in the project
+
+Add a selector profile to the Record type and an access profile that grants only that lookup:
+
+```yaml title="population/registry.yaml"
+recordTypes:
+  - id: person
+    route: population
+    # fields: uin, status, given-name, family-name, birthdate
+    selectorProfiles:
+      - id: by-uin
+        fields: [uin]
+
+accessProfiles:
+  - id: esignet-source
+    principalClaim: registry_principal
+    requiredScopes: ["registry:esignet:lookup"]
+    permissions:
+      records:
+        - recordType: person
+          operations: [lookup]
+          readableFields: [uin, status, given-name, family-name, birthdate]
+          lookups:
+            - selector: by-uin
+              valueOrigin: request
+          rowBoundaries:
+            - field: status
+              claim: registry_eligible_status
+              operator: in
 ```
 
-The `$select` list is never wider than the configured provisioned fields, and BReg enforces the
-same ceiling on its side through the access profile. A misconfigured provider that asked for more
-than the profile grants receives a denial, not extra data.
+`lookups` ties the grant to `by-uin`, and `valueOrigin: request` lets the provider send the
+identifier it verified.
+The profile grants no `get`, `list`, or write operation, because the provider never needs one.
+The row boundary resolves only Records whose `status` the row claim lists, so an inactive Record
+answers like a missing one.
 
-{/* Evidence: crates/registry-breg/src/compiler.rs maps Operation::Lookup to POST on the
-"{base}:lookup" path, and crates/registry-breg/src/api/metadata.rs documents the accessProfile and
-$select query parameters the lookup accepts. docs/site/src/content/docs/reference/breg-api.mdx is
-the adopter-facing reference for the same route family. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, SelectorProfileSource, LookupPermissionSource,
+LookupValueOrigin; crates/registry-breg/src/compiler.rs, validate_selector_profiles,
+validate_lookup_permissions; crates/registry-breg/src/api/mod.rs, resolve_lookup_selector. */}
 
-## What your registry must grant
+Read the compiled grant:
 
-On the BReg side, integration is an access-control decision expressed in the registry project, not
-a code change. The provider needs:
+```sh
+bregctl explain access population
+```
 
-- **One selector profile** on the population route, for example `by-uin`, that resolves exactly one
-  record from one identifier field. The provider fails rather than picking among several matches.
-- **One access profile** dedicated to eSignet, for example `esignet-source`, granting only the
-  `lookup` operation and only the fields the provider may ever project. Leave `get`, `list`, and all
-  write operations out of it. The provider never lists or writes, so a profile that permits either is
-  wider than the integration needs.
-- **A required scope only the provider holds.** `accessProfile` is a request parameter, so the
-  profile's name isolates nothing on its own: any authenticated caller whose token satisfies the
-  profile's principal claim, purposes, and row boundaries can select it. Give the profile a
-  `requiredScopes` entry, for example `registry:esignet:lookup`. A profile that requires no scope
-  has to say so with `requiredScopes: unrestricted`, which is the wrong choice for this profile.
-- **A field list that mirrors the profile.** The provider's `provisioned_fields` must match what the
-  profile grants, and `account_check_fields` must be a non-empty subset of it that contains the
-  selector field. Keep the account check to the identifier and a status field.
-- **A separate administrative client** for anyone who edits records. The eSignet client's key is
-  lookup-only while its scopes and profile grants permit only that lookup. Do not give the client
-  additional record-write, Action, or Proposal permissions.
+The `esignet-source` block reads as follows; the rest of the output is omitted:
 
-{/* Evidence: crates/registry-breg/src/api/mod.rs, authorize_profile_claims: the selected profile
-admits a request when every entry in required_scopes is present in the verified token, so an empty
-set admits any caller that satisfies the principal claim and the row boundaries.
-crates/registry-breg/src/contract/sentinel.rs, required_scopes: the authored member is required and
-is read as unrestricted or a list of at least one scope.
-The provider configuration fixes the token resource and scopes for every exchange. */}
+```text
+    profile esignet-source
+      principal claim         registry_principal
+      operations              ["lookup"]
+      required scopes (all)   ["registry:esignet:lookup"]
+      allowed purposes (any)  unrestricted
+      readable fields         ["birthdate","family-name","given-name","status","uin"]
+      writable fields         none
+      filterable fields       none
+      sortable fields         none
+      row restrictions (all)  [{"claim":"registry_eligible_status","field":"status","operator":"in"}]
+      lookups                 [{"claimMapping":{},"selector":"by-uin","valueOrigin":"request"}]
+```
 
-Register the provider with your OAuth issuer as a `private_key_jwt` client using an ES256 or RS256
-key. Configure the provider with the exact token endpoint, assertion audience, BReg resource, and
-required scopes. The provider sends that immutable resource and scope set on every token request and
-caches each returned token for at most five minutes.
+If `lookups` names a selector the Record type does not declare, `bregctl` refuses the project with
+`breg.access-profile.lookup-selector-unknown`.
+Without the row boundary it warns `breg.access.profile-unrestricted-rows`, because every Record on
+the route could then resolve.
 
-The pages on [BReg access profiles](../../configure/breg-access/) and
-[governed registry actions](../governed-registry-actions/) explain the surrounding model.
+### Admit the provider's client
 
-## Claims and the pairwise subject
+In the runtime file, list the provider's client in `allowedClients`.
+Its `audience` and principal claim must match what the issuer will put in the token:
 
-`claim_map` in the provider configuration ties each OIDC claim name to a registry field. Three
-rules shape it:
+```yaml title="population/runtime.yaml"
+authentication:
+  oidc:
+    issuer: https://issuer.example.com
+    audience: urn:breg:population
+    allowedClients: [esignet-source, registry-admin]
+  authorityClaims:
+    principal: registry_principal
+```
 
-- **The subject is never a registry identifier.** `claim_map.sub` must be the literal `$psut`. The
-  provider derives a pairwise pseudonymous subject per relying party and client, as a base64url
-  HMAC-SHA256 over the tuple of a fixed version string, the relying party, the client, the
-  identifier type, and the identifier, keyed by a secret of at least 32 bytes read from a mounted
-  file. Two relying parties therefore receive different subjects for the same citizen, and neither
-  can recover the registry identifier from its value.
-- **Only mapped fields can ever leave.** A field that the access profile grants but `claim_map`
-  omits is never requested. A claim the citizen approves that is not mapped is silently absent.
-- **eSignet signs, the provider does not.** The provider returns plain claims and the subject.
-  Signing, JWE encryption for relying parties that request it, and key rotation are eSignet's.
+Other keys stay as your deployment sets them.
+Check the project and the runtime file together:
 
-An eSignet ID Token or UserInfo JWT authenticates a citizen to a relying party. It is not a registry
-credential. BReg and Evidence Gateway verify access tokens against their configured issuer and
-required token type, so forwarding a citizen's ID Token to either one is rejected. The only
-credential that reaches the registry is the provider's own access token.
+```sh
+bregctl check population --runtime-config population/runtime.yaml
+```
 
-{/* Evidence: crates/registry-breg/src/runtime_config.rs and crates/registry-evidence/src/auth.rs
-both build TokenVerifierConfig::access_token_profile, whose allowed_typ list is required and fails
-closed when empty (crates/registry-platform-oidc/src/lib.rs, access_token_profile). Neither runtime
-calls verify_id_token or verify_userinfo_jwt. */}
+It prints `Authoring check passed; registry revision sha256:<digest>.` first and exits `0`.
+Then deploy the changed project as
+[Check, test, package](../../operate/breg/#check-test-package) describes.
 
-## Failure behaviour
+### Issue the provider's token
 
-The provider collapses registry-side failures into a fixed set of error codes so that a relying
-party or a citizen never learns whether an identifier exists, is inactive, or is concealed:
+At your OAuth issuer, register the `esignet-source` client to authenticate with `private_key_jwt`.
+Give it an ES256 or RS256 key whose private half the provider reads from a file.
+Grant it the `registry:esignet:lookup` scope and nothing that writes.
+Configure its access tokens to carry:
 
-| Code | When |
-|---|---|
-| `registry_auth_invalid_request` | The request to the provider is malformed or the configuration rejects it. |
-| `registry_auth_challenge_failed` | The one-time code or other challenge did not verify. No registry call was made. |
-| `registry_auth_subject_denied` | The lookup resolved no record the profile may disclose. |
-| `registry_auth_unavailable` | The token issuer or BReg did not answer within the configured timeout, returned an oversized body, redirected, or omitted a configured account-check field. |
-| `registry_auth_context_invalid` | The authentication context does not match the relying party, client, or transaction. |
-| `registry_auth_context_expired` | The five-minute authentication context has lapsed. |
+- `aud` equal to `urn:breg:population`, the value the provider requests as its `resource`.
+- `registry_principal`, naming the provider as the caller.
+- `registry_eligible_status`, an array of the statuses that may sign in, such as `["active"]`.
 
-Outbound calls require HTTPS unless you explicitly allow insecure HTTP for a local fixture. They
-carry a bounded timeout (10 seconds by default), a bounded response size (1 MiB by default), and
-follow no redirects. The provider never logs selectors, tokens, or source values.
+Decode one token issued to this client and confirm each claim before you go on.
+A token without the row claim fails every lookup as if no citizen existed.
 
-## A configuration example
+### Point the provider at the registry
 
-The full grammar lives with the provider. This example shows the shape and the relationships the
-earlier sections described.
+Select the provider with `MOSIP_ESIGNET_AUTHN_PROVIDER=breg` and name its one YAML file in
+`REGISTRY_ESIGNET_CONFIG_FILE`.
+These keys connect it to the grant:
 
-```yaml
+```yaml title="provider.yaml"
 subject_id_type: uin
 psut_secret_file: /run/secrets/registry-psut
 breg:
-  base_url: https://population.example.org
+  base_url: https://registry.example.com
   route: population
   selector: by-uin
   selector_field: uin
   access_profile: esignet-source
-  provisioned_fields: [uin, status, givenName, familyName, birthdate, gender]
+  provisioned_fields: [uin, status, givenName, familyName, birthdate]
   account_check_fields: [uin, status]
 token_client:
-  token_endpoint: https://issuer.example.org/oauth2/token
-  assertion_audience: https://issuer.example.org/oauth2/token
+  token_endpoint: https://issuer.example.com/oauth2/token
+  assertion_audience: https://issuer.example.com/oauth2/token
   client_id: esignet-source
   private_key_file: /run/secrets/registry-client.jwk
   key_id: esignet-source-2026-09
   resource: urn:breg:population
-  scopes: [registry.read, records.lookup]
+  scopes: ["registry:esignet:lookup"]
 claim_map:
   sub: $psut
   given_name: givenName
   family_name: familyName
   birthdate: birthdate
-  gender: gender
-http:
-  timeout_seconds: 10
-  max_response_bytes: 1048576
-demo:
-  static_otp_enabled: false
 ```
 
-Secrets arrive as mounted files, never as inline values or environment variables. The pairwise
-subject secret and the token client key are the two the deployment must protect and rotate on its
-own schedule.
+`route`, `selector`, and `access_profile` name what the project declares; `client_id`,
+`resource`, and `scopes` match the issuer and the runtime file.
+`selector_field`, `provisioned_fields`, and `account_check_fields` take API names, which default to
+the camelCase form of each field ID, so `given-name` becomes `givenName`.
+`account_check_fields` must include `selector_field`.
+Every claim a citizen may release needs a `claim_map` entry, and `sub` must be `$psut`.
+Protect and rotate the two secret files on your own schedule.
 
-The retired top-level `mint` key is rejected. Rename it to `token_client` and add the explicit
-`assertion_audience`, `key_id`, `resource`, and nonempty `scopes` fields; there is no compatibility
-alias and no client-secret mode.
+{/* Evidence: crates/registry-breg/src/logical_names.rs, default_api_name;
+crates/registry-breg/src/api/mod.rs, parse_lookup_body, resolve_select. */}
+
+Sign in with a synthetic identifier your registry holds.
+The consent screen follows the challenge, or eSignet reports one of the codes below.
 
 :::caution[The demo verifier is for fixtures only]
-The `demo` block enables a synthetic one-time code verifier that reads codes from a static file.
-It exists for fixtures such as Solmara Lab. Production deployments supply a real challenge verifier
-through the provider's Go interface, and the host refuses to start with no verifier configured.
+The provider's `demo` block accepts one-time codes from a static file instead of proving that the
+citizen holds the identifier.
+Leave it disabled in production, where the eSignet host must have a real challenge verifier and
+refuses to start without one.
 :::
 
-## Boundaries
+## What each refusal means
 
-Version 0.3.0 draws its lines deliberately:
+BReg answers each refusal with a [problem document](../../reference/breg-api/#problem-documents),
+and the provider reads its `code`.
+The provider collapses those codes, so a relying party never learns whether an identifier exists:
 
-- **BReg only.** The provider reads from a Base Registry Engine registry. Other registry sources
-  are deferred, and Evidence Gateway is not involved: an eSignet login is an authentication,
-  not a signed minimum-disclosure assertion.
-- **No production challenge delivery.** Sending one-time codes over SMS or email, enrollment,
-  wallet-based login, and identity assurance levels are out of scope. Deployments bring their own
-  verifier.
-- **No Java path.** Earlier releases shipped a Java authenticator and JAR injection. Version 0.3.0
-  replaces them with the Go provider, strict YAML, and mounted secret files, with no compatibility
-  layer.
-- **Source-integrated build.** The provider is compiled into a pinned eSignet release rather than
-  loaded as a plugin, and ships as an OCI image with checksums, an SBOM, and provenance. Publishing
-  that image and running it as a hosted service are separate operator actions.
+| BReg answers | When | Provider reports |
+|---|---|---|
+| `401` `authentication.refused` | The token's signature, issuer, type, lifetime, or audience fails, its client is not in `allowedClients`, or it lacks the principal claim. | `registry_auth_unavailable`, after dropping its cached token |
+| `404` `resource.not_found` | The token lacks the profile's scope, principal claim, or row claim; the profile does not exist or grant `lookup`; or `$select` names a field it cannot read. | `registry_auth_subject_denied` |
+| `404` `lookup.unresolved` | No single Record matches inside the row boundary, or the profile has no `lookups` entry for the selector. | `registry_auth_subject_denied` |
+| `400` `request.invalid` | The `values` keys in the request body are not the selector's API names. | `registry_auth_unavailable` |
+
+{/* Evidence: crates/registry-breg/src/problem.rs, ProblemCode, AuthenticationRefused,
+ResourceNotFound, LookupUnresolved, RequestInvalid; crates/registry-breg/src/auth.rs,
+authenticate_request, accepted_audience, matched_client_id; crates/registry-breg/src/api/mod.rs,
+lookup_dispatch, authorize_profile_claims, resolve_select, parse_lookup_body,
+resolve_lookup_selector, lookup_unresolved, concealed, audited_read_concealment;
+crates/registry-breg/src/api/service.rs, RecordReadRefusal. */}
+
+A profile that grants `lookup` with no `lookups` entry passes `bregctl check`, yet every lookup
+answers `lookup.unresolved`.
+Because both `404` codes look alike, a grant mistake reads as an unknown citizen.
+When every sign-in is denied, compare a decoded token with the `bregctl explain access` output
+before you suspect the data.
+The audit journal records each refused lookup with its principal and selected profile, but not
+which check failed.
+
+Timeouts, redirects, and oversized responses also report `registry_auth_unavailable`.
+The provider's other codes never involve your registry.
+`registry_auth_challenge_failed` reports a failed challenge.
+`registry_auth_context_invalid` and `registry_auth_context_expired` report a five-minute sign-in
+context that does not match or has lapsed.
 
 ## Next
 
-- [Configure BReg access profiles](../../configure/breg-access/) to define the lookup-only grant.
-- [BReg HTTP API reference](../../reference/breg-api/) for the lookup route and problem documents.
-- [Data minimization and purpose limitation](../data-minimization-and-purpose-limitation/) for the
-  principles this integration applies.
+- [Query a registry from Python and Node](../../tutorials/query-breg-client/) to read the same
+  registry from your own application.
+- [Control access and reads](../../configure/breg-access/) for every profile key used here.
+- [Data minimization and purpose limitation by design](../data-minimization-and-purpose-limitation/)
+  for the principles this integration applies.

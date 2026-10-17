@@ -278,9 +278,11 @@ EVIDENCE_TUTORIAL_INPUTS = (
 )
 
 # Every input the Base Registry Engine tutorial gate replays or is built from:
-# the page runner, the pages whose frontmatter it replays, and the build inputs
-# of the binaries it runs. Native Proposal attachments are exercised by the
-# PostgreSQL lane.
+# the page runner, the pages whose frontmatter it replays (tutorials and the
+# opt-in configure and explanation pages alike), and the build inputs of the
+# binaries it runs. Native Proposal attachments are exercised by the
+# PostgreSQL lane. The replayed pages here must stay in step with their
+# tutorial_test frontmatter, which test_ci_changes.py enforces.
 BREG_TUTORIAL_INPUTS = (
     "Cargo.lock",
     "Cargo.toml",
@@ -288,11 +290,26 @@ BREG_TUTORIAL_INPUTS = (
     "docs/site/package.json",
     "docs/site/scripts/run-tutorial.mjs",
     "docs/site/scripts/tutorial-runner/**",
+    "docs/site/src/content/docs/configure/breg-access.mdx",
+    "docs/site/src/content/docs/configure/breg-actions.mdx",
+    "docs/site/src/content/docs/configure/breg-journeys.mdx",
+    "docs/site/src/content/docs/configure/breg.mdx",
+    "docs/site/src/content/docs/explanation/registry-modeling-patterns.mdx",
+    "docs/site/src/content/docs/tutorials/change-a-registry-with-an-action.mdx",
     "docs/site/src/content/docs/tutorials/derive-a-registry-from-publicschema.mdx",
     "docs/site/src/content/docs/tutorials/extend-a-registry-with-a-module.mdx",
     "docs/site/src/content/docs/tutorials/first-breg.mdx",
-    "docs/site/src/content/docs/tutorials/review-registry-changes.mdx",
+    "docs/site/src/content/docs/tutorials/query-breg-client.mdx",
     "docs/site/src/content/docs/tutorials/send-registry-events-to-a-webhook.mdx",
+    # The client tutorial imports the maintained client packages, and the
+    # runner assembles them from this commit with these scripts and this
+    # pinned build tool. A change to any of them changes what the replay
+    # imports.
+    "release/requirements/maturin-1.9.6.txt",
+    "release/scripts/assemble-registry-client-packages.py",
+    "release/scripts/assemble-registry-client-wheel.py",
+    "release/scripts/build-linux-python-client",
+    "release/scripts/zig-glibc-compiler",
 )
 
 # Every input the Registry Casework tutorial gate replays or is built from: the
@@ -433,13 +450,15 @@ ASSEMBLED_PYTHON_CLIENT_PACKAGES = frozenset(
     package for package in NATIVE_BINDING_PACKAGES if package.endswith("-client-py")
 )
 
-# The gate builds and runs exactly these: the registry, the tool that applies
-# its package, and issuer tooling, because the `bregctl dev` session the
-# tutorial starts issues the operator token the reader's first authenticated call carries. The
-# clients in the Base Registry Engine shard are not on the replayed path.
+# The gate builds and runs the registry, the tool that applies its package, and
+# issuer tooling, because the `bregctl dev` session the tutorial starts issues
+# the operator token the reader's first authenticated call carries. The client
+# tutorial installs the unified Node.js and Python packages, which the runner
+# assembles from every product's native binding, so a change to any binding
+# changes what the replay imports, whichever product it belongs to.
 BREG_TUTORIAL_PACKAGES = frozenset(
     {"registry-breg", "registry-bregctl", "registry-thunderid-tooling"}
-)
+) | NATIVE_BINDING_PACKAGES
 
 # The gate builds and runs exactly these: the Casework runtime, the tool that
 # starts and seeds the local session, and issuer tooling, because every call the

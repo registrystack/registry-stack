@@ -1,11 +1,11 @@
 ---
 title: Extend a registry with a module
-description: Extend the native contact Record type through a module, grant its field, pin the source, and generate its schema.
+description: Add an optional note to the contact Record type through a module, let the editor read and write it, pin the module, check it for production, and see it in the generated schema.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-08"
+last_reviewed: "2026-10-17"
 doc_type: tutorial
 persona:
   - data publisher
@@ -15,31 +15,34 @@ standards_referenced:
   - json-schema
 tutorial_test:
   toolset: breg
-  after: tutorials/first-breg
+  after: tutorials/query-breg-client
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you completed the first Base Registry Engine (BReg) tutorial, add an optional contact note through a
-module, grant it explicitly, and pin the module's exact bytes before generating
-the updated schema. This exercise changes files without starting a registry.
+In about fifteen minutes you will add an optional internal note to every contact without editing
+the contact Record type itself: the module written, pinned, checked for production, and visible in
+the generated schema.
 
 <QuickstartMeta
-  outcome="A native module extending the contact Record type, with explicit field grants and a content lock."
+  outcome="The contact Record type extended by a pinned module that passes the production check and appears in the generated schema."
   time="About 15 minutes"
-  level="Offline authoring"
-  prerequisites={['The tutorial-work/project directory from the first BReg tutorial', 'Matching bregctl binary', 'An editor']}
+  level="Local evaluation only"
+  prerequisites={['The project from Change a registry with an Action, with its registry running', 'An editor']}
 />
 
-## Add a module
+## Write the module
 
-```sh
-mkdir -p tutorial-work/project/modules/contact-notes
+A [module](../../reference/glossary/#module) is a separate file of additions to a project. In the
+project directory, create its folder:
+
+```sh test-cwd="tutorial-work/project"
+mkdir -p modules/contact-notes
 ```
 
-Create `tutorial-work/project/modules/contact-notes/module.yaml` with this content:
+Create `modules/contact-notes/module.yaml`:
 
-```yaml title="tutorial-work/project/modules/contact-notes/module.yaml" test-file
+```yaml title="modules/contact-notes/module.yaml" test-file
 apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
 kind: BRegModule
 id: contact-notes
@@ -54,9 +57,9 @@ extendRecordTypes:
         classification: internal
 ```
 
-Register the module in `tutorial-work/project/registry.yaml`, before `datasets`:
+Add the module to `registry.yaml`, before `datasets`:
 
-```diff lang="yaml" title="tutorial-work/project/registry.yaml" test-edit
+```diff lang="yaml" title="registry.yaml" test-edit
 -datasets:
 +modules:
 +  - id: contact-notes
@@ -65,55 +68,117 @@ Register the module in `tutorial-work/project/registry.yaml`, before `datasets`:
 +datasets:
 ```
 
-## Grant the field explicitly
+## Let the editor read and write the note
 
-Adding a field grants no disclosure or write authority. Add it to the editor's
-record permission:
+A new field is hidden from every caller until an access profile names it. Add it to the editor's
+fields:
 
-```diff lang="yaml" title="tutorial-work/project/registry.yaml" test-edit
+```diff lang="yaml" title="registry.yaml" test-edit
 -          readableFields: [name, email, jurisdiction]
 -          writableFields: [name, email, jurisdiction]
 +          readableFields: [name, email, jurisdiction, internal-note]
 +          writableFields: [name, email, jurisdiction, internal-note]
 ```
 
-The jurisdiction boundary is unchanged. The note receives no filter, sort, or
-other profile grant.
+Who may read a contact is unchanged.
 
-## Pin and check the source
-
-```sh
-bregctl project lock tutorial-work/project
-bregctl check tutorial-work/project --production
-```
-
-Inspect `registry.yaml` for the module digest. The lock binds its version and exact
-source bytes. A later module edit requires another deliberate lock and check;
-changing generated output cannot repair a source mismatch. Read a diagnostic's
-named file and member if the check refuses.
-
-## Generate the field contract
+## Pin the module and check
 
 ```sh
-bregctl generate schemas tutorial-work/project --output tutorial-work/contact-schemas
+bregctl project lock .
 ```
 
-Open `tutorial-work/contact-schemas/generated/schemas/contact.schema.json`.
-The optional note uses its generated API name `internalNote` and maximum length.
-The existing required contact fields remain required. Generation needs a fresh
-output path; choose another path for the next candidate.
+```text test-expect
+Locked the project modules. 1 artifact written.
+  revision  sha256:<digest>
 
-No database changed. Activating a successor over retained records requires the
-normal test, package, and operator lifecycle. The first tutorial's disposable
-session remains stopped; do not remove a serving database to apply this edit.
+  registry.yaml
 
-{/* Evidence: crates/registry-breg/src/contract.rs, RegistryModule and EntityExtensionSource;
+{
+  "changed": true,
+  "modules": [
+    {
+      "digest": "sha256:<digest>",
+      "id": "contact-notes",
+      "status": "updated",
+      "version": "0.1.0"
+    }
+  ]
+}
+```
+
+The lock writes the digest of the module's exact bytes into `registry.yaml`. If the module file
+changes later, the check fails until you lock again.
+
+```sh
+bregctl check . --production
+```
+
+```text test-expect
+Production check passed; registry revision sha256:<digest>.
+0 errors, 0 warnings in 4 files
+```
+
+## Generate the contact schema
+
+```sh
+bregctl generate schemas . --output ../contact-schemas
+```
+
+```text test-expect
+Generated 7 artifacts.
+  revision  sha256:<digest>
+
+  generated/action-schemas/register-contact.invoke.input.schema.json
+  generated/action-schemas/register-contact.invoke.response.schema.json
+  generated/action-schemas/update-contact-email.invoke.input.schema.json
+  generated/action-schemas/update-contact-email.invoke.response.schema.json
+  generated/action-schemas/update-contact-email.target-conditions.input.schema.json
+  generated/action-schemas/update-contact-email.target-conditions.response.schema.json
+  generated/schemas/contact.schema.json
+```
+
+These JSON Schemas describe what the API accepts and returns. In
+`../contact-schemas/generated/schemas/contact.schema.json`, the note appears as `internalNote`: a
+string of at most 2000 characters, or null, and not in the `required` list.
+
+```json title="contact.schema.json" test-excerpt="../contact-schemas/generated/schemas/contact.schema.json"
+{
+  "internalNote": {
+    "anyOf": [
+      {
+        "maxLength": 2000,
+        "type": "string"
+      },
+      {
+        "type": "null"
+      }
+    ]
+  }
+}
+```
+
+## Stop the registry
+
+The running registry was built from the project as it was, and its test data was written for that
+version. Stop it and discard that data:
+
+```sh
+bregctl dev stop --remove
+```
+
+```text test-excerpt
+bregctl dev succeeded.
+  status          stopped
+```
+
+Keep the project: the next `bregctl dev start` in this directory runs it with the note.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, RegistryModule;
     crates/registry-bregctl/src/lib.rs, ProjectLockArgs;
     products/breg/examples/minimal/registry.yaml;
     crates/registry-breg/src/artifacts.rs. */}
 
 ## Next
 
-- [Author a registry project](../../configure/breg/)
-- [Test with journeys](../../configure/breg-journeys/)
-- [Build a production candidate](../build-a-breg-production-candidate/)
+[Send registry events to a webhook](../send-registry-events-to-a-webhook/)

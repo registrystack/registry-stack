@@ -16,11 +16,7 @@
 export const PRODUCT_PAGES = Object.freeze({
   // The Base Registry Engine citizen services, breg-mcp and breg-review. The
   // Base Registry Engine itself is published by every docset.
-  'registry-breg-services': Object.freeze([
-    'tutorials/first-citizen-mcp',
-    'configure/breg-mcp',
-    'operate/breg-mcp',
-  ]),
+  'registry-breg-services': Object.freeze(['configure/breg-mcp']),
   'registry-messaging': Object.freeze([
     'start/messaging',
     'tutorials/first-messaging',

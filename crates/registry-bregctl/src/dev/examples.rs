@@ -828,7 +828,11 @@ fn run_example(args: RunArgs) -> Result<Value> {
         &args,
     ));
     if let Err(error) = result {
-        if directory.join(format!("{}.json", attempt.id)).exists() {
+        if directory.join(format!("{}.json", attempt.id)).exists()
+            && error
+                .downcast_ref::<proposals::SettledApplication>()
+                .is_none()
+        {
             let mut resume = format!(
                 "bregctl examples run {} {} --attempt {}",
                 scenario.id,
@@ -1982,6 +1986,13 @@ mod tests {
         ))
         .unwrap();
         source["package"] = json!({"sourceRevision":"native-example-recovery"});
+        // Recovery covers generated CRUD only; the canonical Actions stay out.
+        source.as_object_mut().unwrap().remove("actions");
+        let editor = source["accessProfiles"][0]["permissions"]
+            .as_object_mut()
+            .unwrap();
+        editor.remove("actions");
+        editor.remove("proposals");
         let contact = &mut source["recordTypes"][0];
         contact["constraints"] =
             json!([{"id":"contact-email-unique","type":"unique","fields":["email"]}]);

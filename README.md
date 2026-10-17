@@ -50,7 +50,7 @@ its own deployment contract and adopter tooling, and each one is optional.
   Two supporting services run beside it: `breg-mcp`, an MCP gateway a chat
   host uses to read one verified citizen's own data and draft a Proposal,
   and `breg-review`, the page where that citizen reviews and submits the draft.
-  Docs: [Run a citizen chat assistant locally](https://docs.registrystack.org/dev/tutorials/first-citizen-mcp/).
+  Docs: [Citizen chat assistant](https://docs.registrystack.org/dev/configure/breg-mcp/).
 - **Evidence Gateway:** signed, minimum-disclosure assertions from fixed
   requests to authoritative sources. Version 1 excludes credential lifecycles,
   documents, federation, and a general policy engine.

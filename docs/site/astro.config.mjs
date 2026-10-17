@@ -4,7 +4,7 @@ import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
-import starlightOpenAPI, { openAPISidebarGroups } from 'starlight-openapi';
+import starlightOpenAPI, { createOpenAPISidebarGroup, openAPISidebarGroups } from 'starlight-openapi';
 import mermaid from 'astro-mermaid';
 import remarkGfm from 'remark-gfm';
 // Single source of truth for the machine-discovery pointer. Reused as the
@@ -15,6 +15,7 @@ import { cliReferenceSidebar } from './src/lib/cli-reference-sidebar.mjs';
 import { flattenSidebarGroups } from './src/lib/sidebar.mjs';
 import { buildNotaryRetirementRedirects } from './src/lib/notary-retirement-redirects.mjs';
 import { buildRelayRetirementRedirects } from './src/lib/relay-retirement-redirects.mjs';
+import { docsetPublishesBregOpenApi } from './scripts/fetch-openapi.mjs';
 import { omittedCliBinaries, productRoutes, remarkDocsetProducts } from './src/lib/docset-products.mjs';
 
 // Marketing site that now owns the persuasion layer (the pitch). Old docs
@@ -107,7 +108,6 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
 const docsetsManifest = loadDocsetsManifest();
 const {
   base,
-  isArchivedBuild,
   isHistoricalArchiveBuild,
   isSearchExcludedBuild,
   hasCasework,
@@ -122,6 +122,7 @@ const {
   internalRedirect,
   currentDocsetRedirect,
 } = resolveDocsetBuildContext(docsetsManifest);
+const hasBregOpenApi = docsetPublishesBregOpenApi(selectedDocset, docsetsManifest.current);
 const productSidebar = loadProductSidebar();
 
 // Lift a generated per-product group to the top level of the sidebar.
@@ -206,6 +207,23 @@ export function messagingRedirects(hasMessaging, currentHasMessaging, currentDoc
     ];
   }));
 }
+// A registry's API is compiled from its project, so the site renders the
+// facility template's compiled document as an example. scripts/fetch-openapi.mjs
+// fetches it for the current docset and release docsets from v0.42.0, and the
+// same test decides whether this build renders it.
+// Its operations fill their own placeholder group: openAPISidebarGroups is a
+// single placeholder that receives every schema without a group.
+const bregOpenApiSidebarGroup = createOpenAPISidebarGroup();
+const bregOpenApiSchema = {
+  base: 'reference/apis/breg',
+  schema: './openapi/registry-breg.render.openapi.json',
+  sidebar: {
+    group: bregOpenApiSidebarGroup,
+    label: 'API operations (facility template)',
+    collapsed: true,
+    operations: { labels: /** @type {'path'} */ ('path'), badges: true },
+  },
+};
 const coordinatorOpenApiSchema = {
   base: 'reference/apis/coordinator',
   schema: './openapi/registry-coordinator.render.openapi.json',
@@ -258,6 +276,37 @@ export function caseworkRedirects(hasCasework, currentDocsetRedirect) {
   ]));
 }
 
+// The Base Registry Engine docs rewrite moved or folded these pages into the
+// pages that now carry their content. The Actions page is named after what it
+// declares, and field encryption is a thing an author does to a project, so
+// both sit in the Author group.
+const bregRewriteMoves = [
+  ['/configure/breg-change-control/', '/configure/breg-actions/'],
+  ['/explanation/breg-field-encryption/', '/configure/breg-field-encryption/'],
+  ['/tutorials/review-registry-changes/', '/tutorials/change-a-registry-with-an-action/'],
+  ['/tutorials/build-a-breg-production-candidate/', '/operate/breg/'],
+  ['/tutorials/first-citizen-mcp/', '/configure/breg-mcp/'],
+  ['/tutorials/deploy-evidence-from-breg/', '/tutorials/evidence-from-breg/'],
+  ['/explanation/governed-registry-actions/', '/configure/breg-actions/'],
+  ['/explanation/native-field-patterns/', '/explanation/registry-modeling-patterns/'],
+  ['/explanation/breg-statistical-datasets/', '/configure/breg-statistics/'],
+  ['/explanation/membership-read-boundaries/', '/configure/breg-access/'],
+  ['/explanation/deriving-a-registry-from-a-model/', '/tutorials/derive-a-registry-from-publicschema/'],
+  ['/explanation/openfn-adaptors/', '/explanation/integration-patterns/'],
+  ['/operate/breg-requirements/', '/operate/breg/'],
+  ['/operate/breg-mcp/', '/configure/breg-mcp/'],
+];
+
+/**
+ * @param {(path: string) => string} internalRedirect
+ */
+export function bregRewriteRedirects(internalRedirect) {
+  return Object.fromEntries(bregRewriteMoves.flatMap(([route, target]) => [
+    [route, internalRedirect(target)],
+    [`${route.slice(0, -1)}.md`, internalRedirect(target)],
+  ]));
+}
+
 export default defineConfig({
   site: 'https://docs.registrystack.org',
   base,
@@ -295,7 +344,8 @@ export default defineConfig({
     // The operating-requirements pages moved from Start into each product's
     // Deploy group; a first visit chooses a product before it plans a deployment.
     '/start/evaluate-evidence/': internalRedirect('/operate/evidence-requirements/'),
-    '/start/evaluate-breg/': internalRedirect('/operate/breg-requirements/'),
+    '/start/evaluate-breg/': internalRedirect('/operate/breg/'),
+    ...bregRewriteRedirects(internalRedirect),
     // One client package documents the retained namespaces in one reference.
     '/reference/breg-client-api/': internalRedirect('/reference/client-api/'),
     // The deprecation rules are a section of the one stability promise page.
@@ -406,6 +456,7 @@ export default defineConfig({
           ...[schedulingOpenApiSchema].filter(() => hasScheduling),
           ...[messagingOpenApiSchema].filter(() => hasMessaging),
           ...[coordinatorOpenApiSchema].filter(() => hasCoordinator),
+          ...[bregOpenApiSchema].filter(() => hasBregOpenApi),
         ]),
       ],
       defaultLocale: 'root',
@@ -465,7 +516,6 @@ export default defineConfig({
                 { label: 'Configure token acquisition', slug: 'configure/request-an-access-token' },
                 { label: 'Verify and retain assertions', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
                 { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
-                { label: 'Automate with OpenFn', slug: 'explanation/openfn-adaptors' },
               ],
             },
             {
@@ -532,63 +582,60 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'start/breg-quickstart' },
             { label: 'Your first registry', slug: 'tutorials/first-breg' },
-            { label: 'How registries work', slug: 'explanation/configuration-defined-registry' },
+            { label: 'How a registry works', slug: 'explanation/configuration-defined-registry' },
             {
               label: 'Tutorials',
               collapsed: true,
               items: [
+                { label: 'Change it with an Action', slug: 'tutorials/change-a-registry-with-an-action' },
                 { label: 'Extend with a module', slug: 'tutorials/extend-a-registry-with-a-module' },
                 { label: 'Derive from PublicSchema', slug: 'tutorials/derive-a-registry-from-publicschema' },
-                { label: 'Review changes', slug: 'tutorials/review-registry-changes' },
-                { label: 'Send events to a webhook', slug: 'tutorials/send-registry-events-to-a-webhook' },
+                { label: 'Query and change from Python and Node', slug: 'tutorials/query-breg-client' },
               ],
             },
             {
-              label: 'Model a registry',
+              label: 'Author a registry',
               collapsed: true,
               items: [
-                { label: 'Project configuration', slug: 'configure/breg' },
-                { label: 'Access profiles', slug: 'configure/breg-access' },
-                { label: 'Change requests and actions', slug: 'configure/breg-change-control' },
-                { label: 'Test with journeys', slug: 'configure/breg-journeys' },
+                { label: 'Author a project', slug: 'configure/breg' },
                 { label: 'Modeling patterns', slug: 'explanation/registry-modeling-patterns' },
-                { label: 'Governed actions', slug: 'explanation/governed-registry-actions' },
-                { label: 'Native field patterns', slug: 'explanation/native-field-patterns' },
-                { label: 'Field encryption', slug: 'explanation/breg-field-encryption' },
-                { label: 'Live counts and statistical releases', slug: 'explanation/breg-statistical-datasets' },
-                { label: 'Publish a statistical series', slug: 'configure/breg-statistics' },
-                { label: 'Membership and consent read boundaries', slug: 'explanation/membership-read-boundaries' },
-                { label: 'Deriving from a model', slug: 'explanation/deriving-a-registry-from-a-model' },
+                { label: 'Control access and reads', slug: 'configure/breg-access' },
+                { label: 'Actions and Proposals', slug: 'configure/breg-actions' },
+                { label: 'Encrypt a field', slug: 'configure/breg-field-encryption' },
+                { label: 'Publish statistics', slug: 'configure/breg-statistics' },
+                { label: 'Test with journeys', slug: 'configure/breg-journeys' },
               ],
             },
             {
-              label: 'Deploy',
+              label: 'Deploy and operate',
               collapsed: true,
               items: [
-                { label: 'What you need to run it', slug: 'operate/breg-requirements' },
-                { label: 'Build a production candidate', slug: 'tutorials/build-a-breg-production-candidate' },
-                { label: 'Deploy a registry', slug: 'operate/breg' },
-                { label: 'Bind webhook receivers', slug: 'operate/breg-webhooks' },
-              ],
-            },
-            {
-              label: 'Operate',
-              collapsed: true,
-              items: [
+                { label: 'Deploy and serve', slug: 'operate/breg' },
                 { label: 'Change an active registry', slug: 'operate/breg-changes' },
+                { label: 'Monitor and recover', slug: 'operate/breg-monitor' },
                 { label: 'Retain, erase, and audit', slug: 'operate/breg-retention' },
                 { label: 'Move data in bulk', slug: 'operate/breg-data' },
+                { label: 'Bind webhook receivers', slug: 'operate/breg-webhooks' },
               ],
             },
             {
               label: 'Use from applications',
               collapsed: true,
               items: [
-                { label: 'Query with Python and Node', slug: 'tutorials/query-breg-client' },
+                { label: 'Client reference', slug: 'reference/breg-client-capabilities' },
                 { label: 'Client API reference', slug: 'reference/client-api' },
-                { label: 'Client capabilities', slug: 'reference/breg-client-capabilities' },
+                { label: 'API reference', slug: 'reference/breg-api' },
+                { label: 'PublicSchema wizard', slug: 'reference/bregctl-publicschema-wizard' },
                 { label: 'Authenticate with eSignet', slug: 'explanation/esignet-authentication-over-breg' },
-                { label: 'Automate with OpenFn', slug: 'explanation/openfn-adaptors' },
+              ],
+            },
+            {
+              label: 'Compose',
+              collapsed: true,
+              items: [
+                { label: 'Send events to a webhook', slug: 'tutorials/send-registry-events-to-a-webhook' },
+                { label: 'Serve a lookup to Evidence', slug: 'tutorials/evidence-from-breg' },
+                { label: 'Review a Proposal in Casework', slug: 'tutorials/review-breg-changes-in-casework' },
               ],
             },
             // breg-mcp and breg-review are published only by docsets that carry
@@ -597,14 +644,11 @@ export default defineConfig({
               label: 'Citizen chat assistant',
               collapsed: true,
               items: [
-                { label: 'Run it locally', slug: 'tutorials/first-citizen-mcp' },
-                { label: 'Configure the gateway and review page', slug: 'configure/breg-mcp' },
-                { label: 'Operate the gateway and review page', slug: 'operate/breg-mcp' },
+                { label: 'Citizen chat assistant', slug: 'configure/breg-mcp' },
               ],
             }] : []),
             { label: 'Configuration reference', slug: 'reference/breg-configuration' },
-            { label: 'API reference', slug: 'reference/breg-api' },
-            { label: 'PublicSchema wizard prompts', slug: 'reference/bregctl-publicschema-wizard' },
+            ...(hasBregOpenApi ? [bregOpenApiSidebarGroup] : []),
           ],
         },
         ...(hasCasework ? [{
@@ -613,7 +657,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'start/casework' },
             { label: 'Decide your first review request', slug: 'tutorials/first-casework' },
-            { label: 'Pair BReg review context', slug: 'tutorials/review-breg-changes-in-casework' },
+            { label: 'Review a Proposal in Casework', slug: 'tutorials/review-breg-changes-in-casework' },
             { label: 'How Casework works', slug: 'explanation/how-casework-works' },
             { label: 'Author a policy', slug: 'configure/casework' },
             { label: 'Deploy Casework', slug: 'operate/casework' },

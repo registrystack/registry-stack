@@ -25,6 +25,10 @@
 // both: it declares either one, with a skip reason.
 // A new tutorial therefore fails the gate on the commit that adds it, until it
 // is replayed or says why not.
+//
+// Pages under configure/, explanation/, operate/, or reference/ join the gate
+// by declaring tutorial_test, and then meet every rule above; one that does not
+// declare it is outside the gate, whatever its sh fences run.
 
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -33,6 +37,7 @@ import YAML from 'yaml';
 import { readJourney } from './page.mjs';
 
 const SECTIONS = ['start', 'tutorials'];
+const OPT_IN_SECTIONS = ['configure', 'explanation', 'operate', 'reference'];
 const KEYS = new Set(['toolset', 'after', 'skip', 'checkout']);
 
 export function frontmatter(text) {
@@ -42,10 +47,10 @@ export function frontmatter(text) {
 
 async function readPages(docsRoot) {
   const pages = [];
-  for (const section of SECTIONS) {
+  for (const section of [...SECTIONS, ...OPT_IN_SECTIONS]) {
     let names;
     try {
-      names = await readdir(join(docsRoot, section));
+      names = await readdir(join(docsRoot, section), { recursive: true });
     } catch (error) {
       if (error.code === 'ENOENT') continue;
       throw error;
@@ -60,6 +65,7 @@ async function readPages(docsRoot) {
         pages.push({ slug, unreadable: error.message.split('\n')[0] });
         continue;
       }
+      if (declaration === undefined && OPT_IN_SECTIONS.includes(section)) continue;
       const { steps, errors } = readJourney(text);
       const commands = steps.filter((step) => step.code !== undefined).map((step) => step.code);
       const replayedCommands = steps.filter((step) => step.kind === 'run').map((step) => step.code);
@@ -164,7 +170,7 @@ export async function planGate(docsRoot, toolset, toolsets) {
     if (after === undefined) continue;
     if (skippedSlugs.has(after)) errors.push(`${slug}.mdx: tutorial_test.after names ${after}, which is skipped`);
     else if (!replayed.has(after)) {
-      errors.push(`${slug}.mdx: tutorial_test.after names ${after}, which no page under start/ or tutorials/ replays with ${toolset}`);
+      errors.push(`${slug}.mdx: tutorial_test.after names ${after}, which no page in the gate replays with ${toolset}`);
     } else if (chain(slug) === undefined) errors.push(`${slug}.mdx: tutorial_test.after leads back to itself`);
     else if (checkout.has(slug)) {
       errors.push(`${slug}.mdx: tutorial_test.checkout belongs on ${chain(slug)[0]}, where the journey starts`);

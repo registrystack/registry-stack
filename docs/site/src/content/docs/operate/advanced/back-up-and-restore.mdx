@@ -28,9 +28,12 @@ up these alongside every database backup, on the same schedule:
 
 ### Base Registry Engine state
 
-- The PostgreSQL database, with `pg_dump` before every activation, as
-  [Back up and restore the database](../../breg-changes/#back-up-and-restore-the-database)
-  describes.
+- The PostgreSQL database, taken with `pg_dump` before every activation, as an administrator:
+
+  ```sh
+  pg_dump --format=custom --file=/srv/backup/registry-before-build-2.dump registry
+  ```
+
 - The package directory, the runtime file, and the secret files it
   references. A restore needs the package the backup was taken under.
 - The field-encryption key when the project encrypts a field: the Transit key, or the local
@@ -122,9 +125,31 @@ captured under the event source it derives, so while any of them remains, `bregc
 a changed value with `startup.instance-id.pending-deliveries` and `breg` refuses to start. Change
 it, if you must, only after those deliveries drain.
 
-Follow
-[Back up and restore the database](../../breg-changes/#back-up-and-restore-the-database) through
-`verify` and `instance-claim status`, then retire the original for good and adopt the copy:
+Recreate the database with the database-level statements from
+[provision PostgreSQL](../../breg/#provision-postgresql), which a dump does not carry, and restore
+the dump into it as an administrator:
+
+```sql
+CREATE DATABASE registry_restored;
+REVOKE ALL ON DATABASE registry_restored FROM PUBLIC;
+GRANT CONNECT ON DATABASE registry_restored TO registry_migration, registry_runtime;
+```
+
+```sh
+pg_restore --exit-on-error --dbname=registry_restored /srv/backup/registry-before-build-2.dump
+```
+
+Point the runtime file's database references at the restored database, then check it before
+anything serves from it:
+
+```sh
+bregctl verify --runtime-config /etc/breg/runtime.yaml
+bregctl --format json instance-claim status --runtime-config /etc/breg/runtime.yaml
+```
+
+A restored database pinned in maintenance needs
+[`migration reconcile`](../../breg-changes/#recover-a-failed-activation) first. Then retire the
+original for good and adopt the copy:
 
 ```sh
 bregctl --format json instance-claim adopt \
@@ -201,7 +226,7 @@ Once the copy serves, work through these:
   backup. While the review environment is still unreachable, the code is
   `result-lookup-uncertain` instead, which `resubmit` refuses; it changes once the restored
   environment answers. Recover each with
-  [`bregctl review-recovery resubmit` or `close`](../../breg/#resubmit-or-close-a-review-the-authority-lost).
+  [`bregctl review-recovery resubmit` or `close`](../../breg-changes/#resubmit-or-close-a-review-the-authority-lost).
 
 {/* Evidence: docs/site/src/content/docs/operate/breg-retention.mdx, "Erasure does not reach
     backups"; crates/registry-breg/src/action_evidence_client.rs,
