@@ -335,7 +335,7 @@ impl fmt::Display for FixtureError {
                 "the fixture credential is missing the configured actor-kind claim"
             }
             Self::AuthenticationCredentialRefused => {
-                "the fixture credential failed token verification; check its signing key, signature, issuer, and validity period"
+                "the fixture credential failed token verification; check its signing key, signature, issuer, audience, and validity period"
             }
             Self::ResponseTooLarge => "the fixture response exceeded a fixed bound",
             Self::ResponseShapeRefused => "the fixture response shape was refused",
@@ -3791,11 +3791,25 @@ impl SchemaTestRuntime {
     }
 }
 
+/// A refusal that describes the token itself is a refused credential, as the
+/// runtime authenticator treats it; a key source or configuration failure
+/// is not.
 fn fixture_verification_error(error: registry_platform_oidc::OidcError) -> FixtureError {
-    if matches!(error, registry_platform_oidc::OidcError::UnknownKid) {
-        FixtureError::AuthenticationCredentialRefused
-    } else {
-        FixtureError::RequestConstructionRefused
+    use registry_platform_oidc::OidcError;
+    match error {
+        OidcError::IssuerMismatch { .. }
+        | OidcError::MalformedToken
+        | OidcError::AlgorithmNotAllowed
+        | OidcError::TokenTypeNotAllowed
+        | OidcError::MissingKid
+        | OidcError::KidTooLong
+        | OidcError::UnknownKid
+        | OidcError::TokenExpired
+        | OidcError::TokenNotYetValid
+        | OidcError::AudienceMismatch
+        | OidcError::SignatureInvalid
+        | OidcError::InvalidToken => FixtureError::AuthenticationCredentialRefused,
+        _ => FixtureError::RequestConstructionRefused,
     }
 }
 
@@ -6054,10 +6068,44 @@ mod tests {
             fixture_authentication_error(crate::auth::AuthenticationError::MissingActorKind),
             FixtureError::AuthenticationActorKindMissing
         );
-        assert_eq!(
-            fixture_verification_error(registry_platform_oidc::OidcError::UnknownKid),
-            FixtureError::AuthenticationCredentialRefused
-        );
+        // Every verification refusal that describes the token itself is a
+        // refused credential, as the runtime authenticator treats it.
+        for error in [
+            registry_platform_oidc::OidcError::IssuerMismatch {
+                expected: "issuer-canary-expected".to_owned(),
+                actual: "issuer-canary-actual".to_owned(),
+            },
+            registry_platform_oidc::OidcError::MalformedToken,
+            registry_platform_oidc::OidcError::AlgorithmNotAllowed,
+            registry_platform_oidc::OidcError::TokenTypeNotAllowed,
+            registry_platform_oidc::OidcError::MissingKid,
+            registry_platform_oidc::OidcError::KidTooLong,
+            registry_platform_oidc::OidcError::UnknownKid,
+            registry_platform_oidc::OidcError::TokenExpired,
+            registry_platform_oidc::OidcError::TokenNotYetValid,
+            registry_platform_oidc::OidcError::AudienceMismatch,
+            registry_platform_oidc::OidcError::SignatureInvalid,
+            registry_platform_oidc::OidcError::InvalidToken,
+        ] {
+            assert_eq!(
+                fixture_verification_error(error),
+                FixtureError::AuthenticationCredentialRefused
+            );
+        }
+        // A key source or configuration failure is not the credential's fault.
+        for error in [
+            registry_platform_oidc::OidcError::HttpStatus(503),
+            registry_platform_oidc::OidcError::InvalidUrl,
+            registry_platform_oidc::OidcError::Parse,
+            registry_platform_oidc::OidcError::InvalidJwk,
+            registry_platform_oidc::OidcError::EmptyKeySet,
+            registry_platform_oidc::OidcError::MissingIssuer,
+        ] {
+            assert_eq!(
+                fixture_verification_error(error),
+                FixtureError::RequestConstructionRefused
+            );
+        }
         // The runtime authenticator erases why verification refused a token:
         // an unknown key, a bad signature, a wrong issuer, and an expired
         // token are one refusal, so the message must be true of each.
@@ -6066,7 +6114,13 @@ mod tests {
             FixtureError::AuthenticationCredentialRefused
         );
         let message = FixtureError::AuthenticationCredentialRefused.to_string();
-        for cause in ["signing key", "signature", "issuer", "validity period"] {
+        for cause in [
+            "signing key",
+            "signature",
+            "issuer",
+            "audience",
+            "validity period",
+        ] {
             assert!(message.contains(cause), "{message}");
         }
         assert!(!message.contains("unknown"), "{message}");
