@@ -2845,6 +2845,19 @@ on:
                 self.assertTrue(Path(path).is_file())
                 self.assertTrue(classify(self.workspace, (path,))["docs"])
 
+    def test_casework_config_schema_change_runs_docs(self) -> None:
+        """The docs Casework configure and operate pages are generated from these files."""
+        for path in (
+            "products/casework/generated/project/project.schema.json",
+            "products/casework/generated/fixture/fixture.schema.json",
+            "products/casework/generated/dev-clients/dev-clients.schema.json",
+            "products/casework/generated/holiday-set/holiday-set.schema.json",
+            "products/casework/generated/runtime/runtime.schema.json",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(Path(path).is_file())
+                self.assertTrue(classify(self.workspace, (path,))["docs"])
+
     def test_config_format_registry_change_runs_docs(self) -> None:
         """The docs configuration files page is generated from the registry."""
         path = "products/platform/config-formats.yaml"
