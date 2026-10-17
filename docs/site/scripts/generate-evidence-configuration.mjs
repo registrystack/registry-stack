@@ -35,11 +35,15 @@ export { FORMAT_VERSION } from './configuration-reference.mjs';
 // What promise a published schema carries. `frozen` is the Version 1
 // configuration contract. `tooling` is adopter tooling, held to the same
 // key-path parity rule and free to change with the tool that generates it.
-export const CONTRACT_STATUSES = ['frozen', 'tooling'];
+// `beta` is the runtime grammar of a supporting service beside Evidence,
+// generated from its source and pre-1.0; it has no CONFIG.md, so its
+// `reference` is the site page that explains it and it carries no `marker`.
+export const CONTRACT_STATUSES = ['frozen', 'tooling', 'beta'];
 
 const DEPLOYMENT_REFERENCE =
   'products/evidence/reference/request-adapter/deployment-projects/CONFIG.md';
 const AUTHORING_REFERENCE = 'products/evidence/reference/authoring-projects/CONFIG.md';
+const OID4VCI_REFERENCE = 'docs/site/src/content/docs/configure/evidence-oid4vci.mdx';
 
 export const CONTRACTS = [
   {
@@ -105,6 +109,13 @@ export const CONTRACTS = [
     marker: 'evidence-authoring-target-authority-key-paths',
     status: 'tooling',
     reference: AUTHORING_REFERENCE,
+  },
+  {
+    id: 'oid4vci-runtime',
+    file: 'products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json',
+    title: 'evidence-oid4vci runtime configuration',
+    status: 'beta',
+    reference: OID4VCI_REFERENCE,
   },
 ];
 
