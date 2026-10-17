@@ -70,14 +70,13 @@ in `dev-authority.yaml`:
 The project ceiling says what this definition may emit. The target grant says what this requester
 profile may receive. Both must include the format; a client cannot widen either list.
 
-Prove the edited project and target, then revoke the previous registration and create a new client
-against the changed profile digest:
+Prove the edited project and target, then create a client for this tutorial against the changed
+profile digest. The first tutorial's client keeps its registration against the earlier digest:
 
 ```sh
 evidencectl check . --target local-target.yaml
 evidencectl test . --target local-target.yaml
-evidencectl access client revoke tutorial-client
-evidencectl access client add sd-jwt-client \
+evidencectl access client add wallet-client \
   --access-profile standalone-service \
   --generate-local-key
 ```
@@ -111,7 +110,7 @@ Record the required response format before a response exists:
 
 ```sh
 evidencectl request prepare adult-status \
-  --client sd-jwt-client \
+  --client wallet-client \
   --purpose age-check \
   --subject subject:record-id=adult \
   --response-format sd-jwt-vc \
@@ -186,6 +185,7 @@ relationship.
 
 ```sh
 evidencectl dev stop .
+evidencectl access client revoke wallet-client
 evidencectl audit show --last-operation
 evidencectl dev clean .
 ```
