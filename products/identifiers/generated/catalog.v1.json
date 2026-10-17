@@ -4204,11 +4204,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "6b9d16998d1bbee1c27336b5d4232ee6aa9f596da5792095a24714e960447f37"
+        "sha256": "fbfdd29acabfb23b0691dede91abde9829a7c7bb19d486e2e4ee891ba036aa26"
       },
       "artifact": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "6b9d16998d1bbee1c27336b5d4232ee6aa9f596da5792095a24714e960447f37",
+        "sha256": "fbfdd29acabfb23b0691dede91abde9829a7c7bb19d486e2e4ee891ba036aa26",
         "mediaType": "application/yaml"
       }
     },
