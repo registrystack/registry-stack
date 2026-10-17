@@ -1031,7 +1031,7 @@ also publish bounded attempt counts and latency histograms:
 | `evidence_source_request_duration_seconds` | `source`, `outcome` | Attempt latency, with histogram bucket, sum and count series |
 | `evidence_signer_requests_total` | `signer="active"`, `outcome` | JWS or SD-JWT issuance attempts, excluding readiness probes |
 | `evidence_signer_request_duration_seconds` | `signer="active"`, `outcome` | Issuance latency, with histogram bucket, sum and count series |
-| `evidence_build_info` | `version`, `bundle`, `authority` | Gauge fixed at 1 for the captured package and authority revision; `package` denotes package authority |
+| `evidence_build_info` | `version`, `bundle`, `authority` | Gauge fixed at 1 for the captured package and authority revision. `authority="package"` means no separate authority document is active, so the package's own ceilings govern. |
 
 Source IDs come only from the governed bundle. Outcomes are closed categories:
 `success`, `cancelled`, `credential`, `concurrency`, `timeout`, `transport`,
