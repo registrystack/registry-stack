@@ -43,7 +43,7 @@ journeys:
           status: 200
           count: 1
           members:
-            - recordCapture: first-widget
+            first-widget:
               fields: {label: first, quantity: 1}
       - id: patch-widget
         recordType: widget

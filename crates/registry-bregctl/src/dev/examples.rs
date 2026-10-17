@@ -169,6 +169,7 @@ impl Identified for Scenario {
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(transform = step_capture_schema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Step {
     #[serde(deserialize_with = "local_id")]
@@ -228,6 +229,44 @@ struct Step {
     proposal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     expect: Option<ProposalExpectation>,
+}
+
+/// A flat reader keeps source positions; these conditions mirror the record
+/// and result-capture variants checked by `catalogue_problems`.
+#[cfg(feature = "schema")]
+fn step_capture_schema(schema: &mut schemars::Schema) {
+    schema.insert(
+        "allOf".to_owned(),
+        json!([
+            {
+                "if": {"properties": {"operation": {
+                    "enum": [Operation::Create, Operation::Get, Operation::History]
+                }}},
+                "then": {"required": ["recordType"]}
+            },
+            {
+                "if": {"properties": {"operation": {"const": Operation::Invoke}}},
+                "then": {
+                    "required": ["action", "input"],
+                    "oneOf": [
+                        {
+                            "required": ["recordType", "result", "capture"],
+                            "not": {"required": ["captureResults"]}
+                        },
+                        {
+                            "required": ["captureResults"],
+                            "not": {"anyOf": [
+                                {"required": ["recordType"]},
+                                {"required": ["result"]},
+                                {"required": ["capture"]}
+                            ]}
+                        }
+                    ]
+                },
+                "else": {"not": {"required": ["captureResults"]}}
+            }
+        ]),
+    );
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1807,7 +1846,7 @@ mod tests {
                 "{field}"
             );
         }
-        for operation in ["create", "get"] {
+        for operation in ["create", "get", "history"] {
             let mut missing_record_type = json!({"apiVersion":API_VERSION,"kind":KIND,"scenarios":[{
                 "id":"record-step","description":"Exercise one record step","input":"examples/inputs.json",
                 "steps":[{"id":"step","operation":operation,"recordType":"entry","client":"writer",

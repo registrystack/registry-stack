@@ -70,6 +70,86 @@
     },
     "Step": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "create",
+                  "get",
+                  "history"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "recordType"
+            ]
+          }
+        },
+        {
+          "else": {
+            "not": {
+              "required": [
+                "captureResults"
+              ]
+            }
+          },
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "invoke"
+              }
+            }
+          },
+          "then": {
+            "oneOf": [
+              {
+                "not": {
+                  "required": [
+                    "captureResults"
+                  ]
+                },
+                "required": [
+                  "recordType",
+                  "result",
+                  "capture"
+                ]
+              },
+              {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "recordType"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "result"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "capture"
+                      ]
+                    }
+                  ]
+                },
+                "required": [
+                  "captureResults"
+                ]
+              }
+            ],
+            "required": [
+              "action",
+              "input"
+            ]
+          }
+        }
+      ],
       "properties": {
         "accessProfile": {
           "$ref": "#/$defs/LocalId"
