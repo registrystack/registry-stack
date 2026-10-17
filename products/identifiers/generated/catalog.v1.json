@@ -3884,7 +3884,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/review-runtime/review-runtime.schema.json",
-        "sha256": "32968a00582e3296857cab5485e29fc61755b1c38935e5a0a2cb344c65e71bbd",
+        "sha256": "a5669b6e77a1ae4bb5ba7884af15b28b52a4b9a54ccb5612035b7175fabc7bee",
         "mediaType": "application/schema+json"
       }
     },
