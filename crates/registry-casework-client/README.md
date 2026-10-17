@@ -47,8 +47,10 @@ subject to current source visibility, Casework membership and retention.
 
 Producer, human-review, and Directory calls take a bearer token and explicit
 Casework profile. Agent assertion and grant-status calls take only a bearer
-token and grant ID. Current-source task reads take the human caller's source
-profile. Submitted-context tasks need no provider. It never retains a
+token and grant ID. Open current-source task reads, context, lists, mutations,
+and new notes take the human caller's source profile. A retained decided-task
+read and settled history use Casework authority without a source profile;
+submitted-context tasks need no provider. The client never retains a
 human token or follows redirects, and it resends a mutation only under the
 bounded same-key retry below. Direct mutations carry the task or directory
 revision the caller displayed and a caller-supplied idempotency key.

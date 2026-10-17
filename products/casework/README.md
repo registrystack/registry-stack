@@ -173,13 +173,15 @@ metadata; unrelated package changes do not alter the accepted context binding. S
 reader secret references. The status reader needs only the BReg
 `get-review-status` purpose. It never supplies fields displayed to a person.
 The human caller sends the current bearer and selects an authorized
-`Registry-Source-Profile` for each task read or decision. BReg applies that
+`Registry-Source-Profile` for open work, source context, lists, decisions, and
+new notes. BReg applies that
 profile's `get-review-context` disclosure and checks the exact Proposal
 binding; Casework refuses or omits concealed or changed work. Open work must
 also still be reviewable at the source: claim, decide, `next`, and reads of an
 open task refuse or omit it once it is not. Decided tasks and settled requests
-need only current source visibility, because the source stops reporting a
-Proposal as reviewable once it is decided.
+release their retained Casework-owned task, decision, history, and existing
+notes under current Casework authority and retention. Their `/context` read
+and new notes still require current source disclosure.
 There is no generic Proposal read or source synchronization in this integration.
 
 For local development, configure `dev-clients.yaml` `integrations` explicitly
@@ -223,11 +225,14 @@ through `/v1/review-tasks/supervision` and independently authorized, audited
 producer results; accountability does not release review context. Directory
 teams, absence cover, membership, and queue service remain current authority.
 An opaque task reference or cursor grants no access. A decided row in either
-list, a decided task read, and the history and notes of a settled request each
-still ask the current source whether the caller can see the subject, with the
-caller's bearer and source profile; a concealed subject is omitted or answers
-not found, and any source error fails closed. They do not require the subject
-to still be reviewable.
+list still asks the current source whether the caller can see the subject, with
+the caller's bearer and source profile; a concealed subject is omitted and any
+source error fails closed. A decided task read and the history, including notes,
+of a settled request instead release retained Casework-owned records under
+current Casework authority until terminal retention expires. They do not
+release source context: `/v1/review-tasks/{taskId}/context` still asks the source
+and answers not found when the source conceals the subject. Adding a new note
+also retains the current source-visibility check.
 
 The list, next-task and holdings reads deliberately complete a bounded scan
 before returning globally ordered results. This includes unfiltered queues:

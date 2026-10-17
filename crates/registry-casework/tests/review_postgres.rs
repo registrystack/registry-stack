@@ -4068,11 +4068,11 @@ async fn own_decisions_filter_authors_scope_and_continue_past_hidden_source_cand
 }
 
 /// A source stops calling its subject reviewable once it acted on the
-/// outcome. Decided work stays readable while the source still shows it to
-/// the caller, and vanishes, without disclosing that it exists, once the
-/// source conceals it. Open work still needs a reviewable subject.
+/// outcome. Decided Casework-owned state stays readable under current
+/// Casework authority and retention after source concealment, while source
+/// context stays hidden. Open work still needs a reviewable subject.
 #[tokio::test]
-async fn decided_review_stays_readable_while_its_source_still_shows_it() {
+async fn decided_review_state_stays_readable_after_the_source_conceals_context() {
     let fixture = fixture().await;
     let mut policy = project("decided-visible");
     policy.review_policies[0].stages.truncate(1);
@@ -4250,7 +4250,8 @@ async fn decided_review_stays_readable_while_its_source_still_shows_it() {
         Err(ReviewRuntimeError::NotFound)
     ));
 
-    // Concealment at the source still hides the decided work entirely.
+    // Concealment still removes source-gated discovery and context, while the
+    // retained Casework-owned decision and history remain available.
     fixture.source_revoked.store(true, Ordering::SeqCst);
     assert!(service
         .own_review_decisions(
@@ -4279,22 +4280,30 @@ async fn decided_review_stays_readable_while_its_source_still_shows_it() {
         .unwrap()
         .items
         .is_empty());
+    let concealed_read = service
+        .review_task(&fixture.reviewer_a, decided, Some("staff"), "human-bearer")
+        .await
+        .expect("retained decision is Casework-owned");
+    assert_eq!(concealed_read.state, ReviewTaskState::Decided);
+    assert!(concealed_read.decision_receipt.is_some());
+    let concealed_history = service
+        .review_history(
+            &fixture.reviewer_a,
+            request_id,
+            Some("staff"),
+            "human-bearer",
+            None,
+            100,
+        )
+        .await
+        .expect("retained history is Casework-owned");
+    assert!(concealed_history
+        .items
+        .iter()
+        .any(|entry| entry.detail["note"] == "after the decision"));
     assert!(matches!(
         service
-            .review_task(&fixture.reviewer_a, decided, Some("staff"), "human-bearer")
-            .await,
-        Err(ReviewRuntimeError::NotFound)
-    ));
-    assert!(matches!(
-        service
-            .review_history(
-                &fixture.reviewer_a,
-                request_id,
-                Some("staff"),
-                "human-bearer",
-                None,
-                100,
-            )
+            .review_task_context(&fixture.reviewer_a, decided, Some("staff"), "human-bearer",)
             .await,
         Err(ReviewRuntimeError::NotFound)
     ));
@@ -6811,7 +6820,7 @@ async fn assignment_and_delegation_replay_use_the_addressed_pinned_stage() {
 }
 
 #[tokio::test]
-async fn source_context_task_disclosure_requires_a_current_caller_source_read() {
+async fn source_disclosure_remains_live_for_lists_open_work_and_context() {
     let fixture = fixture().await;
     let mut source_request = request("record-source-visible", "producer-ref-source-visible");
     source_request.context = ReviewContext::CurrentSource {
@@ -6936,10 +6945,19 @@ async fn source_context_task_disclosure_requires_a_current_caller_source_read() 
         .await
         .expect("revoked source visibility conceals list item");
     assert!(concealed.items.is_empty());
-    assert!(matches!(
+    assert_eq!(
         fixture
             .service_v2
             .review_task(&fixture.reviewer_a, task, Some("staff"), "human-bearer")
+            .await
+            .expect("terminal Casework task survives source concealment")
+            .task_id,
+        task
+    );
+    assert!(matches!(
+        fixture
+            .service_v2
+            .review_task_context(&fixture.reviewer_a, task, Some("staff"), "human-bearer")
             .await,
         Err(ReviewRuntimeError::NotFound)
     ));

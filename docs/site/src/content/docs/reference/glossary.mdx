@@ -359,7 +359,7 @@ Product names are always in English, including on future translated pages.
   <dd>A product-specific declaration constraining how a fixed source is accessed.</dd>
 
   <dt id="casework-source-profile">source profile (Casework)</dt>
-  <dd>The value a human sends in `Registry-Source-Profile` for a current-source task read or decision. A read-only provider uses that profile and the human's bearer for source disclosure; submitted-context tasks require no source profile.</dd>
+  <dd>The value a human sends in `Registry-Source-Profile` for open current-source work, source context, lists, decisions, and new notes. A read-only provider uses that profile and the human's bearer for source disclosure. Retained decided-task and settled-history reads use Casework authority without releasing source context; submitted-context tasks require no source profile.</dd>
 
   <dt>source</dt>
   <dd>A named data interface a product reads through its fixed source contract.</dd>

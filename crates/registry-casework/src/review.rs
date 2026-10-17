@@ -232,11 +232,13 @@ struct ReviewRequestRecord {
     context: Option<registry_casework_core::ReviewContext>,
 }
 
-/// What a current source must answer before Casework discloses review work.
+/// What a current source must answer before Casework lists review work.
 /// The source stops offering a subject for review once it acts on the
-/// outcome, so decided or settled work requires only that the source still
-/// shows the subject to this caller; a concealed subject stays hidden.
-/// Open work, and every command, still requires a reviewable subject.
+/// outcome, so decided work requires only that the source still shows the
+/// subject to this caller. Direct reads of retained terminal Casework state
+/// do not release source context and use Casework authority instead.
+/// Open work and task mutations still require a reviewable subject; a new
+/// note on settled work requires current source visibility.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceDisclosure {
     Reviewable,
@@ -1217,7 +1219,7 @@ impl CaseworkService {
             None
         };
         if producer.is_none() {
-            self.preflight_review_request_read_source(request_id, source_profile_id, token)
+            self.preflight_review_request_note_source(request_id, source_profile_id, token)
                 .await?;
         }
         self.store
@@ -1295,7 +1297,8 @@ impl CaseworkService {
             .await
     }
 
-    /// A task read requires a reviewable subject only while the task is open.
+    /// A terminal task read releases only Casework-owned retained state.
+    /// Open work still requires a currently reviewable source subject.
     async fn preflight_review_task_read_source(
         &self,
         task_id: Uuid,
@@ -1304,14 +1307,25 @@ impl CaseworkService {
     ) -> Result<(), ReviewRuntimeError> {
         let record = self.store.review_request_for_task(task_id).await?;
         ensure_review_result_retained(&record)?;
+        if record.policy.context == ReviewContextPolicy::Submitted {
+            return if source_profile_id.is_some() {
+                Err(ReviewRuntimeError::SourceProfileNotApplicable)
+            } else {
+                Ok(())
+            };
+        }
         let decided = self.store.review_task_decided(task_id).await?;
-        self.preflight_review_disclosure(
-            &record,
-            SourceDisclosure::for_task(decided),
-            source_profile_id,
-            token,
-        )
-        .await
+        if decided {
+            Ok(())
+        } else {
+            self.preflight_review_disclosure(
+                &record,
+                SourceDisclosure::Reviewable,
+                source_profile_id,
+                token,
+            )
+            .await
+        }
     }
 
     async fn preflight_review_request_source(
@@ -1334,6 +1348,35 @@ impl CaseworkService {
         token: &str,
     ) -> Result<(), ReviewRuntimeError> {
         let record = self.store.review_request_record(request_id).await?;
+        ensure_review_result_retained(&record)?;
+        if record.policy.context == ReviewContextPolicy::Submitted {
+            return if source_profile_id.is_some() {
+                Err(ReviewRuntimeError::SourceProfileNotApplicable)
+            } else {
+                Ok(())
+            };
+        }
+        if record.lifecycle != ReviewRequestLifecycle::Reviewing {
+            Ok(())
+        } else {
+            self.preflight_review_disclosure(
+                &record,
+                SourceDisclosure::Reviewable,
+                source_profile_id,
+                token,
+            )
+            .await
+        }
+    }
+
+    async fn preflight_review_request_note_source(
+        &self,
+        request_id: Uuid,
+        source_profile_id: Option<&str>,
+        token: &str,
+    ) -> Result<(), ReviewRuntimeError> {
+        let record = self.store.review_request_record(request_id).await?;
+        ensure_review_result_retained(&record)?;
         self.preflight_review_disclosure(
             &record,
             SourceDisclosure::for_request(&record),

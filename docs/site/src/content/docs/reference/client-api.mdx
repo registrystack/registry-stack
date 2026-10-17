@@ -1100,10 +1100,19 @@ Rust and Python use snake case; Node uses the corresponding camel case.
 | Caller | Operations | Boundary |
 | --- | --- | --- |
 | Producer | `review_policies`, `review_policy`, request creation, cancellation, result reads and feed | Exact admitted producer and subject binding |
-| Human reviewer | `review_tasks`, `next_review_task`, `review_task_holdings`, task context, claim, release, assignment, delegation, private drafts, decisions, history and notes | Current profile, membership, exclusions, ownership and context disclosure |
+| Human reviewer | `review_tasks`, `next_review_task`, `review_task_holdings`, task context, claim, release, assignment, delegation, private drafts, decisions, history and notes | Current profile, membership, exclusions and ownership; current source disclosure for lists, open work, context and new notes |
 | Deciding caller | `own_review_decisions`, own single-task receipt | Retained authorship, not prior holding |
 | Supervisor | `supervisory_review_tasks`, `review_accountability` | Currently served queues; accountability is a separate audited read |
 | Administrator | Directory, absence, holiday, caseload and clock preview/apply operations | Administration grants no review or external write authority |
+
+Retained decided-task and terminal-history reads use current Casework authority and result
+retention. They do not require current source disclosure and never release source context.
+Own-decisions and supervision lists still require current source disclosure.
+
+{/* Evidence: crates/registry-casework/src/review.rs, preflight_review_task_read_source,
+    preflight_review_request_read_source, preflight_review_request_note_source;
+    crates/registry-casework/tests/review_postgres.rs,
+    decided_review_state_stays_readable_after_the_source_conceals_context */}
 
 `ReviewStaffingQuery` supports queue, ownership, visible reference, and either all five exact
 subject selectors or none. Sort by `due`, `subject`, or `reference`. `next_review_task` is

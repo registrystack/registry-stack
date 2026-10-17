@@ -144,7 +144,10 @@ fn project(root: &std::path::Path, idp: &MockIdp, context: &BregContextExport) -
             "capabilities":["human-display","service-status"],"serviceProfiles":{"service-status":"casework-review-status"}}},
         "reviewPolicies":{"facility-address-review":{"version":"1","purpose":"approval",
             "context":{"mode":"current-source","provider":"facility","contract":context.contract},
-            "stages":[{"id":"review","queue":"review","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true}],
+            "stages":[
+                {"id":"review","queue":"review","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true},
+                {"id":"approval","queue":"review","decidingProfiles":["supervisor"],"requiredApprovals":1,"excludePreviousStageReviewers":true}
+            ],
             "retention":{"terminalRetentionDays":30,"accountabilityRetentionDays":90},
             "displaySchema":{"$ref":"schemas/address.schema.json"},"outcomes":{"approved":{"label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"},
                 "rejected":{"label":"Reject","settlement":"rejected","reasonRequired":true,"publicReason":"required"}}}},
@@ -724,6 +727,79 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
         .await
         .unwrap();
     assert_eq!(decided.status(), StatusCode::NO_CONTENT);
+    let supervisor = minted(
+        &idp,
+        json!([CASEWORK_AUDIENCE, BREG_AUDIENCE]),
+        "supervisor-one",
+        "casework-human",
+        "casework:supervisor registry:proposal:review",
+        "human",
+        Some("facility-review"),
+    );
+    let supervisor_page = reqwest::Client::new()
+        .get(
+            casework_url
+                .join("v1/review-tasks?queue=review&limit=25")
+                .unwrap(),
+        )
+        .bearer_auth(&supervisor)
+        .header("registry-casework-profile", "supervisor")
+        .header("registry-source-profile", "proposal-reviewer")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(supervisor_page.status(), StatusCode::OK);
+    let supervisor_page: Value = supervisor_page.json().await.unwrap();
+    let supervisor_task = supervisor_page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["requestId"] == accepted.request_id.to_string())
+        .expect("the second-stage native Proposal task is reviewable");
+    let supervisor_task_id = supervisor_task["taskId"].as_str().unwrap().to_owned();
+    let supervisor_claim = reqwest::Client::new()
+        .post(
+            casework_url
+                .join(&format!("v1/review-tasks/{supervisor_task_id}/claim"))
+                .unwrap(),
+        )
+        .bearer_auth(&supervisor)
+        .header("registry-casework-profile", "supervisor")
+        .header("registry-source-profile", "proposal-reviewer")
+        .header(
+            "if-match",
+            format!("\"{}\"", supervisor_task["revision"].as_i64().unwrap()),
+        )
+        .header("idempotency-key", "native-supervisor-claim")
+        .send()
+        .await
+        .unwrap();
+    let supervisor_claim_status = supervisor_claim.status();
+    let supervisor_claim: Value = supervisor_claim.json().await.unwrap();
+    assert_eq!(
+        supervisor_claim_status,
+        StatusCode::OK,
+        "{supervisor_claim}"
+    );
+    let supervisor_decision = reqwest::Client::new()
+        .post(
+            casework_url
+                .join(&format!("v1/review-tasks/{supervisor_task_id}/decisions"))
+                .unwrap(),
+        )
+        .bearer_auth(&supervisor)
+        .header("registry-casework-profile", "supervisor")
+        .header("registry-source-profile", "proposal-reviewer")
+        .header(
+            "if-match",
+            format!("\"{}\"", supervisor_claim["revision"].as_i64().unwrap()),
+        )
+        .header("idempotency-key", "native-supervisor-approve")
+        .json(&json!({"decision":{"type":"approve","outcome":"approved"}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(supervisor_decision.status(), StatusCode::NO_CONTENT);
     let (review_client, review_token) = live_approval.casework.get().unwrap();
     let ReviewResultResponse::Available(result) = review_client
         .result(ReviewAuth::new(review_token, "requester"), &accepted)
@@ -777,17 +853,130 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
         );
     let applied = author.read_proposal(&proposal).await.unwrap().value;
     assert_eq!(applied.state(), BRegProposalState::Applied);
+    let decided_task = reqwest::Client::new()
+        .get(casework_url.join(&format!("v1/review-tasks/{id}")).unwrap())
+        .bearer_auth(&human)
+        .header("registry-casework-profile", "staff")
+        .header("registry-source-profile", "proposal-reviewer")
+        .send()
+        .await
+        .unwrap();
+    let decided_task_status = decided_task.status();
+    let decided_task: Value = decided_task.json().await.unwrap();
+    assert_eq!(decided_task_status, StatusCode::OK, "{decided_task}");
+    assert_eq!(decided_task["taskId"], id, "{decided_task}");
+    assert_eq!(decided_task["state"], "decided", "{decided_task}");
+    let retained = admin
+        .query_one(
+            "SELECT result_erased_at IS NULL,result_available_until>now() \
+             FROM casework_review_requests WHERE request_id=$1",
+            &[&accepted.request_id],
+        )
+        .await
+        .unwrap();
+    assert!(retained.get::<_, bool>(0));
+    assert!(retained.get::<_, bool>(1));
+    let casework_only_human = minted(
+        &idp,
+        json!(CASEWORK_AUDIENCE),
+        "reviewer-one",
+        "casework-human",
+        "casework:staff",
+        "human",
+        None,
+    );
+    let retained_task = reqwest::Client::new()
+        .get(casework_url.join(&format!("v1/review-tasks/{id}")).unwrap())
+        .bearer_auth(&casework_only_human)
+        .header("registry-casework-profile", "staff")
+        .header("registry-source-profile", "proposal-reviewer")
+        .send()
+        .await
+        .unwrap();
+    let retained_task_status = retained_task.status();
+    let retained_task: Value = retained_task.json().await.unwrap();
+    assert_eq!(retained_task_status, StatusCode::OK, "{retained_task}");
+    assert_eq!(retained_task["taskId"], id, "{retained_task}");
+    assert_eq!(retained_task["state"], "decided", "{retained_task}");
+    let concealed_context = reqwest::Client::new()
+        .get(
+            casework_url
+                .join(&format!("v1/review-tasks/{id}/context"))
+                .unwrap(),
+        )
+        .bearer_auth(&casework_only_human)
+        .header("registry-casework-profile", "staff")
+        .header("registry-source-profile", "proposal-reviewer")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(concealed_context.status(), StatusCode::NOT_FOUND);
+    let retained_note = reqwest::Client::new()
+        .post(
+            casework_url
+                .join(&format!("v1/review-requests/{}/notes", accepted.request_id))
+                .unwrap(),
+        )
+        .bearer_auth(&human)
+        .header("registry-casework-profile", "staff")
+        .header("registry-source-profile", "proposal-reviewer")
+        .header("idempotency-key", "native-retained-note")
+        .json(&json!({"audience":"reviewers","note":"decision archived"}))
+        .send()
+        .await
+        .unwrap();
+    let retained_note_status = retained_note.status();
+    let retained_note: Value = retained_note.json().await.unwrap();
+    assert!(retained_note_status.is_success(), "{retained_note}");
+    let retained_history = reqwest::Client::new()
+        .get(
+            casework_url
+                .join(&format!(
+                    "v1/review-requests/{}/history",
+                    accepted.request_id
+                ))
+                .unwrap(),
+        )
+        .bearer_auth(&casework_only_human)
+        .header("registry-casework-profile", "staff")
+        .header("registry-source-profile", "proposal-reviewer")
+        .send()
+        .await
+        .unwrap();
+    let retained_history_status = retained_history.status();
+    let retained_history: Value = retained_history.json().await.unwrap();
+    assert_eq!(
+        retained_history_status,
+        StatusCode::OK,
+        "{retained_history}"
+    );
+    assert!(
+        retained_history["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["eventId"] == retained_note["eventId"]),
+        "{retained_history}"
+    );
+    let former_reviewer = minted(
+        &idp,
+        json!(CASEWORK_AUDIENCE),
+        "former-reviewer",
+        "casework-human",
+        "casework:staff",
+        "human",
+        None,
+    );
+    let unauthorized_terminal_task = reqwest::Client::new()
+        .get(casework_url.join(&format!("v1/review-tasks/{id}")).unwrap())
+        .bearer_auth(&former_reviewer)
+        .header("registry-casework-profile", "staff")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthorized_terminal_task.status(), StatusCode::NOT_FOUND);
     // A decided task stays listed while BReg still shows the applied
     // Proposal to the reader, although it is no longer reviewable there.
-    let supervisor = minted(
-        &idp,
-        json!([CASEWORK_AUDIENCE, BREG_AUDIENCE]),
-        "supervisor-one",
-        "casework-human",
-        "casework:supervisor registry:proposal:review",
-        "human",
-        Some("facility-review"),
-    );
     let decided_list = |path: &'static str, token: String, profile: &'static str| {
         let url = casework_url.join(path).unwrap();
         async move {
@@ -833,6 +1022,22 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
             .any(|row| row["taskId"] == id),
         "the supervisor still sees the decided task after BReg applied: {supervised}"
     );
+    admin
+        .execute(
+            "UPDATE casework_review_requests SET result_available_until=now()-interval '1 second' \
+             WHERE request_id=$1",
+            &[&accepted.request_id],
+        )
+        .await
+        .unwrap();
+    let expired_task = reqwest::Client::new()
+        .get(casework_url.join(&format!("v1/review-tasks/{id}")).unwrap())
+        .bearer_auth(&casework_only_human)
+        .header("registry-casework-profile", "staff")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(expired_task.status(), StatusCode::NOT_FOUND);
     let (_, pending_proposal) = start_proposal(&fixture, &breg_url, &idp, 2).await;
     let pending_id = Uuid::parse_str(pending_proposal.id()).unwrap();
     let row = fixture.database.admin.query_one("SELECT create_request FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&pending_id]).await.unwrap();

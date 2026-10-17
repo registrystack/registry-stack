@@ -115,8 +115,10 @@ support report.
 
 The generated operations specify the caller and refusal for each route.
 Administrator status grants no review payload or decision authority, and producer status grants no
-human task authority. Source concealment remains effective on current-source task reads, context,
-history, and decisions. An opaque ID or cursor grants no access.
+human task authority. Source concealment remains effective on open current-source task reads,
+context, lists, decisions, and new notes. Retained decided tasks and settled history, including
+existing notes, use current Casework authority and retention without releasing source context. An
+opaque ID or cursor grants no access.
 
 {/* Evidence: crates/registry-casework/src/http.rs;
     products/casework/generated/registry-casework.openapi.json;

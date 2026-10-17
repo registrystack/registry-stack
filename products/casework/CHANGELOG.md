@@ -16,11 +16,14 @@
 - A decided review task no longer disappears from
   `GET /v1/review-tasks/own-decisions` and `/v1/review-tasks/supervision`
   when its current source stops reporting the subject as reviewable, which a
-  BReg Proposal does as soon as it is decided. Decided rows, a decided task
-  read, and the history and notes of a settled request now require current
-  source visibility only; claim, decide, `next`, and reads of open work still
-  require the subject to be reviewable. A subject the source conceals stays
-  omitted or not found, and a source error still fails closed.
+  BReg Proposal does as soon as it is decided. Decided rows still require
+  current source visibility. A decided task read and the history, including
+  existing notes, of a settled request remain available under current Casework
+  authority and retention after the source conceals its context; the task
+  context route stays not found, and adding a new note still requires current
+  source visibility. Claim, decide, `next`, and reads of open work still require
+  the subject to be reviewable
+  ([#2074](https://github.com/registrystack/registry-stack/issues/2074)).
 - BREAKING: every `ReviewDecisionReceipt` names the policy `outcome` its
   decision selected; the field is required in the OpenAPI document and the
   Rust, Node.js and Python clients, and a client refuses a receipt without

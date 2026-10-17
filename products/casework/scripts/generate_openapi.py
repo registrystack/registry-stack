@@ -199,7 +199,7 @@ def document(contract: dict, wire: dict) -> dict:
         if bool(endpoint.body)!=op["acceptsJson"] or bool(endpoint.query)!=op["extractsQuery"] or bool(re.search(r"\{",endpoint.path))!=op["extractsPath"]:raise ValueError(f"Rust/OpenAPI extraction drifted for {key}")
         parameters=[parameter("traceparent","header",{"type":"string"})]
         if not endpoint.public and not endpoint.service:parameters.append(parameter(REVIEW_PROFILE if endpoint.review else PROFILE,"header",bounded_identifier(),True,"The caller's exact governed access profile for this protocol."))
-        if endpoint.source:parameters.append(parameter(SOURCE_PROFILE,"header",bounded_identifier(),False,"Current-source work requires the human caller's source-valid profile and credential. Submitted context requires no provider."))
+        if endpoint.source:parameters.append(parameter(SOURCE_PROFILE,"header",bounded_identifier(),False,"Current-source lists, open work, source context, task mutations and new notes require the human caller's source-valid profile and credential. Retained terminal task and history reads use Casework authority. Submitted context requires no provider."))
         for name in re.findall(r"\{([^}]+)\}",endpoint.path):
             schema={"type":"string","format":"uuid"}
             if name in ("policy_id","team_id","id"):schema=bounded_identifier()

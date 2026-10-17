@@ -1030,8 +1030,9 @@ pub struct ReviewTask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decided_by_caller: Option<bool>,
     /// Present only on a single decided-task read when `decidedByCaller` is
-    /// true. Current task eligibility, membership, source disclosure, and
-    /// result retention still apply.
+    /// true. Current task eligibility, membership, and result retention still
+    /// apply. The receipt contains only Casework-owned decision state; source
+    /// context remains subject to the source's current disclosure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_receipt: Option<ReviewDecisionReceipt>,
 }
