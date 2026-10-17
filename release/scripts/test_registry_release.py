@@ -2292,6 +2292,7 @@ class RegistryReleaseTest(TestCase):
                 "evidence-contracts",
                 "identifiers",
                 "breg-contracts",
+                "breg-postgres-18",
                 "breg-wasm",
                 "casework-postgres",
                 "scheduling-contracts",
