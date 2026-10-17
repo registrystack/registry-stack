@@ -2463,6 +2463,26 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
     assert_eq!(package.status.code(), Some(1), "{package:?}");
     assert_reserved_iri_refusal(&json_stdout(&package));
     assert!(!project.path().join("build").exists());
+    // No command-line spelling packages the placeholder for deployment:
+    // `bregctl dev` packages its loopback session in process instead.
+    let bypass = bregctl(&[
+        "package",
+        path(&destination),
+        "--schema-fingerprint",
+        &"0".repeat(64),
+        "--test-receipt",
+        path(&project.path().join("receipt.json")),
+        "--output",
+        path(&project.path().join("build")),
+        "--local-development",
+    ]);
+    assert_eq!(bypass.status.code(), Some(2), "{bypass:?}");
+    let stderr = String::from_utf8(bypass.stderr).expect("usage error is UTF-8");
+    assert!(
+        stderr.contains("unexpected argument --local-development"),
+        "{stderr}"
+    );
+    assert!(!project.path().join("build").exists());
     let journeys =
         fs::read_to_string(destination.join("tests/journeys.yaml")).expect("derived journeys read");
     assert!(journeys.contains("scopes: [registry:household-registry:operate]"));

@@ -704,6 +704,84 @@ fn dev_capture_runs_the_placeholder_iri_and_names_a_compile_refusal_by_code() {
 }
 
 #[test]
+fn dev_packages_the_placeholder_iri_in_process_and_retains_a_refusal() {
+    let temporary = tempfile::tempdir().expect("temporary");
+    let root = fs::canonicalize(temporary.path()).unwrap();
+    let project = root.join("project");
+    crate::init(&project).unwrap_or_else(|failure| {
+        panic!("init failed: {}", serde_json::to_string(&failure).unwrap())
+    });
+    let registry_path = project.join("registry.yaml");
+    let registry = fs::read_to_string(&registry_path).unwrap();
+    let authored = "canonicalBaseIri: https://directory.example.gov";
+    assert_eq!(registry.matches(authored).count(), 1);
+    fs::write(
+        &registry_path,
+        registry.replace(
+            authored,
+            "canonicalBaseIri: https://directory.example.invalid",
+        ),
+    )
+    .unwrap();
+    fs::create_dir(root.join("logs")).unwrap();
+    let args = crate::PackageArgs {
+        candidate: crate::PackageCandidateArgs {
+            project,
+            baseline_package: None,
+            reviewed_migrations: None,
+        },
+        schema_fingerprint: Some("0".repeat(64)),
+        test_receipt: root.join("schema-test-receipt.json"),
+        output: root.join("build"),
+        revision: None,
+    };
+    let codes = |refusal: &crate::Refusal| match refusal {
+        crate::Refusal::Tool(report) => report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.clone())
+            .collect::<Vec<_>>(),
+        crate::Refusal::Document(_) => Vec::new(),
+    };
+
+    // A deployment package refuses the placeholder before it reads the
+    // receipt, and the in-process refusal is retained and named.
+    let Err(deployment) = crate::package(&args, true) else {
+        panic!("a deployment package refuses the placeholder");
+    };
+    assert_eq!(
+        codes(&deployment),
+        ["breg.registry.canonical-base-iri-reserved"]
+    );
+    let rendered = format!("{:#}", in_process_refusal(&root, "package", &deployment));
+    assert!(
+        rendered.contains("native package refused: breg.registry.canonical-base-iri-reserved"),
+        "{rendered}"
+    );
+    let retained = fs::read_dir(root.join("logs"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(retained.len(), 1, "{retained:?}");
+    assert!(retained[0].starts_with("package-report-"), "{retained:?}");
+
+    // The local-development package accepts the placeholder and goes on to
+    // the receipt, which this synthetic session never produced.
+    let Err(local) = crate::package(&args, false) else {
+        panic!("a missing receipt is refused");
+    };
+    let local = codes(&local);
+    assert!(!local.is_empty());
+    assert!(
+        !local
+            .iter()
+            .any(|code| code == "breg.registry.canonical-base-iri-reserved"),
+        "{local:?}"
+    );
+    assert!(!root.join("build").exists());
+}
+
+#[test]
 fn every_initialized_template_has_complete_local_clients_and_journeys() {
     for template in crate::starters::ids() {
         let temporary = tempfile::tempdir().expect("temporary");
