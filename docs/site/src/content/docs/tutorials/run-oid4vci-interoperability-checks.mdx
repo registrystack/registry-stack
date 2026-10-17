@@ -1,7 +1,7 @@
 ---
-title: Run the OID4VCI interoperability checks
-description: Replay the sanitized Registry profile and optional pinned Inji client checks without using a live issuer or live user data.
-status: draft
+title: Check wallet interoperability
+description: Replay the sanitized Inji wallet profile against your source build of evidence-oid4vci, read each milestone it prints, and optionally rerun the pinned upstream client tests.
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
@@ -20,43 +20,28 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Run the maintained OpenID for Verifiable Credential Issuance (OID4VCI) adopter journey and
-interoperability checks. You will copy a complete configuration, exercise the real adapter binary,
-then learn when to run the opt-in upstream Inji client check and how narrowly to describe either
-result.
+You deployed `evidence-oid4vci` on [Deliver to a wallet](../../configure/evidence-oid4vci/). Now
+replay the wallet profile it was checked against on your own source build, and watch the runner
+print each stage of a wallet flow. Every value in the run is synthetic and discarded on exit.
 
 <QuickstartMeta
-  outcome="A checked and exercised local OID4VCI adapter configuration, plus reproducible evidence for the frozen profile and optional pinned Inji revisions."
-  time="About 10 minutes for the ordinary check; longer for the opt-in upstream builds"
-  level="Source checkout and synthetic interoperability evidence"
-  prerequisites={['A registry-stack source checkout', 'The repository Rust toolchain', 'Bash', 'Python 3', 'Loopback ports 18440 through 18442 available', 'For the optional upstream check: macOS, Git, network access, npm, Java 17, Android SDK platform 34 with Build Tools 33.0.1, full Xcode, and an iPhone 15 simulator']}
+  outcome="The sanitized Inji wallet profile replayed against your build, every milestone printed, and a PASS line."
+  time="About 10 minutes, most of it the first test build; longer for the opt-in upstream check"
+  level="Source checkout and synthetic data"
+  prerequisites={['A registry-stack source checkout with its Rust toolchain', 'Bash and Python 3', 'Free loopback ports 18440 through 18442', 'For the upstream check: macOS, Git, network access, npm, Java 17, Android SDK platform 34 with Build Tools 33.0.1, full Xcode, and an iPhone 15 simulator']}
 />
 
-The runners create their disposable working material and remove it when they exit. They use a
-sanitized profile and synthetic values. Do not replace the fixture with a live credential, token,
-proof, nonce, selector, subject identifier, or issuer response.
+## Write the adapter configuration
 
-## Before you start
-
-Start at the root of a clean `registry-stack` source checkout. The ordinary runner uses only the
-checked-in sanitized profile at
-`products/evidence/fixtures/interoperability/inji-oid4vci/profile.json` and the Registry-side
-tests. The upstream runner is opt-in because it fetches and builds three pinned public source
-revisions.
-
-## Copy the complete configuration
-
-Create an owner-only working directory. The runner generates the delivery client key and hands it
-to the processes it starts through their environment, so the key is never written to disk:
+From the checkout root, create an owner-only directory for the runtime file. The client key the
+runner generates reaches its processes only through the environment, never this directory:
 
 ```sh
 umask 077
 mkdir -p .tutorial/oid4vci-adopter
 ```
 
-### `.tutorial/oid4vci-adopter/oid4vci.yaml`
-
-Copy this complete loopback configuration exactly:
+Copy this file exactly, because the runner refuses a copy that differs from its fixture:
 
 ```yaml title=".tutorial/oid4vci-adopter/oid4vci.yaml" test-file
 apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1
@@ -90,42 +75,35 @@ store:
   maximumTransactionCodeAttempts: 3
 ```
 
-This is a supervised local configuration. Its public and metrics listeners are distinct loopback
-ports. The maintained runner supplies deterministic synthetic Evidence and authorization support;
-it does not contact a live issuer or use a real subject.
+Three keys differ from production, each explained on
+[Deliver to a wallet](../../configure/evidence-oid4vci/):
+`validationMode: supervised-local-development` admits plain HTTP on `127.0.0.1`,
+`secretProviders.environment` reads the key from the environment, and every origin is loopback,
+with the runner's synthetic Evidence and token service on 18442.
 
-## Replay the sanitized profile
+{/* Evidence: crates/registry-evidence-oid4vci/tests/inji_interoperability.rs, adopter_config,
+    CLIENT_KEY_VARIABLE; products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json,
+    ValidationMode. */}
 
-Run the ordinary check against the configuration you copied:
+## Replay the profile
+
+Run the check against your file:
 
 ```sh
 EVIDENCE_OID4VCI_ADOPTER_ROOT="$PWD/.tutorial/oid4vci-adopter" \
   products/evidence/scripts/compat/inji-oid4vci.sh
 ```
 
-The successful run ends with this exact receipt:
+A successful run ends with:
 
 ```text test-excerpt
 PASS: sanitized Inji OID4VCI profile and Registry-side interoperability tests
 ```
 
-The runner follows the published metadata rather than fixed protocol paths. It resolves the
-offered credential configuration, redeems the pre-authorized code, requests a nonce with an
-unauthenticated empty `POST`, submits an Inji-shaped ES256 proof through self-contained
-`did:jwk#0`, reads plural `credentials`, and independently verifies the returned holder-bound
-Evidence presentation contract.
-
-The maintained harness creates every value that is not in the copied configuration: the delivery
-client, offer signer, holder key, codes, tokens, nonces, synthetic Evidence response, and relying
-policy. It fixes the independently trusted relying policy before any credential is issued. Those
-runtime-only values live in the test process and in the environment of the binaries it starts, and
-are discarded when the run ends.
-
-Before those compatibility cases, the runner invokes the actual `evidence-oid4vci` binary. It runs
-`check` against the copied file, runs `inspect` and checks the derived batch ceiling, starts
-`serve`, probes `/health` and `/ready`, confirms that `/metrics` exists only on the separate private
-listener, completes an authorized wallet flow through the published metadata, and verifies the
-returned holder-bound presentation independently. Its safe milestones include:
+That sanitized profile is the interoperability profile, a fixture of the wallet's expected
+metadata and wire shapes. The runner asserts it and its upstream receipt, compares the rendered
+OpenAPI document with the tracked one when `EVIDENCE_OID4VCI_BIN` names a built binary, then runs
+the crate's interoperability test, which prints:
 
 ```text test-excerpt
 CONFIG CHECKED: complete delivery configuration is valid
@@ -137,104 +115,65 @@ PRESENTATION VERIFIED: public wallet flow returned holder-bound Evidence
 CLEANUP COMPLETE: generated private material was removed
 ```
 
-The same run refuses malformed or private holder keys, an unsupported proof algorithm, the wrong
-proof audience, an unknown or tampered nonce, an expired proof, a remote key reference, an
-excessive proof batch, and a duplicate holder key. The state-recovery suite separately pins the
-expired-nonce boundary. A recognized live access token is consumed before proof validation, and a
-refused proof makes no Evidence request. A separate case reuses one nonce across two live
-authorizations, then proves that two concurrent requests with one token have at most one successful
-Evidence call.
+Each line is a milestone: `check` accepted your file; `inspect` published a batch ceiling of four;
+`serve` answered `/health` and `/ready` publicly and `/metrics` only on the metrics listener; a task-bound offer
+token was refused; a wallet flow driven by the published metadata returned a credential verified as
+holder-bound Evidence; and the generated keys were dropped. Any failed case stops the run before
+`PASS:`.
+
+{/* Evidence: products/evidence/scripts/compat/inji-oid4vci.sh, EVIDENCE_OID4VCI_BIN;
+    crates/registry-evidence-oid4vci/tests/inji_interoperability.rs,
+    copied_config_checks_starts_and_completes_the_real_binary_journey. */}
 
 ## Read the pinned target
 
-The sanitized profile records the upstream target reviewed on 2026-08-09:
+The interoperability profile names Inji Wallet and its Android and iOS clients at revisions tested
+on 2026-08-09;
+[`profile.json`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/fixtures/interoperability/inji-oid4vci/profile.json)
+and
+[`receipt.json`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json)
+hold the pins. As the
+[frozen profile](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/oid4vci-profile.yaml)
+for [OID4VCI](/reference/glossary/#oid4vci) states, a pass is bounded evidence for those
+revisions, not certification.
 
-| Component | Revision |
-| --- | --- |
-| Inji Wallet | `2fa12c3285b6523db340c3dd2333454b750b40a4` |
-| Inji Android VCI client | `f1d7ee2b14e996e18bfc7c40fbf89ec31b768951` |
-| Inji iOS VCI client | `dbe60eef9a8c7b71ba58ee81cc7d0e5a92af7c7c` |
-
-The ordinary run records the checked-in fixture and Registry-side behavior. Ordinary continuous
-integration validates the stored receipt's shape and consistency with the profile, then runs the
-Registry-side tests. It does not fetch or rerun the pinned upstream clients.
-
-The separate upstream receipt records bounded exact-pin evidence from 2026-08-09: the focused
-public tests from all three pinned repositories built and passed beside the sanitized Registry
-flow in the stated clean environment. It does not record a pinned Inji client crossing HTTP to
-Registry.
+{/* Evidence: products/evidence/fixtures/interoperability/inji-oid4vci/profile.json, testedOn;
+    products/evidence/contracts/oid4vci-profile.yaml, claim_rule. */}
 
 ## Run the pinned upstream clients
 
-Run the opt-in check when the acceptance process requires a clean build against the exact public
-Inji revisions:
-
-The combined upstream runner is macOS-only because its final suite uses Xcode and the iOS
-Simulator. Before running it, install Java 17, Android SDK platform 34 with Build Tools 33.0.1,
-full Xcode, and an iPhone 15 simulator. The runner requires `git`, `npm`, `java`, `xcodebuild`, and
-`xcrun` on `PATH`, plus network access.
+The upstream runner is opt-in: it runs only with `EVIDENCE_INJI_OID4VCI=1` on macOS, builds those
+Inji revisions from clean checkouts, and ends with the line `receipt.json` records.
 
 ```sh test-skip="the upstream runner needs macOS with Xcode and the iOS Simulator, Java, the Android SDK, and network access"
 EVIDENCE_INJI_OID4VCI=1 products/evidence/scripts/compat/inji-oid4vci-upstream.sh
 ```
 
-The successful run ends with this exact receipt:
-
-```text
-PASS: pinned Inji OID4VCI source and client tests
-```
-
-The runner fetches only the pinned revisions. It exercises the public client tests from clean
-temporary checkouts and removes those checkouts on exit. Its sanitized result is recorded in
-`products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json`; keep the revision pins,
-test date, environment, and exclusions together when retaining a later result.
+{/* Evidence: products/evidence/scripts/compat/inji-oid4vci-upstream.sh, EVIDENCE_INJI_OID4VCI. */}
 
 ## Clean up
 
-A completed runner removes generated private material. Remove the copied configuration and its
-now-empty working directories:
+A completed run removes its private material. Remove the copied file and its empty directories:
 
 ```sh
 rm -f .tutorial/oid4vci-adopter/oid4vci.yaml
 rmdir .tutorial/oid4vci-adopter .tutorial 2>/dev/null || true
 ```
 
-The source checkout and checked-in sanitized fixture remain unchanged. If a runner is interrupted,
-remove only `.tutorial/oid4vci-adopter`; do not delete or rewrite the source checkout.
-
-## What you proved
-
-- The sanitized Registry profile and Registry-side tests agree on the metadata-driven OID4VCI
-  Final flow.
-- The actual adapter binary accepted the copied configuration and completed its local public HTTP
-  journey with health, readiness, private metrics, and independent presentation verification.
-- An opt-in passing run confirms the exact pinned Inji client source tests in that clean build
-  environment.
-- Neither receipt is full OID4VCI certification or a compatibility promise for another Inji
-  revision.
-
-The checks include no Android or iOS user-interface or device automation, live issuer, live user
-data, durable state, or multi-replica deployment. They do not cover authorization code, DPoP,
-deferred or encrypted issuance, notification, credential status, or other credential formats.
+After an interrupted run, remove only `.tutorial/oid4vci-adopter`.
 
 ## Troubleshooting
 
-| Symptom | Cause | Resolution |
+The runners name any missing tool or opt-in themselves. Two messages need more:
+
+| Message | Meaning | Recovery |
 | --- | --- | --- |
-| The ordinary runner reports fixture drift | The sanitized profile no longer matches the runtime metadata or request and response shapes. | Review the profile change and the failing Registry test together. Do not update the fixture without the corresponding runtime evidence. |
-| The adopter journey cannot bind a listener | One of loopback ports 18440 through 18442 is already in use. | Stop the conflicting local service and rerun. Do not change only one copy of the configuration because the executable fixture intentionally checks exact drift. |
-| Cargo cannot build the Registry tests | The checkout lacks the repository Rust toolchain or locked dependencies. | Install the pinned toolchain and rerun from the repository root. |
-| The upstream runner exits before cloning | The opt-in environment variable is absent, or the runner has no network access. | Set `EVIDENCE_INJI_OID4VCI=1` only in a network-enabled clean runner. |
-| The runner prints `Pinned Inji OID4VCI checking requires macOS because the combined receipt includes iOS client tests.` | The combined runner was started on another operating system. | Rerun the optional combined check on macOS. |
-| The runner prints `Pinned Inji OID4VCI checking needs Java 17; the installed runtime is not Java 17.`, `Pinned Inji OID4VCI checking needs ANDROID_HOME or ANDROID_SDK_ROOT to name an installed Android SDK.`, or `Pinned Inji OID4VCI checking needs Android SDK platform 34 and Build Tools 33.0.1.` | The Android client prerequisites are missing or not selected. | Install a Java 17 JDK, set `JAVA_HOME`, install the named Android packages, and set `ANDROID_HOME` or `ANDROID_SDK_ROOT`. |
-| The runner prints `Pinned Inji OID4VCI checking needs full Xcode, not Command Line Tools alone.`, `Pinned Inji OID4VCI checking could not inspect installed iOS simulators.`, or `Pinned Inji OID4VCI checking needs an available iPhone 15 simulator.` | Full Xcode or the iPhone 15 simulator is missing or unavailable. | Install full Xcode, select it with `xcode-select`, accept its licence, and install an iPhone 15 simulator. |
-| A pinned upstream build fails | The checked revision, toolchain, or resolved dependencies did not reproduce in this environment. | Retain the failed result and environment details. Do not replace the pin with a mutable branch or describe the failed run as compatibility evidence. |
+| `the reader-gated configuration must stay identical to the executable fixture` | Your file differs from the fixture. | Copy it again, unchanged. |
+| `bind the synthetic Evidence and Mint support listener` or `the real delivery binary did not become ready` | A port from 18440 to 18442 is taken. | Free the port rather than change it, because the file must match the fixture. |
+
+{/* Evidence: products/evidence/scripts/compat/inji-oid4vci-upstream.sh, EVIDENCE_INJI_OID4VCI;
+    crates/registry-evidence-oid4vci/tests/inji_interoperability.rs, wait_until_ready. */}
 
 ## Next
 
-- [Configure OID4VCI wallet delivery](../../configure/evidence-oid4vci/) before deploying the
-  frozen profile.
-- [Enable SD-JWT VC in a deployment](../../configure/enable-sd-jwt-vc/) to understand the
-  Evidence credential contract delivered through the adapter.
-- [Read the known limitations](../../explanation/known-limitations/) before writing a public
-  interoperability claim.
+[Evidence Gateway security model](../../security/evidence/)
