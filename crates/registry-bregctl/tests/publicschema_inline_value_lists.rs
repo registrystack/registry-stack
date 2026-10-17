@@ -56,7 +56,6 @@ fn derived_publicschema_inline_value_lists_roundtrip_through_the_runtime() {
         .expect("bregctl init starts");
     assert_command_succeeded("bregctl init", &init);
     assert_generated_inline_value_schemas(&project.project_root);
-    prepare_generated_project_for_production(&project.project_root);
 
     fs::write(
         project.project_root.join("tests/journeys.yaml"),
@@ -95,25 +94,6 @@ fn derived_publicschema_inline_value_lists_roundtrip_through_the_runtime() {
     .expect("schema-test receipt is JSON");
     assert_eq!(receipt["kind"], "BRegSchemaTestReceipt");
     assert_eq!(receipt["successfulJourneyIds"], json!([JOURNEY_ID]));
-}
-
-fn prepare_generated_project_for_production(project: &Path) {
-    let registry_path = project.join("registry.yaml");
-    let registry = fs::read_to_string(&registry_path).expect("derived registry reads");
-    let placeholder = "canonicalBaseIri: https://inline-value-list.example.invalid";
-    assert_eq!(
-        registry.matches(placeholder).count(),
-        1,
-        "init writes exactly one documented production placeholder"
-    );
-    fs::write(
-        registry_path,
-        registry.replace(
-            placeholder,
-            "canonicalBaseIri: https://inline-value-list.example.test",
-        ),
-    )
-    .expect("positive runtime fixture replaces the production placeholder");
 }
 
 fn assert_generated_inline_value_schemas(project: &Path) {

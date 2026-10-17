@@ -664,6 +664,46 @@ fn a_fresh_init_project_is_ready_for_the_native_dev_lifecycle() {
 }
 
 #[test]
+fn dev_capture_runs_the_placeholder_iri_and_names_a_compile_refusal_by_code() {
+    let temporary = tempfile::tempdir().expect("temporary");
+    let project = fs::canonicalize(temporary.path()).unwrap().join("project");
+    crate::init(&project).unwrap_or_else(|failure| {
+        panic!("init failed: {}", serde_json::to_string(&failure).unwrap())
+    });
+    let client_bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let registry_path = project.join("registry.yaml");
+    let registry = fs::read_to_string(&registry_path).unwrap();
+    let authored = "canonicalBaseIri: https://directory.example.gov";
+    assert_eq!(registry.matches(authored).count(), 1);
+
+    fs::write(
+        &registry_path,
+        registry.replace(
+            authored,
+            "canonicalBaseIri: https://directory.example.invalid",
+        ),
+    )
+    .unwrap();
+    capture(&project, &client_bytes).expect("local development runs the placeholder IRI");
+
+    fs::write(
+        &registry_path,
+        registry.replace(authored, "canonicalBaseIri: \"\""),
+    )
+    .unwrap();
+    let refusal = format!(
+        "{:#}",
+        capture(&project, &client_bytes)
+            .err()
+            .expect("an empty canonical IRI does not compile")
+    );
+    assert!(
+        refusal.contains("(breg.registry.canonical-base-iri-required)"),
+        "{refusal}"
+    );
+}
+
+#[test]
 fn every_initialized_template_has_complete_local_clients_and_journeys() {
     for template in crate::starters::ids() {
         let temporary = tempfile::tempdir().expect("temporary");

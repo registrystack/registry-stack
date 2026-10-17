@@ -478,15 +478,6 @@ fn validate_project_header(
         "breg.registry.canonical-base-iri-required",
         errors,
     );
-    if profile == CompileProfile::Production
-        && reserved_production_iri(&project.project.canonical_base_iri)
-    {
-        errors.push(Diagnostic::error(
-            "breg.registry.canonical-base-iri-reserved",
-            "project.project.canonicalBaseIri",
-            "production canonicalBaseIri must not use the reserved .invalid namespace",
-        ));
-    }
 
     match (&project.package, profile) {
         (None, CompileProfile::Authoring) => findings.push(Diagnostic::finding(
@@ -668,6 +659,24 @@ fn validate_project_header(
             _ => {}
         }
     }
+}
+
+/// Refusals for project identity that a deployable package must not carry.
+///
+/// They are not part of [`compile_project`]: a freshly initialized project
+/// carries a placeholder identity that local development and schema tests
+/// run unchanged. Tooling applies them where it builds a package for
+/// deployment or asserts production readiness.
+pub fn deployment_diagnostics(project: &RegistryProject) -> Vec<Diagnostic> {
+    let mut errors = Vec::new();
+    if reserved_production_iri(&project.project.canonical_base_iri) {
+        errors.push(Diagnostic::error(
+            "breg.registry.canonical-base-iri-reserved",
+            "project.project.canonicalBaseIri",
+            "production canonicalBaseIri must not use the reserved .invalid namespace",
+        ));
+    }
+    errors
 }
 
 fn reserved_production_iri(value: &str) -> bool {
