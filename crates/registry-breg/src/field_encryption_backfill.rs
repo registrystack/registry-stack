@@ -56,8 +56,8 @@ use crate::postgres::{
 pub use crate::history_maintenance::HistoryMaintenanceTimeouts as FieldEncryptionBackfillTimeouts;
 
 /// The audit schema every field-encryption lifecycle entry carries. The shape
-/// follows the history maintenance entries: actor reference, package revision,
-/// step, and counts; field values never cross this boundary.
+/// follows the history maintenance entries: actor reference, activation
+/// identity, step, and counts; field values never cross this boundary.
 pub const FIELD_ENCRYPTION_AUDIT_SCHEMA: &str = "breg-field-encryption-audit/v3";
 
 const MAX_OPERATOR_REFERENCE_BYTES: usize = 512;
