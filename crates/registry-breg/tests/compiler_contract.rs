@@ -3493,6 +3493,136 @@ fn decimal_bound_diagnostic_names_the_scale_and_ordering_rules() {
 }
 
 #[test]
+fn reusable_decimal_bound_diagnostic_names_capacity_and_preserves_valid_bounds() {
+    let mut project = multi_dataset_project();
+    project.value_types.insert(
+        "bounded-decimal".to_owned(),
+        registry_breg::contract::FieldTypeSource::Decimal {
+            precision: 2,
+            scale: 0,
+            minimum: Some("100".to_owned()),
+            maximum: None,
+        },
+    );
+    let failure = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.field.decimal-bounds-invalid")
+        .expect("the reusable decimal refusal is reported");
+    assert_eq!(diagnostic.path, "valueTypes.bounded-decimal");
+    assert!(
+        diagnostic
+            .message
+            .contains("integer digits that fit precision minus scale"),
+        "{diagnostic:?}"
+    );
+
+    project.value_types.insert(
+        "bounded-decimal".to_owned(),
+        registry_breg::contract::FieldTypeSource::Decimal {
+            precision: 2,
+            scale: 0,
+            minimum: Some("-99".to_owned()),
+            maximum: Some("99".to_owned()),
+        },
+    );
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("canonical reusable bounds that fit the declared precision compile");
+}
+
+#[test]
+fn action_decimal_bound_diagnostic_names_capacity_and_preserves_valid_bounds() {
+    let source = |minimum: &str, maximum: Option<&str>| {
+        let mut input = json!({
+            "id": "amount",
+            "type": "decimal",
+            "precision": 2,
+            "scale": 0,
+            "minimum": minimum,
+            "required": true,
+            "classification": "internal"
+        });
+        if let Some(maximum) = maximum {
+            input["maximum"] = json!(maximum);
+        }
+        json!({
+            "datasets": [{"id": "test-dataset"}],
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": {
+                "id": "decimal-action",
+                "version": "1",
+                "defaultLanguage": "en",
+                "canonicalBaseIri": "https://authoring.example.test"
+            },
+            "recordTypes": [{
+                "id": "entry",
+                "primaryDataset": "test-dataset",
+                "route": "entries",
+                "mutationMode": "create-only",
+                "fields": [{
+                    "id": "amount",
+                    "type": "decimal",
+                    "precision": 2,
+                    "scale": 0,
+                    "minimum": "-99",
+                    "maximum": "99",
+                    "classification": "internal"
+                }]
+            }],
+            "actions": [{
+                "execution": {"mode": "immediate"},
+                "id": "create-entry",
+                "inputs": [input],
+                "plan": {"type": "fixed", "effects": [{
+                    "id": "entry",
+                    "target": {"recordType": "entry"},
+                    "operation": "create",
+                    "set": {"amount": {"fromInput": "amount"}}
+                }]}
+            }],
+            "accessProfiles": [{
+                "id": "operator",
+                "default": true,
+                "principalClaim": "principal",
+                "requiredScopes": "unrestricted",
+                "permissions": {"actions": [{
+                    "action": "create-entry",
+                    "operations": ["invoke"],
+                    "targets": [{"recordType": "entry", "rowBoundaries": "unrestricted"}],
+                    "results": ["entry"]
+                }]}
+            }]
+        })
+    };
+
+    let project =
+        parse_project_json(&serde_json::to_vec(&source("100", None)).expect("source serializes"))
+            .expect("invalid decimal bounds remain compiler input");
+    let failure = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.action.input-decimal-bounds-invalid")
+        .expect("the action input decimal refusal is reported");
+    assert_eq!(diagnostic.path, "actions[create-entry].inputs[]");
+    assert!(
+        diagnostic
+            .message
+            .contains("integer digits that fit precision minus scale"),
+        "{diagnostic:?}"
+    );
+
+    let project = parse_project_json(
+        &serde_json::to_vec(&source("-99", Some("99"))).expect("source serializes"),
+    )
+    .expect("valid decimal bounds parse");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("canonical action input bounds that fit the declared precision compile");
+}
+
+#[test]
 fn crs84_point_and_structured_fields_cannot_be_row_boundaries_until_equality_is_defined() {
     for field in [
         r#"{"id":"location","type":"crs84-point","precision":4,"classification":"internal"}"#,
