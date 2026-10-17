@@ -680,9 +680,15 @@ pub(crate) async fn verify_postgres_17_or_newer(client: &impl GenericClient) -> 
         )
         .await?;
     check_postgres_version_num(&server.get::<_, String>(0))?;
-    if server.get::<_, String>(1) != "UTF8" {
+    check_server_encoding(&server.get::<_, String>(1))
+}
+
+/// Refuse a `server_encoding` other than UTF8, naming the command that
+/// creates a fresh UTF8 database.
+fn check_server_encoding(server_encoding: &str) -> Result<()> {
+    if server_encoding != "UTF8" {
         return Err(PostgresKernelError::Configuration(
-            "the PostgreSQL database server_encoding must be UTF8; create a fresh UTF8 database and apply the package",
+            "the PostgreSQL database server_encoding must be UTF8; create a fresh UTF8 database with `CREATE DATABASE <name> ENCODING 'UTF8' TEMPLATE template0` and apply the package",
         ));
     }
     Ok(())
@@ -1046,7 +1052,9 @@ fn quote_compiled_identifier(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_postgres_version_num, postgres_version_num_is_supported};
+    use super::{
+        check_postgres_version_num, check_server_encoding, postgres_version_num_is_supported,
+    };
 
     #[test]
     fn postgres_version_gate_refuses_16_and_accepts_17() {
@@ -1058,6 +1066,18 @@ mod tests {
             assert_eq!(
                 refusal.to_string(),
                 "invalid PostgreSQL configuration: PostgreSQL 17 or newer is required"
+            );
+        }
+    }
+
+    #[test]
+    fn a_non_utf8_database_is_refused_with_the_create_database_command() {
+        assert!(check_server_encoding("UTF8").is_ok());
+        for refused in ["SQL_ASCII", "LATIN1"] {
+            let refusal = check_server_encoding(refused).expect_err("a non-UTF8 database");
+            assert_eq!(
+                refusal.to_string(),
+                "invalid PostgreSQL configuration: the PostgreSQL database server_encoding must be UTF8; create a fresh UTF8 database with `CREATE DATABASE <name> ENCODING 'UTF8' TEMPLATE template0` and apply the package"
             );
         }
     }
