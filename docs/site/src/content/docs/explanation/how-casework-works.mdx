@@ -76,8 +76,10 @@ A service-status credential can establish reviewability but cannot supply displa
 Routing and task-grant context are separate purpose-specific capabilities, required only by policies
 that actually use them.
 
-If the source conceals the subject or its version no longer matches, Casework omits or refuses the
-task rather than releasing stale context.
+If the source conceals the subject or its version no longer matches, Casework omits it from lists
+and refuses open work and context rather than releasing stale source data. A retained decided task
+and settled history remain readable under current Casework authority until retention expires; they
+contain Casework-owned state, not a cached source projection.
 An unavailable provider does not become permission to use a service credential for human disclosure.
 
 {/* Evidence: crates/registry-casework-core/src/adapter.rs;

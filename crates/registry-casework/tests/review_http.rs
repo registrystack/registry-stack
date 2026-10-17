@@ -2187,6 +2187,44 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
         );
     }
 
+    let terminal_task_with_source_profile = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-tasks/{task_id}"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("terminal submitted task with source profile"),
+        )
+        .await
+        .expect("terminal submitted task response with source profile");
+    assert_eq!(
+        terminal_task_with_source_profile.status(),
+        StatusCode::BAD_REQUEST
+    );
+    let terminal_history_with_source_profile = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/review-requests/{}/history",
+                    created.request_id
+                ))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("terminal submitted history with source profile"),
+        )
+        .await
+        .expect("terminal submitted history response with source profile");
+    assert_eq!(
+        terminal_history_with_source_profile.status(),
+        StatusCode::BAD_REQUEST
+    );
+
     let result = app
         .clone()
         .oneshot(
@@ -3520,11 +3558,19 @@ async fn decision_receipts_disclose_only_the_callers_retained_pinned_outcome_ove
     );
     assert_eq!(approved.outcome, "approved");
     revoked.store(true, Ordering::SeqCst);
+    let retained_approved = client
+        .review_task(auth().with_source_profile("reviewer-source"), source_task)
+        .await
+        .expect("source revocation preserves Casework-owned receipt")
+        .value
+        .decision_receipt
+        .expect("retained approval receipt");
+    assert_eq!(retained_approved, approved);
     assert_client_status(
         client
-            .review_task(auth().with_source_profile("reviewer-source"), source_task)
+            .review_task_context(auth().with_source_profile("reviewer-source"), source_task)
             .await
-            .expect_err("source revocation conceals receipt"),
+            .expect_err("source revocation conceals context"),
         404,
     );
     database
