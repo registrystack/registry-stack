@@ -229,7 +229,6 @@ fn non_review_meaning_matches(
     previous: &CompiledAction,
     candidate: &CompiledAction,
     baseline: &CompiledRegistryMigrationBaseline,
-    registry: &CompiledRegistry,
 ) -> bool {
     if crate::immediate_actions::definition_revision(previous, &baseline.entities)
         != previous.definition_revision
@@ -271,7 +270,9 @@ fn non_review_meaning_matches(
         return false;
     };
     proposal.review = new.review.clone();
-    crate::immediate_actions::definition_revision(&substituted, registry.entities())
+    // Substitute only the review policy. The predecessor record shapes remain
+    // part of what was reviewed, including fields the frozen effects do not set.
+    crate::immediate_actions::definition_revision(&substituted, &baseline.entities)
         == candidate.definition_revision
 }
 
@@ -469,7 +470,7 @@ pub async fn prepare_proposal_activation_compatibility(
             else {
                 continue;
             };
-            if !non_review_meaning_matches(&previous, active, baseline, candidate.registry()) {
+            if !non_review_meaning_matches(&previous, active, baseline) {
                 continue;
             }
             let CompiledActionExecution::Proposal { proposal: old } = &previous.execution else {

@@ -612,3 +612,8 @@ required-features = ["runtime"]
 name = "startup_ordering"
 path = "tests/startup_ordering.rs"
 required-features = ["runtime"]
+
+[[test]]
+name = "postgres_proposal_shape_activation"
+path = "tests/postgres_proposal_shape_activation.rs"
+required-features = ["postgres-test", "tooling"]
