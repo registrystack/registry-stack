@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `authentication.oidc.allowInsecureHttp` permits plain HTTP to the issuer and
+  JWKS endpoint beyond loopback under the `local` assurance profile only.
+  `production` and `evidence-grade` bundles still require HTTPS for both: a
+  deployable bundle that sets the key to `true` is refused with a message naming
+  it. The fixed `jwksSource.uri` is operator-declared, so it may resolve to a
+  private or loopback address on any origin; cloud-metadata and link-local
+  addresses stay refused.
 - BREAKING: `EvidenceFixture` control keys use camelCase and both fixture forms
   reject unknown control keys. In an existing fixture, rename snake_case keys
   directly under the root, `common`, each `cases` item and `privacyExpectation`

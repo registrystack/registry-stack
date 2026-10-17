@@ -3088,14 +3088,24 @@ impl OidcAuthenticationConfig {
             .map_err(|_| ConfigError::Invalid("authentication issuer is invalid"))?;
         let jwks_uri = Url::parse(self.jwks_uri())
             .map_err(|_| ConfigError::Invalid("authentication JWKS URI is invalid"))?;
-        if (issuer.scheme() == "http" || jwks_uri.scheme() == "http")
-            && !self.provider.allow_insecure_http
-        {
-            if assurance_profile != AssuranceProfile::Local {
+        let plain_http = issuer.scheme() == "http" || jwks_uri.scheme() == "http";
+        // Deployable bundles require HTTPS for the issuer and the JWKS URI.
+        // The plain HTTP opt-in exists for the local profile alone, so a
+        // deployable bundle that sets it is refused rather than ignored.
+        if assurance_profile != AssuranceProfile::Local {
+            if self.provider.allow_insecure_http {
+                return Err(ConfigError::InvalidField(
+                    "production and evidence-grade authentication requires HTTPS; remove allowInsecureHttp, which only the local assurance profile accepts",
+                    "authentication.oidc.allowInsecureHttp",
+                ));
+            }
+            if plain_http {
                 return invalid(
-                    "production and evidence-grade authentication requires HTTPS; a declared plain HTTP issuer needs authentication.oidc.allowInsecureHttp: true",
+                    "production and evidence-grade authentication requires HTTPS for the issuer and JWKS URI; plain HTTP is accepted only under the local assurance profile",
                 );
             }
+        }
+        if plain_http && !self.provider.allow_insecure_http {
             // The local permission is for a supervised issuer on this
             // deployment's own loopback: a canonical numeric origin, with the
             // JWKS served from that exact origin. It is not a permission for
@@ -3290,11 +3300,11 @@ fn validate_local_issuer_origin(value: &str) -> Result<&str, ConfigError> {
         .and_then(|port| port.parse::<u16>().ok())
         .filter(|port| *port != 0)
         .ok_or(ConfigError::Invalid(
-            "local authentication issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port",
+            "local authentication issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port; any other plain HTTP issuer needs authentication.oidc.allowInsecureHttp: true",
         ))?;
     if value != format!("http://127.0.0.1:{port}") {
         return invalid(
-            "local authentication issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port",
+            "local authentication issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port; any other plain HTTP issuer needs authentication.oidc.allowInsecureHttp: true",
         );
     }
     Ok(value)
@@ -7974,23 +7984,30 @@ mod tests {
         }
     }
 
-    #[test]
-    fn runtime_reads_the_explicit_http_issuer_opt_in() {
+    fn plain_http_issuer_candidate(profile: &str, opt_in: bool) -> serde_json::Value {
         let config = EvidenceConfig::parse_yaml(include_bytes!(
             "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         ))
         .expect("strict fixture validates");
         let mut candidate = serde_json::to_value(config).expect("configuration serializes");
+        candidate["assuranceProfile"] = serde_json::json!(profile);
         candidate["authentication"]["oidc"]["issuer"] =
             serde_json::json!("http://identity.internal:8080");
         candidate["authentication"]["oidc"]["jwksSource"] = serde_json::json!({
             "type": "uri",
             "uri": "http://identity.internal:8080/oauth2/jwks"
         });
-        candidate["authentication"]["oidc"]["allowInsecureHttp"] = serde_json::json!(true);
+        if opt_in {
+            candidate["authentication"]["oidc"]["allowInsecureHttp"] = serde_json::json!(true);
+        }
+        candidate
+    }
 
+    #[test]
+    fn local_runtime_reads_the_explicit_http_issuer_opt_in() {
+        let mut candidate = plain_http_issuer_candidate("local", true);
         let parsed = EvidenceConfig::parse_projection(&candidate)
-            .expect("explicit HTTP issuer opt-in parses and validates");
+            .expect("explicit HTTP issuer opt-in parses and validates under local");
         assert!(parsed.authentication.oidc.provider.allow_insecure_http);
         assert_eq!(
             parsed
@@ -8013,22 +8030,58 @@ mod tests {
     }
 
     #[test]
-    fn strict_http_issuer_refusal_names_the_explicit_opt_in() {
-        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
-            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-        ))
-        .expect("strict fixture validates");
-        config.authentication.oidc.provider.issuer =
-            registry_platform_yaml::Url::new("http://identity.internal:8080").expect("valid URL");
-        config.authentication.oidc.provider.jwks_source =
-            registry_platform_config::JwksSource::Uri {
-                uri: registry_platform_yaml::Url::new("http://identity.internal:8080/oauth2/jwks")
-                    .expect("valid URL"),
-            };
+    fn local_http_issuer_refusal_names_the_explicit_opt_in() {
+        let error = EvidenceConfig::parse_projection(&plain_http_issuer_candidate("local", false))
+            .expect_err("a non-loopback HTTP issuer needs the opt-in")
+            .to_string();
+        assert!(
+            error.contains("authentication.oidc.allowInsecureHttp: true"),
+            "{error}"
+        );
+        assert!(!error.contains("identity.internal"), "{error}");
+    }
 
-        let rendered = config.validate().unwrap_err().to_string();
-        assert!(rendered.contains("authentication.oidc.allowInsecureHttp: true"));
-        assert!(!rendered.contains("identity.internal"));
+    /// The frozen contract promises HTTPS for deployable bundles, so the
+    /// plain HTTP opt-in is refused there rather than honored.
+    #[test]
+    fn deployable_profiles_refuse_plain_http_and_the_insecure_http_opt_in() {
+        for profile in ["production", "evidence-grade"] {
+            for opt_in in [false, true] {
+                let error =
+                    EvidenceConfig::parse_projection(&plain_http_issuer_candidate(profile, opt_in))
+                        .expect_err("deployable bundles require HTTPS")
+                        .to_string();
+                assert!(
+                    error.contains("production and evidence-grade authentication requires HTTPS"),
+                    "{profile}: {error}"
+                );
+                assert!(
+                    error.contains("local assurance profile"),
+                    "{profile}: {error}"
+                );
+                assert!(!error.contains("identity.internal"), "{profile}: {error}");
+            }
+
+            // The opt-in is refused on its own, even when every URL is https.
+            let config = EvidenceConfig::parse_yaml(include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+            ))
+            .expect("strict fixture validates");
+            let mut https = serde_json::to_value(config).expect("configuration serializes");
+            https["assuranceProfile"] = serde_json::json!(profile);
+            https["authentication"]["oidc"]["allowInsecureHttp"] = serde_json::json!(true);
+            let error = EvidenceConfig::parse_projection(&https)
+                .expect_err("deployable bundles refuse the opt-in")
+                .to_string();
+            assert!(
+                error.contains("remove allowInsecureHttp"),
+                "{profile}: {error}"
+            );
+            assert!(
+                error.contains("authentication.oidc.allowInsecureHttp"),
+                "{profile}: {error}"
+            );
+        }
     }
 
     /// The issuer's trust profile is a logical id the runtime file binds, and
