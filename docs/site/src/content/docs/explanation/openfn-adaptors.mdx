@@ -108,7 +108,7 @@ follow the older client contract:
 - **Drafts do not submit themselves.** The former `createChangeRequest` operation creates a
   request record. `executeLifecycleAction` then follows the actions advertised by that record.
   These operations are not aliases for current Proposal Start, submit, review, or apply. Current
-  BReg semantics are described in [change control](../../configure/breg-change-control/).
+  BReg semantics are described in [change control](../../configure/breg-actions/).
 
 Patch members are written as field operations such as replace on a named field. The native client
 builds and validates the HTTP patch document, so job authors never touch JSON Pointer paths.

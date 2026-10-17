@@ -306,6 +306,10 @@ export default defineConfig({
     // Webhook binding is an operator task with its own page; history reads
     // and the event reference are sections of the API reference page.
     '/configure/breg-webhooks/': internalRedirect('/operate/breg-webhooks/'),
+    // The Actions page is named after what it declares, and field encryption
+    // is a thing an author does to a project, so both sit in the Author group.
+    '/configure/breg-change-control/': internalRedirect('/configure/breg-actions/'),
+    '/explanation/breg-field-encryption/': internalRedirect('/configure/breg-field-encryption/'),
     '/reference/breg-history/': internalRedirect('/reference/breg-api/'),
     '/reference/breg-events/': internalRedirect('/reference/breg-api/'),
     // The operating-requirements pages moved from Start into each product's
@@ -562,19 +566,19 @@ export default defineConfig({
               ],
             },
             {
-              label: 'Model a registry',
+              label: 'Author a registry',
               collapsed: true,
               items: [
-                { label: 'Project configuration', slug: 'configure/breg' },
-                { label: 'Access profiles', slug: 'configure/breg-access' },
-                { label: 'Change requests and actions', slug: 'configure/breg-change-control' },
-                { label: 'Test with journeys', slug: 'configure/breg-journeys' },
+                { label: 'Author a project', slug: 'configure/breg' },
                 { label: 'Modeling patterns', slug: 'explanation/registry-modeling-patterns' },
+                { label: 'Control access and reads', slug: 'configure/breg-access' },
+                { label: 'Actions and Proposals', slug: 'configure/breg-actions' },
+                { label: 'Encrypt a field', slug: 'configure/breg-field-encryption' },
+                { label: 'Publish statistics', slug: 'configure/breg-statistics' },
+                { label: 'Test with journeys', slug: 'configure/breg-journeys' },
                 { label: 'Governed actions', slug: 'explanation/governed-registry-actions' },
                 { label: 'Native field patterns', slug: 'explanation/native-field-patterns' },
-                { label: 'Field encryption', slug: 'explanation/breg-field-encryption' },
                 { label: 'Live counts and statistical releases', slug: 'explanation/breg-statistical-datasets' },
-                { label: 'Publish a statistical series', slug: 'configure/breg-statistics' },
                 { label: 'Membership and consent read boundaries', slug: 'explanation/membership-read-boundaries' },
                 { label: 'Deriving from a model', slug: 'explanation/deriving-a-registry-from-a-model' },
               ],
