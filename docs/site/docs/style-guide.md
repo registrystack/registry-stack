@@ -19,6 +19,17 @@ If a rule here conflicts with `design-registry-docs.md`, follow the design doc f
 7. **The compiled model is the only catalogue.** A table of keys, codes, fields, or rules is generated from the product's schemas or code by a script under `scripts/`, never typed. When the product cannot produce a catalogue the page needs, the page carries prose and the gap is reported to the product; a hand-typed inventory is a finding in review, because every drift the site has carried started as one.
 8. **Each fact has one home.** A procedure lives on exactly one page and is linked from the others. One explanation page per product answers what you define, what exists at runtime, who owns the result, and how you inspect or recover it. Troubleshooting is one section keyed by diagnostic code, or nothing where the tool already prints the remedy.
 
+### When principles conflict
+
+The principles above pull against each other on real pages. These are the tie-breakers, each learned from a page that went the other way.
+
+- **The reader over the harness.** When a step cannot be both readable and replayable, write it for the reader and let the harness skip that fence. A runnable page is worth having only while it costs the reader nothing; a page bent to fit a runner has stopped being documentation.
+- **Generated over typed, and prose over both when nothing generates.** When the product cannot produce the catalogue a page needs, the page says what the reader needs in prose and the gap goes to the product as a finding. Typing the table to close the gap is how the gap becomes permanent.
+- **The product over the page.** When a page needs a workaround to explain the product, a step the tool makes awkward or a remedy the tool should print itself, write the finding and keep the page honest about the awkwardness. Documentation that papers over the product hides the fault from the people who can fix it.
+- **One home over convenience.** When a fact would help on two pages, it lives on one and the other links. A copy is a future drift, and the reader who finds the stale one has no way to know.
+- **Fewer pages over more.** Consolidate before splitting. A split is justified by a different reader or a different altitude, never by length alone; a long page is usually carrying another page's content, and the fix is to move that content home, not to mint a page for it.
+- **Publish or delete.** A page that cannot be published as it stands goes, with its useful lines moved to a page that can. `draft: true` is for a page days from publication, not a parking place for one nobody will finish.
+
 ## Voice and tone
 
 - Use second person (`you`) for actions the reader takes, and keep using it to the end. A procedure that addresses the reader in the prerequisites and then goes impersonal for nine steps has stopped talking to anyone.
@@ -27,6 +38,7 @@ If a rule here conflicts with `design-registry-docs.md`, follow the design doc f
 - Institutional, calm, technical. More operating manual than marketing copy, and an operating manual is written to the operator.
 - Do not manage the reader's emotions. No "don't worry", "easy", "no problem". Calm is not distance: that a step is destructive, that a mistake here cannot be undone, or that a command runs for ten minutes is information the reader needs, and withholding it is not restraint.
 - Say what a thing does before what it does not. A negation closes a door the reader would otherwise walk through, so use one where a door is open. A run of sentences that all open with a negation tells the reader everything except what to do.
+- Let the tool introduce a term. The reader meets a noun first in output they have seen or a response they have read; the next sentence names it in one clause and links the glossary. A term defined before the reader has seen it is a glossary paragraph, and the glossary already exists.
 - Do not promise future features. If a capability is unbuilt, link to the issue or say `not yet supported`.
 
 ## Page structure
@@ -75,6 +87,8 @@ Each page belongs to exactly one `doc_type`. The pattern is enforced by the type
 
 **Tutorial.** Goal, prerequisites, estimated time, ordered steps, how the reader knows each step worked, what to do when it did not, cleanup, next page. The reader can finish the tutorial in one sitting. "How the reader knows it worked" is a statement about observable state, not a mandatory transcript block: a line the command prints, a file that now exists, a status code, a key the reader can list. Show a transcript only under the rules in "Code, commands, paths".
 
+A product's tutorials form a sequence, not a category. Each one starts from the project the previous one left behind and adds at most three new nouns, and its `Next` list points at the one after. One small project threads the whole sequence, so every configuration block on the product's pages is an excerpt of that project and the tutorial gate checks the excerpt against it. A tutorial that starts from a fresh project in the middle of the sequence is a sign the sequence is broken, not a reason to add a second project.
+
 **How-to.** When to use it, prerequisites, ordered steps, verification, troubleshooting. Scoped to one task. Verification, output, and recovery follow the same rules as a tutorial.
 
 **Explanation.** Context, model, boundaries, tradeoffs, related docs. No steps. No commands. The reader leaves with a mental model, not a finished artifact.
@@ -118,7 +132,7 @@ Preferred terms.
 | Repo slugs            | `registry-platform`, `registry-manifest`, `registry-evidence`, `registry-breg`, and `registry-discovery`; `solmara-lab` for the external adopter demo (monospace) |
 | Legacy repo paths     | `registry_relay` and `decentralized-evidence-demo` appear only in historical pages or `rename_status` fields. Never in prose on a `current` page without explicit rename context. |
 | Standards             | Use the official acronym after spelling on first use. `DCAT`, `SHACL`, `OGC API Records`, `SD-JWT VC`, `CCCEV`. Never translate. |
-| Base Registry Engine nouns | Six nouns, capitalized as the product prints them: `Record type` (`recordType` in a project file), `Record`, `Action`, `Plan`, `Proposal`, and `ActionReceipt`. Retired and refused by `check:config-vocabulary` on BReg pages: entity and entities as registry nouns, change request, change control, lifecycle action and lifecycle authority. Registry Record v1's `entityTypeIdentifier`, Manifest names, and other products' own vocabulary are not affected. |
+| Base Registry Engine nouns | Six nouns, capitalized as the product prints them: `Record type` (`recordType` in a project file), `Record`, `Action`, `Plan`, `Proposal`, and `ActionReceipt`. Retired and refused by `check:config-vocabulary` on Base Registry Engine pages: entity and entities as registry nouns, change request, change control, lifecycle action and lifecycle authority. Registry Record v1's `entityTypeIdentifier`, Manifest names, and other products' own vocabulary are not affected. |
 
 ## Choosing examples
 
