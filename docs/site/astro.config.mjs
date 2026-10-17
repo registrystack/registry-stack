@@ -343,7 +343,12 @@ export default defineConfig({
     '/reference/breg-events/': internalRedirect('/reference/breg-api/'),
     // The operating-requirements pages moved from Start into each product's
     // Deploy group; a first visit chooses a product before it plans a deployment.
-    '/start/evaluate-evidence/': internalRedirect('/operate/evidence-requirements/'),
+    // Evidence's requirements page was then absorbed by the one page that
+    // explains how the product works, and the refusal tutorial was folded
+    // into the access-control tutorial that follows it.
+    '/start/evaluate-evidence/': internalRedirect('/explanation/how-evidence-works/'),
+    '/operate/evidence-requirements/': internalRedirect('/explanation/how-evidence-works/'),
+    '/tutorials/refuse-unsafe-evidence-requests/': internalRedirect('/tutorials/control-who-can-request-evidence/'),
     '/start/evaluate-breg/': internalRedirect('/operate/breg/'),
     ...bregRewriteRedirects(internalRedirect),
     // One client package documents the retained namespaces in one reference.
@@ -506,6 +511,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'start/evidence-quickstart' },
             { label: 'Your first assertion', slug: 'tutorials/first-evidence-assertion' },
+            { label: 'How Evidence works', slug: 'explanation/how-evidence-works' },
             // Consumers need no deployment. Keep their path visible beside
             // the provider's entry points, separate from wallet delivery.
             {
@@ -522,11 +528,10 @@ export default defineConfig({
               label: 'Tutorials',
               collapsed: true,
               items: [
-                { label: 'Explore SD-JWT VC', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
                 { label: 'Return a governed value', slug: 'tutorials/return-a-governed-value' },
-                { label: 'Control caller access', slug: 'tutorials/control-who-can-request-evidence' },
-                { label: 'Handle safe refusals', slug: 'tutorials/refuse-unsafe-evidence-requests' },
-                { label: 'Model a relationship', slug: 'tutorials/assert-a-role-bound-relationship' },
+                { label: 'Control who can request evidence', slug: 'tutorials/control-who-can-request-evidence' },
+                { label: 'Assert a role-bound relationship', slug: 'tutorials/assert-a-role-bound-relationship' },
+                { label: 'Request evidence as an SD-JWT VC', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
               ],
             },
             {
@@ -550,7 +555,6 @@ export default defineConfig({
               label: 'Deploy',
               collapsed: true,
               items: [
-                { label: 'What you need to run it', slug: 'operate/evidence-requirements' },
                 { label: 'Test with fixtures', slug: 'tutorials/prove-an-evidence-project' },
                 { label: 'Configure a deployment', slug: 'configure/evidence' },
                 { label: 'Build a production candidate', slug: 'tutorials/build-and-deploy-evidence-project' },
