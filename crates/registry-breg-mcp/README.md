@@ -1,5 +1,9 @@
 # Base Registry Engine MCP gateway
 
+`breg-mcp` and its paired `breg-review` page are experimental supporting
+services, outside Registry Stack's 1.0 compatibility and deployment promise.
+Maintained citizen task-authority provisioning is deferred until after 1.0.
+
 `registry-breg-mcp` builds the `breg-mcp` binary: a Model Context Protocol
 server that lets a chat host act for one verified citizen against one Base
 Registry Engine deployment. The citizen reads their own record, drafts and
@@ -98,6 +102,21 @@ remain outside its tools, even if the delegated token carries more authority.
 Registry problems map to fixed tool codes and neutral text. Registry problem
 details, credentials, target and owner inputs never appear in tool results.
 
+| Tool code | Recovery meaning |
+|---|---|
+| `stale-application` | The gateway compared disclosed revisions and found that the Proposal or its Action definition changed. Review the current application before trying again. |
+| `change-refused` | The registry refused a required condition, current-state conflict, or expired idempotency receipt. Review the request, existing application and permissions before retrying. The response establishes neither a stale revision nor a withdrawn grant. |
+| `authorization-refused` | The token service explicitly refused delegated access or supplied insufficient scopes. Check whether the service is permitted to act for the citizen. Signing in again alone may not resolve it. |
+| `authorization-failed` | A bearer credential is missing, unusable or no longer accepted. Sign in again. |
+| `registry-unavailable` | The registry or its authorization service could not complete the request. Try again later. |
+| `not-found` | No application with that identifier is available to the caller. Missing and concealed applications share this response. |
+
+A value-free runtime `412` maps to `change-refused`, even when the caller
+suspects authority was withdrawn. The gateway cannot determine that cause
+from the response. Provider error codes and descriptions are never relayed.
+Missing or invalid inbound credentials are refused at the HTTP boundary with
+the bearer challenge described below, before any tool call or exchange.
+
 Read, edit and resume require the issuer to supply an explicit, current TaskGrant.
 The registry's agent Record-read profile declares the trusted grant source and
 its own static read bounds. Proposal grants separately name exact
@@ -108,10 +127,20 @@ rights. The source may issue instance authority for later calls after the
 Proposal locator is known. The gateway receives these grants through token
 exchange and accepts no grant, target or transition arguments from the chat host.
 
+An experimental deployment must supply an external task authority integrated
+with its issuer and token exchange. That authority must track the Proposals it
+authorizes for each citizen, issue current grants for each exact
+`proposal:<uuid>` and permitted operation once the locator is known, and answer
+the registry's configured task-grant status checks. Neither `breg-mcp` nor
+`breg-review` provides this authority or provisions those grants. Token exchange
+alone does not create per-Proposal authority, and a Start grant does not grant
+later Get, List or Edit access.
+
 The runtime example selects the profile; deployment must configure that profile
-and an issuer that supports this grant issuance. The maintained protocol tests
-use a conforming synthetic issuer. Real issuer pairing is a separate deployment
-integration.
+and the external authority/issuer integration. The maintained protocol tests
+use a conforming synthetic issuer and fixture-owned grant inventory. They prove
+the protocol under those supplied grants, not a maintained task-authority
+deployment. Real issuer pairing remains a separate deployment integration.
 
 ## Run it
 
