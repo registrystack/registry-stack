@@ -23,19 +23,22 @@ mod statistics;
 pub use baseline::{
     advise, inspect_baseline, AdvisorySeverity, BaselineAdvisory, BaselineSettings,
 };
+pub use catalog::{
+    catalog_drift_objects, managed_schema_fingerprint, verify_catalog_identity_for_catalog,
+    CatalogIdentity, ExpectedManagedCatalog, ExpectedRegistryIdentity,
+};
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
 pub use catalog::{
     initialize_compiled_registry_state_for_test, initialize_registry_state_for_catalog_test,
     test_activation_id, test_package_digest, RegistryStateTestIdentity,
 };
-pub use catalog::{
-    managed_schema_fingerprint, verify_catalog_identity_for_catalog, CatalogIdentity,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity,
-};
 pub(crate) use catalog::{registry_state_shape, runtime_grants_missing, RegistryStateShape};
 pub(crate) use config::MAX_POOL_TIMEOUT;
-pub use config::{set_application_name, ConnectionConfig, PoolBounds, RuntimePool, TlsPolicy};
+pub use config::{
+    set_application_name, ConnectionConfig, DatabaseConnectionCause, PoolBounds, RuntimePool,
+    TlsPolicy,
+};
 pub(crate) use context::begin_registry_transaction;
 pub(crate) use context::{
     begin_action_transaction, ActionClaimContext, ImmediateActionLinkBinding,

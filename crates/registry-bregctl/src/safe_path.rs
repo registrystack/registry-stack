@@ -46,6 +46,38 @@ pub(crate) enum SafePathError {
     Unsupported,
 }
 
+/// Name the first symbolic-link component and the filesystem target it
+/// resolves to. This is diagnostic-only: security decisions still use the
+/// descriptor-relative resolver above.
+pub(crate) fn symlink_detail(path: &std::path::Path) -> Option<String> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    let mut component = std::path::PathBuf::new();
+    for part in absolute.components() {
+        component.push(part.as_os_str());
+        let metadata = std::fs::symlink_metadata(&component).ok()?;
+        if metadata.file_type().is_symlink() {
+            let target = std::fs::canonicalize(&component).ok().or_else(|| {
+                let target = std::fs::read_link(&component).ok()?;
+                Some(if target.is_absolute() {
+                    target
+                } else {
+                    component.parent()?.join(target)
+                })
+            })?;
+            return Some(format!(
+                "symbolic link component `{}` resolves to `{}`",
+                component.display(),
+                target.display()
+            ));
+        }
+    }
+    None
+}
+
 impl SafePathError {
     /// Report whether the refusal was a missing component, which callers with a
     /// distinct "not present" outcome report separately from a refusal.

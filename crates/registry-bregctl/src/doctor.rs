@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use registry_breg::postgres::DatabaseConnectionCause;
 use registry_breg::startup::{check, CheckedStartup, StartupError};
 use registry_breg::{Diagnostic, DiagnosticSeverity};
 
@@ -152,6 +153,16 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             ),
         );
     }
+    if let StartupError::DatabaseCatalogDrift { objects } = error {
+        return diagnostic(
+            "startup.database.catalog-drift",
+            "database.catalog",
+            &format!(
+                "the managed database catalog differs from the runtime package at: {}; restore these objects from the package migration or reapply the active package, then rerun doctor",
+                objects.join(", ")
+            ),
+        );
+    }
     // The package refusal carries its own closed-vocabulary cause. Name it
     // inside the one package check instead of collapsing every package fault
     // into the same sentence; both vocabularies are value free.
@@ -187,17 +198,14 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         | StartupError::InstanceIdChangedWithPendingDeliveries { .. } => {
             unreachable!("handled above")
         }
-        StartupError::DatabaseConnection => (
-            "startup.database.connection-refused",
-            "database",
-            "the database connection was refused",
-        ),
+        StartupError::DatabaseConnection(cause) => database_connection_diagnostic(cause),
         StartupError::FieldPatternSyntax { .. } => unreachable!("handled before match"),
         StartupError::DatabaseUnready => (
             "startup.database.unready",
             "database",
             "the database is not ready for the runtime package",
         ),
+        StartupError::DatabaseCatalogDrift { .. } => unreachable!("handled above"),
         StartupError::DatabaseUninitialized => (
             "startup.database.uninitialized",
             "database",
@@ -317,6 +325,12 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
     diagnostic(code, path, message)
 }
 
+fn database_connection_diagnostic(
+    cause: DatabaseConnectionCause,
+) -> (&'static str, &'static str, &'static str) {
+    (cause.code(), cause.diagnostic_path(), cause.message())
+}
+
 fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
     Diagnostic {
         severity: DiagnosticSeverity::Error,
@@ -361,8 +375,11 @@ mod tests {
         //   it here would double-count that one stage under a second name.
         let distinctly_checked = [
             StartupError::PackageRefused(PackageError::Integrity),
-            StartupError::DatabaseConnection,
+            StartupError::DatabaseConnection(DatabaseConnectionCause::Unreachable),
             StartupError::DatabaseUnready,
+            StartupError::DatabaseCatalogDrift {
+                objects: vec!["registry_data.example_idx".to_owned()],
+            },
             StartupError::DatabaseUninitialized,
             StartupError::UnrecognizedDatabase,
             StartupError::InstanceClaimMismatch,
@@ -383,7 +400,14 @@ mod tests {
 
         let reported_paths: HashSet<String> = distinctly_checked
             .into_iter()
-            .map(|error| startup_diagnostic(error).path)
+            .map(|error| {
+                let path = startup_diagnostic(error).path;
+                if path.starts_with("database.") {
+                    "database".to_owned()
+                } else {
+                    path
+                }
+            })
             .chain(std::iter::once("runtimeConfig".to_owned()))
             .collect();
         let checked_dependencies: HashSet<String> = CHECKED_DEPENDENCIES
@@ -514,14 +538,51 @@ mod tests {
                 "package",
             ),
             (
-                StartupError::DatabaseConnection,
-                "startup.database.connection-refused",
+                StartupError::DatabaseConnection(DatabaseConnectionCause::Unreachable),
+                "startup.database.unreachable",
+                "database.runtimeUrlRef",
+            ),
+            (
+                StartupError::DatabaseConnection(DatabaseConnectionCause::Tls),
+                "startup.database.tls-refused",
                 "database",
+            ),
+            (
+                StartupError::DatabaseConnection(DatabaseConnectionCause::Authentication),
+                "startup.database.authentication-refused",
+                "database.runtimeUrlRef",
+            ),
+            (
+                StartupError::DatabaseConnection(DatabaseConnectionCause::DatabaseMissing),
+                "startup.database.missing",
+                "database.runtimeUrlRef",
+            ),
+            (
+                StartupError::DatabaseConnection(DatabaseConnectionCause::Timeout),
+                "startup.database.timeout",
+                "database",
+            ),
+            (
+                StartupError::DatabaseConnection(DatabaseConnectionCause::Configuration),
+                "startup.database.configuration-refused",
+                "database",
+            ),
+            (
+                StartupError::DatabaseConnection(DatabaseConnectionCause::Secret),
+                "startup.database.secret-refused",
+                "database.runtimeUrlRef",
             ),
             (
                 StartupError::DatabaseUnready,
                 "startup.database.unready",
                 "database",
+            ),
+            (
+                StartupError::DatabaseCatalogDrift {
+                    objects: vec!["registry_data.example_idx".to_owned()],
+                },
+                "startup.database.catalog-drift",
+                "database.catalog",
             ),
             (
                 StartupError::DatabaseUninitialized,

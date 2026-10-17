@@ -478,6 +478,43 @@ fn plural_projection_refuses_duplicate_and_dangling_membership() {
 }
 
 #[test]
+fn production_refuses_a_reserved_canonical_base_iri() {
+    for iri in [
+        "https://invalid",
+        "https://household-registry.example.invalid",
+        "https://HOUSEHOLD-REGISTRY.EXAMPLE.INVALID",
+        "https://household-registry.example.invalid./registry",
+        "https://household-registry.example.invalid.?source=placeholder",
+        "http://household-registry.example.invalid/",
+    ] {
+        let mut project = multi_dataset_project();
+        project.project.canonical_base_iri = iri.to_owned();
+        let failure = compile_project(&project, &[], CompileProfile::Production)
+            .expect_err("a production package cannot publish a reserved IRI");
+        let diagnostic = failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.registry.canonical-base-iri-reserved")
+            .expect("the reserved production IRI is named");
+        assert_eq!(diagnostic.path, "project.project.canonicalBaseIri");
+    }
+
+    for iri in [
+        "https://household-registry.example.invalid.example.org",
+        "https://household-registry.exampleinvalid",
+    ] {
+        let mut project = multi_dataset_project();
+        project.project.canonical_base_iri = iri.to_owned();
+        let failure = compile_project(&project, &[], CompileProfile::Production)
+            .expect_err("the shared fixture omits production package identity");
+        assert!(failure
+            .diagnostics()
+            .iter()
+            .all(|diagnostic| diagnostic.code != "breg.registry.canonical-base-iri-reserved"));
+    }
+}
+
+#[test]
 fn missing_resource_identity_members_have_actionable_authoring_diagnostics() {
     let project = parse_project_json(
         br#"{
@@ -3389,6 +3426,32 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
             "{failure:?}"
         );
     }
+}
+
+#[test]
+fn decimal_bound_diagnostic_names_the_record_field_and_scale_rule() {
+    let mut project = multi_dataset_project();
+    let field = project.entities[0]
+        .fields
+        .iter_mut()
+        .find(|field| field.id == "name")
+        .unwrap();
+    field.field_type = registry_breg::contract::FieldTypeSource::Decimal {
+        precision: 6,
+        scale: 2,
+        minimum: Some("1.0".to_owned()),
+        maximum: Some("99.99".to_owned()),
+    };
+    let failure = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.field.decimal-bounds-invalid")
+        .unwrap();
+    assert_eq!(diagnostic.path, "recordTypes[id=person].fields[id=name]");
+    assert!(diagnostic
+        .message
+        .contains("exactly scale fractional digits"));
 }
 
 #[test]

@@ -449,7 +449,16 @@ fn encrypted_field_refuses_processing_row_boundaries_and_lookupless_selectors() 
         json!(["secret"]);
     processing["accessProfiles"][0]["permissions"]["records"][0]["sortableFields"] =
         json!(["secret"]);
-    expect_code(&processing, "breg.access-profile.processing-encrypted");
+    let failure = compile_value(&processing).expect_err("encrypted processing is refused");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.access-profile.processing-encrypted")
+        .expect("encrypted processing diagnostic");
+    assert_eq!(
+        diagnostic.path,
+        "recordTypes[id=case].accessProfiles[id=caseworker].filterableFields[field=secret]"
+    );
 
     let mut boundary = encrypted_project();
     boundary["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"] =

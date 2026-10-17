@@ -224,6 +224,8 @@ pub enum FixtureError {
     CreateRowBoundaryNotWritable,
     AuthorityWideningRefused,
     RequestConstructionRefused,
+    AuthenticationActorKindMissing,
+    AuthenticationKeyRefused,
     ResponseTooLarge,
     ResponseShapeRefused,
     ExpectationMismatch,
@@ -235,6 +237,8 @@ pub enum FixtureError {
     ResponseStatusMismatch {
         expected: u16,
         actual: u16,
+        problem_code: Option<String>,
+        problem_detail: Option<String>,
     },
     /// A journeys document the shared reader refused: its diagnostics, each
     /// with a code, a path, a position, and the fix, and never an authored
@@ -275,11 +279,21 @@ impl fmt::Display for FixtureError {
         if let Self::LogicalReference(refusal) = self {
             return write!(formatter, "{refusal}");
         }
-        if let Self::ResponseStatusMismatch { expected, actual } = self {
-            return write!(
+        if let Self::ResponseStatusMismatch {
+            expected,
+            actual,
+            problem_code,
+            problem_detail,
+        } = self
+        {
+            write!(
                 formatter,
                 "expected HTTP {expected}, received HTTP {actual}"
-            );
+            )?;
+            if let (Some(code), Some(detail)) = (problem_code, problem_detail) {
+                write!(formatter, "; problem {code}: {detail}")?;
+            }
+            return Ok(());
         }
         if let Self::JourneyDocument(report) = self {
             return write!(
@@ -317,6 +331,12 @@ impl fmt::Display for FixtureError {
             }
             Self::AuthorityWideningRefused => "the fixture authority reference was refused",
             Self::RequestConstructionRefused => "the fixture request could not be constructed",
+            Self::AuthenticationActorKindMissing => {
+                "the fixture credential is missing the configured actor-kind claim"
+            }
+            Self::AuthenticationKeyRefused => {
+                "the fixture credential uses an unknown or disallowed signing key"
+            }
             Self::ResponseTooLarge => "the fixture response exceeded a fixed bound",
             Self::ResponseShapeRefused => "the fixture response shape was refused",
             Self::ExpectationMismatch => "the fixture expectation did not match",
@@ -2940,10 +2960,13 @@ impl PostgresFixtureTestRunner {
             .ok_or(FixtureError::ExecutionRefused)?;
         let actual = response.status().as_u16();
         if actual != step.expect.status {
+            let (problem_code, problem_detail) = response_problem(response).await;
             return Err(
                 self.current_step_failure(FixtureError::ResponseStatusMismatch {
                     expected: step.expect.status,
                     actual,
+                    problem_code,
+                    problem_detail,
                 }),
             );
         }
@@ -3227,9 +3250,12 @@ async fn execute_schema_test_with_key_source(
             };
             let actual = response.status().as_u16();
             if actual != step.expect.status {
+                let (problem_code, problem_detail) = response_problem(response).await;
                 return Err(step_failure(FixtureError::ResponseStatusMismatch {
                     expected: step.expect.status,
                     actual,
+                    problem_code,
+                    problem_detail,
                 }));
             }
             accept_response(step, response, &mut observations, Some(&runtime.pool))
@@ -3253,6 +3279,24 @@ async fn execute_schema_test_with_key_source(
         candidate_binding_sha256: candidate_binding_sha256(&candidate),
     };
     build_schema_test_receipt(&candidate, suite, &successful)
+}
+
+async fn response_problem(response: Response<Body>) -> (Option<String>, Option<String>) {
+    let Ok(bytes) = to_bytes(response.into_body(), MAX_RESPONSE_BYTES).await else {
+        return (None, None);
+    };
+    let Ok(problem) = serde_json::from_slice::<Value>(&bytes) else {
+        return (None, None);
+    };
+    let code = problem
+        .get("code")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let detail = problem
+        .get("detail")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    (code, detail)
 }
 
 struct SchemaTestRuntime {
@@ -3418,12 +3462,12 @@ impl SchemaTestRuntime {
             .verifier
             .verify(token)
             .await
-            .map_err(|_| FixtureError::RequestConstructionRefused)?;
+            .map_err(fixture_verification_error)?;
         let mapped = self
             .authenticator
             .authenticate(token)
             .await
-            .map_err(|_| FixtureError::RequestConstructionRefused)?;
+            .map_err(fixture_authentication_error)?;
         assert_exact_claims(
             &step.claims,
             &step.profile,
@@ -3573,6 +3617,26 @@ impl SchemaTestRuntime {
             last = Some(response);
         }
         last.ok_or(FixtureError::RequestConstructionRefused)
+    }
+}
+
+fn fixture_verification_error(error: registry_platform_oidc::OidcError) -> FixtureError {
+    if matches!(error, registry_platform_oidc::OidcError::UnknownKid) {
+        FixtureError::AuthenticationKeyRefused
+    } else {
+        FixtureError::RequestConstructionRefused
+    }
+}
+
+fn fixture_authentication_error(error: crate::auth::AuthenticationError) -> FixtureError {
+    match error {
+        crate::auth::AuthenticationError::MissingActorKind => {
+            FixtureError::AuthenticationActorKindMissing
+        }
+        crate::auth::AuthenticationError::VerificationRefused => {
+            FixtureError::AuthenticationKeyRefused
+        }
+        _ => FixtureError::RequestConstructionRefused,
     }
 }
 
@@ -5766,6 +5830,26 @@ mod tests {
         load_package, prepare_package, prepare_package_with_project_assets, PackageBuildRequest,
         PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
     };
+
+    #[test]
+    fn fixture_authentication_diagnostics_distinguish_missing_claim_from_refused_key() {
+        assert_eq!(
+            fixture_authentication_error(crate::auth::AuthenticationError::MissingActorKind),
+            FixtureError::AuthenticationActorKindMissing
+        );
+        assert_eq!(
+            fixture_verification_error(registry_platform_oidc::OidcError::UnknownKid),
+            FixtureError::AuthenticationKeyRefused
+        );
+        for error in [
+            FixtureError::AuthenticationActorKindMissing,
+            FixtureError::AuthenticationKeyRefused,
+        ] {
+            let rendered = format!("{error:?}: {error}");
+            assert!(!rendered.contains("claim-canary-value"));
+            assert!(!rendered.contains("key-canary-value"));
+        }
+    }
 
     /// A request decoded the way the journeys reader decodes one: the shape
     /// first, then each HTTP body read from the authored value.

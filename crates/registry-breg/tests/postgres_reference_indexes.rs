@@ -149,7 +149,9 @@ async fn activation_installs_reference_indexes_and_verification_refuses_their_ab
     ));
     assert_eq!(
         startup(&database, &package).await.err(),
-        Some(StartupError::DatabaseUnready),
+        Some(StartupError::DatabaseCatalogDrift {
+            objects: vec![format!("registry_data.{site_index}")],
+        }),
         "startup refuses a catalog missing a compiled reference index"
     );
     let recreate = registry

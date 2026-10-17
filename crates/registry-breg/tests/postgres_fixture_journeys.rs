@@ -565,6 +565,8 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
             error: Box::new(FixtureError::ResponseStatusMismatch {
                 expected: 201,
                 actual: 409,
+                problem_code: Some("mutation.conflict".to_owned()),
+                problem_detail: Some("The mutation conflicts with current state.".to_owned()),
             }),
         }
     );
@@ -1511,6 +1513,10 @@ fn compiled_fixture() -> (registry_breg::CompiledRegistry, Vec<u8>) {
     let project_source = String::from_utf8(PROJECT_TEMPLATE.to_vec())
         .expect("project fixture is UTF-8")
         .replace("MODULE_DIGEST", &module_digest(&module))
+        .replace(
+            "canonicalBaseIri: https://fixture.invalid",
+            "canonicalBaseIri: https://fixture.example.test",
+        )
         .into_bytes();
     let project = parse_project_yaml(&project_source).expect("project fixture parses");
     let registry = compile_project(&project, &[module], CompileProfile::Production)
@@ -1522,6 +1528,10 @@ fn compiled_import_fixture() -> (registry_breg::CompiledRegistry, Vec<u8>, Vec<u
     let module = parse_module_yaml(MODULE_SOURCE).expect("import module fixture parses");
     let project_with_import = String::from_utf8(PROJECT_TEMPLATE.to_vec())
         .expect("project fixture is UTF-8")
+        .replace(
+            "canonicalBaseIri: https://fixture.invalid",
+            "canonicalBaseIri: https://fixture.example.test",
+        )
         .replace(
             "operations: [create, get, list, patch, batch]",
             "operations: [create, get, list, patch, import]",
