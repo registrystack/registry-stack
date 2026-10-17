@@ -182,7 +182,13 @@ cannot change which package the runtime serves; with one role for both, the
 ledger check catches mistakes but not someone holding that credential. Removing or narrowing an access
 profile removes its obsolete compiled row-security policies during apply;
 activation still requires the exact candidate catalog. Unexpected policies
-remain catalog drift and are not silently deleted. A migration failure after
+remain catalog drift and are not silently deleted. A compiled policy whose
+expression was altered in place while it kept its definition comment is also
+refused as drift, and the activation fails: apply keeps a policy whose
+comment matches, so it does not repair one. A database administrator recovers
+by clearing that policy's comment (`COMMENT ON POLICY name ON table IS NULL`)
+and applying the exact target package again, which replaces the policy with
+its compiled definition. A migration failure after
 maintenance begins leaves the database durably in maintenance and readiness
 fails until an operator resolves the cause and applies the exact target
 package again, or restores the operator's own pre-activation backup and
