@@ -173,7 +173,7 @@ test('an approved specification page keeps the words it was approved with', asyn
 
 test('the existing stale configuration patterns still fail', async () => {
   await withFixture(
-    { pages: { 'src/content/docs/configure/evidence.mdx': 'Set `webhook.destinationId`.\n' } },
+    { pages: { 'src/content/docs/reference/evidence-configuration.mdx': 'Set `webhook.destinationId`.\n' } },
     async (root) => {
       const result = await runGate(root);
       assert.equal(result.code, 1, result.output);

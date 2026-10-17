@@ -792,11 +792,12 @@ test('keeps operating requirements in each product Deploy group, not in Start', 
   assertOrdered(
     evidence,
     [
-      "label: 'Deploy'",
+      "label: 'Prove and deploy'",
       "slug: 'tutorials/prove-an-evidence-project'",
-      "slug: 'configure/evidence'",
+      "slug: 'tutorials/build-and-deploy-evidence-project'",
+      "slug: 'operate/evidence-audit'",
     ],
-    'Registry Evidence Deploy group',
+    'Evidence Gateway Prove and deploy group',
   );
   // Base Registry Engine states its requirements at the top of Deploy and
   // serve, so that page opens its Deploy and operate group; the separate
@@ -902,7 +903,7 @@ test('organizes Registry Evidence tasks without publishing the obsolete Relay co
       "label: 'Use from applications'",
       "label: 'Tutorials'",
       "label: 'Connect a source'",
-      "label: 'Deploy'",
+      "label: 'Prove and deploy'",
       "label: 'Wallet delivery'",
       // Reference a reader opens with the deployment in front of them, so it
       // ends this section instead of starting a Reference lookup.

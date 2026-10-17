@@ -110,8 +110,8 @@ test('removes authored Notary pages but publishes the retirement decision', () =
   assert.doesNotMatch(retirement, /^draft: true$/m);
 });
 
-test('redirects every removed current Notary route to Registry Evidence or the retirement decision', () => {
-  const allowedTarget = /^(?:\/decisions\/notary-retirement-2026-08-03\/|\/(?:start\/evidence-quickstart|configure\/evidence|reference\/apis\/(?:evidence|registry-evidence)|tutorials\/move-evidence-to-production-signing)\/)$/;
+test('redirects every removed current Notary route to Evidence Gateway or the retirement decision', () => {
+  const allowedTarget = /^(?:\/decisions\/notary-retirement-2026-08-03\/|\/(?:start\/evidence-quickstart|tutorials\/build-and-deploy-evidence-project|reference\/apis\/(?:evidence|registry-evidence)|tutorials\/move-evidence-to-production-signing)\/)$/;
 
   for (const route of [...authoredNotaryRoutes, ...mirroredNotaryRoutes]) {
     const target = redirects[route];
