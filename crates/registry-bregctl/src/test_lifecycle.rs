@@ -169,7 +169,11 @@ pub(crate) fn preflight_output(path: &Path) -> Result<OutputTarget, TestLifecycl
         _ => refused(),
     })?;
     if destination.exists().map_err(|_| refused())? {
-        return Err(refused());
+        return Err(symlink_detail(path).map_or_else(refused, |detail| {
+            TestLifecycleError::OutputPreflight {
+                message: format!("the schema-test receipt output was refused; {detail}"),
+            }
+        }));
     }
 
     // Prove the destination can be created and removed before a long schema

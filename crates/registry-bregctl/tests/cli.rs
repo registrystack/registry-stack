@@ -5500,6 +5500,50 @@ fn test_output_symlink_parent_is_refused_before_candidate_or_database_work() {
 
 #[cfg(unix)]
 #[test]
+fn test_output_symlink_is_named_with_its_target_before_candidate_or_database_work() {
+    use std::os::unix::fs::symlink;
+
+    let project = TestProject::from_registry_source(authoring_fixture());
+    let live_target = project.path().join("operator-receipt.json");
+    fs::write(&live_target, b"operator-owned").expect("link target writes");
+    let dangling_target = project.path().join("missing-receipt.json");
+    for (name, target) in [
+        ("live-receipt.json", &live_target),
+        ("dangling-receipt.json", &dangling_target),
+    ] {
+        let output = project.path().join(name);
+        symlink(target, &output).expect("output symlink creates");
+        let result = bregctl(&[
+            "--format",
+            "json",
+            "test",
+            path(project.path()),
+            "--runtime-config",
+            path(&project.path().join("runtime.yaml")),
+            "--credentials",
+            path(&project.path().join("credentials.yaml")),
+            "--output",
+            path(&output),
+        ]);
+
+        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        let report = json_stdout(&result);
+        assert_eq!(report["diagnostics"][0]["code"], "test.output.refused");
+        let message = report["diagnostics"][0]["message"]
+            .as_str()
+            .expect("diagnostic message");
+        assert!(message.contains(&output.display().to_string()), "{message}");
+        assert!(message.contains(&target.display().to_string()), "{message}");
+    }
+    assert_eq!(
+        fs::read(&live_target).expect("link target remains"),
+        b"operator-owned"
+    );
+    assert!(!dangling_target.exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn package_fixture_journey_source_is_required_regular_bounded_and_value_free() {
     use std::os::unix::fs::symlink;
 
