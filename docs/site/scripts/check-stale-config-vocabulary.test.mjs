@@ -156,7 +156,7 @@ test('retired Evidence and Casework spellings fail on any page', async () => {
     await withFixture({ pages: { [page]: text } }, async (root) => {
       const result = await runGate(root);
       assert.equal(result.code, 1, result.output);
-      assert.match(result.output, new RegExp(`${page.replace(/[./]/gu, '\\$&')}:1:`, 'u'));
+      assert.ok(result.output.includes(`${page}:1:`), result.output);
     });
   }
 });
