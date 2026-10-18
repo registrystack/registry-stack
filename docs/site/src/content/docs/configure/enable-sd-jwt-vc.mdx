@@ -18,18 +18,41 @@ tutorial_test:
   after: tutorials/request-evidence-as-sd-jwt-vc
 ---
 
-If you provide assertions and your relying parties want an
-[SD-JWT VC](../../reference/glossary/#sd-jwt-vc) response, this page settles what a holder may
-disclose and whom the response is bound to. [Request evidence as an SD-JWT VC](../../tutorials/request-evidence-as-sd-jwt-vc/)
-already permits and requests one; you continue in its project, with `dev` stopped.
+If you operate an Evidence project and one assertion definition must answer as an
+[SD-JWT VC](../../reference/glossary/#sd-jwt-vc), you decide two things once the representation is
+permitted: which values a holder may keep or drop, and whether the response is bound to the
+holder's key. You continue in `first-evidence-assertion/adult-status` from
+[Request evidence as an SD-JWT VC](../../tutorials/request-evidence-as-sd-jwt-vc/), with Evidence
+Gateway stopped and its state cleaned.
+
+## What changes for callers
+
+A definition answers as SD-JWT VC only when `sd-jwt-vc` is in its `representations` and in the
+grant a caller acts under. That caller then sends `Accept: application/dc+sd-jwt` and receives the
+same assertion, serialized as an SD-JWT VC; a caller whose grant lacks it still receives signed
+JWS. The two choices below change what that caller can do with the response:
+
+- The disclosure shape decides which values the holder can present separately.
+- The subject binding decides who the response means something to: the relying party that
+  requested it (`audience-scoped`), or whoever proves possession of the holder's key
+  (`holder-bound`). A holder-bound definition has no signed JWS representation, so every caller
+  must send holder keys.
 
 ## Choose what a holder can disclose
 
-```sh test-cwd="first-evidence-assertion"
-cd adult-status
+From the project directory, confirm the project checks clean before you change it:
+
+```sh test-cwd="first-evidence-assertion/adult-status"
+evidencectl check . --target local-target.yaml
 ```
 
-Try declaring a field projection on `adult`, a boolean output:
+```text test-excerpt
+0 errors, 0 warnings
+```
+
+Each output travels as a disclosure, a salted claim the holder may keep or drop. An output without
+`sdJwtVc` is one disclosure named by its concept URI. Try projecting `adult`, a boolean output, as
+a named claim:
 
 ```diff lang="yaml" title="evidence.yaml" test-edit
       adult:
@@ -45,17 +68,13 @@ evidencectl check . --target local-target.yaml
 ```
 
 ```text test-excerpt
-error[evidence.project.output-projection-type] ./evidence.yaml:276:11 /assertionDefinitions/adult-status/outputs/adult/sdJwtVc
-  SD-JWT VC field projection requires a reviewed structured value
+SD-JWT VC field projection requires a reviewed structured value
 ```
 
-Each value travels as a disclosure, a salted claim the holder may keep or drop. An output without
-`sdJwtVc` is one disclosure named by its concept URI. Only a `reviewed-structured-value` output
-may declare `sdJwtVc`: it then appears under `claim`, a unique name of at most 64 characters, and
-each direct field becomes its own disclosure; a nested object stays one. `top-level` is the only
-`disclosure` value.
-
-Remove the block again:
+Only a `reviewed-structured-value` output may declare `sdJwtVc`. It then appears under `claim`, a
+unique name of at most 64 characters, and each direct field becomes its own disclosure; a nested
+object stays one. `top-level` is the only `disclosure` value. A boolean has nothing to split, so
+remove the block:
 
 ```diff lang="yaml" title="evidence.yaml" test-edit
         type: boolean
@@ -71,9 +90,8 @@ Remove the block again:
 
 ## Bind adult-status to the holder
 
-`adult-status` declares `subjectBinding: audience-scoped`: the response means something only to
-the relying party that requested it. Declare [`holder-bound`](../../reference/glossary/#holder-bound) instead, and keep only `sd-jwt-vc`,
-because a holder-bound definition has no other representation:
+`adult-status` declares `subjectBinding: audience-scoped`. Declare
+[`holder-bound`](../../reference/glossary/#holder-bound) instead, and keep only `sd-jwt-vc`:
 
 ```diff lang="yaml" title="evidence.yaml" test-edit
 -   subjectBinding: audience-scoped
@@ -88,12 +106,12 @@ evidencectl check . --target local-target.yaml
 ```
 
 ```text test-excerpt
-error[evidence.authority.ceiling] ./dev-authority.yaml:62:7 /accessProfiles/age-checker-service/grants/0
-  each complete grant must stay inside every definition ceiling
+each complete grant must stay inside every definition ceiling
 ```
 
-Both `adult-status` grants still ask for an audience-scoped JWS. Narrow each one in
-`dev-authority.yaml`:
+The definition is now a ceiling its grants exceed: both `adult-status` grants in
+`dev-authority.yaml` still permit an audience-scoped JWS. Narrow the `standalone-service` grant,
+then the `age-checker-service` one:
 
 ```diff lang="yaml" title="dev-authority.yaml" test-edit
       representations:
@@ -127,27 +145,25 @@ Target: local-target.yaml
 0 errors, 0 warnings
 ```
 
-`adult-status` no longer answers as signed JWS. A request now carries `holderKeys`, and each key
-becomes the `cnf` claim of its response and scopes the subject binding; the response carries no
-audience. The relying party checks the holder's key-binding JWT against that `cnf` key with
+A request for `adult-status` now carries `holderKeys`. Each key becomes the `cnf` claim of its
+response and scopes the subject binding, and the response names no audience. A caller that still
+asks for signed JWS is refused before any source is contacted. The relying party checks the
+holder's key-binding JWT against the `cnf` key with
 [`evidence verify-presentation`](/reference/cli/evidence/verify-presentation/).
 
 {/* Evidence: crates/registry-evidencectl/schemas/authoring/project.schema.json, BindingMode;
-    crates/registry-evidence/src/contracts.rs, holderKeys;
+    crates/registry-evidence/src/contracts.rs, holderKeys, application/dc+sd-jwt;
+    products/evidence/contracts/problem-contract.yaml, authorization;
     products/evidence/contracts/holder-bound-profile.yaml, binding_derivation. */}
 
-## Keep the boundary and verifier trust
+## What relying parties trust
 
-An SD-JWT VC response is a second encoding of the same stateless assertion: one authorization,
-source call, derivation, and audit, then serialization. Evidence Gateway keeps no issuance session,
-status list, or revocation. The frozen [SD-JWT VC profile](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/sd-jwt-vc-profile.yaml)
-pins RFC 9901 and SD-JWT VC draft 18.
-
-Relying parties verify against keys they pinned themselves, with
-[`evidence verify`](/reference/cli/evidence/verify/) for a stored response; neither command opens
-a network connection. `/.well-known/jwt-vc-issuer` is discovery, not a trust anchor. A deployment
-target may cap formats with `responseFormats`; see the
-[configuration reference](/reference/evidence-configuration/).
+An SD-JWT VC response is a second encoding of the same stateless assertion, so Evidence Gateway
+keeps no issuance session, status list, or revocation for it. The frozen
+[SD-JWT VC profile](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/sd-jwt-vc-profile.yaml)
+pins RFC 9901 and SD-JWT VC draft 18. Relying parties verify against keys they pinned themselves;
+`/.well-known/jwt-vc-issuer` is discovery, not a trust anchor. A deployment target may cap formats
+with `responseFormats`; see the [configuration reference](/reference/evidence-configuration/).
 
 {/* Evidence: products/evidence/contracts/sd-jwt-vc-profile.yaml, standards_profile, key_discovery;
     crates/registry-evidence/src/server.rs, JWT_VC_ISSUER_ROUTE;
