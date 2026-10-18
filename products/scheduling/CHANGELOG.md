@@ -55,6 +55,14 @@
 - Appointment observers read their allowed projection fields from the
   policy model instead of a second copy in the runtime.
 
+- The token issuer and a JWKS URI declared in `authentication.oidc.jwksSource`
+  may resolve to a private or loopback address. A discovery `jwks_uri` on
+  another origin than the issuer stays under the public-network policy: it
+  must use HTTPS and is refused when it resolves to a private or loopback
+  address. `authentication.oidc.allowInsecureHttp: true` permits plain HTTP
+  beyond loopback to the issuer and a declared JWKS URI, never to a
+  cross-origin discovered one.
+
 ## 0.41.0 - 2026-10-13
 
 - BREAKING: the published `registry-stack-client` Python package, which carries
