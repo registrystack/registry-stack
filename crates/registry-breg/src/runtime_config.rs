@@ -1460,9 +1460,9 @@ impl DeploymentIdentity {
         }
         validate_deployment_value(&raw.database_id)?;
         validate_deployment_value(&raw.database_initialization_environment)?;
-        // Package loading keys its permission strictness on the
-        // initialization environment, so a deployment that names another
-        // environment would load its package under the wrong strictness.
+        // Package loading keys its permission and project-identity strictness
+        // on the initialization environment, so a deployment that names
+        // another environment would load its package under the wrong policy.
         if raw.environment != raw.database_initialization_environment {
             return Err(RuntimeConfigError::EnvironmentIdentityConflict);
         }

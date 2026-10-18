@@ -148,6 +148,63 @@ fn package_builder_is_deterministic_and_local_publication_loads() {
 }
 
 #[test]
+fn a_local_placeholder_package_cannot_load_for_a_production_database() {
+    let module_bytes = module_bytes(PlanChoice::Schema);
+    let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
+    let deployable_project = project_bytes(&module_digest(&module));
+    let local_project = String::from_utf8(deployable_project.clone())
+        .expect("fixture project is UTF-8")
+        .replace(
+            "https://package.example.test",
+            "https://package.example.invalid",
+        )
+        .into_bytes();
+
+    let publish = |project_bytes| {
+        let root = TempRoot::create();
+        prepare_package(build_request(BuildRequestParts {
+            prior_revision: None,
+            schema_fingerprint: fingerprint(1),
+            project_bytes,
+            module_bytes: module_bytes.clone(),
+            migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+        }))
+        .expect("package prepares")
+        .publish_to_directory(root.path())
+        .expect("package publishes");
+        root
+    };
+
+    let local = publish(local_project);
+    load_package(local.path(), &local_context()).expect("local development loads its package");
+    assert!(matches!(
+        load_package(
+            local.path(),
+            &PackageLoadContext {
+                database_initialization_environment: "production",
+            },
+        ),
+        Err(PackageError::DeploymentIdentity)
+    ));
+    load_predecessor_package(
+        local.path(),
+        &PackageLoadContext {
+            database_initialization_environment: "production",
+        },
+    )
+    .expect("a formerly admitted local identity remains readable for successor recovery");
+
+    let deployable = publish(deployable_project);
+    load_package(
+        deployable.path(),
+        &PackageLoadContext {
+            database_initialization_environment: "production",
+        },
+    )
+    .expect("a deployment-ready package loads for production");
+}
+
+#[test]
 fn package_builder_refuses_successor_without_prior_compiled_registry() {
     let module_bytes = module_bytes(PlanChoice::SecondTable);
     let module = parse_module_yaml(&module_bytes).expect("fixture module parses");
@@ -1033,7 +1090,7 @@ fn predecessor_verification_does_not_weaken_successor_plan_checks() {
     let legacy_revision = "legacy-compiler-source-revision";
     let legacy = legacy_compiler_fixture(legacy_revision);
     let active_revision = legacy.digest();
-    load_predecessor_package(legacy.root.path(), &local_context())
+    load_predecessor_package(legacy.root.path(), &legacy.context())
         .expect("legacy active predecessor verifies for planning");
 
     let successor = PackageFixture::build(

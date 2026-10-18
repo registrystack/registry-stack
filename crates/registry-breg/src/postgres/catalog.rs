@@ -120,6 +120,34 @@ enum ManagedPolicyRole {
 const SUBJECT_ACCESS_LOG_TABLE: &str = "registry_internal.registry_subject_access_log";
 const SUBJECT_ACCESS_LOG_EXPIRY: &str = "registry_internal.expire_subject_access_log()";
 
+/// Product-owned indexes installed outside compiler-generated entity DDL.
+///
+/// The pristine-catalog diagnostic test compares this inventory with the
+/// actual installed catalog, so a new installer-owned index cannot silently
+/// fall out of drift localization.
+const MANAGED_INTERNAL_INDEXES: &[&str] = &[
+    "registry_internal.registry_attachment_live_references",
+    "registry_internal.registry_attachment_verification_pending",
+    "registry_internal.registry_field_encryption_lifecycle_progress_idx",
+    "registry_internal.registry_idempotency_caller_key",
+    "registry_internal.registry_import_authorities_one_open",
+    "registry_internal.registry_ingestion_run_chunk_records_erased_record",
+    "registry_internal.registry_migrations_one_open_activation_per_digest",
+    "registry_internal.registry_proposal_idempotency_by_request",
+    "registry_internal.registry_proposal_pending_targets",
+    "registry_internal.registry_proposal_queue",
+    "registry_internal.registry_proposal_review_completion_reconcile",
+    "registry_internal.registry_proposal_review_submission_jobs",
+    "registry_internal.registry_revision_commit_members_lookup_idx",
+    "registry_internal.registry_revision_commit_members_position_idx",
+    "registry_internal.registry_subject_access_log_expiry",
+    "registry_internal.registry_subject_access_log_record",
+    "registry_internal.registry_webhook_delivery_state_due_idx",
+    "registry_internal.registry_webhook_delivery_state_expired_idx",
+];
+const IMMEDIATE_ACTION_RESULT_TARGET_INDEX: &str =
+    "registry_internal.registry_immediate_action_results_target_idx";
+
 /// Exact managed PostgreSQL inventory accepted by catalog verification.
 ///
 /// Construction is deliberately closed to one compiler-produced Registry plus
@@ -176,7 +204,7 @@ pub async fn catalog_drift_objects(
         differences.insert(name.clone());
     }
 
-    let expected_indexes: BTreeSet<String> = registry
+    let mut expected_indexes: BTreeSet<String> = registry
         .ddl()
         .statements
         .iter()
@@ -187,7 +215,15 @@ pub async fn catalog_drift_objects(
             let schema = table.split_once('.')?.0;
             Some(format!("{schema}.{name}"))
         })
+        .chain(
+            MANAGED_INTERNAL_INDEXES
+                .iter()
+                .map(|name| (*name).to_owned()),
+        )
         .collect();
+    if !registry.actions().actions.is_empty() {
+        expected_indexes.insert(IMMEDIATE_ACTION_RESULT_TARGET_INDEX.to_owned());
+    }
     let index_rows = client
         .query(
             "SELECT n.nspname || '.' || i.relname
@@ -196,8 +232,8 @@ pub async fn catalog_drift_objects(
          JOIN pg_catalog.pg_class i ON i.oid = x.indexrelid
          JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
          LEFT JOIN pg_catalog.pg_constraint c ON c.conindid = i.oid
-         WHERE n.nspname = 'registry_data' AND c.oid IS NULL",
-            &[],
+         WHERE n.nspname = ANY($1::text[]) AND c.oid IS NULL",
+            &[&MANAGED_SCHEMAS],
         )
         .await?;
     let actual_indexes: BTreeSet<String> = index_rows.into_iter().map(|row| row.get(0)).collect();

@@ -5942,6 +5942,13 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::VerifyPackagePath,
         ),
+        ApplyLifecycleError::TargetPackage(PackageError::DeploymentIdentity) => (
+            "apply.package.deployment-identity-refused",
+            "package",
+            "the activation package carries a local-only identity; replace canonicalBaseIri, schema-test, and rebuild the deployment package. Nothing was changed",
+            DiagnosticArtifact::VerifiedPackage,
+            SuggestedAction::CorrectPackageBuild,
+        ),
         ApplyLifecycleError::TargetPackage(error) => (
             "apply.package.refused",
             "package",
@@ -6635,6 +6642,10 @@ fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
             SuggestedAction::VerifyPackagePermissions,
         ),
         PackageError::Binding => ("binding-refused", SuggestedAction::VerifyPackageBinding),
+        PackageError::DeploymentIdentity => (
+            "deployment-identity-refused",
+            SuggestedAction::CorrectPackageBuild,
+        ),
         PackageError::Envelope
         | PackageError::ExpectedDigestMismatch(_)
         | PackageError::Closure
@@ -6659,6 +6670,7 @@ fn package_refusal_action(error: &PackageError) -> SuggestedAction {
         PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
         PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
         PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+        PackageError::DeploymentIdentity => SuggestedAction::CorrectPackageBuild,
         _ => SuggestedAction::VerifyPackageIntegrity,
     }
 }
@@ -12583,6 +12595,23 @@ mod tests {
                 .as_str()
                 .is_some_and(|message| message.contains("package.root")),
             "{active}"
+        );
+
+        let local_identity = diagnostic(ApplyLifecycleError::TargetPackage(
+            PackageError::DeploymentIdentity,
+        ));
+        assert_eq!(
+            local_identity["code"],
+            "apply.package.deployment-identity-refused"
+        );
+        assert_eq!(local_identity["path"], "package");
+        assert_eq!(local_identity["suggestedAction"], "correct-package-build");
+        assert!(
+            local_identity["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("replace canonicalBaseIri")
+                    && message.contains("Nothing was changed")),
+            "{local_identity}"
         );
     }
 
