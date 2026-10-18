@@ -17,14 +17,9 @@ import ConfigurationFormatChecks from '../../../components/ConfigurationFormatCh
 import ConfigurationReference from '../../../components/ConfigurationReference.astro';
 import reference from '../../../data/generated/render-configuration.json';
 
-Look up the keys of a Registry Render bundle's `manifest.yaml` and `labels/*.yaml`, and of the
-operator's `runtime.yaml`. The tables are generated from Render's Rust-derived JSON Schemas.
-
 ## Scope
 
-This reference describes the current grammar, not a frozen contract. Types, required fields,
-accepted values, defaults, and constraints come from the schemas, with descriptions where the
-Rust definition supplies them.
+This grammar is not frozen.
 
 `manifest.yaml` declares the bundle's document types: each one's template, data schema, label
 locales, version, and PDF standard. Each `labels/<locale>.yaml` holds one label table, and every
@@ -47,9 +42,8 @@ substitution that apply when serve reads `runtime.yaml`.
 
 `documents[]` means an array item; `labels.*` means a map entry whose name you choose. Required
 fields inside an optional object apply when that object is present. Conditional fields depend on
-another value, such as `audit.path` on `audit.destination`. A schema default applies only where
-the schema declares it: the audit writer rotates at 100 MiB and keeps sealed files 90 days when
-`rotateBytes` and `retentionDays` are unset, although the tables show no default for them.
+another value, such as `audit.path` on `audit.destination`. `audit.rotateBytes` defaults to
+100 MiB and `audit.retentionDays` to 90.
 
 <ConfigurationReference contracts={reference.contracts} prefix="render" />
 

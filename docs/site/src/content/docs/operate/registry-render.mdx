@@ -265,10 +265,8 @@ opens. At startup and at each rotation, sealed files older than `retentionDays` 
 file is not chained or signed, so ship sealed files, or the `stdout` stream, to append-only storage
 before retention deletes them.
 
-:::danger
 Never rename, edit, or truncate the active audit file while serve runs. The writer stops, and
 every render fails closed until you restart the process.
-:::
 
 {/* Evidence: crates/registry-render/src/audit.rs, AUDIT_SCHEMA, RenderAuditEvent and correlation;
     crates/registry-render/src/server.rs, render_route and refuse;
