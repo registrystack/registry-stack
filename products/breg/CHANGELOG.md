@@ -23,9 +23,19 @@
 - Refuse activation before maintenance with `apply.hooks.local-retained` when
   local hook work still needs the active package. `bregctl webhook drain`
   attempts due local work under that package with attempt and time bounds.
-  Settled URL proposal decisions can finish delivery after activation;
-  uncommitted superseded answers become non-replayable dead letters, while
-  committed answers retain receipt recovery without applying twice.
+  Apply audits this retained-local guard refusal as `refused`; an incomplete
+  refusal audit returns `apply.audit.refusal-incomplete` with ready state
+  unchanged. Other activation failure classifications retain their contracts.
+- Let settled URL proposal decisions finish delivery after activation.
+  Uncommitted proposals classified under a successor become non-replayable
+  `hook.proposal.package_unavailable` dead letters, while committed answers
+  retain receipt recovery without applying twice. An interrupted final attempt
+  with no recoverable receipt instead becomes `worker-interrupted` without a
+  proposal code and may remain eligible for explicit replay to the receiver.
+  `webhook list` exposes `proposalCode` and a bounded `proposalSummary` for
+  the superseded-activation refusal; it does not expose other handler-authored
+  summaries. `replayEligible` includes both captured operator permission and
+  product proposal policy, alongside state, payload, and binding checks.
 - Classify added events as disclosure widening and removed events as narrowing.
   Changed projections and destinations require disclosure review in diff output;
   event changes remain applicable without reviewed migration SQL.

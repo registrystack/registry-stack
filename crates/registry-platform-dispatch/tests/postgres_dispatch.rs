@@ -558,6 +558,93 @@ impl DispatchStore for TestStore {
     }
 }
 
+/// A consumer that permits completion after its ordinary identity check refuses.
+/// Keep `TestStore` on the trait default to exercise that default independently.
+struct PermissiveFinishStore(TestStore);
+
+#[async_trait]
+impl DispatchStore for PermissiveFinishStore {
+    type Job = TestJob;
+    type Record = ();
+    type Detail = ();
+    type Context = ();
+
+    fn capture_context(&self) {}
+
+    async fn connection(&self) -> Result<DispatchConnection, DispatchError> {
+        self.0.connection().await
+    }
+
+    async fn verify_transaction(&self, transaction: &Transaction<'_>) -> Result<(), DispatchError> {
+        self.0.verify_transaction(transaction).await
+    }
+
+    async fn verify_finish_transaction(
+        &self,
+        _transaction: &Transaction<'_>,
+        _job: &LeasedJob<TestJob>,
+        _sent: &Sent<()>,
+    ) -> Result<(), DispatchError> {
+        Ok(())
+    }
+
+    fn decode_claim(&self, row: &Row, first: usize) -> Result<Decoded<TestJob>, ClaimRefusal> {
+        self.0.decode_claim(row, first)
+    }
+
+    fn claim_record(&self, _job: &TestJob) {}
+
+    fn decode_lapsed(&self, row: &Row, first: usize) -> Result<Decoded<()>, DispatchError> {
+        self.0.decode_lapsed(row, first)
+    }
+
+    fn decode_expired(&self, row: &Row, first: usize) -> Result<(), DispatchError> {
+        self.0.decode_expired(row, first)
+    }
+
+    fn decode_target(
+        &self,
+        row: &Row,
+        first: usize,
+        key: &JobKey,
+        action: TargetAction,
+    ) -> Result<Option<()>, DispatchError> {
+        self.0.decode_target(row, first, key, action)
+    }
+
+    async fn record_attempt_audit(
+        &self,
+        job: &LeasedJob<TestJob>,
+        audit: AttemptAudit<'_, ()>,
+        context: &(),
+    ) -> Result<(), DispatchError> {
+        self.0.record_attempt_audit(job, audit, context).await
+    }
+
+    async fn record_transition_audit(
+        &self,
+        audit: &TransitionAudit<()>,
+        outcome: TransitionOutcome,
+        context: &(),
+    ) -> Result<(), DispatchError> {
+        self.0
+            .record_transition_audit(audit, outcome, context)
+            .await
+    }
+
+    async fn record_replay_audit(
+        &self,
+        audit: &ReplayAudit<()>,
+        context: &(),
+    ) -> Result<(), DispatchError> {
+        self.0.record_replay_audit(audit, context).await
+    }
+
+    fn operational_event(&self, event: DispatchEvent) {
+        self.0.operational_event(event);
+    }
+}
+
 impl TestStore {
     async fn audit_intent(
         &self,
@@ -655,16 +742,34 @@ fn quarantining_dispatcher(harness: &Harness, quarantine: QuarantineMode) -> Dis
             quarantine,
             controls: Arc::clone(&harness.controls),
         },
-        DispatchConfig {
-            table: harness.table.clone(),
-            sql: dispatch_sql(),
-            attempt_timeout: AttemptTimeoutBound::new(
-                Duration::from_millis(100),
-                Duration::from_secs(60),
-            )
-            .expect("the consumer's bound is within the core ceiling"),
-            replayable: &[JobState::DeadLettered, JobState::Unknown],
-        },
+        dispatch_config(harness),
+    )
+    .expect("the consumer's configuration is valid")
+}
+
+fn dispatch_config(harness: &Harness) -> DispatchConfig {
+    DispatchConfig {
+        table: harness.table.clone(),
+        sql: dispatch_sql(),
+        attempt_timeout: AttemptTimeoutBound::new(
+            Duration::from_millis(100),
+            Duration::from_secs(60),
+        )
+        .expect("the consumer's bound is within the core ceiling"),
+        replayable: &[JobState::DeadLettered, JobState::Unknown],
+    }
+}
+
+fn permissive_finish_dispatcher(harness: &Harness) -> Dispatcher<PermissiveFinishStore> {
+    Dispatcher::new(
+        PermissiveFinishStore(TestStore {
+            url: harness.url.clone(),
+            schema: harness.schema.clone(),
+            events: Arc::clone(&harness.events),
+            quarantine: QuarantineMode::Unsupported,
+            controls: Arc::clone(&harness.controls),
+        }),
+        dispatch_config(harness),
     )
     .expect("the consumer's configuration is valid")
 }
@@ -733,6 +838,7 @@ async fn enqueue_message(harness: &Harness, message: &Message) -> JobKey {
     key
 }
 
+#[derive(Debug, Eq, PartialEq)]
 struct StateRow {
     state: String,
     generation: i64,
@@ -1069,6 +1175,111 @@ async fn default_finish_verification_preserves_the_consumer_identity_fence() {
             .await,
         Ok(DispatchOutcome::Delivered),
     );
+}
+
+async fn assert_completion_override_keeps_strict_identity(
+    outcome: SendOutcome,
+    maximum_attempts: i16,
+) {
+    for on_uncertain in ["retry", "hold", "retry_then_hold"] {
+        let harness = harness().await;
+        let key = enqueue_message(
+            &harness,
+            &Message {
+                maximum_attempts,
+                on_uncertain,
+                ..Message::default()
+            },
+        )
+        .await;
+        let dispatcher = permissive_finish_dispatcher(&harness);
+        let job = dispatcher.claim().await.unwrap().leased().unwrap();
+        let before = state_row(&harness, &key).await;
+        let audit_before = audit_trail(&harness, &key).await;
+        assert_eq!(before.state, "leased");
+        assert_eq!(before.lease_token, Some(job.lease_token));
+        harness
+            .controls
+            .refuse_identity
+            .store(true, Ordering::SeqCst);
+        assert_eq!(
+            dispatcher
+                .finish(&job, Sent { outcome: outcome.clone(), detail: () })
+                .await,
+            Err(DispatchError::Unavailable),
+            "raw {outcome:?} must keep strict identity under {on_uncertain} at attempt 1/{maximum_attempts}",
+        );
+        assert_eq!(state_row(&harness, &key).await, before);
+        assert_eq!(audit_trail(&harness, &key).await, audit_before);
+        assert!(intent_trail(&harness, &key).await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn completion_override_cannot_finish_maybe_sent_with_refused_identity() {
+    assert_completion_override_keeps_strict_identity(SendOutcome::MaybeSent, 3).await;
+}
+
+#[tokio::test]
+async fn completion_override_cannot_finish_exhausted_maybe_sent_with_refused_identity() {
+    assert_completion_override_keeps_strict_identity(SendOutcome::MaybeSent, 1).await;
+}
+
+#[tokio::test]
+async fn completion_override_cannot_finish_transient_with_refused_identity() {
+    assert_completion_override_keeps_strict_identity(transient(), 3).await;
+}
+
+#[tokio::test]
+async fn completion_override_cannot_finish_exhausted_transient_with_refused_identity() {
+    assert_completion_override_keeps_strict_identity(transient(), 1).await;
+}
+
+#[tokio::test]
+async fn completion_override_allows_accepted_and_permanent_with_refused_identity() {
+    for (outcome, expected, state) in [
+        (accepted(), DispatchOutcome::Delivered, "delivered"),
+        (
+            SendOutcome::Permanent {
+                code: FailureCode::new("recipient.rejected").expect("bounded code"),
+            },
+            DispatchOutcome::DeadLettered,
+            "dead-lettered",
+        ),
+    ] {
+        let harness = harness().await;
+        let key = enqueue_message(&harness, &Message::default()).await;
+        let dispatcher = permissive_finish_dispatcher(&harness);
+        let job = dispatcher.claim().await.unwrap().leased().unwrap();
+        harness
+            .controls
+            .refuse_identity
+            .store(true, Ordering::SeqCst);
+        assert_eq!(
+            dispatcher
+                .finish(
+                    &job,
+                    Sent {
+                        outcome,
+                        detail: ()
+                    }
+                )
+                .await,
+            Ok(expected),
+        );
+        let finished = state_row(&harness, &key).await;
+        assert_eq!(finished.state, state);
+        assert_eq!(finished.generation, job.generation);
+        assert_eq!(finished.attempt, job.attempt);
+        assert_eq!(finished.lease_token, None);
+        assert_eq!(
+            audit_trail(&harness, &key).await,
+            vec![
+                "attempt_started:leased:g1:a1".to_owned(),
+                format!("attempt_finished:{state}:g1:a1")
+            ],
+        );
+    }
 }
 
 #[tokio::test]

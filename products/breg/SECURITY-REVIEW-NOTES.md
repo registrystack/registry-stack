@@ -1063,7 +1063,11 @@ not audited.
 Activation must neither strand local work under an unavailable package nor
 give a late predecessor answer successor authority. The retained-local
 inventory in `crates/registry-breg/src/postgres/interlock.rs` guards plan and
-apply before maintenance in `migration.rs`. `bregctl webhook drain` attempts
+apply before maintenance in `migration.rs`. Across captured revisions it counts
+pending or leased local rows and operator-replayable dead letters with retained,
+unexpired payloads. Other terminal metadata, non-replayable dead letters, and
+rows whose payload expired or was erased can remain after activation.
+`bregctl webhook drain` attempts
 only due local work for the active activation, with attempt and time bounds.
 It preserves URL work, live leases, future retries and dead letters for their
 existing recovery paths; a drain can itself produce more governed hook work.
@@ -1075,23 +1079,36 @@ Drain executes reviewed Rhai/Wasm handlers in the `bregctl` process. In
 package and execution configuration and uses the runtime database connection.
 It needs the configured destination and audit secrets, handler assets, and,
 when fields are encrypted, the existing field-encryption provider and keys.
-It preserves serving-path custody restrictions, including the local-only
-file key provider; it does not require a migration credential. Listing,
+The CLI may run on a different authorized operator host with access to those
+assets, secrets, and the runtime database. It preserves serving-path custody
+restrictions, including the local-only file key provider; it does not require
+a migration credential. Listing,
 replay and discard do not enable the execution-only Wasm runtime or
 field-encryption service.
 
 `crates/registry-breg/src/mutation/action.rs::apply_hook_change` recovers a
 committed receipt before classifying an uncommitted answer against the live,
-ready activation. A superseded answer is a non-replayable dead letter.
+ready activation. An uncommitted proposal classified under a successor is a
+non-replayable `hook.proposal.package_unavailable` dead letter. If completion
+is interrupted before recording a proposal result and no receipt is recoverable,
+final-lease recovery instead records `worker-interrupted` with no proposal code.
+Explicit replay may remain eligible and send the event to the receiver again;
+only a returned proposal classified under the successor receives the package
+refusal. This does not give the old event successor mutation authority.
+
 For a decision already settled, `settled_url_proposal` in
 `crates/registry-platform-hooks/src/delivery/store.rs` admits completion only
 for a URL handler with `Accepted` plus `Applied` or
 `Refused`, or `Permanent` plus `DeadLettered`. Dispatch's
 `crates/registry-platform-dispatch/src/postgres/dispatcher.rs` invokes its
-separate finish verifier only while completing the attempt. BReg's
-`verify_proposal_completion` retains the same registry and database, ready
-state and shared activation lock, while the store preserves exact lease,
-generation and attempt comparisons, audit ordering and commit-fate handling.
+separate finish verifier only for raw `Accepted` or `Permanent` outcomes.
+Raw `MaybeSent` and `Transient` retain the ordinary verifier even if their
+captured policy would make the next state terminal. BReg's
+`verify_proposal_completion` omits only the `active_package_digest`,
+`active_activation_id`, and `schema_fingerprint` comparisons. It retains
+`package_id` and `database_id`, ready maintenance state, and the shared
+activation lock. The store preserves exact lease token, generation, and
+attempt comparisons, audit ordering, and commit-fate handling.
 Claims, source reads, mutations, recovery and operator replay/discard/cancel
 retain the ordinary active-package check. So do local, non-proposal,
 transient, maybe-sent and inconsistent outcome pairs. The shared Dispatch
@@ -1103,11 +1120,24 @@ Coverage in `crates/registry-breg/tests/support/hook_activation.rs` includes
 scope, time-budget and Wasm tests, the in-flight predecessor answer and
 committed-receipt tests, and
 `classified_proposal_completion_preserves_registry_and_lease_fences`.
+`in_flight_predecessor_answer_keeps_unreadable_activation_uncertain` continues
+through final-lease recovery, explicit replay, a second receiver request, and
+the successor's proposal refusal without a mutation. Complementing this
+classified-completion coverage for BREG-SEC-67,
+`real_postgres_terminal_retry_fences_a_late_proposal_application` in
+`crates/registry-breg/tests/postgres_hook_changes.rs` retains the older
+terminal-retry fence regression.
 `crates/registry-platform-hooks/src/delivery/store.rs` tests the 48 typed
 outcome combinations in
 `only_consistent_terminal_url_proposals_use_completion_verification`.
 `crates/registry-platform-dispatch/tests/postgres_dispatch.rs` covers the
 default in `default_finish_verification_preserves_the_consumer_identity_fence`.
+Its `completion_override_cannot_finish_*_with_refused_identity` tests cover
+raw uncertain and transient outcomes, including exhausted policies, with a
+permissive completion override and a refusing strict verifier. The refused
+finish preserves the leased state, generation, attempt, lease token, and audit;
+`completion_override_allows_accepted_and_permanent_with_refused_identity`
+provides the allowed controls.
 
 ### Loopback destination names
 

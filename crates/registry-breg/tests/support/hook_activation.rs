@@ -459,8 +459,8 @@ async fn predecessor_answer_across_activation(committed: bool, unreadable_state:
         wait_until_delivery_is_due(&setup, &event, delivery_id).await;
     }
     // Exercise the final allowed attempt so a known late answer settles
-    // with its specific result. The unreadable-state control stays uncertain;
-    // this test does not exercise lease-expiry recovery.
+    // with its specific result. The unreadable-state control stays uncertain
+    // until lease recovery, then exercises a separate explicit replay.
     setup
         .database
         .admin
@@ -536,6 +536,86 @@ async fn predecessor_answer_across_activation(committed: bool, unreadable_state:
         assert_eq!(row.state, "leased");
         assert_eq!(row.disposition, None);
         assert_eq!(row.code, None);
+        setup
+            .database
+            .admin
+            .batch_execute(&format!(
+                "GRANT SELECT ON registry_internal.registry_state TO \"{}\"",
+                setup.database.runtime_role.as_str(),
+            ))
+            .await
+            .unwrap();
+        setup.compiled = target.registry().clone();
+        let active_service = setup.service_for_identity(active);
+        expire_lease(&setup, &event, delivery_id).await;
+        assert_eq!(
+            active_service.deliver_once().await,
+            Ok(WebhookWorkOutcome::Idle)
+        );
+        let recovered = delivery_row(&setup, event.event_id, delivery_id).await;
+        assert_eq!(recovered.state, "dead-lettered");
+        assert_eq!(recovered.disposition, None);
+        assert_eq!(recovered.code, None);
+        let listed = active_service.list(10).await.unwrap();
+        let listed = listed
+            .iter()
+            .find(|row| row.event_id == event.event_id)
+            .unwrap();
+        assert_eq!(
+            listed.dead_letter_reason.map(|reason| reason.as_str()),
+            Some("worker-interrupted")
+        );
+        assert!(listed.payload_available);
+        assert!(listed.replay_eligible);
+        assert_eq!(listed.proposal_code, None);
+        assert_eq!(record_count(&setup, "followup").await, 0);
+
+        let (replay_seen_tx, replay_seen_rx) = oneshot::channel();
+        let (replay_release_tx, replay_release_rx) = oneshot::channel();
+        receiver
+            .enqueue(ResponsePlan::GatedAnswer {
+                body: HOOK_PROPOSAL_MESSAGE.to_vec(),
+                request_seen: replay_seen_tx,
+                release: replay_release_rx,
+            })
+            .await;
+        assert_eq!(
+            active_service.replay(event.event_id, delivery_id, 1).await,
+            Ok(2)
+        );
+        let replay_service = active_service.clone();
+        let replay_worker = tokio::spawn(async move { replay_service.deliver_once().await });
+        tokio::time::timeout(Duration::from_secs(3), replay_seen_rx)
+            .await
+            .expect("explicit replay sends a second HTTP request")
+            .expect("the receiver observes the replay before answering");
+        assert_eq!(record_count(&setup, "followup").await, 0);
+        replay_release_tx.send(()).unwrap();
+        assert_eq!(
+            replay_worker.await.unwrap(),
+            Ok(WebhookWorkOutcome::DeadLettered)
+        );
+        let replayed = delivery_row(&setup, event.event_id, delivery_id).await;
+        assert_eq!(
+            replayed.code.as_deref(),
+            Some("hook.proposal.package_unavailable")
+        );
+        let summary = replayed.summary.unwrap();
+        assert!(summary.contains(&setup.identity.activation_id));
+        assert!(summary.contains(&active_id));
+        assert_eq!(record_count(&setup, "followup").await, 0);
+        let listed = active_service.list(10).await.unwrap();
+        let listed = listed
+            .iter()
+            .find(|row| row.event_id == event.event_id)
+            .unwrap();
+        assert_eq!(listed.generation, 2);
+        assert!(!listed.replay_eligible);
+        assert_eq!(
+            active_service.replay(event.event_id, delivery_id, 2).await,
+            Err(WebhookDeliveryError::Unavailable)
+        );
+        drop(active_service);
         setup.teardown().await;
         receiver.stop().await;
         return;
