@@ -12,8 +12,8 @@ unchanged and no table lost a row.
 A product the previous release did not ship, or whose contract starts at a
 new baseline, has no supported state to carry forward. Its leg is omitted and
 the report says why. The forward state path starts at 0.42.0: Evidence's
-normalized baseline and Messaging's fresh schema baseline both start there, and
-no product reads state a release before it wrote.
+normalized baseline and the Messaging and Scheduling fresh schema baselines all
+start there, and no product reads state a release before it wrote.
 
 While no release on the forward state path is published, there is no
 predecessor to download: the rehearsal then runs every leg with this source's
@@ -84,7 +84,8 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # database (RETIRED_PRODUCTS). Evidence's normalized project, target, and
 # separately activated complete authority replace the split question/source
 # projects and bundled authority, which the current compiler refuses. Messaging
-# installs one schema baseline and refuses a pre-1.0 ledger by name.
+# and Scheduling each install one schema baseline and refuse a pre-1.0 ledger by
+# name.
 FORWARD_PATH_FLOOR = (0, 42, 0)
 
 STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
@@ -1520,6 +1521,12 @@ def main(argv: list[str]) -> int:
                   "version {} from its own build".format(*FORWARD_PATH_FLOOR, version),
                   flush=True)
             if args.fetch_only:
+                if args.report:
+                    nothing_fetched = {"from": None, "toWorkspaceVersion": version,
+                                       "platform": args.platform,
+                                       "fromProvenance": "no published predecessor to fetch"}
+                    args.report.write_text(
+                        json.dumps(nothing_fetched, indent=2, sort_keys=True) + "\n")
                 return 0
             from_tag = f"v{version}"
         check_forward_path(from_tag, version)

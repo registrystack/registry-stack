@@ -490,12 +490,18 @@ class ForwardPathFloorTest(unittest.TestCase):
     def test_fetch_only_from_v0_41_0_has_nothing_to_fetch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary) / "work"
+            report = Path(temporary) / "report.json"
             status, stdout, _stderr, seen = self.run_main(
-                ["--fetch-only", "--platform", "linux-amd64", "--work-dir", str(work)])
+                ["--fetch-only", "--platform", "linux-amd64", "--work-dir", str(work),
+                 "--report", str(report)])
             self.assertFalse(work.exists())
+            document = json.loads(report.read_text(encoding="utf-8"))
         self.assertEqual(status, 0)
         self.assertEqual(seen["sides"], [])
         self.assertIn("no release from v0.42.0 onward is published", stdout)
+        self.assertIsNone(document["from"])
+        self.assertEqual(document["platform"], "linux-amd64")
+        self.assertEqual(document["fromProvenance"], "no published predecessor to fetch")
 
     def test_a_named_or_local_v0_41_0_start_is_refused_before_any_state(self) -> None:
         for chosen in (["--from-tag", "v0.41.0"], ["--from-bin-dir", "/previous"],
