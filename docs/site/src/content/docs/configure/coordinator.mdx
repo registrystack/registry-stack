@@ -1,6 +1,6 @@
 ---
 title: Author a Coordinator workflow
-description: Start a Registry Coordinator project, write its steps and mappings, check and test it offline, and package it with the digest an operator pins.
+description: Start a Registry Coordinator project, read and change its steps, check and test it offline, and package it with the digest an operator pins.
 status: draft
 owner: registry-docs
 source_repos:
@@ -10,89 +10,116 @@ doc_type: how-to
 locale: en
 standards_referenced:
   - json-schema
+tutorial_test:
+  toolset: coordinator
 ---
 
-You know which product calls your workflow makes and in what order, and now you want to write it as a
-Registry Coordinator project. Write
-the steps, check and test them offline, and hand the package, digest, and connection requirements
-to the operator who serves it. Endpoints, credentials, caller policies, and keys never enter the package;
-[Deploy Registry Coordinator](../../operate/coordinator/) covers them.
+You know which product calls your process makes and in what order, and you want Registry
+Coordinator to make them, with waits in between that survive restarts. Write the process as a
+project, check and test it with no service running, and package it for the operator who serves
+it. Endpoints, credentials, and caller policies never enter the package;
+[Deploy Registry Coordinator](../../operate/coordinator/) adds them.
 
-{/* Evidence: products/coordinator/README.md, Package and deploy;
-    crates/registry-coordinator/src/deployment.rs, package. */}
+You need `coordinatorctl` on your `PATH`. Build it from a Registry Stack checkout of the release
+you deploy:
 
-## Get `coordinatorctl`
-
-Build `coordinator` and `coordinatorctl` from a Registry Stack checkout of the release you deploy.
-On Linux, install both binaries in a directory on your `PATH`:
-
-```sh
+```sh test-skip="the gate builds coordinatorctl from this checkout"
 cargo build --locked --release -p registry-coordinator --bins
-mkdir -p "$HOME/.local/bin"
-install -m 755 target/release/coordinator target/release/coordinatorctl "$HOME/.local/bin/"
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$PWD/target/release:$PATH"
 ```
 
-On macOS arm64, each binary has to carry the FIPS library the build links, so copying the executable
-alone loses a runtime dependency. Follow the macOS steps in the
-[deployment runbook](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md#install-and-package),
-which package each binary with its library and install the result.
+On macOS the binary loads the FIPS library its build produced, so run it from that checkout or
+follow the macOS install in the
+[deployment runbook](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md#install-and-package).
 
-{/* Evidence: products/coordinator/DEPLOYMENT.md, Install and package. */}
-
-The authoring commands `init`, `check`, `explain`, `test`, and `package` work offline: they read no
-credential and send no request. Each prints readable text by default, or one JSON report of kind
-`CoordinatorCtlReport` with `--format json`, carrying `ok`, `command`, `status`, and a
-`diagnostics` array for a refusal. A command exits 0 when it accepts its input, 1 when it refuses
-it, 2 on a usage error, and 3 when a resource it needs is unavailable. Run
-`coordinatorctl <command> --help` for each command's arguments.
-
-{/* Evidence: crates/registry-coordinator/src/cli.rs, Command, CTL_REPORT_KIND;
-    products/coordinator/README.md, Create and check a project. */}
+{/* Evidence: products/coordinator/DEPLOYMENT.md, Install and package;
+    scripts/cargo-runtime-library-path.sh. */}
 
 ## Start a project
 
-`coordinatorctl init` writes a starter into a new or empty directory, and refuses a directory that
-already has content:
+```sh
+coordinatorctl init --directory follow-up
+```
+
+```text test-expect
+created: follow-up
+  workflow.yaml
+  functions.rhai
+  runtime.yaml
+  scenarios.yaml
+  .gitignore
+next: coordinatorctl test --project follow-up
+```
+
+The starter is a delayed follow-up: wait until a given time, read an application from a Base
+Registry Engine (BReg) registry, and send a notice through Registry Messaging only if the record
+still allows one. The project ID is the directory name. Run the test it suggests:
 
 ```sh
-coordinatorctl init --directory ./follow-up
+coordinatorctl test --project follow-up
 ```
 
-The project ID is the directory name unless you pass `--id`. The starter holds four files and a
-`.gitignore` that keeps the local `.coordinator/` directory out of version control:
+```text test-expect
+PASS notice-accepted-after-virtual-wait
+PASS permission-withdrawn
+PASS same-command-after-response-loss
+PASS read-only-reconciliation-after-response-loss
+PASS expired-receipt-does-not-prove-no-effect
+PASS refusal-after-unknown-preserves-unknown
+6 passed, 0 failed
+```
 
-- `workflow.yaml` names the project and its one `workflow`, plus optional reusable `contracts`,
-  `types`, `functions`, and `operations` assets.
-- `functions.rhai` contains pure Function entrypoints. Projects that need no Functions can omit it.
-- `runtime.yaml` binds logical connections. The deployment copy adds identities, keys, and policies.
-- `scenarios.yaml` holds offline cases with fake replies and expected results.
+Each case in `scenarios.yaml` runs the workflow on a virtual clock against fake product replies:
+the record allows a notice, the record no longer allows one, and four cases where a response is
+lost or refused after the call may have taken effect. No case sends a request or reads a
+credential.
 
-One project is one workflow, and its workflow ID is the workflow name callers start.
+{/* Evidence: crates/registry-coordinator/src/project.rs, init;
+    products/coordinator/examples/delayed-follow-up/;
+    crates/registry-coordinator/src/scenarios.rs. */}
 
-{/* Evidence: crates/registry-coordinator/src/cli.rs, Command;
-    products/coordinator/README.md, Create and check a project;
-    products/coordinator/examples/delayed-follow-up/workflow.yaml. */}
+## Read the steps
 
-## Write the steps
+```sh
+coordinatorctl explain --project follow-up
+```
 
-Each step declares `type`: `call`, `choose`, `wait-until`, `wait-for`, or `finish`.
-Declare an Operation alias first, then name that alias from a call. Endpoints and credentials
-stay in the deployment's tagged `connections` map:
+```text test-excerpt
+Steps from start:
+  due: wait until input /sendAfter, then read-application
+  read-application: call applications applications-read-record (breg read, recovery read-again) with {collection: "applications", recordId: input /applicationId}, then permission
+  permission: choose by notice-route(): send -> notify, skip -> skipped
+  notify: call notices notices-submit-message (messaging mutation, recovery same-command-and-receipt) with notice-request(), then accepted
+  skipped: finish no-current-permission
+  accepted: finish message-accepted with {messageId: step notify /id}
+```
 
-```yaml
+Each line is one step of `workflow.yaml`, in order from `workflow.start`. A step's `type` is
+`wait-until`, `wait-for`, `call`, `choose`, or `finish`. A call names an operation alias declared
+under `operations`:
+
+```yaml title="follow-up/workflow.yaml" test-excerpt="follow-up/workflow.yaml"
 operations:
-  read-application:
+  applications-read-record:
     uses: breg.read-record/v1
     connection: applications
+  notices-submit-message:
+    uses: messaging.submit-message/v1
+    connection: notices
 ```
 
-The call uses that alias and a typed mapping:
+`uses` picks one versioned host operation; the
+[configuration reference](../../reference/coordinator-configuration/#host-operations) lists all
+ten with the effect and recovery `explain` printed. `connection` is a logical name the operator
+binds to an endpoint and credentials in `runtime.yaml`. There is no other way to reach a product:
+no arbitrary HTTP method, SQL, or computed destination.
 
-```yaml
+The call's `input` is a mapping:
+
+```yaml title="follow-up/workflow.yaml" test-excerpt="follow-up/workflow.yaml"
 read-application:
   type: call
-  operation: read-application
+  operation: applications-read-record
   input:
     type: fields
     fields:
@@ -105,143 +132,154 @@ read-application:
   next: permission
 ```
 
-A reference names one value. `type: input` reads the run's input, `type: step` with a `step` reads
-an earlier call's output, and `type: literal` with a `value` supplies a JSON value. An input or
-step reference may add an RFC 6901 `path`, such as `/applicationId`, to select one member. A call
-`input` or a finish `output` is a reference, `type: fields` with up to 64 members, or `type: function` with an `inputs`
-object of up to sixteen named references. Declare each Function's runtime, source, entrypoint,
-named input schemas, and output schema. Its Rhai entrypoint takes one object of named inputs.
-The host validates input and output and enforces pure execution limits.
-
-Functions read no clock. `add_seconds(instant, seconds)` and `seconds_between(first, second)`
-compute over the RFC 3339 instants a function is given, such as an input value or a field of an
-earlier call's output.
-
-{/* Evidence: products/coordinator/README.md, Create and check a project and Start from a
-    maintained project; crates/registry-coordinator/src/authoring.rs, AuthoredStep;
-    crates/registry-coordinator/src/functions.rs. */}
-
-The [configuration reference](../../reference/coordinator-configuration/) describes versioned operations
-with their effects and recovery, and the rules for external reads, typed decisions, and review
-waits. The maintained
-[example projects](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples)
-cover a delayed follow-up, a deferred appointment, a Base Registry Engine (BReg) read under
-Casework task authority, a governed BReg action, a typed decision, a reviewed notice, standalone review, an external
-directory read, and a bounded external job completion. Starting from the closest one is usually faster than starting from the starter.
-
-## Check and explain
-
-```sh
-coordinatorctl check --project ./follow-up --explain
-```
-
-`check` validates the graph, the function exports, references, input and outcome schemas, and
-execution bounds, and fits every mapping to the schemas it reads and feeds, before any run. A
-structural error names its file, line, column, and a repair. A mapping refusal names the step, the
-field path, what was expected, and the fix. Some errors hide the checks that depend on them, so run
-the same check again after each repair. Add `--runtime-config ./follow-up/runtime.yaml` to check
-the logical bindings too.
-
-An accepted check prints the computed Workflow revision on its `Definition:` line. With `--explain`, or
-through `coordinatorctl explain --project ./follow-up`, it also lists the steps in graph order from
-the start, one line each, with each call's product, effect, and recovery.
+`type: input` reads the run's input, `type: step` an earlier call's output, and `type: literal` a
+fixed value. A `path` is a JSON Pointer into it. `type: fields` builds an object of up to 64
+members, and `type: function` computes the value with a Function, as `permission` and `notify` do.
 
 {/* Evidence: crates/registry-coordinator/src/cli.rs, render_explain;
-    crates/registry-coordinator/src/project_check.rs;
-    crates/registry-coordinator/src/mapping_check.rs;
-    products/coordinator/README.md, Create and check a project. */}
+    crates/registry-coordinator/src/authoring.rs, AuthoredStep, Mapping;
+    crates/registry-coordinator/src/operations.rs, CATALOG. */}
 
-## Test against scenarios
+## Functions
 
-```sh
-coordinatorctl test --project ./follow-up
+`notice-route` and `notice-request` are Rhai entrypoints in `functions.rhai`. `workflow.yaml`
+declares each one's inputs and output by schema, here the read operation's output and the
+Messaging operation's input:
+
+```yaml title="follow-up/workflow.yaml" test-excerpt="follow-up/workflow.yaml"
+notice-request:
+  runtime: rhai
+  source: functions.rhai
+  entrypoint: notice_request
+  inputs:
+    input:
+      typeRef: workflow-input
+    record:
+      operationOutput: applications-read-record
+  output:
+    operationInput: notices-submit-message
 ```
 
-`test` runs `scenarios.yaml` with a virtual clock and fake product replies, using the same graph,
-mapping, and function semantics as the service, and reports each case by name. A case whose steps,
-end state, or outcome differs from its expectation names both sides. `test` also holds every
-computed call input to its operation's input contract and every fake success reply to its
-operation's output. A passing case proves the workflow's logic, not that a product accepts the call:
-scenarios never acquire credentials or send requests.
+A Function is pure: it has no clock, network, database, file, or credential. The host checks its
+inputs and output against those schemas and stops it at the limits `check --explain` prints.
+`add_seconds` and `seconds_between` compute over instants a Function is given.
 
-{/* Evidence: crates/registry-coordinator/src/scenarios.rs;
-    products/coordinator/README.md, Create and check a project and Add a maintained operation. */}
+{/* Evidence: crates/registry-coordinator/src/functions.rs;
+    crates/registry-coordinator/src/definition.rs, FunctionLimits. */}
+
+## Check a change
+
+`check` fits every mapping to the schemas it reads and feeds. Misspell the input member the read
+uses:
+
+```diff test-edit title="follow-up/workflow.yaml"
+       recordId:
+         type: input
+-        path: /applicationId
++        path: /applicationID
+```
+
+```sh test-exit="1"
+coordinatorctl check --project follow-up
+```
+
+```text test-expect
+error[coordinator.mapping.path] <file> /workflow/steps/read-application/input/fields/recordId/path
+  expected a path that the workflow input schema declares; it declares nothing at /applicationID
+  next: Correct the path to a member the workflow input schema declares, or omit path to use the whole value.
+1 error, 0 warnings in 1 file
+```
+
+The refusal names the file, line, and column, the step and field, and the repair. Some refusals
+hide the checks that depend on them, so check again after each repair. Put the path back:
+
+```diff test-edit title="follow-up/workflow.yaml"
+       recordId:
+         type: input
+-        path: /applicationID
++        path: /applicationId
+```
+
+Check the project with the runtime file the starter carries, which binds `applications` and
+`notices` to a BReg and a Messaging connection:
+
+```sh
+coordinatorctl check --project follow-up --runtime-config follow-up/runtime.yaml
+```
+
+```text test-expect
+Valid workflow follow-up version 1
+Definition: sha256:<digest>
+Valid runtime configuration
+```
+
+The `Definition:` digest is the workflow revision. It hashes what execution depends on: input,
+steps, outcomes, and the operation and Function revisions used. Titles, descriptions, and
+`project.version` do not change it. Every run records the revision it was admitted under.
+
+{/* Evidence: crates/registry-coordinator/src/mapping_check.rs;
+    crates/registry-coordinator/src/project_check.rs;
+    crates/registry-coordinator/src/definition.rs, seal_revisions, semantic_revision. */}
 
 ## Package the workflow
 
 ```sh
-coordinatorctl package --project ./follow-up --output ./follow-up-package
+coordinatorctl package --project follow-up --output follow-up-package
 ```
 
-When the project has a `scenarios.yaml`, `package` runs it first and writes nothing unless every
-case passes. It writes the workflow's immutable snapshot, `definition.json`, and `SHA256SUMS` into a new
-directory, and refuses an output that already exists, so build a fresh directory for each change.
-It prints the package digest.
+```text test-expect
+created: follow-up-package
+package digest: sha256:<digest>
+```
 
-Pin the package digest for exact bytes and retain the computed Workflow revision for starts:
+`package` runs `scenarios.yaml` first and writes nothing unless every case passes. It writes
+`definition.json` and `SHA256SUMS` into a new directory and refuses one that exists. The package
+digest is the SHA-256 of `SHA256SUMS`, so it covers the exact bytes; the operator pins it.
+`project.version` is a label for people; the revision is what tells two definitions apart.
 
-- The package digest is the SHA-256 of `SHA256SUMS`, covering the exact snapshot bytes.
-- `workflowRevision` hashes execution semantics: input, graph, outcomes, used Operation and
-  Function revisions, and host execution contracts. Titles and descriptions do not change it.
-  Each run reports the revision it was admitted under, even after activation changes.
-
-Once a workflow version has admitted runs, give a changed definition a new `project.version`.
-`plan` and `apply` refuse a changed definition under a version already used, with
-`coordinator.command.workflow-version-conflict`.
-
-{/* Evidence: crates/registry-coordinator/src/deployment.rs, package, plan, apply;
-    crates/registry-coordinator/src/cli.rs, Command;
-    products/coordinator/DEPLOYMENT.md, Package digest and definition digest. */}
+{/* Evidence: crates/registry-coordinator/src/deployment.rs, package;
+    products/coordinator/DEPLOYMENT.md, Install and package, Package digest and definition digest. */}
 
 ## Export a typed caller
 
+A caller starts a run with the workflow name, the revision, and an input the workflow accepts.
+Generate those as code:
+
 ```sh
-coordinatorctl types --project ./follow-up --language typescript --output ./follow-up.ts
-coordinatorctl types --project ./follow-up --language python --output ./follow_up.py
+coordinatorctl types --project follow-up --language typescript --output follow-up.ts
 ```
 
-The generated wrappers provide typed `start`, `get`, and `cancel` through the maintained public
-generic clients. They pin the computed `workflowRevision` and check returned identity and declared
-outcome names. Keep a start's original identity, key, revision, and input through unknown admission.
-A fresh start must match the deployed active revision, which `coordinatorctl workflow` discovers.
-Regenerate the wrapper after an execution contract change; runtime schema checks remain with
-Coordinator.
+```text test-expect
+output: follow-up.ts
+status: exported
+workflow: follow-up
+workflowRevision: sha256:<digest>
+```
+
+`follow-up.ts` exports the workflow name and revision, an `Input` type, an `Outcome` type with one
+member per outcome, and a client with `start`, `get`, and `cancel`. `--language python` writes the
+same for Python. Regenerate after any change that moves the revision.
 
 {/* Evidence: crates/registry-coordinator/src/sdk.rs;
-    crates/registry-coordinator/src/cli.rs, Types, Workflow;
     crates/registry-coordinator/tests/sdk_generation.rs. */}
 
 ## Hand over the package
 
-Give the operator the package directory and its package digest, plus a sanitized `runtime.yaml`
-template. List each logical connection's product, required access profile and exact review policy, OAuth
-client scopes and resource, completion destination, and Messaging template and provider. The
-operator supplies endpoint addresses, registered identities, private JWKs and other secret files,
-and checks those contracts in the receiving products. Share secret references, never secret values.
+Give the operator the package directory, its package digest, and a `runtime.yaml` template with
+secret references and no secret values. For each connection, list the product, the access profile
+or review policy it needs, and for Messaging the template and sender profile the Functions name.
+The operator pins the package in `deployment.packages` by `root` and `expectedDigest`. One
+deployment serves up to sixteen workflows; each is applied, upgraded, and rolled back on its own,
+and a run keeps the definition it started with.
 
-The maintained examples show these handoffs with synthetic offline scenarios. A passing scenario
-does not establish the owning products' live review or application policy.
-
-The operator installs the
-directory read-only and pins it as one entry of `deployment.packages`, with its `root` and the
-digest as `expectedDigest`. One deployment serves up to sixteen workflows, one package each, and each
-workflow is applied, upgraded, and rolled back on its own. Runs already admitted keep the definition
-they started with, and new starts use the active one.
-
-{/* Evidence: crates/registry-coordinator/src/deployment.rs, DeploymentConfig, Workflows;
+{/* Evidence: crates/registry-coordinator/src/deployment.rs, DeploymentConfig;
     products/coordinator/README.md, Package and deploy. */}
 
-Each of the three files has an offline check command, listed under
-[Check commands](../../reference/coordinator-configuration/#check-commands) in the configuration
-reference.
+The
+[example projects](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples)
+show the other step and operation shapes: a review wait, a governed BReg action, a typed decision,
+an external read, and an appointment. Each runs under `coordinatorctl test` the same way.
 
 ## Next
 
-- [Deploy Registry Coordinator](../../operate/coordinator/) to bind the connections, apply the
-  package, and serve it.
-- [Registry Coordinator configuration reference](../../reference/coordinator-configuration/) for
-  every operation, mapping, and wait rule.
-- [Registry Coordinator API](../../reference/apis/registry-coordinator/) for the contract a caller
-  uses to start and follow a run.
-- [Registry Coordinator overview](../../start/coordinator/) for what stays with each product a
-  workflow calls.
+[Deploy Registry Coordinator](../../operate/coordinator/)

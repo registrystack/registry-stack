@@ -11,94 +11,51 @@ locale: en
 standards_referenced: []
 ---
 
-Registry Coordinator runs a reviewed, declared workflow of calls to other Registry Stack products'
-public HTTP APIs, and keeps that workflow going across durable waits, service outages, and worker
-restarts. Use it when a sequence such as "read the application, wait two days, read it again, then
-send a notice" has to continue without a person or a script holding it open. Each product a workflow
-calls keeps authorization and ownership of what that call does.
+[Registry Coordinator](../../reference/glossary/#registry-coordinator) runs a reviewed sequence of calls to other Registry Stack products, and keeps
+it going across waits of days or weeks, service outages, and restarts. Use it when a sequence such
+as "ask a reviewer, wait for the decision, then send the applicant a notice" has to continue
+without a person or a script holding it open.
 
 {/* Evidence: products/coordinator/README.md;
     products/coordinator/PRODUCT-CONTRACT.md, Execution and authority. */}
 
-## What a workflow is
+## What you write, and what runs
 
-A workflow is a finite, acyclic graph of steps written in YAML. Mappings carry values between steps,
-and bounded pure Rhai functions compute values and pick branches; a function cannot make a call or
-acquire a credential. You check a workflow offline, test it against fake product replies, and package
-it into an immutable artifact an operator pins by digest. A run keeps the definition it was
-admitted under, so upgrading a workflow never changes a run in flight.
+You write a **[workflow](../../reference/glossary/#workflow)**: a finite graph of steps in YAML, checked offline and packaged into an
+immutable artifact that an operator pins by digest. Each start of that workflow is a **[run](../../reference/glossary/#run)**, which
+Coordinator keeps in its own PostgreSQL 17 or newer database. A run keeps the definition it was
+admitted under, so a later upgrade never changes a run in flight.
 
-{/* Evidence: products/coordinator/PRODUCT-CONTRACT.md, Execution and authority;
-    crates/registry-coordinator/src/deployment.rs, package. */}
-
-Every step has one of five types:
-
-- `call` sends one versioned host operation over a connection the operator configured, such as
-  reading a Base Registry Engine (BReg) record, booking a Registry Scheduling appointment,
-  submitting a Registry Messaging message, or submitting a Registry Casework review request.
-- `choose` picks the next step from one value, such as a field of an earlier call's output.
-- `wait-until` waits until an instant. The wait is stored in PostgreSQL, so it survives a
-  restart.
-- `wait-for` waits, up to a timeout, for a named completion of an earlier accepted call: a Casework result or a
-  bounded external read. The host reads authoritative evidence within a
-  durable observation budget. A completion wake-up only advances an eligible read.
-- `finish` ends the run with a declared outcome and output, which the caller reads from the run's
-  status.
+A workflow is built from five step types: `call` one product operation, `choose` the next step,
+`wait-until` an instant, `wait-for` a named result such as a Casework review decision, and
+`finish` with a declared outcome.
 
 {/* Evidence: crates/registry-coordinator/src/authoring.rs, AuthoredStep;
-    crates/registry-coordinator/src/operations.rs, CATALOG;
-    products/coordinator/README.md, Waits and polling. */}
+    crates/registry-coordinator/src/store.rs, runs insert. */}
 
-A project separates generated contracts, reusable types, named pure Functions, and local Operation
-aliases from its one Workflow graph. Functions take one typed object of named inputs. A bounded
-completion poll repeats a saved read under host scheduling; the graph remains acyclic.
+## What stays with each product
 
-## When to use it
+Every product a run calls keeps its own authority. Coordinator calls each one over its public HTTP
+API with a service identity the operator configured, and that product decides, under its current
+policy, whether to allow the call. Being allowed to start a workflow grants nothing downstream.
+Coordinator never writes another product's database, never applies a Base Registry Engine (BReg) Proposal for the
+applicant, and never reverses an effect a product accepted.
 
-Use the Coordinator when a sequence of product calls has to outlast time and failure: a follow-up
-after a delay, a notice once a human review approves, a booking after an approved deferral. It is
-an optional service with its own PostgreSQL 17 or newer database, where a run's progress and
-prepared commands are stored encrypted. A call is retried only after an answer the receiving
-product says it did not act on, and an uncertain effect waits for an operator rather than being
-sent again.
+When Coordinator cannot tell whether a call took effect, it holds the run for an operator rather
+than sending the call again.
 
-Look elsewhere when the work needs SQL, arbitrary HTTP methods, a loop, or a number of calls known
-only at run time. The Coordinator has no SQL steps, no dynamic fan-out, no automatic compensation,
-and no distributed rollback.
+{/* Evidence: products/coordinator/PRODUCT-CONTRACT.md, Execution and authority, Governed Actions,
+    Observation and uncertainty. */}
 
-{/* Evidence: products/coordinator/README.md, Start from a maintained project;
-    products/coordinator/DEPLOYMENT.md, Recover safely. */}
+## When to look elsewhere
 
-## Authority boundaries
+Coordinator has no SQL steps, no loops, no number of calls decided at run time, no arbitrary HTTP
+methods, no automatic compensation, and no distributed rollback. It is an optional service and
+pre-1.0: use the binaries and documentation of one source version together.
 
-A run starts from an authorized caller, an accepted Review request, or a configured authenticated
-product event. Completion events only advance eligible observations on existing waits.
-Each downstream call acquires the operator-configured identity, and its receiver
-checks current authority. A wait or retry preserves the original approval deadline. Public HTTP
-contracts separate products; each owns its database. Cancellation stops future dispatch where
-possible and leaves accepted effects in place.
-
-{/* Evidence: products/coordinator/README.md, Waits and polling;
-    products/coordinator/PRODUCT-CONTRACT.md, Admission and integration, Execution and authority;
-    crates/registry-coordinator/src/completion.rs, receive_review_completion;
-    products/coordinator/DEPLOYMENT.md, Recover safely. */}
-
-The Coordinator is pre-1.0, so use the binaries and documentation of one source version together.
-[Author a Coordinator workflow](../../configure/coordinator/) to check and package one reviewed
-sequence. The applicant drives a BReg Proposal in BReg, and a workflow follows it by product
-event or record read; a notice still needs Messaging authority. Standalone Casework review and
-external job observation work independently of that path.
-
-{/* Evidence: products/coordinator/README.md;
-    products/coordinator/examples/product-events/README.md;
-    products/coordinator/examples/standalone-review/workflow.yaml;
-    products/coordinator/examples/external-job/workflow.yaml. */}
+{/* Evidence: products/coordinator/PRODUCT-CONTRACT.md, Compatibility and verification. */}
 
 ## Next
 
-- [Author a Coordinator workflow](../../configure/coordinator/) to write, check, test, and package a
-  workflow.
-- [Deploy Registry Coordinator](../../operate/coordinator/) to run the service against PostgreSQL
-  and the products your workflows call.
-- [Registry Coordinator API](../../reference/apis/registry-coordinator/) for the contract a caller
-  uses to start and follow runs.
+[Review an application and send an approval notice](../../tutorials/review-an-application-and-send-a-notice/)
+runs one workflow through a human review to a delivered notice, on your machine.

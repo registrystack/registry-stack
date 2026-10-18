@@ -1,0 +1,52 @@
+---
+import reference from '../data/generated/coordinator-configuration.json';
+
+type Operation = {
+  id: string;
+  product: string;
+  effect: string;
+  recovery: string;
+  read_receipt: boolean;
+  key_requirement: string;
+  completion: string | null;
+};
+
+const operations: Operation[] = reference.operations;
+if (operations.length === 0) throw new Error('the Coordinator operation catalogue is empty; run npm run generate');
+---
+
+<div class="table-scroll">
+  <table aria-label="Registry Coordinator host operations">
+    <thead>
+      <tr>
+        <th scope="col">Operation</th>
+        <th scope="col">Product</th>
+        <th scope="col">Effect</th>
+        <th scope="col">Recovery</th>
+        <th scope="col">Read receipt</th>
+        <th scope="col">Key</th>
+        <th scope="col">Completion</th>
+      </tr>
+    </thead>
+    <tbody>
+      {operations.map((operation) => (
+        <tr>
+          <th scope="row"><code>{operation.id}</code></th>
+          <td>{operation.product}</td>
+          <td>{operation.effect}</td>
+          <td><code>{operation.recovery}</code></td>
+          <td>{operation.read_receipt ? 'Yes' : 'No'}</td>
+          <td>{operation.key_requirement}</td>
+          <td>{operation.completion ? <code>{operation.completion}</code> : 'None'}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+
+<style>
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; }
+  th, td { text-align: start; vertical-align: top; }
+  code { overflow-wrap: anywhere; }
+</style>

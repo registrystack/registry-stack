@@ -15,14 +15,18 @@ standards_referenced:
 import ApiReferenceTable from '../../../../components/ApiReferenceTable.astro';
 
 Registry Coordinator serves one HTTP surface for starting a run of a served workflow, following and
-recovering that run, operating the deployment, and taking Casework's Casework completion wake-ups.
-Every route except liveness, readiness, and completion events presents a bearer access token, and
-the caller policy that token resolves to decides what the caller may do. The contract is pre-1.0 and
-carries no frozen compatibility promise.
+recovering that run, operating the deployment, and taking Casework completion wake-ups.
+Every route except `/health`, `/ready`, `/v1/review-completions`, and
+`/v1/events/{workflow}/{trigger}` takes a caller access token, and the caller policy that token
+resolves to decides what the caller may do. A Casework completion authenticates with its
+completion token, and a product event with its source's delivery signature. The contract is
+pre-1.0 and carries no frozen compatibility promise.
 
 [Open the Registry Coordinator API operations](../coordinator/) for every route, parameter, schema,
-and reachable problem code. This page holds the authentication, ownership, idempotency, and
-recovery rules those operations assume.
+and reachable problem code.
+
+{/* Evidence: products/coordinator/generated/openapi/coordinator.openapi.json, security,
+    securitySchemes bearer, eventSource, reviewCompletion. */}
 
 ## Contract boundary
 
@@ -93,6 +97,31 @@ A start is refused before admission when:
 - the input does not satisfy the workflow's input schema and value bounds, with `400 input.invalid`;
 - the instance runs in recovery-only mode, with `409 admission.recovery-only`;
 - a restore left admissions held, with `409 admission.held`.
+
+## Start a run from a product event
+
+`POST /v1/events/{workflow}/{trigger}` admits a run from a signed product event, when the workflow
+declares that trigger and the runtime file lists its source under `eventSources`. The body is the
+platform hook envelope, at most 1,048,576 canonical JSON bytes, above which it answers
+`413 request.body-too-large`; the admitted event value must then fit the 131,072-byte value
+profile, or it answers `413 event.too-large`. The `X-Registry-Signature` header carries the HMAC delivery signature over
+the envelope, the signed delivery headers, the method, and the exact request target; the
+`ce-*` headers must match the body and the trigger's authored source, event type, and data
+schema. The delivery time must be within 30 seconds of the Coordinator's clock, so a producer
+signs each delivery attempt afresh.
+
+The exact source, event identity, and trigger bind admission across retries: a redelivered event
+returns the run it already admitted, and the run belongs to the authenticated source, not to a
+caller. An admitted event answers `204` with an empty body and an `X-Coordinator-Run-Id` header.
+An unknown workflow or trigger, or a signature that does not verify, answers
+`401 event.unauthenticated`, a malformed envelope `400 event.invalid`, and a source whose key is
+not configured or cannot be read `503 event.source-unavailable`. The event grants no authority for
+the calls the run then makes.
+
+{/* Evidence: crates/registry-coordinator/src/event_trigger.rs, MAXIMUM_EVENT_BYTES,
+    DELIVERY_SKEW, verify_delivery, receive;
+    crates/registry-coordinator/src/http/admission_contracts.rs, event_path;
+    crates/registry-coordinator/src/http.rs, router, http_edge. */}
 
 ## Read and inspect runs
 
@@ -201,7 +230,8 @@ reads the result itself through the connection's producer credential. An event s
 `503 service.unavailable` asks Casework to deliver the event again.
 
 {/* Evidence: crates/registry-coordinator/src/completion.rs, receive_review_completion,
-    MAXIMUM_BODY_BYTES; products/coordinator/generated/openapi/coordinator.openapi.json,
+    MAXIMUM_BODY_BYTES; crates/registry-coordinator/src/review.rs, CompletionSender::matches
+    (registry_platform_crypto::mac::constant_time_eq); products/coordinator/generated/openapi/coordinator.openapi.json,
     ReviewCompletion; products/coordinator/DEPLOYMENT.md, Configure the deployment. */}
 
 ## Problem documents and codes
@@ -219,9 +249,9 @@ carries `WWW-Authenticate: Bearer`, and a `503` carries `Retry-After`.
 
 Every problem response carries one `code` from this closed catalogue, answered with the HTTP status
 listed beside it. `request.not-found` answers a path the contract does not declare, and
-`request.unprocessable` a body the HTTP framework rejects before an operation reads it, so the
-operations page lists neither under an operation. `coordinatorctl` reports its own diagnostics
-with `coordinator.*` codes, which this catalogue does not hold.
+`request.unprocessable` a body the HTTP framework rejects before an operation reads it, so no
+operation lists either. `coordinatorctl` reports its own diagnostics with `coordinator.*` codes,
+which this catalogue does not hold.
 
 <ApiReferenceTable id="problem-codes" source="coordinator-api" />
 
@@ -248,22 +278,10 @@ metrics are served on that separate socket only, and the service listener has no
 
 {/* Evidence: products/coordinator/DEPLOYMENT.md, Configure the deployment. */}
 
-## Source of truth
-
-The implementation is the source of truth, and the generated document is the published form of it.
-`coordinatorctl openapi` builds the document offline from the service's route inventory, wire
-schemas, and problem catalogue, and the committed document is regenerated with that command.
+`coordinatorctl openapi` prints the OpenAPI document offline.
 
 {/* Evidence: crates/registry-coordinator/src/http.rs, openapi;
-    crates/registry-coordinator/src/cli.rs, Openapi;
-    products/coordinator/README.md, Verify a change. */}
-
-The problem code and route tables are generated from maintained data that a site test holds to the
-generated document: the same codes with the statuses that answer them, and the same methods and
-paths. The rest of this page is maintained by hand against the cited source.
-
-{/* Evidence: docs/site/src/data/coordinator-api.yaml;
-    docs/site/scripts/coordinator-api-reference.test.mjs. */}
+    crates/registry-coordinator/src/cli.rs, Openapi. */}
 
 ## Next
 

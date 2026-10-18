@@ -1,0 +1,130 @@
+---
+title: How Registry Coordinator works
+description: What you define in a Coordinator project, what exists once a run is admitted, who owns each effect a run causes, and how an operator inspects and recovers a run.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: explanation
+locale: en
+standards_referenced: []
+persona:
+  - operator
+---
+
+You have followed one application through review to a notice. Here is what each part of that run
+was, and what changes when a wait times out, a product refuses, or a service restarts.
+
+## What do you define?
+
+A Registry Coordinator project defines one workflow. `workflow.yaml` names the operations the workflow may
+call, the typed input it accepts, and the steps from `start` to every finish. Each operation alias
+binds one exact versioned host operation, such as `casework.submit-review-request/v1`, to a
+logical connection name. There are five step types:
+
+- `call` runs one operation with a typed mapping of input, earlier step output, and literals.
+- `choose` routes on a pure [Function](../../reference/glossary/#function) written in bounded
+  [Rhai](../../reference/glossary/#rhai). A Function has no clock, file, network, database, or
+  credentials, and cannot add steps.
+- `wait-until` waits for an instant.
+- `wait-for` waits for a named completion that an earlier accepted call exposes, such as the
+  `result` of a submitted review request.
+- `finish` ends the run with a declared outcome and the output the workflow chooses to publish.
+
+In `reviewed-notice`, every refusal and timeout has its own named finish, so each
+way the run can end is visible before it starts.
+
+`coordinatorctl check` compiles the project offline. It proves that every mapping reads data that
+exists on every route that reaches it, and computes a workflow revision from what changes
+execution; titles, descriptions, and `project.version` do not change it. `coordinatorctl package` freezes the project into an immutable
+[package](../../reference/glossary/#package) whose digest the deployment pins.
+
+What you do not define is equally deliberate: no SQL steps, no dynamic fan-out, no arbitrary HTTP
+method or destination, and no automatic compensation or rollback.
+
+{/* Evidence: products/coordinator/PRODUCT-CONTRACT.md, "Execution and authority";
+    crates/registry-coordinator/src/definition.rs. */}
+
+## What exists once a run is admitted?
+
+A run is one admitted execution of the active workflow revision. It is admitted in one of two
+ways: an authorized caller posts to `POST /v1/runs` with the expected revision, its input, and an
+idempotency key, or an authored event trigger accepts a signed product event at
+`POST /v1/events/{workflow}/{trigger}`. The same key with the same revision and input returns the
+same run; a different revision or input gets `409 idempotency.key-reused`. Coordinator is not a
+review provider: when a workflow needs a human decision, it submits its own request to Casework,
+as `reviewed-notice` does.
+
+Admission, the run, and its first job commit together in PostgreSQL, and the run's definition,
+input, and prepared commands are sealed with AES-256-GCM under the deployment's payload state
+key. A later package
+activation leaves an admitted run on the definition it started with.
+
+A wait is durable state, not a sleeping process. A `wait-for` has a required `timeoutSeconds`
+shorter than the run deadline, and an optional `onTimeout` and `onCancel` route. While waiting,
+Coordinator observes the source at most every 30 seconds, a floor the deployment can raise. A
+Casework pending result is read every 900 seconds by default. A Casework completion event at
+`POST /v1/review-completions` only brings the next read forward; it carries no result and starts
+no run.
+
+A timeout means the workflow stopped waiting, not that the review stopped, so `reviewed-notice`
+withdraws its request and reads whether a decision arrived anyway.
+
+{/* Evidence: products/coordinator/PRODUCT-CONTRACT.md, "Admission and integration",
+    "Standalone review and named completions"; crates/registry-coordinator/src/completion.rs;
+    crates/registry-coordinator/src/protected_state.rs, seal;
+    crates/registry-platform-crypto/src/sealed_value.rs and field_encryption.rs, AES-256-GCM. */}
+
+## Who owns each effect?
+
+Each product a run calls owns the effect and decides whether to allow it. Coordinator keeps the
+progress, the prepared commands, the waits, and its own [audit journal](../../reference/glossary/#audit-journal).
+
+Every connection in `runtime.yaml` carries its own service identity, with a fresh credential for
+each attempt, and starting a workflow grants no downstream authority. In `reviewed-notice`, Base
+Registry Engine (BReg) decided what the workflow could read, Casework who could review, and
+Messaging whether the notice could be sent. A wait, retry, or restart never renews an approval or
+widens its scope.
+
+Coordinator does not apply a BReg [Proposal](../../reference/glossary/#proposal): `check` refuses
+a Proposal [Action](../../reference/glossary/#action) with `coordinator.operation.proposal-action`.
+The applicant drives the Proposal in BReg, and a workflow follows it through a product event or a
+later record read.
+
+A product refusal is a fact about the product's policy. An immediate Action call may route an
+owner-declared no-effect refusal through `onDeclaredRefusal` as `{refusalCode}`; any other refusal
+fails the run with `product-refused`.
+
+{/* Evidence: products/coordinator/PRODUCT-CONTRACT.md, "Execution and authority",
+    "Governed Actions"; crates/registry-coordinator/src/breg_action.rs;
+    crates/registry-coordinator/src/adapters.rs. */}
+
+## How do you inspect and recover a run?
+
+`coordinatorctl status` and `coordinatorctl inspect` show a run's state: `running`, `attention`,
+`cancel-requested`, `finished`, `failed`, `cancelled`, `cancelled-after-effect`, or `expired`.
+Inspection adds each step, every effect as `accepted` or `unknown`, and the timing and observation
+count of a wait. Inputs, product responses, and prepared requests stay protected; a finished run publishes only the output its finish step declares.
+
+When a call might have reached the product but no answer came back, the effect is uncertain, and
+Coordinator does not guess. A definite retryable response resends the same saved command within
+the original deadline. Messaging and Scheduling expose a receipt for the original idempotency
+key, so `coordinatorctl reconcile` can settle an uncertain send against it. BReg Action and
+Casework mutations have no such receipt, so a record read or an operator's word does not settle
+them. A decision-evaluation call (`evaluation.evaluate/v1`) that may have been sent is never
+repeated.
+
+`coordinatorctl retry-same` resends the original command, and `coordinatorctl cancel` stops
+future calls where it can. Cancellation never reverses an accepted effect or withdraws a
+downstream request on its own; a workflow that wants a withdrawal says so in its `onCancel` path,
+as `reviewed-notice` does. A restored database starts in recovery-only mode and holds every
+unfinished run for review before work resumes.
+
+{/* Evidence: products/coordinator/PRODUCT-CONTRACT.md, "Recovery and limits";
+    products/coordinator/generated/openapi/coordinator.openapi.json, RunStatus. */}
+
+## Next
+
+[Author a Coordinator workflow](../../configure/coordinator/) builds, checks, and packages a
+workflow of your own.
