@@ -15,6 +15,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
+import { packageExamples } from '../generate-evidence-examples.mjs';
 import { stopGroup } from './background.mjs';
 
 export class ToolsetError extends Error {}
@@ -515,9 +516,12 @@ const discovery = productToolset({
   sessions: [],
 });
 
-// Evidence: evidence, evidencectl, and evidence-oid4vci. Two things a reader
+// Evidence: evidence, evidencectl, and evidence-oid4vci. Three things a reader
 // sets up themselves are set up here instead:
 //
+// - The example projects a reader downloads from the site are packaged from
+//   products/evidence/examples into the reader's starting directory as
+//   evidence-examples.tar.gz, by the same generator the site build runs.
 // - The Python client package a reader installs with pip is unpacked from
 //   REGISTRY_CLIENT_PY_WHEEL, a wheel assembled from this checkout with
 //   release/scripts/assemble-registry-client-packages.py, onto PYTHONPATH.
@@ -595,9 +599,10 @@ let fhirMock;
 const evidence = {
   ...evidenceProduct,
 
-  async prepare({ repoRoot, binDir, workRoot }) {
+  async prepare({ repoRoot, binDir, workRoot, readerDir }) {
     const wheel = clientWheel();
     await evidenceProduct.prepare({ repoRoot, binDir });
+    await packageExamples(join(repoRoot, 'products/evidence/examples'), join(readerDir, 'evidence-examples.tar.gz'));
     const clientPackage = join(workRoot, 'client-package');
     const unpack = spawnSync('python3', ['-m', 'zipfile', '-e', wheel, clientPackage], { encoding: 'utf8' });
     if (unpack.status !== 0) throw new ToolsetError(`could not unpack ${wheel}:\n${unpack.stderr}`);

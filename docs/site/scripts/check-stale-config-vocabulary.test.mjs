@@ -122,7 +122,7 @@ test('allowances pass on BReg and cross-product pages', async () => {
           '  --data-binary @.evidence/requests/opencrvs-parent/request.json \\',
           '',
         ].join('\n'),
-        'src/content/docs/explanation/disclosure-modes-and-computed-answers.mdx':
+        'src/content/docs/explanation/how-evidence-works.mdx':
           'The `audience-scoped-entity-reference` value form identifies a related entity.\n',
       },
     },

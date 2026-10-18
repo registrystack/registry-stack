@@ -276,11 +276,16 @@ async function stoppedAt(pages, outDir) {
   return { what: `${blockName(step)} at ${where(step)}`, output: existsSync(out) ? await readFile(out, 'utf8') : '' };
 }
 
-// Make everything under root writable and readable, so that a directory the
-// journey locked cannot stop the teardown from finding sessions or the work
-// directory from being removed.
+// Make every directory under root readable, writable and searchable, so that
+// a directory the journey locked cannot stop the teardown from finding
+// sessions or the work directory from being removed. Only directories change:
+// a session's control socket and runtime file keep the modes its tool checks
+// before it stops the session. find runs chmod on a directory before reading
+// it, so a locked directory's contents are reached.
 function unlock(root) {
-  const result = spawnSync('chmod', ['-R', 'u+rwX', root], { encoding: 'utf8' });
+  const result = spawnSync('find', [root, '-type', 'd', '-exec', 'chmod', 'u+rwx', '{}', ';'], {
+    encoding: 'utf8',
+  });
   if (result.status !== 0) console.error(`could not make ${root} writable:\n${result.stderr}`);
 }
 
@@ -355,7 +360,7 @@ async function replay(pages, toolset, checkout, keepFailed = false) {
   let prepared = false;
   let inherited = new Map();
   try {
-    const toolsetEnv = await toolset.prepare({ repoRoot: REPO_ROOT, binDir, workRoot, steps });
+    const toolsetEnv = await toolset.prepare({ repoRoot: REPO_ROOT, binDir, workRoot, readerDir, steps });
     prepared = true;
     if (checkout) {
       await copyCheckout(REPO_ROOT, readerDir);
