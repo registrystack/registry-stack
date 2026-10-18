@@ -392,10 +392,11 @@ pub enum CompiledRegistryChangeTargetKind {
 }
 
 /// What package loading needs from the deployment. A package carries no
-/// environment, so the only deployment input is how strictly the package
-/// directory's permissions are checked.
+/// environment, so the database's initialization environment decides both
+/// filesystem strictness and whether local-only project identity is accepted.
 pub struct PackageLoadContext<'a> {
     /// Environment durably recorded when the database was initialized.
+    /// Only the explicit `local` value admits local-development identity.
     pub database_initialization_environment: &'a str,
 }
 
@@ -726,6 +727,8 @@ pub enum PackageError {
     Binding,
     #[error("the package compiler derivation failed")]
     Derivation,
+    #[error("the package carries a local-only deployment identity")]
+    DeploymentIdentity,
     #[error("the package migration plan is invalid")]
     MigrationPlan,
     #[error("the package permissions are unsafe")]
@@ -3640,6 +3643,7 @@ pub fn load_package_with_verified_envelope(
 ) -> Result<VerifiedPackage> {
     let production = context.database_initialization_environment != "local";
     let (manifest, loaded) = load_verified_closure(root, shared, production)?;
+    validate_deployment_identity(&manifest, &loaded, production)?;
     let (registry, reviewed_migration_plan) = rederive(&manifest, &loaded)?;
 
     Ok(VerifiedPackage {
@@ -3861,6 +3865,25 @@ fn load_predecessor_closure(
         },
         loaded,
     ))
+}
+
+fn validate_deployment_identity(
+    manifest: &PackageManifest,
+    loaded: &BTreeMap<String, Vec<u8>>,
+    production: bool,
+) -> Result<()> {
+    if !production {
+        return Ok(());
+    }
+    let project = loaded
+        .get(&manifest.sources.project)
+        .ok_or(PackageError::Derivation)
+        .and_then(|bytes| parse_project_yaml(bytes).map_err(|_| PackageError::Derivation))?;
+    if crate::compiler::deployment_diagnostics(&project).is_empty() {
+        Ok(())
+    } else {
+        Err(PackageError::DeploymentIdentity)
+    }
 }
 
 #[cfg(feature = "tooling")]

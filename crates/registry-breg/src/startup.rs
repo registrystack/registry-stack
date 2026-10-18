@@ -603,6 +603,9 @@ impl StartupError {
             Self::PackageRefused(PackageError::RetiredApiVersion) => {
                 "the Registry package carries the retired apiVersion registry.registrystack.org/package/v2; rebuild it with this release's `bregctl package`, then run `bregctl apply --initial --package DIR` against a new database"
             }
+            Self::PackageRefused(PackageError::DeploymentIdentity) => {
+                "the Registry package carries a local-only identity; replace canonicalBaseIri, schema-test and rebuild the deployment package"
+            }
             Self::PackageRefused(_) => "the Registry package was refused",
             Self::PackageEnvelopeRefused(_) => "the Registry package was refused",
             Self::DatabaseConnection(cause) => cause.message(),

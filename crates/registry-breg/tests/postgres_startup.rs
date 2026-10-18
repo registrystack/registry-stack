@@ -1626,6 +1626,8 @@ async fn startup_refuses_a_database_without_subject_access_log_storage_and_write
             objects: vec![
                 "registry_internal.expire_subject_access_log()".to_owned(),
                 "registry_internal.registry_subject_access_log".to_owned(),
+                "registry_internal.registry_subject_access_log_expiry".to_owned(),
+                "registry_internal.registry_subject_access_log_record".to_owned(),
             ],
         })
     );

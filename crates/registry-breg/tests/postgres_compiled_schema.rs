@@ -320,6 +320,55 @@ async fn compiled_postgres_schema_enforces_context_rls_and_exact_catalog() {
     install_asset_fixture().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn immediate_action_catalog_localizes_its_conditional_internal_index() {
+    let registry = compiled_action_registry();
+    let database = TestDatabase::create(1).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("the Action-bearing Registry installs its exact catalog");
+    let catalog = ExpectedManagedCatalog::compiled(&registry);
+
+    assert_eq!(
+        catalog_drift_objects(&database.admin, &registry, &catalog)
+            .await
+            .unwrap(),
+        Vec::<String>::new(),
+        "an Action-bearing pristine catalog has no named drift"
+    );
+    database
+        .admin
+        .batch_execute(
+            "BEGIN;
+             DROP INDEX registry_internal.registry_immediate_action_results_target_idx",
+        )
+        .await
+        .expect("the test administrator removes the conditional Action index");
+    let named_drift = catalog_drift_objects(&database.admin, &registry, &catalog)
+        .await
+        .unwrap();
+    database
+        .admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("the test administrator restores the conditional Action index");
+    assert_eq!(
+        named_drift,
+        ["registry_internal.registry_immediate_action_results_target_idx".to_owned()]
+    );
+    assert_eq!(
+        catalog_drift_objects(&database.admin, &registry, &catalog)
+            .await
+            .unwrap(),
+        Vec::<String>::new(),
+        "the restored Action-bearing catalog has no named drift"
+    );
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
 /// The source view is not a barrier view, so the planner flattens it and may
 /// evaluate a caller predicate before the lifecycle condition of the view.
 /// Row security does not rest on that order: PostgreSQL applies the policies
@@ -1692,6 +1741,54 @@ async fn assert_catalog_drift_is_rejected(
         .await
         .expect("test administrator removes the added index");
 
+    database
+        .admin
+        .batch_execute(
+            "BEGIN;
+             DROP INDEX registry_internal.registry_subject_access_log_expiry",
+        )
+        .await
+        .expect("test administrator removes a managed internal index");
+    let named_drift = catalog_drift_objects(&database.admin, registry, catalog)
+        .await
+        .unwrap();
+    database
+        .admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("test administrator restores the managed internal index");
+    assert_eq!(
+        named_drift,
+        ["registry_internal.registry_subject_access_log_expiry".to_owned()]
+    );
+
+    database
+        .admin
+        .batch_execute(
+            "CREATE INDEX registry_subject_access_log_unexpected
+                 ON registry_internal.registry_subject_access_log (event_id)",
+        )
+        .await
+        .expect("test administrator adds an internal index");
+    assert_eq!(
+        catalog_drift_objects(&database.admin, registry, catalog)
+            .await
+            .unwrap(),
+        ["registry_internal.registry_subject_access_log_unexpected".to_owned()]
+    );
+    database
+        .admin
+        .batch_execute("DROP INDEX registry_internal.registry_subject_access_log_unexpected")
+        .await
+        .expect("test administrator removes the added internal index");
+    assert_eq!(
+        catalog_drift_objects(&database.admin, registry, catalog)
+            .await
+            .unwrap(),
+        Vec::<String>::new(),
+        "the restored catalog has no named drift"
+    );
+
     let required_column = &registry.entities()["entry"].fields["label"].physical_name;
     database
         .admin
@@ -2259,6 +2356,80 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
     .expect("compiled PostgreSQL fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("compiled PostgreSQL fixture compiles")
+}
+
+fn compiled_action_registry() -> registry_breg::CompiledRegistry {
+    let project = serde_json::json!({
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {
+            "id": "compiled-action-postgres",
+            "version": "1",
+            "defaultLanguage": "en",
+            "canonicalBaseIri": "https://authoring.example.test"
+        },
+        "datasets": [{"id": "test-dataset"}],
+        "recordTypes": [{
+            "id": "entry",
+            "primaryDataset": "test-dataset",
+            "route": "entries",
+            "mutationMode": "mutable",
+            "fields": [{
+                "id": "label",
+                "type": "string",
+                "maximumLength": 128,
+                "required": true,
+                "classification": "internal"
+            }]
+        }],
+        "actions": [{
+            "id": "relabel-entry",
+            "execution": {"mode": "immediate"},
+            "inputs": [
+                {
+                    "id": "target",
+                    "type": "reference",
+                    "target": "entry",
+                    "required": true,
+                    "classification": "internal"
+                },
+                {
+                    "id": "label",
+                    "type": "string",
+                    "maximumLength": 128,
+                    "required": true,
+                    "classification": "internal"
+                }
+            ],
+            "plan": {
+                "type": "fixed",
+                "effects": [{
+                    "id": "entry",
+                    "target": {"fromInput": "target"},
+                    "operation": "patch",
+                    "set": {"label": {"fromInput": "label"}}
+                }]
+            }
+        }],
+        "accessProfiles": [{
+            "id": "operator",
+            "default": true,
+            "principalClaim": "registry_principal",
+            "requiredScopes": "unrestricted",
+            "permissions": {
+                "actions": [{
+                    "action": "relabel-entry",
+                    "operations": ["invoke"],
+                    "targets": [{"recordType": "entry", "rowBoundaries": "unrestricted"}],
+                    "results": ["entry"]
+                }]
+            }
+        }]
+    });
+    let project_bytes = serde_json::to_vec(&project).expect("Action catalog fixture serializes");
+    let project = parse_project_json(&project_bytes).expect("Action catalog fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("Action catalog fixture compiles")
 }
 
 fn derived_registry() -> registry_breg::CompiledRegistry {
