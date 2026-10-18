@@ -11,9 +11,12 @@
 //! role mode the runtime credential cannot write the ledger while the
 //! service still starts and serves.
 
+use chrono::{TimeDelta, Utc};
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_scheduling::config::RuntimeConfig;
-use registry_scheduling::store::{attempt_key_reference, PostgresStore};
+use registry_scheduling::hooks::{ActivatedHooks, HookRuntimeIdentity};
+use registry_scheduling::store::{attempt_key_reference, ClaimRow, ClaimState, PostgresStore};
+use registry_scheduling_core::LedgerKind;
 use registry_schedulingctl::activation;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -77,6 +80,12 @@ fn successor_policy() -> String {
         "label: 30-minute counter update",
         "label: 30-minute counter visit",
         1,
+    )
+}
+
+fn observer_policy(policy: &str) -> String {
+    format!(
+        "{policy}hooks:\n  - id: confirmed-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, revision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n"
     )
 }
 
@@ -370,6 +379,14 @@ fn refusal(result: anyhow::Result<Value>) -> String {
     format!("{:#}", result.expect_err("the command refuses"))
 }
 
+fn add_hook_destination(config: &Path, url: &str, key_secret: &str) {
+    let mut text = std::fs::read_to_string(config).expect("the runtime configuration is readable");
+    text.push_str(&format!(
+        "destinations:\n  hooks:\n    appointment-events:\n      url: {url}\n      hmacSha256KeyRef: secret:env/{key_secret}\n"
+    ));
+    std::fs::write(config, text).expect("the hook destination is written");
+}
+
 #[tokio::test]
 async fn plan_on_an_empty_database_reports_the_initial_activation_and_writes_nothing() {
     let deployment = Deployment::single("activation_plan_empty").await;
@@ -572,6 +589,181 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
     assert_eq!(report["schemaVersion"], 100);
     assert_eq!(report["roleMode"], "single");
     assert!(report["roleModeStatement"].is_string());
+    deployment.drop().await;
+}
+
+#[tokio::test]
+async fn successor_activation_checks_retained_hook_bindings_on_the_version_100_baseline() {
+    let deployment = Deployment::single("activation_hook").await;
+    let initial_policy = observer_policy(POLICY);
+    let successor_policy = observer_policy(&successor_policy());
+    let changed_policy = successor_policy.replacen(
+        "label: Registry record update",
+        "label: Registry record update service",
+        1,
+    );
+    let initial_package = deployment.package("initial", &initial_policy);
+    let successor_package = deployment.package("successor", &successor_policy);
+    let changed_package = deployment.package("changed", &changed_policy);
+    let initial_config =
+        deployment.config("initial.yaml", &initial_package, ConfigOptions::default());
+    let successor_config = deployment.config(
+        "successor.yaml",
+        &successor_package,
+        ConfigOptions::default(),
+    );
+    let changed_config =
+        deployment.config("changed.yaml", &changed_package, ConfigOptions::default());
+    let hook_secret = format!("{}_HOOK_CANARY", deployment.audit_secret);
+    std::env::set_var(&hook_secret, "canary-hook-signing-key-material".repeat(2));
+    add_hook_destination(
+        &initial_config,
+        "http://127.0.0.1:9/appointment-events",
+        &hook_secret,
+    );
+    add_hook_destination(
+        &successor_config,
+        "http://127.0.0.1:9/appointment-events",
+        &hook_secret,
+    );
+    add_hook_destination(
+        &changed_config,
+        "http://127.0.0.1:9/changed-appointment-events",
+        &hook_secret,
+    );
+
+    let initial = apply(&initial_config).expect("the initial package activates");
+    assert_eq!(initial["schemaVersionsApplied"], serde_json::json!([100]));
+    assert_eq!(initial["applyOrder"], 1);
+
+    let config = RuntimeConfig::load(&initial_config).expect("the runtime configuration loads");
+    let loaded = config.load_policy().expect("the initial package verifies");
+    let resolver = SecretResolver::new([SecretProvider::Environment], "")
+        .expect("the environment secret provider configures");
+    let row = deployment
+        .admin
+        .query_one(
+            &format!(
+                "SELECT policy_revision, policy_digest FROM {}.scheduling_meta WHERE singleton",
+                deployment.schema
+            ),
+            &[],
+        )
+        .await
+        .expect("the published policy is readable");
+    let policy_revision: i64 = row.get(0);
+    let policy_digest: String = row.get(1);
+    let hooks = ActivatedHooks::activate(
+        &loaded.policy.hook_declarations(),
+        &config.destinations.hooks,
+        &resolver,
+        HookRuntimeIdentity {
+            scheduling_id: loaded.policy.project.id.to_string(),
+            policy_revision,
+            policy_digest,
+        },
+        deployment.schema.clone(),
+        Duration::from_secs(2 * 24 * 60 * 60),
+    )
+    .expect("the initial hook destination activates");
+    let start = Utc::now() + TimeDelta::days(1);
+    let claim = ClaimRow {
+        claim_id: Uuid::new_v4(),
+        kind: LedgerKind::Booking,
+        state: ClaimState::Active,
+        offering: "registry-update-30".to_owned(),
+        supply_id: "update-station-1".to_owned(),
+        channel: Some("public".to_owned()),
+        displayed_start: start,
+        displayed_end: start + TimeDelta::minutes(30),
+        occupied_start: start - TimeDelta::minutes(5),
+        occupied_end: start + TimeDelta::minutes(35),
+        units: 1,
+        duplicate_key: None,
+        external_references: Vec::new(),
+        hold_expires_at: None,
+        revision: 1,
+        policy_revision,
+        actor: "canary-retained-hook-actor".to_owned(),
+        reason: None,
+        created_at: Utc::now(),
+        closed_at: None,
+        owner: None,
+    };
+    let mut capture_client = connect(&scoped_url(&base_url(), &deployment.schema)).await;
+    let transaction = capture_client
+        .transaction()
+        .await
+        .expect("the retained delivery transaction opens");
+    let captured = hooks
+        .capture(&transaction, "appointment.confirmed", &claim)
+        .await
+        .expect("the retained hook delivery is captured");
+    assert_eq!(captured, 1);
+    transaction
+        .commit()
+        .await
+        .expect("the retained hook delivery commits");
+
+    let allowed_plan = plan(&successor_config);
+    assert_eq!(allowed_plan["retainedHookBindings"], "verified");
+    assert_eq!(allowed_plan["refusals"], serde_json::json!([]));
+    assert_eq!(allowed_plan["changesPending"], true);
+    let allowed = apply(&successor_config).expect("the unchanged binding stays deliverable");
+    assert_eq!(allowed["applyOrder"], 2);
+
+    let before = deployment
+        .admin
+        .query_one(
+            &format!(
+                "SELECT policy_revision, policy_digest, \
+                 (SELECT count(*) FROM {}.scheduling_activations) \
+                 FROM {}.scheduling_meta WHERE singleton",
+                deployment.schema, deployment.schema
+            ),
+            &[],
+        )
+        .await
+        .expect("the accepted successor state is readable");
+    let before_revision: i64 = before.get(0);
+    let before_digest: String = before.get(1);
+    let before_activations: i64 = before.get(2);
+
+    let refused_plan = plan(&changed_config);
+    assert_eq!(refused_plan["retainedHookBindings"], "refused");
+    assert_eq!(refused_plan["changesPending"], false);
+    let refusals = refused_plan["refusals"]
+        .as_array()
+        .expect("the plan refusals are an array");
+    assert_eq!(refusals.len(), 1, "{refused_plan}");
+    assert_eq!(
+        refusals[0]["code"],
+        "schedulingctl.activation.retained-hook-bindings"
+    );
+    let refusal = refusal(apply(&changed_config));
+    assert!(
+        refusal.contains("cannot deliver every retained hook event"),
+        "{refusal}"
+    );
+
+    let after = deployment
+        .admin
+        .query_one(
+            &format!(
+                "SELECT policy_revision, policy_digest, \
+                 (SELECT count(*) FROM {}.scheduling_activations) \
+                 FROM {}.scheduling_meta WHERE singleton",
+                deployment.schema, deployment.schema
+            ),
+            &[],
+        )
+        .await
+        .expect("the refused successor state is readable");
+    assert_eq!(after.get::<_, i64>(0), before_revision);
+    assert_eq!(after.get::<_, String>(1), before_digest);
+    assert_eq!(after.get::<_, i64>(2), before_activations);
+
+    std::env::remove_var(&hook_secret);
     deployment.drop().await;
 }
 
