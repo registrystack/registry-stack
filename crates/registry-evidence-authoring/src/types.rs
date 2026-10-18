@@ -271,7 +271,7 @@ fn source_calls(project: &EvidenceProject) -> Vec<SourceCall<'_>> {
                 stage: "single",
                 prior_facts: object(Map::new()),
             }),
-            project::Acquisition::SearchThenFetch { search, fetch } => {
+            project::Acquisition::SearchThenFetch { search, fetch, .. } => {
                 calls.push(SourceCall {
                     definition: id,
                     source: search,

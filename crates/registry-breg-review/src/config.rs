@@ -115,7 +115,8 @@ pub struct RuntimeConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SignInConfig {
     /// The provider's issuer. An https URL with no query or fragment; plain
-    /// http is accepted only on a loopback host under `development-loopback`.
+    /// http is accepted only on a loopback host under `development-loopback`,
+    /// because the page sends its client credentials to the token endpoint.
     pub issuer: Url,
     /// The page's client identifier at the provider.
     pub client_id: ExternalId,
@@ -1275,6 +1276,17 @@ audit:
             "breg.review-runtime.plain-http-endpoint",
             "/signIn/issuer",
         );
+        // Sign-in sends client credentials to the token endpoint, so the page
+        // has no plain HTTP opt-in: the key is unknown.
+        let opted_in = document().replace(
+            "  issuer: https://id.example",
+            "  issuer: http://id.example\n  allowInsecureHttp: true",
+        );
+        assert!(load(&opted_in).is_err());
+        assert!(findings_of(&opted_in).contains(&(
+            "config.unknown-key".to_owned(),
+            "/signIn/allowInsecureHttp".to_owned()
+        )));
         refused(
             &development().replace("bind: 127.0.0.1:8115", "bind: 0.0.0.0:8115"),
             "breg.review-runtime.public-bind",

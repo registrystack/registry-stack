@@ -569,6 +569,13 @@ $defs:
         $ref: '#/$defs/Url'
         pattern: ^https?://
         maxLength: 512
+      allowInsecureHttp:
+        description: >-
+          Permits plain HTTP to the issuer and JWKS URI beyond loopback under the local assurance
+          profile only. Deployable bundles require HTTPS for both even when it is set, and a
+          production or evidence-grade bundle that sets it to true is refused. Omission is false.
+        type: boolean
+        default: false
       audience:
         description: >-
           The one exact audience value an inbound access token must carry to be accepted; it is
@@ -622,11 +629,13 @@ $defs:
             const: uri
           uri:
             description: >-
-              Fixed endpoint the verifier fetches issuer signing keys from; the endpoint may
-              resolve to a public or private address, so DNS is pinned for each fetch, ambient
-              proxies are disabled, and cloud-metadata destinations remain prohibited. It
-              requires HTTPS; the local assurance profile also permits HTTP on the exact
-              numeric 127.0.0.1 loopback origin with an explicit port.
+              Fixed endpoint the verifier fetches issuer signing keys from. As an endpoint the
+              operator declares, it inherits the declared issuer's allowance on any origin: it
+              may resolve to a public, private, or loopback address, while cloud-metadata and
+              link-local destinations remain prohibited, DNS is pinned for each fetch, and
+              ambient proxies and redirects are disabled. It requires HTTPS; the local assurance
+              profile also permits HTTP on the exact numeric 127.0.0.1 loopback origin with an
+              explicit port, or elsewhere under allowInsecureHttp.
             $ref: '#/$defs/Url'
             pattern: ^https?://
             maxLength: 512
@@ -921,6 +930,13 @@ $defs:
         properties:
           type:
             const: date
+      - type: object
+        additionalProperties: false
+        required:
+          - type
+        properties:
+          type:
+            const: uuid
       - type: object
         additionalProperties: false
         required:
@@ -1402,6 +1418,12 @@ $defs:
         required: [type, name]
         properties:
           type: {const: date}
+          name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
+      - type: object
+        additionalProperties: false
+        required: [type, name]
+        properties:
+          type: {const: uuid}
           name: {type: string, pattern: '^[a-z][a-z0-9._-]{0,63}$'}
       - type: object
         additionalProperties: false
@@ -2833,6 +2855,13 @@ $defs:
               the fixed second-stage source, or the ordered array of member sources, invoked
               after the search resolves and never chosen from response content.
             $ref: '#/$defs/local-id'
+          onFetchNoMatch:
+            description: >-
+              Selects how an absent optional fetch record is reported. The default preserves
+              dependency failure; unavailable returns evidence.unavailable and an Unresolved
+              audit decision. Ambiguity and transport failures remain dependency failures.
+            enum: [dependency-failure, unavailable]
+            default: dependency-failure
       - type: object
         additionalProperties: false
         required:

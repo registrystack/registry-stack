@@ -1,5 +1,5 @@
 ---
-title: Decide your first review request
+title: Decide your first ReviewRequest
 description: Start a local Casework runtime, create a policy-bound review request, claim and answer its task, and poll the structured result.
 status: current
 owner: registry-docs
@@ -17,182 +17,243 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you are evaluating Registry Casework, submit one immutable snapshot, answer its task as a human,
-and read the result as the producer. You will also verify that the producer cannot read the human task.
-This starter runs without a source provider or external registry.
+You will submit one ReviewRequest as a producer, decide it as staff, and read the answer as the
+producer. The request carries its own snapshot, so no source registry is needed.
 
 <QuickstartMeta
-  outcome="One policy-bound review request answered by Staff and read by its producer, with unauthorized task access refused."
-  time="About 20 minutes, plus the image download"
+  outcome="One ReviewRequest decided by staff and read by its producer, who is refused the task."
+  time="About 20 minutes, plus image downloads"
   level="Local evaluation only"
-  prerequisites={['Matching casework and caseworkctl binaries on PATH', 'Running Docker', 'A Bash or zsh shell', 'curl 7.76 or later', 'Python 3 and an editor', 'Free loopback ports 8182, 8183, and 55473']}
+  prerequisites={['Running Docker', 'curl 7.76 or later', 'jq', 'Free loopback ports 8092, 8093 and 15433']}
 />
 
-{/* Evidence: products/casework/examples/standalone-decision/casework.yaml;
-    crates/registry-caseworkctl/tests/dev_lifecycle.rs. */}
+## Install casework and caseworkctl
 
-## Check your binaries
+`casework` is the review service and [`caseworkctl`](../../reference/cli/caseworkctl/) its tool. The
+installer checks the checksums on the
+[releases page](https://github.com/registrystack/registry-stack/releases/latest) and puts both
+in `~/.local/bin`; keep it on your `PATH`.
 
-Use both binaries from the release your docset describes, or from one source checkout for the
-unreleased development docset. A released binary may implement an earlier pre-1.0 model.
-The [Registry Stack releases](https://github.com/registrystack/registry-stack/releases/latest)
-provide release artifacts and installation instructions.
+{/* Evidence: crates/registry-casework/install.sh, CASEWORK_INSTALL_DIR. */}
+
+```sh test-skip="downloads a release; the gate uses binaries built from this checkout"
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/casework-install.sh | bash
+```
 
 ```sh
 casework --version
 caseworkctl --version
 ```
 
-If a source-built binary cannot load its runtime library on macOS, follow the repository's build
-instructions before starting this journey. A failure before the command starts is not a development
-session failure.
+```text test-expect
+casework <version>
+caseworkctl <version>
+```
 
 ## Create the project
 
-Create and check the standalone starter:
+Create a project from the standalone template and work inside it:
 
 ```sh
 mkdir -p tutorial-work
 caseworkctl init tutorial-work/casework --template standalone-decision
-caseworkctl check tutorial-work/casework
-caseworkctl test tutorial-work/casework
+cd tutorial-work/casework
 ```
 
-`init` refuses an existing destination. Choose a fresh directory rather than overwriting retained work.
-The starter declares the `decision` ReviewPolicy, submitted context, one answer stage, two outcomes,
-and a trusted requester. The local fixture check is synthetic; the HTTP steps establish the running
-service behavior.
-
-{/* Evidence: crates/registry-caseworkctl/src/project.rs;
-    products/casework/examples/standalone-decision/casework.yaml. */}
-
-## Choose separate local ports
-
-Use separate ports so this tutorial can run beside another local project.
-Before the first start, edit the trusted producer's issuer in
-`tutorial-work/casework/casework.yaml` to match the tutorial issuer port:
-
-```diff test-edit title="tutorial-work/casework/casework.yaml"
--issuer: http://127.0.0.1:8093
-+issuer: http://127.0.0.1:8183
-```
-
-This changes an authority binding, so the issuer URL must match the issuer that signs the requester's
-token. If one of these tutorial ports is occupied, choose another before starting and keep the issuer
-binding, start flags, and service URL consistent. A retained session keeps its first-start ports.
-
-:::caution[Use synthetic data only]
-The session keeps records in its Docker volume and private credentials in
-`tutorial-work/casework/.casework/dev/`. Keep that directory out of version control and support reports.
-:::
-
-```sh
-caseworkctl dev start tutorial-work/casework \
-  --casework-port 8182 --issuer-port 8183 --database-port 55473
-caseworkctl dev token requester tutorial-work/casework
-caseworkctl dev token staff tutorial-work/casework
-casework_url=http://127.0.0.1:8182
-headers=tutorial-work/casework/.casework/dev/secrets
-```
-
-Start returns after readiness and seeds the team serving the `decisions` queue.
-The token commands write owner-only header files containing both the bearer token and selected
-Casework profile. If start fails, inspect the named private logs and run
-`caseworkctl dev doctor tutorial-work/casework` before changing retained state.
-
-{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs;
-    crates/registry-caseworkctl/src/dev/config.rs. */}
-
-## Discover the exact policy
-
-Fetch the compiled policy as the producer. This tutorial submits its complete `identity` to pin
-the exact version and digest. Your integration can instead select a policy by ID and retain the
-concrete binding Casework returns at acceptance:
-
-```sh
-curl --fail-with-body --silent --show-error \
-  --header @"$headers/requester.header" \
-  --output tutorial-work/policy.json \
-  "$casework_url/v1/review-policies/decision"
-```
-
-Create the request from that identity. For this synthetic subject, the content digest covers the
-compact, sorted JSON snapshot; your producer uses its actual subject's immutable content digest.
-The submission digest returned by Casework is a separate binding over the complete review round.
-
-```sh
-python3 - <<'PYREQUEST'
-import hashlib
-import json
-from pathlib import Path
-
-snapshot = {"reference": "LIC-2026-0041", "summary": "Review licence batch LIC-2026-0041"}
-content = json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()
-request = {
-    "policy": json.loads(Path("tutorial-work/policy.json").read_text())["identity"],
-    "subject": {
-        "source": "standalone", "type": "batch", "id": "LIC-2026-0041", "version": "1",
-        "digest": "sha256:" + hashlib.sha256(content).hexdigest(),
-    },
-    "requesterReference": "LIC-2026-0041",
-    "context": {"mode": "submitted", "snapshot": snapshot},
+```json test-excerpt
+{
+  "command": "init",
+  "data": {
+    "created": "tutorial-work/casework",
+    "next": "Run caseworkctl check, test and types, then caseworkctl dev start.",
+    "template": "standalone-decision"
+  }
 }
-Path("tutorial-work/request.json").write_text(json.dumps(request))
-PYREQUEST
+```
+
+## Check what the policy allows
+
+The project declares one [ReviewPolicy](../../reference/glossary/#review-policy), `decision`: who
+may ask, which team answers, and the outcomes allowed. Check it offline and run its fixture:
+
+```sh
+caseworkctl check .
+caseworkctl test .
+```
+
+```json test-excerpt
+{
+  "policyBindings": [
+    {"digest": "sha256:<digest>", "id": "decision", "version": "1"}
+  ]
+}
+```
+
+The digest pins the policy's behavior. To read what that behavior is, explain it:
+
+```sh
+caseworkctl explain .
+```
+
+```json test-excerpt
+{
+  "contextCustody": "admitted bounded snapshot",
+  "refusals": [
+    "untrusted producer",
+    "policy binding mismatch",
+    "concealed source",
+    "changed subject or contract",
+    "stale task revision",
+    "ineligible reviewer"
+  ]
+}
+```
+
+Casework keeps the snapshot the producer sends and refuses each listed case.
+
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, check(), test(), explain(). */}
+
+## Start the development session
+
+```sh
+caseworkctl dev start
+```
+
+```json test-excerpt
+{
+  "caseworkUrl": "http://127.0.0.1:8092",
+  "directory": {"revision": 1, "teams": 1},
+  "state": "ready"
+}
+```
+
+PostgreSQL and a token issuer run in Docker, with one staff team seeded. `.casework/dev/` holds
+private credentials; keep it out of version control. Get tokens for the producer (`requester`)
+and for `staff`:
+
+```sh
+caseworkctl dev token requester
+caseworkctl dev token staff
+casework_url=http://127.0.0.1:8092
+headers=.casework/dev/secrets
+```
+
+```json test-excerpt
+{"headerFile": "<path>"}
+```
+
+Each header file carries a token and the caller's profiles. Tokens last five minutes; when a call
+answers `401`, run `dev token` again.
+
+{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, start, the dev token report, header_file. */}
+
+## Submit a ReviewRequest
+
+Save the request. It names the policy, the subject under review, and the snapshot a reviewer will
+read:
+
+```json title="request.json" test-file
+{
+  "policy": {"id": "decision"},
+  "subject": {
+    "source": "standalone",
+    "type": "batch",
+    "id": "LIC-2026-0041",
+    "version": "1",
+    "digest": "sha256:6a3167d79ae3308448b24f2c9c0b9ac1cf116a7ad8be0c167c7e8660e43662bb"
+  },
+  "requesterReference": "LIC-2026-0041",
+  "context": {
+    "mode": "submitted",
+    "snapshot": {"reference": "LIC-2026-0041", "summary": "Review licence batch LIC-2026-0041"}
+  }
+}
+```
+
+The subject digest is the producer's own fingerprint of the version it asks about, here the
+SHA-256 of the snapshot's compact JSON; Casework binds the request and its result to it. Send it:
+
+```sh
 curl --fail-with-body --silent --show-error \
   --header @"$headers/requester.header" \
   --header 'Idempotency-Key: tutorial-review-1' \
   --header 'Content-Type: application/json' \
-  --data-binary @tutorial-work/request.json \
-  --output tutorial-work/requested.json --write-out 'HTTP %{http_code}\n' \
+  --data-binary @request.json --output accepted.json \
   "$casework_url/v1/review-requests"
-request_id="$(python3 -c 'import json; print(json.load(open("tutorial-work/requested.json"))["requestId"])')"
+jq . accepted.json
+request_id="$(jq -r .requestId accepted.json)"
 ```
 
-Creation returns HTTP `201`. Repeating the exact file and key recovers that request; changing the body
-under the same key is refused. Keep the request ID and original key for recovery.
+```json test-excerpt
+{
+  "requestId": "<id>",
+  "policy": {"id": "decision", "version": "1", "digest": "sha256:<digest>"},
+  "submissionDigest": "<digest>"
+}
+```
 
-{/* Evidence: crates/registry-review-protocol/src/lib.rs;
-    crates/registry-casework/src/http.rs;
-    crates/registry-casework/tests/review_http.rs. */}
+The request named only the policy ID, so Casework bound it to the active version and the digest
+`check` printed. The same body under the same key returns this request, not a second one.
 
-## Read the task and verify the boundary
+{/* Evidence: crates/registry-casework/src/http.rs, create_review_request;
+    crates/registry-casework/src/review.rs, PolicySelection::matches at admission;
+    crates/registry-review-protocol/src/lib.rs, ReviewCreateRequest, PolicySelection, ReviewRequestAccepted;
+    crates/registry-casework/tests/review_http.rs, producer_http_create_recover_conflict_and_pending_result_are_closed. */}
 
-List tasks as Staff and select the first task with the revision the service returned:
+## Read the ReviewTask
+
+The request opened a [ReviewTask](../../reference/glossary/#review-task). List it as staff:
 
 ```sh
 curl --fail-with-body --silent --show-error \
-  --header @"$headers/staff.header" \
-  --output tutorial-work/tasks.json \
+  --header @"$headers/staff.header" --output tasks.json \
   "$casework_url/v1/review-tasks?limit=25"
-task_id="$(python3 -c 'import json; print(json.load(open("tutorial-work/tasks.json"))["items"][0]["taskId"])')"
-task_revision="$(python3 -c 'import json; print(json.load(open("tutorial-work/tasks.json"))["items"][0]["revision"])')"
+task_id="$(jq -r '.items[0].taskId' tasks.json)"
+task_revision="$(jq -r '.items[0].revision' tasks.json)"
 ```
 
-Try reading the same task with the producer's credential:
+Try to read it as the producer:
 
 ```sh
 curl --silent --show-error \
   --header @"$headers/requester.header" \
-  --output tutorial-work/refused.json --write-out 'HTTP %{http_code}\n' \
-  "$casework_url/v1/review-tasks/$task_id"
+  "$casework_url/v1/review-tasks/$task_id" | jq .
 ```
 
-The response is HTTP `403`. Producer authority permits result access, not human task disclosure.
-A refusal contains a fixed problem and trace ID, not the submitted snapshot.
+```json test-excerpt
+{"code": "operation.not-authorized", "status": 403, "title": "Operation not authorized"}
+```
 
-## Claim and answer
+A producer may read its result, never the human task.
 
-Claim the displayed revision, then take the next revision from the claim response:
+{/* Evidence: crates/registry-casework/src/http.rs, review_tasks, get_review_task. */}
+
+## Claim and decide
+
+[Claim](../../reference/glossary/#claim) the task at the revision you read, so no one else decides
+it while you work:
 
 ```sh
 curl --fail-with-body --silent --show-error --request POST \
   --header @"$headers/staff.header" \
   --header "If-Match: \"$task_revision\"" \
   --header 'Idempotency-Key: tutorial-claim-1' \
-  --output tutorial-work/claimed.json \
+  --output claimed.json \
   "$casework_url/v1/review-tasks/$task_id/claim"
-claimed_revision="$(python3 -c 'import json; print(json.load(open("tutorial-work/claimed.json"))["revision"])')"
+jq . claimed.json
+claimed_revision="$(jq -r .revision claimed.json)"
+```
+
+```json test-excerpt
+{
+  "revision": 2,
+  "state": {"held": {"holder": {"issuer": "http://127.0.0.1:8093", "subject": "<subject>"}}}
+}
+```
+
+You hold the task at revision 2. Decide it with one of the policy's outcomes:
+
+```sh
 curl --fail-with-body --silent --show-error --request POST \
   --header @"$headers/staff.header" \
   --header "If-Match: \"$claimed_revision\"" \
@@ -203,54 +264,42 @@ curl --fail-with-body --silent --show-error --request POST \
   "$casework_url/v1/review-tasks/$task_id/decisions"
 ```
 
-The terminal decision returns HTTP `204`. If a revision changed, read the task again and decide
-whether another action is still appropriate; do not replace the revision merely to force the write.
+```text test-expect
+HTTP 204
+```
 
-{/* Evidence: crates/registry-casework/src/http.rs;
-    crates/registry-casework/src/review.rs. */}
+{/* Evidence: crates/registry-casework/src/http.rs, claim_review_task, decide_review_task;
+    crates/registry-casework/src/review.rs, claim_review_task, decide_review_task. */}
 
-## Read the result
+## Read the ReviewResult
 
-Fetch the answer with the original producer credential and request ID:
+Back as the producer, fetch the answer:
 
 ```sh
 curl --fail-with-body --silent --show-error \
   --header @"$headers/requester.header" \
-  --output tutorial-work/result.json --write-out 'HTTP %{http_code}\n' \
-  "$casework_url/v1/review-requests/$request_id/result"
-python3 -m json.tool tutorial-work/result.json
+  "$casework_url/v1/review-requests/$request_id/result" | jq .
 ```
 
-The retained result returns HTTP `200`, status `answered`, and outcome `confirmed`.
-Its policy, subject, and submission digest correlate the answer with the accepted round.
-It contains no raw reviewer identity, private reason, or draft and authorizes no external mutation.
-While pending, the result endpoint returns `202`; after result expiry, it returns `410`.
-
-{/* Evidence: crates/registry-casework/tests/review_http.rs;
-    crates/registry-review-protocol/src/lib.rs. */}
-
-## Stop and remove the tutorial
-
-Stop preserves the database for a later restart:
-
-```sh
-caseworkctl dev stop tutorial-work/casework
+```json test-excerpt
+{"status": "answered", "outcome": "confirmed", "availableUntil": "<instant>"}
 ```
 
-:::caution[Removal discards the tutorial database and local audit]
-When you no longer need this synthetic review, remove only this project's owned development resources.
-Export anything you need first; removal also clears its local audit directory.
-:::
+The [ReviewResult](../../reference/glossary/#review-result) repeats the request's policy, subject
+and submission digest. It names no reviewer and is kept until `availableUntil`.
 
-```sh
-caseworkctl dev stop tutorial-work/casework --remove
-```
+{/* Evidence: crates/registry-casework/src/http.rs, get_review_result;
+    crates/registry-review-protocol/src/lib.rs, ReviewResult;
+    crates/registry-casework/tests/review_http.rs, standalone_structured_answer_can_be_claimed_decided_and_polled_over_http. */}
 
-{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs;
-    crates/registry-caseworkctl/src/dev/tests.rs. */}
+## Leave it running
+
+The next page continues with this session and its policy, so leave it running. When you are
+finished with Casework, run `caseworkctl dev stop --remove` in `tutorial-work/casework` to delete
+the session's containers, database and credentials.
+
+{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, stop. */}
 
 ## Next
 
-- [Author a Casework policy](../../configure/casework/) to define stages and context.
-- [Deploy Registry Casework](../../operate/casework/) to activate a reviewed package.
-- [How Casework works](../../explanation/how-casework-works/) for authority and retention.
+[How Casework works](../../explanation/how-casework-works/)

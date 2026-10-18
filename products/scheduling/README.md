@@ -271,7 +271,10 @@ reasons cannot be projected. Retained payloads expire after
 Terminal delivery metadata uses `retention.receiptRetentionDays`: every
 delivered outbox intent (confirmation, change, cancellation, reminder) and
 every completed hook delivery ages out in bounded retention batches.
-Dead letters remain through payload expiry and the metadata window. Active,
+Dead-letter metadata ages from the original `dead_lettered_at` timestamp and
+requires completed payload expiry and erased payload bytes before removal.
+Later payload expiry does not restart the metadata window, so an old dead letter
+can disappear as soon as expiry completes. Active,
 retryable and uncertain work, spent idempotency keys, and audit records survive
 this cleanup. See [retention configuration](RUNTIME-CONFIG.md).
 

@@ -414,6 +414,54 @@ mod tests {
     }
 
     #[test]
+    fn revoked_key_ids_have_one_typed_contract_in_the_schema_and_reader() {
+        let schema = runtime_schema();
+        let with = |kids: Option<Value>| {
+            let mut instance = runtime_instance("secret:file/jwks.json", "file");
+            if let Some(kids) = kids {
+                instance["authentication"]["oidc"]["revokedKeyIds"] = kids;
+            }
+            instance
+        };
+
+        let omitted = with(None);
+        assert!(schema.is_valid(&omitted));
+        assert!(read(&omitted).is_ok());
+        let listed = with(Some(serde_json::json!(["retired-key", "emergency-key"])));
+        assert!(schema.is_valid(&listed));
+        assert!(read(&listed).is_ok());
+
+        for (label, kids) in [
+            ("empty", serde_json::json!([])),
+            (
+                "duplicate",
+                serde_json::json!(["retired-key", "retired-key"]),
+            ),
+            (
+                "invalid external id",
+                serde_json::json!(["retired\u{7}key"]),
+            ),
+        ] {
+            let instance = with(Some(kids));
+            assert!(read(&instance).is_err(), "{label}: the runtime accepted it");
+            assert!(
+                !schema.is_valid(&instance),
+                "{label}: the schema accepted a value the runtime refuses"
+            );
+        }
+
+        let document: Value =
+            serde_json::from_str(&runtime_documents().unwrap()[RUNTIME_CONFIG_SCHEMA_FILE])
+                .unwrap();
+        let revoked = &document["$defs"]["OidcConfig"]["properties"]["revokedKeyIds"];
+        assert!(revoked.get("default").is_none());
+        assert_eq!(revoked["uniqueItems"], true);
+        assert_eq!(revoked["minItems"], 1);
+        assert_eq!(revoked["maxItems"], 128);
+        assert_eq!(revoked["items"]["$ref"], "#/$defs/ExternalId");
+    }
+
+    #[test]
     fn completion_destination_schema_names_exactly_one_secret_and_a_token_header() {
         let schema = runtime_schema();
         let with = |destination: Value| {

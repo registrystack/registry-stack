@@ -251,7 +251,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Fetch the key set from this absolute `https` URI, skipping discovery.",
+          "description": "Fetch the key set from this absolute `https` URI, skipping discovery.\nA plain `http` URI is accepted on loopback for supervised local\ndevelopment, and beyond loopback only when the issuer block sets\n`allowInsecureHttp`.",
           "properties": {
             "type": {
               "const": "uri",
@@ -342,6 +342,11 @@
       "additionalProperties": false,
       "description": "The access tokens this runtime accepts: the issuer and its keys, the\nclients admitted, the scope claim, and the claim that marks a human actor.",
       "properties": {
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
+          "type": "boolean"
+        },
         "allowedClients": {
           "$ref": "#/$defs/OidcAllowedClients",
           "description": "The OAuth clients whose access tokens are admitted: `unrestricted` to\nadmit a token from every client the issuer verifies, or a list of at\nleast one distinct client. A runtime decides whether `unrestricted`\nis acceptable in production."
@@ -378,7 +383,7 @@
         },
         "issuer": {
           "$ref": "#/$defs/Url",
-          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL."
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set."
         },
         "jwksSource": {
           "$ref": "#/$defs/JwksSource",
@@ -386,6 +391,23 @@
             "type": "discovery"
           },
           "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
+        },
+        "maximumTokenLifetimeSeconds": {
+          "description": "Optional deployment bound on the lifetime declared by an incoming\naccess token, independently of the issuer's own policy.",
+          "format": "uint64",
+          "maximum": 7200,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "revokedKeyIds": {
+          "description": "Signing-key identifiers Casework refuses locally, even while the issuer\nstill publishes them; listing a key does not revoke it at the issuer.\nOmitted, no key is refused; written, the list is non-empty.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
         },
         "scopeClaim": {
           "default": "registry_scopes",

@@ -133,7 +133,16 @@ fn authorize(
     claims: &VerifiedRequestClaims,
     selected: Option<&str>,
 ) -> Option<AuthorizedRequestContext> {
-    claims.principal()?;
+    authorize_with_reason(service, dataset, kind, claims, selected).ok()
+}
+
+fn authorize_with_reason(
+    service: &HttpService,
+    dataset: &CompiledStatisticalDataset,
+    kind: Kind,
+    claims: &VerifiedRequestClaims,
+    selected: Option<&str>,
+) -> Result<AuthorizedRequestContext, ReadRefusalReason> {
     let eligible = |id: &str| match kind {
         Kind::Live => dataset.live_profiles.contains(id),
         Kind::Publish | Kind::Withdraw => {
@@ -153,33 +162,48 @@ fn authorize(
     let default = only.filter(|_| profiles.next().is_none());
     let selected = selected
         .or(configured_default)
-        .or_else(|| default.map(String::as_str))?;
+        .or_else(|| default.map(String::as_str))
+        .ok_or(ReadRefusalReason::SurfaceUnavailable)?;
     if !eligible(selected) {
-        return None;
+        return Err(ReadRefusalReason::SurfaceUnavailable);
     }
+    claims
+        .principal()
+        .ok_or(ReadRefusalReason::ProfileAdmission)?;
     if matches!(kind, Kind::Live | Kind::Publish | Kind::Withdraw) {
-        let route = service.registry.routes().routes.iter().find(|route| {
-            route.entity_id == dataset.unit_entity_id
-                && route.operation == Operation::List
-                && read_path_for_route(service, route).is_none()
-        })?;
+        let route = service
+            .registry
+            .routes()
+            .routes
+            .iter()
+            .find(|route| {
+                route.entity_id == dataset.unit_entity_id
+                    && route.operation == Operation::List
+                    && read_path_for_route(service, route).is_none()
+            })
+            .ok_or(ReadRefusalReason::SurfaceUnavailable)?;
         let mut options = QueryOptions::default();
         options.parsed.access_profile = Some(selected.to_owned());
-        return Some(authorize_route(service, route, claims, &options)?.context);
+        return authorize_route_with_reason(service, route, claims, &options)
+            .map(|surface| surface.context);
     }
-    let profile = dataset.access_profiles.get(selected)?;
-    let boundaries = authorize_profile_claims(profile, claims).ok()?;
-    Some(
-        AuthorizedRequestContext::new(
-            claims.principal().map(str::to_owned),
-            claims.purpose().map(str::to_owned),
-            selected.to_owned(),
-            boundaries,
-        )
-        .with_task_grant(task_grant_binding(profile, claims).ok()?)
-        .with_grant_audit(claims)
-        .with_recipients(claims),
+    let profile = dataset
+        .access_profiles
+        .get(selected)
+        .ok_or(ReadRefusalReason::SurfaceUnavailable)?;
+    let boundaries = authorize_profile_claims(profile, claims)
+        .map_err(|_| ReadRefusalReason::ProfileAdmission)?;
+    Ok(AuthorizedRequestContext::new(
+        claims.principal().map(str::to_owned),
+        claims.purpose().map(str::to_owned),
+        selected.to_owned(),
+        boundaries,
     )
+    .with_task_grant(
+        task_grant_binding(profile, claims).map_err(|_| ReadRefusalReason::ProfileAdmission)?,
+    )
+    .with_grant_audit(claims)
+    .with_recipients(claims))
 }
 
 /// Extract only the selector needed for admission. Full validation follows
@@ -263,6 +287,27 @@ async fn refusal(
     correlation: &RequestCorrelation,
     response: Response,
 ) -> Response {
+    refusal_with_reason(
+        service,
+        route,
+        claims,
+        selected,
+        correlation,
+        response,
+        None,
+    )
+    .await
+}
+
+async fn refusal_with_reason(
+    service: &HttpService,
+    route: &Route,
+    claims: &VerifiedRequestClaims,
+    selected: Option<&str>,
+    correlation: &RequestCorrelation,
+    response: Response,
+    reason: Option<ReadRefusalReason>,
+) -> Response {
     let selected = selected.filter(|id| {
         service
             .registry
@@ -278,10 +323,12 @@ async fn refusal(
         response,
         route.kind.method().into(),
         &route.id(),
+        reason,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)] // The bounded refusal audit carries the exact HTTP identity.
 async fn refusal_for_operation(
     service: &HttpService,
     claims: &VerifiedRequestClaims,
@@ -290,6 +337,7 @@ async fn refusal_for_operation(
     response: Response,
     method: RefusalHttpMethod,
     operation_id: &str,
+    reason: Option<ReadRefusalReason>,
 ) -> Response {
     let Some(backend) = &service.statistics else {
         return unavailable();
@@ -298,6 +346,7 @@ async fn refusal_for_operation(
         backend.audit(),
         backend.expected(),
         HttpRefusalAudit {
+            refusal_reason: reason,
             grant: crate::audit::GrantAuditContext::from_claims(claims),
             method,
             operation_id,
@@ -345,18 +394,25 @@ async fn dispatch(
         .await;
     };
     let selected = admission_profile(raw.as_deref());
-    let Some(context) = authorize(&service, dataset, route.kind, &claims, selected.as_deref())
-    else {
-        return refusal(
-            &service,
-            &route,
-            &claims,
-            selected.as_deref(),
-            &correlation,
-            concealed(),
-        )
-        .await;
-    };
+    let context =
+        match authorize_with_reason(&service, dataset, route.kind, &claims, selected.as_deref()) {
+            Ok(context) => context,
+            Err(reason) => {
+                let reason = (route.kind.method() == HttpMethod::Get
+                    && reason == ReadRefusalReason::ProfileAdmission)
+                    .then_some(reason);
+                return refusal_with_reason(
+                    &service,
+                    &route,
+                    &claims,
+                    selected.as_deref(),
+                    &correlation,
+                    concealed(),
+                    reason,
+                )
+                .await;
+            }
+        };
     let options = match Options::parse(raw.as_deref(), route.kind) {
         Ok(v) => v,
         Err(field) => {
@@ -1000,6 +1056,7 @@ pub(super) async fn unknown(
         concealed(),
         RefusalHttpMethod::from_request(method),
         "statistics.unknown",
+        None,
     )
     .await
 }

@@ -538,6 +538,7 @@ fn authenticator() -> SchedulingAuthenticator {
             issuer: registry_platform_yaml::Url::new(ISSUER).expect("valid issuer URL"),
             audience: AUDIENCE.to_owned(),
             jwks_source: JwksSource::Discovery {},
+            allow_insecure_http: false,
         },
         clients: OidcClientsConfig {
             allowed_clients: vec![CLIENT.to_owned()],
@@ -9863,6 +9864,8 @@ mod terminal_retention {
             ("leased", old, false, false),
             ("dead-lettered", old, false, false),
             ("dead-lettered", old, true, true),
+            ("dead-lettered", cutoff, true, true),
+            ("dead-lettered", recent, true, false),
             ("expired", old, true, true),
             ("expired", recent, true, false),
         ]
@@ -9913,8 +9916,11 @@ mod terminal_retention {
              dead_lettered_at=CASE WHEN $2='dead-lettered' THEN $3::timestamptz ELSE NULL END,
              dead_letter_reason=CASE WHEN $2='dead-lettered' THEN
                  CASE WHEN $6 THEN 'http-non-success' ELSE 'worker-interrupted' END ELSE NULL END,
-             expired_at=CASE WHEN $6 THEN $3::timestamptz ELSE NULL END,
-             updated_at=$3 WHERE event_id=$1",
+             expired_at=CASE WHEN $6 THEN
+                 CASE WHEN $2='dead-lettered' THEN $4::timestamptz ELSE $3::timestamptz END
+                 ELSE NULL END,
+             updated_at=CASE WHEN $2='dead-lettered' AND $6 THEN $4::timestamptz ELSE $3::timestamptz END
+             WHERE event_id=$1",
                 &[
                     &event,
                     &state,

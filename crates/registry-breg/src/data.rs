@@ -297,7 +297,9 @@ fn valid_iso_date(value: &str) -> bool {
     (1..=9999).contains(&year) && Date::from_calendar_date(year, month, day).is_ok()
 }
 
-fn valid_uuid(value: &str) -> bool {
+/// Whether `value` is a UUID in its canonical lowercase hyphenated spelling,
+/// the only spelling the registry stores or matches.
+pub(crate) fn valid_uuid(value: &str) -> bool {
     value.len() == 36
         && value.bytes().enumerate().all(|(index, byte)| match index {
             8 | 13 | 18 | 23 => byte == b'-',

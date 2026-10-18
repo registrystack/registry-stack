@@ -23,8 +23,8 @@ pub use registry_platform_config::{
     PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TlsTermination,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery, parse_static_jwks, JwksFetcher, JwksFetcherConfig,
-    OidcDiscoveryConfig, TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy,
+    JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
 };
 use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Report, RetiredApiVersion};
 use serde::{Deserialize, Deserializer};
@@ -62,6 +62,10 @@ pub const CASEWORK_REMOVED_KEYS: &[RemovedKey] = &[
     RemovedKey {
         path: "authentication.oidc.principalClaim",
         replacement: "declare accessProfiles.PROFILE_ID.principalClaim in casework.yaml",
+    },
+    RemovedKey {
+        path: "authentication.oidc.deniedKids",
+        replacement: "Rename deniedKids to revokedKeyIds",
     },
     RemovedKey {
         path: "audit.retainDays",
@@ -660,6 +664,77 @@ pub struct OidcConfig {
     pub scope_claim: String,
     #[serde(default)]
     pub human_identity: HumanIdentityConfig,
+    /// Signing-key identifiers Casework refuses locally, even while the issuer
+    /// still publishes them; listing a key does not revoke it at the issuer.
+    /// Omitted, no key is refused; written, the list is non-empty.
+    #[serde(default, deserialize_with = "present_revoked_key_ids")]
+    pub revoked_key_ids: Option<RevokedKeyIds>,
+    /// Optional deployment bound on the lifetime declared by an incoming
+    /// access token, independently of the issuer's own policy.
+    #[serde(
+        default,
+        deserialize_with = "registry_casework_core::typed::optional_bounded_u64::<_, 1, 7_200>"
+    )]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 7_200)))]
+    pub maximum_token_lifetime_seconds: Option<u64>,
+}
+
+/// An empty list is not how the file says "refuse no key" (CFG-EMPTY-2):
+/// omitting the member says it.
+fn present_revoked_key_ids<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<RevokedKeyIds>, D::Error> {
+    RevokedKeyIds::deserialize(deserializer).map(Some)
+}
+
+/// A written list of refused keys: distinct external key identifiers with a
+/// bounded deployment size. Absence, rather than an empty list, means refuse
+/// no key.
+#[derive(Clone, Debug)]
+pub struct RevokedKeyIds(registry_platform_yaml::UniqueList<registry_platform_yaml::ExternalId>);
+
+impl<'de> Deserialize<'de> for RevokedKeyIds {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let kids =
+            registry_platform_yaml::UniqueList::<registry_platform_yaml::ExternalId>::deserialize(
+                deserializer,
+            )?;
+        if kids.is_empty() {
+            return Err(registry_platform_yaml::Invalid::expected(
+                "at least one key identifier",
+                "List at least one key identifier to refuse, or delete revokedKeyIds to refuse no key.",
+            )
+            .into_error());
+        }
+        if kids.len() > 128 {
+            return Err(registry_platform_yaml::Invalid::expected(
+                "at most 128 key identifiers",
+                "Remove key identifiers from revokedKeyIds until it lists at most 128.",
+            )
+            .into_error());
+        }
+        Ok(Self(kids))
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for RevokedKeyIds {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "RevokedKeyIds".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut schema = generator.subschema_for::<
+            registry_platform_yaml::UniqueList<registry_platform_yaml::ExternalId>,
+        >();
+        schema.insert("minItems".to_owned(), 1.into());
+        schema.insert("maxItems".to_owned(), 128.into());
+        schema
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1324,9 +1399,21 @@ impl RuntimeConfig {
         &self,
         secrets: &SecretResolver,
     ) -> Result<(TokenVerifierConfig, std::sync::Arc<JwksFetcher>), RuntimeConfigError> {
-        let fetcher = match &self.authentication.oidc.provider.jwks_source {
+        let provider = &self.authentication.oidc.provider;
+        if let Some(diagnostic) = self.insecure_http_startup_diagnostic() {
+            tracing::warn!("{diagnostic}");
+        }
+        let network =
+            IssuerNetworkPolicy::new(provider.issuer.as_str(), provider.allow_insecure_http)
+                .map_err(|_| RuntimeConfigError::Oidc)?;
+        let fetcher = match &provider.jwks_source {
             JwksSource::Uri { uri } => {
-                JwksFetcher::new(uri.to_string(), JwksFetcherConfig::defaults())
+                let policy = network.declared_jwks_fetch_policy();
+                JwksFetcher::new_with_fetch_url_policy(
+                    uri.to_string(),
+                    JwksFetcherConfig::defaults(),
+                    policy,
+                )
             }
             JwksSource::Discovery {} => {
                 let discovery_config = OidcDiscoveryConfig {
@@ -1335,10 +1422,15 @@ impl RuntimeConfig {
                     discovery_timeout: Duration::from_secs(5),
                     max_doc_bytes: 1024 * 1024,
                 };
-                let discovery = fetch_discovery(&discovery_config)
-                    .await
-                    .map_err(|_| RuntimeConfigError::Oidc)?;
-                JwksFetcher::new(discovery.jwks_uri, JwksFetcherConfig::defaults())
+                let (discovery, policy) =
+                    fetch_discovery_for_issuer(&discovery_config, provider.allow_insecure_http)
+                        .await
+                        .map_err(|_| RuntimeConfigError::Oidc)?;
+                JwksFetcher::new_with_fetch_url_policy(
+                    discovery.jwks_uri,
+                    JwksFetcherConfig::defaults(),
+                    policy,
+                )
             }
             JwksSource::Static { document_ref } => {
                 let document = secrets.resolve(document_ref).map_err(|error| {
@@ -1354,6 +1446,16 @@ impl RuntimeConfig {
             }
         };
         Ok((self.verifier_profile(), std::sync::Arc::new(fetcher)))
+    }
+
+    fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
+        self.authentication
+            .oidc
+            .provider
+            .allow_insecure_http
+            .then_some(
+                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
+            )
     }
 
     /// The access-token verifier profile this deployment's OIDC settings
@@ -1376,6 +1478,21 @@ impl RuntimeConfig {
         .with_scope_claim(self.authentication.oidc.scope_claim.clone())
         .with_allowed_clients(self.authentication.oidc.clients.allowed_clients.clone())
         .with_assertion_issuers(self.authentication.oidc.clients.assertion_issuers.clone())
+        .with_denied_kids(
+            self.authentication
+                .oidc
+                .revoked_key_ids
+                .iter()
+                .flat_map(|kids| kids.0.iter())
+                .map(|kid| kid.as_str().to_owned())
+                .collect(),
+        )
+        .with_max_token_lifetime(
+            self.authentication
+                .oidc
+                .maximum_token_lifetime_seconds
+                .map(Duration::from_secs),
+        )
     }
 }
 
@@ -1641,7 +1758,7 @@ mod tests {
     }
 
     fn write_operator(value: &serde_json::Value, directory: &Path) -> PathBuf {
-        let path = directory.join("runtime.yaml");
+        let path = directory.canonicalize().unwrap().join("runtime.yaml");
         std::fs::write(&path, serde_norway::to_string(value).unwrap()).unwrap();
         path
     }
@@ -1656,6 +1773,22 @@ mod tests {
             "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
             "audit":{"path":directory.join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"}
         })
+    }
+
+    #[test]
+    fn runtime_reads_the_explicit_http_issuer_opt_in() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["issuer"] = json!("http://identity.example.test");
+        value["authentication"]["oidc"]["allowInsecureHttp"] = json!(true);
+        let config = read_operator(&value, directory.path());
+        assert!(config.authentication.oidc.provider.allow_insecure_http);
+        assert_eq!(
+            config.insecure_http_startup_diagnostic(),
+            Some(
+                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
+            )
+        );
     }
 
     fn referenced_policy() -> (Vec<u8>, BTreeMap<String, Vec<u8>>, CaseworkProject) {
@@ -1673,6 +1806,132 @@ mod tests {
             .unwrap()
             .value;
         (authored, schemas, project)
+    }
+
+    /// Verify one HS256 token under the profile `value` configures, so a test
+    /// reads its refused keys and lifetime bound exactly as startup does.
+    async fn verify_under_operator_profile(
+        value: &serde_json::Value,
+        kid: &str,
+        lifetime_seconds: i64,
+    ) -> Result<registry_casework_core::ActorContext, crate::auth::AuthenticationError> {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        const SECRET: &[u8] = b"canary-casework-oidc-test-secret";
+        let directory = tempfile::tempdir().unwrap();
+        let config = read_operator(value, directory.path());
+        let mut profile = config.verifier_profile();
+        profile.allowed_algorithms = vec![Algorithm::HS256];
+        let keys = std::sync::Arc::new(JwksFetcher::new_static(
+            serde_json::from_value(json!({"keys": [{
+                "kty": "oct", "kid": kid, "alg": "HS256", "use": "sig",
+                "k": URL_SAFE_NO_PAD.encode(SECRET),
+            }]}))
+            .unwrap(),
+            JwksFetcherConfig::defaults(),
+        ));
+        let (_, _, project) = referenced_policy();
+        let profile_id = project.access_profiles[0].id.to_string();
+        let scopes = project.access_profiles[0].required_scopes.join(" ");
+        let authenticator = crate::CaseworkAuthenticator::new(
+            &project,
+            profile,
+            keys,
+            config.authentication.oidc.human_identity.clone(),
+        );
+        let now = chrono::Utc::now().timestamp();
+        let mut header = jsonwebtoken::Header::new(Algorithm::HS256);
+        header.kid = Some(kid.to_owned());
+        header.typ = Some("at+jwt".to_owned());
+        let claims = json!({
+            "iss": "https://identity.example.test", "aud": "urn:example:casework",
+            "sub": "reviewer-1", "azp": "reviewer-app", "scope": scopes,
+            "registry_actor_kind": "human",
+            "iat": now, "exp": now + lifetime_seconds,
+        });
+        let token = jsonwebtoken::encode(
+            &header,
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(SECRET),
+        )
+        .unwrap();
+        authenticator.authenticate(&token, &profile_id).await
+    }
+
+    #[tokio::test]
+    async fn omitting_revoked_key_ids_and_maximum_token_lifetime_keeps_current_acceptance() {
+        let directory = tempfile::tempdir().unwrap();
+        let value = operator_value(directory.path(), directory.path());
+        verify_under_operator_profile(&value, "signing-1", 86_400)
+            .await
+            .expect("no refused keys and no lifetime bound accept a day-long token");
+    }
+
+    #[tokio::test]
+    async fn a_token_signed_by_a_revoked_key_id_is_refused_like_any_other_verification_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["revokedKeyIds"] = json!(["signing-1"]);
+        let refused = verify_under_operator_profile(&value, "signing-1", 300).await;
+        assert!(matches!(
+            refused,
+            Err(crate::auth::AuthenticationError::Refused)
+        ));
+        verify_under_operator_profile(&value, "signing-2", 300)
+            .await
+            .expect("a key not on the list still verifies");
+    }
+
+    #[tokio::test]
+    async fn a_token_outliving_the_maximum_token_lifetime_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["maximumTokenLifetimeSeconds"] = json!(300);
+        verify_under_operator_profile(&value, "signing-1", 300)
+            .await
+            .expect("a token within the bound verifies");
+        let refused = verify_under_operator_profile(&value, "signing-1", 301).await;
+        assert!(matches!(
+            refused,
+            Err(crate::auth::AuthenticationError::Refused)
+        ));
+    }
+
+    #[test]
+    fn an_empty_revoked_key_ids_list_or_an_out_of_range_lifetime_is_refused_with_its_fix() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["revokedKeyIds"] = json!([]);
+        let path = write_operator(&value, directory.path());
+        let error = RuntimeConfig::loader()
+            .load::<RuntimeConfig>(&path)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(
+                "List at least one key identifier to refuse, or delete revokedKeyIds to refuse no key."
+            ),
+            "{error}"
+        );
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["revokedKeyIds"] =
+            json!((0..129).map(|n| format!("signing-{n}")).collect::<Vec<_>>());
+        let path = write_operator(&value, directory.path());
+        let error = RuntimeConfig::loader()
+            .load::<RuntimeConfig>(&path)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Remove key identifiers from revokedKeyIds until it lists at most 128."),
+            "{error}"
+        );
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["maximumTokenLifetimeSeconds"] = json!(0);
+        let path = write_operator(&value, directory.path());
+        let error = RuntimeConfig::loader()
+            .load::<RuntimeConfig>(&path)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("maximumTokenLifetimeSeconds"), "{error}");
     }
 
     #[test]

@@ -14,7 +14,7 @@ standards_referenced:
 
 One package carries every maintained Registry Stack client API: `@registrystack/client` on npm and
 `registry-stack-client` on PyPI. It holds one namespace per product: `discovery` for Registry
-Discovery, `evidence` for Evidence Gateway, `breg` for Base Registry
+Discovery, `evidence` for Registry Evidence, `breg` for Base Registry
 Engine (BReg), `casework` for Registry
 Casework<DocsetProduct product="registry-messaging">, `messaging` for Registry Messaging</DocsetProduct>, and `scheduling` for
 Registry Scheduling. Each namespace keeps its own routes,
@@ -350,7 +350,7 @@ that matched it.
 | Selection | Rust | Python and Node |
 | --- | --- | --- |
 | One record by identifier and capability | `response.select_exact(request)` | `select_exact` and `selectExact` |
-| One Evidence Gateway service | `response.select_evidence(request)` | `select_evidence_service` and `selectEvidenceService` |
+| One Registry Evidence service | `response.select_evidence(request)` | `select_evidence_service` and `selectEvidenceService` |
 | One Evidence Type mapping alternative | `response.select_alternative(id)` | `select_evidence_alternative` and `selectEvidenceAlternative` |
 
 Rust supplies the selections as extension traits on the response, `ServiceSearchSelectionExt` and
@@ -390,7 +390,7 @@ For kind `problem`, `problem` is one of `invalid-request`, `not-found`, `result-
     crates/registry-discovery-client/src/selection.rs,
     crates/registry-discovery-client/src/error.rs */}
 
-## Evidence Gateway
+## Registry Evidence
 
 The Evidence client requests minimum-disclosure assertions over the public Evidence HTTP contract
 and verifies every response. Verification is the point of the client: a client built directly with
@@ -469,18 +469,19 @@ in both languages.
 
 The private-key-JWT configuration requires `token_endpoint`, `client_id`, and `client_key` (Node:
 `tokenEndpoint`, `clientId`, `clientKey`). Its optional members in Python are `audience`,
-`assertion_lifetime_seconds`, `refresh_margin_seconds`, `request_timeout_seconds`,
-`connect_timeout_seconds`, and `user_agent`. Node takes the same six in camel case, with
-`requestTimeoutMs` and `connectTimeoutMs` for the timeouts, and adds string-valued
+`resource`, `scopes`, `assertion_lifetime_seconds`, `refresh_margin_seconds`,
+`request_timeout_seconds`, `connect_timeout_seconds`, and `user_agent`. Node takes the same eight
+in camel case, with `requestTimeoutMs` and `connectTimeoutMs` for the timeouts, and adds string-valued
 `trustedRootCertificates` for the token endpoint. Python has no nested trust anchor for the token
 endpoint: its top-level `trusted_root_certificates` crosses as genuine `bytes` and the nested
 configuration crosses as JSON, which carries no byte values. `client_key` holds the private half; it
 stays in the process and reaches nothing but the token endpoint. Rust passes an
 `Arc<dyn TokenProvider>` instead, and can implement a custom provider.
 
-The built-in exchange sends only `grant_type`, `client_assertion_type`, and `client_assertion`. It
-sends no scope, no RFC 8707 resource, no body `client_id`, and no deployment-defined form member.
-Use a pre-acquired short-lived static bearer when an issuer requires those members.
+The built-in exchange sends `grant_type`, `client_id`, `client_assertion_type`, and
+`client_assertion`, adds `scope` when `scopes` is set, and adds the RFC 8707 `resource` when
+`resource` is set. It sends no other form member. Use a pre-acquired short-lived static bearer when
+an issuer requires one.
 
 ### Read a client from a profile
 
@@ -601,7 +602,7 @@ the category it handles and let the rest propagate. Node throws `evidence.Eviden
 | `token` | `TokenError` | The configured credential source could not supply a bearer |
 | `transport` | `TransportError` | The exchange failed below HTTP |
 | `denied` | `DeniedError` | Evidence refused the request |
-| `not-available` | `NotAvailableError` | The source could not answer the request |
+| `not-available` | `NotAvailableError` | Evidence could not be produced: no match, an ambiguous match, a missing fact, or a source that answered with no record, all collapsed into one answer |
 | `protocol` | `ProtocolError` | The response violated the contract |
 | `verification` | `VerificationError` | The response did not satisfy the pinned verification |
 
@@ -1000,7 +1001,7 @@ performs no I/O.
 Select the policy by ID in `ReviewCreateRequest.policy`; Casework freezes its concrete version and
 digest at acceptance. To require an exact pin, use `review_policy` (`reviewPolicy` in Node) to
 discover a compiled closure and supply its complete `identity`, or use your reviewed project's
-binding. See the [Casework API policy contract](../apis/registry-casework/#policy-and-submission-binding)
+binding. See the [Casework API policy contract](../apis/registry-casework/#policy-pins-and-retries)
 for selector validation. Submitted context uses `mode: submitted` and a bounded snapshot;
 current-source context uses `mode: current-source` and a reference binding.
 The subject supplies all five immutable binding fields.
@@ -1121,7 +1122,7 @@ membership, or current-source visibility changes can invalidate them. After
 scan the complete candidate set before sorting or paging, including unfiltered reads. Exhausted
 candidate or source-read budgets return `422 review.query-too-broad`, with no partial page;
 narrow the queue or exact subject selectors before retrying. A smaller page size or a visible
-reference filter does not reduce that scan. See the [queue sizing limits](../../operate/casework/#size-the-review-queue-reads).
+reference filter does not reduce that scan. See the `inbox` keys of the [runtime configuration](../../operate/casework/#casework-runtime-configuration).
 An unavailable required provider is a failure, not an empty reviewer inbox.
 
 {/* Evidence: crates/registry-casework-client/src/model.rs, CaseworkComplete, ReviewResultResponse;
@@ -1393,7 +1394,7 @@ Deployment-defined data stays dynamic at the SDK boundary.
 
 - [Query a registry from Python and Node](../../tutorials/query-breg-client/) for a worked BReg run
   against the quickstart.
-- [Request evidence from an application](../../tutorials/request-evidence-from-an-application/) for a
+- [Request Evidence from your application](../../tutorials/request-evidence-from-an-application/) for a
   worked Evidence run.
 - [Base Registry Engine API reference](../breg-api/) for the BReg HTTP and Problem contracts.
 - [Registry Casework API](../apis/registry-casework/) for the Casework HTTP, header, and problem

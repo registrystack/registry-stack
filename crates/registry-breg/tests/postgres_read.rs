@@ -1982,3 +1982,84 @@ fn registry_source() -> String {
 	        }"#
     .to_owned()
 }
+
+#[tokio::test]
+async fn concealed_read_audit_distinguishes_profile_admission_and_select_overreach() {
+    let database = TestDatabase::create(8).await;
+    database
+        .admin
+        .execute("CREATE EXTENSION IF NOT EXISTS btree_gist", &[])
+        .await
+        .expect("administrator installs btree_gist for temporal exclusion constraints");
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = Arc::new(compiled_registry_with_composite_lookup());
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs the complete compiled PostgreSQL schema");
+    let catalog = ExpectedManagedCatalog::compiled(&compiled);
+    let identity = initialize_registry_state_for_catalog_test(
+        &migration,
+        &database.runtime_role,
+        &catalog,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            database_id: DATABASE_ID,
+            label: "package-read-1",
+        },
+    )
+    .await
+    .expect("migration initializes durable Registry identity");
+    migration_task.abort();
+
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded");
+    seed_records(&database, &pool, lock_key, &identity, &compiled, false).await;
+
+    let profile = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x7a; 32].into())
+            .expect("test owns a strongly keyed audit profile"),
+    );
+    let app = read_router(
+        pool.clone(),
+        compiled.clone(),
+        identity.clone(),
+        lock_key,
+        profile.clone(),
+        None,
+    );
+
+    for (query, claims, reason) in [
+        (
+            "accessProfile=auditor",
+            read_claims_with(PRINCIPAL_CANARY, "canary-refused-purpose", ["zone-a"]),
+            "profile_admission",
+        ),
+        (
+            "accessProfile=auditor&$select=secret",
+            read_claims(["zone-a"]),
+            "select_overreach",
+        ),
+    ] {
+        let response = send(
+            &app,
+            &format!("/v1/records/widgets/{VISIBLE_RECORD}?{query}"),
+            Some(claims),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(body_json(response).await["code"], "resource.not_found");
+        let entries = database.audit_entries();
+        let entry = entries.last().unwrap();
+        assert_eq!(entry["record"]["refusalReason"], reason);
+        let serialized = serde_json::to_string(&entries).unwrap();
+        for canary in [PRINCIPAL_CANARY, SECRET_CANARY, "canary-refused-purpose"] {
+            assert!(!serialized.contains(canary));
+        }
+    }
+    drop(app);
+    drop(pool);
+    database.cleanup().await;
+}

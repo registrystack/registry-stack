@@ -1,6 +1,6 @@
 ---
-title: "RS-PR-EVIDENCE: Evidence Gateway protocol"
-description: "The normative HTTP protocol contract for Evidence Gateway: provider publication, requester-scoped discovery, authentication, assurance profiles, the closed request contract, minimum disclosure, response formats, problem reporting, audit gates, and immutable deployment input."
+title: "RS-PR-EVIDENCE: Registry Evidence protocol"
+description: "The normative HTTP protocol contract for Registry Evidence: provider publication, requester-scoped discovery, authentication, assurance profiles, the closed request contract, minimum disclosure, response formats, problem reporting, audit gates, and immutable deployment input."
 status: draft
 owner: registry-docs
 source_repos:
@@ -24,12 +24,12 @@ audience:
   - specification editor
 ---
 
-This document defines the HTTP protocol contract that Evidence Gateway exposes: how a caller authenticates,
+This document defines the HTTP protocol contract that Registry Evidence exposes: how a caller authenticates,
 discovers the request shapes it may invoke, submits one closed singular request or bounded request
 batch against a predefined requirement, and receives the smallest sufficient assertions in the
 authorized response envelope, plus the problem, audit, and configuration-immutability behavior
 every request carries.
-Evidence Gateway is a minimum-disclosure assertion service over data institutions already hold.
+Registry Evidence is a minimum-disclosure assertion service over data institutions already hold.
 It returns the answer a requirement asks for, not the record behind it.
 
 Every requirement statement in this document restates a frozen Version 1 contract that lives in the
@@ -41,14 +41,14 @@ at the file rather than copying the value, so the two cannot drift apart.
 The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2.
 Defined terms are used per [RS-TERMS](../rs-terms/).
 
-{/* RS-ARC-G 0.6.0 places Evidence Gateway in the architecture as its own component and states its
+{/* RS-ARC-G 0.6.0 places Registry Evidence in the architecture as its own component and states its
     boundary in REQ-ARC-G-007, REQ-ARC-G-014, and REQ-ARC-G-015. This document still does not claim
     to refine a numbered RS-ARC-G requirement; adding that mapping is a separate normative
     decision. */}
 
 {/* TODO[evidence]: src/data/standards.yaml now lists registry-evidence under `used_by` for
     sd-jwt-vc, with Evidence-owned evidence links and the two subject binding modes described in its
-    notes. The cccev, openapi, and json-schema entries still record no Evidence Gateway row, so this
+    notes. The cccev, openapi, and json-schema entries still record no Registry Evidence row, so this
     page's claims against those three are not yet traceable from the register itself. */}
 
 ## Version history
@@ -56,7 +56,7 @@ Defined terms are used per [RS-TERMS](../rs-terms/).
 | Version | Date | Status | Change |
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-08-03 | draft | Initial profile derived from the frozen V1 contracts. |
-| 0.2.0 | 2026-08-04 | draft | Registry Notary is retired. Removed the RS-PR-NOTARY relationship statements and the `registry-notary*` dependency prohibition, and recorded that RS-ARC-G 0.6.0 now places Evidence Gateway in the architecture. |
+| 0.2.0 | 2026-08-04 | draft | Registry Notary is retired. Removed the RS-PR-NOTARY relationship statements and the `registry-notary*` dependency prohibition, and recorded that RS-ARC-G 0.6.0 now places Registry Evidence in the architecture. |
 | 0.3.0 | 2026-08-05 | draft | Added the governed assurance-profile boundary, corrected the evaluation pipeline and three-format response surface, and specified bounded startup verification plus complete out-of-band verification for segmented audit history. |
 | 0.4.0 | 2026-08-06 | draft | Added the fail-closed, privacy-safe audit gate for authenticated authorization refusals and distinguished its minimal event from authorized-material events. |
 | 0.5.0 | 2026-08-07 | draft | Added the closed single and search-then-fetch acquisition kinds, the hard one-request-per-stage and two-request-per-evaluation ceilings, validated prior-fact handoff, and per-stage access audit. |
@@ -67,7 +67,7 @@ Defined terms are used per [RS-TERMS](../rs-terms/).
 
 ## 1. Scope and references
 
-This specification covers Evidence Gateway's externally observable protocol behavior:
+This specification covers Registry Evidence's externally observable protocol behavior:
 
 - The service surface, the generated OpenAPI document, public provider publication, and
   requester-scoped definition discovery.
@@ -105,24 +105,24 @@ This specification does not define:
   `products/evidence/contracts/holder-bound-verification-policy.schema.yaml`. Neither command
   accepts the other's document.
 
-Evidence Gateway Version 1 has explicit non-goals, recorded in
+Registry Evidence Version 1 has explicit non-goals, recorded in
 `products/evidence/contracts/README.md` and `products/evidence/README.md`.
 It stops before documents, credential issuance protocols and credential lifecycle, status lists and
 revocation, OpenID for Verifiable Credential Issuance (OID4VCI) in any part, service-held replay,
 challenge, or presentation state, server-issued challenges, federation, delegated agents, workflow,
 a public requester-entitlement or definition catalog, searchable, mutable, aggregate, or federated
 catalogs, runtime bundle mutation, source planning, multi-source fulfillment, and an application
-database. The closed public provider advertisement is allowed because Evidence Gateway serves
+database. The closed public provider advertisement is allowed because Registry Evidence serves
 package-derived facts for external indexing and implements no catalog runtime.
 The SD-JWT VC output is a second encoding of one stateless assertion under a frozen profile; it is
 never a credential lifecycle.
 Presentation-side verification is a relying-party act, not a service surface: Section 7.3 specifies
-what a relying party verifies for a holder-bound credential, and Evidence Gateway itself appends no
+what a relying party verifies for a holder-bound credential, and Registry Evidence itself appends no
 key-binding JWT, issues no challenge, and holds no presentation state.
 
 ## 2. Service surface and discovery
 
-Evidence Gateway is one `registry-evidence` crate, one `evidence` binary, one serving process, and one
+Registry Evidence is one `registry-evidence` crate, one `evidence` binary, one serving process, and one
 operator-controlled trust domain, beside the portable `registry-evidence-verifier` library the
 runtime depends on for the response formats, the Evidence payload contract, and relying-party
 verification (`products/evidence/README.md`).
@@ -165,7 +165,7 @@ governed verifier configuration (`products/evidence/contracts/jws-profile.yaml`,
 
 ## 3. Authentication and authorization
 
-Evidence Gateway accepts access tokens from one OIDC issuer, `authentication.oidc`, whose issuer, single
+Registry Evidence accepts access tokens from one OIDC issuer, `authentication.oidc`, whose issuer, single
 audience, accepted token types, algorithms, fixed JWKS URI, and claim paths are fixed in the immutable bundle
 (`products/evidence/contracts/bundle.schema.yaml`).
 
@@ -228,7 +228,7 @@ REQ-PR-EVIDENCE-014: Every singular request and every request-batch item MUST ca
 nonce in the canonical form fixed by `products/evidence/contracts/request.schema.yaml` and
 `products/evidence/contracts/request-batch.schema.yaml`, generated independently per evaluation by
 a cryptographically secure random source.
-Evidence Gateway MUST echo it into the assertion payload and cover it by the signature, and MUST NOT store
+Registry Evidence MUST echo it into the assertion payload and cover it by the signature, and MUST NOT store
 it, uniqueness-check it, or expose it to authorization, rate limits, scripts, source requests, logs,
 metrics, traces, or native audit (invariant `V1-I27`).
 Nonce reuse is not rejected, so the nonce is transaction binding only for a relying party that
@@ -294,7 +294,7 @@ HTTP call; it creates no additional acquisition kind or transport authority.
 
 REQ-PR-EVIDENCE-019: Provider lookup MUST return only the closed union of match, no-match, and
 ambiguous outcomes, and only a match MAY carry facts.
-Evidence Gateway MUST NOT expose or choose candidates, and MUST NOT emit candidate counts, scores,
+Registry Evidence MUST NOT expose or choose candidates, and MUST NOT emit candidate counts, scores,
 confidence, hints, diagnostics, or comparisons
 (`products/evidence/contracts/rhai-abi.yaml`, invariant `V1-I10`).
 
@@ -354,7 +354,7 @@ combined disclosure review (`products/evidence/OPERATOR-CONTRACT.md`).
 
 ## 7. Response formats and signing
 
-Each Evidence Gateway evaluation releases one stateless assertion.
+Each Registry Evidence evaluation releases one stateless assertion.
 The bundle-level and grant-level `responseFormats` permission decides which serializations may carry
 it (`products/evidence/contracts/bundle.schema.yaml`).
 
@@ -444,7 +444,7 @@ before serialization.
 The issuer MUST NOT append a key-binding JWT.
 
 REQ-PR-EVIDENCE-040: Under the audience-scoped mode a holder confirmation claim MUST be present only
-when the caller supplied a holder public key in the request, and Evidence Gateway MUST NOT validate
+when the caller supplied a holder public key in the request, and Registry Evidence MUST NOT validate
 a presentation.
 The accepted key type and the prohibited private members are fixed by
 `products/evidence/contracts/request.schema.yaml` and
@@ -485,7 +485,7 @@ The trust domain and binding-key version MUST remain inputs, so one holder key u
 deployments never yields one binding.
 The audience MUST NOT be an input, and the consequence MUST be stated rather than mitigated: the
 same holder key, purpose, role, selector profile, and selector values yield the same binding for
-every caller and every verifier, holder key reuse is a correlator Evidence Gateway can neither
+every caller and every verifier, holder key reuse is a correlator Registry Evidence can neither
 prevent nor detect, and a binding is a persistent pseudonym for that tuple.
 
 REQ-PR-EVIDENCE-062: A holder-bound assertion MUST be released only when the immutable bundle
@@ -533,7 +533,7 @@ does not make credentials unlinkable: members share an issuance timestamp, purpo
 Evidence Type, configuration revision, and disclosed values, and the issuer knows one requester
 submitted the keys together.
 
-REQ-PR-EVIDENCE-066: Evidence Gateway MUST NOT append a key-binding JWT under either mode.
+REQ-PR-EVIDENCE-066: Registry Evidence MUST NOT append a key-binding JWT under either mode.
 An issued holder-bound credential ends in the trailing tilde marking an absent key-binding JWT.
 A presentation is the compact serialization with the holder's key-binding JWT after the last tilde
 and no trailing tilde, so an issued credential and a presentation are mutually exclusive shapes,
@@ -584,7 +584,7 @@ REQ-PR-EVIDENCE-070: `POST /v1/evidence/batch` MUST validate the closed body in
 between one and sixteen ordered items, each carrying one complete subject-role set and one canonical,
 pairwise-distinct request nonce.
 The authenticated token MUST supply the one common audience, and the route MUST reject holder keys.
-Evidence Gateway MUST authenticate once, reserve one evaluation instant, atomically charge rate cost
+Registry Evidence MUST authenticate once, reserve one evaluation instant, atomically charge rate cost
 equal to the complete item count, and validate and authorize every item before source credential
 resolution, access audit, or source access.
 Each item MAY resolve through its own complete matched grant or authority kind; authority MUST NOT be
@@ -670,7 +670,7 @@ source content.
 
 ## 9. Audit behavior
 
-REQ-PR-EVIDENCE-046: Evidence Gateway MUST durably accept a standalone minimal event after an
+REQ-PR-EVIDENCE-046: Registry Evidence MUST durably accept a standalone minimal event after an
 authenticated authorization refusal and before returning its generic `403`, an access-attempt event
 after authorization and before credential acquisition or source access for every actual acquisition
 stage, and a disclosure-release event after the final immutable response bytes are serialized and
@@ -704,18 +704,18 @@ and comparisons, and script inputs, outputs, or signing material.
 Identity MUST travel only as domain-separated keyed pseudonyms (invariant `V1-I15`).
 
 REQ-PR-EVIDENCE-050: Every authorization refusal after successful authentication MUST durably append
-exactly one standalone minimal native event before Evidence Gateway returns the generic `403`.
+exactly one standalone minimal native event before Registry Evidence returns the generic `403`.
 That event MUST identify the event and operation, assurance profile, package digest in the frozen
 `bundleRevision` field, requester
 pseudonym, optional actor pseudonym, closed denial category and decision, timestamp, and duration.
 It MUST NOT contain the requested requirement, purpose, subjects, unmatched authority, selector
 information, response protection, source, or evaluation material. If the event cannot be durably
-appended, Evidence Gateway MUST return the generic `503` instead and MUST NOT acquire source
+appended, Registry Evidence MUST return the generic `503` instead and MUST NOT acquire source
 credentials or make a source request. Authentication, malformed-request, and invalid-selector
 failures MUST NOT create a native audit event
 (`products/evidence/contracts/audit-event.schema.yaml`, invariant `V1-I39`).
 
-REQ-PR-EVIDENCE-051: Exactly one Evidence Gateway process MUST write a given audit file, holding a
+REQ-PR-EVIDENCE-051: Exactly one Registry Evidence process MUST write a given audit file, holding a
 lock beside it for the process lifetime.
 External replacement or modification of the active audit file or its lock file MUST fail readiness
 and close future appends for the process lifetime, and a failed durable append MUST close future
@@ -729,7 +729,7 @@ ships audit entries to, not to the serving process
 ## 10. Immutability of deployment input
 
 REQ-PR-EVIDENCE-052: Configuration MUST be immutable for the serving process lifetime.
-Evidence Gateway MUST verify and load one read-only atomic governed package plus one closed runtime
+Registry Evidence MUST verify and load one read-only atomic governed package plus one closed runtime
 file at startup; runtime override, reload, merge, fallback, and mutation paths MUST NOT exist
 (invariant `V1-I18`, `products/evidence/contracts/runtime.schema.yaml`).
 
@@ -831,7 +831,7 @@ credential format that the frozen Version 1 contracts do not provide.
   never a fallback from a signed-path failure (REQ-PR-EVIDENCE-036).
 - Signature meaning: Provider authentication and payload integrity only, not legal-signature status,
   source truth, or holder possession (REQ-PR-EVIDENCE-035).
-- Identity resolution: Lookup is match, no-match, or ambiguous. Evidence Gateway is not an
+- Identity resolution: Lookup is match, no-match, or ambiguous. Registry Evidence is not an
   identity-resolution engine and returns no candidate material (REQ-PR-EVIDENCE-019).
 - Purpose attestation: A declared purpose is an authorized selection from the granted set, not an
   identity-provider attestation, unless the operator issues a distinct requester tag per purpose
@@ -854,14 +854,14 @@ credential format that the frozen Version 1 contracts do not provide.
 - Platform: Version 1 supports Unix targets only, because its secret and audit invariants require
   owner, mode, no-follow, link-count, and file-identity guarantees
   (`products/evidence/contracts/runtime.schema.yaml`).
-- Standards claims: The CCCEV alignment is a documented mapping with explicit Evidence Gateway extensions,
+- Standards claims: The CCCEV alignment is a documented mapping with explicit Registry Evidence extensions,
   and the SD-JWT VC output follows a frozen local profile
   (`products/evidence/contracts/cccev-field-mapping.yaml`,
   `products/evidence/contracts/sd-jwt-vc-profile.yaml`).
 
 ## Conformance
 
-An Evidence Gateway deployment conforms to this specification when it:
+A Registry Evidence deployment conforms to this specification when it:
 
 - exposes only the generated OpenAPI surface, keeps definition discovery authenticated and
   requester-scoped, grants no authority through discovery, and publishes key material as
@@ -943,12 +943,12 @@ Conformance to this specification does not imply conformance to any external sta
 Each standard's adoption mode and scope are documented in the
 [standards register](../../reference/standards/).
 
-## Evidence Gateway
+## Registry Evidence
 
 This specification is `verified`: its requirements cite inspectable frozen contracts, generated
 artifacts, implementation tests, or operator material, per RS-DOC REQ-DOC-014.
 The standards register lists `registry-evidence` under its SD-JWT VC entry, with Evidence-owned
-evidence links; it does not yet carry an Evidence Gateway row under the CCCEV, OpenAPI, and JSON
+evidence links; it does not yet carry a Registry Evidence row under the CCCEV, OpenAPI, and JSON
 Schema entries this page also references, and that remaining gap is marked with an author comment in
 the source of this page.
 
@@ -989,7 +989,7 @@ the source of this page.
 
 ## Next
 
-- [Evidence Gateway API reference](../../reference/apis/registry-evidence/) is the route-level
-  reference and the link to the generated OpenAPI document.
+- [Registry Evidence API](../../reference/apis/registry-evidence/) introduces the API and links
+  the generated operations rendered from the OpenAPI document.
 - [RS-ARC-G](../rs-arc-g/) places the registry stack services in one architecture.
 - [RS-SEC-G](../rs-sec-g/) holds the cross-product security model this protocol sits inside.

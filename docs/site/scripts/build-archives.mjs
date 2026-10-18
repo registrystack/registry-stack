@@ -24,6 +24,7 @@ import { generateBRegConfiguration } from './generate-breg-configuration.mjs';
 import { generateConfigurationFormats } from './generate-configuration-formats.mjs';
 import { generateEvidenceConfiguration } from './generate-evidence-configuration.mjs';
 import { generateSchedulingConfiguration } from './generate-scheduling-configuration.mjs';
+import { generateCaseworkConfiguration } from './generate-casework-configuration.mjs';
 
 const execFileAsync = promisify(execFile);
 const archiveExecutionEnvironmentKeys = Object.freeze([
@@ -58,6 +59,7 @@ const configurationGenerators = new Map([
   ['docs/site/src/data/generated/evidence-configuration.json', generateEvidenceConfiguration],
   ['docs/site/src/data/generated/breg-configuration.json', generateBRegConfiguration],
   ['docs/site/src/data/generated/scheduling-configuration.json', generateSchedulingConfiguration],
+  ['docs/site/src/data/generated/casework-configuration.json', generateCaseworkConfiguration],
   ['docs/site/src/data/generated/configuration-formats.json', generateConfigurationFormats],
 ]);
 // New archives generate these artifacts from their pinned source. Legacy refs
@@ -66,6 +68,7 @@ const configurationGenerators = new Map([
 // Directory entries include every file, including newly added command pages.
 export const currentSourceGeneratedArtifacts = Object.freeze([
   'docs/site/public/examples/breg-evidence-starter.tar.gz',
+  'docs/site/public/examples/evidence-examples.tar.gz',
   'docs/site/src/content/docs/reference/cli',
   'docs/site/src/data/generated/cli-reference.json',
   ...configurationGenerators.keys(),

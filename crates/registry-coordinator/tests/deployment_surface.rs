@@ -43,6 +43,50 @@ fn immutable_package_closure_tamper_and_abi_are_checked() {
     fs::write(package_path.join("definition.json"), "{}").unwrap();
     assert!(deployment::load_package(&d.packages[0]).is_err());
 }
+
+#[test]
+fn runtime_reads_the_explicit_http_issuer_opt_in() {
+    let runtime_file = tempfile::NamedTempFile::new().unwrap();
+    let template = include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml")
+        .replace(
+            "issuer: https://issuer.example.org",
+            "issuer: http://issuer.example.org\n    allowInsecureHttp: true",
+        );
+    assert_ne!(
+        template,
+        include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml")
+    );
+    fs::write(runtime_file.path(), template).unwrap();
+    let runtime = RuntimeConfig::load(&runtime_file.path().canonicalize().unwrap()).unwrap();
+    let authentication = runtime.deployment.unwrap().authentication;
+    assert!(authentication.issuer.allow_insecure_http);
+    assert!(serde_norway::to_string(&authentication)
+        .unwrap()
+        .contains("allowInsecureHttp: true"));
+}
+
+#[test]
+fn a_remote_http_issuer_is_refused_without_the_opt_in() {
+    let runtime_file = tempfile::NamedTempFile::new().unwrap();
+    let template = include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml")
+        .replace(
+            "issuer: https://issuer.example.org",
+            "issuer: http://issuer.example.org",
+        );
+    fs::write(runtime_file.path(), template).unwrap();
+    let error = RuntimeConfig::load(&runtime_file.path().canonicalize().unwrap())
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "coordinator.access.configuration");
+    assert_eq!(
+        error.field.as_deref(),
+        Some("/deployment/authentication/issuer")
+    );
+    assert!(error
+        .suggested_action
+        .as_deref()
+        .is_some_and(|action| action.contains("allowInsecureHttp: true")));
+}
 #[test]
 fn unrelated_connection_and_signing_rotation_preserve_workflow_binding() {
     let root = tempfile::tempdir().unwrap();
@@ -366,6 +410,7 @@ async fn runtime_authenticator_derives_exact_admission_from_policy_keys() {
         jwks_source: JwksSource::Uri {
             uri: issuer.jwks_uri().parse().unwrap(),
         },
+        allow_insecure_http: false,
     };
     access.scope_claim = "scope".into();
     let mut policy = access.policies.remove("institution-producer").unwrap();

@@ -129,9 +129,8 @@ PY
 
 ## Read and claim the Casework task
 
-List the open task with the Casework profile and credential the session exported from the shared
-issuer. Then read its context. The snapshot contains facts a reviewer can act on, while the
-applicant's email stays in BReg.
+As staff, list the open ReviewTask and read its context. The snapshot holds the facts a reviewer
+decides on; the applicant's email stays in BReg.
 
 ```sh
 python3 - <<'PY'
@@ -153,7 +152,7 @@ print('Requested amount:', facts['requestedAmount'])
 PY
 ```
 
-The printed facts must match the synthetic application. Claim that exact task revision:
+Claim the task at the revision you read:
 
 ```sh
 python3 - <<'PY'
@@ -179,8 +178,8 @@ PY
     review_subject_route and review_request; products/coordinator/examples/reviewed-notice/workflow.yaml,
     read-for-review through await-review. */}
 
-A successful claim prints `Claimed`. If a concurrent change makes the revision stale, read the task
-again and claim its current revision.
+The claim prints `Claimed`. A stale revision is refused; read the task again and claim its
+current revision.
 
 ## Restart Coordinator while it waits
 
@@ -195,7 +194,7 @@ python3 products/coordinator/examples/reviewed-notice/session.py restart-coordin
 
 ## Approve the application
 
-Read the claimed task again to obtain its current revision, then record the decision:
+Read the task for its current revision, then record the decision:
 
 ```sh
 python3 - <<'PY'
@@ -219,7 +218,9 @@ print('Approved')
 PY
 ```
 
-A successful decision prints `Approved`. The decision names the policy's `approved` outcome; an approval without one is refused with HTTP `400` and the policy's approval outcomes in the `Registry-Casework-Validation-Allowed` header. If the task revision changed, read it again before deciding.
+The decision prints `Approved`. It names the policy's `approved` outcome; an approval without
+one is refused with HTTP `400`, and the `registry-casework-validation-allowed` header lists the
+allowed outcomes.
 
 The Casework completion event advances an eligible read on the restarted worker while preserving
 the durable observation floor. Coordinator reads the authoritative

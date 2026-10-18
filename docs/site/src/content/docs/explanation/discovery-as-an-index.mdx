@@ -1,6 +1,6 @@
 ---
 title: Discovery as an index
-description: How Registry Discovery publishes an inert, curated index of Evidence Gateway providers.
+description: How Registry Discovery publishes an inert, curated index of Registry Evidence providers.
 status: current
 owner: registry-docs
 source_repos:
@@ -14,7 +14,7 @@ standards_referenced:
   - bregdcat-ap
 ---
 
-Registry Discovery is a curated, read-only index of public Evidence Gateway descriptions. A catalog
+Registry Discovery is a curated, read-only index of public Registry Evidence descriptions. A catalog
 operator chooses which descriptions to publish. Applications can search those descriptions and make
 their own explicit selection.
 
@@ -39,7 +39,7 @@ type. The client validates the closed selection structure and capability binding
 application-supplied local policy accepts it.
 
 Acceptance is synchronous and local. Successful acceptance creates an ephemeral object exposing the
-advertised base URL. The application supplies credentials and invokes Evidence Gateway only after
+advertised base URL. The application supplies credentials and invokes Registry Evidence only after
 that decision. Persisted selections can be revalidated, but a selection never becomes a trust
 anchor.
 
@@ -47,7 +47,7 @@ anchor.
 
 The published `registry-discovery-v1alpha1` profile resources are immutable and continue to
 validate historical provider descriptions, including capabilities no longer maintained by the
-current stack. Current publication, index, query, and client contracts support Evidence Gateway
+current stack. Current publication, index, query, and client contracts support Registry Evidence
 only.
 
 An operator upgrading a mixed pre-retirement index must remove retired-provider origins and rebuild

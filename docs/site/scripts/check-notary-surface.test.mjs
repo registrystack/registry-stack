@@ -31,7 +31,7 @@ test('rejects a current page that describes Notary as a product to use', async (
         'Registry Notary evaluates claims from compiler-pinned Relay',
         'consultations and issues credentials.',
         '',
-        '| Evidence Gateway | A caller needs a status. | Registry Notary |',
+        '| Registry Evidence | A caller needs a status. | Registry Notary |',
       ].join('\n'),
     );
 

@@ -21,7 +21,7 @@ operational boundary. Base Registry Engine (BReg) is the governed record service
 ```mermaid
 flowchart LR
   Caller[Calling service] --> BReg[Base Registry Engine]
-  Caller --> Evidence[Evidence Gateway]
+  Caller --> Evidence[Registry Evidence]
   Evidence --> Source[Fixed authoritative source]
   Reviewer[Reviewer] --> Manifest[Registry Manifest]
   Manifest --> Static[Static metadata]
@@ -33,9 +33,9 @@ flowchart LR
 
 - **Base Registry Engine** owns writable PostgreSQL records, governed changes, history, events, and
   its record API.
-- **Evidence Gateway** evaluates predefined requirements against fixed sources and returns signed,
+- **Registry Evidence** evaluates predefined requirements against fixed sources and returns signed,
   minimum-disclosure assertions.
-- **Registry Manifest** validates and renders portable static metadata.
+- **[Registry Manifest](../../reference/glossary/#registry-manifest)** validates and renders portable static metadata.
 - **Registry Discovery** serves a curated public index. Current contracts index Evidence providers.
 - **Registry Casework** coordinates human review while mutations remain with the source system.
 - **Registry Platform** supplies bounded primitives. It does not decide product policy.
@@ -46,11 +46,11 @@ record from one product does not silently authorize another.
 ## Composition
 
 Applications integrate through documented APIs and portable artifacts. BReg can supply governed
-records through its own API. Evidence Gateway can call an explicitly configured source. Manifest
+records through its own API. Registry Evidence can call an explicitly configured source. Manifest
 output can describe a service without controlling it. Discovery returns inert metadata that an
 application must validate and accept locally.
 
-A fixed authoritative source remains outside the Evidence Gateway product boundary. An
+A fixed authoritative source remains outside the Registry Evidence product boundary. An
 authenticated Base Registry Engine route can serve as such a source when its own authorization
 permits the request; that composition does not merge the two products' trust boundaries.
 

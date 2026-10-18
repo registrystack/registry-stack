@@ -1,6 +1,6 @@
 ---
 title: Return a governed value
-description: Request a controlled value from the normalized Evidence project and verify it before use.
+description: Ask your Evidence project for a residence region, see north in a verified response, and see the project refuse a value outside its declared list.
 status: current
 owner: registry-docs
 source_repos:
@@ -18,70 +18,24 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Complete [Get your first Evidence Gateway assertion](../first-evidence-assertion/) before starting.
-You will reuse that normalized project to return a controlled region value. The project declares
-the complete set of possible values, so a Function cannot invent a new category at runtime.
+In about ten minutes you will ask the project from [Your first assertion](../first-evidence-assertion/)
+which region a synthetic person lives in, and read `north` from a verified response. Then you will
+see why no other answer could have come back: the project lists every value the answer may take.
 
 <QuickstartMeta
-  outcome="A verified residence-region assertion whose value is one reviewed category."
+  outcome="A verified residence-region assertion carrying one declared value."
   time="About 10 minutes"
   level="Local development with synthetic data"
-  prerequisites={[
-    'The completed first Evidence assertion tutorial',
-    'Its normalized standalone project',
-    'Python 3 and curl',
-  ]}
+  prerequisites={['The project, source, and Registry Evidence left running by Your first assertion']}
 />
 
-## Review the governed boundary
+## Request the region
 
-Enter the copied project:
+Work in `first-evidence-assertion/adult-status`, where the source and Registry Evidence from
+Your first assertion are still running. Prepare a request for the `residence-region` assertion
+definition:
 
-```sh test-cwd="first-evidence-assertion"
-cd adult-status
-```
-
-`evidence.yaml` already declares the `residence-region` definition. Its `region` output is a
-`controlled-category` restricted to `north` or `south`. The named `derive-residence-region`
-Function may choose only one of those values. The `standalone-service` target profile grants the
-complete request shape: definition, purpose, audience source, representation, subject role,
-selector profile, and value origin.
-
-Prove the unchanged project and target before running them:
-
-```sh
-evidencectl check . --target local-target.yaml
-evidencectl test . --target local-target.yaml
-```
-
-## Start the local boundary
-
-In another terminal, start the synthetic source from the project directory:
-
-```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
-python3 serve-source.py \
-  --port 8081 \
-  --token-file .generated/secrets/synthetic-source-token
-```
-
-Back in the first terminal, start a fresh generation on the alternate Evidence port:
-
-```sh
-evidencectl dev start . \
-  --target local-target.yaml \
-  --evidence-port 18080 \
-  --issuer-port 8082
-```
-
-```text test-excerpt
-Evidence ready at http://127.0.0.1:18080
-```
-
-## Request the controlled value
-
-Prepare the request with the existing tutorial client and the definition's declared purpose:
-
-```sh
+```sh test-cwd="first-evidence-assertion/adult-status"
 evidencectl request prepare residence-region \
   --client tutorial-client \
   --purpose residence-check \
@@ -89,7 +43,13 @@ evidencectl request prepare residence-region \
   --name residence-region
 ```
 
-Send the request, then verify the signed response before inspecting it:
+```text test-expect
+Prepared request: .evidence/requests/residence-region/request.json
+Prepared verification context: .evidence/requests/residence-region/verification.json
+Prepared authorization: .evidence/requests/residence-region/authorization.curl
+```
+
+Send the request, then verify the response before reading it:
 
 ```sh
 curl --silent --show-error --fail-with-body \
@@ -100,7 +60,6 @@ curl --silent --show-error --fail-with-body \
   --header 'Accept: application/jose+json' \
   --data-binary @.evidence/requests/residence-region/request.json \
   --output residence-region.jws.json
-
 evidencectl verify residence-region.jws.json \
   --context .evidence/requests/residence-region/verification.json \
   --output residence-region.verified.json
@@ -110,24 +69,97 @@ evidencectl verify residence-region.jws.json \
 VERIFIED
 ```
 
-The synthetic adult record produces `north`. Read that value only from
-`residence-region.verified.json`. The assertion excludes the source record's birth date and private
-address canary because neither is an output of this definition.
-
-## Clean up
-
 ```sh
-evidencectl dev stop .
-evidencectl audit show --last-operation
-evidencectl dev clean .
+jq '.supportedValues' residence-region.verified.json
 ```
 
-The audit view records that the controlled output was released without printing its value or the
-selector. The tutorial runner stops the synthetic source. If you started it by hand, press
-`Ctrl+C` in its terminal.
+```json test-expect
+[
+  {
+    "providesValueFor": "urn:example:concept:residence-region:v1",
+    "value": "north"
+  }
+]
+```
+
+The source holds a birth date and a private address beside the region; the assertion carries
+only `north`.
+
+{/* Evidence: products/evidence/examples/standalone/serve-source.py, residence_region, address_canary. */}
+
+## See which values the answer may take
+
+In `evidence.yaml`, the `residence-region` definition's `region` output is a
+`controlled-category`: `values` lists every value it may carry.
+
+```yaml title="evidence.yaml" test-excerpt="evidence.yaml"
+outputs:
+  region:
+    concept: urn:example:concept:residence-region:v1
+    type: controlled-category
+    values:
+    - north
+    - south
+```
+
+A [Function](../../reference/glossary/#function) that computed any other value would not get it
+past Registry Evidence. One fixture case proves that by returning a value outside the list; run the
+region fixtures with their trace:
+
+```sh
+evidencectl test . --target local-target.yaml --fixture fixtures/residence-region.yaml --explain
+```
+
+```text test-excerpt
+"id": "negative-outside-controlled-values",
+"observedResult": {
+  "class": "service-unavailable"
+},
+"reasonCode": "output-refused",
+```
+
+Registry Evidence refused the output, so the caller would have received a refusal, not the value.
+
+## See who may ask
+
+The same definition sets a `grantCeiling`, the [grant ceiling](../../reference/glossary/#grant-ceiling): the widest authority any grant may give for it:
+
+```yaml title="evidence.yaml" test-excerpt="evidence.yaml"
+purpose: residence-check
+grantCeiling:
+  authorities:
+  - organizational
+  actorKinds:
+  - service
+  valueOrigins:
+  - request
+  audiences:
+  - urn:example:audience:standalone-app
+```
+
+`dev-authority.yaml` grants one exact request shape within it, to the `standalone-service`
+access profile that `tutorial-client` holds:
+
+```yaml title="dev-authority.yaml" test-excerpt="dev-authority.yaml"
+- definition: residence-region
+  purpose: residence-check
+  audienceFrom: authenticated-requester
+  representations:
+  - signed-jws
+  subjectBinding: audience-scoped
+  subjects:
+  - role: subject
+    selectorProfile: record-by-id
+    valueOrigin: request
+```
+
+Leave the source and Registry Evidence running; the next tutorial continues with them.
+
+{/* Evidence: products/evidence/examples/standalone/evidence.yaml, assertionDefinitions.residence-region.grantCeiling;
+    products/evidence/examples/standalone/dev-authority.yaml, accessProfiles.standalone-service;
+    products/evidence/examples/standalone/fixtures/residence-region.yaml, negative-outside-controlled-values;
+    crates/registry-evidence/src/main.rs, validate_injected_rejection, ReasonCode::OutputRefused. */}
 
 ## Next
 
-- [Control who can request Evidence](../control-who-can-request-evidence/)
-- [See Evidence Gateway refuse unsafe requests](../refuse-unsafe-evidence-requests/)
-- [Connect an institution source](../connect-an-institution-source/)
+[Control who can request evidence](../control-who-can-request-evidence/)

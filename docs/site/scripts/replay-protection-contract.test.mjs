@@ -19,7 +19,7 @@ const prose = replaySection.replace(/\s+/g, ' ');
 test('RS-SEC-G distinguishes Evidence credential replay from operation receipts', () => {
   assert.match(
     prose,
-    /Evidence Gateway holds no credential or presentation replay state/,
+    /Registry Evidence holds no credential or presentation replay state/,
   );
   assert.match(
     prose,

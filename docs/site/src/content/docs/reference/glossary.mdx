@@ -5,417 +5,192 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-breg
-  - registry-discovery
-  - registry-platform
   - registry-manifest
   - registry-evidence
-  - solmara-lab
+  - registry-casework
 last_reviewed: "2026-09-20"
 doc_type: reference
 locale: en
 standards_referenced:
-  - dcat
-  - bregdcat-ap
-  - cpsv-ap
   - oid4vci
-  - openapi
-  - shacl
-  - json-schema
-  - json-ld
   - sd-jwt-vc
-  - cccev
-  - odrl
-  - ogc-api-records
-  - ogc-api-features
-  - ogc-api-edr
-  - geojson
-  - json-fg
-  - sdmx
-  - skos
-  - prov-o
-  - w3c-did
-  - sp-dci
 ---
 
-Use this page to look up unfamiliar terms.
 Product names are always in English, including on future translated pages.
 {/* Do not translate contract identifiers, env vars, media types, route paths, schema versions,
     crate names, or Docker image names. */}
 
 <dl class="glossary-dl">
-  <dt>acceptance definition</dt>
-  <dd>One complete authored answer path in an Evidence Gateway deployment project: a source with its request and response schema, the extraction script, the fact schema and any codelist, the derivation, the requirement with its concept and disclosure guard, the authority grant that permits it, and the synthetic fixture cases that prove it before anything is served. Evidence Gateway Version 1 freezes four coequal acceptance definitions: adult status, residence region, professional licence status, and legal-parent relationship. None is privileged in the runtime, so there is no domain type, built-in operation, or special route for any of them.</dd>
-
   <dt id="access-profile">access profile</dt>
-  <dd>A named Base Registry Engine grant stating which scopes, purposes, claims, operations, fields, and rows a caller may reach. See <a href="../../configure/breg-access/">Control access per profile</a>.</dd>
-
-  <dt>access token</dt>
-  <dd>The bearer credential a caller presents to Evidence Gateway. Evidence Gateway accepts access tokens from one OIDC issuer, `authentication.oidc`, whose issuer, single audience, accepted token types, algorithms, fixed JWKS URI, and claim names are fixed in the immutable bundle, and it reads authority only from those configured claim names. Any issuer may be used only when it satisfies that complete configured token profile and signs with a key accepted from the configured JWKS; matching claim names alone is insufficient.</dd>
+  <dd>A named grant a caller selects with its token. In Base Registry Engine (BReg), it states which scopes, purposes, claims, operations, fields, and rows the caller may reach; see <a href="../../configure/breg-access/">Control access per profile</a>. In Registry Casework, an entry under `accessProfiles` admits a token carrying its `requiredScopes`, takes the caller's identity from `principalClaim`, and gives one role: staff, supervisor, administrator, or requester; see <a href="../../configure/casework/">Author a Casework policy</a>.</dd>
 
   <dt id="accountability-record">accountability record</dt>
-  <dd>The protected state Registry Casework keeps beside a human decision: the deciding person's issuer-qualified identity, profile, private reason, and result digest, retained for the pinned policy's `accountabilityRetentionDays`. Producer results omit that identity and private reason. A separately authorized Supervisor resolves accountability through an audited route. See <a href="../../operate/casework-retention/">Retention in Casework</a>.</dd>
-
-  <dt id="attempt">attempt</dt>
-  <dd>A historical Casework source-action lifecycle. Current Casework records human review decisions and returns results; the source product performs and recovers its own independently authorized application. Casework exposes no source-action or attempt-settlement API.</dd>
-
-  <dt id="assertion">assertion</dt>
-  <dd>Evidence Gateway's output: one stateless signed payload that answers a requirement and carries no source record. Its member set is closed by `products/evidence/contracts/evidence.schema.yaml`: the requirement it supports, the Evidence Type it conforms to, issuer and provider, issue, observation, and validity instants, purpose, audience, configuration revision, role-bound subject bindings, and the supported values. A holder-bound assertion carries neither audience nor request nonce, because it names no relying party to echo them to. Signed flattened JSON Web Signature (JWS) is the default serialization; the SD-JWT VC serialization carries the same assertion and adds no credential lifecycle.</dd>
-
-  <dt id="audit-journal">audit journal</dt>
-  <dd>The minimized request and response entries that Base Registry Engine writes to a per-process file or stdout stream, separately from PostgreSQL. Entries use keyed references and a shared request correlation. File appends are durable; stdout is best-effort. Rotation and retention bound local files. Operators ship the stream to append-only storage for tamper evidence and completeness. An <a href="#erasure">erasure</a> does not remove audit entries. See <a href="../../operate/breg-retention/">Retain, erase, and audit</a>.</dd>
-
-  <dt>BRegDCAT-AP</dt>
-  <dd>SEMIC profile of DCAT-AP for base registries. Registry Manifest emits BRegDCAT-AP-shaped registry and data-service metadata.</dd>
-
-  <dt id="authoring-project">authoring project</dt>
-  <dd>A local directory an adopter writes as reviewed product input. Each product owns its project shape and compiler.</dd>
-
-  <dt id="authoring-workspace">authoring workspace</dt>
-  <dd>The editable Evidence Gateway project `evidencectl init` starts from exactly one OpenAPI or SQLite source: the sources, questions, schemas, derivations, and fixtures an author writes. OpenAPI mode leaves the source, question, and fixture directories empty for authoring; SQLite mode supplies a complete synthetic starter. Both generate disposable Evidence Gateway keys. `evidencectl package` compiles one workspace and one explicit target into a production candidate, which an operator mounts as a <a href="#deployment-project">deployment project</a>. `evidencectl package --help` calls the workspace an editable Evidence Gateway project.</dd>
-
-  <dt id="base-registry-engine">Base Registry Engine (product)</dt>
-  <dd>The governed writable system of record in this monorepo. Base Registry Engine (BReg) is a PostgreSQL system of record whose data model and REST API are compiled from a <a href="#registry-project">registry project</a>. The runtime carries no built-in domain types, so a business, a plot, a permit, or an asset exists only when the active <a href="#package">package</a> declares it. It verifies bearer tokens and issues none, enforces <a href="#access-profile">access profiles</a> and <a href="#row-boundary">row boundaries</a> on every request, and appends each admitted request to the <a href="#audit-journal">audit journal</a> through a separate per-process writer. Crate: `crates/registry-breg`; binaries `breg` (runtime) and `bregctl` (adopter tooling); repo slug: `registry-breg`. It was named `Registry Server` before the naming decision, and that name survives only in an explicit rename note.</dd>
-
-  <dt id="breg">BReg</dt>
-  <dd>The short technical family name for <a href="#base-registry-engine">Base Registry Engine</a>, and the stem its binaries, crate, client module, and configuration keys use. Write the formal name on a page's first use, `Base Registry Engine (BReg)`, then `BReg` for the rest of that page. `BREG`, `Breg`, and `B-Reg` are not spellings of it.</dd>
-
-  <dt id="bounded-question">bounded question</dt>
-  <dd>The kind of question Evidence Gateway answers: one predefined, versioned question with a closed set of supported values, evaluated against a source and answered without returning the source record. Bounded is what makes the product safe to point at sensitive data, because a caller can ask only what the deployment already declared and what the caller's grant already permits, and no request parameter, header, or token claim widens the answer. An author declares it under `assertionDefinitions` in `evidence.yaml`, with a stable Requirement URI in its semantics.</dd>
-
-  <dt>CCCEV</dt>
-  <dd>Core Criterion and Core Evidence Vocabulary. Registry Manifest emits CCCEV-shaped requirement, evidence type, and evidence type list metadata. Evidence Gateway maps its assertion payload onto CCCEV terms under the frozen mapping in `products/evidence/contracts/cccev-field-mapping.yaml`, with named Evidence Gateway extensions where CCCEV has no counterpart.</dd>
-
-  <dt id="calendar">calendar</dt>
-  <dd>In Registry Casework, the working week and time zone an activity <a href="#clock">clock</a> counts against, declared in the policy with a named holiday set whose dates arrive separately as a <a href="#holiday-revision">holiday revision</a>. A project declares at most 16 calendars.</dd>
-
-  <dt>caller</dt>
-  <dd>The technical client that invokes a Registry Stack service.</dd>
-
-  <dt id="record-type">Record type</dt>
-  <dd>The BReg definition of one kind of <a href="#registry-record">Record</a>: its fields, route, dataset, and `mutationPolicy`, authored under `recordTypes`. It carries no built-in institutional domain.</dd>
+  <dd>The protected record Registry Casework keeps of who made a <a href="#decision">Decision</a> and their private reason, held for the pinned policy's `accountabilityRetentionDays` and never sent to the producer. See <a href="../../operate/casework-retention/">Retention in Casework</a>.</dd>
 
   <dt id="action">Action</dt>
-  <dd>A BReg typed operation with one bounded <a href="#planner">Plan</a> and a fixed execution mode, `immediate` or `proposal`. An immediate Action commits its ordered effects atomically and returns an <a href="#action-receipt">ActionReceipt</a>; a proposal-mode Action starts a durable <a href="#proposal">Proposal</a>. The `invoke` and `start` operations require separate explicit grants.</dd>
+  <dd>A BReg typed operation with one bounded <a href="#planner">Plan</a> and a fixed execution mode. An `immediate` Action commits its effects atomically and returns an <a href="#action-receipt">ActionReceipt</a>; a `proposal` Action starts a durable <a href="#proposal">Proposal</a>.</dd>
 
   <dt id="action-receipt">ActionReceipt</dt>
-  <dd>The response to a successful immediate <a href="#action">Action</a>: the Action's identifier as `action`, an `applicationId`, and under `results` the Record type, `recordId`, and new revision of each effect the caller's grant may see. Its effects commit in one transaction, so a refused invocation leaves no partial change.</dd>
+  <dd>The response to a successful immediate <a href="#action">Action</a>: its `applicationId` and, under `results`, the Record type, `recordId`, and new revision of each effect the caller may see. A refused invocation leaves no partial change.</dd>
 
-  <dt id="proposal">Proposal</dt>
-  <dd>BReg durable work created by a proposal-mode Action. Submission freezes inputs, effects, target revisions, Action revision, attachments, and the requested review policy selection. A provider fixes the concrete policy at acceptance; BReg retains that binding separately from the frozen submission. BReg applies that exact plan automatically under restricted system authority by default, or manually when explicitly configured. The Proposal has independent lifecycle, disclosure, retention, and promoted transition links.</dd>
+  <dt id="assertion">assertion</dt>
+  <dd>Registry Evidence's answer: a signed payload that carries the answer to one <a href="#requirement">requirement</a> and none of the record behind it. Signed flattened JSON Web Signature (JWS) is the default serialization; <a href="#sd-jwt-vc">SD-JWT VC</a> carries the same assertion.</dd>
 
-  <dt id="function">Function</dt>
-  <dd>A project-local typed implementation asset used by an Action's <a href="#planner">Plan</a>. Its runtime, source, entrypoint, ABI, capabilities, and limits are governed configuration. It computes effects within the Action's declared write ceiling and cannot grant authority or invent a review decision.</dd>
+  <dt id="assertion-definition">assertion definition</dt>
+  <dd>One fixed question in an <a href="#evidence-project">Evidence project</a>, declared under `assertionDefinitions` with its Requirement URI, purpose, subject roles, source, permitted outputs, and the grant ceiling no caller can exceed.</dd>
+
+  <dt id="audit-journal">audit journal</dt>
+  <dd>The minimized request and response entries Base Registry Engine writes to a per-process file or stdout stream, separately from PostgreSQL; operators ship it to append-only storage. An <a href="#erasure">erasure</a> does not remove audit entries. See <a href="../../operate/breg-retention/">Retain, erase, and audit</a>.</dd>
+
+  <dt id="base-registry-engine">Base Registry Engine (BReg)</dt>
+  <dd>The PostgreSQL system of record whose data model and REST API are compiled from a <a href="#registry-project">registry project</a>, with no built-in domain types. Binaries `breg` and `bregctl`.</dd>
+
+  <dt id="calendar">calendar</dt>
+  <dd>In Registry Casework, the working week and time zone a <a href="#clock">clock</a> counts working days against, with a named holiday set whose dates arrive as a separate revision.</dd>
 
   <dt id="claim">claim</dt>
-  <dd>In Casework, taking an eligible <a href="#review-task">ReviewTask</a> into the human caller's holdings under its current `If-Match` revision and an idempotency key. The holder may draft privately, decide, release, or delegate under current authority. A Supervisor may move an exact caseload through preview and atomic apply. A JWT claim is a separate meaning: a named value inside a token.</dd>
-
-  <dt>claim level</dt>
-  <dd>The evidence discipline these docs use for standards claims: `implements`, `emits`, `maps_to`, `aligns_with`, `inspired_by`, or `compares_against`.</dd>
+  <dd>In Casework, taking an eligible <a href="#review-task">ReviewTask</a> into a reviewer's holdings at its current revision, before they decide, release, or delegate it. A JWT claim is a separate meaning: a named value inside a token.</dd>
 
   <dt id="clock">clock</dt>
-  <dd>A pinned Casework policy rule measuring a ReviewRequest subject or a review activity. Activity clocks use a <a href="#calendar">calendar</a> and published holiday revisions; reminders and due steps change local review metadata or queue assignment. Required source status is rechecked before a current-source effect. Missing facts defer processing. A clock decides no human outcome and performs no source mutation.</dd>
+  <dd>A pinned Casework policy rule that measures a subject or a <a href="#stage">stage</a> against a deadline, in elapsed time or working days on a <a href="#calendar">calendar</a>. It can send a reminder or move a due task to another queue, and never decides an outcome.</dd>
 
   <dt id="configuration-revision">`configurationRevision`</dt>
-  <dd>The `sha256:` digest an Evidence Gateway assertion carries for the package configuration and artifact closure that requirement's evaluation reached (`products/evidence/contracts/evidence.schema.yaml`). It is scoped to the requirement, not to the whole package, so an edit that cannot change an assertion leaves that assertion's revision alone. A signing-key rotation or revocation leaves it alone too, because key trust travels in the JWKS and the verification policy's denylist, and so does revoking a caller token key, which decides who may call rather than what an assertion means. Runtime-only path or listener changes leave both the package digest and requirement revisions unchanged.</dd>
+  <dd>The `sha256:` digest a Registry Evidence <a href="#assertion">assertion</a> carries for what its <a href="#assertion-definition">assertion definition</a> does, which relying services pin. It moves with the source request or response shape, selector profiles, Functions, codelists, schemas, outputs, or validity, and stays put for question text, fixtures, endpoints, credentials, grants, and signing keys.</dd>
 
-  <dt>consumer decision</dt>
-  <dd>An eligibility, qualification, prioritization, approval, routing, payment, workflow, or other outcome determined outside Registry Stack by or for an evidence consumer.</dd>
+  <dt id="context-provider">context provider</dt>
+  <dd>The source's read-only review interface a Casework policy names under `context.mode: current-source`. Casework asks it again under each reviewer's own credential when a task opens and keeps none of the source's data.</dd>
 
-  <dt>DCAT</dt>
-  <dd>Data Catalog Vocabulary. W3C recommendation. Registry Manifest emits DCAT-shaped JSON-LD catalogs. Spell out on first use per page: "Data Catalog Vocabulary (DCAT)".</dd>
+  <dt id="decision">Decision</dt>
+  <dd>One reviewer's recorded choice of an outcome the <a href="#review-policy">ReviewPolicy</a> declares. Casework counts decisions against each <a href="#stage">stage</a>'s threshold and settles the <a href="#review-request">ReviewRequest</a>.</dd>
 
-  <dt>CPSV-AP</dt>
-  <dd>Core Public Service Vocabulary Application Profile. Registry Manifest emits CPSV-AP service catalogue JSON-LD.</dd>
+  <dt id="deployment-bundle">deployment bundle</dt>
+  <dd>A deferred project-root packaging concept tracked by <a href="https://github.com/registrystack/registry-stack/issues/361">registry-stack issue #361</a>. Current source does not generate, sign, verify, or activate a project-root bundle. Each product uses its own bundle, and no Registry Stack component binds or atomically activates them, so this is not atomic project activation.</dd>
 
-  <dt id="dataset">dataset</dt>
-  <dd>In a Base Registry Engine project, the value of a Record type's required `primaryDataset`, naming the dataset its records belong to. Registry Manifest catalogs use the same word for their own shape.</dd>
+  <dt id="deployment-candidate">deployment candidate</dt>
+  <dd>The directory `evidencectl package` writes from an <a href="#evidence-project">Evidence project</a> and one target: an immutable `bundle/`, a runtime file, and a compiled authority. Its <a href="#package-digest">package digest</a> identifies the bundle.</dd>
 
   <dt id="directory">directory</dt>
-  <dd>Registry Casework's runtime record of teams, their members and leads, the <a href="#queue">queues</a> each team serves, and declared absences. An Administrator bootstraps and maintains it through the authenticated directory API under `If-Match` revisions; it is not part of the policy package. Team service is a second authority check on every human call, so a queue nobody serves has no inbox, and `caseworkctl doctor` reports it. See <a href="../../operate/casework/">Deploy Registry Casework</a>.</dd>
-
-  <dt>deployment bundle</dt>
-  <dd>A deferred project-root packaging concept tracked by <a href="https://github.com/registrystack/registry-stack/issues/361">registry-stack issue #361</a>. Current source does not generate, sign, verify, or activate a project-root bundle. Each product instead uses its own product-owned bundle, and no Registry Stack component binds or atomically activates them, so this is not atomic project activation. Not the same thing as an Evidence Gateway deployment project's governed bundle, which is one product's immutable startup input.</dd>
-
-  <dt>deployment</dt>
-  <dd>An operated set of product instances. Each product stages and activates its own configuration.</dd>
-
-  <dt id="deployment-project">deployment project</dt>
-  <dd>An Evidence Gateway input form used by deployment inspection and fixture tooling: a directory with `runtime.yaml` whose `package.root` names the installed package. The current authoring flow keeps these inputs separate: `evidencectl package` compiles an <a href="#authoring-workspace">authoring workspace</a> and explicit target into one closed package, while the target retains `runtime.yaml`. Evidence Gateway verifies the package and captures the runtime read-only at startup; a new package is a new deployment, not a live change.</dd>
-
-  <dt>decision owner</dt>
-  <dd>The institution accountable for the requirements, rules, decisions, and actions that use evidence. The decision owner can operate the evidence consumer directly or rely on a separate caller or intermediary.</dd>
-
-  <dt>DPI</dt>
-  <dd>Digital Public Infrastructure. Shared, interoperable digital systems (identity, payments, data exchange) deployed at population scale to support public service delivery. These projects cover the registry-consultation slice of a DPI deployment.</dd>
-
-  <dt>DID</dt>
-  <dd>Decentralized Identifier. The OID4VCI supporting service accepts a self-contained `did:jwk#0` proof-key reference and never performs remote resolution.</dd>
-
-  <dt>distributed custody</dt>
-  <dd>The architectural premise that each authority retains control of its own registry data. The registry stack provides the API surface for lawful exchange between authorities; it does not aggregate data into a central system. Equivalent terms include data sovereignty (Gaia-X, IDS, EU dataspaces vocabulary), subsidiarity (governance literature), and federated custody.</dd>
-
-  <dt id="evidence-gateway">Evidence Gateway (product)</dt>
-  <dd>The minimum-disclosure assertion service in this monorepo. Crate: `crates/registry-evidence`; product material: `products/evidence/`. Given authenticated authority, an authorized purpose, and a predefined requirement, Evidence Gateway serves a signed assertion that answers the requirement, not the source record, plus an SD-JWT VC serialization of that same stateless assertion under a frozen Version 1 profile. The SD-JWT VC format is never a credential lifecycle: no issuance session, holder-binding ceremony, status list, or revocation. Evidence Gateway is a separate greenfield product, not a reduced configuration of anything that came before it.</dd>
-
-  <dt>Evidence Gateway toolset</dt>
-  <dd>The three released binaries `evidence`, `evidencectl`, and `evidence-oid4vci`. Releases that include the toolset publish reproducible binaries alongside a cosign-signed `SHA256SUMS` file. The installer stages and checksum-verifies every binary before replacement begins, attempts to restore the previous three-binary set if replacement fails, and does not itself authenticate `SHA256SUMS`. Use the tag-frozen release verification procedure for authenticity. `evidencectl` delegates runtime evaluation, signing, bundle validation, and fixture evaluation to `evidence`, and reuses the Evidence client and portable verifier for relying-party request preparation and offline response verification. It adds no Evidence Gateway semantics of its own. `evidence-oid4vci` is the optional wallet delivery front end and adds no assertion semantics.</dd>
-
-  <dt>evidence consumer</dt>
-  <dd>A service or process that uses returned evidence. Examples include a business-registration portal, procurement service, licensing authority, environmental reporting service, or credential verifier. The evidence consumer, caller, and decision owner can be the same component or separate components.</dd>
-
-  <dt>ecosystem binding</dt>
-  <dd>Manifest-level binding that connects an external ecosystem profile or governed evidence pack to a Registry Stack runtime surface. A governed evidence ecosystem binding names the evidence pack metadata and policy identity. It is metadata that Registry Manifest validates and publishes; no maintained runtime in the current release consumes it.</dd>
+  <dd>Registry Casework's runtime record of <a href="#team">teams</a>, their staff and supervisors, and the <a href="#queue">queues</a> they serve, maintained by an administrator through the directory API under revisions. See <a href="../../configure/casework-directory/">Staff the directory</a>.</dd>
 
   <dt id="erasure">erasure</dt>
-  <dd>The irreversible removal of retained detail from a Base Registry Engine registry under an approved retention request. `bregctl history erase` removes the retained revisions of one record up to a revision number, the correction context and retained outbox payloads that referenced them, and the cached idempotency responses that could replay them. `bregctl proposal-retention erase` removes eligible payload detail of one exact Proposal submission. Its separate `dry-run` counts the proposed erasure. Neither touches the current record, later revisions, or the <a href="#audit-journal">audit journal</a>. History erasure has no dry run. A <a href="#rebaseline">rebaseline</a> restores snapshot coverage afterwards. Registry Casework erases expired review payloads through bounded runtime maintenance under the pinned ReviewPolicy. It retains minimized replay identities, keeps accountability under its separate retention policy, and makes no source mutation. See <a href="../../operate/casework-retention/">Retain review data and audit</a>.</dd>
+  <dd>The irreversible removal of retained detail under an approved retention request. In Base Registry Engine, `bregctl history erase` and `bregctl proposal-retention erase` remove retained revisions or Proposal detail, never the current record or the <a href="#audit-journal">audit journal</a>; Registry Casework erases expired review data through runtime maintenance.</dd>
 
-  <dt>eSignet</dt>
-  <dd>Open-source identity and authentication service (part of MOSIP). No Registry Stack service integrates with it directly. Evidence Gateway authenticates callers against one configured OIDC issuer and key set named in its immutable bundle, and names no specific identity product. A separately maintained eSignet provider can authenticate citizens against a Base Registry Engine registry through one governed lookup; see <a href="../../explanation/esignet-authentication-over-breg/">Authenticate citizens with eSignet</a>.</dd>
+  <dt id="evidence-gateway">Registry Evidence</dt>
+  <dd>The minimum-disclosure assertion product: it answers one predefined question from a fixed read of your system with a signed <a href="#assertion">assertion</a>, never the source record. Binaries `evidence` and `evidencectl`.</dd>
 
-  <dt>evidence offering</dt>
-  <dd>Metadata entry in a Registry Manifest dataset that describes a verification capability and the access path a client uses to reach it (schema versions `registry-manifest-evidence-offering/v1` and `registry-manifest-evidence-offerings/v1`). Registry Manifest compiles and publishes offerings; an offering is a pointer, and no maintained runtime in the current release serves offerings in its own metadata or evaluates the capability behind one.</dd>
+  <dt id="evidence-project">Evidence project</dt>
+  <dd>An `evidence.yaml` file and the scripts it names, kept in version control, declaring <a href="#assertion-definition">assertion definitions</a>, sources, selector profiles, and Functions. `evidencectl` checks, tests, and packages it with a target into a <a href="#deployment-candidate">deployment candidate</a>.</dd>
 
-  <dt>evidence type list</dt>
-  <dd>CCCEV list of evidence types that satisfy a requirement. In Registry Manifest, one list is one grouped option; multiple lists on the same requirement are alternatives.</dd>
+  <dt id="function">Function</dt>
+  <dd>A project-local typed implementation asset. In BReg, an Action's <a href="#planner">Plan</a> uses one to compute effects within the Action's declared write ceiling; it cannot grant authority or invent a review decision. In an <a href="#evidence-project">Evidence project</a>, a <a href="#rhai">Rhai</a> script with a declared interface that turns a <a href="#source">source</a> response into facts or facts into declared outputs, under fixed operation and size limits.</dd>
 
-  <dt>executable safeguards</dt>
-  <dd>Registry Stack product term for safeguards a runtime enforces rather than a policy document asserts: scope-checked routes, disclosure bounded by a declared profile, an audit event for every request that touches person-level data, and machine-readable metadata a third party can check with software.</dd>
-
-  <dt>governed evidence</dt>
-  <dd>Governed evidence metadata bound to a `governed-evidence` ecosystem binding. Manifest validation requires pack identity, evidence metadata, required PDP gates, allowed outputs, policy id and hash binding, and the legacy `registry-evidence-gateway-pdp/v1` ODRL enforcement profile identifier, while some evidence metadata fields remain opaque JSON. The identifier does not name or connect to the Evidence Gateway product, and the runtime that once enforced these gates is retired.</dd>
-
-  <dt>historical docs</dt>
-  <dd>Older specs, implementation reviews, or pre-rename documents that remain useful evidence but are not current user guidance.</dd>
-
-  <dt>holder</dt>
-  <dd>In Evidence Gateway, the party whose public key a caller supplies in the request's `holderKeys` array. Under the audience-scoped binding mode the key is optional and inert: Evidence Gateway echoes it into the SD-JWT VC `cnf` claim and does nothing else with it, so there is no holder-binding ceremony, no presentation verification, and no key-binding JWT. Under the holder-bound mode at least one key is required and its RFC 7638 thumbprint scopes the subject binding. In both modes the key never reaches authorization, selectors, scripts, source requests, or audit, and no private key member is accepted (`products/evidence/contracts/request.schema.yaml`, `products/evidence/contracts/sd-jwt-vc-profile.yaml`).</dd>
+  <dt id="grant-ceiling">grant ceiling</dt>
+  <dd>The widest authority a Registry Evidence <a href="#assertion-definition">assertion definition</a> lets any grant give for it: the authorities, actor kinds, value origins, and audiences a grant may name. A <a href="#target">target</a> authority's grant may only narrow it; Registry Evidence refuses to activate one that widens it.</dd>
 
   <dt id="holder-bound">holder-bound</dt>
-  <dd>The second Evidence Gateway subject binding mode, declared by a requirement in the immutable bundle. The subject binding derives from the RFC 7638 thumbprint of the holder key rather than from the audience, `cnf` is required in the credential, the assertion carries neither audience nor request nonce, and the audience check moves from issuance to presentation, where the relying party verifies a key-binding JWT. The mode narrows its requirement's response formats to the SD-JWT VC serialization and the holder-bound issuance batch envelope, and refuses the two entity-reference value forms, which take the audience as a derivation input. It accepts cross-verifier correlation through holder key reuse, which the service can neither prevent nor detect (`products/evidence/contracts/holder-bound-profile.yaml`, frozen).</dd>
-
-  <dt id="holiday-revision">holiday revision</dt>
-  <dd>In Registry Casework, a dated list of public holidays for one named holiday set, published to a running deployment by an Administrator rather than written into the policy, because holidays are announced on their own schedule. A new revision drives a reviewed recompute of the activity <a href="#clock">clocks</a> that count against a <a href="#calendar">calendar</a> naming that set.</dd>
-
-  <dt id="review-request">review request</dt>
-  <dd>A Registry Casework review round admitted from a trusted producer under an exact <a href="#review-policy">review policy</a>. The producer selects a policy by ID and may also require an exact version and digest; Casework fixes the concrete policy at acceptance. It binds an immutable subject, policy identity, submission digest, submitted snapshot or current-source reference, human tasks, terminal result, and retention. Submitted context needs no source service.</dd>
-
-  <dt id="review-kind">review kind</dt>
-  <dd>The historical name for a Casework policy declaration. The current product uses <a href="#review-policy">ReviewPolicy</a> and `reviewPolicies`.</dd>
-
-  <dt id="review-policy">review policy</dt>
-  <dd>The Casework declaration that fixes a review round's context requirements, stages, independent reviewer thresholds and exclusions, display and result schemas, outcomes, routing, clocks, and retention. Its exact ID, version, and digest are pinned at admission. See <a href="../../configure/casework/">Author a Casework policy</a>.</dd>
-
-  <dt id="review-task">review task</dt>
-  <dd>One eligible human contribution to a <a href="#review-request">review request</a>, with a stage, serving queue, current revision, holding, private draft, and decision. Current Directory and source disclosure checks govern who may read or act.</dd>
-
-  <dt id="review-result">review result</dt>
-  <dd>The immutable terminal answer a producer reads for its exact review round. It repeats subject, policy, and submission bindings, omits raw reviewer identity and private reasons, and grants no authority to mutate another product.</dd>
-
-  <dt id="key-binding-jwt">key-binding JWT</dt>
-  <dd>The JWT a holder appends to a presentation, defined by RFC 9901 section 4.3, signed by the private key of the credential's `cnf` and covering the presented bytes plus the audience and nonce the relying party chose. Evidence Gateway never appends one; the holder does, and the relying party verifies it with the portable verifier or the `evidence verify-presentation` command. A verified key-binding JWT proves possession at signing time and nothing more: comparing a nonce is not consuming it, so this is not replay prevention, and RFC 9901 section 7.3 leaves the challenge lifecycle to the relying party.</dd>
-
-  <dt>interoperability</dt>
-  <dd>Commitment that each product publishes documented, standards-shaped contracts. Registry Manifest renders portable metadata and Evidence Gateway can serialize SD-JWT VC under its frozen profile.</dd>
-
-  <dt>JSON-LD</dt>
-  <dd>JSON-based linked data format. W3C recommendation (JSON-LD 1.1). Registry Manifest uses it for catalog and policy render output.</dd>
+  <dd>The Registry Evidence subject binding mode in which the binding derives from the holder key's RFC 7638 thumbprint instead of the audience. Its requirement returns only <a href="#sd-jwt-vc">SD-JWT VC</a>, and the relying party checks the audience at presentation by verifying a key-binding JWT.</dd>
 
   <dt id="journey">journey</dt>
-  <dd>One of the scenarios in `tests/journeys.yaml` that `bregctl test` replays over HTTP against a throwaway database, because a row boundary, a query bound, or a review workflow is only proven by a request that runs. A fully successful run writes a <a href="#receipt">receipt</a>. See <a href="../../configure/breg-journeys/">Test with journeys</a>.</dd>
-
-  <dt>metadata manifest</dt>
-  <dd>Portable `metadata.yaml` document (schema version `registry-manifest/v1`) that describes a registry through its catalog and defined collections. The <a href="../../products/registry-manifest/reference/">Registry Manifest reference</a> is authoritative for the current top-level keys and field schemas. It contains publication metadata rather than runtime bindings.</dd>
-
-  <dt>minimized evidence</dt>
-  <dd>Registry Stack product term for an evidence response shaped by data minimization, selective disclosure, or verifiable attestation. The response can be narrower than the full source record when the configured use case supports that pattern.</dd>
-
-  <dt id="minimum-disclosure">minimum disclosure</dt>
-  <dd>Evidence Gateway's design rule: one response carries the smallest sufficient answer to one requirement, never the source record. The assertion payload is closed and rejects additional properties, subject selector profiles and selector values never appear in it, the output gate admits only the exact declared concept identifiers and value forms, and purpose does not narrow disclosure, so a purpose that justifies a coarser answer needs its own requirement. See <a href="../../spec/rs-pr-evidence/">RS-PR-EVIDENCE</a> Section 6.</dd>
+  <dd>One scenario in `tests/journeys.yaml` that `bregctl test` replays over HTTP against a throwaway database. A fully successful run writes a <a href="#receipt">receipt</a>. See <a href="../../configure/breg-journeys/">Test with journeys</a>.</dd>
 
   <dt id="module">module</dt>
-  <dd>A reusable file under `modules/<id>/module.yaml` that contributes Record types, value types, Functions, Actions, and additive extensions to Record types declared elsewhere, so a part of a Base Registry Engine model can be reviewed and versioned separately from the <a href="#registry-project">registry project</a> that adopts it.</dd>
-
-  <dt>ODRL</dt>
-  <dd>Open Digital Rights Language. W3C recommendation. Registry Manifest emits ODRL Offer documents for dataset-scoped descriptive policies. Publishing an ODRL document is a description, not enforcement, and no maintained runtime in the current release evaluates ODRL terms.</dd>
-
-  <dt>OGC API Records</dt>
-  <dd>Open Geospatial Consortium API specification for records. Registry Manifest renders an OGC Records item collection.</dd>
-
-  <dt>OGC API Features</dt>
-  <dd>Open Geospatial Consortium API specification for feature collections and items. No maintained Registry Stack runtime claims conformance.</dd>
-
-  <dt>OGC API EDR</dt>
-  <dd>Open Geospatial Consortium API specification for Environmental Data Retrieval. The profiled area queries that once carried this name were feature-gated routes on the retired Relay 1.0 runtime. No maintained runtime in the current release serves them.</dd>
+  <dd>A reusable `modules/<id>/module.yaml` file that contributes Record types, value types, Functions, Actions, and additive extensions to a Base Registry Engine <a href="#registry-project">registry project</a>.</dd>
 
   <dt id="oid4vci">OID4VCI</dt>
-  <dd>OpenID for Verifiable Credential Issuance. The historical credential-issuance flow is retired. The current `registry-evidence-oid4vci` supporting service implements the frozen OID4VCI 1.0 Final profile for holder-bound `dc+sd-jwt` delivery, with protected offer creation, pre-authorized-code token exchange, nonce, and credential endpoints. Evidence Gateway signs the credential and the adapter transports it; deferred issuance, notification, persistence, and draft-13 compatibility remain outside the profile.</dd>
+  <dd>OpenID for Verifiable Credential Issuance. The `registry-evidence-oid4vci` supporting service implements a frozen OID4VCI 1.0 Final profile to deliver holder-bound `dc+sd-jwt` credentials to a wallet; Registry Evidence signs them.</dd>
 
   <dt id="outbox">outbox</dt>
-  <dd>A table in a Base Registry Engine registry's own database that takes one row per configured event, written inside the same transaction as the record change that raised it, which the webhook worker inside `breg` then reads and delivers.</dd>
+  <dd>A table in a Base Registry Engine registry's own database that takes one row per configured event, written in the same transaction as the record change, which the webhook worker inside `breg` delivers.</dd>
 
   <dt id="package">package</dt>
   <dd>The compiled and verified form of one product's reviewed authoring input.</dd>
 
   <dt id="package-digest">package digest</dt>
-  <dd>The `sha256:` digest of a package's `SHA256SUMS` file, which lists the digest of every other file in the package. Every product that serves a package reports this value and accepts it as `package.expectedDigest`, so two operators can confirm they run the same reviewed bytes. It is an integrity digest, not an authenticity proof: packages are unsigned, and the operator's own transport and storage are what bind a package to its author.</dd>
-
-  <dt>PROV-O</dt>
-  <dd>W3C Provenance Ontology. Currently listed as design influence (`inspired_by`). Provenance-shaped concepts appear in audit fields, but no PROV-O vocabulary terms are emitted as JSON-LD at reviewed commits.</dd>
-
-  <dt>PDP</dt>
-  <dd>Policy decision point. No maintained Registry Stack runtime exposes a general external policy-decision point.</dd>
-
-  <dt>PDP gate</dt>
-  <dd>A named policy decision point check, such as policy identity, ODRL terms, purpose, jurisdiction, assurance, source freshness, legal basis, consent, and redaction. Registry Manifest still validates the required-gate list a governed evidence pack declares; the gates are metadata that describes an intended enforcement, and no maintained runtime evaluates them.</dd>
+  <dd>The `sha256:` digest of a package's `SHA256SUMS` file, reported by every product that serves a package and accepted as `package.expectedDigest`. It is an integrity digest, not an authenticity proof: packages are unsigned.</dd>
 
   <dt id="planner">Plan</dt>
-  <dd>The effects an <a href="#action">Action</a> makes, authored under `plan`. A `type: fixed` Plan lists its effects in order; a `type: function` Plan names a <a href="#function">Function</a> that computes them within the Action's declared `writes`. The Action, not the Plan, owns its execution mode, review requirement, and application authority.</dd>
-
-  <dt>policy hash</dt>
-  <dd>Lowercase `sha256:` digest that binds a governed evidence policy identity to canonical policy bytes or an externally supplied policy artifact. Registry Manifest verifies it when an inline evidence pack policy object is present.</dd>
-
-  <dt id="private-draft">private draft</dt>
-  <dd>The working notes the holder keeps on a claimed <a href="#review-task">review task</a> before deciding. Only that holder reads or writes them. A release or transfer does not disclose the draft to the next holder or producer.</dd>
-
-  <dt>registry stack</dt>
-  <dd>The product family including Registry Platform, Registry Manifest, Base Registry Engine, Registry Casework, Evidence Gateway, Registry Discovery, Registry Render, Registry Scheduling, and Registry Messaging.</dd>
-
-  <dt id="purpose">purpose</dt>
-  <dd>The authorized reason a caller gives for one Evidence Gateway singular request or request batch. A purpose is a configured code drawn from the requirement's declared `purposes` list and from the caller's grant, never caller-defined prose. It is part of each complete authorization decision, is echoed into each assertion, and does not narrow disclosure. A declared purpose is an authorized selection from the granted set, not an identity-provider attestation. In Base Registry Engine, an <a href="#access-profile">access profile</a>'s `requiredPurposes` lists the purposes it accepts, and the verified token's purpose must match one of them.</dd>
-
-  <dt>purpose-bound request</dt>
-  <dd>Registry Stack product term for a request evaluated against an explicit purpose limitation or context-aware authorization rule.</dd>
-
-  <dt id="queue">queue</dt>
-  <dd>A named Casework inbox used by pinned review stages, routing, and clock steps. A team in the <a href="#directory">Directory</a> serves it; current membership and deciding authority determine which tasks a human can reach.</dd>
-
-  <dt>scope</dt>
-  <dd>An authorization value a protected operation requires from a verified caller credential. A scope is not a disclosure decision on its own.</dd>
-
-  <dt>fail closed</dt>
-  <dd>Security posture where a missing, malformed, unsupported, stale, or unauditable input results in refusal rather than a partial answer.</dd>
-
-  <dt>Solmara Lab</dt>
-  <dd>Separately maintained adopter demo for the fictional Republic of Solmara. It runs published Registry Stack images in local and hosted topologies and is not a formal Registry Stack product. Repo slug: `solmara-lab`.</dd>
-
-  <dt id="rebaseline">rebaseline</dt>
-  <dd>The Base Registry Engine maintenance run that restores snapshot coverage after a history <a href="#erasure">erasure</a>, by proving every live row still matches its retained journal head and installing one baseline commit at that head.</dd>
+  <dd>The effects an <a href="#action">Action</a> makes, authored under `plan`: a `type: fixed` Plan lists them in order, and a `type: function` Plan names a <a href="#function">Function</a> that computes them within the Action's declared `writes`.</dd>
 
   <dt id="policy-package">policy package</dt>
-  <dd>The Casework artifact `caseworkctl package` writes from a checked project: its policy, referenced local schemas, provider exports, and exact `SHA256SUMS`. Activation records the package identity; the runtime verifies that exact closure before serving. A changed byte, missing file, or extra file is refused.</dd>
+  <dd>The directory `caseworkctl package` writes from a checked Casework project, with its exact `SHA256SUMS`. The runtime verifies that closure before serving and refuses a changed, missing, or extra file.</dd>
 
-  <dt id="record-context">record context</dt>
-  <dd>The identifier, revision, lifecycle state, and recorded-at context that lets a consumer distinguish one version of a Registry Record from another.</dd>
+  <dt id="producer">producer</dt>
+  <dd>The system that sends Registry Casework a <a href="#review-request">ReviewRequest</a> and reads its <a href="#review-result">ReviewResult</a>, declared under `trustedProducers`. It authenticates independently of the human reviewers.</dd>
+
+  <dt id="proposal">Proposal</dt>
+  <dd>BReg durable work created by a proposal-mode Action. Submission freezes its inputs, effects, target revisions, and the review it requests; BReg applies that exact plan automatically by default, or manually when configured.</dd>
+
+  <dt id="purpose">purpose</dt>
+  <dd>The authorized reason a caller gives for a Registry Evidence request: a configured code from the definition's declared purposes and the caller's grant, echoed into the assertion. In Base Registry Engine, an <a href="#access-profile">access profile</a>'s `requiredPurposes` lists the purposes it accepts.</dd>
+
+  <dt id="queue">queue</dt>
+  <dd>A named Casework inbox that <a href="#stage">stages</a>, routing, and clock steps send tasks to. A person reaches its tasks only as a member of a <a href="#team">team</a> serving it.</dd>
+
+  <dt id="rebaseline">rebaseline</dt>
+  <dd>The Base Registry Engine maintenance run, `bregctl history rebaseline`, that restores snapshot coverage after a history <a href="#erasure">erasure</a> by verifying every live row against its retained journal head.</dd>
 
   <dt id="receipt">receipt</dt>
-  <dd>The JSON document a fully successful `bregctl test` run writes, recording the candidate's registry revision, the source closure, the package it succeeds, the target schema fingerprint, and the <a href="#journey">journeys</a> that passed, so packaging can refuse a receipt taken for anything else.</dd>
-
-  <dt id="registry-casework">Registry Casework</dt>
-  <dd>The bounded human-review product: trusted producers submit <a href="#review-request">review requests</a>; authorized teams claim, draft, and decide <a href="#review-task">review tasks</a>; producers consume correlated results. It uses the issuer's human-actor assertion and leaves external disclosure and mutation authority with the source. See the <a href="../../start/casework/">Registry Casework overview</a>.</dd>
-
-  <dt id="registry-discovery">Registry Discovery</dt>
-  <dd>The read-only public index in this monorepo. Current profiles index Evidence Gateway provider descriptions and evidence-type mappings. Published v1alpha1 packages may retain historical provider capabilities, but a mixed index must be rebuilt before current serving.</dd>
-
-  <dt id="registry-document">registry document</dt>
-  <dd>The root `registry.yaml` of a Base Registry Engine registry project.</dd>
-
-  <dt>Registry Manifest</dt>
-  <dd>Portable Rust library and CLI for modeling, validating, and rendering standards-facing metadata without running a service.</dd>
-
-  <dt id="registry-platform">Registry Platform</dt>
-  <dd>Shared Rust crates for registry security and operational primitives, including auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, and test fixtures. Their APIs are workspace-internal and not published compatibility contracts.</dd>
+  <dd>The JSON document a fully successful `bregctl test` run writes for one exact candidate, recording the <a href="#journey">journeys</a> that passed, so packaging can refuse a receipt taken for anything else.</dd>
 
   <dt id="registry-record">Record (Registry Record)</dt>
-  <dd>One stored row of a BReg <a href="#record-type">Record type</a>, with a stable UUID and a revision counter that each committed change advances. Registry Record v1 is the neutral, strict representation in which Base Registry Engine and its clients return it; the <a href="#registry-record-envelope">Registry Record envelope</a> gives its shape.</dd>
+  <dd>One stored row of a BReg <a href="#record-type">Record type</a>, with a stable UUID and a revision counter each committed change advances. Registry Record v1 is the strict shape BReg and its clients return it in; see the <a href="../breg-api/#record-envelope">Base Registry Engine API reference</a>.</dd>
 
-  <dt id="registry-record-envelope">Registry Record envelope</dt>
-  <dd>The single shape every Base Registry Engine read, create, patch, tombstone, revision, and snapshot response returns. `data.recordIdentifier` is the record's stable UUID, `data.revisionIdentifier` a string revision counter starting at `1`, and `data.domainData` the Record type's fields under their `apiName`, narrowed to the grant's readable fields and to `$select`. Mutation responses add `data.snapshot`. Proposals and ActionReceipts have their own response shapes. `meta` carries `registryIdentifier`, `datasetIdentifier`, and `entityTypeIdentifier` (the Record type) from the compiled <a href="#package">package</a>, and a collection read returns `items` and a `pageInfo` object instead of a single `data`. A field name that would collide with an envelope member is refused at compile time. See the <a href="../breg-api/#record-envelope">Base Registry Engine API reference</a>.</dd>
+  <dt id="record-type">Record type</dt>
+  <dd>The BReg definition of one kind of <a href="#registry-record">Record</a>: its fields, route, dataset, and `mutationPolicy`, authored under `recordTypes`.</dd>
+
+  <dt id="registry-casework">Registry Casework</dt>
+  <dd>The human-review product: a <a href="#producer">producer</a> sends a <a href="#review-request">ReviewRequest</a>, authorized people decide its <a href="#review-task">ReviewTasks</a>, and the producer reads the result. The source keeps its data, its disclosure, and all authority to change it. See the <a href="../../start/casework/">Registry Casework overview</a>.</dd>
+
+  <dt id="registry-manifest">Registry Manifest</dt>
+  <dd>The Rust library and CLI that validate and render portable, standards-shaped registry metadata without running a service. The <a href="../../products/registry-manifest/reference/">Registry Manifest reference</a> is authoritative for the current top-level keys and field schemas.</dd>
 
   <dt id="registry-project">registry project</dt>
-  <dd>The directory of YAML files an adopter writes for one Base Registry Engine registry, `registry.yaml` plus optional <a href="#module">modules</a> and <a href="#journey">journeys</a>, declaring Record types, datasets, access profiles, Functions, Actions, Proposal policies, and events. `bregctl` checks and packages the project; its journeys test the declared behavior against a throwaway database. `bregctl --help` also calls it an <a href="#authoring-project">authoring project</a>. See <a href="../../configure/breg/">Author a registry project</a>.</dd>
+  <dd>The directory of YAML files an adopter writes for one Base Registry Engine registry: `registry.yaml` plus optional <a href="#module">modules</a> and <a href="#journey">journeys</a>. `bregctl` checks, tests, and packages it. See <a href="../../configure/breg/">Author a registry project</a>.</dd>
 
-  <dt id="registry-relay">Registry Relay</dt>
-  <dd>A retired Registry Stack product. Version 0.38.0 was its last numbered release; 0.39.0 is the first release without it. See the <a href="../../decisions/registry-relay-retirement-2026-10-03/">retirement decision</a>.</dd>
-
-  <dt>Registry Stack project</dt>
-  <dd>Retired term for a shared authored root. Current products are authored and deployed independently.</dd>
+  <dt id="registry-source-profile">`Registry-Source-Profile`</dt>
+  <dd>The header a Casework reviewer sends to select the source's access profile for work whose context comes from a <a href="#context-provider">context provider</a>, which reads under that profile and the reviewer's own credential. Producer, policy, and accountability routes refuse it.</dd>
 
   <dt id="requirement">requirement</dt>
-  <dd>The predefined, versioned question one Evidence Gateway request names. A requirement is declared in the immutable bundle with its identifier, kind, closed single or search-then-fetch acquisition, authorized purposes, subject roles and selector profiles, reference frameworks, Evidence Type, validity, derivation script, concepts, fixtures, and disclosure guard (`products/evidence/contracts/bundle.schema.yaml`). Only predefined requirements can be evaluated, and to a caller lacking authorization an unknown identifier is indistinguishable from an unauthorized one. The word is CCCEV's, adopted for the same idea. An author declares the same meaning in an AssertionDefinition under `assertionDefinitions` in `evidence.yaml`; its semantics supplies the Requirement URI used by public requests.</dd>
+  <dd>The question a Registry Evidence <a href="#assertion-definition">assertion definition</a> answers, named by a stable Requirement URI such as `urn:example:requirement:adult-status:v1` that a caller sends. A change in meaning gets a new URI.</dd>
 
-  <dt>request batch</dt>
-  <dd>An Evidence Gateway envelope that asks `POST /v1/evidence/batch` to evaluate between one and sixteen ordered audience-scoped subject sets for one common requirement and purpose. Each item has its own request nonce and complete subject-role set. The response preserves order and contains either one independently signed flattened JWS or `evidence-not-available` for each item; any other failure aborts the complete request. This envelope is distinct from the holder-bound issuance batch on `POST /v1/evidence`, which performs one subject evaluation and emits one credential per holder key.</dd>
+  <dt id="review-policy">`ReviewPolicy`</dt>
+  <dd>The Casework declaration under `reviewPolicies` that fixes a review's context, <a href="#stage">stages</a>, schemas, outcomes, routing, clocks, and retention; its ID, version, and digest are pinned at acceptance. See <a href="../../configure/casework/">Author a Casework policy</a>.</dd>
 
-  <dt id="resource">resource (retired Relay term)</dt>
-  <dd>A named collection in the retired Registry Relay read-only publication contract. Current Base Registry Engine projects declare Record types and Actions; Evidence Gateway projects declare fixed sources and requirements.</dd>
+  <dt id="review-request">`ReviewRequest`</dt>
+  <dd>What a <a href="#producer">producer</a> sends Casework: the subject to review and the <a href="#review-policy">ReviewPolicy</a> to review it under. Casework pins the policy's binding and a `submissionDigest` when it accepts the request.</dd>
+
+  <dt id="review-result">`ReviewResult`</dt>
+  <dd>The immutable terminal answer a producer reads for its <a href="#review-request">ReviewRequest</a>: subject, policy binding, `submissionDigest`, status, outcome, and any public reason. It never names the reviewer and grants no authority to change the source.</dd>
+
+  <dt id="review-task">`ReviewTask`</dt>
+  <dd>One human contribution to a <a href="#review-request">ReviewRequest</a>, created when a <a href="#stage">stage</a> becomes active, with its queue, revision, holder, and <a href="#decision">Decision</a>.</dd>
 
   <dt id="rhai">Rhai</dt>
-  <dd>The bounded scripting language both Evidence Gateway and Base Registry Engine embed for adopter-authored logic, reviewed with the rest of the configuration. Evidence Gateway uses it for requirement-specific derivations, which read the facts, selectors, and context the host gathered and return the answer. Base Registry Engine uses it for named Action plan Functions, which receive admitted inputs and compute effects within the declared write ceiling.</dd>
+  <dd>The bounded scripting language for adopter-authored Functions, run under fixed operation and size limits. Registry Evidence Functions extract facts and derive outputs; Base Registry Engine Functions compute an Action's effects.</dd>
 
   <dt id="row-boundary">row boundary</dt>
-  <dd>A rule in a Base Registry Engine <a href="#access-profile">access profile</a> that binds one record field to a verified claim in the caller's token with `equals` or `in`, so a request reaches only the rows whose field matches what the token carries.</dd>
-
-  <dt id="source-profile">source profile</dt>
-  <dd>A product-specific declaration constraining how a fixed source is accessed.</dd>
-
-  <dt id="casework-source-profile">source profile (Casework)</dt>
-  <dd>The value a human sends in `Registry-Source-Profile` for open current-source work, source context, lists, decisions, and new notes. A read-only provider uses that profile and the human's bearer for source disclosure. Retained decided-task and settled-history reads use Casework authority without releasing source context; submitted-context tasks require no source profile.</dd>
-
-  <dt>source</dt>
-  <dd>A named data interface a product reads through its fixed source contract.</dd>
-
-  <dt>source-owned decision</dt>
-  <dd>A decision already made and owned by an authoritative source system. A registry stack service may disclose that fact only when the requirement and its review documentation identify it as source-owned; no service recomputes the decision or claims ownership of its policy.</dd>
-
-  <dt>`registry-manifest/v1`</dt>
-  <dd>Schema version string for portable metadata manifests.</dd>
-
-  <dt>reviewability</dt>
-  <dd>Commitment that stack promises are backed by inspectable contracts, artifacts, tests, or audit evidence.</dd>
-
-  <dt>runtime binding</dt>
-  <dd>Deployment-local settings that connect reviewed product input to one operated environment.</dd>
-
-  <dt>safeguards</dt>
-  <dd>Technical and institutional controls that keep an exchange authorized, bounded, auditable, and subject to accountable governance.</dd>
+  <dd>A rule in a Base Registry Engine <a href="#access-profile">access profile</a> that binds one record field to a verified token claim with `equals` or `in`, so a request reaches only matching rows.</dd>
 
   <dt id="sd-jwt-vc">SD-JWT VC</dt>
-  <dd>Selective Disclosure JWT Verifiable Credential (IETF draft). Evidence Gateway serializes the same stateless assertion as an SD-JWT VC under the frozen profile in `products/evidence/contracts/sd-jwt-vc-profile.yaml`, when the immutable bundle and the one matched grant both permit that response format. Under the default audience-scoped binding mode the credential is meaningful only to the relying party named in the assertion's audience; a requirement declaring the holder-bound mode narrows its formats to this serialization and the holder-bound issuance batch envelope. Neither is a credential lifecycle, and full SD-JWT VC conformance is not claimed. Media type: `application/dc+sd-jwt`.</dd>
+  <dd>Selective Disclosure JWT Verifiable Credential (IETF draft), the second serialization Registry Evidence offers for the same stateless <a href="#assertion">assertion</a> under its frozen profile. It adds no credential lifecycle. Media type: `application/dc+sd-jwt`.</dd>
 
-  <dt id="subject-binding-mode">subject binding mode</dt>
-  <dd>Which value the binding scope takes inside an Evidence Gateway subject binding. The vocabulary is closed at `audience-scoped` and `holder-bound`. Omission has the effective default `audience-scoped`; no caller input selects the mode. Each mode derives under its own domain constant, so the two cannot collide, and both emit into the one `urn:evidence:subject` namespace. Because the derivation is an HMAC under a deployment secret, a relying party cannot recompute a binding under either mode and pins the expected bindings from independent trusted state.</dd>
+  <dt id="selector-profile">selector profile</dt>
+  <dd>The bound on what a caller may send to identify a subject in a Registry Evidence request, declared in the <a href="#evidence-project">Evidence project</a>: the fields, their sizes, and the aggregate limit. A <a href="#source">source</a> takes its request values only from those fields.</dd>
 
-  <dt>SHACL</dt>
-  <dd>Shapes Constraint Language. Registry Manifest emits SHACL node shapes for published entity schemas.</dd>
+  <dt id="source">source</dt>
+  <dd>One fixed read an <a href="#evidence-project">Evidence project</a> declares: an HTTP request with one method and path template, or one SQL statement over a read-only SQLite extract, with the response shape it accepts and the fields it may read. Registry Evidence reaches a source with the credential its <a href="#target">target</a> binds, never the caller's.</dd>
 
-  <dt>SP DCI</dt>
-  <dd>Social Protection Digital Convergence Initiative. The SP DCI adapter and the reviewed DCI source integration were surfaces of the retired Relay 1.0 runtime. No maintained runtime in the current release exposes them.</dd>
+  <dt id="stage">stage</dt>
+  <dd>One step of a <a href="#review-policy">ReviewPolicy</a>, run in order, naming its <a href="#queue">queue</a>, the profiles that may decide, and how many independent reviewers must approve.</dd>
 
-  <dt>static discovery bundle</dt>
-  <dd>Manifest-generated directory whose digest-bearing index inventories portable metadata and linked-data outputs. It can be hosted as static files.</dd>
+  <dt id="subject-binding">subject binding</dt>
+  <dd>The opaque value that stands for a subject in a Registry Evidence <a href="#assertion">assertion</a> in place of its identifier. An audience-scoped binding differs for each relying audience, so two cannot join their answers; a <a href="#holder-bound">holder-bound</a> binding derives from the holder's key instead.</dd>
 
-  <dt>standards-shaped metadata</dt>
-  <dd>Registry Stack product term for machine-readable metadata emitted through formats such as DCAT, CPSV-AP, CCCEV, SHACL, JSON Schema, ODRL, OpenAPI, OGC API Records, and SKOS-shaped codelist metadata.</dd>
-
-  <dt>SKOS</dt>
-  <dd>Simple Knowledge Organization System. Registry Manifest currently emits flat SKOS-shaped `skos:ConceptScheme` and `skos:Concept` nodes for codelists inside SHACL and BRegDCAT/DCAT-shaped outputs. It does not yet publish a standalone SKOS artifact.</dd>
+  <dt id="target">target</dt>
+  <dd>The operator-owned file, such as `local-target.yaml`, that binds an <a href="#evidence-project">Evidence project</a> to one deployment: the token issuer, each <a href="#source">source</a>'s endpoint and credential, the signer, and the audit path. Its target authority names the <a href="#access-profile">access profiles</a> that may call and the grants each holds.</dd>
 
   <dt id="team">team</dt>
-  <dd>A <a href="#directory">directory</a> entry in Registry Casework: a named group with members, leads, and the <a href="#queue">queues</a> it serves. Membership decides what a Staff member sees, and leading a serving team decides what a Supervisor may move, cover, or read from an <a href="#accountability-record">accountability record</a>.</dd>
-
-  <dt id="result-feed">result feed</dt>
-  <dd>The producer-facing, cursor-paged list of terminal results for <a href="#review-request">review requests</a> created under one exact producer binding. Events carry a stable identifier and terminal result without raw reviewer identity or private reason. Events leave the feed when the pinned ReviewPolicy's `retention.terminalRetentionDays` elapse, so a producer polls within that period and deduplicates by `eventId`.</dd>
-
-  <dt id="transit-proxy">Transit proxy</dt>
-  <dd>The workload-local Vault or OpenBao Transit proxy an Evidence Gateway deployment reaches over a Unix socket to sign assertions in production and evidence-grade mode. The operator runs it beside the service, so Evidence Gateway holds no signing key of its own in those modes. Local assurance may use an owner-only P-256 private JWK under the secret root instead.</dd>
-
-  <dt>trust domain</dt>
-  <dd>The institutional boundary whose operators, runtime identities, policy, and deployment approval govern one deployment.</dd>
-
-  <dt>wallet</dt>
-  <dd>Holder-owned application that stores credentials and presents them to verifiers. The separate `registry-evidence-oid4vci` supporting service exposes a frozen OID4VCI delivery profile to a wallet, while Evidence Gateway itself integrates with none. Wallet onboarding, wallet attestation, trust-list membership, and holder key generation, holding, escrow, or recovery by a service remain non-goals. The holder-bound profile defines what a relying party verifies when a holder presents a credential; no test in this repository covers a wallet storing or presenting an Evidence Gateway credential.</dd>
-<dt id="work-item">work item</dt>
-  <dd>The historical source-work coordination record removed from Casework. Current human work uses the single <a href="#review-request">ReviewRequest</a> and <a href="#review-task">ReviewTask</a> model; Casework keeps no source-action execution lifecycle.</dd>
+  <dd>A named Casework group that serves <a href="#queue">queues</a> and declares the profiles its members and supervisors must hold; its membership lives in the <a href="#directory">directory</a>.</dd>
 
 </dl>
 
@@ -424,7 +199,13 @@ Product names are always in English, including on future translated pages.
     crates/registry-breg/src/mutation/action.rs, applicationId;
     crates/registry-breg-client/src/actions.rs, BRegActionReceipt and BRegActionResultReference;
     crates/registry-record/src/lib.rs, RegistryRecord and RegistryRecordMeta;
-    crates/registry-breg/src/fixtures.rs, SchemaTestReceipt. */}
+    crates/registry-breg/src/fixtures.rs, SchemaTestReceipt;
+    crates/registry-evidence-authoring/src/project.rs, EvidenceProject and AssertionDefinition;
+    crates/registry-evidencectl/src/build.rs; crates/registry-evidence/src/bundle.rs,
+    compute_requirement_revisions; crates/registry-review-protocol/src/lib.rs, ReviewCreateRequest,
+    ReviewContext, and ReviewResult; crates/registry-casework-core/src/review.rs, ReviewPolicy,
+    ReviewStagePolicy, and Decision; crates/registry-casework-core/src/adapter.rs;
+    crates/registry-caseworkctl/src/project.rs, explain(). */}
 
 ## Style notes
 

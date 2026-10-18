@@ -15,7 +15,7 @@ pub const REMOVED_RUNTIME_ENVIRONMENT_VARIABLE: &str = "REGISTRY_EVIDENCE_RUNTIM
 #[command(
     name = "evidence",
     version = registry_platform_buildinfo::DISPLAY_VERSION,
-    about = "Evidence Gateway Version 1"
+    about = "Registry Evidence Version 1"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -66,6 +66,9 @@ pub enum AuthorityCommand {
         /// Target authority document to validate and activate.
         #[arg(long, value_name = "FILE")]
         document: PathBuf,
+        /// Operator or change reference; only its hash is retained in activation audit.
+        #[arg(long, value_name = "REFERENCE")]
+        operator_reference: Option<String>,
     },
     /// Inspect revisions and digests from committed activation history, without identity values.
     History {
@@ -224,7 +227,7 @@ pub enum Command {
         #[arg(long)]
         config: PathBuf,
     },
-    /// Start the native Evidence Gateway HTTP service.
+    /// Start the native Registry Evidence HTTP service.
     Serve {
         /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]

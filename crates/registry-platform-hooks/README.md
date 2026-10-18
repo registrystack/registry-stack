@@ -113,3 +113,8 @@ metadata ages out. State rows are deleted before delivery metadata, and an event
 is deleted only after its last delivery is gone. A failure returns the shared
 `RetentionError`, whose cause is the refused bound or the server's SQLSTATE. Audit retention remains the
 product's responsibility; metadata cleanup never substitutes for expiry audits.
+
+Dead-letter metadata ages from the dead-letter transition and becomes eligible
+only after payload expiry and erasure complete. Later expiry does not restart
+the metadata horizon. Explicit discard likewise uses its completed terminal
+transition, without waiting for the original scheduled payload deadline.

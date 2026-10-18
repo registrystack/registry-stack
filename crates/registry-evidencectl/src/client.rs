@@ -57,7 +57,7 @@ pub enum ContractsCommand {
         .args(["private_key_file", "private_key_env"])
 ))]
 pub struct ProfileCreateArgs {
-    /// Evidence Gateway base URL. HTTPS is required by default.
+    /// Registry Evidence base URL. HTTPS is required by default.
     #[arg(long)]
     base_url: Url,
 

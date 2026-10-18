@@ -47,16 +47,20 @@ async fn read(
             .await;
         }
     };
-    let Some(surface) = authorize_route(&service, &route, &claims, &options) else {
-        return audited_read_concealment(
-            &service,
-            &route,
-            &options,
-            &claims,
-            path.get("record_id"),
-            &correlation,
-        )
-        .await;
+    let surface = match super::authorize_route_with_reason(&service, &route, &claims, &options) {
+        Ok(surface) => surface,
+        Err(reason) => {
+            return audited_read_concealment(
+                &service,
+                &route,
+                &options,
+                &claims,
+                path.get("record_id"),
+                &correlation,
+                reason,
+            )
+            .await;
+        }
     };
     let record_id = path.get("record_id");
     if claims.principal().is_none()

@@ -47,12 +47,22 @@ The configured issuer and explicit JWKS URI use the shared checked `Url`
 type before authentication is constructed. Backslashes and host text the URL
 parser rewrites are refused with `config.invalid-value` at the member, without
 repeating its value. ASCII DNS case differences, punycode, and IPv6 literals
-remain accepted, and the issuer is still compared as written. Existing HTTPS
-and supervised loopback rules remain in force. The shared
+remain accepted, and the issuer is still compared as written. The declared
+issuer may resolve to a private address, and so may an explicit JWKS URI,
+which is declared configuration and inherits the declared-issuer allowance on
+any origin. A discovered JWKS URI inherits that allowance only on the same
+origin; a discovered cross-origin private address is refused, and cloud
+metadata and link-local addresses remain refused for declared and discovered
+endpoints alike. Plain HTTP remains limited to loopback unless the
+runtime explicitly sets `allowInsecureHttp: true`, in which case startup emits
+a fixed warning; that setting never extends plain HTTP to a discovered
+cross-origin endpoint, which must use HTTPS. Redirects remain disabled. The shared
 `issuer_and_jwks_uri_are_checked_urls_when_read` test covers refusals and
 ordinary configurations; Messaging's
 `an_expanded_value_can_never_change_the_document_shape` proves that an
-expanded invalid issuer is refused at `/authentication/oidc/issuer`.
+expanded invalid issuer is refused at `/authentication/oidc/issuer`, and
+`runtime_reads_the_explicit_http_issuer_opt_in` covers the explicit HTTP
+exception and its startup diagnostic.
 
 ## Authorization
 

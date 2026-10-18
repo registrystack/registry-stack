@@ -3346,3 +3346,528 @@ fn pem(label: &str, der: &[u8]) -> String {
         .join("\n");
     format!("-----BEGIN {label}-----\n{body}\n-----END {label}-----\n")
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_prunes_old_terminal_hooks_and_keeps_recent_and_pending_work() {
+    let receiver = HttpsReceiver::start().await;
+    let database = TestDatabase::create(12).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = compiled_registry();
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs delivery state with the compiled schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        registry_state_test_identity(),
+    )
+    .await
+    .expect("migration initializes active package identity with empty history");
+    migration_task.abort();
+
+    let fixture = DestinationFixture::new(&receiver);
+    let destinations = Arc::new(fixture.activate(&compiled));
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
+        .expect("test owns a keyed audit profile");
+    let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
+        .expect("test lock identity is bounded");
+    let coordinator = MutationTransaction::new_with_event_destinations(
+        lock_key,
+        Duration::from_secs(2),
+        identity.clone(),
+        "webhook-delivery-instance",
+        database.audit(audit_profile.clone()),
+        Some(Arc::clone(&destinations)),
+    );
+    let service = WebhookDeliveryService::new(
+        pool.clone(),
+        Arc::clone(&destinations),
+        hook_handlers(&compiled, &identity.activation_id),
+        Arc::new(compiled.clone()),
+        identity.clone(),
+        "webhook-delivery-instance",
+        lock_key,
+        Duration::from_secs(2),
+        database.audit(audit_profile.clone()),
+    );
+    let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
+        .expect("create plan retains the exact compiler delivery");
+    let claims = mutation_claims(&compiled);
+    let mut mutation_client = pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+
+    let mut events = Vec::new();
+    for key in [
+        "canary-old-terminal",
+        "canary-recent-terminal",
+        "canary-pending",
+        "canary-leased",
+        "canary-replayable",
+    ] {
+        if matches!(key, "canary-old-terminal" | "canary-recent-terminal") {
+            receiver.enqueue(ResponsePlan::Status(204)).await;
+        }
+        let event = create_event(
+            &database,
+            &coordinator,
+            &mut mutation_client,
+            &plan,
+            &claims,
+            key,
+            key,
+        )
+        .await;
+        if matches!(key, "canary-old-terminal" | "canary-recent-terminal") {
+            service.deliver_once().await.unwrap();
+        }
+        events.push(event);
+    }
+    database.admin.execute("UPDATE registry_internal.registry_webhook_delivery_state SET updated_at=transaction_timestamp()-interval '400 days', delivered_at=transaction_timestamp()-interval '400 days' WHERE event_id=$1", &[&events[0].event_id]).await.unwrap();
+    database.admin.execute("UPDATE registry_internal.registry_webhook_delivery_state SET next_attempt_at=transaction_timestamp()+interval '1 day' WHERE event_id=$1", &[&events[2].event_id]).await.unwrap();
+    database.admin.execute("UPDATE registry_internal.registry_webhook_delivery_state SET state='leased', attempt=1, next_attempt_at=NULL, attempt_started_at=transaction_timestamp(), lease_expires_at=transaction_timestamp()+interval '1 day', lease_token=$2, updated_at=transaction_timestamp()-interval '400 days' WHERE event_id=$1", &[&events[3].event_id, &Uuid::new_v4()]).await.unwrap();
+    database.admin.execute("UPDATE registry_internal.registry_webhook_delivery_state SET state='dead-lettered', attempt=1, next_attempt_at=NULL, dead_lettered_at=transaction_timestamp()-interval '400 days', updated_at=transaction_timestamp()-interval '400 days', dead_letter_reason='http-non-success' WHERE event_id=$1", &[&events[4].event_id]).await.unwrap();
+    // The old terminal template plus 512 copies require more than one
+    // platform batch, while all recent and nonterminal fixtures remain.
+    for table in [
+        "registry_outbox",
+        "registry_webhook_deliveries",
+        "registry_webhook_delivery_state",
+    ] {
+        let sequence = if table == "registry_outbox" {
+            ", 'outbox_id', nextval('registry_internal.registry_outbox_outbox_id_seq')"
+        } else {
+            ""
+        };
+        let overriding = if table == "registry_outbox" {
+            " OVERRIDING SYSTEM VALUE"
+        } else {
+            ""
+        };
+        database
+            .admin
+            .batch_execute(&format!(
+                "INSERT INTO registry_internal.{table}{overriding}
+             SELECT (jsonb_populate_record(NULL::registry_internal.{table},
+                 to_jsonb(template) || jsonb_build_object(
+                     'event_id', md5('canary-retention-batch-' || n){sequence}))).*
+             FROM registry_internal.{table} template CROSS JOIN generate_series(1,512) n
+             WHERE template.event_id='{event}'::uuid",
+                event = events[0].event_id,
+            ))
+            .await
+            .unwrap();
+    }
+    let receipts: i64 = database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_idempotency",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let audit_count = database.audit_entries().len();
+    let (removed, bound_reached) = service.prune_terminal_for_test(1).await.unwrap();
+    assert_eq!(removed, 256);
+    assert!(
+        bound_reached,
+        "a bounded tick yields with terminal backlog remaining"
+    );
+    // The worker must now drain the remaining 257 rows before its next tick.
+
+    drop(mutation_client);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let worker =
+        tokio::spawn(registry_breg::webhook::WebhookWorker::new(service.clone()).run(shutdown_rx));
+    let pruned = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let n: i64 = database
+                .admin
+                .query_one(
+                    "SELECT count(*) FROM registry_internal.registry_outbox
+                     WHERE event_id=$1 OR event_id IN (
+                         SELECT md5('canary-retention-batch-' || n)::uuid
+                         FROM generate_series(1,512) n)",
+                    &[&events[0].event_id],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if n == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    shutdown_tx.send_replace(true);
+    worker.await.unwrap();
+    assert!(pruned.is_ok(), "runtime must prune old terminal metadata");
+    for event in &events[1..] {
+        let n: i64 = database
+            .admin
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_outbox WHERE event_id=$1",
+                &[&event.event_id],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(n, 1, "recent or pending metadata remains");
+    }
+    let retained_receipts: i64 = database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_idempotency",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(retained_receipts, receipts, "spent keys remain");
+    assert_eq!(
+        database.audit_entries().len(),
+        audit_count,
+        "pruning leaves the audit journal intact"
+    );
+    // Metadata retention must not shorten the delivery worker's graceful
+    // shutdown: an in-flight acknowledged delivery still finalizes.
+    receiver
+        .enqueue(ResponsePlan::Delay(Duration::from_millis(200), 204))
+        .await;
+    let mut mutation_client = pool.get_for_test().await.unwrap();
+    let finishing = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "canary-shutdown",
+        "canary-shutdown",
+    )
+    .await;
+    drop(mutation_client);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let worker = tokio::spawn(registry_breg::webhook::WebhookWorker::new(service).run(shutdown_rx));
+    receiver.wait_for_count(3).await;
+    shutdown_tx.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(3), worker)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        delivery_state(&database, &finishing).await.1,
+        "delivered",
+        "graceful shutdown finishes the current delivery"
+    );
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn early_discard_metadata_uses_completed_erasure_without_shortening_expiry_horizons() {
+    exercise_terminal_metadata_horizons(false).await;
+}
+
+#[tokio::test]
+async fn dead_letter_metadata_horizon_starts_at_dead_lettering_and_requires_completed_erasure() {
+    exercise_terminal_metadata_horizons(true).await;
+}
+
+async fn exercise_terminal_metadata_horizons(check_dead_letter: bool) {
+    let receiver = HttpsReceiver::start().await;
+    let database = TestDatabase::create(12).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = compiled_registry();
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs delivery state with the compiled schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        registry_state_test_identity(),
+    )
+    .await
+    .expect("migration initializes active package identity with empty history");
+    migration_task.abort();
+
+    let fixture = DestinationFixture::new(&receiver);
+    let destinations = Arc::new(fixture.activate(&compiled));
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
+        .expect("test owns a keyed audit profile");
+    let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
+        .expect("test lock identity is bounded");
+    let coordinator = MutationTransaction::new_with_event_destinations(
+        lock_key,
+        Duration::from_secs(2),
+        identity.clone(),
+        "webhook-delivery-instance",
+        database.audit(audit_profile.clone()),
+        Some(Arc::clone(&destinations)),
+    );
+    let service = WebhookDeliveryService::new(
+        pool.clone(),
+        Arc::clone(&destinations),
+        hook_handlers(&compiled, &identity.activation_id),
+        Arc::new(compiled.clone()),
+        identity.clone(),
+        "webhook-delivery-instance",
+        lock_key,
+        Duration::from_secs(2),
+        database.audit(audit_profile.clone()),
+    );
+    let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
+        .expect("create plan retains the exact compiler delivery");
+    let claims = mutation_claims(&compiled);
+    let mut mutation_client = pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+
+    let discarded = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "canary-early-discard",
+        "canary-early-discard",
+    )
+    .await;
+    assert_eq!(
+        service
+            .discard(discarded.event_id, &discarded.compiled_delivery_id, 1)
+            .await,
+        Ok(2)
+    );
+    assert!(!outbox_payload_available(&database, &discarded).await);
+    assert_eq!(delivery_state(&database, &discarded).await.1, "expired");
+
+    let natural = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "canary-natural-expiry",
+        "canary-natural-expiry",
+    )
+    .await;
+    // Age creation and its original deadline together, then let the real
+    // expiry operation stamp the terminal transition and write its audit.
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_outbox
+         SET created_at=created_at-interval '8 days',
+             payload_expires_at=payload_expires_at-interval '8 days'
+         WHERE event_id=$1",
+            &[&natural.event_id],
+        )
+        .await
+        .unwrap();
+    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_eq!(delivery_state(&database, &natural).await.1, "expired");
+    assert!(!outbox_payload_available(&database, &natural).await);
+
+    receiver.enqueue(ResponsePlan::Break).await;
+    receiver.enqueue(ResponsePlan::Break).await;
+    let dead_letter = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "canary-dead-letter-expiry",
+        "canary-dead-letter-expiry",
+    )
+    .await;
+    assert_eq!(
+        service.deliver_once().await,
+        Ok(WebhookWorkOutcome::RetryScheduled)
+    );
+    wait_until_retry_is_due(&database, &dead_letter).await;
+    assert_eq!(
+        service.deliver_once().await,
+        Ok(WebhookWorkOutcome::DeadLettered)
+    );
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_outbox
+         SET created_at=created_at-interval '8 days',
+             payload_expires_at=payload_expires_at-interval '8 days'
+         WHERE event_id=$1",
+            &[&dead_letter.event_id],
+        )
+        .await
+        .unwrap();
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_delivery_state
+         SET dead_lettered_at=dead_lettered_at-interval '8 days',
+             updated_at=updated_at-interval '8 days'
+         WHERE event_id=$1",
+            &[&dead_letter.event_id],
+        )
+        .await
+        .unwrap();
+    if check_dead_letter {
+        let terminal: SystemTime = database.admin.query_one(
+            "SELECT dead_lettered_at FROM registry_internal.registry_webhook_delivery_state WHERE event_id=$1",
+            &[&dead_letter.event_id],
+        ).await.unwrap().get(0);
+        let transaction = mutation_client.transaction().await.unwrap();
+        assert_eq!(
+            registry_platform_hooks::delivery::prune_terminal_deliveries(
+                &transaction,
+                "registry_internal",
+                terminal + Duration::from_secs(3600),
+            )
+            .await
+            .unwrap(),
+            0,
+            "old dead letters remain replayable until real expiry completes"
+        );
+        transaction.rollback().await.unwrap();
+        assert!(outbox_payload_available(&database, &dead_letter).await);
+    }
+    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_eq!(
+        delivery_state(&database, &dead_letter).await.1,
+        "dead-lettered"
+    );
+    assert!(!outbox_payload_available(&database, &dead_letter).await);
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &natural,
+        1,
+        0,
+        "terminal",
+        "payload-expired",
+    )
+    .await;
+    assert_eq!(
+        audit_outcomes(&database, &audit_profile, &dead_letter, 1, 2, "terminal").await,
+        ["destination-transport-unavailable", "payload-expired"],
+        "dead-letter finalization and subsequent expiry each retain their outcome"
+    );
+    let audits = database.audit_entries();
+    let receipts: i64 = database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_idempotency",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let last_expiry: SystemTime = database
+        .admin
+        .query_one(
+            "SELECT max(expired_at) FROM registry_internal.registry_webhook_delivery_state",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+
+    if check_dead_letter {
+        // The documented metadata horizon starts at the dead-letter terminal
+        // transition. Later completed erasure is an eligibility condition,
+        // not another terminal transition or a restart of that horizon.
+        let terminal: SystemTime = database.admin.query_one(
+            "SELECT dead_lettered_at FROM registry_internal.registry_webhook_delivery_state WHERE event_id=$1",
+            &[&dead_letter.event_id],
+        ).await.unwrap().get(0);
+        let transaction = mutation_client.transaction().await.unwrap();
+        assert_eq!(
+            registry_platform_hooks::delivery::prune_terminal_deliveries(
+                &transaction,
+                "registry_internal",
+                terminal - Duration::from_micros(1),
+            )
+            .await
+            .unwrap(),
+            0,
+            "completed expiry cannot shorten the terminal metadata horizon"
+        );
+        transaction.rollback().await.unwrap();
+        let cutoff = terminal + Duration::from_secs(3600);
+        assert!(cutoff < last_expiry);
+        let transaction = mutation_client.transaction().await.unwrap();
+        let removed = registry_platform_hooks::delivery::prune_terminal_deliveries(
+            &transaction,
+            "registry_internal",
+            cutoff,
+        )
+        .await
+        .unwrap();
+        transaction.rollback().await.unwrap();
+        drop(mutation_client);
+        drop(service);
+        drop(pool);
+        database.cleanup().await;
+        assert_eq!(removed, 1, "dead-letter metadata is due after its original terminal horizon and completed erasure; recent natural expiry and discard remain");
+        return;
+    }
+
+    // At a product clock one hour beyond the full horizon, original scheduled
+    // expiry is not a second metadata clock for an already erased discard.
+    let after_horizon = last_expiry + Duration::from_secs(3600);
+    let scheduled: SystemTime = database
+        .admin
+        .query_one(
+            "SELECT payload_expires_at FROM registry_internal.registry_outbox WHERE event_id=$1",
+            &[&discarded.event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(scheduled > after_horizon);
+    let transaction = mutation_client.transaction().await.unwrap();
+    let removed = registry_platform_hooks::delivery::prune_terminal_deliveries(
+        &transaction,
+        "registry_internal",
+        after_horizon,
+    )
+    .await
+    .unwrap();
+    transaction.commit().await.unwrap();
+    let remaining_receipts: i64 = database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_idempotency",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(remaining_receipts, receipts);
+    assert_eq!(database.audit_entries(), audits);
+    drop(mutation_client);
+    drop(service);
+    drop(pool);
+    database.cleanup().await;
+    assert_eq!(
+        removed, 3,
+        "completed discard erasure must not wait an extra scheduled horizon"
+    );
+}
+
+#[path = "support/webhook_retention_logs.rs"]
+mod retention_logs;

@@ -13,7 +13,7 @@ import {
   RETIRED_RELAY_ROUTES,
 } from '../src/lib/relay-retirement-redirects.mjs';
 import { flattenSidebarGroups } from '../src/lib/sidebar.mjs';
-import { docsetPublishesBregOpenApi } from './fetch-openapi.mjs';
+import { docsetPublishesBregOpenApi, docsetPublishesEvidenceOid4vciOpenApi } from './fetch-openapi.mjs';
 
 const siteRoot = resolve(import.meta.dirname, '..');
 const configSource = readFileSync(resolve(siteRoot, 'astro.config.mjs'), 'utf8');
@@ -67,7 +67,7 @@ assert.ok(sidebarSource, 'could not isolate the Starlight sidebar configuration'
 // Evaluate the trusted local sidebar expression without loading Astro or
 // requiring generated artifacts. Nested product fixtures exercise the actual
 // config's flattening; the OpenAPI plugin owns its generated tag hierarchy.
-const generatedProducts = new Map(['Manifest', 'Evidence Gateway'].map((label) => [
+const generatedProducts = new Map(['Manifest', 'Registry Evidence'].map((label) => [
   label,
   {
     label,
@@ -85,44 +85,51 @@ const generatedProducts = new Map(['Manifest', 'Evidence Gateway'].map((label) =
 ]));
 const apiConfigSource = configSource.match(/starlightOpenAPI\((\[[\s\S]*?\])\),/)?.[1];
 assert.ok(apiConfigSource, 'could not isolate the OpenAPI plugin configuration');
-const caseworkOpenApiSchema = {
-  base: 'reference/apis/casework',
-  schema: './openapi/registry-casework.openapi.json',
-  sidebar: { label: 'API operations', collapsed: true },
-};
-const schedulingOpenApiSchema = {
-  base: 'reference/apis/scheduling',
-  schema: './openapi/registry-scheduling.openapi.json',
-  sidebar: { label: 'API operations', collapsed: true },
-};
-const messagingOpenApiSchema = {
-  base: 'reference/apis/messaging',
-  schema: './openapi/registry-messaging.openapi.json',
-  sidebar: { label: 'API operations', collapsed: true },
-};
-const coordinatorOpenApiSchema = {
-  base: 'reference/apis/coordinator',
-  schema: './openapi/registry-coordinator.openapi.json',
-  sidebar: { label: 'API operations', collapsed: true },
-};
-// BReg's operations fill their own createOpenAPISidebarGroup() placeholder,
-// which the plugin replaces with the generated group.
-const bregOpenApiSidebarGroup = {
-  label: 'API operations (facility template)',
-  collapsed: true,
-  items: [{ label: 'Generated tag', items: [] }],
-};
-const bregOpenApiSchema = {
-  base: 'reference/apis/breg',
-  schema: './openapi/registry-breg.openapi.json',
-  sidebar: { group: bregOpenApiSidebarGroup, label: 'API operations (facility template)', collapsed: true },
-};
+// Each product's operations fill their own createOpenAPISidebarGroup()
+// placeholder, which the plugin replaces with the generated group. The
+// fixture names the base in the generated tag, so two groups with the same
+// label never compare equal.
+function openApiGroup(base, label) {
+  return { label, collapsed: true, items: [{ label: `Generated tag (${base})`, items: [] }] };
+}
+function openApiSchema(base, group) {
+  return { base, schema: `./openapi/${base.slice('reference/apis/'.length)}.openapi.json`,
+    sidebar: { group, label: group.label, collapsed: true } };
+}
+const evidenceOpenApiSidebarGroup = openApiGroup('reference/apis/evidence', 'API operations');
+const evidenceOpenApiSchema = openApiSchema('reference/apis/evidence', evidenceOpenApiSidebarGroup);
+const evidenceOid4vciOpenApiSidebarGroup = openApiGroup('reference/apis/evidence-oid4vci', 'API operations (wallet delivery)');
+const evidenceOid4vciOpenApiSchema = openApiSchema('reference/apis/evidence-oid4vci', evidenceOid4vciOpenApiSidebarGroup);
+const caseworkOpenApiSidebarGroup = openApiGroup('reference/apis/casework', 'API operations');
+const caseworkOpenApiSchema = openApiSchema('reference/apis/casework', caseworkOpenApiSidebarGroup);
+const schedulingOpenApiSidebarGroup = openApiGroup('reference/apis/scheduling', 'API operations');
+const schedulingOpenApiSchema = openApiSchema('reference/apis/scheduling', schedulingOpenApiSidebarGroup);
+const messagingOpenApiSidebarGroup = openApiGroup('reference/apis/messaging', 'API operations');
+const messagingOpenApiSchema = openApiSchema('reference/apis/messaging', messagingOpenApiSidebarGroup);
+const coordinatorOpenApiSidebarGroup = openApiGroup('reference/apis/coordinator', 'API operations');
+const coordinatorOpenApiSchema = openApiSchema('reference/apis/coordinator', coordinatorOpenApiSidebarGroup);
+const bregOpenApiSidebarGroup = openApiGroup('reference/apis/breg', 'API operations (facility template)');
+const bregOpenApiSchema = openApiSchema('reference/apis/breg', bregOpenApiSidebarGroup);
+// The product groups in the order the sidebar factory takes them; BReg's
+// group is a separate parameter.
+const productOpenApiSidebarGroups = [
+  evidenceOpenApiSidebarGroup,
+  evidenceOid4vciOpenApiSidebarGroup,
+  caseworkOpenApiSidebarGroup,
+  schedulingOpenApiSidebarGroup,
+  messagingOpenApiSidebarGroup,
+  coordinatorOpenApiSidebarGroup,
+];
+const openApiSidebarGroups = [...productOpenApiSidebarGroups, bregOpenApiSidebarGroup];
 const apiSchemaFactory = new Function(
+  'hasEvidenceOid4vciOpenApi',
   'hasBregOpenApi',
   'hasCasework',
   'hasScheduling',
   'hasMessaging',
   'hasCoordinator',
+  'evidenceOpenApiSchema',
+  'evidenceOid4vciOpenApiSchema',
   'caseworkOpenApiSchema',
   'schedulingOpenApiSchema',
   'messagingOpenApiSchema',
@@ -130,29 +137,21 @@ const apiSchemaFactory = new Function(
   'bregOpenApiSchema',
   `return ${apiConfigSource};`,
 );
-const apiSchemas = apiSchemaFactory(
-  true,
-  true,
-  true,
-  true,
-  true,
+const apiSchemaArguments = [
+  evidenceOpenApiSchema,
+  evidenceOid4vciOpenApiSchema,
   caseworkOpenApiSchema,
   schedulingOpenApiSchema,
   messagingOpenApiSchema,
   coordinatorOpenApiSchema,
   bregOpenApiSchema,
-);
+];
+const apiSchemas = apiSchemaFactory(true, true, true, true, true, true, ...apiSchemaArguments);
 assert.ok(apiSchemas.includes(bregOpenApiSchema), 'the current docset registers the BReg OpenAPI schema');
-// Schemas without their own group stand in for the openAPISidebarGroups slices.
-const generatedAPI = apiSchemas.filter((schema) => !schema.sidebar.group).map((schema) => ({
-  ...schema.sidebar,
-  items: [{ label: 'Generated tag', items: [] }],
-}));
 const sidebarFactory = new Function(
   'cliReferenceSidebar',
   'generatedProduct',
   'optionalGeneratedProduct',
-  'openAPISidebarGroups',
   'flattenSidebarGroups',
   'omittedCliBinaries',
   'hasCasework',
@@ -164,6 +163,13 @@ const sidebarFactory = new Function(
   'selectedDocset',
   'hasBregOpenApi',
   'bregOpenApiSidebarGroup',
+  'hasEvidenceOid4vciOpenApi',
+  'evidenceOpenApiSidebarGroup',
+  'evidenceOid4vciOpenApiSidebarGroup',
+  'caseworkOpenApiSidebarGroup',
+  'schedulingOpenApiSidebarGroup',
+  'messagingOpenApiSidebarGroup',
+  'coordinatorOpenApiSidebarGroup',
   `return [${sidebarSource}];`,
 );
 const sidebarArguments = [
@@ -173,7 +179,6 @@ const sidebarArguments = [
     return generatedProducts.get(label);
   },
   (label) => generatedProducts.get(label) ?? null,
-  generatedAPI,
   flattenSidebarGroups,
   omittedCliBinaries,
 ];
@@ -189,7 +194,7 @@ const everyProductDocset = {
   },
 };
 const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true, true, everyProductDocset,
-  true, bregOpenApiSidebarGroup);
+  true, bregOpenApiSidebarGroup, true, ...productOpenApiSidebarGroups);
 
 const messagingPageRoutes = [
   '/start/messaging/',
@@ -312,7 +317,7 @@ function assertOrdered(source, expectations, label) {
 test('uses the product navigation in its published order', () => {
   assert.deepEqual(topLevelLabels(sidebarSource), [
     'Start',
-    'Evidence Gateway',
+    'Registry Evidence',
     'Base Registry Engine',
     'Registry Casework',
     'Registry Scheduling',
@@ -332,6 +337,8 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     released: 'v0.29.0',
     docsets: [
       { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' }, 'registry-scheduling': { ref: 'HEAD' }, 'registry-render': { ref: 'HEAD' } } },
+      // The last archive that predates the OID4VCI supporting service's document.
+      { id: 'v0.19.0', status: 'archived', availability: 'released', path: '/v/0.19.0/', products: {} },
       { id: 'v0.29.0', status: 'archived', availability: 'released', path: '/v/0.29.0/', products: {} },
       { id: 'v0.30.0', status: 'archived', availability: 'candidate', path: '/v/0.30.0/', products: { 'registry-casework': { ref: 'v0.30.0' } } },
       // A docset that carries Messaging without Scheduling, so the Messaging
@@ -347,6 +354,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
   };
   for (const [id, env, hasCasework, hasScheduling, hasRender, hasMessaging, hasBregServices, hasCoordinator] of [
     ['latest', {}, true, true, true, false, false, false],
+    ['v0.19.0', {}, false, false, false, false, false, false],
     ['v0.29.0', {}, false, false, false, false, false, false],
     ['v0.30.0', {}, true, false, false, false, false, false],
     ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false, false, false, false, false],
@@ -356,6 +364,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
   ]) {
     const context = resolveDocsetBuildContext(docsets, { DOCS_DOCSET: id, ...env });
     const hasBregOpenApi = docsetPublishesBregOpenApi(context.selectedDocset, docsets.current);
+    const hasEvidenceOid4vciOpenApi = docsetPublishesEvidenceOid4vciOpenApi(context.selectedDocset, docsets.current);
     assert.equal(context.hasCasework, hasCasework, id);
     assert.equal(context.hasScheduling, hasScheduling, id);
     assert.equal(context.hasRender, hasRender, id);
@@ -373,6 +382,8 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       context.selectedDocset,
       hasBregOpenApi,
       bregOpenApiSidebarGroup,
+      hasEvidenceOid4vciOpenApi,
+      ...productOpenApiSidebarGroups,
     );
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Casework'), hasCasework, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Scheduling'), hasScheduling, id);
@@ -388,60 +399,49 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     // docsets from v0.42.0 onward, archived or not.
     assert.equal(hasBregOpenApi, id === 'latest' || id === 'v0.42.0', id);
     assert.equal(docsetBreg.items.includes(bregOpenApiSidebarGroup), hasBregOpenApi, id);
+    // The OID4VCI document is published by the current docset and by release
+    // docsets from v0.20.0 onward.
+    assert.equal(hasEvidenceOid4vciOpenApi, id !== 'v0.19.0', id);
     const docsetSchemas = apiSchemaFactory(
+      hasEvidenceOid4vciOpenApi,
       hasBregOpenApi,
       context.hasCasework,
       context.hasScheduling,
       context.hasMessaging,
       context.hasCoordinator,
-      caseworkOpenApiSchema,
-      schedulingOpenApiSchema,
-      messagingOpenApiSchema,
-      coordinatorOpenApiSchema,
-      bregOpenApiSchema,
+      ...apiSchemaArguments,
     );
     assert.equal(
       docsetSchemas.length,
-      1 + Number(hasCasework) + Number(hasScheduling) + Number(hasMessaging) + Number(hasCoordinator) +
-        Number(hasBregOpenApi),
+      1 + Number(hasEvidenceOid4vciOpenApi) + Number(hasCasework) + Number(hasScheduling) +
+        Number(hasMessaging) + Number(hasCoordinator) + Number(hasBregOpenApi),
       id,
     );
-    // Each product group seats the operations of its own schema, whichever
-    // products come before it in this docset.
-    const docsetAPI = docsetSchemas.filter((schema) => !schema.sidebar.group).map((schema) => ({ ...schema.sidebar, base: schema.base, items: [] }));
-    const docsetAPISidebar = sidebarFactory(
-      cliReferenceSidebar,
-      sidebarArguments[1],
-      sidebarArguments[2],
-      docsetAPI,
-      flattenSidebarGroups,
-      omittedCliBinaries,
-      context.hasCasework,
-      context.hasScheduling,
-      context.hasRender,
-      context.hasMessaging,
-      context.hasBregServices,
-      context.hasCoordinator,
-      context.selectedDocset,
-      hasBregOpenApi,
-      bregOpenApiSidebarGroup,
+    // Each product group seats the group of its own schema and no other,
+    // whichever products come before it in this docset.
+    const seatedGroups = (group) => group.items.filter((item) => openApiSidebarGroups.includes(item));
+    const docsetEvidence = docsetSidebar.find((item) => item.label === 'Registry Evidence');
+    assert.deepEqual(
+      seatedGroups(docsetEvidence),
+      hasEvidenceOid4vciOpenApi
+        ? [evidenceOpenApiSidebarGroup, evidenceOid4vciOpenApiSidebarGroup]
+        : [evidenceOpenApiSidebarGroup],
+      id,
     );
-    const docsetMessaging = docsetAPISidebar.find((item) => item.label === 'Registry Messaging');
-    if (hasMessaging) {
-      assert.deepEqual(
-        docsetMessaging.items.filter((item) => item.base).map((item) => item.base),
-        ['reference/apis/messaging'],
-        id,
-      );
+    assert.deepEqual(seatedGroups(docsetBreg), hasBregOpenApi ? [bregOpenApiSidebarGroup] : [], id);
+    for (const [label, present, group] of [
+      ['Registry Casework', hasCasework, caseworkOpenApiSidebarGroup],
+      ['Registry Scheduling', hasScheduling, schedulingOpenApiSidebarGroup],
+      ['Registry Messaging', hasMessaging, messagingOpenApiSidebarGroup],
+      ['Registry Coordinator', hasCoordinator, coordinatorOpenApiSidebarGroup],
+    ]) {
+      if (!present) continue;
+      assert.deepEqual(seatedGroups(docsetSidebar.find((item) => item.label === label)), [group], `${id} ${label}`);
     }
-    const docsetCoordinator = docsetAPISidebar.find((item) => item.label === 'Registry Coordinator');
-    if (hasCoordinator) {
-      assert.deepEqual(
-        docsetCoordinator.items.filter((item) => item.base).map((item) => item.base),
-        ['reference/apis/coordinator'],
-        id,
-      );
-    }
+    // Every registered schema is seated exactly once, and nothing else is.
+    const seated = docsetSidebar.flatMap(seatedGroups);
+    assert.equal(seated.length, docsetSchemas.length, id);
+    assert.deepEqual(new Set(seated), new Set(docsetSchemas.map((schema) => schema.sidebar.group)), id);
     const redirects = caseworkRedirects(context.hasCasework, context.currentDocsetRedirect);
     assert.equal(redirects['/operate/casework/'] !== undefined, !hasCasework, id);
     assert.equal(redirects['/tutorials/first-casework.md'] !== undefined, !hasCasework, id);
@@ -571,7 +571,7 @@ test('starts with only Start expanded and all secondary groups collapsed', () =>
 test('requires at most two groups to reach a hand-authored page', () => {
   function walk(items, parents = []) {
     for (const item of items) {
-      if (generatedAPI.includes(item) || item === bregOpenApiSidebarGroup) continue;
+      if (openApiSidebarGroups.includes(item)) continue;
       if (!item.items) continue;
       const path = [...parents, item.label];
       assert.ok(path.length <= 2, `sidebar adds a third group: ${path.join(' / ')}`);
@@ -582,7 +582,7 @@ test('requires at most two groups to reach a hand-authored page', () => {
 });
 
 test('keeps consumer and wallet-provider guidance in separate Evidence groups', () => {
-  const evidence = section('Evidence Gateway');
+  const evidence = section('Registry Evidence');
   const consumer = evidence.items.find((item) => item.label === 'Use from applications');
   const wallet = evidence.items.find((item) => item.label === 'Wallet delivery');
   assert.ok(consumer, 'Evidence must provide an application-consumer entry point');
@@ -596,17 +596,18 @@ test('keeps consumer and wallet-provider guidance in separate Evidence groups', 
   assert.deepEqual(wallet.items.map((item) => item.slug), [
     'configure/enable-sd-jwt-vc',
     'configure/evidence-oid4vci',
-    'tutorials/run-oid4vci-interoperability-checks',
   ]);
   assert.equal(evidence.items[1].slug, 'tutorials/first-evidence-assertion');
-  assert.equal(evidence.items[2], consumer, 'consumer entry point must precede provider phases');
+  assert.equal(evidence.items[2].slug, 'explanation/how-evidence-works');
+  assert.equal(evidence.items[3].label, 'Tutorials', 'the tutorials continue the first assertion');
+  assert.equal(evidence.items[4], consumer, 'consumer entry point follows the tutorials it builds on');
 });
 
 test('seats generated product references directly below Reference without losing leaf attributes', () => {
   const reference = section('Reference');
   for (const [label, product] of [
     ['Registry Manifest', 'Manifest'],
-    ['Evidence Gateway', 'Evidence Gateway'],
+    ['Registry Evidence', 'Registry Evidence'],
   ]) {
     const group = reference.items.find((item) => item.label === label);
     assert.ok(group, `missing generated reference group: ${label}`);
@@ -617,7 +618,7 @@ test('seats generated product references directly below Reference without losing
 
 test('uses the formal product names for top-level sections', () => {
   for (const product of [
-    'Evidence Gateway',
+    'Registry Evidence',
     'Base Registry Engine',
     'Registry Casework',
     'Registry Scheduling',
@@ -638,7 +639,7 @@ test('uses the formal product names for top-level sections', () => {
       ['Discovery', 'Registry Discovery'],
       ['Render', 'Registry Render'],
       ['BReg', 'Base Registry Engine'],
-      ['Evidence', 'Evidence Gateway'],
+      ['Evidence', 'Registry Evidence'],
     ]) {
       if (!label.includes(shortForm)) continue;
       assert.ok(
@@ -652,7 +653,7 @@ test('uses the formal product names for top-level sections', () => {
 test('publishes one overview route for every section that has one', () => {
   for (const [label, route] of [
     ['Start', "link: '/'"],
-    ['Evidence Gateway', "slug: 'start/evidence-quickstart'"],
+    ['Registry Evidence', "slug: 'start/evidence-quickstart'"],
     ['Base Registry Engine', "slug: 'start/breg-quickstart'"],
     ['Registry Casework', "slug: 'start/casework'"],
     ['Registry Render', "slug: 'start/registry-render'"],
@@ -673,11 +674,11 @@ test('publishes one overview route for every section that has one', () => {
 // reader is on call for a running deployment, not choosing a product, so pages
 // that name a runtime sit beside the ones that do not.
 test('files adoption-time pages under their product', () => {
-  // Evidence Gateway's security model is product-scoped, so it stays with the
+  // Registry Evidence's security model is product-scoped, so it stays with the
   // product rather than in the cross-product security group.
   const security = topLevelSection(sidebarSource, 'Operations');
   assert.doesNotMatch(security, /slug: 'security\/evidence'/);
-  const evidence = topLevelSection(sidebarSource, 'Evidence Gateway');
+  const evidence = topLevelSection(sidebarSource, 'Registry Evidence');
   assert.match(evidence, /slug: 'security\/evidence'/);
 });
 
@@ -689,13 +690,13 @@ test('publishes the Relay retirement decision without a current product lane', (
   assert.doesNotMatch(homepageSource, /publish-governed-sqlite-registry|query-relay-client/);
 });
 
-test('gives Evidence Gateway a lane on both front doors without a retired Notary path', () => {
+test('gives Registry Evidence a lane on both front doors without a retired Notary path', () => {
   assert.match(homepageSource, /\]\(start\/evidence-quickstart\/\)/);
   assert.match(homepageSource, /tutorials\/first-evidence-assertion/);
   assert.doesNotMatch(homepageSource, /Expose Notary|verify-claim-registry-api/);
 });
 
-// The BReg section follows the shape the Evidence Gateway section proved: an
+// The BReg section follows the shape the Registry Evidence section proved: an
 // overview, one first tutorial in the open, then each later phase behind the
 // group it belongs to. A reader who has finished one phase finds the next one
 // beside it, and a reader who has not is not shown its vocabulary yet.
@@ -774,28 +775,29 @@ test('keeps the BReg guide and references in one adoption path', () => {
 // Both runtime products ask an adopter for infrastructure before they serve
 // anything: PostgreSQL, a token issuer, and a signing process for Base Registry
 // Engine; a Transit proxy, an identity provider, and durable audit storage for
-// Evidence Gateway. That is deployment planning, so it opens each product's
+// Registry Evidence. That is deployment planning, so it opens each product's
 // Deploy group. It is not a first encounter, so Start carries none of it: a
-// first visit meets the overview, the product chooser, and the glossary, and
-// reaches every product through its own overview. The two retired Start seats
-// redirect to the Deploy pages that replaced them.
+// first visit meets the overview and the page that explains how the products
+// fit together, and reaches every product through its own overview. The two
+// retired Start seats redirect to the Deploy pages that replaced them.
 test('keeps operating requirements in each product Deploy group, not in Start', () => {
   const start = topLevelSection(sidebarSource, 'Start');
   assert.ok(start, 'could not isolate Start');
   assert.deepEqual(
     [...start.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]),
-    ['reference/glossary'],
+    ['start/concepts'],
   );
 
-  const evidence = topLevelSection(sidebarSource, 'Evidence Gateway');
+  const evidence = topLevelSection(sidebarSource, 'Registry Evidence');
   assertOrdered(
     evidence,
     [
-      "label: 'Deploy'",
-      "slug: 'operate/evidence-requirements'",
+      "label: 'Prove and deploy'",
       "slug: 'tutorials/prove-an-evidence-project'",
+      "slug: 'tutorials/build-and-deploy-evidence-project'",
+      "slug: 'operate/evidence-audit'",
     ],
-    'Evidence Gateway Deploy group',
+    'Registry Evidence Prove and deploy group',
   );
   // Base Registry Engine states its requirements at the top of Deploy and
   // serve, so that page opens its Deploy and operate group; the separate
@@ -810,18 +812,27 @@ test('keeps operating requirements in each product Deploy group, not in Start', 
     ],
     'Base Registry Engine Deploy and operate group',
   );
-  for (const slug of ['operate/evidence-requirements', 'operate/breg']) {
+  for (const slug of ['explanation/how-evidence-works', 'operate/breg']) {
     assert.ok(hasDocForSlug(slug), `${slug} must be a published page`);
   }
 
-  for (const retired of ['start/evaluate-evidence', 'start/evaluate-breg', 'operate/breg-requirements']) {
+  // Evidence's requirements page was absorbed by the one page that explains
+  // how the product works.
+  for (const retired of [
+    'start/evaluate-evidence',
+    'start/evaluate-breg',
+    'operate/breg-requirements',
+    'operate/evidence-requirements',
+  ]) {
     assert.equal(hasDocForSlug(retired), false, `${retired} must not be a published page`);
     assert.doesNotMatch(sidebarSource, new RegExp(retired));
   }
-  assert.match(
-    configSource,
-    /'\/start\/evaluate-evidence\/': internalRedirect\('\/operate\/evidence-requirements\/'\)/,
-  );
+  for (const route of ['/start/evaluate-evidence/', '/operate/evidence-requirements/']) {
+    assert.match(
+      configSource,
+      new RegExp(`'${route.replaceAll('/', '\\/')}': internalRedirect\\('\\/explanation\\/how-evidence-works\\/'\\)`),
+    );
+  }
   assert.match(
     configSource,
     /'\/start\/evaluate-breg\/': internalRedirect\('\/operate\/breg\/'\)/,
@@ -840,6 +851,26 @@ test('redirects each page the Base Registry Engine rewrite retired and its Markd
   }
   assert.equal(redirects['/explanation/governed-registry-actions.md'], '/dev/configure/breg-actions/');
   assert.equal(Object.keys(redirects).length, 2 * routes.length);
+});
+
+test('redirects each page the Evidence and Casework rewrite retired and its Markdown twin to one target', () => {
+  for (const [route, target] of [
+    ['/operate/evidence-requirements/', '/explanation/how-evidence-works/'],
+    ['/tutorials/refuse-unsafe-evidence-requests/', '/tutorials/control-who-can-request-evidence/'],
+    ['/configure/evidence/', '/tutorials/build-and-deploy-evidence-project/'],
+    ['/reference/evidencectl/', '/reference/cli/evidencectl/'],
+    ['/tutorials/issue-fhir-evidence-as-vcs/', '/tutorials/connect-an-institution-source/'],
+    ['/explanation/integration-patterns/', '/start/concepts/'],
+    ['/tutorials/run-oid4vci-interoperability-checks/', '/configure/evidence-oid4vci/'],
+    ['/explanation/disclosure-modes-and-computed-answers/', '/explanation/how-evidence-works/'],
+  ]) {
+    const twin = `${route.slice(0, -1)}.md`;
+    for (const path of [route, twin]) {
+      const entry = `'${path}': internalRedirect('${target}'),`;
+      assert.ok(configSource.includes(entry), `${entry} must be a redirect`);
+    }
+    assert.equal(hasDocForSlug(route.slice(1, -1)), false, `${route} must not be a published page`);
+  }
 });
 
 test('redirects the retired Server webhook, history, and event pages to their merged pages', () => {
@@ -881,41 +912,69 @@ test('redirects the retired deprecation policy page and its Markdown twin to the
   assert.ok(hasDocForSlug('reference/api-stability'), 'reference/api-stability must be a published page');
 });
 
-test('organizes Evidence Gateway tasks without publishing the obsolete Relay composition', () => {
-  const evidence = topLevelSection(sidebarSource, 'Evidence Gateway');
+test('organizes Registry Evidence tasks without publishing the obsolete Relay composition', () => {
+  const evidence = topLevelSection(sidebarSource, 'Registry Evidence');
   assertOrdered(
     evidence,
     [
       // The first hands-on tutorial sits beside the overview, so opening the
       // product section reveals both starting points.
       "slug: 'tutorials/first-evidence-assertion'",
-      "label: 'Use from applications'",
       "label: 'Tutorials'",
+      "label: 'Use from applications'",
       "label: 'Connect a source'",
-      "label: 'Source examples'",
-      "label: 'Deploy'",
+      "label: 'Prove and deploy'",
       "label: 'Wallet delivery'",
       // Reference a reader opens with the deployment in front of them, so it
       // ends this section instead of starting a Reference lookup.
       "slug: 'reference/evidence-configuration'",
       "slug: 'reference/evidence-problems'",
       "slug: 'reference/apis/registry-evidence'",
-      '...openAPISidebarGroups.slice(0, 1)',
+      'evidenceOpenApiSidebarGroup,',
+      // The wallet-facing supporting service's operations follow the Evidence
+      // operations and never leave the Evidence section.
+      'evidenceOid4vciOpenApiSidebarGroup',
     ],
-    'Evidence Gateway task group',
+    'Registry Evidence task group',
   );
   assert.doesNotMatch(evidence, /label: 'Verify and trust'/);
   // Token issuance stays with the deployment's identity provider. The Evidence
   // consumer group is separate from provider authoring and wallet-delivery guidance.
   assert.doesNotMatch(evidence, /label: 'Verify as a relying party'/);
-  // explanation/integration-patterns held two seats, which left Starlight
-  // unable to say which one is the active page and made prev/next ambiguous.
-  // Its one seat is the advanced half of connecting a source.
+  // explanation/integration-patterns was retired: its composition rules live
+  // on the cross-product concepts page and its same-key retry rules on the
+  // client API reference.
+  assert.equal(hasDocForSlug('explanation/integration-patterns'), false);
+  assert.doesNotMatch(sidebarSource, /explanation\/integration-patterns/);
+  assert.match(
+    configSource,
+    /'\/explanation\/integration-patterns\/': internalRedirect\('\/start\/concepts\/'\)/,
+  );
+  // How Evidence works has one seat, right after the first tutorial, and the
+  // tutorials that follow it sit in the order each one's `after:` chains them.
   assert.equal(
-    [...sidebarSource.matchAll(/slug: 'explanation\/integration-patterns'/g)].length,
+    [...sidebarSource.matchAll(/slug: 'explanation\/how-evidence-works'/g)].length,
     1,
   );
-  assert.match(evidence, /slug: 'explanation\/integration-patterns'/);
+  assertOrdered(
+    evidence,
+    [
+      "slug: 'tutorials/first-evidence-assertion'",
+      "slug: 'explanation/how-evidence-works'",
+      "slug: 'tutorials/return-a-governed-value'",
+      "slug: 'tutorials/control-who-can-request-evidence'",
+      "slug: 'tutorials/assert-a-role-bound-relationship'",
+      "slug: 'tutorials/request-evidence-as-sd-jwt-vc'",
+    ],
+    'Registry Evidence tutorial order',
+  );
+  // The refusal tutorial was folded into the access-control tutorial.
+  assert.equal(hasDocForSlug('tutorials/refuse-unsafe-evidence-requests'), false);
+  assert.doesNotMatch(sidebarSource, /refuse-unsafe-evidence-requests/);
+  assert.match(
+    configSource,
+    /'\/tutorials\/refuse-unsafe-evidence-requests\/': internalRedirect\('\/tutorials\/control-who-can-request-evidence\/'\)/,
+  );
   assert.doesNotMatch(evidence, /first-run-with-solmara-lab|Relay-protected|over a Relay/);
   assert.equal(hasDocForSlug('tutorials/first-run-with-solmara-lab'), false);
   assert.ok(RETIRED_RELAY_ROUTES.includes('/tutorials/first-run-with-solmara-lab/'));
@@ -928,18 +987,31 @@ test('keeps the Casework journey in one product lane', () => {
   assert.deepEqual(slugs, [
     'start/casework',
     'tutorials/first-casework',
-    'tutorials/review-breg-changes-in-casework',
     'explanation/how-casework-works',
     'configure/casework',
+    'configure/casework-directory',
     'operate/casework',
+    'operate/change-a-casework-package',
     'operate/casework-retention',
+    'tutorials/review-breg-changes-in-casework',
     'reference/apis/registry-casework',
     'reference/client-api',
   ]);
+  assertOrdered(
+    casework,
+    [
+      "slug: 'tutorials/first-casework'",
+      "label: 'Author a policy'",
+      "label: 'Deploy and operate'",
+      "label: 'Compose'",
+      "slug: 'reference/apis/registry-casework'",
+    ],
+    'Registry Casework',
+  );
   for (const slug of slugs) {
     assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the Casework journey`);
   }
-  assert.match(casework, /\.\.\.openAPISidebarGroups\.slice\(1, 2\)/);
+  assert.match(casework, /caseworkOpenApiSidebarGroup,/);
 });
 
 // The Coordinator configuration reference has one seat, in the Coordinator
@@ -963,10 +1035,33 @@ test('keeps the Coordinator journey in one product lane', () => {
     [...sidebarSource.matchAll(/slug: 'reference\/coordinator-configuration'/g)].length,
     1,
   );
-  assert.match(
-    coordinator,
-    /\.\.\.openAPISidebarGroups\.slice\(\s*1 \+ Number\(hasCasework\) \+ Number\(hasScheduling\) \+ Number\(hasMessaging\),\s*2 \+ Number\(hasCasework\) \+ Number\(hasScheduling\) \+ Number\(hasMessaging\),\s*\)/,
-  );
+  assert.match(coordinator, /coordinatorOpenApiSidebarGroup,/);
+});
+
+// The plugin maps every schema without its own group to one shared
+// placeholder, so a product seat for that placeholder would show every
+// product's operations. Each schema names its own created group instead, and
+// the sidebar seats each group once.
+test('seats each product OpenAPI schema in its own created group', () => {
+  assert.match(configSource, /import starlightOpenAPI, \{ createOpenAPISidebarGroup \} from 'starlight-openapi'/);
+  assert.doesNotMatch(sidebarSource, /openAPISidebarGroups/);
+  for (const schema of apiSchemas) {
+    assert.ok(schema.sidebar.group, `${schema.base} registers no sidebar group`);
+  }
+  assert.equal(new Set(apiSchemas.map((schema) => schema.sidebar.group)).size, apiSchemas.length);
+  const seats = sidebar.flatMap((group) => group.items.filter((item) => openApiSidebarGroups.includes(item)));
+  assert.equal(seats.length, apiSchemas.length);
+  assert.equal(new Set(seats).size, seats.length);
+});
+
+// The glossary is a lookup a reader opens from a term, not a first encounter,
+// so it ends Reference instead of opening Start.
+test('ends Reference with the glossary', () => {
+  const reference = section('Reference');
+  assert.equal(reference.items.at(-1).slug, 'reference/glossary');
+  assert.equal([...sidebarSource.matchAll(/slug: 'reference\/glossary'/g)].length, 1);
+  const start = section('Start');
+  assert.deepEqual(start.items.map((item) => item.slug ?? item.link), ['/', 'start/concepts']);
 });
 
 test('does not publish the retired pre-1.0 cutover page', () => {

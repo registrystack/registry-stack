@@ -428,6 +428,109 @@ impl UndeclaredNotFound {
     }
 }
 
+/// Closed, value-free outcomes shared by dependency counters and latency histograms.
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) enum DependencyOutcome {
+    Success,
+    Cancelled,
+    Credential,
+    Concurrency,
+    Timeout,
+    Transport,
+    Unauthorized,
+    Forbidden,
+    RateLimited,
+    ServerError,
+    Protocol,
+    Verification,
+    Statement,
+    Signing,
+    Serialization,
+}
+impl DependencyOutcome {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Cancelled => "cancelled",
+            Self::Credential => "credential",
+            Self::Concurrency => "concurrency",
+            Self::Timeout => "timeout",
+            Self::Transport => "transport",
+            Self::Unauthorized => "unauthorized",
+            Self::Forbidden => "forbidden",
+            Self::RateLimited => "rate-limited",
+            Self::ServerError => "server-error",
+            Self::Protocol => "protocol",
+            Self::Verification => "verification",
+            Self::Statement => "statement",
+            Self::Signing => "signing",
+            Self::Serialization => "serialization",
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct DependencyMetrics(Mutex<BTreeMap<DependencyOutcome, Series>>);
+impl DependencyMetrics {
+    pub(crate) fn start(&self) -> DependencyObservation<'_> {
+        DependencyObservation {
+            metrics: self,
+            started: Instant::now(),
+            outcome: DependencyOutcome::Cancelled,
+        }
+    }
+    fn record(&self, outcome: DependencyOutcome, elapsed: Duration) {
+        let mut series = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = series.entry(outcome).or_default();
+        let seconds = elapsed.as_secs_f64();
+        entry.requests += 1;
+        entry.duration_sum += seconds;
+        for (count, bound) in entry.bucket_counts.iter_mut().zip(DURATION_BUCKETS) {
+            if seconds <= bound {
+                *count += 1;
+            }
+        }
+    }
+    fn render(&self, body: &mut String, dependency: &str, identity: &str) {
+        let series = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (outcome, entry) in series.iter() {
+            let labels = format!("{identity},outcome=\"{}\"", outcome.label());
+            let counter = format!("evidence_{dependency}_requests_total");
+            let duration = format!("evidence_{dependency}_request_duration_seconds");
+            body.push_str(&format!("{counter}{{{labels}}} {}\n", entry.requests));
+            for (count, bound) in entry.bucket_counts.iter().zip(DURATION_BUCKETS) {
+                body.push_str(&format!(
+                    "{duration}_bucket{{{labels},le=\"{bound}\"}} {count}\n"
+                ));
+            }
+            body.push_str(&format!("{duration}_bucket{{{labels},le=\"+Inf\"}} {}\n{duration}_count{{{labels}}} {}\n{duration}_sum{{{labels}}} {}\n", entry.requests, entry.requests, entry.duration_sum));
+        }
+    }
+}
+
+/// A dropped future records cancellation once, rather than losing its attempt.
+pub(crate) struct DependencyObservation<'a> {
+    metrics: &'a DependencyMetrics,
+    started: Instant,
+    outcome: DependencyOutcome,
+}
+impl DependencyObservation<'_> {
+    pub(crate) fn complete(mut self, outcome: DependencyOutcome) {
+        self.outcome = outcome;
+    }
+}
+impl Drop for DependencyObservation<'_> {
+    fn drop(&mut self) {
+        self.metrics.record(self.outcome, self.started.elapsed());
+    }
+}
+
 /// Value-free operator diagnostics for every governed source.
 ///
 /// The entry set is fixed when the runtime starts, from the bundle's own
@@ -435,10 +538,13 @@ impl UndeclaredNotFound {
 /// traffic. A report for an identifier outside that set is dropped.
 pub(crate) struct SourceDiagnostics {
     sources: BTreeMap<String, SourceSignals>,
+    signer: Arc<DependencyMetrics>,
+    build: Option<(String, String)>,
 }
 
 #[derive(Default)]
 struct SourceSignals {
+    requests: DependencyMetrics,
     shape_drift_total: AtomicU64,
     shape_drift_warning: Mutex<WarningWindow>,
     undeclared_not_found_warning: Mutex<WarningWindow>,
@@ -470,11 +576,21 @@ impl WarningWindow {
 impl SourceDiagnostics {
     pub(crate) fn new<'a>(source_ids: impl IntoIterator<Item = &'a str>) -> Self {
         Self {
+            signer: Arc::new(DependencyMetrics::default()),
+            build: None,
             sources: source_ids
                 .into_iter()
                 .map(|source_id| (source_id.to_owned(), SourceSignals::default()))
                 .collect(),
         }
+    }
+
+    pub(crate) fn with_build(mut self, bundle: &str, authority: Option<&str>) -> Self {
+        self.build = Some((bundle.to_owned(), authority.unwrap_or("package").to_owned()));
+        self
+    }
+    pub(crate) fn signer(&self) -> Arc<DependencyMetrics> {
+        Arc::clone(&self.signer)
     }
 
     /// The reporting handle one source executor holds, if `source_id` is one
@@ -538,6 +654,27 @@ impl SourceDiagnostics {
     }
 
     fn render(&self, body: &mut String) {
+        if let Some((bundle, authority)) = &self.build {
+            body.push_str("# HELP evidence_build_info Running version and captured governed identities.\n# TYPE evidence_build_info gauge\n");
+            body.push_str(&format!(
+                "evidence_build_info{{version=\"{}\",bundle=\"{}\",authority=\"{}\"}} 1\n",
+                env!("CARGO_PKG_VERSION"),
+                escape_label_value(bundle),
+                escape_label_value(authority)
+            ));
+        }
+        for dependency in ["source", "signer"] {
+            body.push_str(&format!("# HELP evidence_{dependency}_requests_total Completed dependency attempts by closed outcome.\n# TYPE evidence_{dependency}_requests_total counter\n# HELP evidence_{dependency}_request_duration_seconds Dependency attempt latency including cancellation.\n# TYPE evidence_{dependency}_request_duration_seconds histogram\n"));
+        }
+        for (source, signals) in &self.sources {
+            signals.requests.render(
+                body,
+                "source",
+                &format!("source=\"{}\"", escape_label_value(source)),
+            );
+        }
+        self.signer.render(body, "signer", "signer=\"active\"");
+
         body.push_str(
             "# HELP evidence_source_shape_drift_total Source responses whose shape departed from the declared projection.\n",
         );
@@ -576,6 +713,10 @@ pub(crate) struct SourceObserver {
 }
 
 impl SourceObserver {
+    pub(crate) fn start(&self) -> DependencyObservation<'_> {
+        self.diagnostics.sources[&self.source_id].requests.start()
+    }
+
     /// Count one response whose shape drifted and, at most once per interval,
     /// log the declared pointers it drifted at.
     pub(crate) fn shape_drift(&self, findings: &[String]) {
@@ -864,7 +1005,7 @@ mod tests {
         let mut body = String::new();
         diagnostics.render(&mut body);
         assert_eq!(
-            body,
+            body.lines().filter(|line| line.contains("evidence_source_shape_drift_total")).collect::<Vec<_>>().join("\n") + "\n",
             "# HELP evidence_source_shape_drift_total Source responses whose shape departed from the declared projection.\n\
              # TYPE evidence_source_shape_drift_total counter\n\
              evidence_source_shape_drift_total{source=\"source-a\"} 2\n\
@@ -914,5 +1055,41 @@ mod tests {
         assert!(rendered.contains("le=\"0.05\"} 1\n"));
         assert!(rendered.contains("le=\"+Inf\"} 1\n"));
         assert!(rendered.contains("evidence_http_request_duration_seconds_count{route=\"/health\",method=\"GET\",status=\"success\",error=\"none\"} 1\n"));
+    }
+}
+
+#[cfg(test)]
+mod dependency_metric_tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_attempts_and_cancellation_have_exact_bounded_counts() {
+        let metrics = Arc::new(DependencyMetrics::default());
+        let workers = (0..8)
+            .map(|_| {
+                let metrics = Arc::clone(&metrics);
+                std::thread::spawn(move || {
+                    for _ in 0..100 {
+                        metrics.start().complete(DependencyOutcome::Success);
+                        metrics.start().complete(DependencyOutcome::Timeout);
+                        drop(metrics.start());
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let series = metrics.0.lock().unwrap();
+        assert_eq!(series.len(), 3);
+        for entry in series.values() {
+            assert_eq!(entry.requests, 800);
+            assert!(entry.duration_sum >= 0.0);
+            assert!(entry
+                .bucket_counts
+                .windows(2)
+                .all(|pair| pair[0] <= pair[1]));
+            assert!(entry.bucket_counts.iter().all(|count| *count <= 800));
+        }
     }
 }

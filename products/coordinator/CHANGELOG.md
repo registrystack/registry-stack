@@ -35,3 +35,12 @@ First release of Registry Coordinator.
   event value still fits the 128 KiB structured value profile; an event over that profile is
   refused with `event.too-large` (413), which names the bounds and asks the producer to project
   fewer or smaller fields into the event.
+
+- BREAKING: a discovery `jwks_uri` on another origin than the
+  `deployment.authentication` issuer must use HTTPS and is refused when it
+  resolves to a private or loopback address, under `development-loopback` too.
+  The issuer and a declared `jwksSource.uri` may resolve to a private or
+  loopback address, and `deployment.authentication.allowInsecureHttp: true`
+  permits plain HTTP beyond loopback to them. Migration: declare the key
+  endpoint as `jwksSource: {type: uri, uri: ...}` or serve it from the
+  issuer's origin.

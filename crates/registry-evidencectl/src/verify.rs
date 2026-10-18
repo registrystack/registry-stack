@@ -22,14 +22,14 @@ const MAX_VERIFIED_BYTES: u64 = 256 * 1024;
 
 #[derive(Debug, Args)]
 pub struct VerifyArgs {
-    /// Signed JWS or SD-JWT VC response returned by Evidence Gateway.
+    /// Signed JWS or SD-JWT VC response returned by Registry Evidence.
     pub(crate) response: PathBuf,
 
     /// Owner-only verification context retained before the response existed.
     #[arg(long)]
     pub(crate) context: PathBuf,
 
-    /// New owner-only file for the exact verified Evidence Gateway payload.
+    /// New owner-only file for the exact verified Registry Evidence payload.
     #[arg(long)]
     pub(crate) output: PathBuf,
 }

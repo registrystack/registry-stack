@@ -31,6 +31,12 @@ pub enum Field {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
+    Uuid {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
     Integer {
         #[cfg_attr(feature="schema",schemars(range(min = -9_007_199_254_740_991_i64,max = 9_007_199_254_740_991_i64)))]
         minimum: i64,
@@ -115,6 +121,7 @@ impl Field {
                     && maximum_bytes.get() <= maximum
             }
             Self::Date { .. } | Self::Boolean { .. } => true,
+            Self::Uuid { .. } => maximum >= 36,
         }
     }
 }

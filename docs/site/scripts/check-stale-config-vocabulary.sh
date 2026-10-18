@@ -14,7 +14,7 @@ PATHS=(
 
 status=0
 if command -v rg >/dev/null 2>&1; then
-  rg -n --no-ignore --glob '!scripts/check-stale-config-vocabulary.*' "$PATTERN" "${PATHS[@]}" || status=$?
+  rg -n --no-ignore --glob '!**/check-stale-config-vocabulary.*' "$PATTERN" "${PATHS[@]}" || status=$?
 else
   grep -RInE --exclude='check-stale-config-vocabulary.*' "$PATTERN" "${PATHS[@]}" || status=$?
 fi
@@ -39,6 +39,11 @@ fi
 # shellcheck disable=SC2016 # the backticks are literal Markdown code marks
 CROSS_PRODUCT_RETIRED='permissions\.entities|entityIds?([^a-z]|$)|extendEntities|[Cc]hange[ -]?[Rr]equests?|/requests/[<{:]|[Cc]hange[ -][Cc]ontrol|[Ll]ifecycle[ -]?[Aa]ctions?|[Ll]ifecycle[ -]?[Aa]uthorit(y|ies)|executeLifecycleAction|BRegPreparedLifecycle|lifecycle-promotion|fieldEncryptionBackfill|requestHistoryAfterProposalVersion|planRefusal|[Rr]ecovery[^.]*[`"]terminal[`"]|[`"]terminal[`"][^.]*[Rr]ecovery'
 BREG_RETIRED='(^|[^A-Za-z])[Ee]ntit(y|ies)([^a-z]|$)|SSL_CERT_FILE'
+# Retired Registry Evidence and Registry Casework vocabulary, refused on every
+# page like CROSS_PRODUCT_RETIRED. No tool prints these and no configuration
+# key spells them: an Evidence project is an editable project or a deployment
+# project, a definition answers a question, and Casework pins a ReviewRequest.
+EVIDENCE_CASEWORK_RETIRED='[Aa]uthoring [Ww]orkspaces?|[Bb]ounded [Qq]uestions?|[Rr]eview [Rr]ounds?'
 # Spellings removed from a line before it is matched:
 # - Registry Record v1's entityTypeIdentifier field, and its prose name;
 # - HTTP entity tags;
@@ -72,8 +77,9 @@ is_breg_page() {
 
 is_exempt_page() {
   case "$1" in
-    # Release history and retirement records name what was retired.
-    src/content/docs/changelog.* | src/content/docs/decisions/*) return 0 ;;
+    # Release history and retirement records name what was retired, and an
+    # approved specification keeps the words it was approved with.
+    src/content/docs/changelog.* | src/content/docs/decisions/* | src/content/docs/spec/*) return 0 ;;
     # Generated trees: change their sources instead.
     src/content/docs/products/* | src/content/docs/reference/cli/*) return 0 ;;
   esac
@@ -105,11 +111,12 @@ done < <(
 # spelling on a baselined page is counted and reported; anywhere else it
 # fails the check.
 retired_status=0
-ROOT="$ROOT" CROSS_PRODUCT_RETIRED="$CROSS_PRODUCT_RETIRED" BREG_RETIRED="$BREG_RETIRED" ALLOWED="$ALLOWED" \
+ROOT="$ROOT" CROSS_PRODUCT_RETIRED="$CROSS_PRODUCT_RETIRED" BREG_RETIRED="$BREG_RETIRED" \
+  EVIDENCE_CASEWORK_RETIRED="$EVIDENCE_CASEWORK_RETIRED" ALLOWED="$ALLOWED" \
   awk '
     BEGIN {
       root = ENVIRON["ROOT"] "/"
-      narrow = ENVIRON["CROSS_PRODUCT_RETIRED"]
+      narrow = ENVIRON["CROSS_PRODUCT_RETIRED"] "|" ENVIRON["EVIDENCE_CASEWORK_RETIRED"]
       broad = narrow "|" ENVIRON["BREG_RETIRED"]
       allowed = ENVIRON["ALLOWED"]
       pending = 0
@@ -149,7 +156,7 @@ ROOT="$ROOT" CROSS_PRODUCT_RETIRED="$CROSS_PRODUCT_RETIRED" BREG_RETIRED="$BREG_
         } else if (count[page] == 0) {
           printf "pending rewrite: %s: clean; remove it from the baseline\n", page
         } else {
-          printf "pending rewrite: %s: %d line(s) with retired BReg vocabulary\n", page, count[page]
+          printf "pending rewrite: %s: %d line(s) with retired vocabulary\n", page, count[page]
         }
       }
       exit (failures > 0)
@@ -157,9 +164,9 @@ ROOT="$ROOT" CROSS_PRODUCT_RETIRED="$CROSS_PRODUCT_RETIRED" BREG_RETIRED="$BREG_
   ' mode=baseline "$BASELINE" ${pages[@]+"${pages[@]}"} || retired_status=$?
 
 if [[ "$retired_status" -eq 1 ]]; then
-  echo "retired BReg vocabulary found outside the pending-rewrite baseline ($BASELINE)" >&2
+  echo "retired vocabulary found outside the pending-rewrite baseline ($BASELINE)" >&2
   exit 1
 elif [[ "$retired_status" -ne 0 ]]; then
-  echo "retired BReg vocabulary search failed with exit code $retired_status" >&2
+  echo "retired vocabulary search failed with exit code $retired_status" >&2
   exit "$retired_status"
 fi

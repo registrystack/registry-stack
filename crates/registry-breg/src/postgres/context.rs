@@ -1509,20 +1509,61 @@ impl GuardedTransaction<'_> {
     }
 }
 
-/// Holds the shared package lock and admits the exact active registry identity.
-/// It installs no caller or target authority, so workers can fence durable claims
-/// without inheriting Record or Action permissions.
+#[derive(Debug)]
+pub(crate) enum RegistryLockFailure {
+    Timeout,
+    QueryCancelled,
+    Database,
+}
+
+#[derive(Debug)]
+pub(crate) enum RegistryTransactionError {
+    Kernel(PostgresKernelError),
+    Lock(RegistryLockFailure),
+}
+
+impl From<PostgresKernelError> for RegistryTransactionError {
+    fn from(error: PostgresKernelError) -> Self {
+        Self::Kernel(error)
+    }
+}
+
+impl From<tokio_postgres::Error> for RegistryTransactionError {
+    fn from(error: tokio_postgres::Error) -> Self {
+        Self::Kernel(error.into())
+    }
+}
+
 pub(crate) async fn begin_registry_transaction<'a>(
     client: &'a mut Client,
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
     expected: &ExpectedRegistryIdentity,
 ) -> Result<GuardedTransaction<'a>> {
+    begin_registry_transaction_with_reason(client, lock_key, lock_timeout, expected)
+        .await
+        .map_err(|error| match error {
+            RegistryTransactionError::Kernel(error) => error,
+            // Preserve the original refusal for every existing caller.
+            RegistryTransactionError::Lock(_) => PostgresKernelError::RegistryUnavailable,
+        })
+}
+
+/// Holds the shared package lock and admits the exact active registry identity.
+/// It installs no caller or target authority, so workers can fence durable claims
+/// without inheriting Record or Action permissions.
+pub(crate) async fn begin_registry_transaction_with_reason<'a>(
+    client: &'a mut Client,
+    lock_key: RegistryLockKey,
+    lock_timeout: Duration,
+    expected: &ExpectedRegistryIdentity,
+) -> std::result::Result<GuardedTransaction<'a>, RegistryTransactionError> {
     expected.validate()?;
     if lock_timeout.is_zero() || lock_timeout > Duration::from_secs(30) {
         return Err(PostgresKernelError::Configuration(
             "record lock timeout must be between 1 millisecond and 30 seconds",
-        ));
+        )
+        .into());
     }
     let transaction = client.transaction().await?;
     let timeout_millis = i32::try_from(lock_timeout.as_millis()).map_err(|_| {
@@ -1549,7 +1590,13 @@ pub(crate) async fn begin_registry_transaction<'a>(
             &[(&lock_key.get(), Type::INT8)],
         )
         .await
-        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        .map_err(|error| {
+            RegistryTransactionError::Lock(match error.code().map(|code| code.code()) {
+                Some("55P03") => RegistryLockFailure::Timeout,
+                Some("57014") => RegistryLockFailure::QueryCancelled,
+                _ => RegistryLockFailure::Database,
+            })
+        })?;
     let state = transaction
         .query_typed_opt(
             "SELECT package_id, database_id, active_package_digest,
@@ -1567,7 +1614,7 @@ pub(crate) async fn begin_registry_transaction<'a>(
         && state.get::<_, String>(3) == expected.activation_id
         && state.get::<_, String>(4) == expected.schema_fingerprint;
     if !ready {
-        return Err(PostgresKernelError::RegistryUnavailable);
+        return Err(PostgresKernelError::RegistryUnavailable.into());
     }
     Ok(GuardedTransaction { transaction })
 }

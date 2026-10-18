@@ -492,6 +492,7 @@ fn issuer(issuer: &str, audience: &str, jwks_source: JwksSource) -> OidcIssuerCo
         issuer: Url::new(issuer).unwrap(),
         audience: audience.to_owned(),
         jwks_source,
+        allow_insecure_http: false,
     }
 }
 
@@ -508,6 +509,22 @@ fn the_oidc_issuer_is_an_https_url_and_the_audience_is_bounded_text() {
     issuer("http://127.0.0.1:8082", "api", JwksSource::default())
         .check(field, true)
         .expect("supervised loopback issuer");
+    for loopback in ["http://localhost:8082", "http://[::1]:8082"] {
+        issuer(loopback, "api", JwksSource::default())
+            .check(field, true)
+            .expect("every loopback spelling is admitted");
+    }
+
+    let opted_in: ProductOidc = read_block(
+        "issuer: http://issuer.example.test\naudience: urn:example:api\n\
+         allowInsecureHttp: true\ntokenTypes: [at+jwt]",
+    )
+    .expect("explicit HTTP issuer opt-in parses");
+    assert!(opted_in.issuer.allow_insecure_http);
+    opted_in
+        .issuer
+        .check(field, false)
+        .expect("explicit HTTP issuer opt-in validates");
 
     for (candidate, loopback, expected_field) in [
         (
@@ -577,6 +594,29 @@ fn the_oidc_issuer_is_an_https_url_and_the_audience_is_bounded_text() {
         assert_eq!(report.diagnostics()[0].path, "/issuer");
         assert!(!report.to_string().contains("user:pass"));
     }
+}
+
+#[test]
+fn the_insecure_http_opt_in_also_admits_a_declared_http_jwks_uri() {
+    let field = "authentication.oidc";
+    let mut candidate = issuer(
+        "https://issuer.example.test",
+        "api",
+        JwksSource::Uri {
+            uri: Url::new("http://keys.internal/jwks").unwrap(),
+        },
+    );
+    let error = candidate
+        .check(field, false)
+        .expect_err("a plain HTTP key URI needs the opt-in");
+    assert_eq!(error.field(), "authentication.oidc.jwksSource.uri");
+    assert!(error.to_string().contains("allowInsecureHttp: true"));
+    assert!(!error.to_string().contains("keys.internal"), "{error}");
+
+    candidate.allow_insecure_http = true;
+    candidate
+        .check(field, false)
+        .expect("the opt-in admits a declared HTTP key URI under an HTTPS issuer");
 }
 
 #[test]

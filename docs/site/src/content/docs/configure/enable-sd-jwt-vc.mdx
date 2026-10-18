@@ -1,6 +1,6 @@
 ---
-title: Enable SD-JWT VC in a deployment
-description: Permit SD-JWT VC at both governed response-format gates, request it over HTTP, and preserve independent verifier trust.
+title: Enable SD-JWT VC
+description: Decide which parts of an SD-JWT VC response a holder may disclose, bind a definition to the holder's key, and keep verifier trust independent.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,179 +13,139 @@ persona:
 locale: en
 standards_referenced:
   - sd-jwt-vc
+tutorial_test:
+  toolset: evidence
+  after: tutorials/request-evidence-as-sd-jwt-vc
 ---
 
-Start with a complete governed deployment project. Evidence Gateway can serialize the same
-stateless assertion as signed JWS or SD-JWT VC. The question, source access, derivation, supported
-values, subject binding, purpose, audience, signing key, and audit boundaries remain the same.
+If you operate an Evidence project and one assertion definition must answer as an
+[SD-JWT VC](../../reference/glossary/#sd-jwt-vc), you decide two things once the representation is
+permitted: which values a holder may keep or drop, and whether the response is bound to the
+holder's key. You continue in `first-evidence-assertion/adult-status`, the project from
+[Request evidence as an SD-JWT VC](../../tutorials/request-evidence-as-sd-jwt-vc/), with Evidence
+Gateway stopped and its state cleaned.
 
-For an executable introduction, complete [Explore SD-JWT VC locally](../../tutorials/request-evidence-as-sd-jwt-vc/)
-first. Local question authoring uses `responseFormats` to compile both local permission gates. A
-deployment instead keeps the bundle ceiling and authority grant under deployment governance.
+## What changes for callers
 
-## Permit the format at both gates
+A definition answers as SD-JWT VC only when `sd-jwt-vc` is in its `representations` and in the
+grant a caller acts under. That caller then sends `Accept: application/dc+sd-jwt` and receives the
+same assertion, serialized as an SD-JWT VC; a caller whose grant lacks it still receives signed
+JWS. Two choices change what that caller can do with the response:
 
-Keep signed JWS enabled and add `sd-jwt-vc` to the bundle-wide response formats:
+- The disclosure shape decides which values the holder can present separately.
+- The subject binding decides who the response means something to: the relying party that
+  requested it (`audience-scoped`), or whoever proves possession of the holder's key
+  (`holder-bound`). A holder-bound definition has no signed JWS representation, so every caller
+  must send holder keys.
 
-```yaml
-responseFormats: [signed-jws, sd-jwt-vc]
+## Choose what a holder can disclose
+
+Each output travels as a disclosure, a salted claim the holder may keep or drop. An output without
+`sdJwtVc` is one disclosure named by its concept URI, which is what `adult`, a boolean, needs.
+
+To present the fields of a structured value separately, give that output an `sdJwtVc` block. The
+output then appears under `claim`, a unique name of at most 64 characters, and each direct field becomes
+its own disclosure; a nested object stays one. `top-level` is the only `disclosure` value.
+Only a `reviewed-structured-value` output may declare `sdJwtVc`; on any other type `evidencectl
+check` refuses with `output-projection-type`, because a scalar has no fields to split.
+
+{/* Evidence: crates/registry-evidence-authoring/src/project.rs, output-projection-type;
+    crates/registry-evidence-authoring/src/validate.rs, validate_sd_jwt_claim_name;
+    crates/registry-evidencectl/schemas/authoring/project.schema.json, ProjectionDisclosure;
+    products/evidence/contracts/sd-jwt-vc-profile.yaml, selectively_disclosed. */}
+
+## Bind adult-status to the holder
+
+`adult-status` declares `subjectBinding: audience-scoped`, and the project checks clean:
+
+```sh test-cwd="first-evidence-assertion/adult-status"
+evidencectl check . --target local-target.yaml
 ```
 
-Add the same format to every exact authority grant that may return it:
-
-```yaml
-authorityProfiles:
-  approved-caller:
-    kind: explicit-request
-    requesterTags: [approved-caller]
-    permissions:
-      - requirement: urn:example:requirement:age-bracket:v1
-        purpose: service-path-selection
-        audienceFrom: authenticated-requester
-        responseFormats: [signed-jws, sd-jwt-vc]
-        subjects:
-          - role: person
-            selectorProfile: person-reference-v1
-            valueOrigin: request
+```text test-excerpt
+0 errors, 0 warnings
 ```
 
-Both gates must permit the format. Enabling only one returns the ordinary authorization refusal
-before source access. An unknown, combined, parameterized, or malformed `Accept` value returns
-HTTP 406.
+Declare [`holder-bound`](../../reference/glossary/#holder-bound) instead, and keep only
+`sd-jwt-vc`:
 
-Run the candidate checks and deploy the exact reviewed revision:
+```diff lang="yaml" title="evidence.yaml" test-edit
+-   subjectBinding: audience-scoped
++   subjectBinding: holder-bound
+    representations:
+-   - signed-jws
+    - sd-jwt-vc
+```
+
+```sh test-exit="1"
+evidencectl check . --target local-target.yaml
+```
+
+```text test-excerpt
+each complete grant must stay inside every definition ceiling
+```
+
+The definition is now a ceiling its grants exceed: both `adult-status` grants in
+`dev-authority.yaml` still permit an audience-scoped JWS. Narrow the `standalone-service` grant,
+then the `age-checker-service` one:
+
+```diff lang="yaml" title="dev-authority.yaml" test-edit
+      representations:
+-     - signed-jws
+      - sd-jwt-vc
+-     subjectBinding: audience-scoped
++     subjectBinding: holder-bound
+```
+
+```diff lang="yaml" title="dev-authority.yaml" test-edit
+    - age-checker-service
+    grants:
+    - definition: adult-status
+      purpose: age-check
+      audienceFrom: authenticated-requester
+      representations:
+-     - signed-jws
+-     subjectBinding: audience-scoped
++     - sd-jwt-vc
++     subjectBinding: holder-bound
+```
 
 ```sh
-evidencectl test "<editable-project>" --target "<deployment-target>"
-evidence check --runtime-config "<deployment-target>/runtime.yaml"
+evidencectl check . --target local-target.yaml
 ```
 
-## Choose root or structured disclosures
-
-An ordinary scalar or unprojected governed value becomes one root disclosure named by its concept
-URI. No extra requirement configuration is needed.
-
-To make the direct fields of a reviewed structure independently encoded disclosures, add an
-`sdJwtVc` projection to that concept:
-
-```yaml
-concepts:
-  - uri: urn:example:concept:business-registration:v1
-    type: reviewed-structured-value
-    required: true
-    constraints:
-      schema: urn:example:schema:business-registration:v1
-      maximumSerializedBytes: 2048
-    sdJwtVc:
-      claim: businessRegistration
-      disclosure: top-level
+```text test-expect
+Evidence project check: complete
+Project: .
+Target: local-target.yaml
+0 errors, 0 warnings
 ```
 
-`businessRegistration` is adopter configuration, not a built-in Evidence Gateway claim. A direct
-nested object remains one atomic disclosure. Review the complete and combined disclosure surfaces
-before widening a production requirement.
+A request for `adult-status` now carries `holderKeys`. Each key becomes the `cnf` claim of its
+response and scopes the subject binding, and the response names no audience. A caller that still
+asks for signed JWS is refused before any source is contacted. The relying party checks the
+holder's key-binding JWT against the `cnf` key with
+[`evidence verify-presentation`](/reference/cli/evidence/verify-presentation/).
 
-## Request the serialization
+{/* Evidence: crates/registry-evidencectl/schemas/authoring/project.schema.json, BindingMode;
+    crates/registry-evidence/src/contracts.rs, holderKeys, application/dc+sd-jwt;
+    products/evidence/contracts/problem-contract.yaml, authorization;
+    products/evidence/contracts/holder-bound-profile.yaml, binding_derivation. */}
 
-The requester must retain its expected format before sending the request. For local integration
-testing, `evidencectl request prepare` records that expectation:
+## What relying parties trust
 
-```sh
-evidencectl request prepare "<question>" \
-  --purpose "<purpose>" \
-  --subject "<role>:<field>=<value>" \
-  --response-format sd-jwt-vc \
-  --name "<request-name>"
-```
+An SD-JWT VC response is a second encoding of the same stateless assertion, so Registry Evidence
+keeps no issuance session, status list, or revocation for it. The frozen
+[SD-JWT VC profile](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/sd-jwt-vc-profile.yaml)
+pins RFC 9901 and SD-JWT VC draft 18. Relying parties verify against keys they pinned themselves;
+`/.well-known/jwt-vc-issuer` is discovery, not a trust anchor. A deployment target may cap formats
+with `responseFormats`; see the [configuration reference](/reference/evidence-configuration/).
 
-Only response negotiation changes at the HTTP boundary:
-
-```sh
-curl --silent --show-error --fail-with-body \
-  --config authorization.curl \
-  --request POST \
-  --url https://<evidence-host>/v1/evidence \
-  --header 'Content-Type: application/json' \
-  --header 'Accept: application/dc+sd-jwt' \
-  --data-binary @request.json \
-  --output assertion.sd-jwt
-```
-
-Treat `assertion.sd-jwt` as untrusted opaque input. Do not decode its disclosures into application
-state before verification.
-
-## Verify with independent trust
-
-Use an independently retained verification policy and trusted key set:
-
-```sh
-evidence verify \
-  --sd-jwt-vc assertion.sd-jwt \
-  --jwks trusted-issuer-keys.json \
-  --policy verification-policy.json
-```
-
-The verifier opens no network connection. `trusted-issuer-keys.json` is the complete approved
-trust set for the run, and `verification-policy.json` comes from the consumer's request and
-governance records, not from the credential.
-
-`evidence verify` reads a stored credential, which ends in a trailing tilde and offers no proof of
-possession. A holder-bound presentation, which carries the holder's key-binding JWT after its last
-tilde, is verified by a separate command against its own closed policy document:
-
-```sh
-evidence verify-presentation \
-  --sd-jwt-vc-presentation presentation.sd-jwt \
-  --jwks trusted-issuer-keys.json \
-  --policy holder-bound.policy.yaml
-```
-
-Neither command accepts the other's document. Both open no network connection, and both accept
-`--at <rfc3339-utc>` to verify at a historical decision instant. `evidence verify-presentation`
-exits 0 when the presentation is authentic, possession is proven, and the assertion is currently
-valid; 3 when it is authentic and possession is proven but the assertion is not currently valid;
-and 1 for every other outcome. Comparing the expected challenge is not consuming it, so the same
-presentation verifies again under the same policy.
-
-Provider metadata is published at `/.well-known/jwt-vc-issuer`, and signing keys remain at
-`/.well-known/evidence/jwks.json`. Both endpoints are discovery. Outside local mode, the service
-provider identifier must be a stable HTTPS origin. It becomes the signed `iss`, and issuer
-metadata publishes its exact `issuer` and `jwks_uri`.
-
-Approve trust independently through [Manage Evidence Gateway verifier trust](../../tutorials/manage-evidence-verifier-trust/).
-
-## Keep the boundary explicit
-
-This response is not a credential lifecycle, in either subject binding mode:
-
-- no OID4VCI offer, issuance session, token exchange, or wallet onboarding;
-- no status list, revocation, refresh, or reissuance;
-- no presentation exchange protocol, and no key-binding JWT appended at issuance;
-- no replay prevention for a presented credential.
-
-By default the subject binding remains scoped to the assertion's audience and purpose, and the
-credential is usable only by the relying party it was issued to. `holderKeys` carries public P-256
-JWKs, each echoed into the `cnf` claim of the credential issued for it. Their inclusion alone
-proves no possession.
-
-A requirement the bundle declares as `holder-bound` scopes its subject bindings to the presented
-holder key instead, so the credential can be presented to a relying party that was not named at
-issuance. That mode is a deployment declaration, never a caller option, and it narrows the
-requirement to the SD-JWT VC serialization and its batch envelope.
-
-The profile emits `application/dc+sd-jwt`, `typ: dc+sd-jwt`, `vct`, SHA-256 disclosures, optional
-`cnf.jwk`, and a trailing tilde without a key-binding JWT. It is pinned to RFC 9901 and SD-JWT VC
-draft v18. `evidence verify` checks the complete stored credential. A selectively disclosed
-presentation carrying a holder-signed key-binding JWT is checked by `evidence verify-presentation`
-instead. Neither command implements a wallet protocol, and full SD-JWT VC conformance stays
-unclaimed.
-
-For deterministic source-tree proof of the format and tamper refusals, see the
-[maintained SD-JWT VC demo](https://github.com/registrystack/registry-stack/blob/main/products/evidence/SD-JWT-VC-DEMO.md).
+{/* Evidence: products/evidence/contracts/sd-jwt-vc-profile.yaml, standards_profile, key_discovery;
+    crates/registry-evidence/src/server.rs, JWT_VC_ISSUER_ROUTE;
+    crates/registry-evidence/src/cli.rs, VerifyPresentation;
+    crates/registry-evidencectl/schemas/authoring/target.schema.json, responseFormats. */}
 
 ## Next
 
-- [Configure OID4VCI wallet delivery](../evidence-oid4vci/) to deliver this SD-JWT VC response to
-  a wallet over the protocol Evidence Gateway itself refuses to speak.
-- [Evidence Gateway security model](../../security/evidence/) for the complete boundary this
-  response sits inside, beyond the credential-lifecycle exclusions listed above.
+[Deliver to a wallet](../evidence-oid4vci/)

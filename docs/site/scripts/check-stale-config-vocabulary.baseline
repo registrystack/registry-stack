@@ -1,17 +1,19 @@
 # Pending-rewrite baseline for check-stale-config-vocabulary.sh.
 #
 # Each line names one page, relative to docs/site, that still carries retired
-# Base Registry Engine vocabulary. The check counts and reports its lines
-# instead of refusing them. The comment names the BReg docs rewrite PR that
-# removes the vocabulary; that PR deletes the line. A page not listed here
-# fails the check on its first retired spelling.
+# vocabulary. The check counts and reports its lines instead of refusing them.
+# The comment names the docs rewrite package that removes the vocabulary; that
+# package deletes the line. A page not listed here fails the check on its
+# first retired spelling.
 #
 # Not scanned: the field descriptions the generated configuration reference
 # renders from products/breg/generated/*/*.schema.json. Several still say
 # "entity"; they are Rust doc comments, fixed in the product (PF-18 in the
 # rewrite's findings register), not on a page.
 
-# PR 2: tutorials and entry pages
-
-# PR 5: Reference and src/data
+# BReg rewrite, PR 5: Reference and src/data
 src/content/docs/reference/bregctl-publicschema-wizard.mdx # quotes the wizard's own prompts, which still say entity (crates/registry-bregctl/src/init_from_model/wizard.rs); cleared when the product renames them
+
+# Evidence and Casework rewrite: Start and Reference
+src/content/docs/operate/advanced/upgrade-and-retire.mdx # review round
+src/data/projects.yaml # bounded question

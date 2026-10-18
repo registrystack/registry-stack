@@ -173,7 +173,7 @@ service `authorization`. It accepts no task authority. Submission carries a `Pol
 subject, reviewer context, and requester reference. Select a policy by ID, or require an exact
 version and digest together. Casework freezes the concrete `PolicyBinding` at acceptance;
 completion must agree with that accepted policy, subject, and submission digest.
-The [Casework API contract](../apis/registry-casework/#policy-and-submission-binding) defines selection
+The [Casework API contract](../apis/registry-casework/#policy-pins-and-retries) defines selection
 and recovery. Casework owns review authority and outcomes.
 Standalone review needs no BReg connection and creates no registry effect.
 

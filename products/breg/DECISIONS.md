@@ -121,9 +121,16 @@
   operator in runtime configuration. BReg depends unconditionally on
   `registry-evidence-client` and `registry-evidence-verifier` for this
   release; gating that dependency behind a Cargo feature is deferred. The
-  accepted assertion is retained for 24 hours after acceptance and erased by
-  `bregctl evidence-retention erase-expired`, following the same operator-run
-  erasure pattern already used for change-request retention and history.
+  accepted assertion is retained for a fixed 24 hours after acceptance. A
+  supervised runtime worker erases expired immediate Action and Proposal uses
+  on startup and every minute, in batches of at most 1,000 rows per table.
+  Each tick drains at most 100 separately audited and committed batches, then
+  yields; larger backlogs continue on subsequent ticks. With separate runtime and migration
+  roles, the runtime can invoke expiry but cannot read the retained assertions
+  or delete unexpired material. Each sweep
+  requires an accepted audit attempt and records its outcome without assertion
+  values. `bregctl evidence-retention erase-expired` remains available for manual
+  use; this does not change request or history erasure.
 - `products/breg/starters/` holds ready-made, versioned BReg projects with
   fixed scenarios and synthetic clients, pinned to the same PublicSchema
   draft vocabulary snapshot as `bregctl init --from publicschema`.

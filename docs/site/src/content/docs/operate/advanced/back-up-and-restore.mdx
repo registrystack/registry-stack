@@ -204,9 +204,11 @@ A restore rewinds every row to the backup point, including the ones you erased o
 Once the copy serves, work through these:
 
 - **Erasures.** Erasure does not reach backups, so a restore brings back erased history and
-  expired Evidence uses. Repeat each `history erase` request you ran after the backup point, and
-  run `bregctl evidence-retention erase-expired --runtime-config /etc/breg/runtime.yaml --before
-  <now>` so Evidence assertions past their 24-hour window are erased again. See
+  expired Evidence uses. Repeat each `history erase` request you ran after the backup point.
+  The runtime resumes bounded Evidence expiry after startup admission. To erase expired
+  assertions before the next sweep, run
+  `bregctl evidence-retention erase-expired --runtime-config /etc/breg/runtime.yaml --before
+  <now>`. The same 24-hour acceptance window applies. See
   [What cannot be undone](../../breg-retention/#what-cannot-be-undone).
 - **Webhooks.** Deliveries still pending at the backup point are sent again once the copy serves,
   under the same `Idempotency-Key` they carried the first time, so a receiver that deduplicates by
@@ -307,7 +309,7 @@ Rate limits and caches start empty. Restore audit history into your archive, nev
 audit directory. When `evidence-oid4vci` delivers credentials, start it after Evidence is ready:
 its offers live in memory, so a restart invalidates every outstanding offer and wallets must ask
 for a fresh one. See
-[Operational limits](../../../configure/evidence-oid4vci/#operational-limits).
+[Serve](../../../configure/evidence-oid4vci/#serve).
 
 {/* Evidence: products/evidence/OPERATOR-CONTRACT.md, "no application database" and the audit
     restore rule; crates/registry-evidence/src/main.rs, check subcommand;

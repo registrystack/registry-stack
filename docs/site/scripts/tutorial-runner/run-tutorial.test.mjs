@@ -539,6 +539,33 @@ test('the work directory is removed after a journey, even where it made a direct
   });
 });
 
+test('teardown finds a session\'s control socket and runtime file as the journey left them', async () => {
+  const body =
+    '## Start\n\n' +
+    fence(
+      'sh',
+      'mkdir -p project/.breg/dev\ncd project/.breg/dev\necho {} >state.json\n' +
+        "python3 -c 'import socket; socket.socket(socket.AF_UNIX).bind(\"control.sock\")'\n" +
+        'chmod 600 control.sock\ntouch runtime.yaml\nchmod 400 runtime.yaml',
+    );
+  await withPage(body, async ({ dir, page }) => {
+    const modes = join(dir, 'modes.log');
+    await writeFile(join(dir, 'breg'), '#!/bin/sh\n');
+    await writeFile(
+      join(dir, 'bregctl'),
+      `#!/bin/sh\npython3 -c 'import os, sys; print(*(oct(os.lstat(p).st_mode & 0o777) for p in sys.argv[1:]))' "$3/.breg/dev/control.sock" "$3/.breg/dev/runtime.yaml" >'${modes}'\n`,
+    );
+    await chmod(join(dir, 'breg'), 0o755);
+    await chmod(join(dir, 'bregctl'), 0o755);
+    const { code, output } = await run(['--toolset', 'breg', page], {
+      BREG_BIN: join(dir, 'breg'),
+      BREGCTL_BIN: join(dir, 'bregctl'),
+    });
+    assert.equal(code, 0, output);
+    assert.equal(await readFile(modes, 'utf8'), '0o600 0o400\n');
+  });
+});
+
 test('--keep-failed retains private diagnostics after stopping owned sessions', async () => {
   const body = '## Fail\n\n' + fence('sh', 'mkdir -p project/.breg/dev\necho {} >project/.breg/dev/state.json\necho startup-category >diagnostic.log\nfalse');
   await withPage(body, async ({ dir, page }) => {
@@ -702,7 +729,7 @@ test('a test-file block whose directory does not exist stops the journey', async
   });
 });
 
-test('a background fence runs until the next one starts or the page ends, and test-cwd says where a fence runs', async () => {
+test('a background fence runs until the next one starts or the journey ends, and test-cwd says where a fence runs', async () => {
   const port = await freePort();
   const url = `http://127.0.0.1:${port}/`;
   const serve = `python3 -m http.server ${port} --bind 127.0.0.1`;
@@ -719,9 +746,27 @@ test('a background fence runs until the next one starts or the page ends, and te
     const { code, output } = await run([page]);
     assert.equal(code, 0, output);
     assert.match(output, /tutorial PASS/u);
-    await assert.rejects(fetch(url), 'the page end must stop the background fence');
+    await assert.rejects(fetch(url), 'the journey end must stop the background fence');
     const plan = await run(['--dry-run', page]);
     assert.match(plan.output, new RegExp(`run   line 14 \\(Serve\\): ${serve} \\(in site/one, in the background until ${url} answers\\)`, 'u'));
+  });
+});
+
+test('a background fence a page leaves running is still there for the next page', async () => {
+  const port = await freePort();
+  const url = `http://127.0.0.1:${port}/`;
+  const body =
+    '## Serve\n\n' +
+    fence('sh', 'mkdir site\necho first >site/index.html') +
+    fence(`sh test-background="${url}" test-cwd="site"`, `python3 -m http.server ${port} --bind 127.0.0.1`);
+  await withPage(body, async ({ dir, page }) => {
+    const second = join(dir, 'second.mdx');
+    await writeFile(second, '---\ntitle: s\n---\n\n## Read\n\n' + fence('sh', `curl -fsS ${url}`) + fence('text test-expect', 'first'));
+    const { code, output } = await run([page, second]);
+    assert.equal(code, 0, output);
+    assert.match(output, /tutorial PASS/u);
+    assert.match(output, /expect second\.mdx line 11: ok/u);
+    await assert.rejects(fetch(url), 'the journey end must stop the background fence');
   });
 });
 
@@ -858,9 +903,10 @@ test('the evidence toolset serves its binaries, the client package, and the FHIR
       'evidence --version\nevidencectl dev\n"$EVIDENCE_OID4VCI_BIN" --version\n' +
         'python3 -c "import tutorial_fake_client; print(tutorial_fake_client.NAME)"\n' +
         'python3 -c "import os, urllib.request; print(urllib.request.urlopen(os.environ[\'FHIR_TUTORIAL_TEST_BASE_URL\'] + \'/healthz\').status)"\n' +
+        'tar -tzf evidence-examples.tar.gz | grep -x fhir/.gitignore\n' +
         'mkdir -p work/project/.evidence/dev\ntouch work/project/.evidence/dev/control.sock',
     ) +
-    fence('text test-expect', 'unpacked\n200') +
+    fence('text test-expect', 'unpacked\n200\nfhir/.gitignore') +
     fence('sh', 'false');
   await withPage(body, async ({ dir, page }) => {
     const calls = join(dir, 'calls.log');

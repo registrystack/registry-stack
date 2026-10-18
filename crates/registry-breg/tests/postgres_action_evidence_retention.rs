@@ -534,3 +534,410 @@ async fn retention_serializes_activation_and_holds_identity_lock_through_deletio
     database.assert_every_audit_request_answered_once();
     database.cleanup().await;
 }
+
+#[tokio::test]
+async fn runtime_evidence_expiry_erases_only_due_material_without_read_or_delete_authority() {
+    let database = TestDatabase::create(1).await;
+    let registry = registry();
+    install(
+        &database,
+        None,
+        &registry,
+        &database.runtime_role,
+        "runtime-retention",
+    )
+    .await;
+    proposal_sentinel(&database).await;
+    sentinel(&database).await;
+    let pool = database.runtime_config.build_pool().unwrap();
+    let client = pool.get_for_test().await.unwrap();
+    for table in [
+        "registry_action_evidence_uses",
+        "registry_proposal_evidence_uses",
+    ] {
+        assert!(client
+            .query(
+                &format!("SELECT retained FROM registry_internal.{table}"),
+                &[]
+            )
+            .await
+            .is_err());
+        assert!(client
+            .execute(&format!("DELETE FROM registry_internal.{table}"), &[])
+            .await
+            .is_err());
+    }
+    let erased: i64 = client
+        .query_one(
+            "SELECT registry_internal.expire_action_evidence_uses()",
+            &[],
+        )
+        .await
+        .expect("runtime can invoke bounded expiry")
+        .get(0);
+    assert_eq!(erased, 2);
+    assert_eq!(count(&database).await, 0);
+    let row = database.admin.query_one("SELECT count(*), min(retained::text) FROM registry_internal.registry_proposal_evidence_uses", &[]).await.unwrap();
+    assert_eq!(row.get::<_, i64>(0), 1);
+    assert!(row.get::<_, String>(1).contains("live"));
+    drop(client);
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn supervised_runtime_evidence_expiry_is_audited_and_stops_with_server() {
+    let database = TestDatabase::create(1).await;
+    let registry = registry();
+    let expected = install(
+        &database,
+        None,
+        &registry,
+        &database.runtime_role,
+        "runtime-worker",
+    )
+    .await;
+    sentinel(&database).await;
+    let pool = database.runtime_config.build_pool().unwrap();
+    let worker = registry_breg::action_evidence_retention::EvidenceRetentionWorker::new_for_test(
+        pool.clone(),
+        expected,
+        RegistryLockKey::derive(PACKAGE).unwrap(),
+        database.audit(
+            registry_platform_audit::AuditProfile::production_from_secret_bytes(
+                vec![0x5e; 32].into(),
+            )
+            .unwrap(),
+        ),
+    );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let bind = listener.local_addr().unwrap();
+    drop(listener);
+    let prepared = registry_breg::startup::PreparedServer::from_parts_for_test(
+        bind,
+        axum::Router::new(),
+        Duration::from_secs(2),
+    )
+    .with_evidence_retention_for_test(worker);
+    registry_breg::startup::serve_until_shutdown(prepared, async {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if database
+                    .audit_entries()
+                    .iter()
+                    .any(|entry| entry["record"]["outcome"] == "erased")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("supervised startup runs an immediate sweep");
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(count(&database).await, 0);
+    let entries = database.audit_entries();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[1]["record"]["erased"], 1);
+    assert!(!serde_json::to_string(&entries)
+        .unwrap()
+        .contains("retained-sentinel"));
+    database.assert_every_audit_request_answered_once();
+    assert!(tokio::net::TcpStream::connect(bind).await.is_err());
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn runtime_evidence_expiry_audit_refusal_preserves_material() {
+    let database = TestDatabase::create(1).await;
+    let registry = registry();
+    let expected = install(
+        &database,
+        None,
+        &registry,
+        &database.runtime_role,
+        "runtime-audit-refusal",
+    )
+    .await;
+    sentinel(&database).await;
+    database.audit_capture().fail_after(0);
+    let pool = database.runtime_config.build_pool().unwrap();
+    let audit = database.audit(
+        registry_platform_audit::AuditProfile::production_from_secret_bytes(vec![0x5e; 32].into())
+            .unwrap(),
+    );
+    let writer = audit.writer().clone();
+    let worker = registry_breg::action_evidence_retention::EvidenceRetentionWorker::new_for_test(
+        pool.clone(),
+        expected,
+        RegistryLockKey::derive(PACKAGE).unwrap(),
+        audit,
+    );
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(worker.run(rx));
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while writer.ready().await {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the sweep reaches the refusing audit destination");
+    tx.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(count(&database).await, 1);
+    assert!(database.audit_entries().is_empty());
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn runtime_evidence_tick_drains_an_asymmetric_backlog_before_the_next_minute() {
+    for table in [
+        "registry_action_evidence_uses",
+        "registry_proposal_evidence_uses",
+    ] {
+        let database = TestDatabase::create(1).await;
+        let registry = registry();
+        let expected = install(
+            &database,
+            None,
+            &registry,
+            &database.runtime_role,
+            "canary-backlog",
+        )
+        .await;
+        sentinel(&database).await;
+        proposal_sentinel(&database).await;
+        database
+            .admin
+            .batch_execute(
+                "INSERT INTO registry_internal.registry_action_evidence_uses
+             (application_id,ordinal,retained,created_at,expires_at) VALUES
+             ('00000000-0000-4000-8000-000000000001',1,'{\"canary\":\"live\"}',
+              CURRENT_TIMESTAMP,CURRENT_TIMESTAMP+INTERVAL '1 day')",
+            )
+            .await
+            .unwrap();
+        // One table has three batches; the other has only one due row. A sum
+        // below 2,000 therefore does not establish that both tables drained.
+        let parents = if table == "registry_action_evidence_uses" {
+            "INSERT INTO registry_internal.registry_idempotency
+             SELECT (jsonb_populate_record(NULL::registry_internal.registry_idempotency,
+                 to_jsonb(seed) || jsonb_build_object(
+                     'key_reference', 'canary-backlog-' || n,
+                     'idempotency_key', 'canary-backlog-' || n))).*
+             FROM registry_internal.registry_idempotency seed
+             CROSS JOIN generate_series(1,2500) n WHERE key_reference='retention-test';
+             INSERT INTO registry_internal.registry_immediate_action_applications
+             SELECT (jsonb_populate_record(NULL::registry_internal.registry_immediate_action_applications,
+                 to_jsonb(seed) || jsonb_build_object(
+                     'key_reference', 'canary-backlog-' || n,
+                     'application_id', md5('canary-backlog-application-' || n)))).*
+             FROM registry_internal.registry_immediate_action_applications seed
+             CROSS JOIN generate_series(1,2500) n WHERE key_reference='retention-test';"
+        } else {
+            "INSERT INTO registry_internal.registry_proposal_state
+             SELECT (jsonb_populate_record(NULL::registry_internal.registry_proposal_state,
+                 to_jsonb(seed) || jsonb_build_object(
+                     'proposal_id', md5('canary-backlog-proposal-' || n)))).*
+             FROM registry_internal.registry_proposal_state seed
+             CROSS JOIN generate_series(1,2500) n
+             WHERE proposal_id='00000000-0000-4000-8000-000000000002';
+             INSERT INTO registry_internal.registry_proposal_submissions
+             SELECT (jsonb_populate_record(NULL::registry_internal.registry_proposal_submissions,
+                 to_jsonb(seed) || jsonb_build_object(
+                     'proposal_id', md5('canary-backlog-proposal-' || n)))).*
+             FROM registry_internal.registry_proposal_submissions seed
+             CROSS JOIN generate_series(1,2500) n
+             WHERE proposal_id='00000000-0000-4000-8000-000000000002';
+             INSERT INTO registry_internal.registry_proposal_applications
+             SELECT (jsonb_populate_record(NULL::registry_internal.registry_proposal_applications,
+                 to_jsonb(seed) || jsonb_build_object(
+                     'proposal_id', md5('canary-backlog-proposal-' || n),
+                     'application_id', md5('canary-backlog-application-' || n)))).*
+             FROM registry_internal.registry_proposal_applications seed
+             CROSS JOIN generate_series(1,2500) n
+             WHERE application_id='00000000-0000-4000-8000-000000000003';"
+        };
+        database.admin.batch_execute(parents).await.unwrap();
+        // Each application retains at most two uses. Seed distinct valid
+        // application parents rather than exceeding the ordinal constraint.
+        database
+            .admin
+            .batch_execute(&format!(
+                "INSERT INTO registry_internal.{table}
+             (application_id,ordinal,retained,created_at,expires_at)
+             SELECT md5('canary-backlog-application-' || n)::uuid, 0,
+                    '{{\"canary\":\"backlog\"}}'::jsonb,
+                    CURRENT_TIMESTAMP-INTERVAL '2 days',CURRENT_TIMESTAMP-INTERVAL '1 day'
+             FROM generate_series(1,2500) n",
+            ))
+            .await
+            .unwrap();
+        let pool = database.runtime_config.build_pool().unwrap();
+        let worker =
+            registry_breg::action_evidence_retention::EvidenceRetentionWorker::new_for_test(
+                pool.clone(),
+                expected,
+                RegistryLockKey::derive(PACKAGE).unwrap(),
+                database.audit(
+                    registry_platform_audit::AuditProfile::production_from_secret_bytes(
+                        vec![0x5e; 32].into(),
+                    )
+                    .unwrap(),
+                ),
+            );
+        let (erased, bound_reached) = worker.drain_tick_for_test(1).await;
+        assert_eq!(
+            erased, 1_001,
+            "one bounded batch takes rows from both tables"
+        );
+        assert!(bound_reached, "the tick returns at its explicit cap");
+        // The remaining 1,501 due rows still require multiple worker batches.
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(worker.run(shutdown_rx));
+        let drained = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let remaining: i64 = database
+                    .admin
+                    .query_one(
+                        "SELECT
+                     (SELECT count(*) FROM registry_internal.registry_action_evidence_uses
+                      WHERE expires_at <= transaction_timestamp()) +
+                     (SELECT count(*) FROM registry_internal.registry_proposal_evidence_uses
+                      WHERE expires_at <= transaction_timestamp())",
+                        &[],
+                    )
+                    .await
+                    .unwrap()
+                    .get(0);
+                if remaining == 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        shutdown_tx.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        let live: i64 = database
+            .admin
+            .query_one(
+                "SELECT
+             (SELECT count(*) FROM registry_internal.registry_action_evidence_uses
+              WHERE expires_at > transaction_timestamp()) +
+             (SELECT count(*) FROM registry_internal.registry_proposal_evidence_uses
+              WHERE expires_at > transaction_timestamp())",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        database.assert_every_audit_request_answered_once();
+        assert!(!serde_json::to_string(&database.audit_entries())
+            .unwrap()
+            .contains("backlog"));
+        drop(pool);
+        database.cleanup().await;
+        assert_eq!(live, 2, "both unexpired assertions remain");
+        assert!(
+            drained.is_ok(),
+            "{table} must drain before the next minute tick"
+        );
+    }
+}
+
+#[tokio::test]
+async fn runtime_evidence_shutdown_cancels_a_blocked_batch_without_late_erasure() {
+    let database = TestDatabase::create(1).await;
+    let registry = registry();
+    let expected = install(
+        &database,
+        None,
+        &registry,
+        &database.runtime_role,
+        "canary-cancel-expiry",
+    )
+    .await;
+    sentinel(&database).await;
+    let (blocker, blocker_task) = database.connect_migration().await;
+    blocker.batch_execute(
+        "BEGIN; LOCK TABLE registry_internal.registry_action_evidence_uses IN ACCESS EXCLUSIVE MODE",
+    ).await.unwrap();
+    let pool = database.runtime_config.build_pool().unwrap();
+    let worker = registry_breg::action_evidence_retention::EvidenceRetentionWorker::new_for_test(
+        pool.clone(),
+        expected,
+        RegistryLockKey::derive(PACKAGE).unwrap(),
+        database.audit(
+            registry_platform_audit::AuditProfile::production_from_secret_bytes(
+                vec![0x5e; 32].into(),
+            )
+            .unwrap(),
+        ),
+    );
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(worker.run(shutdown_rx));
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let blocked: bool = database
+                .admin
+                .query_one(
+                    "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity
+                 WHERE usename=$1 AND wait_event_type='Lock'
+                   AND query LIKE '%expire_action_evidence_uses%')",
+                    &[&database.runtime_role.as_str()],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if blocked {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the expiry statement reaches the held table lock");
+    assert_eq!(database.audit_entries().len(), 1);
+    shutdown_tx.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap();
+    blocker.batch_execute("ROLLBACK").await.unwrap();
+    // A pool of one makes this wait for cancellation cleanup of the same
+    // runtime connection before checking that no late erasure committed.
+    let client = tokio::time::timeout(Duration::from_secs(5), pool.get_for_test())
+        .await
+        .unwrap()
+        .unwrap();
+    client.query_one("SELECT 1", &[]).await.unwrap();
+    assert_eq!(count(&database).await, 1);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while database.audit_entries().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("cancellation answers the audit attempt");
+    database.assert_every_audit_request_answered_once();
+    assert!(!serde_json::to_string(&database.audit_entries())
+        .unwrap()
+        .contains("retained-sentinel"));
+    drop(client);
+    drop(pool);
+    drop(blocker);
+    blocker_task.abort();
+    database.cleanup().await;
+}

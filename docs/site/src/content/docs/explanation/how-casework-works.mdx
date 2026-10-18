@@ -1,6 +1,6 @@
 ---
 title: How Registry Casework works
-description: How pinned review policy, current human authority, read-only context, decisions, and results fit together.
+description: Who calls Registry Casework, what a ReviewRequest binds, where a reviewer's context comes from, who decides and when a request settles, and what the result carries back.
 status: current
 owner: registry-docs
 source_repos:
@@ -14,138 +14,116 @@ persona:
   - operator
 ---
 
-When you integrate Registry Casework, your producer owns the subject and the business action;
-Casework owns the human review round. The same review model works with an admitted snapshot or
-current context disclosed by a source.
+You have taken one ReviewRequest to a decision. These five questions explain what happened in
+each step, and what changes when a policy has more stages, a live source, or deadlines.
 
-{/* Evidence: products/casework/README.md;
-    crates/registry-casework-core/src/review.rs;
-    crates/registry-review-protocol/src/lib.rs. */}
+## Who calls Casework, and on whose authority?
 
-## One review round
+Three parties authenticate independently. The [producer](../../reference/glossary/#producer) is
+the system that sends a ReviewRequest; your project trusts one, `requester`, under
+`trustedProducers`, bound to an issuer, a subject, the source namespaces it may name, and the
+policies it may ask for. The human reviewer is a person holding a staff or supervisor access
+profile. The downstream executor is whatever system later acts on the answer, under its own
+authority.
 
-A `ReviewPolicy` declares context requirements, ordered stages, eligible profiles, independent
-reviewer thresholds, outcomes, routing, clocks, and retention.
-A trusted producer creates a `ReviewRequest` selecting the policy by ID, with an immutable subject
-binding and an idempotency key. The producer can also require an exact version and digest.
-Casework atomically binds acceptance to the selected policy's concrete ID, version, and digest.
-The producer cannot select a reviewer or invent a stage.
+Each sends its own token and selects one [access profile](../../reference/glossary/#access-profile) per request; Casework never combines two
+profiles, and a producer's authority never supplies a reviewer's. That is why the producer in
+your first review was refused the task: it may read its result, never the human work. An
+administrator maintains the directory and the holiday calendars, and an operator activates
+packages, but only a staff or supervisor profile can decide.
 
-Casework creates `ReviewTask`s as the pinned stages become active.
-Eligible humans claim or receive tasks and record `Decision`s under the current task revision.
-A stage advances only when its pinned threshold and exclusion rules are satisfied.
-A terminal `ReviewResult` repeats the policy, subject, and submission digest so the producer can
-correlate the answer with the round it actually submitted.
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, explain() "authority";
+    crates/registry-casework/src/auth.rs; crates/registry-casework-core/src/lifecycle.rs,
+    "caller-authentication"; crates/registry-casework/src/http.rs, get_review_task. */}
 
-```mermaid
-sequenceDiagram
-    participant P as Producer
-    participant C as Casework
-    participant H as Human reviewer
-    participant S as Source system
-    P->>C: Submit policy selector and exact subject binding
-    C->>C: Pin policy and create review tasks
-    H->>C: Claim and decide current task revision
-    C-->>P: Return authenticated terminal result
-    P->>S: Request separately authorized business action
-    Note over C,S: A review result grants no source mutation authority
-```
+## What does a ReviewRequest bind?
 
-Changing a policy does not reinterpret accepted requests.
-Activation refuses changes that would strand open reviews or replace their required authority.
-A producer may cancel its own pending request; a later round may supersede an older round under the
-same admitted producer and subject identity.
-Neither terminal status means that an external system applied a change.
+A producer selects a [ReviewPolicy](../../reference/glossary/#review-policy) by `id`, and may also
+pin its `version` and `digest`. When Casework accepts the request it freezes the concrete binding,
+so a later policy change never reinterprets work already admitted. A request that named only the
+ID is bound to whatever is active at that moment; a request that pinned a version and digest is
+refused with `review.policy-mismatch` if they are not the active ones.
 
-{/* Evidence: crates/registry-casework/src/review.rs;
-    crates/registry-casework/src/pinned_work.rs;
-    crates/registry-casework/tests/review_acceptance_postgres.rs;
-    crates/registry-review-protocol/src/lib.rs, PolicySelection, ReviewRequestAccepted;
-    crates/registry-casework/tests/breg_review_journey.rs. */}
+The request also binds its subject by `source`, `type`, `id`, `version`, and a content `digest`.
+That digest is the producer's own fingerprint of the version it asks about. Casework does not
+recompute it; it carries it into the task and the result, so the producer can tell which version
+was reviewed. The acceptance returns a `submissionDigest` over the producer, its source namespace,
+and the whole request. A retry with the same `Idempotency-Key` recovers that acceptance instead of
+creating a second request.
 
-## Two context custody choices
+{/* Evidence: crates/registry-review-protocol/src/lib.rs, PolicySelection::matches,
+    ReviewCreateRequest, SubjectBinding, submission_digest, ReviewRequestAccepted;
+    crates/registry-casework/src/review.rs, PolicyMismatch at admission;
+    crates/registry-casework/src/pinned_work.rs. */}
 
-Submitted context is a bounded immutable snapshot validated against the pinned display schema.
-It lets you run Casework without a source provider.
-The snapshot is review input, not current source authority.
+## Where does the reviewer's context come from?
 
-Current-source context is an exact provider and contract binding.
-Casework retains the reference and derived task metadata rather than the business projection.
-A human display read uses the person's current bearer token and selected source profile.
-A service-status credential can establish reviewability but cannot supply displayed fields.
-Routing and task-grant context are separate purpose-specific capabilities, required only by policies
-that actually use them.
+A policy chooses one of two custody models.
 
-If the source conceals the subject or its version no longer matches, Casework omits it from lists
-and refuses open work and context rather than releasing stale source data. A retained decided task
-and settled history remain readable under current Casework authority until retention expires; they
-contain Casework-owned state, not a cached source projection.
-An unavailable provider does not become permission to use a service credential for human disclosure.
+With `context.mode: submitted`, as in your project, the producer sends a snapshot that Casework
+validates against the policy's `displaySchema` and keeps. Casework needs no source service, and
+the snapshot is review input, not current source data.
 
-{/* Evidence: crates/registry-casework-core/src/adapter.rs;
-    crates/registry-casework-core/src/config.rs;
-    crates/registry-casework/src/review.rs;
-    crates/registry-casework-breg/src/lib.rs. */}
+With `context.mode: current-source`, the policy names a
+[context provider](../../reference/glossary/#context-provider), the source's read-only review
+interface. Casework keeps an exact reference and task metadata, never the source's data. Each time
+a reviewer opens a task, Casework asks the source again under that reviewer's own credential.
+When the source conceals the subject or its version moved, Casework refuses the read rather than
+show stale data.
 
-## Current authority around pinned behavior
+Either way the source keeps its data and its disclosure. Casework holds no write or apply
+authority over the source, so a review never becomes a change there by itself.
 
-The policy fixes what a review means; current authentication, Directory membership, queue service,
-reviewer exclusions, and source disclosure determine who can act now.
-Each request selects one access profile. Scopes from different profiles are not combined.
-Staff and Supervisors need the issuer's human-actor assertion; a producer is a separate calling system.
-Operator activation manages deployment. Administrator authority manages Directory and calendar
-state without granting a review decision.
+{/* Evidence: crates/registry-review-protocol/src/lib.rs, ReviewContext;
+    crates/registry-caseworkctl/src/project.rs, explain() contextCustody;
+    crates/registry-casework/src/review.rs, preflight_review_disclosure;
+    crates/registry-casework-core/src/adapter.rs. */}
 
-Claims, assignments, delegation, decisions, and caseload moves check revisions and eligibility inside
-the committing transaction.
-An exact caseload preview applies atomically, so a stale selection cannot silently become a partial
-move. Absence cover is resolved under current eligibility, with retained accountability for the change.
-Private drafts remain private to their holder and do not become producer-visible result fields.
+## Who decides, and when does a request settle?
 
-{/* Evidence: crates/registry-casework/src/auth.rs;
-    crates/registry-casework/src/review.rs;
-    crates/registry-casework/src/review/staffing.rs;
-    crates/registry-casework/tests/review_acceptance_postgres.rs. */}
+A policy's [stages](../../reference/glossary/#stage) run in order. Each names its
+[queue](../../reference/glossary/#queue), the profiles that may decide, and how many independent
+reviewers must approve. When a stage becomes active, Casework creates a
+[ReviewTask](../../reference/glossary/#review-task). A person reaches it only as a member of a
+[team](../../reference/glossary/#team) that serves the queue in the
+[directory](../../reference/glossary/#directory), holding a deciding profile, and not excluded as
+the initiator or an earlier stage's reviewer. The policy declares which queues and teams exist;
+the directory, which an administrator keeps at runtime, says who is in each team.
 
-## Clocks and operational recovery
+A reviewer [claims](../../reference/glossary/#claim) a task at the revision they read, and every
+claim and decision is fenced by that revision, so a decision made on a stale read is refused.
+Approvals that meet a stage's threshold advance the request, or settle it as approved at the last
+stage. A rejection, a request for changes, or an answer settles it at once. A request also leaves
+`reviewing` without any reviewer when its producer cancels it, or supersedes it by sending a
+replacement for the same subject and policy.
 
-Clocks measure a subject or review activity against the pinned policy and calendar.
-Reminders and due steps change local review metadata or the serving queue; they decide no outcome and
-apply nothing at the source. Missing required source or holiday facts defer the affected calculation.
-An Administrator reviews and applies clock recomputation rather than silently changing a running
-calculation when holiday data changes.
+A [clock](../../reference/glossary/#clock) measures a subject or a stage against a deadline, in
+elapsed hours or in working days on a [calendar](../../reference/glossary/#calendar). It can mark
+work at risk, send a reminder, or move a due task to another queue. It never decides an outcome.
 
-Sensitive mutations and accountability disclosure use the audit destination as a release gate.
-A lost response is an unknown outcome, so a producer retries the same request and key or reads its
-accepted request. The original selector remains part of the submission identity; retrying an
-ID-only selection after a policy update recovers the original concrete binding.
-The producer still needs current authority. It does not create a new round merely to recover the
-old answer.
-Human mutations also retain keyed receipts; a stale revision requires a fresh read before a new action.
+{/* Evidence: crates/registry-casework-core/src/review.rs, ReviewStagePolicy;
+    crates/registry-casework-core/src/lifecycle.rs, "producer-or-reviewer-admission", "threshold",
+    and the cancelled and superseded settle transitions;
+    crates/registry-casework-core/src/config.rs, TeamPolicy;
+    crates/registry-casework/src/assignment.rs, bootstrap_directory() and update_directory_team();
+    crates/registry-casework-core/src/policy.rs, ClockPolicy, ClockStepAction. */}
 
-{/* Evidence: crates/registry-casework/src/review/maintenance.rs;
-    crates/registry-casework/src/review/staffing.rs;
-    crates/registry-casework/src/audit.rs;
-    crates/registry-casework/tests/review_acceptance_postgres.rs. */}
+## What comes back, and for how long?
 
-## Retained results and accountability
+The [ReviewResult](../../reference/glossary/#review-result) repeats the subject, the policy
+binding, and the `submissionDigest`, so the producer can match it to its request, and adds a
+terminal `status`, the `outcome`, any public reason, and any structured result the policy
+requires. It never names the reviewer or carries the reviewer's private reason, which stays in
+Casework's [accountability record](../../reference/glossary/#accountability-record).
 
-The producer receives a minimized terminal result without raw reviewer identity, private reasons,
-or drafts. A separately authorized Supervisor may resolve protected accountability while it is
-retained, and that disclosure is audited.
+The policy's `terminalRetentionDays` bounds how long the producer can read the result, which is
+the `availableUntil` you saw. `accountabilityRetentionDays`, never shorter, bounds the record of
+who decided. Maintenance erases each once it expires.
 
-`terminalRetentionDays` bounds producer-visible result retention; `accountabilityRetentionDays` bounds protected
-accountability and is at least as long. Maintenance erases expired state according to the pinned
-policy. Minimal replay state and independent audit retention have their own boundaries.
-[Retention in Casework](../../operate/casework-retention/) explains what expires and how you verify
-that maintenance is progressing.
-
-{/* Evidence: crates/registry-casework/src/review/maintenance.rs;
-    crates/registry-casework/src/review.rs;
-    products/casework/contracts/security-invariant-matrix.yaml. */}
+{/* Evidence: crates/registry-review-protocol/src/lib.rs, ReviewResult;
+    crates/registry-casework-core/src/review.rs, DecisionKind, ReviewRetentionPolicy;
+    crates/registry-casework/src/review/maintenance.rs, erase_expired_reviews_at. */}
 
 ## Next
 
-- [Author a Casework policy](../../configure/casework/) for stages and context requirements.
-- [Deploy Registry Casework](../../operate/casework/) for package activation and recovery.
-- [Registry Casework API](../../reference/apis/registry-casework/) for exact request contracts.
+[Author a Casework policy](../../configure/casework/)

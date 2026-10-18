@@ -190,6 +190,8 @@ formats:
         whenOmitted: open
       - pointer: /authentication/oidc/allowedClients
         whenOmitted: refused
+      - pointer: /authentication/oidc/allowInsecureHttp
+        whenOmitted: closed
       - pointer: /authentication/oidc/assertionIssuers
         whenOmitted: open
       - pointer: /attachmentVerification
@@ -240,6 +242,8 @@ formats:
         whenOmitted: refused
       - pointer: /resourceServer/allowedClients
         whenOmitted: refused
+      - pointer: /resourceServer/allowInsecureHttp
+        whenOmitted: closed
       - pointer: /resourceServer/requiredScopes
         whenOmitted: refused
       - pointer: /registry/accessProfile
@@ -1266,6 +1270,12 @@ formats:
         whenOmitted: open
       - pointer: /authentication/oidc/allowedClients
         whenOmitted: refused
+      - pointer: /authentication/oidc/allowInsecureHttp
+        whenOmitted: closed
+      - pointer: /authentication/oidc/revokedKeyIds
+        whenOmitted: open
+      - pointer: /authentication/oidc/maximumTokenLifetimeSeconds
+        whenOmitted: open
       - pointer: /authentication/oidc/assertionIssuers
         whenOmitted: open
       - pointer: /package/expectedDigest
@@ -1566,6 +1576,8 @@ formats:
         whenOmitted: refused
       - pointer: /authentication/oidc/allowedClients
         whenOmitted: refused
+      - pointer: /authentication/oidc/allowInsecureHttp
+        whenOmitted: closed
       - pointer: /authentication/oidc/assertionIssuers
         whenOmitted: open
       - pointer: /package/expectedDigest
@@ -1759,6 +1771,8 @@ formats:
         whenOmitted: open
       - pointer: /authentication/oidc/allowedClients
         whenOmitted: refused
+      - pointer: /authentication/oidc/allowInsecureHttp
+        whenOmitted: closed
       - pointer: /authentication/oidc/assertionIssuers
         whenOmitted: open
       - pointer: /package/expectedDigest
@@ -2247,6 +2261,8 @@ formats:
     securityMembers:
       - pointer: /authentication/oidc/allowedClients
         whenOmitted: refused
+      - pointer: /authentication/oidc/allowInsecureHttp
+        whenOmitted: closed
       - pointer: /authentication/oidc/requiredScopes
         whenOmitted: refused
       - pointer: /authentication/oidc/assertionIssuers
@@ -2805,6 +2821,8 @@ formats:
         whenOmitted: closed
       - pointer: /offers/authorizedClients
         whenOmitted: refused
+      - pointer: /offers/allowInsecureHttp
+        whenOmitted: closed
       - pointer: /offers/requiredScopes
         whenOmitted: refused
       - pointer: /offers/audiences
@@ -3374,6 +3392,8 @@ formats:
       - pointer: /deployment/authentication/policies
         whenOmitted: refused
       - pointer: /deployment/authentication/assertionIssuers
+        whenOmitted: closed
+      - pointer: /deployment/authentication/allowInsecureHttp
         whenOmitted: closed
       - pointer: /deployment/authentication/policies/*/actions
         whenOmitted: refused

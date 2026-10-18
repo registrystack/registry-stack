@@ -13,8 +13,8 @@ use registry_platform_audit::{AuditError, AuditProfile, AuditWriter};
 use registry_platform_config::{JwksSource, ProtectedSecret, SecretResolver};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_oidc::{
-    fetch_discovery_with_policy, parse_static_jwks, JwksFetcher, JwksFetcherConfig,
-    OidcDiscoveryConfig,
+    fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy, JwksFetcher,
+    JwksFetcherConfig, OidcDiscoveryConfig,
 };
 use zeroize::Zeroizing;
 
@@ -23,7 +23,7 @@ use crate::{
     config::{describe_secret_failure, RuntimeConfig},
     contract::ContractSpec,
     gateway::{Gateway, ServiceDescription},
-    inbound::{jwks_fetch_policy, uri_fetcher, verifier, ResourceServer, ResourceServerError},
+    inbound::{verifier, ResourceServer, ResourceServerError},
     outbound::{Outbound, OutboundError},
     server,
 };
@@ -109,20 +109,27 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
         hash_key.expose_secret().to_vec(),
     ))
     .map_err(|_| StartupError::Key("audit.hashKeyRef"))?;
-    let development = config.development_loopback();
     let server = &config.resource_server;
+    if let Some(diagnostic) = server.insecure_http_startup_diagnostic() {
+        tracing::warn!("{diagnostic}");
+    }
+    let network = IssuerNetworkPolicy::new(server.issuer.as_str(), server.allow_insecure_http)
+        .map_err(|error| StartupError::ResourceServer(error.to_string()))?;
     let fetcher = match &server.jwks_source {
-        JwksSource::Uri { uri } => uri_fetcher(uri, development),
+        JwksSource::Uri { uri } => JwksFetcher::new_with_fetch_url_policy(
+            uri.to_string(),
+            JwksFetcherConfig::defaults(),
+            network.declared_jwks_fetch_policy(),
+        ),
         JwksSource::Discovery {} => {
-            let policy = jwks_fetch_policy(development);
-            let discovery = fetch_discovery_with_policy(
+            let (discovery, policy) = fetch_discovery_for_issuer(
                 &OidcDiscoveryConfig {
                     issuer: server.issuer.to_string(),
                     jwks_uri_override: None,
                     discovery_timeout: Duration::from_secs(5),
                     max_doc_bytes: 1024 * 1024,
                 },
-                &policy,
+                server.allow_insecure_http,
             )
             .await
             .map_err(|_| StartupError::ResourceServer("OIDC discovery failed".to_owned()))?;

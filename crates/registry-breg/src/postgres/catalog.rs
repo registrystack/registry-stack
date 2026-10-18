@@ -46,14 +46,17 @@ const FUNCTION_OWNER_PRIVILEGES: &[&str] = &["EXECUTE"];
 // library's own, and the runtime privileges on each stay Base Registry
 // Engine's decision.
 const DELIVERY_TABLE_PRIVILEGES: &[(&str, &[&str])] = &[
-    ("registry_internal.registry_outbox", &["INSERT", "SELECT"]),
+    (
+        "registry_internal.registry_outbox",
+        &["DELETE", "INSERT", "SELECT"],
+    ),
     (
         "registry_internal.registry_webhook_deliveries",
-        &["INSERT", "SELECT"],
+        &["DELETE", "INSERT", "SELECT"],
     ),
     (
         "registry_internal.registry_webhook_delivery_state",
-        &["INSERT", "SELECT", "UPDATE"],
+        &["DELETE", "INSERT", "SELECT", "UPDATE"],
     ),
 ];
 const DELIVERY_SEQUENCE: &str = "registry_internal.registry_outbox_outbox_id_seq";
@@ -126,6 +129,7 @@ const SUBJECT_ACCESS_LOG_EXPIRY: &str = "registry_internal.expire_subject_access
 /// actual installed catalog, so a new installer-owned index cannot silently
 /// fall out of drift localization.
 const MANAGED_INTERNAL_INDEXES: &[&str] = &[
+    "registry_internal.registry_action_evidence_uses_expiry",
     "registry_internal.registry_attachment_live_references",
     "registry_internal.registry_attachment_verification_pending",
     "registry_internal.registry_field_encryption_lifecycle_progress_idx",
@@ -133,6 +137,7 @@ const MANAGED_INTERNAL_INDEXES: &[&str] = &[
     "registry_internal.registry_import_authorities_one_open",
     "registry_internal.registry_ingestion_run_chunk_records_erased_record",
     "registry_internal.registry_migrations_one_open_activation_per_digest",
+    "registry_internal.registry_proposal_evidence_uses_expiry",
     "registry_internal.registry_proposal_idempotency_by_request",
     "registry_internal.registry_proposal_pending_targets",
     "registry_internal.registry_proposal_queue",
@@ -368,6 +373,11 @@ impl ExpectedManagedCatalog {
             Some((false, false)),
         );
         catalog.function(SUBJECT_ACCESS_LOG_EXPIRY, Some("EXECUTE"), None);
+        catalog.function(
+            crate::action_evidence_retention::EXPIRY_FUNCTION,
+            Some("EXECUTE"),
+            None,
+        );
         if registry.ddl().requires_postgis {
             catalog.grant_schema_spatial_bbox("registry_data");
             catalog.grant_schema_spatial_bbox("registry_context");
@@ -1311,7 +1321,7 @@ async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()
                                     AND NOT p.prosecdef
                                     AND p.provolatile = 's')))
                            OR (n.nspname = 'registry_internal'
-                               AND p.proname = 'expire_subject_access_log'
+                               AND p.proname IN ('expire_subject_access_log', 'expire_action_evidence_uses')
                                AND pg_catalog.pg_get_function_identity_arguments(p.oid) = ''
                                AND p.prorettype = 'bigint'::regtype
                                AND NOT p.proretset AND p.prosecdef

@@ -533,8 +533,9 @@ Verified the package against the runtime it is bound to.
 ```
 
 `doctor` opens every startup dependency without binding the listener, stops at the first one that
-refuses, and otherwise lists them all, then the PostgreSQL advisories. Advisories never change the
-exit status:
+refuses, and otherwise lists them all, then its advisories. These include the PostgreSQL advisories
+and the `authentication.insecure-http` warning when the runtime file sets
+`authentication.oidc.allowInsecureHttp: true`. Advisories never change the exit status:
 
 ```sh
 bregctl doctor --runtime-config /etc/breg/runtime.yaml
@@ -554,7 +555,7 @@ bregctl doctor --runtime-config /etc/breg/runtime.yaml
   fieldEncryption      pass
   roleMode             split
 
-PostgreSQL advisories:
+Advisories:
   information  postgres.connections.budget
     one replica's runtime pool takes at most half of the connections PostgreSQL leaves
     for ordinary roles

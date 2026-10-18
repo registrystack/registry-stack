@@ -2498,9 +2498,10 @@ where
         }
         Command::Doctor(args) => {
             return match doctor::run(&args.runtime_config) {
-                Ok(checked) => write_doctor_success(
-                    &checked.postgres_advisories,
-                    checked.role_mode,
+                Ok(success) => write_doctor_success(
+                    &success.checked.postgres_advisories,
+                    success.checked.role_mode,
+                    success.insecure_http_warning,
                     format,
                     stdout,
                     stderr,
@@ -10849,24 +10850,34 @@ fn write_dev_success(
 fn write_doctor_success(
     advisories: &[registry_breg::postgres::BaselineAdvisory],
     role_mode: registry_breg::postgres::RoleMode,
+    insecure_http_warning: Option<&'static str>,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
+    let mut doctor_advisories = advisories
+        .iter()
+        .map(|advisory| DoctorAdvisory {
+            code: advisory.code().replace('_', "-"),
+            severity: advisory.severity().as_str(),
+            message: advisory.message(),
+            observed: ObservedNumbers(advisory.observed()),
+        })
+        .collect::<Vec<_>>();
+    if let Some(message) = insecure_http_warning {
+        doctor_advisories.push(DoctorAdvisory {
+            code: "authentication.insecure-http".to_owned(),
+            severity: "warning",
+            message,
+            observed: ObservedNumbers(&[]),
+        });
+    }
     let report = DoctorSuccessReport {
         ok: true,
         command: "doctor",
         checked: &doctor::CHECKED_DEPENDENCIES,
         role_mode: role_mode.as_str(),
-        advisories: advisories
-            .iter()
-            .map(|advisory| DoctorAdvisory {
-                code: advisory.code().replace('_', "-"),
-                severity: advisory.severity().as_str(),
-                message: advisory.message(),
-                observed: ObservedNumbers(advisory.observed()),
-            })
-            .collect(),
+        advisories: doctor_advisories,
     };
     let result = if format == OutputFormat::Json {
         write_ctl_report(&mut *stdout, &report)
@@ -10890,7 +10901,7 @@ fn write_doctor_success(
                 lines.prose(2, SINGLE_ROLE_MODE_NOTE);
             }
             if !report.advisories.is_empty() {
-                lines.heading("PostgreSQL advisories:");
+                lines.heading("Advisories:");
                 for advisory in &report.advisories {
                     lines.item(&format!("{}  {}", advisory.severity, advisory.code));
                     lines.prose(2, advisory.message);
@@ -14040,7 +14051,7 @@ mod tests {
             let mut stderr = Vec::new();
 
             assert_eq!(
-                write_doctor_success(&[], RoleMode::Split, format, &mut stdout, &mut stderr),
+                write_doctor_success(&[], RoleMode::Split, None, format, &mut stdout, &mut stderr),
                 ExitCode::SUCCESS
             );
             assert_eq!(plain(&stdout), expected);
@@ -14056,6 +14067,7 @@ mod tests {
             write_doctor_success(
                 &[],
                 RoleMode::Single,
+                None,
                 OutputFormat::Human,
                 &mut stdout,
                 &mut stderr
@@ -14078,6 +14090,7 @@ mod tests {
             write_doctor_success(
                 &[],
                 RoleMode::Single,
+                None,
                 OutputFormat::Json,
                 &mut stdout,
                 &mut stderr
@@ -14109,6 +14122,7 @@ mod tests {
             write_doctor_success(
                 &advisories,
                 RoleMode::Split,
+                None,
                 OutputFormat::Human,
                 &mut stdout,
                 &mut stderr
@@ -14118,7 +14132,7 @@ mod tests {
         assert!(stderr.is_empty());
         let human = plain(&stdout);
         let (checks, advisory_section) = human
-            .split_once("\n\nPostgreSQL advisories:\n")
+            .split_once("\n\nAdvisories:\n")
             .expect("advisories follow the passing checks in their own section");
         assert!(checks.starts_with("10 dependency checks passed.\n"));
         assert!(checks.ends_with("roleMode             split"));
@@ -14146,6 +14160,7 @@ mod tests {
             write_doctor_success(
                 &advisories,
                 RoleMode::Split,
+                None,
                 OutputFormat::Json,
                 &mut stdout,
                 &mut stderr
@@ -14190,6 +14205,34 @@ mod tests {
             keys.find("\"poolMaxSize\"") < keys.find("\"usableConnections\""),
             "observed numbers keep the order the advisory decided them in"
         );
+    }
+
+    #[test]
+    fn doctor_reports_the_plain_http_issuer_opt_in_as_a_value_free_advisory() {
+        const WARNING: &str =
+            "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration";
+        for format in [OutputFormat::Human, OutputFormat::Json] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            assert_eq!(
+                write_doctor_success(
+                    &[],
+                    RoleMode::Split,
+                    Some(WARNING),
+                    format,
+                    &mut stdout,
+                    &mut stderr,
+                ),
+                ExitCode::SUCCESS
+            );
+            let output = plain(&stdout);
+            assert!(output.contains("authentication.insecure-http"), "{output}");
+            // Human output wraps long messages, so compare whitespace-collapsed text.
+            let unwrapped = output.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(unwrapped.contains(WARNING), "{output}");
+            assert!(!output.contains("identity.example"), "{output}");
+            assert!(stderr.is_empty());
+        }
     }
 
     #[test]

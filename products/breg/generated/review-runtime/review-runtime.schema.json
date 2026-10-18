@@ -337,7 +337,7 @@
         },
         "issuer": {
           "$ref": "#/$defs/Url",
-          "description": "The provider's issuer. An https URL with no query or fragment; plain\nhttp is accepted only on a loopback host under `development-loopback`."
+          "description": "The provider's issuer. An https URL with no query or fragment; plain\nhttp is accepted only on a loopback host under `development-loopback`,\nbecause the page sends its client credentials to the token endpoint."
         },
         "scopes": {
           "description": "Scopes requested beside `openid`, such as the review scope the\nregistry profile requires. The page always requests `openid`, so the\nlist does not name it.",

@@ -18,11 +18,12 @@ use axum::{Extension, Json, Router};
 use serde_json::{json, Map, Value};
 
 use super::{
-    audited_read_concealment, audited_read_refusal, authorize_route, concealed, data_field_type,
-    exact_non_record_no_store, invalid_query, percent_decode, read_query, unavailable,
-    Authenticated, AuthorizedSurface, HttpService, QueryOptions, QueryParseError, ReadQueryError,
-    RecordReadKind, RecordReadRequest, VerifiedRequestClaims, MAX_RAW_QUERY_BYTES,
+    audited_read_concealment, audited_read_refusal, authorize_route_with_reason, concealed,
+    data_field_type, exact_non_record_no_store, invalid_query, percent_decode, read_query,
+    unavailable, Authenticated, AuthorizedSurface, HttpService, QueryOptions, QueryParseError,
+    ReadQueryError, RecordReadKind, RecordReadRequest, VerifiedRequestClaims, MAX_RAW_QUERY_BYTES,
 };
+use crate::audit::ReadRefusalReason;
 use crate::contract::{FieldTypeSource, Operation};
 use crate::correlation::RequestCorrelation;
 use crate::cursor::{CursorAdapter, CursorRepresentation};
@@ -267,8 +268,22 @@ async fn items(
     Path(collection): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    let Some(mut authorized) = authorize_gis_collection(&service, &claims, &collection) else {
-        return concealed();
+    let mut authorized = match authorize_gis_collection_with_reason(&service, &claims, &collection)
+    {
+        Some(Ok(authorized)) => authorized,
+        Some(Err(refusal)) if refusal.reason == ReadRefusalReason::ProfileAdmission => {
+            return audited_read_concealment(
+                &service,
+                refusal.route,
+                &profile_query_options(refusal.profile_id),
+                &claims,
+                None,
+                &correlation,
+                refusal.reason,
+            )
+            .await;
+        }
+        Some(Err(_)) | None => return concealed(),
     };
     if authorized
         .surface
@@ -376,6 +391,7 @@ async fn items(
             &claims,
             None,
             &correlation,
+            crate::audit::ReadRefusalReason::SelectOverreach,
         )
         .await;
     }
@@ -404,6 +420,12 @@ async fn items(
         }
         Err(super::ReadServiceError::CursorInvalid) => super::cursor_invalid(),
     }
+}
+
+struct GisAdmissionRefusal<'a> {
+    route: &'a CompiledRoute,
+    profile_id: &'a str,
+    reason: ReadRefusalReason,
 }
 
 struct AuthorizedGisCollection<'a> {
@@ -477,6 +499,16 @@ fn authorize_gis_collection<'a>(
     claims: &VerifiedRequestClaims,
     collection_id: &str,
 ) -> Option<AuthorizedGisCollection<'a>> {
+    authorize_gis_collection_with_reason(service, claims, collection_id).and_then(Result::ok)
+}
+
+// Discovery treats denied profiles as absent; items preserves their admission
+// reason only after resolving a configured collection and its native route.
+fn authorize_gis_collection_with_reason<'a>(
+    service: &'a HttpService,
+    claims: &VerifiedRequestClaims,
+    collection_id: &str,
+) -> Option<Result<AuthorizedGisCollection<'a>, GisAdmissionRefusal<'a>>> {
     let operation = service
         .registry
         .queries()
@@ -493,7 +525,16 @@ fn authorize_gis_collection<'a>(
             && route.query_kind == Some(CompiledQueryKind::List)
     })?;
     let options = profile_query_options(&operation.profile_id);
-    let surface = authorize_route(service, route, claims, &options)?;
+    let surface = match authorize_route_with_reason(service, route, claims, &options) {
+        Ok(surface) => surface,
+        Err(reason) => {
+            return Some(Err(GisAdmissionRefusal {
+                route,
+                profile_id: &operation.profile_id,
+                reason,
+            }))
+        }
+    };
     if surface.read_path.is_some()
         || surface.response_entity.id != operation.entity_id
         || !surface.readable_fields.contains(&bbox.geometry_field)
@@ -502,11 +543,11 @@ fn authorize_gis_collection<'a>(
         return None;
     }
     let collection = gis_collection_value(operation, surface.response_entity, &surface)?;
-    Some(AuthorizedGisCollection {
+    Some(Ok(AuthorizedGisCollection {
         collection,
         route,
         surface,
-    })
+    }))
 }
 
 fn gis_collection_value(

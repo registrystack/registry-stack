@@ -177,6 +177,11 @@
           "type": "array",
           "uniqueItems": true
         },
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP beyond loopback to the offer-token issuer and to\n`jwksUri`.",
+          "type": "boolean"
+        },
         "audiences": {
           "description": "The audiences this service answers to, each at most 256 bytes. A token\nissued for anything else is refused.",
           "items": {

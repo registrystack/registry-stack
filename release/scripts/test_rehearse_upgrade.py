@@ -834,6 +834,87 @@ class EvidencePackageTest(unittest.TestCase):
                                         str(evidence.installed / "compiled-authority.yaml"))
             self.assertFalse(candidate.exists())
 
+    ALREADY_ACTIVE = ("evidence: target authority revision sha256:" + "a" * 64
+                      + " is already active for this package as sequence 1; "
+                      "nothing needs activating\n")
+
+    def upgrade_with_activation(self, returncode: int, stdout: str, stderr: str) -> unittest.mock.Mock:
+        """Run `Evidence.upgrade` over a stub side whose activation exits as given."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        evidence = MODULE.Evidence.__new__(MODULE.Evidence)
+        evidence.work = root
+        evidence.project = root / "project"
+        evidence.target = root / "target"
+        evidence.installed = root / "installed"
+        evidence.runtime = root / "runtime.yaml"
+        candidate = root / "candidate-upgraded"
+
+        def run(binary: str, *_args: str, **_kwargs: Any) -> Any:
+            if binary == "evidencectl":
+                (candidate / "bundle").mkdir(parents=True)
+                dump_json(candidate / "runtime.yaml", {"package": {}})
+                (candidate / "compiled-authority.yaml").write_text("complete authority")
+                return unittest.mock.Mock(returncode=0, stdout="", stderr="")
+            return MODULE.subprocess.CompletedProcess([binary], returncode, stdout, stderr)
+
+        side = unittest.mock.Mock()
+        side.run.side_effect = run
+        side.path.side_effect = lambda binary: str(root / "bin" / binary)
+        evidence.upgrade(side)
+        return side
+
+    def test_the_upgrade_continues_past_an_already_active_package(self) -> None:
+        side = self.upgrade_with_activation(1, "", self.ALREADY_ACTIVE)
+        side.run.assert_called_with("evidence", "authority", "activate", "--runtime-config",
+                                    unittest.mock.ANY, "--document", unittest.mock.ANY,
+                                    check=False)
+
+    def test_the_already_active_refusal_may_follow_stdout_audit_entries(self) -> None:
+        self.upgrade_with_activation(1, "", '{"phase":"request"}\n{"phase":"response"}\n'
+                                     + self.ALREADY_ACTIVE)
+
+    def test_the_upgrade_still_fails_on_any_other_activation_failure(self) -> None:
+        for returncode, stdout, stderr in (
+                (1, "", "evidence: target authority activation is not for this package and "
+                        "target; activate it again for the selected package\n"),
+                (1, "", "evidence: target authority revision sha256:" + "a" * 64
+                        + " (sha256:abc) is active as sequence 2, but the audit destination "
+                        "did not accept the activation's response entry\n"),
+                (2, "", self.ALREADY_ACTIVE),
+                (1, "ACTIVATED x", self.ALREADY_ACTIVE),
+                (1, "", self.ALREADY_ACTIVE + "evidence: another failure\n"),
+                (1, "", "")):
+            with self.subTest(returncode=returncode, stdout=stdout, stderr=stderr):
+                with self.assertRaisesRegex(Error, "evidence authority activate exited"):
+                    self.upgrade_with_activation(returncode, stdout, stderr)
+
+    def test_a_successful_upgrade_activation_passes(self) -> None:
+        self.upgrade_with_activation(0, "ACTIVATED sha256:a sha256:b sequence=2\n", "")
+
+    def test_the_initial_activation_stays_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = MODULE.Evidence.__new__(MODULE.Evidence)
+            evidence.target = root / "target"
+            evidence.project = root / "project"
+            evidence.installed = root / "installed"
+            evidence.runtime = root / "runtime.yaml"
+            candidate = root / "candidate"
+
+            def run(binary: str, *_args: str, **kwargs: Any) -> None:
+                self.assertNotIn("check", kwargs)
+                if binary == "evidencectl":
+                    (candidate / "bundle").mkdir(parents=True)
+                    dump_json(candidate / "runtime.yaml", {"package": {}})
+                    (candidate / "compiled-authority.yaml").write_text("complete authority")
+
+            side = unittest.mock.Mock()
+            side.run.side_effect = run
+            evidence.package(side, candidate)
+            self.assertEqual(side.run.call_count, 2)
+
 
 class EvidenceGrammarTest(unittest.TestCase):
     def test_tls_trust_input_is_immutable_before_packaging(self) -> None:

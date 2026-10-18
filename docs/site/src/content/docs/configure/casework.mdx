@@ -1,6 +1,6 @@
 ---
 title: Author a Casework policy
-description: Define review policies, context contracts, trusted producers, routing, and clocks, then check and package the policy for deployment.
+description: Edit a Casework project's queues, review policy, calendar, and clock, check and package it offline, and restart the development session on the result.
 status: current
 owner: registry-docs
 source_repos:
@@ -10,354 +10,268 @@ doc_type: how-to
 locale: en
 standards_referenced:
   - json-schema
+tutorial_test:
+  toolset: casework
+  after: tutorials/first-casework
 ---
 
 import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+import ConfigurationReference from '../../../components/ConfigurationReference.astro';
+import reference from '../../../data/generated/casework-configuration.json';
 
-If you are preparing a Registry Casework deployment for a review team, start with a submitted-context policy, check its stages and outcomes, then add current-source context when reviewers need a fresh authorized view. Casework returns a review result; the producer remains responsible for the subject and any later business mutation.
+If you are writing the policy a Registry Casework deployment will run, you edit a project
+directory and check it offline, with no database and no network. You continue in
+`tutorial-work/casework`, the project from
+[Decide your first ReviewRequest](../../tutorials/first-casework/), with its development session
+still running.
 
-{/* Evidence: products/casework/README.md; crates/registry-review-protocol/src/lib.rs, ReviewResult. */}
+## Read the project files
 
-## The project file `casework.yaml`
+`casework.yaml` is the policy. `dev-clients.yaml` names the local callers and teams for
+`caseworkctl dev`, `fixtures/` holds the cases `test` proves, and `runtime.example.yaml` is a
+starting runtime configuration for a deployment. `.casework/schemas/` holds the JSON Schemas your
+editor reads through each file's first-line comment. Check the project as it stands:
 
-With `caseworkctl` installed, create a complete starter in a new directory:
-
-```sh
-caseworkctl init ./decisions --template standalone-decision
-caseworkctl check ./decisions
-caseworkctl explain ./decisions
+```sh test-cwd="tutorial-work/casework"
+caseworkctl check .
 ```
 
-`init` refuses an existing destination. The starter includes `casework.yaml`, a runtime example, local callers, synthetic fixtures, and editor settings. Its local issuer and producer identity are teaching values. Replace them with the exact issuer, subject, profiles, and scopes your deployment admits before packaging a production policy.
-
-`check` reports configuration problems at their source fields. `explain` shows compiled policy bindings, context custody, stages, outcomes, routing, clocks, dependency definitions, and recovery guidance. Check these before handing the package to an operator.
-
-{/* Evidence: crates/registry-caseworkctl/src/project.rs, init(), check(), explain(), and STANDALONE_YAML;
-    crates/registry-caseworkctl/src/report.rs, ExplainPolicy. */}
-
-The project envelope and identity are:
-
-```yaml
-apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
-kind: CaseworkProject
-project:
-  id: decisions
-  version: "1"
+```json test-excerpt
+{
+  "filesChecked": 3,
+  "policyBindings": [
+    {"digest": "sha256:<digest>", "id": "decision", "version": "1"}
+  ]
+}
 ```
 
-| Member | Purpose |
-| --- | --- |
-| `accessProfiles` | Token scopes, principal claims, and human or requester roles |
-| `queues` | Stable queue identifiers and display labels |
-| `reviewPolicies` | Review purpose, stages, context, schemas, outcomes, and retention |
-| `trustedProducers` | Exact service identities allowed to submit each policy |
-| `contextProviders` | Read capabilities and purpose-specific service profiles |
-| `teams` | Authored serving-team requirements, when configured |
-| `calendars` and `clocks` | Working time and request or stage deadlines |
-| `inbox` | Bounded page, candidate, and source-read budgets |
-| `taskTemplates` | Bounded task-grant authority, when configured |
+Check reads `casework.yaml`, `dev-clients.yaml`, the development session's state file while one
+exists, and any `holiday-sets/`, and prints one binding for each
+[ReviewPolicy](../../reference/glossary/#review-policy). When a file is wrong, it prints a refusal
+with a code such as `casework.review-policy.unknown-queue`, the file, line, and JSON pointer, and
+the next step to take.
 
-Keep identifiers stable. Queue labels, outcome labels, and routing explanations can change without changing the behavioral policy binding. Stages, thresholds, eligibility, context contracts, routing selection, clocks, and other behavioral dependencies are covered by that binding. Package integrity also covers the presentation bytes.
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, init(), check(), check_holiday_sets();
+    products/casework/examples/standalone-decision/casework.yaml;
+    crates/registry-casework-core/src/config.rs, casework.review-policy.unknown-queue. */}
 
-{/* Evidence: crates/registry-casework-core/src/config.rs, CaseworkProject;
-    crates/registry-casework-core/src/review.rs, ReviewPolicyClosure;
-    crates/registry-casework-core/tests/policy_compiler.rs,
-    presentation_changes_preserve_behavior_binding_and_closure_keeps_them(),
-    routing_explanation_and_grant_label_are_presentation_only(), and
-    clock_step_explanation_is_presentation_and_effect_is_behavior(). */}
+## Name the queue for its reviewers
 
-### Access profiles and queues
+Each [access profile](../../reference/glossary/#access-profile) admits a token that carries its `requiredScopes`, takes the caller's identity
+from `principalClaim`, and gives the caller one role: `staff`, `supervisor`, `administrator`, or
+`requester`. The project declares one of each:
 
-Keep human review authority separate from the requesting service:
-
-```yaml
+```yaml title="casework.yaml" test-excerpt="casework.yaml"
 accessProfiles:
   staff:
     principalClaim: sub
     requiredScopes: [casework:staff]
     role: staff
-  supervisor:
-    principalClaim: sub
-    requiredScopes: [casework:supervisor]
-    role: supervisor
-  administrator:
-    principalClaim: sub
-    requiredScopes: [casework:admin]
-    role: administrator
-  requester:
-    principalClaim: sub
-    requiredScopes: [casework:request]
-    role: requester
-queues:
-  decisions:
-    label: Decisions awaiting review
 ```
 
-Human profiles also require the runtime's configured human-identity assertion. A token's profile and scopes do not establish Directory membership. An Administrator gives a team queue service, staff, and supervisors through the Directory API. Administrator authority does not release review context or authorize decisions.
+A [queue](../../reference/glossary/#queue) is where a stage's ReviewTasks wait. Its label is what
+reviewers see, so give it the name your team uses:
 
-{/* Evidence: crates/registry-casework-core/src/config.rs, access_profile_findings();
-    crates/registry-casework/src/auth.rs;
-    crates/registry-casework/src/assignment.rs, bootstrap_directory();
-    crates/registry-casework/src/review.rs, require_human_reviewer(). */}
+```diff test-edit title="casework.yaml"
+ queues:
+   decisions:
+-    label: Decisions awaiting review
++    label: Licence decisions
+```
 
-### Review policies and producers
+Labels are excluded from the policy digest, so `check` still prints the same binding.
 
-This submitted-context fragment adds a structured answer to the starter. Both schemas stay closed, and each structured result field declares its type:
+## Read the review policy and its producer
 
-```yaml
+```yaml title="casework.yaml" test-excerpt="casework.yaml"
 reviewPolicies:
   decision:
     version: "1"
     purpose: answer
-    context:
-      mode: submitted
+    context: {mode: submitted}
     stages:
       - id: answer
         queue: decisions
         decidingProfiles: [staff]
         requiredApprovals: 1
-    retention:
-      terminalRetentionDays: 90
-      accountabilityRetentionDays: 365
-    displaySchema:
-      type: object
-      additionalProperties: false
-      required: [summary, reference]
-      properties:
-        summary:
-          type: string
-          maxLength: 160
-        reference:
-          type: string
-          maxLength: 120
-    resultSchema:
-      type: object
-      additionalProperties: false
-      required: [batchStatus]
-      properties:
-        batchStatus:
-          type: string
-          enum: [valid, partial, invalid]
-        acceptedCount:
-          type: integer
-          minimum: 0
-          maximum: 100000
-    outcomes:
-      confirmed:
-        label: Confirm
-        settlement: answered
-        reasonRequired: false
-        publicReason: none
-        resultRequired: true
-      rejected:
-        label: Return for correction
-        settlement: answered
-        reasonRequired: true
-        publicReason: required
-trustedProducers:
-  requester:
-    profile: requester
-    issuer: https://identity.example.test
-    subject: requester-service
-    sourceNamespaces: [standalone]
-    reviewPolicies: [decision]
-    retention:
-      receiptRetentionDays: 30
 ```
 
-A stage names its queue, eligible human profiles, and approval threshold. Every approval in one stage names the same outcome: an approval naming another outcome than the stage's earlier approvals chose is refused at `$.outcome` with `approval-outcome-differs`, and the `Registry-Casework-Validation-Allowed` header names the outcome already chosen, so the reviewer approves with it or requests changes or rejects instead. Optional `excludeInitiator` and `excludePreviousStageReviewers` rules restrict who may decide. Initiator exclusion requires the producer's `trustedInitiatorIssuer` and an issuer-qualified initiator in the request. Match principal claims across the producer and reviewer deployment so the exclusion identifies the same person.
+A ReviewPolicy fixes the purpose, the stages in order, the profiles that decide each stage, the
+`displaySchema` reviewers see, and the outcomes a decision may record. Each outcome sets its
+`settlement`, whether a reason is required, and whether a public reason is `required`,
+`optional`, or `none`. A larger policy adds `routing` rules that send a task to another queue by its
+fields, and `teams` that state which profiles a queue's staff must hold.
 
-Display snapshots, private drafts, structured results, and result constraints each have a 16 KiB bound. Schemas are closed JSON Schema 2020-12 objects, with a 64 KiB schema bound and bounded nesting. Declare only the fields the reviewer needs; increasing disclosure is not a recovery for an oversized payload.
+`context: {mode: submitted}` reviews the snapshot the producer sent. A policy whose reviewers
+must see the source's current record sets `mode: current-source` and names a
+[context provider](../../reference/glossary/#context-provider), as
+[Review a Proposal in Casework](../../tutorials/review-breg-changes-in-casework/) does.
+`trustedProducers` names each calling system: its access profile, issuer, subject, source
+namespaces, and the policies it may request.
 
-The producer normally selects a `policy` by ID, with an immutable subject binding and its context.
-Casework atomically selects the active policy's concrete version and digest at acceptance and retains
-that binding for the round. To require a particular version, supply both `version` and `digest` from
-`data.policyBindings` in `caseworkctl --format json check` or authenticated policy discovery.
-A mismatched exact pin is refused with `review.policy-mismatch`.
-Neither selection form grants producer authority or relaxes context validation.
-See the [Casework API policy contract](../../reference/apis/registry-casework/#policy-and-submission-binding)
-for selection and recovery rules.
+The digest covers the policy's behavior and everything it depends on: stages, context, outcomes,
+access profiles, queues, teams, producers, and the clocks and calendars it uses. A producer that
+names only the policy ID is bound to the active version and digest when Casework accepts its
+request. A producer that pins `version` and `digest` is refused with `review.policy-mismatch` once
+the active digest changes.
 
-Every decision names one of the policy's declared outcomes, an approval included, so an approval policy must declare at least one outcome with `settlement: approved`. Approval policies use approval, rejection, or changes-requested decisions. Answer policies use a configured outcome. A required reason or structured result must be supplied at decision time. The producer may narrow declared result properties with `resultConstraints`; it cannot widen the schema or introduce fields. Keep result data within the purpose of the review.
+{/* Evidence: crates/registry-casework-core/src/review.rs, digest_with();
+    crates/registry-casework-core/src/config.rs, policy_dependencies(), ReviewProducerPolicy;
+    crates/registry-review-protocol/src/lib.rs, PolicySelection::matches;
+    crates/registry-casework-core/src/http.rs, REVIEW_POLICY_MISMATCH_PROBLEM;
+    crates/registry-casework-core/src/context.rs, ReviewContextPolicy. */}
 
-Each outcome states whether the decision gives a public reason: `required`, `optional`, or `none`, with no default. A public reason is text of at most 2000 UTF-8 bytes that the producer receives on the ReviewResult for release to the subject's owner. The private `reason` stays in the accountability record and never reaches the producer. A reviewer approving without an outcome is refused at `$.outcome` with the policy's approval outcome identifiers listed in the `Registry-Casework-Validation-Allowed` header. The final stage settles the request: its outcome, with the public reason of the approval that meets its threshold, is the one the producer receives. Earlier stages' outcomes and reasons, and other approvers' public reasons, are kept in the accountability record and not released.
+## Give the stage a deadline
 
-`terminalRetentionDays` and `accountabilityRetentionDays` run from terminal settlement, with the accountability period at least as long as result availability. The producer's `retention.receiptRetentionDays`, at most 365, bounds how long its submission receipts stay recoverable. A Base Registry Engine (BReg) review authority's `recoveryDays` should not exceed it, because BReg retries against a receipt that Casework keeps only that long. Open reviews have no terminal retention deadline yet. [Review retention and audit](../../operate/casework-retention/) explains erasure and recovery.
+A [clock](../../reference/glossary/#clock) measures a deadline, and a stage clock counts working
+days on a [calendar](../../reference/glossary/#calendar). Add a calendar and a five-day review
+deadline to the end of `casework.yaml`:
 
-{/* Evidence: crates/registry-casework-core/src/review.rs, ReviewPolicy, ReviewStagePolicy,
-    ReviewRetentionPolicy, and ReviewOutcomePolicy;
-    crates/registry-casework-core/src/config.rs, ReviewProducerPolicy;
-    crates/registry-review-protocol/src/lib.rs, ReviewCreateRequest, PolicySelection;
-    crates/registry-casework/src/review.rs, settle_review();
-    crates/registry-casework/tests/review_postgres.rs,
-    rejected_cancelled_and_superseded_results_commit_atomically();
-    crates/registry-casework-client-node/__test__/facade.test.js,
-    "an undeclared outcome refusal names the outcomes the review policy declares";
-    crates/registry-casework/tests/review_acceptance_postgres.rs,
-    exact_policy_admission_and_independent_producer_authority(),
-    current_policy_selection_recovers_before_updates_and_requires_live_authority(),
-    concurrent_current_policy_acceptance_freezes_one_binding_and_refuses_incompatible_context(). */}
-
-## Choose context custody
-
-A submitted policy retains the admitted snapshot until its retention deadline. A current-source policy retains a binding and derived task metadata, then reads a fresh bounded projection under the human caller's source authority. Choose the mode according to what the reviewer needs to see and what Casework is allowed to keep.
-
-For current-source context, the policy names one provider and an exact producer contract. This fragment shows the values you replace with a checked export:
-
-```yaml
-context:
-  mode: current-source
-  provider: facility-proposal-context
-  contract:
-    id: <context-id-from-export>
-    revision: <revision-digest-from-export>
-    schemaDigest: <schema-digest-from-export>
-displaySchema:
-  $ref: schemas/correct-address.schema.json
-```
-
-Declare the provider's read purposes separately:
-
-```yaml
-contextProviders:
-  facility-proposal-context:
-    capabilities: [human-display, service-status]
-    sourceNamespace: facility-registry
-    deploymentRef: facility-registry
-    serviceProfiles:
-      service-status: casework-review-status
-```
-
-The schema digest binds exact referenced file bytes. Vendor the schema and provider export into the project, then use the native pairing command against the matching Base Registry Engine (BReg) package:
-
-```sh
-caseworkctl provider pair ./facility-review \
-  --provider-id facility-proposal-context \
-  --breg-package /srv/registry/facility-package \
-  --action-id correct-address
-caseworkctl provider pair ./facility-review \
-  --provider-id facility-proposal-context \
-  --breg-package /srv/registry/facility-package \
-  --action-id correct-address --apply
-caseworkctl check ./facility-review \
-  --against-breg-package /srv/registry/facility-package
-```
-
-Run pairing on a project already configured for that provider and action. The first command previews the proposed changes; review them before repeating with `--apply`. A contract or schema mismatch means the producer export and Casework policy differ; rebuild and pair matching packages rather than editing a digest to suppress the refusal.
-
-The provider declaration separates `human-display`, `service-status`, `routing-context`, and `task-grant-context`. Only capabilities used by the policy become required dependencies. Human display uses the caller's bearer and selected `Registry-Source-Profile`; a service status credential never substitutes for a human disclosure. Routing and task-grant context require their own declared purpose bindings when used. Configure transport URLs and secret references in the deployment runtime file, outside the authored policy.
-
-Concealed or moved context cannot authorize a decision. A malformed provider display returns `source.bad-gateway`; the runtime logs the policy identifier and a closed validation reason without source fields or values. Fix the provider/schema mismatch rather than broadening human disclosure as a workaround. Casework has no source write or apply authority. An approved result is input to the producer's separately authorized mutation.
-
-{/* Evidence: products/casework/examples/canonical-review/casework.yaml;
-    crates/registry-casework-core/src/adapter.rs, ReviewContextProvider;
-    crates/registry-casework-core/src/config.rs, required_context_capabilities();
-    crates/registry-caseworkctl/src/provider_pair.rs;
-    crates/registry-casework/src/review.rs, invalid_provider_display();
-    crates/registry-casework/tests/review_postgres.rs,
-    malformed_provider_display_is_a_bad_gateway_and_moved_binding_is_concealed(). */}
-
-## Local callers in `dev-clients.yaml`
-
-The local callers file names teaching identities and the Directory seed for a retained development session:
-
-```yaml
-apiVersion: id.registrystack.org/formats/casework/dev-clients/v1alpha1
-kind: CaseworkDevClients
-clients:
-  - id: administrator
-    accessProfile: administrator
-    scopes: [casework:admin]
-    claims:
-      registry_actor_kind: human
-  - id: supervisor
-    accessProfile: supervisor
-    scopes: [casework:supervisor]
-    claims:
-      registry_actor_kind: human
-  - id: staff
-    accessProfile: staff
-    scopes: [casework:staff]
-    claims:
-      registry_actor_kind: human
-  - id: requester
-    accessProfile: requester
-    scopes: [casework:request]
-directory:
-  - team: decisions-team
-    queue: decisions
-    staff: [staff]
-    supervisors: [supervisor]
-```
-
-`check` validates profile, scope, claim, and Directory references against the project. `dev` creates owner-only client credentials; this file contains no credential and is excluded from the deployment package. For current-source development, start the source separately and configure its provider bindings explicitly. A retained `dev stop` preserves the database; `--remove` destroys that owned local session, so use it only when you intend to discard its reviews.
-
-{/* Evidence: crates/registry-caseworkctl/src/dev/config.rs, read_against();
-    crates/registry-caseworkctl/src/dev/mod.rs;
-    crates/registry-caseworkctl/src/project.rs, STANDALONE_DEV_CLIENTS and package();
-    products/casework/DEV-SOURCES.md. */}
-
-## Routing, clocks, and calendars
-
-Routing selects a queue when a task or stage is created. Declare ordered `routing` rules on the review policy using fields from its display schema. The compiler derives the required routing projection. Submitted routing reads the admitted snapshot; current-source routing reads only the provider's routing context. The first matching rule wins, and the stage queue is the fallback. Derived routing metadata does not grant access to source records.
-
-### Subject and stage clocks
-
-A subject clock starts when the request is accepted and completes when its result becomes terminal. Each request has its own budget, including a new request after changes were requested. Declare the clock at project level and name it in the policy's `clocks` list:
-
-```yaml
+```yaml title="casework.yaml" test-append
+calendars:
+  office:
+    timezone: Asia/Bangkok
+    workingWeekdays: [monday, tuesday, wednesday, thursday, friday]
+    holidaySet: office-holidays
 clocks:
   review-deadline:
-    type: subject
-    anchor:
-      type: request-accepted
-    after:
-      hours: 48
+    type: stage
+    anchor: {type: stage-entered}
+    calendar: office
+    after: {workingDays: 5}
+    dueTime: "17:00"
+    atRisk: {before: {workingDays: 1}}
+    reminders: {due-soon: {before: {workingDays: 1}}}
 ```
 
-`after` names exactly one of `minutes`, `hours`, or `days`.
+The task is due at 17:00 Bangkok time on the fifth working day after it enters the stage, and is
+at risk one working day before. A clock may also carry `steps` that move a due task to another
+queue; it never decides an outcome. Attach the clock to the policy:
 
-A stage clock (`type: stage`) starts at stage entry (`anchor: {type: stage-entered}`) and uses a declared working calendar. Its `after`, `atRisk`, and `reminders` count working days: `after: {workingDays: 3}`, `atRisk: {before: {workingDays: 1}}`, and `reminders: {due-soon: {before: {workingDays: 1}}}`. A due step can move a task to a served queue; an unserved target defers the unapplied step until service is restored.
+```diff test-edit title="casework.yaml"
+         requiredApprovals: 1
++    clocks: [review-deadline]
+     retention:
+```
 
-### Calendars and holiday revisions
+The calendar's working days exclude the dates of its holiday set. Write one revision of it, so
+`check` validates it with the project:
 
-An Administrator publishes immutable holiday-set revisions. Missing holiday facts defer stage-clock scheduling. When the facts arrive, maintenance computes the occurrence and refreshes the task deadline. Existing calculations remain pinned until an authorized preview/apply recompute changes them. Inspect the affected task set, then apply the same unexpired preview; create another preview when Directory, task, or holiday state changed.
+```sh
+mkdir -p holiday-sets
+```
 
-{/* Evidence: crates/registry-casework-core/src/policy.rs, ClockPolicy;
-    crates/registry-casework/src/review.rs, insert_initial_review_clocks();
-    crates/registry-casework/src/review/maintenance.rs;
-    crates/registry-casework/src/review/staffing.rs;
-    crates/registry-casework/tests/support/clock_progress_regressions.rs;
-    crates/registry-casework/tests/review_acceptance_postgres.rs,
-    clock_recompute_uses_pinned_calendar_and_fences_changed_holiday_inputs(). */}
+```yaml title="holiday-sets/office-holidays-7.yaml" test-file
+apiVersion: id.registrystack.org/formats/casework/holiday-set/v1alpha1
+kind: CaseworkHolidaySet
+holidaySet: office-holidays
+revision: 7
+dates: [2026-09-07]
+```
 
-## The verification loop
+Check the project and prove its fixture again. The clock changed the policy's behavior, so its
+digest changes:
+
+```sh
+caseworkctl check .
+caseworkctl test .
+```
+
+```json test-excerpt
+{
+  "filesChecked": 4,
+  "policyBindings": [
+    {"digest": "sha256:<digest>", "id": "decision", "version": "1"}
+  ]
+}
+```
+
+```json test-excerpt
+{"proofBoundary": "offline-synthetic", "productionClosure": false}
+```
+
+`offline-synthetic` means no PostgreSQL and no runtime decision took part.
+
+{/* Evidence: products/casework/examples/multi-stage-routing-clocks/casework.yaml and
+    holiday-sets/office-holidays-7.yaml; crates/registry-casework-core/src/policy.rs, ClockPolicy,
+    CalendarPolicy, HolidaySetDocument; crates/registry-caseworkctl/src/project.rs, check_holiday_sets(),
+    test(). */}
+
+## Generate types and plan the package
+
+A producer's client code is written against typed bindings: the policy bindings and the
+TypeScript and Python types for its requests, tasks, and results. Generate them outside the
+project and hand them to the producer's developers:
+
+```sh
+caseworkctl types . --output ../casework-types
+```
+
+```json test-excerpt
+{
+  "files": ["casework.ts", "casework.py", "contexts.schema.json"],
+  "output": "../casework-types"
+}
+```
+
+Then plan the [policy package](../../reference/glossary/#policy-package) without writing it:
+
+```sh
+caseworkctl package . --dry-run
+```
+
+```json test-excerpt
+{
+  "dryRun": true,
+  "files": ["casework.yaml"],
+  "packageDigest": "sha256:<digest>"
+}
+```
+
+The [package digest](../../reference/glossary/#package-digest) covers the bytes of every packaged
+file, so any edit changes it. The holiday set is not packaged: an administrator publishes its
+revisions to the running service, and until one is published the stage clock cannot compute a due
+time. [Deploy Registry Casework](../../operate/casework/) activates the package.
+
+{/* Evidence: crates/registry-caseworkctl/src/project_types.rs, generate();
+    crates/registry-caseworkctl/src/project.rs, package_dry_run();
+    crates/registry-casework/src/http.rs, create_holiday_revision;
+    crates/registry-casework/src/review.rs, "source-facts-missing" clock state. */}
+
+## Restart the session on the edited project
+
+The running session serves the package it built when it started, and it refuses to restart on
+edited files while it holds records, so discard it and start a fresh one. This deletes the
+ReviewRequest you decided earlier and the session's credentials:
+
+```sh
+caseworkctl dev stop --remove
+caseworkctl dev start
+```
+
+```json test-excerpt
+{"directory": {"revision": 0, "teams": 0}, "state": "stopped"}
+```
+
+```json test-excerpt
+{"directory": {"revision": 1, "teams": 1}, "state": "ready"}
+```
+
+The session keeps its ports. Its tokens are new, so run `caseworkctl dev token` again before your
+next call. Leave it running.
+
+{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, start, stop, InputsChanged. */}
+
+## Configuration reference
 
 <ConfigurationFormatChecks product="casework" />
 
-Check the authored policy, inspect the closure, exercise its synthetic fixtures, and generate client types:
+{/* Generated from products/casework/generated/project/project.schema.json and the fixture,
+    dev-clients, and holiday-set schemas beside it, through src/data/generated/casework-configuration.json,
+    by docs/site/scripts/generate-casework-configuration.mjs. Run npm run generate from docs/site. */}
 
-```sh
-caseworkctl check ./decisions
-caseworkctl explain ./decisions
-caseworkctl test ./decisions
-caseworkctl types ./decisions --output ./decision-types
-caseworkctl package ./decisions --dry-run
-caseworkctl package ./decisions --output ./decision-package
-```
-
-Synthetic fixture tests are offline authoring checks. They do not prove deployed authentication, source disclosure, or a producer's later mutation. Verify those boundaries with the applications and identities that will call the deployment.
-
-The package includes `casework.yaml`, referenced local schemas, provider exports, and `SHA256SUMS`. The package digest covers that exact file closure. Hand the package and digest to the operator, together with the required identity claims, Directory setup, context-provider purpose profiles, and retention choices. Keep transport credentials out of the package.
-
-Use `--format json` for automation. Reports carry one versioned envelope with diagnostics and suggested actions. Success exits `0`, a domain refusal `1`, invalid usage `2`, and an operational failure `3`. Correct the named field or dependency and rerun the failed check; a changed request body must not be retried under an existing idempotency key.
-
-{/* Evidence: crates/registry-caseworkctl/src/project.rs, check(), explain(), test(), and package();
-    crates/registry-caseworkctl/src/report.rs, CliReport;
-    crates/registry-caseworkctl/src/lib.rs, DOMAIN_REFUSAL_EXIT and OPERATIONAL_FAILURE_EXIT. */}
+<ConfigurationReference contracts={reference.contracts.filter((contract) => ['project', 'fixture', 'dev-clients', 'holiday-set'].includes(contract.id))} prefix="casework" />
 
 ## Next
 
-- [Deploy Registry Casework](../../operate/casework/)
-- [Review retention and audit](../../operate/casework-retention/)
-- [Understand Casework authority](../../explanation/how-casework-works/)
+[Staff the directory](../casework-directory/)

@@ -1,6 +1,6 @@
 ---
-title: Read and ship the Evidence Gateway audit log
-description: Configure where Evidence Gateway writes its audit entries, ship them to append-only storage, understand what each phase establishes, and keep the subject-correlation boundary explicit.
+title: Operate the Registry Evidence audit log
+description: Choose where Registry Evidence writes its audit log, preflight the audit path, ship the log to append-only storage, read what each record phase establishes, and rotate the audit master.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,269 +13,197 @@ locale: en
 standards_referenced: []
 ---
 
-Evidence Gateway writes one audit entry before every source read and one with every outcome, and
-refuses the request when an entry cannot be written. The log is useful for showing which governed
-operation was admitted and what concept was released. It does not repeat source values,
-automatically provide a citizen-facing access history, or prove on its own host that nobody edited
-it: tamper evidence comes from the append-only storage you ship it to.
+You run a deployed Registry Evidence service and answer for what it disclosed. For every admitted
+operation, Evidence writes one entry before any source read and one with its outcome, and refuses
+the request when an entry cannot be written. Requests refused before admission write nothing:
+authentication failures, malformed requests, invalid selectors, and rate-limited requests. The log
+is tamper-evident only once it reaches the append-only storage you ship it to.
 
-{/* Evidence: products/evidence/OPERATOR-CONTRACT.md, "Audit destinations, rotation, and retention";
-    crates/registry-platform-audit/src/writer.rs, AuditWriter and AuditEntry. */}
+{/* Evidence: crates/registry-evidence/src/audit.rs, EvidenceAuditLog;
+    crates/registry-evidence/src/runtime.rs, map_request_limit and append_authorization_refusal;
+    crates/registry-evidence/src/runtime_tests.rs, "authentication failures are not audited" and
+    "pre-material selector failures are not audited";
+    products/evidence/OPERATOR-CONTRACT.md, "Audit destinations, rotation, and retention". */}
 
-## Read one entry
+## Choose where the audit log is written
 
-Every entry is one JSON line with six members:
-
-| Member | Meaning |
-|---|---|
-| `schema` | `registry.evidence.audit/v2`, `registry.evidence.audit.request-batch/v2`, or `registry.evidence.audit.authorization-refusal/v2`. |
-| `eventId` | A random identifier the writer gives this entry. |
-| `time` | The writer's UTC timestamp for the append. |
-| `phase` | `request` for an access attempt, written before the source read it authorizes; `response` for a release, denial, or failure. |
-| `correlation` | The server-minted operation identifier, shared by every entry of one operation. |
-| `record` | The closed, minimized Evidence record. |
-
-Entries are not chained, so any line can be read on its own. To list the entries in a file with
-their phases and decisions, for example:
-
-```sh
-jq -c '{correlation, phase, event: .record.phase, decision: .record.decision}' \
-  /var/lib/registry-evidence/audit/evidence.jsonl
-```
-
-Readers written for the chained `/v1` records do not read these entries; update them before routing
-traffic to a runtime that writes `/v2`.
-
-## Interpret one operation
-
-For an admitted request, the record's own `phase` uses closed values:
-
-| Record phase | What it establishes | What it does not establish |
-|---|---|---|
-| `access-attempt` with `authorized` | Authentication and the complete authority path were accepted before source credentials or source data were touched. | The source returned a record or the assertion was released. |
-| `disclosure-release` with `released` | The named concepts were serialized and durably recorded before the exact response bytes were released. | The source fact was true or the caller used the answer correctly. |
-| `denial` with `not-authorized` | An authenticated authorization refusal was durably recorded before its generic `403` response. | The rejected requirement, purpose, subjects, unmatched authority, selector information, or response format. |
-| `denial` or `transient-failure` after authorization | An admitted operation later failed in one closed, value-free class. | The protected selector, source value, or credential that triggered it. |
-
-Authentication, malformed-request, and invalid-selector failures happen before Evidence Gateway has
-enough privacy-safe context and do not fabricate an audit entry. Do not expect every HTTP request
-to produce two entries.
-
-Authorized-material records can carry the governed requirement, purpose, package digest
-(in the frozen `bundleRevision` field),
-requester pseudonym, subject role and selector-profile pseudonym, source and adapter identifiers,
-response protection, decision, safe failure class, disclosed concept IDs, evidence ID, and signing
-key ID. A standalone authorization-refusal record instead carries a requester pseudonym and closed
-denial reason without the rejected requirement, purpose, subjects, unmatched authority, selector
-information, or response format. Records never carry the disclosed value, raw selector,
-source response, access token, or credential.
-
-## Choose a destination
-
-The runtime file's `audit` block picks one of two destinations:
+You author the `audit` block in the deployment target, not in the runtime file. The
+[production example target](https://github.com/registrystack/registry-stack/blob/main/products/evidence/reference/deployment-targets/environments/production/evidence/target.yaml)
+declares:
 
 ```yaml
 audit:
-  destination: file
-  path: /var/lib/registry-evidence/audit/evidence.jsonl
-  rotateBytes: 104857600
-  retentionDays: 90
+  hashKeyRef: secret:file/evidence-audit-hmac
+  hashKeyVersion: 1
+  path: /var/lib/registry-evidence/production/evidence.jsonl
 ```
 
-- **`file`**, the default, returns from each append only after the entry is synced to disk. When
-  the active file would pass `rotateBytes` (100 MiB by default), the writer renames it to
-  `<path>.<sequence>` with an eight-digit sequence and opens a fresh file at `path`. When it opens
-  and each time it rotates, it deletes sealed files last modified more than `retentionDays` ago (90
-  by default); it never deletes the active file.
-- **`stdout`** writes each entry as one flushed line on standard output. The process writes its
-  operational records to standard error, so the stream carries audit entries alone. Durability, rotation, and
-  retention belong to your log collector, and `path`, `rotateBytes`, and `retentionDays` are refused.
-  `evidence check --require-audit-under` refuses this destination, because it has no local file to
-  contain.
+`evidencectl package` splits the block. `audit.hashKeyRef` and `audit.hashKeyVersion` name the
+audit master and its version, and go into the governed package. `audit.destination`,
+`audit.path`, `audit.rotateBytes`, and `audit.retentionDays` go into the candidate's
+`runtime.yaml`:
 
-One process writes one file. The writer holds a lock on `<path>.lock` for its whole life, and a
-second process pointed at the same path fails at startup with a sink-locked error. To run more
-than one replica, give each its own `path`, for example on a per-replica volume, or use `stdout`
-and let the platform's collector gather every stream.
+- `destination: file`, the default, appends to `path` and acknowledges an entry only after it is
+  synced to disk. It rotates the active file at `rotateBytes` (100 MiB by default) and deletes
+  sealed files older than `retentionDays` (90 by default).
+- `destination: stdout` writes one flushed line per entry on standard output, and refuses `path`,
+  `rotateBytes`, and `retentionDays`: durability, rotation, and retention belong to your
+  collector. Operational records go to standard error.
 
-The file's directory must belong to the service user and must not be writable by group or others.
-Never rename, edit, or truncate the active file while the service runs: the writer treats that as
-tampering, and readiness and every later audited request fail closed until the process restarts.
-Copying a sealed file is safe at any time.
+One process writes one file. The writer holds `<path>.lock` for its whole life, so give each
+replica its own `path` or use `stdout`. The directory must belong to the service user and be
+unwritable by group or others.
 
-A `stdout` destination stalls when its collector stops reading the stream.
-Once the writer has held one entry for 5 seconds, the request waiting on that entry is refused,
-later audited requests are refused at once, and readiness fails.
-With `EVIDENCE_LOG` at its default of `info`, the log on standard error carries
-`audit stream has held one entry past the write deadline`.
-When the collector reads again, the log carries `audit stream took the entry it was holding`, and
-the writer accepts entries with no restart.
-The first record is logged at `error` and the second at `warn`, both under the
-`registry_platform_audit` target, so an `EVIDENCE_LOG` filter that leaves out that target or those
-levels hides them.
-Keep standard error read as well.
-Evidence Gateway writes both records to standard error from the request, readiness check, or
-writer that noticed the change, and that write waits when standard error is full.
-A collector that stops reading both streams can therefore leave a request or a readiness check
-waiting rather than refused, until standard error is read again, so give callers and probes their
-own deadlines.
-The stream still receives the entry the collector was holding, so it can carry an entry for a
-request that was refused.
-Restore the collector rather than restarting Evidence Gateway: a process that exits during a stall
-can lose the entries queued behind the held one.
-A write the stream refuses is a different fault and stops the writer until the process restarts.
+:::caution[Archive chained logs before the first start]
+A runtime that wrote the older chained format left `<path>.<sequence>` segments and an active file
+behind. The writer refuses to start on a chained active file, and retention deletes old sealed
+segments under the same names. Archive them to append-only storage and point `path` at a
+directory that holds no old segments.
+:::
 
-{/* Evidence: products/evidence/contracts/runtime.schema.yaml, audit;
+{/* Evidence: crates/registry-evidence-authoring/src/target_binding.rs, TargetAudit,
+    TargetAuditDestination, and target_audit_fields_are_partitioned_by_ownership;
+    products/evidence/contracts/runtime.schema.yaml, rotateBytes and retentionDays;
+    products/evidence/contracts/bundle.schema.yaml, hashKeyVersion;
     crates/registry-platform-audit/src/writer.rs, DEFAULT_AUDIT_ROTATE_BYTES,
-    DEFAULT_AUDIT_RETAIN_DAYS, AuditDestination, STREAM_WRITE_DEADLINE,
-    AuditUnavailableReason::Stalled, StreamEvent::StallStarted, StreamEvent::StallEnded,
-    StreamEvent::WrittenAfterRefusal, StreamEvent::AbandonedAtDrop,
-    a_stalled_stream_refuses_the_append_at_the_deadline_and_later_ones_at_once, and
-    readiness_follows_a_stall_and_returns_once_the_stream_drains;
-    crates/registry-evidence/src/runtime.rs, ready();
-    crates/registry-evidence/src/main.rs, install_operational_logging. */}
+    DEFAULT_AUDIT_RETAIN_DAYS, and require_current_entry_format. */}
+
+## Preflight the audit path
+
+Before you start a candidate, prove its audit file sits on your persistent storage:
+
+```sh
+evidencectl doctor \
+  --runtime-config /srv/registry-evidence/candidate/runtime.yaml \
+  --require-audit-under /var/lib/registry-evidence
+```
+
+When every dependency is reachable, doctor prints `Dependency preflight passed for` the runtime
+file and a `Proof:` line. When the root does not exist on the host, it refuses with
+`evidence.deployment.audit-outside-root` and exits 3. A `stdout` destination is refused here,
+because it has no local file.
+
+A candidate staged beside the instance it replaces meets the running writer's lock:
+
+```text
+Evidence runtime dependency preflight refused <runtime-file>
+error[evidence.deployment.audit-unavailable] <runtime-file>
+  runtime audit initialization failed: another process holds the single-writer lock beside the audit file; stop it before starting this one
+  next: Make the audit destination writable by this user and free of another writer, as the message says.
+1 error, 0 warnings in <count> files
+Next: Another Evidence instance holds this audit destination's writer lock. To check a candidate staged beside it, rerun doctor with --without-audit-lock; otherwise stop the other writer first.
+```
+
+Rerun with `--without-audit-lock`. Doctor still checks the destination's ownership, modes, write
+access, and final entry, and its `Proof:` line says a second writer is not detected.
+See [`evidencectl doctor`](../../reference/cli/evidencectl/doctor/) for every option.
+
+{/* Evidence: crates/registry-evidencectl/src/runtime.rs, HELD_LOCK_ACTION, proof_boundary, and
+    LOCK_FREE_PROOF_BOUNDARY. */}
 
 ## Ship audit to append-only storage
 
-Ship sealed files, or the `stdout` stream, to storage the Evidence Gateway host cannot rewrite:
-object storage with an object lock, a write-once archive, or a log pipeline whose retention the
-Evidence operator account cannot change. Ship each sealed file before `retentionDays` deletes it.
-The writer records the next sequence in `<path>.seq` at every start and before every rotation, so
-numbering continues after retention or a shipper removed every sealed file. It restarts only in a
-directory that lost `<path>.seq`, such as a fresh or restored one, and every replica's stream uses
-the same names, so key archived copies on more than the sealed file name.
+Tamper evidence comes from where entries end up, not from the file the service writes. Once the
+service runs:
 
-If the process stopped mid-write, the active file ends in part of an entry. The next start copies
-those bytes to the owner-only side file `<path>.torn`, truncates the active file to its last
-complete line, and logs the side file's path and byte count at error level. Entries are
-acknowledged only after they are synced, so no acknowledged entry is lost. Archive the side file
-with the sealed files and remove it; the writer never overwrites it, so a second torn line refuses
-to start until the first side file is moved.
+1. Pick a store the Evidence host cannot rewrite: object storage with an object lock, a
+   write-once archive, or a log pipeline whose retention the Evidence operator account cannot
+   change.
+2. With `destination: file`, ship every sealed file. Rotation renames the active file to
+   `<path>.<sequence>`, an ascending eight-digit number, and the next number is kept in
+   `<path>.seq`. Copying a sealed file is safe at any time. Ship each one before
+   `audit.retentionDays` deletes it, so set that key in the target's `audit` block longer than
+   your shipper can fall behind. Key archived files by host or replica as well as by name: two
+   replicas use the same names, and numbering restarts when `<path>.seq` is lost.
+3. If a crash left `<path>.torn`, the bytes of an unfinished entry that belongs to no
+   acknowledged entry, inspect it, archive it with the sealed files, and then remove it. The
+   writer refuses a later torn line while the side file is still there.
+4. With `destination: stdout`, point your collector at the store; each line on standard output
+   is one entry.
+5. Verify, as part of your backup, restore, and incident procedures, that entries reach the
+   store: pick an operation and find its entries there by their shared `correlation`.
+
+Restore audit history into that store, never into the live audit directory. The
+[operator contract](https://github.com/registrystack/registry-stack/blob/main/products/evidence/OPERATOR-CONTRACT.md#audit-destinations-rotation-and-retention)
+is the authority for these rules.
+
+Never rename, edit, or truncate the active file while the service runs: the writer treats that as
+tampering, and every later audited request fails closed until a restart. A `stdout` destination
+stalls when its collector stops reading. After the writer has held one entry for 5 seconds,
+audited requests are refused and readiness fails; standard error carries
+`audit stream has held one entry past the write deadline`, and later
+`audit stream took the entry it was holding` once the collector reads again. Restore the collector
+rather than restarting, which can lose queued entries.
 
 {/* Evidence: crates/registry-platform-audit/src/writer.rs, write_next_sequence,
-    AuditSegments::next_sequence, and recover_torn_tail. */}
+    recover_torn_tail, STREAM_WRITE_DEADLINE, StreamEvent::StallStarted, and
+    StreamEvent::StallEnded;
+    products/evidence/OPERATOR-CONTRACT.md, "Audit destinations, rotation, and retention" and
+    "Ship audit to append-only storage". */}
 
-Confirm that entries reached the store as part of backup, restore, and incident procedures.
-Restore audit history into that store, never back into the live audit directory.
+## Read what an entry establishes
 
-:::caution[Archive chained logs before switching]
-A runtime that wrote the older chained audit format left `<path>.<sequence>` segments behind.
-Retention deletes sealed files under the same name once they are older than `retentionDays`. Before
-the first start with the `audit` block, archive every old segment and the old active file to
-append-only storage, and point `path` at a fresh file in a directory that holds no old segments.
-:::
+Each entry is one JSON line whose `schema` is `registry.evidence.audit/v2`,
+`registry.evidence.audit.request-batch/v2`, or
+`registry.evidence.audit.authorization-refusal/v2`. Entries are not chained. The
+[`audit-event.schema.yaml`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/audit-event.schema.yaml)
+and
+[`request-batch-audit-event.schema.yaml`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/request-batch-audit-event.schema.yaml)
+contracts define the members and each phase's closed decision values. The record's `phase` says
+what the entry establishes:
 
-## Inspect the last local tutorial operation
+| Record phase | What it establishes | What it does not establish |
+|---|---|---|
+| `access-attempt` | Authentication and the complete authority path were accepted before source credentials or data were touched. | That the source returned a record or that anything was released. |
+| `disclosure-release` | The named concepts were serialized and durably recorded before the response bytes left the service. | That the source fact was true or that the caller used it correctly. |
+| `denial` | The operation was refused, either as an authenticated authorization refusal or as an evaluation that decided no answer. | The rejected requirement, selector, or source value behind it. |
+| `transient-failure` | An admitted operation failed in one closed, value-free class a retry may clear. | The selector, source value, or credential that triggered it. |
 
-The local tutorials expose one intentionally small view after the services stop:
+Requester and subject handles are keyed pseudonyms prefixed `hmac-sha256:v<version>:`, derived
+from the audit master: protected correlators, not anonymous values. A record never
+carries a raw selector, a released or source value, or an access token. No supported tool turns a
+person's identifier into their access history, so do not expose the audit master or raw records
+to build one. On a local development session, `evidencectl audit show` reads the last operation,
+as [Stop and read the audit](../../tutorials/request-evidence-as-sd-jwt-vc/#stop-and-read-the-audit)
+shows.
 
-```sh
-evidencectl audit show --last-operation
-```
-
-```text
-ACCESS AUTHORIZED age-bracket service-path-selection requester=<pseudonym>
-DISCLOSURE RELEASED age_bracket
-```
-
-A standalone authorization refusal produces a one-event view:
-
-```text
-ACCESS REFUSED requester=<pseudonym> reason=not-authorized
-```
-
-An operation that ended after its access without a release prints the decision instead of a
-release line: `DISCLOSURE DENIED reason=no-match` (or `ambiguous`, `unresolved`, `fact-missing`)
-for a denial the evaluation decided, and `TRANSIENT FAILURE reason=dependency-failure` (or
-`evaluation-failure`, `signing-failure`) for a failure a retry may clear.
-
-The command takes the writer's lock, so it refuses while Evidence Gateway still runs. It reads the
-retained local audit files in order, checks that every entry is well formed and that each
-operation's access attempts, one per source call, share one context and pair with a coherent
-terminal record, then renders the operation of the physically last entry. A multi-stage acquisition,
-such as `search-then-fetch`, prints one `ACCESS AUTHORIZED` line per source call. Concurrent requests can complete in a different order from their admission order, so "last"
-does not mean the most recently admitted request. The command is not a production audit browser
-and has no `--all`, subject filter, or export mode. An access-only operation prints only the
-authorized line rather than claiming a release that did not occur.
-
-Request-batch entries are checked like every other entry but never shown. When the last operation
-is a request batch, the command refuses with `evidence.audit.request-batch` rather than showing an
-earlier operation as the last one. When other operations hold an access entry and no outcome, as a
-request the process stopped during does, the view ends with a count and never their identities:
-
-```text
-EARLIER OPERATIONS WITHOUT AN OUTCOME count=1
-```
-
-A refusal names its cause where the cause changes what to do: `evidence.audit.writer-running`
-while a process still holds the audit file, `evidence.audit.history-invalid` for an entry that is
-not well formed, and `evidence.audit.unrecognized-outcome` for an outcome a mismatched
-`evidencectl` version does not know. Every other failure is `evidence.audit.inspection-failed`.
-The command never repeats what the `evidence` process wrote on standard error.
-
-{/* Evidence: crates/registry-evidencectl/src/audit_view.rs, ShowArgs, render_unreleased, and
-    CORE_NAMED_FAILURES; crates/registry-evidence/src/audit.rs, last_local_audit_operation and
-    LocalAuditCollector::collect_request_batch; crates/registry-evidence/src/main.rs,
-    local_audit_failure. */}
-
-## Understand pseudonymous correlation
-
-Requester and subject handles are deterministic keyed pseudonyms. They are protected correlators,
-not anonymous values and not encrypted copies of identifiers.
-
-The subject handle binds the complete selector tuple together with the trust domain, purpose,
-audience, role, selector profile, and key version. The same tuple in the same scope can be
-correlated by protected tooling. A different purpose, audience, or key version produces a
-different handle. A composite selector cannot be reproduced from one field such as `person_id`
-alone.
-
-Registry Stack V1 does not expose supported tooling to answer:
-
-```text
-Show every access for person_id=person-123.
-```
-
-There is no subject-history query, citizen portal, pseudonym derivation command, requester-name
-resolver, or cross-system history assembly. Do not work around this by exposing the audit hash key
-or raw JSONL records. The log contains the privacy-preserving correlation primitive that future
-protected tooling would need, but a citizen access request currently requires a separately
-governed operator process.
-
-## Protect the log
-
-- Allow one Evidence Gateway writer per audit path.
-- Put the path on durable storage and monitor capacity before a fail-closed write stops release.
-- Ship sealed files, or the `stdout` stream, to append-only storage before retention deletes them.
-- Retain each audit hash key for as long as pseudonyms from its version must stay recomputable.
-- Restrict event access separately from ordinary service operations.
-- Record retention, deletion, recovery, and requester-identity mapping responsibilities outside the
-  Evidence Gateway bundle.
+{/* Evidence: crates/registry-evidence/src/audit.rs, AUDIT_SCHEMA, REQUEST_BATCH_AUDIT_SCHEMA,
+    AUTHORIZATION_REFUSAL_AUDIT_SCHEMA, AuditPhase, AuditDecision, and requester_pseudonym;
+    crates/registry-platform-audit/src/writer.rs, AuditEntry;
+    products/evidence/OPERATOR-CONTRACT.md, "Audit and operational data". */}
 
 ## Rotate the audit master
 
-Every pseudonym carries the bundle's `audit.hashKeyVersion` in its `hmac-sha256:v<version>:`
-prefix, so entries written under different key material stay distinguishable in one log and
-rotation needs no fresh audit path. The runtime cannot tell a replacement master from the one it
-replaces: new bytes under an unchanged `hashKeyVersion` silently change every pseudonym under the
-same prefix. Rotate only this way:
+Every pseudonym carries `audit.hashKeyVersion` in its prefix, so entries under different masters
+stay distinguishable in one log and rotation needs no fresh audit path.
 
-1. Generate a fresh independent audit master into a new secret file.
-2. Build a governed bundle revision whose `audit.hashKeyRef` names it and whose
-   `audit.hashKeyVersion` is one higher, and record the change, the bundle revision, and both
-   versions in the change record.
-3. Run `evidence check --require-runtime-dependencies` and the full handoff checks, restart the
-   service, and route traffic only after readiness succeeds.
-4. Keep the previous master under its governed secret controls for as long as pseudonyms from its
-   version must be recomputable for an investigation.
+:::danger[Raise the version with the master]
+The runtime cannot tell a replacement master from the one it replaces. New bytes under an
+unchanged `hashKeyVersion` silently change every pseudonym under the same prefix.
+:::
 
-{/* Evidence: products/evidence/OPERATOR-CONTRACT.md, "Audit key rotation";
-    products/evidence/contracts/bundle.schema.yaml, hashKeyVersion. */}
+1. Generate a fresh, independent master into a new secret file (written `0600`):
+
+   ```sh
+   evidencectl keygen secret --output /run/registry-evidence/secrets/evidence-audit-hmac-2
+   ```
+
+2. In the deployment target, set `audit.hashKeyRef` to `secret:file/evidence-audit-hmac-2` and
+   raise `audit.hashKeyVersion` by one. Record both versions in your change record.
+3. Repackage the deployment target into a new candidate and install it with the target-host steps
+   in [Build and deploy a Registry Evidence project](../../tutorials/build-and-deploy-evidence-project/).
+   Route traffic only after readiness succeeds.
+4. Keep the previous master under its secret controls for as long as pseudonyms from its version
+   must stay recomputable for an investigation.
+
+The audit master must differ from the subject-binding secret and the signing key.
+
+{/* Evidence: crates/registry-evidence-authoring/src/target_binding.rs, TargetAudit;
+    crates/registry-evidence/src/audit.rs, valid_pseudonym;
+    products/evidence/contracts/bundle.schema.yaml, hashKeyRef and hashKeyVersion;
+    products/evidence/OPERATOR-CONTRACT.md, "Audit key rotation". */}
 
 ## Next
 
-- [Retention and persistent state](../retention-and-persistent-state/) for the surrounding
-  operator procedures.
-- [Rotate credentials, keys, certificates, and trust](../advanced/rotate-credentials-and-trust/)
-  to rotate the audit key alongside a deployment's other credentials.
-- [Inspect and diagnose a running deployment](../advanced/inspect-and-diagnose/) to use this
-  audit log while diagnosing a failing deployment.
+- [Registry Evidence configuration reference](../../reference/evidence-configuration/) for every `audit` key and
+  its bounds.

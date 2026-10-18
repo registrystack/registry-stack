@@ -208,8 +208,17 @@ proposal disposition, and the bounded value-free summary, never the answer
 itself. Pending and dead-letter payloads have a deployment-selectable
 retention period, `retention.hookPayloadRetentionDays` in the runtime
 configuration, which defaults to 7 days and is capped at 30. After expiry, replay is impossible.
-Digests and value-free operational metadata follow the normal audit
-retention policy. Audit and operational logs contain no projected values,
+The supervised worker prunes terminal delivery metadata once a minute after
+both the configured receipt and payload retention horizons have elapsed since
+the terminal transition. Dead letters also require completed payload expiry and erasure; that later
+expiry does not restart their metadata horizon. Explicit discard uses its
+completed terminal transition, not the original scheduled payload deadline.
+Each tick drains at most 100 bounded batches in separate transactions and stops
+when a batch removes no rows. Larger backlogs continue on subsequent ticks.
+Pending, leased, retryable and replayable work remains. State is deleted before
+its delivery row, and the shared event only after its last delivery is removed.
+This cleanup preserves mutation receipts, spent-key tombstones and the audit
+journal, which retains its independent retention policy. Audit and operational logs contain no projected values,
 raw record ids, destination URLs, or secrets. Payload erasure commits only
 after its terminal audit entry is accepted.
 

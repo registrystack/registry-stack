@@ -4,6 +4,11 @@
       "additionalProperties": false,
       "description": "The OIDC issuer a runtime accepts access tokens from: the exact `iss`\nvalue, the `aud` value a token must carry, and where the issuer's signing\nkeys come from, written under `authentication.oidc` beside the product's\nown token rules.",
       "properties": {
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
+          "type": "boolean"
+        },
         "assertionIssuers": {
           "additionalProperties": {
             "items": {
@@ -33,7 +38,7 @@
         },
         "issuer": {
           "$ref": "#/$defs/Url",
-          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL."
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set."
         },
         "jwksSource": {
           "$ref": "#/$defs/JwksSource",
@@ -707,7 +712,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Fetch the key set from this absolute `https` URI, skipping discovery.",
+          "description": "Fetch the key set from this absolute `https` URI, skipping discovery.\nA plain `http` URI is accepted on loopback for supervised local\ndevelopment, and beyond loopback only when the issuer block sets\n`allowInsecureHttp`.",
           "properties": {
             "type": {
               "const": "uri",

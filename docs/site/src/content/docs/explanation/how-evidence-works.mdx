@@ -1,0 +1,138 @@
+---
+title: How Evidence works
+description: What you define in an Evidence project, what an answer may carry, what exists once Registry Evidence runs, who owns each answer, and how you inspect a project or change a published question.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: explanation
+locale: en
+standards_referenced:
+  - sd-jwt-vc
+---
+
+If you have run [Your first assertion](../../tutorials/first-evidence-assertion/) and want the
+model behind it before you design questions of your own, five questions settle most of it.
+
+## What do I define?
+
+You define an [Evidence project](../../reference/glossary/#evidence-project): an `evidence.yaml`
+file and the scripts it names, kept in version control. It declares four things.
+
+- **Assertion definitions.** Each entry under `assertionDefinitions` is one question with its
+  [Requirement URI](../../reference/glossary/#requirement), the purpose it serves, the subject
+  roles a caller names, the source it reads, the outputs it may return, and the grant ceiling no
+  caller can exceed.
+- **Sources.** Each entry under `sources` is one [source](../../reference/glossary/#source), a fixed read, an HTTP request or one SQL statement
+  over a read-only SQLite extract, with the response shape it accepts.
+- **Selector profiles.** A [selector profile](../../reference/glossary/#selector-profile) bounds what a caller may send to identify a subject.
+  `record-by-id` admits one string field of 1 to 64 bytes, and a source's path takes its value
+  only from that field.
+- **Functions.** A [Function](../../reference/glossary/#function) is a small
+  [Rhai](../../reference/glossary/#rhai) script with a declared interface. A `source-extract/v1`
+  Function turns the source response into facts; an `assertion-derive/v1` Function turns facts
+  into outputs. Functions run under fixed operation and size limits and cannot import code.
+
+Evidence has no built-in domain: adult status exists only because a project declares it.
+
+Beside the project sit two files an operator owns. A [target](../../reference/glossary/#target), such as `local-target.yaml`, binds
+the project to one deployment: the token issuer, the source endpoints and their credentials, the
+signer, and the audit path. A target authority, such as `dev-authority.yaml`, names the access
+profiles that may call and the grants each holds. A grant can only narrow a definition's
+[grant ceiling](../../reference/glossary/#grant-ceiling); Registry Evidence refuses to activate one that widens it.
+
+{/* Evidence: crates/registry-evidence-authoring/src/project.rs, EvidenceProject, SelectorProfile,
+    FunctionInterface, AssertionDefinition, and SourceType; crates/registry-evidence/src/rhai_runtime.rs,
+    MAXIMUM_OPERATIONS and disable_symbol; products/evidence/examples/standalone/evidence.yaml;
+    products/evidence/examples/standalone/local-target.yaml; products/evidence/examples/standalone/dev-authority.yaml;
+    crates/registry-evidence/src/authority.rs, target_grants_cannot_widen_any_definition_ceiling. */}
+
+## What may an answer carry?
+
+An answer is a value the definition declared, computed from the source, never the record. Each
+output names a concept URI and one of twelve types, and the type decides what the source value may
+become before it leaves. A `boolean` says only true or false: `adult-status` derives one from a
+birth date the caller never sees. A `controlled-category` or `controlled-code` says which entry of
+a reviewed list applies, a `date-bucket` which reviewed period, and a bounded number stays inside
+declared bounds. `reviewed-structured-value`, a small structure under a closed schema, is the
+widest type and the one to justify hardest. An output whose value falls outside its declaration is
+refused.
+
+How much a definition reveals is fixed when it is written and reviewed, and it is the same for
+every caller and purpose allowed to ask. A request carries a nonce, the Requirement URI, the
+purpose, and one selector per subject role; nothing in it chooses a disclosure level. The
+representations a definition permits, a signed JWS or an [SD-JWT VC](../../reference/glossary/#sd-jwt-vc),
+change the encoding, not the values.
+
+Two refusals protect what the answer leaves out. No match, an ambiguous match, a missing fact, and
+an unresolved input all reach the caller as one problem, `evidence.unavailable`, so a refusal does
+not reveal whether a record exists; the audit keeps the outcomes distinct for the operator. A
+subject appears in the answer only as an opaque [subject binding](../../reference/glossary/#subject-binding) scoped to the audience that asked, so two
+relying parties asking about the same person cannot join their answers.
+
+Minimization is modelled, not automatic: two definitions each defensible alone can reconstruct
+a protected value between them, so the operator reviews the enabled definitions together.
+
+{/* Evidence: crates/registry-evidence-authoring/src/project.rs, output type enum;
+    crates/registry-evidence-authoring/src/output.rs, TYPES;
+    products/evidence/contracts/request.schema.yaml; products/evidence/contracts/evidence.schema.yaml;
+    products/evidence/contracts/problem-contract.yaml; products/evidence/contracts/bundle.schema.yaml,
+    existenceDisclosure; products/evidence/contracts/security-invariant-matrix.yaml, V1-I03, V1-I16, V1-I17;
+    products/evidence/fixtures/acceptance/. */}
+
+## What exists at runtime?
+
+`evidencectl package` compiles the project and its target into an immutable bundle, a runtime
+file, and a compiled authority; `evidence authority activate` records the authority. One `evidence`
+process serves them as read at startup, so a change means a new package or activation and a
+restart.
+
+Each request passes five stages: the selectors are checked, the source is read, the Functions
+run, only declared outputs are accepted, and the assertion is signed with its definition's
+[`configurationRevision`](../../reference/glossary/#configuration-revision).
+
+Registry Evidence keeps no database and no copy of a source response. Two things it keeps are
+durable. The audit trail records an access event before the source is read and a release event
+before the response leaves; if the release event cannot be written, the caller gets a `503` and no
+assertion. The authority state file, `authority-state.json`, holds the active target authority and
+the history of every activation.
+
+{/* Evidence: crates/registry-evidencectl/src/build.rs; crates/registry-evidence/src/authority.rs,
+    activate(), history(), STATE_FILE; crates/registry-evidence/src/fixture.rs; crates/registry-evidence/src/bundle.rs,
+    compute_requirement_revisions; crates/registry-evidence/src/runtime.rs, AuditPhase::AccessAttempt
+    and AuditPhase::DisclosureRelease; products/evidence/OPERATOR-CONTRACT.md, "Supported deployment". */}
+
+## Who owns the result?
+
+Your institution keeps the record. The relying service verifies the answer and owns the decision
+made from it; an assertion grants no approval and no right to write anywhere. Registry Evidence inherits no
+authority from its sources: a Base Registry Engine route is one more HTTP endpoint, reached with
+Registry Evidence's own credentials. Authors own the project and its fixtures. Operators own the
+target, the target authority, the signing keys, and audit retention.
+
+{/* Evidence: products/evidence/examples/standalone/README.md;
+    products/evidence/OPERATOR-CONTRACT.md, "Secrets and keys" and "Audit destinations, rotation, and retention". */}
+
+## How do I inspect or change it?
+
+`evidencectl` checks a project and runs its synthetic fixtures before anything serves, and verifies
+a retained response or reads a stopped session's audit afterwards; the
+[`evidencectl` reference](../../reference/cli/evidencectl/) lists each command.
+
+Relying services pin the `configurationRevision`. It moves when you edit what a definition does,
+such as its source, selector profiles, Functions, codelists, or outputs, and stays put for
+`question` text, fixtures, endpoints, credentials, grants, and signing keys. A change in meaning gets a new
+Requirement URI, published beside the old one for an announced period; a clarification keeps the
+URI, and relying services read the new revision from `GET /v1/evidence-definitions` and re-pin.
+When you cannot tell which kind of change it is, treat it as a change in meaning.
+
+{/* Evidence: crates/registry-evidencectl/src/check.rs, render_human(); crates/registry-evidencectl/src/fixtures.rs;
+    crates/registry-evidencectl/src/verify.rs; crates/registry-evidencectl/src/audit_view.rs, AuditCommand;
+    crates/registry-evidencectl/src/doctor.rs; crates/registry-evidence/src/authority.rs, history();
+    crates/registry-evidence/src/bundle.rs, canonical_projection and requirement_artifact_paths;
+    crates/registry-evidence/src/server.rs, DEFINITIONS_ROUTE. */}
+
+## Next
+
+- [Return a governed value](../../tutorials/return-a-governed-value/)

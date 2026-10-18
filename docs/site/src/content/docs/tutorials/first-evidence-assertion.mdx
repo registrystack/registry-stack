@@ -1,6 +1,6 @@
 ---
-title: Get your first Evidence Gateway assertion
-description: Run a normalized Evidence project, request one minimum-disclosure assertion, and verify it offline.
+title: Your first assertion
+description: Run the standalone Evidence project on your machine, ask whether one test person is an adult, and verify the signed answer.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,58 +13,66 @@ locale: en
 standards_referenced: []
 tutorial_test:
   toolset: evidence
-  checkout: true
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Run the reviewed standalone project that ships with the same Registry Stack release as your
-`evidence` and `evidencectl` binaries. You will start a synthetic source, request one adult-status
-assertion, verify it offline, and inspect the privacy-safe audit view.
+If other services need a yes-or-no answer from records your institution holds, start by seeing
+what Registry Evidence gives them. You run it over a synthetic source, ask whether one
+test person is an adult, and read `"value": true` from a verified response with no birth date.
 
 <QuickstartMeta
-  outcome="A signed adult-status assertion verified before its Boolean value is read."
-  time="About 15 minutes after the Evidence Gateway toolset is installed"
+  outcome="A verified adult-status assertion, with the source and Registry Evidence left running."
+  time="About 15 minutes, plus the first image download"
   level="Local development with synthetic data"
   prerequisites={[
-    'Matching evidence and evidencectl binaries on PATH',
-    'The Registry Stack source archive for the same release',
-    'Python 3',
-    'Docker',
-    'A shell with curl',
+    'Running Docker',
+    'Python 3, curl, tar, and jq',
+    'Free loopback ports 8081, 8082, and 18080',
   ]}
 />
 
-## Confirm the toolset
+## Install evidence and evidencectl
 
-Run both binaries from one release. `evidencectl` refuses to compile or start a project with an
-`evidence` binary from another version.
+`evidence` is Registry Evidence, the service that answers requests, and
+[`evidencectl`](/reference/cli/evidencectl/) the tool you check and drive a project with. The
+installer checks every download against the release's `SHA256SUMS`, then puts `evidence`,
+`evidencectl`, and `evidence-oid4vci` in `~/.local/bin` together; keep that directory on your
+`PATH`.
+
+{/* Evidence: crates/registry-evidencectl/install.sh, binaries, EVIDENCECTL_INSTALL_DIR, SHA256SUMS. */}
+
+```sh test-skip="downloads a release; the gate uses binaries built from this checkout"
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
+```
+
+`evidencectl` refuses an `evidence` binary from another release, so check that both report the
+same version:
 
 ```sh
 evidence --version
 evidencectl --version
 ```
 
-The two commands print the same version.
+```text test-expect
+evidence <version>
+evidencectl <version>
+```
 
-## Copy the normalized project
+## Get the example project
 
-From the root of the matching Registry Stack source archive, copy the standalone example into a
-writable tutorial directory. The copy keeps generated keys, client credentials, requests, and
-responses out of the source tree.
+Download the [Evidence example projects](../../examples/evidence-examples.tar.gz) into a fresh
+working directory as `evidence-examples.tar.gz`, then unpack the standalone project into a
+directory of its own, because the next commands write keys and responses into it:
 
 ```sh
 mkdir first-evidence-assertion
-cp -R products/evidence/examples/standalone first-evidence-assertion/adult-status
+tar -xzf evidence-examples.tar.gz -C first-evidence-assertion standalone
+mv first-evidence-assertion/standalone first-evidence-assertion/adult-status
 cd first-evidence-assertion/adult-status
 ```
 
-The project has one normalized `evidence.yaml`, named Functions under `functions/`, a disposable
-`local-target.yaml`, and complete local grants in `dev-authority.yaml`. The project file fixes
-assertion semantics and source behavior. The target binds local ports, keys, secrets, and source
-connections. The authority grants one complete request shape at a time.
-
-Generate disposable local material, then prove the project and its synthetic fixtures.
+Generate disposable owner-only keys and secrets:
 
 ```sh
 umask 077
@@ -72,21 +80,66 @@ evidencectl keygen signing --output-dir .generated/secrets
 evidencectl keygen secret --output .generated/secrets/audit-hmac-key
 evidencectl keygen secret --output .generated/secrets/subject-binding-hmac-key
 evidencectl keygen token --output .generated/secrets/synthetic-source-token
+```
+
+## Check and explain the project
+
+```sh
 evidencectl check . --target local-target.yaml
+```
+
+```text test-expect
+Evidence project check: complete
+Project: .
+Target: local-target.yaml
+0 errors, 0 warnings
+```
+
+`check` compiled `evidence.yaml` against `local-target.yaml`, which holds the local ports, keys,
+and source address. Ask what the project answers:
+
+```sh
+evidencectl explain . --target local-target.yaml
+```
+
+```text test-excerpt
+Definition adult-status: urn:example:requirement:adult-status:v1
+  Acquisition: {"source":"person-record","type":"single"}; derive: "derive-adult-status"
+  Outputs: {"adult":{"concept":"urn:example:concept:adult-status:v1","type":"boolean"}}; grant ceiling: {"actorKinds":["service"],"audiences":["urn:example:audience:standalone-app"],"authorities":["organizational"],"valueOrigins":["request"]}
+```
+
+`adult-status` is an [assertion definition](../../reference/glossary/#assertion-definition): one fixed question, named by its
+[Requirement URI](../../reference/glossary/#requirement). It reads the [source](../../reference/glossary/#source) `person-record`
+and may return one output, the Boolean `adult`. The report goes on to three other definitions.
+
+Run the fixture cases offline:
+
+```sh
 evidencectl test . --target local-target.yaml
+```
+
+```text test-excerpt
+PASS: fixtures/adult-status.yaml (10 cases)
+```
+
+Register the caller you will send the request as:
+
+```sh
 evidencectl access client add tutorial-client \
   --access-profile standalone-service \
   --generate-local-key
 ```
 
-`check` compiles the normalized project and target without contacting the source. `test` exercises
-the fixed source, extraction, derivation, output, and privacy boundaries with synthetic fixtures.
-The client command assigns an existing complete access profile; client registration does not create
-authority.
+```text test-expect
+Added client tutorial-client with access profile standalone-service.
+```
+
+{/* Evidence: crates/registry-evidencectl/src/{check,fixtures,access}.rs, render_human, run_fixtures,
+    add_client; products/evidence/examples/standalone/{evidence,local-target}.yaml, assertionDefinitions. */}
 
 ## Start the synthetic source
 
-In another terminal, run the bounded synthetic source from the project directory:
+In a second terminal, in the same directory, start the source that stands in for your system:
 
 ```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
 python3 serve-source.py \
@@ -94,14 +147,14 @@ python3 serve-source.py \
   --token-file .generated/secrets/synthetic-source-token
 ```
 
-Leave this terminal running. Its public health route exposes no record data. Every record route
-requires the bearer token referenced by the target. The source authenticates Evidence Gateway but
-does not decide who may request an assertion.
+It serves records only to the token `local-target.yaml` gives Evidence. Leave it running.
 
-## Start Evidence Gateway
+{/* Evidence: products/evidence/examples/standalone/serve-source.py, healthz. */}
 
-Use port `18080` because another local service may already own the default Evidence port. The
-issuer remains on the example's configured port `8082`.
+## Start Registry Evidence
+
+Port `18080` avoids a clash with any service on the default `8080`. `dev start` also runs a token issuer in
+Docker; the first start pulls its image.
 
 ```sh
 evidencectl dev start . \
@@ -115,13 +168,14 @@ Evidence ready at http://127.0.0.1:18080
 Issuer ready at http://127.0.0.1:8082
 ```
 
-`dev start` retains one generated package and authority snapshot. A later edit takes effect only in
-a new generation.
+If a port is in use, stop what holds it and start again.
+
+{/* Evidence: crates/registry-evidencectl/src/dev.rs, prepare_and_start. */}
 
 ## Prepare, send, and verify one request
 
-Preparation closes the request nonce, expected definition, signing keys, configuration revision,
-subject binding, and output form before the response exists. It sends nothing.
+`request prepare` gets a token from the issuer and sends nothing to Registry Evidence. It fixes
+what a valid answer must match before any response exists.
 
 ```sh
 evidencectl request prepare adult-status \
@@ -131,7 +185,13 @@ evidencectl request prepare adult-status \
   --name adult-status
 ```
 
-Send the prepared body with the owner-only authorization file:
+```text test-expect
+Prepared request: .evidence/requests/adult-status/request.json
+Prepared verification context: .evidence/requests/adult-status/verification.json
+Prepared authorization: .evidence/requests/adult-status/authorization.curl
+```
+
+Send it. `authorization.curl` holds the token; keep it out of logs.
 
 ```sh
 curl --silent --show-error --fail-with-body \
@@ -144,48 +204,49 @@ curl --silent --show-error --fail-with-body \
   --output adult-status.jws.json
 ```
 
-Verify the exact response offline before reading its value:
+Verify the response offline against what `request prepare` fixed:
 
 ```sh
-umask 077
-verification_at="$(python3 -c \
-  'from datetime import datetime, timezone; print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 evidencectl verify adult-status.jws.json \
   --context .evidence/requests/adult-status/verification.json \
   --output adult-status.verified.json
-printf '%s\n' "$verification_at" \
-  > .evidence/requests/adult-status/verified-at.txt
 ```
 
 ```text test-expect
 VERIFIED
 ```
 
-The verified assertion contains one Boolean adult-status output. The owner-only `verified-at.txt`
-records the start of that successful verification and is published only after success. The
-assertion excludes the birth date, residence, source token, and address canary used by the
-synthetic source.
-
-## Inspect the audit and clean up
-
-Stop the retained generation before reading its audit view:
+On failure `verify` writes nothing and exits non-zero. Read the answer:
 
 ```sh
-evidencectl dev stop .
-evidencectl audit show --last-operation
-evidencectl dev clean .
+jq '{supportsRequirement, supportedValues}' adult-status.verified.json
 ```
 
-The view names the requester pseudonym, definition, purpose, and released output. It does not print
-selector values, source facts, tokens, or the returned Boolean. `dev clean` removes generated runtime
-state while preserving the editable project, registered client, and request artifacts.
+```json test-expect
+{
+  "supportsRequirement": "urn:example:requirement:adult-status:v1",
+  "supportedValues": [
+    {
+      "providesValueFor": "urn:example:concept:adult-status:v1",
+      "value": true
+    }
+  ]
+}
+```
 
-The tutorial runner stops the synthetic source. If you started it by hand, press `Ctrl+C` in its
-terminal.
+This [assertion](../../reference/glossary/#assertion) answers the Requirement URI with one value
+for the `adult` output's concept. The source holds a birth date for record `adult`; the
+assertion carries only `true`.
+
+{/* Evidence: crates/registry-evidencectl/src/{request,dev,verify}.rs, prepare_local, obtain_issuer_token,
+    rename_noreplace; products/evidence/examples/standalone/serve-source.py, birth_date. */}
+
+## Leave it running
+
+The next tutorial continues with this project, with the source and Registry Evidence still
+running, so leave both as they are. When you are finished with them, run `evidencectl dev stop .`
+and then `evidencectl dev clean .` in this directory, and press `Ctrl+C` in the source's terminal.
 
 ## Next
 
-- [Return a governed value](../return-a-governed-value/)
-- [Request Evidence from your application](../request-evidence-from-an-application/)
-- [Explore SD-JWT VC locally](../request-evidence-as-sd-jwt-vc/)
-- [See Evidence Gateway refuse an unauthorized request](../refuse-unsafe-evidence-requests/)
+[Return a governed value](../return-a-governed-value/)

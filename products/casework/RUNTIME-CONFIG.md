@@ -116,14 +116,21 @@ all in seconds as Casework reads the URL (unlike libpq, which reads
 answering fails within seconds. The TCP user timeout applies on Linux only.
 
 `authentication.oidc` requires `issuer` and `audience`. The issuer is an exact
-`https` URL without credentials, query, or fragment; plain `http` is accepted only for
-an IPv4 loopback address under development loopback, for the issuer and for a
-`type: uri` key set alike. The audience is at most 512
-characters. `jwksSource` defaults to `type: discovery`. `type: uri` with `uri`
-fetches the key set from a fixed HTTPS address instead of the one discovery
-names. `type: static` with `documentRef` reads a pinned key set, which does no
-rotation of its own: rolling a key means replacing the referenced document and
-restarting Casework. The removed `jwksUri` key is refused with a diagnostic
+`https` URL without credentials, query, or fragment. Its declared origin may resolve to a
+private address, and a discovery document may name a same-origin private `jwks_uri`.
+A cross-origin private `jwks_uri` named by discovery is refused, and cloud metadata and
+link-local addresses are always refused.
+Plain `http` is accepted on IPv4 and IPv6 loopback when `listener.tlsTermination` is
+`development-loopback`. Set `allowInsecureHttp: true` beside `issuer` to permit it
+elsewhere; startup logs a warning while that setting is active. It covers the issuer's
+origin and a `type: uri` key set, never a cross-origin `jwks_uri` named by discovery, which
+must use `https`.
+The audience is at most 512 characters. `jwksSource` defaults to `type: discovery`.
+`type: uri` with `uri` fetches the key set from a fixed address instead of the one
+discovery names; as an endpoint you declare, it inherits the declared issuer's allowance and
+may resolve to a private or loopback address on any origin. `type: static` with `documentRef` reads a
+pinned key set, which does no rotation of its own. The removed `jwksUri` key is refused
+with a diagnostic
 naming `jwksSource` `type: uri` as its replacement. `allowedClients` lists the
 client identifiers whose tokens the runtime admits, matched against the token's
 `azp` claim or, when it has none, its `client_id` claim. Every file writes the
@@ -141,6 +148,20 @@ override. `humanIdentity` defaults to claim
 Principal selection belongs exclusively to each authored
 `accessProfiles.PROFILE_ID.principalClaim` in `casework.yaml`. The removed runtime field
 `authentication.oidc.principalClaim` is refused with that replacement.
+
+`revokedKeyIds` is an optional list of at most 128 distinct nonempty key identifiers.
+Casework refuses a token whose protected `kid` appears in the list even while the key
+remains in the issuer's key set. The list refuses those keys in Casework only; it does not
+revoke them at the issuer. `maximumTokenLifetimeSeconds` optionally limits the
+interval from `iat` to `exp` to 1 through 7200 seconds. Omitting either setting preserves
+the existing acceptance rule.
+
+During key rotation, publish the replacement key first and confirm that Casework accepts a
+test token signed by it. Add the retiring key identifier to `revokedKeyIds` when it must stop
+authorizing immediately, apply the runtime configuration, and confirm that a token signed by
+the retired key is refused. Remove the old public key from the issuer after all services have
+applied the change. A static `jwksSource` also requires atomically replacing its referenced
+document and restarting Casework.
 
 `audit` selects where Casework writes its audit entries and the key that
 pseudonymizes the principals and identifiers they name. `audit.hashKeyRef` is

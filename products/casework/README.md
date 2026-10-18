@@ -365,3 +365,16 @@ transactions, HTTP, grants, and the installed local-client journey. Its final
 journey needs a running Docker daemon, Node, Python, and the documented native
 build prerequisites. Focused product contract checks run with
 `python3 products/casework/scripts/test_product_contracts.py`.
+
+The cross-product task-grant journey is an ignored Rust test owned by the Casework
+maintainer and the `casework-postgres` CI job. CI builds the Scheduling probe and runs the
+exact ignored test against its disposable database and stock ThunderID. The journey loads
+Evidence through its runtime configuration and crosses into Scheduling through its maintained
+probe. To reproduce it locally, build the probe, export the inputs named by the test's ignore
+reason, then run:
+
+```sh
+cargo test --locked -p registry-casework --features postgres-test --lib \
+  approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid \
+  -- --ignored
+```

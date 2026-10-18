@@ -15,9 +15,8 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use registry_evidence::{runtime::EvidenceRuntime, server as evidence_server};
-use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_platform_config::{write_package, SecretProvider, SecretResolver};
 use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use registry_thunderid_tooling::{container::Session, description::*, local, render};
 use std::{
     collections::BTreeMap,
@@ -27,6 +26,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Arc,
+    time::{Duration, Instant},
 };
 use wiremock::{
     matchers::{method, path},
@@ -41,6 +41,8 @@ const EVIDENCE_AUDIENCE: &str = "https://relying.invalid/procedure";
 const EVIDENCE_TAG: &str = "fixture-agency";
 const AUTHORITY: &str = "https://casework.example";
 const SCHEDULING_AUTH_PROBE_ENV: &str = "SCHEDULING_AUTH_PROBE_BIN";
+const OIDC_NETWORK_PROBE_ENV: &str = "BREG_OIDC_NETWORK_PROBE_BIN";
+const OIDC_NETWORK_PROBE_IMAGE_ENV: &str = "BREG_OIDC_NETWORK_PROBE_IMAGE";
 const EVIDENCE_SIGNING_KEY: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
 
 /// Synthetic purpose-bound provider for the three native grant resources.
@@ -112,6 +114,24 @@ fn key(kid: &str) -> registry_platform_crypto::PrivateJwk {
     key.alg = Some("RS256".into());
     key.kid = Some(kid.into());
     key
+}
+fn private_key_value(key: &registry_platform_crypto::PrivateJwk) -> Value {
+    json!({
+        "kty": key.kty,
+        "alg": key.alg,
+        "kid": key.kid,
+        "crv": key.crv,
+        "x": key.x,
+        "y": key.y,
+        "n": key.n,
+        "e": key.e,
+        "d": key.d,
+        "p": key.p,
+        "q": key.q,
+        "dp": key.dp,
+        "dq": key.dq,
+        "qi": key.qi,
+    })
 }
 fn client(
     id: &str,
@@ -370,11 +390,11 @@ fn rewrite_evidence_fixture(
         ("algorithms: [ES256]", "algorithms: [RS256]"),
         (
             "allowedClients: unrestricted",
-            "allowedClients: [evidence-task-agent]",
+            "allowedClients: [evidence-task-agent, other-agent]",
         ),
         (
             "  statutory-caseworker-v1:\n    kind: statutory",
-            "  casework:\n    requesterClients: [evidence-task-agent]\n    grantSourceIssuer: https://casework.example\n    kind: statutory",
+            "  casework:\n    requesterClients: [evidence-task-agent, other-agent]\n    grantSourceIssuer: https://casework.example\n    kind: statutory",
         ),
         (
             "        subjects: [{role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}]",
@@ -466,8 +486,10 @@ fn start_issuer(
     human: &registry_platform_crypto::PrivateJwk,
     agent: &registry_platform_crypto::PrivateJwk,
     evidence_agent: &registry_platform_crypto::PrivateJwk,
+    other_agent: &registry_platform_crypto::PrivateJwk,
     status: &registry_platform_crypto::PrivateJwk,
     seed: &registry_platform_crypto::PrivateJwk,
+    other_seed: &registry_platform_crypto::PrivateJwk,
 ) -> Issuer {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -497,6 +519,12 @@ fn start_issuer(
                 &["casework:grants:assert"],
             ),
             client(
+                "other-agent",
+                other_agent,
+                Some("agent"),
+                &["casework:grants:assert"],
+            ),
+            client(
                 "breg-status",
                 status,
                 Some("service"),
@@ -510,6 +538,16 @@ fn start_issuer(
         ("tenant_claim".into(), "tenant-a".into()),
         ("registry_purpose".into(), "maintain".into()),
     ]);
+    let mut other_seed_client = client(
+        "other-seed-client",
+        other_seed,
+        Some("service"),
+        &["records:get"],
+    );
+    other_seed_client.claims.extend([
+        ("tenant_claim".into(), "tenant-b".into()),
+        ("registry_purpose".into(), "maintain".into()),
+    ]);
     let target = local::local_description(
         SessionIdentity {
             label: session.label.clone(),
@@ -518,7 +556,7 @@ fn start_issuer(
         port,
         root.into(),
         BREG_RESOURCE.into(),
-        vec![seed_client],
+        vec![seed_client, other_seed_client],
     )
     .unwrap();
     description.resource_servers.extend(target.resource_servers);
@@ -580,7 +618,7 @@ fn start_issuer(
         .find(|client| client.client_id == "evidence-task-agent")
         .unwrap();
     evidence_client.token_exchange = Some(TokenExchangeClient {
-        assertion_resource_server_id: authority_server,
+        assertion_resource_server_id: authority_server.clone(),
         assertion_scope: "casework:grants:assert".into(),
         ordinary_resource_permissions: Vec::new(),
     });
@@ -597,6 +635,16 @@ fn start_issuer(
     evidence_client
         .token_attributes
         .extend(["evidence_tags".into(), "evidence_audience".into()]);
+    description
+        .machine_clients
+        .iter_mut()
+        .find(|client| client.client_id == "other-agent")
+        .unwrap()
+        .token_exchange = Some(TokenExchangeClient {
+        assertion_resource_server_id: authority_server,
+        assertion_scope: "casework:grants:assert".into(),
+        ordinary_resource_permissions: Vec::new(),
+    });
     description
         .schema_attributes
         .extend(["evidence_tags".into(), "evidence_audience".into()]);
@@ -627,6 +675,245 @@ fn start_issuer(
     issuer.jwks = local::start(&issuer.session(), Path::new("docker"), &mut || false).unwrap();
     issuer
 }
+
+struct DockerNetwork {
+    name: String,
+    container: String,
+}
+
+impl Drop for DockerNetwork {
+    fn drop(&mut self) {
+        let _ = Command::new("docker")
+            .args(["rm", "-f", &self.container])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let _ = Command::new("docker")
+            .args(["network", "rm", &self.name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+#[ignore = "requires Docker plus absolute BREG_OIDC_NETWORK_PROBE_BIN and a BREG_OIDC_NETWORK_PROBE_IMAGE containing its dynamic runtime"]
+#[test]
+fn configured_private_thunderid_is_discovered_on_an_owned_docker_network() {
+    let probe = PathBuf::from(
+        std::env::var_os(OIDC_NETWORK_PROBE_ENV)
+            .expect("the Linux BReg OIDC runtime-config probe is required"),
+    );
+    assert!(probe.is_absolute() && probe.is_file());
+    let probe_image = std::env::var(OIDC_NETWORK_PROBE_IMAGE_ENV)
+        .expect("a pinned local image for running the Linux probe is required");
+    assert!(!probe_image.trim().is_empty());
+
+    let root = canonical_tempdir();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let issuer_key = key("private-network-client");
+    let description = local::local_description(
+        SessionIdentity {
+            label: "casework-private-network-proof".into(),
+            id: Uuid::new_v4().to_string(),
+        },
+        port,
+        root.path().join("issuer"),
+        "urn:private-network-proof".into(),
+        vec![client(
+            "private-network-client",
+            &issuer_key,
+            Some("service"),
+            &["records:get"],
+        )],
+    )
+    .unwrap();
+    fs::create_dir_all(&description.state_root).unwrap();
+    for name in ["direct_auth_secret", "throwaway-bootstrap-password"] {
+        let path = description.state_root.join("secrets").join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, Uuid::new_v4().to_string()).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    render::render(&description).unwrap();
+    let pin = registry_thunderid_tooling::version::ThunderIdPin::load().unwrap();
+    let issuer = Issuer {
+        description,
+        image: pin.image,
+        jwks: Value::Null,
+    };
+    local::start(&issuer.session(), Path::new("docker"), &mut || false).unwrap();
+    local::stop(&issuer.session(), Path::new("docker")).unwrap();
+
+    let deployment_path = issuer.description.state_root.join("deployment.yaml");
+    let loopback_origin = format!("http://127.0.0.1:{port}");
+    let mut deployment = fs::read_to_string(&deployment_path).unwrap();
+    assert_eq!(deployment.matches(&loopback_origin).count(), 1);
+    deployment = deployment.replace(&loopback_origin, "http://thunderid:8090");
+    let loopback_passkey_origin = format!("\"127.0.0.1:{port}\"");
+    assert_eq!(deployment.matches(&loopback_passkey_origin).count(), 1);
+    deployment = deployment.replace(&loopback_passkey_origin, "\"thunderid:8090\"");
+    fs::write(&deployment_path, deployment).unwrap();
+
+    let suffix = Uuid::new_v4().simple().to_string();
+    let network_name = format!("registry-private-issuer-{}", &suffix[..12]);
+    let container_name = format!("registry-private-issuer-{}", &suffix[12..24]);
+    // Some developer daemons have consumed every automatic address-pool
+    // subnet. Keep this proof independent of that ambient state by choosing
+    // an explicit, test-owned RFC 1918 subnet and trying the bounded set until
+    // Docker accepts a non-overlapping one.
+    let subnet_seed = u8::from_str_radix(&suffix[..2], 16).unwrap();
+    let network_created = (0..16).any(|attempt| {
+        let third_octet = 240 + (subnet_seed.wrapping_add(attempt) % 16);
+        let subnet = format!("172.30.{third_octet}.0/24");
+        Command::new("docker")
+            .args([
+                "network",
+                "create",
+                "--driver",
+                "bridge",
+                "--subnet",
+                &subnet,
+                "--label",
+                "registry.stack.test=private-issuer",
+                &network_name,
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    });
+    assert!(
+        network_created,
+        "no owned private Docker subnet was available"
+    );
+    let _network = DockerNetwork {
+        name: network_name.clone(),
+        container: container_name.clone(),
+    };
+    let user = format!(
+        "{}:{}",
+        String::from_utf8(Command::new("id").arg("-u").output().unwrap().stdout)
+            .unwrap()
+            .trim(),
+        String::from_utf8(Command::new("id").arg("-g").output().unwrap().stdout)
+            .unwrap()
+            .trim()
+    );
+    let state = &issuer.description.state_root;
+    let mut run = Command::new("docker");
+    run.args([
+        "run",
+        "-d",
+        "--user",
+        &user,
+        "--name",
+        &container_name,
+        "--network",
+        &network_name,
+        "--network-alias",
+        "thunderid",
+        "--label",
+        "registry.stack.test=private-issuer",
+    ]);
+    for (host, container) in [
+        (state.join("database"), "/opt/thunderid/database"),
+        (state.join("certs"), "/opt/thunderid/config/certs"),
+        (state.join("secrets"), "/opt/thunderid/config/secrets"),
+        (
+            state.join("deployment.yaml"),
+            "/opt/thunderid/deployment.yaml",
+        ),
+        (state.join("resources"), "/opt/thunderid/config/resources"),
+    ] {
+        run.args([
+            "--mount",
+            &format!("type=bind,src={},dst={container}", host.display()),
+        ]);
+    }
+    assert!(run
+        .arg(&issuer.image)
+        .arg("./start.sh")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success());
+
+    let probe_root = root.path().join("probe");
+    fs::create_dir_all(probe_root.join("secrets")).unwrap();
+    fs::create_dir_all(probe_root.join("package")).unwrap();
+    fs::set_permissions(
+        probe_root.join("secrets"),
+        fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    let runtime_path = probe_root.join("runtime.json");
+    fs::write(
+        &runtime_path,
+        serde_json::to_vec(&json!({
+            "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1",
+            "kind":"BRegRuntimeConfig",
+            "listener":{"bind":"127.0.0.1:0"},
+            "identity":{"environment":"test","instanceId":"private-issuer-proof","databaseId":"private-issuer-proof","databaseInitializationEnvironment":"test"},
+            "secretProviders":{"file":{"root":"/probe/secrets"}},
+            "database":{"runtimeUrlRef":"secret:file/runtime-database-url","migrationUrlRef":"secret:file/migration-database-url","pool":{"maximumConnections":1,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},"roles":{"migration":"registry_migration","runtime":"registry_runtime"}},
+            "package":{"root":"/probe/package"},
+            "authentication":{"oidc":{"issuer":"http://thunderid:8090","allowInsecureHttp":true,"audience":"urn:private-network-proof","allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":["private-network-client"],"maximumTokenLifetimeSeconds":3600,"leewayMilliseconds":60000,"jwksSource":{"type":"discovery"}},"authorityClaims":{"principal":"sub","purpose":"registry_purpose"}},
+            "audit":{"hashKeyRef":"secret:file/audit-key","path":"/probe/audit.jsonl"},
+            "cursor":{"secretRef":"secret:file/cursor-key"}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let output = Command::new("docker")
+            .args([
+                "run",
+                "--rm",
+                "--user",
+                &user,
+                "--network",
+                &network_name,
+                "--mount",
+                &format!("type=bind,src={},dst=/probe,readonly", probe_root.display()),
+                "--mount",
+                &format!(
+                    "type=bind,src={},dst=/usr/local/bin/oidc-probe,readonly",
+                    probe.display()
+                ),
+                "--entrypoint",
+                "/usr/local/bin/oidc-probe",
+                &probe_image,
+                "/probe/runtime.json",
+            ])
+            .output()
+            .unwrap();
+        if output.status.success() {
+            assert_eq!(output.stdout, b"allowed\n");
+            assert!(output.stderr.is_empty());
+            break;
+        }
+        let last_probe_error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            Command::new("docker")
+                .args(["inspect", "--format", "{{.State.Running}}", &container_name])
+                .output()
+                .is_ok_and(|state| state.status.success() && state.stdout == b"true\n"),
+            "the owned ThunderID container stopped before configured discovery"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "configured discovery did not reach the owned private issuer: {last_probe_error}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
 fn provider(
     issuer: &str,
     client: &str,
@@ -646,6 +933,23 @@ fn provider(
     )
     .unwrap()
 }
+
+async fn shorten_grant_deadline(fixture: &Fixture, grant_id: &str, seconds: i64) -> u64 {
+    let grant_id = Uuid::parse_str(grant_id).unwrap();
+    let row = fixture
+        .admin
+        .query_one(
+            "WITH deadline AS (SELECT floor(extract(epoch FROM clock_timestamp()))::bigint+$2 AS value) \
+             UPDATE casework_review_task_grants SET \
+               expires_at=to_timestamp((SELECT value FROM deadline)), \
+               record=jsonb_set(record,'{expiresAt}',to_jsonb((SELECT value FROM deadline))) \
+             WHERE grant_id=$1 RETURNING record",
+            &[&grant_id, &seconds],
+        )
+        .await
+        .unwrap();
+    row.get::<_, Value>(0)["expiresAt"].as_u64().unwrap()
+}
 fn bearer(token: &registry_platform_httputil::BearerToken) -> String {
     token
         .authorization_header_value()
@@ -655,6 +959,64 @@ fn bearer(token: &registry_platform_httputil::BearerToken) -> String {
         .unwrap()
         .to_owned()
 }
+
+fn write_task_connection(
+    root: &Path,
+    name: &str,
+    client_id: &str,
+    key: &registry_platform_crypto::PrivateJwk,
+    resource: &str,
+    scopes: &[&str],
+    casework_port: u16,
+    issuer_url: &str,
+) -> PathBuf {
+    let key_name = format!("{name}-key.json");
+    let key_file = root.join(&key_name);
+    std::fs::write(
+        &key_file,
+        serde_json::to_vec(&private_key_value(key)).unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let mut clients = serde_json::Map::new();
+    clients.insert(
+        client_id.to_owned(),
+        json!({
+            "assertionKeyRef": format!("secret:file/{key_name}"),
+            "resource": resource,
+            "scopes": scopes,
+        }),
+    );
+    let connection_file = root.join(format!("{name}-connection.yaml"));
+    std::fs::write(
+        &connection_file,
+        serde_json::to_vec(&json!({
+            "apiVersion": registry_thunderid_tooling::task_connection::API_VERSION,
+            "kind": registry_thunderid_tooling::task_connection::KIND,
+            "caseworkUrl": format!("http://127.0.0.1:{casework_port}"),
+            "tokenEndpoint": format!("{issuer_url}/oauth2/token"),
+            "clientAssertionAudience": issuer_url,
+            "bootstrapResource": CASEWORK_RESOURCE,
+            "secretProviders": {"file": {"root": root}},
+            "clients": clients,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&connection_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    connection_file
+}
+
+fn acquired_bearer(header_file: &Path) -> String {
+    let header = zeroize::Zeroizing::new(std::fs::read_to_string(header_file).unwrap());
+    header
+        .trim()
+        .strip_prefix("Authorization: Bearer ")
+        .unwrap()
+        .to_owned()
+}
+
 fn payload(token: &str) -> Value {
     serde_json::from_slice(
         &URL_SAFE_NO_PAD
@@ -716,7 +1078,11 @@ struct Fixture {
     admin: tokio_postgres::Client,
     schema: String,
 }
-async fn fixture(issuer: &Issuer, key: registry_platform_crypto::PrivateJwk) -> Fixture {
+async fn fixture(
+    root: &Path,
+    issuer: &Issuer,
+    key: registry_platform_crypto::PrivateJwk,
+) -> Fixture {
     let base = std::env::var("CASEWORK_ASSIGNMENT_TEST_DATABASE_URL")
         .expect("disposable Casework database required");
     let schema = format!("native_task_{}", Uuid::new_v4().simple());
@@ -774,20 +1140,71 @@ async fn fixture(issuer: &Issuer, key: registry_platform_crypto::PrivateJwk) -> 
         .clone();
     let breg: Value = serde_json::from_str(resource::PROJECT).unwrap();
     let operations = breg["accessProfiles"][1]["permissions"]["actions"][0]["operations"].clone();
-    let template:TaskTemplate=serde_json::from_value(json!({"id":"draft","version":"1","label":"Prepare correction draft","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","reviewPolicies":["external-review"],"agent":{"issuer":issuer.url(),"subject":agent},"client":"task-agent","resource":BREG_RESOURCE,"purpose":"review","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"action:file-correction","operations":operations}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900})).unwrap();
+    let template:TaskTemplate=serde_json::from_value(json!({"id":"draft","version":"1","label":"Prepare correction draft","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","reviewPolicies":["external-review"],"agent":{"issuer":issuer.url(),"subject":agent},"client":"task-agent","resource":BREG_RESOURCE,"purpose":"review","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"sites","operations":["get"]},{"collection":"correction-requests","operations":["get"]},{"collection":"action:file-correction","operations":operations}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900})).unwrap();
     let evidence_template:TaskTemplate=serde_json::from_value(json!({"id":"evidence-check","version":"1","label":"Check adult status","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","reviewPolicies":["external-review"],"agent":{"issuer":issuer.url(),"subject":evidence_agent},"client":"evidence-task-agent","resource":EVIDENCE_RESOURCE,"purpose":"fixture-eligibility","scopes":["evidence:invoke"],"bounds":{"type":"evidence","requirement":EVIDENCE_REQUIREMENT},"evidenceContext":{"requesterTags":[EVIDENCE_TAG],"audience":EVIDENCE_AUDIENCE},"subjects":{"birth_date":"birth_date","family_name":"family_name","given_name":"given_name"},"lifetimeSeconds":900})).unwrap();
     let scheduling_template:TaskTemplate=serde_json::from_value(json!({"id":"schedule-update","version":"1","label":"Book a registry update","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","reviewPolicies":["external-review"],"agent":{"issuer":issuer.url(),"subject":agent},"client":"task-agent","resource":SCHEDULING_RESOURCE,"purpose":"schedule-registry-update","scopes":["scheduling:commit"],"bounds":{"type":"scheduling","permissions":[{"service":"registry-update","location":"bangkok-counter","actions":["appointment.create"]}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900})).unwrap();
-    let context_schema = json!({"type":"object","additionalProperties":false,"properties":{"tenant":{"type":"string"},"birth_date":{"type":"string"},"family_name":{"type":"string"},"given_name":{"type":"string"}}});
+    let mut context_schema = json!({
+        "$id": "urn:registry:breg:review-context:source:synthetic-request:synthetic-review-context",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type":"object",
+        "additionalProperties":false,
+        "properties":{"tenant":{"type":"string"},"birth_date":{"type":"string"},"family_name":{"type":"string"},"given_name":{"type":"string"}},
+        "x-registry-review-context": {
+            "registryId": "native-task-source",
+            "sourceNamespace": "source",
+            "actionId": "synthetic-request",
+            "contextId": "synthetic-review-context"
+        }
+    });
+    let context_revision = ContentDigest::for_bytes(
+        &registry_platform_canonical_json::canonicalize_json(&context_schema).unwrap(),
+    );
+    context_schema["x-registry-definition-revision"] = json!(context_revision.as_str());
+    let context_schema_bytes = serde_json::to_string(&context_schema).unwrap();
     let context_contract = ReviewContextContract {
-        id: "synthetic-review-context".into(),
-        revision: ContentDigest::for_bytes(b"synthetic-context-revision"),
-        schema_digest: ContentDigest::for_bytes(
-            &registry_platform_canonical_json::canonicalize_json(&context_schema).unwrap(),
-        ),
+        id: context_schema["$id"].as_str().unwrap().into(),
+        revision: context_revision,
+        schema_digest: ContentDigest::for_bytes(context_schema_bytes.as_bytes()),
     };
-    let mut project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"project":{"id":"native-tasks","version":"1"},"accessProfiles":{"staff":{"principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"},"supervisor":{"principalClaim":"sub","requiredScopes":["casework:supervisor"],"role":"supervisor"},"administrator":{"principalClaim":"sub","requiredScopes":["casework:admin"],"role":"administrator"},"producer":{"principalClaim":"sub","requiredScopes":["casework:reviews:request"],"role":"requester"}},"queues":{"review":{"label":"Review"}},"teams":{"team":{"label":"Review team","serves":["review"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}},"contextProviders":{"source":{"deploymentRef":"source","sourceNamespace":"source","capabilities":["human-display","service-status","task-grant-context"],"serviceProfiles":{"service-status":"status-reader","task-grant-context":"task-reader"}}},"reviewPolicies":{"external-review":{"version":"1","purpose":"approval","context":{"mode":"current-source","provider":"source","contract":context_contract},"stages":[{"id":"review","queue":"review","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true,"excludePreviousStageReviewers":false}],"retention":{"terminalRetentionDays":30,"accountabilityRetentionDays":90},"displaySchema":context_schema,"outcomes":{"approved":{"label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"}}}},"trustedProducers":{"producer":{"profile":"producer","issuer":issuer.url(),"subject":"native-producer","trustedInitiatorIssuer":issuer.url(),"sourceNamespaces":["source"],"reviewPolicies":["external-review"],"retention":{"receiptRetentionDays":7}}}})).unwrap();
+    let context_export = registry_casework_breg::BregContextExport {
+        api_version: registry_casework_breg::DESCRIPTION_API_VERSION.into(),
+        kind: registry_casework_breg::DESCRIPTION_KIND.into(),
+        source_namespace: "source".into(),
+        action_id: "synthetic-request".into(),
+        context_id: "synthetic-review-context".into(),
+        contract: context_contract.clone(),
+        schema: context_schema.clone(),
+        schema_bytes: context_schema_bytes,
+    };
+    context_export.check().unwrap();
+    let context_export_path = "context-providers/source.json";
+    let mut project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"project":{"id":"native-tasks","version":"1"},"accessProfiles":{"staff":{"principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"},"supervisor":{"principalClaim":"sub","requiredScopes":["casework:supervisor"],"role":"supervisor"},"administrator":{"principalClaim":"sub","requiredScopes":["casework:admin"],"role":"administrator"},"producer":{"principalClaim":"sub","requiredScopes":["casework:reviews:request"],"role":"requester"}},"queues":{"review":{"label":"Review"}},"teams":{"team":{"label":"Review team","serves":["review"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]}},"contextProviders":{"source":{"deploymentRef":"source","sourceNamespace":"source","description":context_export_path,"capabilities":["human-display","service-status","task-grant-context"],"serviceProfiles":{"service-status":"status-reader","task-grant-context":"task-reader"}}},"reviewPolicies":{"external-review":{"version":"1","purpose":"approval","context":{"mode":"current-source","provider":"source","contract":context_contract},"stages":[{"id":"review","queue":"review","decidingProfiles":["staff"],"requiredApprovals":1,"excludeInitiator":true,"excludePreviousStageReviewers":false}],"retention":{"terminalRetentionDays":30,"accountabilityRetentionDays":90},"displaySchema":context_schema,"outcomes":{"approved":{"label":"Approve","settlement":"approved","reasonRequired":false,"publicReason":"optional"}}}},"trustedProducers":{"producer":{"profile":"producer","issuer":issuer.url(),"subject":"native-producer","trustedInitiatorIssuer":issuer.url(),"sourceNamespaces":["source"],"reviewPolicies":["external-review"],"retention":{"receiptRetentionDays":7}}}})).unwrap();
     project.task_templates = vec![template, evidence_template, scheduling_template];
     project.check().unwrap();
+
+    let runtime_root = root.join("casework-runtime");
+    let secret_root = runtime_root.join("secrets");
+    let package_root = runtime_root.join("package");
+    fs::create_dir_all(&secret_root).unwrap();
+    fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700)).unwrap();
+    write_package(
+        &package_root,
+        &BTreeMap::from([
+            (
+                crate::POLICY_FILE.to_owned(),
+                serde_norway::to_string(&project).unwrap().into_bytes(),
+            ),
+            (
+                context_export_path.to_owned(),
+                serde_json::to_vec(&context_export).unwrap(),
+            ),
+        ]),
+        None,
+        &crate::package_limits(),
+        crate::PACKAGE_COMMAND,
+    )
+    .unwrap();
+
     store
         .activate_task_templates(&project.task_templates)
         .await
@@ -806,16 +1223,50 @@ async fn fixture(issuer: &Issuer, key: registry_platform_crypto::PrivateJwk) -> 
     let snapshot = project.compile_policy("external-review").unwrap();
     admin.execute("INSERT INTO casework_review_requests(request_id,producer_id,producer_issuer,producer_subject,source_namespace,subject_source,subject_type,subject_id,subject_version,subject_digest,requester_reference,initiator_issuer,initiator_subject,context_strategy,context,policy_id,policy_version,policy_digest,policy_snapshot,submission_digest,lifecycle,active_stage_index,revision,created_at,updated_at) VALUES($1,'producer',$2,'producer','source','source','request','synthetic-request','proposal-1',$3,'native-review',$2,'initiator','current-source',$4,'external-review','1',$5,$6,$7,'reviewing',0,1,now(),now())",&[&review_request,&issuer.url(),&ContentDigest::for_bytes(b"synthetic-request").to_string(),&json!({"reference":"source:request:synthetic-request"}),&snapshot.identity.digest.to_string(),&serde_json::to_value(&snapshot).unwrap(),&ContentDigest::for_bytes(b"submission").to_string()]).await.unwrap();
     admin.execute("INSERT INTO casework_review_tasks(task_id,request_id,stage_index,stage_id,slot,queue_id,state,holder_issuer,holder_subject,assignment_kind,assignment_owner_issuer,assignment_owner_subject,revision,created_at,updated_at) VALUES($1,$2,0,'review',0,'review','claimed',$3,$4,'claim',$3,$4,1,now(),now())",&[&review_task,&review_request,&issuer.url(),&human]).await.unwrap();
-    let authority = TaskAuthority {
-        config: crate::TaskAuthorityConfig {
-            issuer: AUTHORITY.into(),
-            exchange_audience: issuer.url(),
-            signing_key_ref: "secret:env/UNUSED_IN_MEMORY_KEY".into(),
-            status_clients: BTreeMap::from([("breg-status".into(), BREG_RESOURCE.into())]),
-        },
-        key,
-        identifiers: registry_platform_audit::AuditKeyHasher::unkeyed_dev_only(),
-    };
+    write_secret(
+        &secret_root,
+        "task-authority-key",
+        &serde_json::to_string(&private_key_value(&key)).unwrap(),
+    );
+    let runtime_path = runtime_root.join("runtime.json");
+    fs::write(
+        &runtime_path,
+        serde_json::to_vec(&json!({
+            "apiVersion": crate::RUNTIME_CONFIG_API_VERSION,
+            "kind": crate::RUNTIME_CONFIG_KIND,
+            "identity": {"databaseId": "native-task-grant"},
+            "package": {"root": package_root},
+            "listener": {"bind": "127.0.0.1:0", "tlsTermination": "development-loopback", "networkExposure": "private-address"},
+            "secretProviders": {"file": {"root": secret_root}},
+            "database": {"runtimeUrlRef": "secret:file/runtime-url", "migrationUrlRef": "secret:file/migration-url"},
+            "authentication": {"oidc": {
+                "issuer": issuer.url(),
+                "audience": CASEWORK_RESOURCE,
+                "allowedClients": ["human-client", "task-agent", "evidence-task-agent", "breg-status"],
+                "scopeClaim": "scope",
+                "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}
+            }},
+            "audit": {"path": runtime_root.join("audit.jsonl"), "hashKeyRef": "secret:file/audit-key"},
+            "taskAuthority": {
+                "issuer": AUTHORITY,
+                "exchangeAudience": issuer.url(),
+                "signingKeyRef": "secret:file/task-authority-key",
+                "statusClients": {"breg-status": BREG_RESOURCE}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let runtime = crate::RuntimeConfig::load(&runtime_path).unwrap();
+    let project = runtime.load_package().unwrap().project().clone();
+    let secrets = crate::runtime::secret_resolver(&runtime).unwrap();
+    let authority = TaskAuthority::load(
+        runtime.task_authority.as_ref().unwrap(),
+        &secrets,
+        registry_platform_audit::AuditKeyHasher::unkeyed_dev_only(),
+    )
+    .unwrap();
     let service = crate::CaseworkService::new(
         store,
         project.clone(),
@@ -823,27 +1274,12 @@ async fn fixture(issuer: &Issuer, key: registry_platform_crypto::PrivateJwk) -> 
     )
     .unwrap()
     .with_task_authority(Some(authority));
-    let verifier = TokenVerifierConfig::access_token_profile(
-        issuer.url(),
-        vec![CASEWORK_RESOURCE.into()],
-        vec![jsonwebtoken::Algorithm::RS256],
-        vec!["at+jwt".into()],
-    )
-    .with_scope_claim("scope")
-    .with_allowed_clients(vec![
-        "human-client".into(),
-        "task-agent".into(),
-        "evidence-task-agent".into(),
-        "breg-status".into(),
-    ]);
+    let (verifier, keys) = runtime.oidc_verifier(&secrets).await.unwrap();
     let auth = crate::CaseworkAuthenticator::new(
         &project,
         verifier,
-        Arc::new(JwksFetcher::new_static(
-            serde_json::from_value(issuer.jwks.clone()).unwrap(),
-            JwksFetcherConfig::defaults(),
-        )),
-        crate::HumanIdentityConfig::default(),
+        keys,
+        runtime.authentication.oidc.human_identity.clone(),
     );
     Fixture {
         app: crate::router(crate::HttpState {
@@ -899,26 +1335,39 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
     let root = canonical_tempdir();
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let casework_port = listener.local_addr().unwrap().port();
-    let (human_key, agent_key, evidence_agent_key, status_key, seed_key) = (
+    let (
+        human_key,
+        agent_key,
+        evidence_agent_key,
+        other_agent_key,
+        status_key,
+        seed_key,
+        other_seed_key,
+    ) = (
         key("human"),
         key("agent"),
         key("evidence-agent"),
+        key("other-agent"),
         key("status"),
         key("seed"),
+        key("other-seed"),
     );
-    let (h, a, e, s, d) = (
+    let (h, a, e, o, s, d, x) = (
         human_key.clone(),
         agent_key.clone(),
         evidence_agent_key.clone(),
+        other_agent_key.clone(),
         status_key.clone(),
         seed_key.clone(),
+        other_seed_key.clone(),
     );
     let path = root.path().to_path_buf();
-    let issuer =
-        tokio::task::spawn_blocking(move || start_issuer(&path, casework_port, &h, &a, &e, &s, &d))
-            .await
-            .unwrap();
-    let f = fixture(&issuer, key("casework-task-authority")).await;
+    let issuer = tokio::task::spawn_blocking(move || {
+        start_issuer(&path, casework_port, &h, &a, &e, &o, &s, &d, &x)
+    })
+    .await
+    .unwrap();
+    let f = fixture(root.path(), &issuer, key("casework-task-authority")).await;
     let serving = f.app.clone();
     let server = tokio::spawn(async move {
         axum::serve(listener, serving).await.unwrap();
@@ -1009,20 +1458,16 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         BREG_RESOURCE,
         "records:get",
     );
-    let agent_key_file = root.path().join("agent-key.json");
-    std::fs::write(&agent_key_file, serde_json::to_vec(&json!({"kty":agent_key.kty,"alg":agent_key.alg,"kid":agent_key.kid,"n":agent_key.n,"e":agent_key.e,"d":agent_key.d,"p":agent_key.p,"q":agent_key.q,"dp":agent_key.dp,"dq":agent_key.dq,"qi":agent_key.qi})).unwrap()).unwrap();
-    std::fs::set_permissions(&agent_key_file, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let connection_file = root.path().join("task-connection.yaml");
-    std::fs::write(&connection_file, serde_json::to_vec(&json!({
-        "apiVersion":registry_thunderid_tooling::task_connection::API_VERSION,
-        "kind":registry_thunderid_tooling::task_connection::KIND,
-        "caseworkUrl":format!("http://127.0.0.1:{casework_port}"),
-        "tokenEndpoint":format!("{}/oauth2/token",issuer.url()),
-        "clientAssertionAudience":issuer.url(),"bootstrapResource":CASEWORK_RESOURCE,
-        "secretProviders":{"file":{"root":root.path()}},
-        "clients":{"task-agent":{"assertionKeyRef":"secret:file/agent-key.json","resource":BREG_RESOURCE,"scopes":["records:get"]}}
-    })).unwrap()).unwrap();
-    std::fs::set_permissions(&connection_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let connection_file = write_task_connection(
+        root.path(),
+        "breg-task",
+        "task-agent",
+        &agent_key,
+        BREG_RESOURCE,
+        &["records:get"],
+        casework_port,
+        &issuer.url(),
+    );
     let private_output = root.path().join("product-private");
     use registry_thunderid_tooling::grant_file::acquire_to_header;
     assert!(acquire_to_header(
@@ -1056,12 +1501,7 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
             & 0o777,
         0o600
     );
-    let header = zeroize::Zeroizing::new(std::fs::read_to_string(&acquired.header_file).unwrap());
-    let token = header
-        .trim()
-        .strip_prefix("Authorization: Bearer ")
-        .unwrap()
-        .to_string();
+    let token = acquired_bearer(&acquired.header_file);
     // A fresh command rerun uses the retained connection and preserves the immutable deadline.
     let acquired_again =
         acquire_to_header(&connection_file, &private_output, "task-agent", grant_id)
@@ -1101,6 +1541,22 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
             "re-exchange must preserve {name}"
         );
     }
+    let wrong_breg_token = bearer(
+        &provider(
+            &issuer.url(),
+            "other-agent",
+            &other_agent_key,
+            BREG_RESOURCE,
+            "records:get",
+        )
+        .exchange(issued["assertion"].as_str().unwrap())
+        .await
+        .unwrap(),
+    );
+    assert_eq!(
+        payload(&wrong_breg_token)["registry_grant_client"],
+        "task-agent"
+    );
     let (code, scheduling_grant) = request(
         &f.app,
         "POST",
@@ -1113,30 +1569,26 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
     .await;
     assert_eq!(code, StatusCode::OK);
     let scheduling_grant_id = scheduling_grant["id"].as_str().unwrap();
-    let (code, scheduling_assertion) = request(
-        &f.app,
-        "POST",
-        &format!("/v1/task-grants/{scheduling_grant_id}/assertion"),
-        &bootstrap,
-        false,
-        None,
-        None,
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
-    let scheduling_exchange = provider(
-        &issuer.url(),
+    let scheduling_connection = write_task_connection(
+        root.path(),
+        "scheduling-task",
         "task-agent",
         &agent_key,
         SCHEDULING_RESOURCE,
-        "scheduling:commit",
+        &["scheduling:commit"],
+        casework_port,
+        &issuer.url(),
     );
-    let scheduling_token = bearer(
-        &scheduling_exchange
-            .exchange(scheduling_assertion["assertion"].as_str().unwrap())
-            .await
-            .unwrap(),
-    );
+    let scheduling_output = root.path().join("scheduling-private");
+    let scheduling_acquired = acquire_to_header(
+        &scheduling_connection,
+        &scheduling_output,
+        "task-agent",
+        scheduling_grant_id,
+    )
+    .await
+    .unwrap();
+    let scheduling_token = acquired_bearer(&scheduling_acquired.header_file);
     let scheduling_claims = payload(&scheduling_token);
     assert_eq!(
         scheduling_claims["registry_grant_bounds"],
@@ -1153,6 +1605,7 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
     assert_eq!(scheduling_claims["registry_grant_client"], "task-agent");
     assert_eq!(scheduling_claims["scope"], "scheduling:commit");
     prove_scheduling_authentication(&scheduling_token, &issuer);
+    let evidence = start_evidence(root.path(), &issuer).await;
     let (code, evidence_grant) = request(
         &f.app,
         "POST",
@@ -1169,6 +1622,30 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         json!({"requesterTags":[EVIDENCE_TAG],"audience":EVIDENCE_AUDIENCE})
     );
     let evidence_grant_id = evidence_grant["id"].as_str().unwrap();
+    let evidence_deadline = shorten_grant_deadline(&f, evidence_grant_id, 30).await;
+    let evidence_connection = write_task_connection(
+        root.path(),
+        "evidence-task",
+        "evidence-task-agent",
+        &evidence_agent_key,
+        EVIDENCE_RESOURCE,
+        &["evidence:invoke"],
+        casework_port,
+        &issuer.url(),
+    );
+    let evidence_output = root.path().join("evidence-private");
+    let evidence_acquired = acquire_to_header(
+        &evidence_connection,
+        &evidence_output,
+        "evidence-task-agent",
+        evidence_grant_id,
+    )
+    .await
+    .unwrap();
+    let evidence_token = acquired_bearer(&evidence_acquired.header_file);
+
+    // Acquire a second assertion explicitly for the adversarial exchange: it
+    // must be the same approved grant assertion presented by another client.
     let evidence_bootstrap = bearer(
         &provider(
             &issuer.url(),
@@ -1192,6 +1669,7 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
     )
     .await;
     assert_eq!(code, StatusCode::OK);
+    assert_eq!(evidence_assertion["grantExpiresAt"], evidence_deadline);
     let evidence_exchange = provider(
         &issuer.url(),
         "evidence-task-agent",
@@ -1199,11 +1677,21 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         EVIDENCE_RESOURCE,
         "evidence:invoke",
     );
-    let evidence_token = bearer(
-        &evidence_exchange
-            .exchange(evidence_assertion["assertion"].as_str().unwrap())
-            .await
-            .unwrap(),
+    let wrong_evidence_token = bearer(
+        &provider(
+            &issuer.url(),
+            "other-agent",
+            &other_agent_key,
+            EVIDENCE_RESOURCE,
+            "evidence:invoke",
+        )
+        .exchange(evidence_assertion["assertion"].as_str().unwrap())
+        .await
+        .unwrap(),
+    );
+    assert_eq!(
+        payload(&wrong_evidence_token)["registry_grant_client"],
+        "evidence-task-agent"
     );
     let evidence_claims = payload(&evidence_token);
     assert_eq!(evidence_claims["registry_grant_id"], evidence_grant_id);
@@ -1217,7 +1705,15 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         evidence_claims["identity"],
         json!({"birth_date":"2000-01-01","family_name":"Diallo","given_name":"Amina"})
     );
-    let evidence = start_evidence(root.path(), &issuer).await;
+    let evidence_request = json!({
+        "requestNonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "requirement":EVIDENCE_REQUIREMENT,
+        "purpose":"fixture-eligibility",
+        "subjects":[{
+            "role":"subject",
+            "selector":{"profile":"person-demographics-v1"}
+        }]
+    });
     let evidence_response = reqwest::Client::builder()
         .no_proxy()
         .build()
@@ -1225,15 +1721,7 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         .post(format!("{}/v1/evidence", evidence.base_url))
         .header("authorization", format!("Bearer {evidence_token}"))
         .header("accept", "application/jose+json")
-        .json(&json!({
-            "requestNonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "requirement":EVIDENCE_REQUIREMENT,
-            "purpose":"fixture-eligibility",
-            "subjects":[{
-                "role":"subject",
-                "selector":{"profile":"person-demographics-v1"}
-            }]
-        }))
+        .json(&evidence_request)
         .send()
         .await
         .unwrap();
@@ -1257,40 +1745,27 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
     assert!(signed_evidence["protected"].is_string());
     assert!(signed_evidence["payload"].is_string());
     assert!(signed_evidence["signature"].is_string());
+    let wrong_evidence_response = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("{}/v1/evidence", evidence.base_url))
+        .header("authorization", format!("Bearer {wrong_evidence_token}"))
+        .header("accept", "application/jose+json")
+        .json(&evidence_request)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        wrong_evidence_response.status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
     let db = resource::TestDatabase::create(8).await;
-    let registry = Arc::new(
-        registry_breg::compile_project(
-            &registry_breg::parse_project_json(resource::PROJECT.as_bytes()).unwrap(),
-            &[],
-            registry_breg::CompileProfile::Authoring,
-        )
-        .unwrap(),
-    );
-    let identity = resource::install(&db, &registry).await;
-    let checker = Arc::new(
-        registry_breg::task_grant::TaskGrantStatusClient::new(
-            AUTHORITY.into(),
-            BREG_RESOURCE.into(),
-            format!("http://127.0.0.1:{casework_port}").parse().unwrap(),
-            Arc::new(provider(
-                &issuer.url(),
-                "breg-status",
-                &status_key,
-                CASEWORK_RESOURCE,
-                "casework:grants:status",
-            )),
-            None,
-        )
-        .unwrap(),
-    );
-    let app = resource::app(
-        &db,
-        registry.clone(),
-        identity,
-        &issuer.url(),
-        issuer.jwks.clone(),
-        checker,
-    );
+    let breg =
+        resource::start_from_runtime(&db, root.path(), &issuer.url(), &status_key, casework_port)
+            .await;
+    let app = breg.app.clone();
+    let registry = Arc::clone(&breg.registry);
     let seed = bearer(
         &provider(
             &issuer.url(),
@@ -1304,6 +1779,18 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         .unwrap(),
     );
     assert_eq!(payload(&seed)["registry_actor_kind"], "service");
+    let other_seed = bearer(
+        &provider(
+            &issuer.url(),
+            "other-seed-client",
+            &other_seed_key,
+            BREG_RESOURCE,
+            "records:get",
+        )
+        .bearer_token()
+        .await
+        .unwrap(),
+    );
     let old = resource::create(
         &app,
         "/v1/records/sites?accessProfile=steward",
@@ -1320,6 +1807,14 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         json!({"tenant":"tenant-a","name":"next"}),
     )
     .await;
+    let adjacent = resource::create(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        &other_seed,
+        "adjacent",
+        json!({"tenant":"tenant-b","name":"adjacent"}),
+    )
+    .await;
     let placement = resource::create(
         &app,
         "/v1/records/placements?accessProfile=steward",
@@ -1328,6 +1823,53 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         json!({"tenant":"tenant-a","site":resource::id(&old)}),
     )
     .await;
+    let permitted_read = resource::send(
+        &app,
+        axum::http::Method::GET,
+        &format!(
+            "/v1/records/sites/{}?accessProfile=submitter",
+            resource::id(&old)
+        ),
+        &token,
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        permitted_read.status,
+        StatusCode::OK,
+        "{}",
+        permitted_read.body
+    );
+    let adjacent_read = resource::send(
+        &app,
+        axum::http::Method::GET,
+        &format!(
+            "/v1/records/sites/{}?accessProfile=submitter",
+            resource::id(&adjacent)
+        ),
+        &token,
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(adjacent_read.status, StatusCode::NOT_FOUND);
+    let wrong_client_read = resource::send(
+        &app,
+        axum::http::Method::GET,
+        &format!(
+            "/v1/records/sites/{}?accessProfile=submitter",
+            resource::id(&old)
+        ),
+        &wrong_breg_token,
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(wrong_client_read.status, StatusCode::UNAUTHORIZED);
     let correction = resource::send(
         &app,
         axum::http::Method::POST,
@@ -1384,7 +1926,93 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         previous_header == std::fs::read(&acquired.header_file).unwrap(),
         "a refused grant command must not replace an existing header"
     );
+    let (code, expiry_grant) = request(
+        &f.app,
+        "POST",
+        &base,
+        &human,
+        true,
+        Some(json!({"templateId":"draft","templateVersion":"1"})),
+        Some("native-expiry-approval"),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    let expiry_grant_id = expiry_grant["id"].as_str().unwrap();
+    let breg_deadline = shorten_grant_deadline(&f, expiry_grant_id, 4).await;
+    let (code, expiry_assertion) = request(
+        &f.app,
+        "POST",
+        &format!("/v1/task-grants/{expiry_grant_id}/assertion"),
+        &bootstrap,
+        false,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(expiry_assertion["grantExpiresAt"], breg_deadline);
+    let live_breg_token = bearer(
+        &exchange
+            .exchange(expiry_assertion["assertion"].as_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    let live_read = resource::send(
+        &app,
+        axum::http::Method::GET,
+        &format!(
+            "/v1/records/sites/{}?accessProfile=submitter",
+            resource::id(&old)
+        ),
+        &live_breg_token,
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(live_read.status, StatusCode::OK, "{}", live_read.body);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let final_deadline = breg_deadline.max(evidence_deadline);
+    if final_deadline >= now {
+        tokio::time::sleep(std::time::Duration::from_secs(final_deadline - now + 1)).await;
+    }
+    let expired_breg_token = bearer(&exchange.exchange(&live_breg_token).await.unwrap());
+    let expired_breg_read = resource::send(
+        &app,
+        axum::http::Method::GET,
+        &format!(
+            "/v1/records/sites/{}?accessProfile=submitter",
+            resource::id(&old)
+        ),
+        &expired_breg_token,
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(expired_breg_read.status, StatusCode::UNAUTHORIZED);
+    let expired_evidence_token =
+        bearer(&evidence_exchange.exchange(&evidence_token).await.unwrap());
+    let expired_evidence_response = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("{}/v1/evidence", evidence.base_url))
+        .header("authorization", format!("Bearer {expired_evidence_token}"))
+        .header("accept", "application/jose+json")
+        .json(&evidence_request)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        expired_evidence_response.status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
     drop(app);
+    drop(breg);
     db.cleanup().await;
     server.abort();
     drop(f.app);

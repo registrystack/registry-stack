@@ -1,0 +1,119 @@
+---
+title: Staff the directory
+description: Map Casework queues to the people who serve them, seed and read the directory, and bootstrap it in a deployment.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: how-to
+locale: en
+standards_referenced: []
+tutorial_test:
+  toolset: casework
+  after: configure/casework
+---
+
+A ReviewTask waits in a queue until someone eligible picks it up. Which people that is lives in
+the [directory](../../reference/glossary/#directory), not in the policy. You continue in
+`tutorial-work/casework`, with the development session you restarted in
+[Author a Casework policy](../casework/) still running.
+
+## What the directory holds
+
+The policy declares the [queues](../../reference/glossary/#queue) and, for each
+[team](../../reference/glossary/#team) it names, the profiles its members and supervisors must
+hold. The directory is runtime state: each team's staff and supervisors, as an issuer and a
+subject, and the queues the team serves, under one directory revision. A person reaches a queue's
+tasks only as a member of a team that serves it, while holding a profile that may decide the stage.
+Changing who is in a team needs no new package.
+
+Only an [access profile](../../reference/glossary/#access-profile) with the `administrator` role may read or change the directory.
+
+{/* Evidence: crates/registry-casework-core/src/model.rs, TeamRecord, DirectoryMember;
+    crates/registry-casework/src/store.rs, directory(); crates/registry-casework/src/assignment.rs,
+    bootstrap_directory() and update_directory_team(). */}
+
+## Seed it for the development session
+
+The session seeded its directory from `dev-clients.yaml`, as its `administrator` client, on its
+first start:
+
+```yaml title="dev-clients.yaml" test-excerpt="tutorial-work/casework/dev-clients.yaml"
+directory:
+  - team: decisions-team
+    queue: decisions
+    staff: [staff]
+    supervisors: [supervisor]
+```
+
+Each entry names one team and the one declared queue it serves, with at most eight teams. Its
+`staff` must be clients bound to a staff profile and its `supervisors` clients bound to a supervisor
+profile. `caseworkctl check` refuses a file that leaves a declared queue with no team
+(`casework.dev-clients.unserved-queue`) or that has no administrator client to seed it.
+
+A deployment names people by issuer and subject. Show the subject the session's staff client signs in as:
+
+```sh test-cwd="tutorial-work/casework"
+caseworkctl dev identity staff
+```
+
+```json test-excerpt
+{"clientId": "staff", "subject": "17e79057-d468-701e-845e-a94875c37bd4"}
+```
+
+{/* Evidence: crates/registry-caseworkctl/src/dev/config.rs, DirectoryTeam, bind(),
+    casework.dev-clients.unserved-queue and missing-administrator;
+    crates/registry-caseworkctl/src/dev/mod.rs, DevAction::Identity. */}
+
+## Read the directory
+
+Read it as the administrator to confirm every queue has a team:
+
+```sh
+caseworkctl dev token administrator
+curl --fail-with-body --silent --show-error \
+  --header @.casework/dev/secrets/administrator.header \
+  http://127.0.0.1:8092/v1/directory | jq .
+```
+
+```json test-excerpt
+{"revision": 1}
+```
+
+```json test-excerpt
+{"id": "decisions-team", "servedQueues": ["decisions"]}
+```
+
+{/* Evidence: crates/registry-casework/src/http.rs, directory(). */}
+
+## Bootstrap a deployment's directory
+
+A deployment has no `dev-clients.yaml`. Its first administrator creates the first team with one
+call, naming directory revision `0` and an idempotency key so a retry cannot create it twice:
+
+```sh test-skip="the development session already seeded its directory, so revision 0 is refused"
+curl --fail-with-body --silent --show-error --request POST \
+  --header @administrator.header \
+  --header 'If-Match: "0"' \
+  --header 'Idempotency-Key: directory-bootstrap-1' \
+  --header 'Content-Type: application/json' \
+  --data '{"teamId": "decisions-team", "queueId": "decisions",
+    "staff": [{"issuer": "https://identity.example.test/realms/registry", "subject": "<staff subject>"}],
+    "supervisors": [{"issuer": "https://identity.example.test/realms/registry", "subject": "<supervisor subject>"}]}' \
+  "$casework_url/v1/directory/bootstrap"
+```
+
+Casework refuses a queue the active package does not declare. Later changes go through
+`PUT /v1/directory/teams/{teamId}` with the team's `staff`, `supervisors` and `servedQueues`, each
+under the directory revision you last read, so two administrators cannot overwrite each other.
+The [Casework API reference](../../reference/apis/registry-casework/) lists every directory
+operation.
+
+{/* Evidence: crates/registry-casework/src/http.rs, bootstrap() and update_directory_team();
+    crates/registry-casework-core/src/http.rs, BootstrapDirectoryRequest, DirectoryTeamUpdateRequest;
+    crates/registry-casework/src/assignment.rs, bootstrap_directory(). */}
+
+## Next
+
+[Deploy Registry Casework](../../operate/casework/)

@@ -28,7 +28,7 @@ reference for its keys.
 One shared reader reads the runtime configuration file of each of these programs:
 
 - Base Registry Engine (BReg), `BRegRuntimeConfig`
-- Evidence Gateway, `EvidenceRuntimeConfig`
+- Registry Evidence, `EvidenceRuntimeConfig`
 - Registry Casework, `CaseworkRuntimeConfig`
 - Registry Scheduling, `SchedulingRuntimeConfig`
 - Registry Render, `RenderRuntimeConfig`
@@ -541,10 +541,24 @@ after it were not checked, so run the check again with `--environment`.
 
 A format with a Schema `$id` has a JSON Schema your editor can apply. The `$id` identifies the
 schema; it is not an address the project serves. Copy the schema file from its Source copy path,
-at the release you deploy, into your project, then map it to your files. The
-[Base Registry Engine projects](../evidencectl/#base-registry-engine-projects) section of the
-`evidencectl` reference shows the mapping in `.vscode/settings.json`. An editor that uses
-`yaml-language-server` also reads a schema named in a comment at the top of a file:
+at the release you deploy, into your project, then map it to your files. A Base Registry
+Engine project maps its two authoring schemas,
+[`registry-project.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/breg/generated/authoring/registry-project.schema.json)
+and
+[`registry-module.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/breg/generated/authoring/registry-module.schema.json),
+in `.vscode/settings.json`:
+
+```json
+{
+  "yaml.schemas": {
+    "./schemas/registry-project.schema.json": "registry.yaml",
+    "./schemas/registry-module.schema.json": "modules/*/module.yaml"
+  }
+}
+```
+
+An editor that uses `yaml-language-server` also reads a schema named in a comment at the top of
+a file:
 
 ```yaml
 # yaml-language-server: $schema=./schemas/runtime.schema.json
@@ -552,13 +566,14 @@ apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 ```
 
-The reader treats that line as a comment. For an Evidence Gateway authoring project,
-`evidencectl tooling editor <project>` writes the mappings for you, as
-[editor support](../evidencectl/#editor-support) describes. A schema catches shape errors as you
-type. It does not replace the check command, which also applies rules a schema cannot state, such
-as references between files.
+The reader treats that line as a comment. For a Registry Evidence project,
+[`evidencectl tooling editor`](../cli/evidencectl/tooling/editor/) writes the mappings for you.
+A schema catches shape errors as you type. It does not replace the check command, which also
+applies rules a schema cannot state, such as references between files.
 
 {/* Evidence: products/breg/generated/runtime/runtime.schema.json;
+    products/breg/generated/authoring/registry-project.schema.json;
+    products/breg/generated/authoring/registry-module.schema.json;
     crates/registry-evidencectl/src/tooling_editor.rs, EDITOR_SCHEMA_CATALOG. */}
 
 ## Stability
@@ -571,7 +586,7 @@ The Stability column gives each format's label in the format registry:
   formats the promise covers; where the two differ, that table holds.
 - **Experimental**: shipped, and may change in a minor release, announced with a `BREAKING:` note.
 - **Unpromised**: no compatibility promise, for files such as fixtures, test journeys,
-  development clients, and the Evidence Gateway authoring files.
+  development clients, and the Registry Evidence authoring files.
 
 Before `v1.0.0`, the [pre-1.0 rule](../api-stability/#versioning) applies to every format:
 a minor release may change one, with a `BREAKING:` entry and migration steps in the release note.
@@ -604,7 +619,7 @@ Generated files, which no one writes by hand, are left out.
 ## Next
 
 - [Base Registry Engine configuration reference](../breg-configuration/) for every BReg key.
-- [Evidence Gateway configuration reference](../evidence-configuration/) for every Evidence Gateway
+- [Registry Evidence configuration reference](../evidence-configuration/) for every Registry Evidence
   key.
 - [Registry Scheduling configuration reference](../scheduling-configuration/) for every Scheduling key.
 - [Environment variable reference](../environment-variables/) for fixed variables and secret

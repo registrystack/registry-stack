@@ -23,7 +23,7 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Registry Discovery helps an application find which Evidence Gateway service can answer a question.
+Registry Discovery helps an application find which Registry Evidence service can answer a question.
 In this tutorial you play every role: a provider publishes a short public description, an operator
 packages it into an index and serves it, and a consumer selects a matching service.
 
@@ -63,7 +63,7 @@ index. `discovery` is the runtime that serves one verified package.
 ## Confirm the provider publications
 
 Each provider describes its service in one public JSON-LD file. The checkout carries an example
-description for an Evidence Gateway deployment. Check that
+description for a Registry Evidence deployment. Check that
 yours are the files this tutorial was written against:
 
 ```sh
@@ -239,7 +239,7 @@ is one alternative with one type.
 
 ## Search for the providers
 
-Search for Evidence Gateway deployments that assert the resolved type:
+Search for Registry Evidence deployments that assert the resolved type:
 
 ```sh
 curl -s --get \
@@ -288,7 +288,7 @@ and to notice when the index changes. A selection is public metadata only. It is
 and it does not make the provider trusted.
 
 Calling the provider is a separate step that does not involve Discovery. The application's own
-Evidence Gateway configuration decides whether it trusts the selected service.
+Registry Evidence configuration decides whether it trusts the selected service.
 If it does, the application calls the service's `endpointUrl` directly with the Evidence client.
 No credential, request, or response
 passes through Discovery. In an application, the Discovery namespace of the
@@ -331,7 +331,7 @@ The compiled binaries stay under `target/release`, so a second run reuses them.
 - The provider supplied one deterministic public description.
 - The operator checked explicit origins and mappings offline, packaged one immutable index, and
   served it with Discovery.
-- The consumer resolved one requirement and found one Evidence Gateway deployment ready to save as
+- The consumer resolved one requirement and found one Registry Evidence deployment ready to save as
   a selection.
 - Trusting and calling the chosen services stays with the application and the product clients,
   outside Discovery.
@@ -358,5 +358,5 @@ The compiled binaries stay under `target/release`, so a second run reuses them.
   origins, deployment directory, and runtime limits.
 - [Registry Discovery is an index](../../explanation/discovery-as-an-index/) explains why trust and
   invocation stay in the native products.
-- [Request Evidence from an application](../request-evidence-from-an-application/) shows the native
+- [Request Evidence from your application](../request-evidence-from-an-application/) shows the native
   Evidence relying-party workflow.

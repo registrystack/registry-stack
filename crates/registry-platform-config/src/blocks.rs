@@ -313,6 +313,9 @@ pub enum JwksSource {
     // members on a unit variant of an internally tagged enum.
     Discovery {},
     /// Fetch the key set from this absolute `https` URI, skipping discovery.
+    /// A plain `http` URI is accepted on loopback for supervised local
+    /// development, and beyond loopback only when the issuer block sets
+    /// `allowInsecureHttp`.
     Uri { uri: Url },
     /// Read the key set from a secret, for deployments without network access
     /// to the issuer.
@@ -355,17 +358,30 @@ impl JwksSource {
     /// loopback `http` URL is accepted only when `allow_loopback_http` is set,
     /// for supervised local development.
     pub fn check(&self, field: &str, allow_loopback_http: bool) -> Result<(), ConfigBlockError> {
+        self.check_with_insecure_http(field, allow_loopback_http, false)
+    }
+
+    /// Check this key source while carrying the containing issuer's explicit
+    /// plain-HTTP decision into a fixed endpoint.
+    pub fn check_with_insecure_http(
+        &self,
+        field: &str,
+        allow_loopback_http: bool,
+        allow_insecure_http: bool,
+    ) -> Result<(), ConfigBlockError> {
         match self {
             Self::Discovery {} => Ok(()),
             Self::Uri { uri } => {
                 let field = format!("{field}.uri");
-                if valid_jwks_uri(uri, allow_loopback_http) {
+                if valid_jwks_uri(uri, allow_loopback_http, allow_insecure_http) {
                     Ok(())
                 } else {
                     Err(ConfigBlockError::new(
                         ConfigBlockErrorKind::InvalidUri,
                         &field,
-                        format!("{field} must be an absolute https URL without credentials"),
+                        format!(
+                            "{field} must be an absolute https URL without credentials; plain http beyond loopback needs allowInsecureHttp: true"
+                        ),
                     ))
                 }
             }
@@ -403,7 +419,7 @@ impl JwksSource {
     }
 }
 
-fn valid_jwks_uri(value: &Url, allow_loopback_http: bool) -> bool {
+fn valid_jwks_uri(value: &Url, allow_loopback_http: bool, allow_insecure_http: bool) -> bool {
     let parsed = value.to_url();
     if !parsed.username().is_empty() || parsed.password().is_some() || parsed.host().is_none() {
         return false;
@@ -411,11 +427,14 @@ fn valid_jwks_uri(value: &Url, allow_loopback_http: bool) -> bool {
     match parsed.scheme() {
         "https" => true,
         "http" => {
-            allow_loopback_http
-                && matches!(
-                    parsed.host(),
-                    Some(url::Host::Ipv4(address)) if address.is_loopback()
-                )
+            allow_insecure_http
+                || (allow_loopback_http
+                    && match parsed.host() {
+                        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+                        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+                        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+                        None => false,
+                    })
         }
         _ => false,
     }
@@ -461,7 +480,7 @@ pub const MAX_OIDC_AUDIENCE_CHARACTERS: usize = 512;
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct OidcIssuerConfig {
     /// Exact issuer accepted in access-token `iss` claims, an absolute
-    /// `https` URL.
+    /// `https` URL, or a plain `http` URL when `allowInsecureHttp` is set.
     pub issuer: Url,
     /// The audience every accepted access token must carry in `aud`.
     #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 512)))]
@@ -470,18 +489,25 @@ pub struct OidcIssuerConfig {
     /// OpenID Connect discovery document.
     #[serde(default)]
     pub jwks_source: JwksSource,
+    /// Permit plain HTTP beyond loopback to the configured issuer and to a
+    /// JWKS URI declared in configuration. TLS remains required unless the
+    /// operator explicitly accepts this transport risk.
+    #[serde(default)]
+    pub allow_insecure_http: bool,
 }
 
 impl OidcIssuerConfig {
     /// The issuer is an absolute `https` URL without credentials, query, or
-    /// fragment, the audience is non-empty bounded text without control characters, and
-    /// the key source passes [`JwksSource::check`]. A loopback `http` issuer
-    /// or key URI is accepted only when `allow_loopback_http` is set, for
-    /// supervised local development. `field` is the dotted path of the block,
+    /// fragment, or a plain `http` one when `allow_insecure_http` is set, the
+    /// audience is non-empty bounded text without control characters, and
+    /// the key source passes [`JwksSource::check`]. Without
+    /// `allow_insecure_http`, a loopback `http` issuer or key URI is accepted
+    /// only when `allow_loopback_http` is set, for supervised local
+    /// development. `field` is the dotted path of the block,
     /// such as `authentication.oidc`.
     pub fn check(&self, field: &str, allow_loopback_http: bool) -> Result<(), ConfigBlockError> {
         let issuer = self.issuer.to_url();
-        let issuer_ok = valid_jwks_uri(&self.issuer, allow_loopback_http)
+        let issuer_ok = valid_jwks_uri(&self.issuer, allow_loopback_http, self.allow_insecure_http)
             && issuer.query().is_none()
             && issuer.fragment().is_none();
         if !issuer_ok {
@@ -490,7 +516,7 @@ impl OidcIssuerConfig {
                 ConfigBlockErrorKind::InvalidUri,
                 &field,
                 format!(
-                    "{field} must be an absolute https URL without credentials, query, or fragment"
+                    "{field} must be an absolute https URL without credentials, query, or fragment; plain http beyond loopback needs allowInsecureHttp: true"
                 ),
             ));
         }
@@ -508,8 +534,11 @@ impl OidcIssuerConfig {
                 ),
             ));
         }
-        self.jwks_source
-            .check(&format!("{field}.jwksSource"), allow_loopback_http)
+        self.jwks_source.check_with_insecure_http(
+            &format!("{field}.jwksSource"),
+            allow_loopback_http,
+            self.allow_insecure_http,
+        )
     }
 }
 

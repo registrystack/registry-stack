@@ -25,7 +25,7 @@ evidencectl check . --target local-target.yaml
 
 ## Documentation
 
-- Author a project: <https://docs.registrystack.org/configure/evidence/>
+- Author a project from an institution API: <https://docs.registrystack.org/tutorials/connect-an-institution-source/>
 - Build and deploy a project: <https://docs.registrystack.org/tutorials/build-and-deploy-evidence-project/>
 - Every configuration key: <https://docs.registrystack.org/reference/evidence-configuration/>
-- `evidencectl` commands: <https://docs.registrystack.org/reference/evidencectl/>
+- `evidencectl` commands: <https://docs.registrystack.org/reference/cli/evidencectl/>

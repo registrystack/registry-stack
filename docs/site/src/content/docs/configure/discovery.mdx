@@ -23,7 +23,7 @@ import ConfigurationFormatChecks from '../../../components/ConfigurationFormatCh
 
 ## When to use this
 
-Use this procedure to build and serve an immutable index of approved Evidence Gateway provider
+Use this procedure to build and serve an immutable index of approved Registry Evidence provider
 descriptions. Discovery returns public metadata only; the consuming application owns provider
 trust, credentials, and invocation.
 
@@ -291,7 +291,7 @@ The response contains `mappingRevision` and the configured alternative with its 
 {"requirementId":"urn:example:requirement:adult-status","jurisdiction":"urn:example:jurisdiction","mappingRevision":"sha256:<64-lowercase-hex-digits>","alternatives":[{"evidenceTypeListId":"urn:example:list:adult-status","evidenceTypeIds":["urn:example:evidence-type:adult-status"],"mappingId":"urn:example:mapping:adult-status","mappingAuthorityId":"urn:example:authority"}]}
 ```
 
-Search the catalog for a public Evidence Gateway advertisement. Copy the selected `recordId`,
+Search the catalog for a public Registry Evidence advertisement. Copy the selected `recordId`,
 `endpointUrl`, and origin provenance from the result into your application selection record.
 
 ```sh
@@ -342,4 +342,4 @@ the diagnostics, JSON output, and exit codes that
 
 - [Publish and consume a Discovery index](../../tutorials/publish-and-consume-discovery-index/)
 - [Registry Discovery is an index](../../explanation/discovery-as-an-index/)
-- [Configure Evidence Gateway](../evidence/)
+- [Build and deploy a Registry Evidence project](../../tutorials/build-and-deploy-evidence-project/)

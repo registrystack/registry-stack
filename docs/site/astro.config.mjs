@@ -4,7 +4,7 @@ import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
-import starlightOpenAPI, { createOpenAPISidebarGroup, openAPISidebarGroups } from 'starlight-openapi';
+import starlightOpenAPI, { createOpenAPISidebarGroup } from 'starlight-openapi';
 import mermaid from 'astro-mermaid';
 import remarkGfm from 'remark-gfm';
 // Single source of truth for the machine-discovery pointer. Reused as the
@@ -15,7 +15,7 @@ import { cliReferenceSidebar } from './src/lib/cli-reference-sidebar.mjs';
 import { flattenSidebarGroups } from './src/lib/sidebar.mjs';
 import { buildNotaryRetirementRedirects } from './src/lib/notary-retirement-redirects.mjs';
 import { buildRelayRetirementRedirects } from './src/lib/relay-retirement-redirects.mjs';
-import { docsetPublishesBregOpenApi } from './scripts/fetch-openapi.mjs';
+import { docsetPublishesBregOpenApi, docsetPublishesEvidenceOid4vciOpenApi } from './scripts/fetch-openapi.mjs';
 import { omittedCliBinaries, productRoutes, remarkDocsetProducts } from './src/lib/docset-products.mjs';
 
 // Marketing site that now owns the persuasion layer (the pitch). Old docs
@@ -123,6 +123,7 @@ const {
   currentDocsetRedirect,
 } = resolveDocsetBuildContext(docsetsManifest);
 const hasBregOpenApi = docsetPublishesBregOpenApi(selectedDocset, docsetsManifest.current);
+const hasEvidenceOid4vciOpenApi = docsetPublishesEvidenceOid4vciOpenApi(selectedDocset, docsetsManifest.current);
 const productSidebar = loadProductSidebar();
 
 // Lift a generated per-product group to the top level of the sidebar.
@@ -145,19 +146,52 @@ const disabledSitemap = {
   name: '@astrojs/sitemap',
   hooks: {},
 };
-const caseworkOpenApiSchema = {
-  base: 'reference/apis/casework',
-  schema: './openapi/registry-casework.render.openapi.json',
+// Each product's operations fill their own createOpenAPISidebarGroup()
+// placeholder, seated in that product's group. The plugin's shared
+// openAPISidebarGroups placeholder receives every schema without a group, so
+// a seat for it would show every product's operations under one product.
+const evidenceOpenApiSidebarGroup = createOpenAPISidebarGroup();
+const evidenceOpenApiSchema = {
+  base: 'reference/apis/evidence',
+  schema: './openapi/registry-evidence.render.openapi.json',
   sidebar: {
+    group: evidenceOpenApiSidebarGroup,
     label: 'API operations',
     collapsed: true,
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
   },
 };
+// The wallet-facing OID4VCI supporting service publishes its own document.
+// scripts/fetch-openapi.mjs fetches it for the current docset and release
+// docsets from v0.20.0, and the same test decides whether this build renders it.
+const evidenceOid4vciOpenApiSidebarGroup = createOpenAPISidebarGroup();
+const evidenceOid4vciOpenApiSchema = {
+  base: 'reference/apis/evidence-oid4vci',
+  schema: './openapi/registry-evidence-oid4vci.render.openapi.json',
+  sidebar: {
+    group: evidenceOid4vciOpenApiSidebarGroup,
+    label: 'API operations (wallet delivery)',
+    collapsed: true,
+    operations: { labels: /** @type {'path'} */ ('path'), badges: true },
+  },
+};
+const caseworkOpenApiSidebarGroup = createOpenAPISidebarGroup();
+const caseworkOpenApiSchema = {
+  base: 'reference/apis/casework',
+  schema: './openapi/registry-casework.render.openapi.json',
+  sidebar: {
+    group: caseworkOpenApiSidebarGroup,
+    label: 'API operations',
+    collapsed: true,
+    operations: { labels: /** @type {'path'} */ ('path'), badges: true },
+  },
+};
+const schedulingOpenApiSidebarGroup = createOpenAPISidebarGroup();
 const schedulingOpenApiSchema = {
   base: 'reference/apis/scheduling',
   schema: './openapi/registry-scheduling.render.openapi.json',
   sidebar: {
+    group: schedulingOpenApiSidebarGroup,
     label: 'API operations',
     collapsed: true,
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
@@ -177,10 +211,12 @@ export function schedulingRedirects(hasScheduling, currentDocsetRedirect) {
     [route, currentDocsetRedirect(route)],
   ]));
 }
+const messagingOpenApiSidebarGroup = createOpenAPISidebarGroup();
 const messagingOpenApiSchema = {
   base: 'reference/apis/messaging',
   schema: './openapi/registry-messaging.render.openapi.json',
   sidebar: {
+    group: messagingOpenApiSidebarGroup,
     label: 'API operations',
     collapsed: true,
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
@@ -211,8 +247,6 @@ export function messagingRedirects(hasMessaging, currentHasMessaging, currentDoc
 // facility template's compiled document as an example. scripts/fetch-openapi.mjs
 // fetches it for the current docset and release docsets from v0.42.0, and the
 // same test decides whether this build renders it.
-// Its operations fill their own placeholder group: openAPISidebarGroups is a
-// single placeholder that receives every schema without a group.
 const bregOpenApiSidebarGroup = createOpenAPISidebarGroup();
 const bregOpenApiSchema = {
   base: 'reference/apis/breg',
@@ -224,10 +258,12 @@ const bregOpenApiSchema = {
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
   },
 };
+const coordinatorOpenApiSidebarGroup = createOpenAPISidebarGroup();
 const coordinatorOpenApiSchema = {
   base: 'reference/apis/coordinator',
   schema: './openapi/registry-coordinator.render.openapi.json',
   sidebar: {
+    group: coordinatorOpenApiSidebarGroup,
     label: 'API operations',
     collapsed: true,
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
@@ -259,7 +295,9 @@ const caseworkRoutes = [
   '/tutorials/review-breg-changes-in-casework/',
   '/explanation/how-casework-works/',
   '/configure/casework/',
+  '/configure/casework-directory/',
   '/operate/casework/',
+  '/operate/change-a-casework-package/',
   '/operate/casework-retention/',
   '/reference/apis/registry-casework/',
 ];
@@ -292,7 +330,7 @@ const bregRewriteMoves = [
   ['/explanation/breg-statistical-datasets/', '/configure/breg-statistics/'],
   ['/explanation/membership-read-boundaries/', '/configure/breg-access/'],
   ['/explanation/deriving-a-registry-from-a-model/', '/tutorials/derive-a-registry-from-publicschema/'],
-  ['/explanation/openfn-adaptors/', '/explanation/integration-patterns/'],
+  ['/explanation/openfn-adaptors/', '/start/concepts/'],
   ['/operate/breg-requirements/', '/operate/breg/'],
   ['/operate/breg-mcp/', '/configure/breg-mcp/'],
 ];
@@ -343,7 +381,21 @@ export default defineConfig({
     '/reference/breg-events/': internalRedirect('/reference/breg-api/'),
     // The operating-requirements pages moved from Start into each product's
     // Deploy group; a first visit chooses a product before it plans a deployment.
-    '/start/evaluate-evidence/': internalRedirect('/operate/evidence-requirements/'),
+    // Evidence's requirements page was then absorbed by the one page that
+    // explains how the product works, and the refusal tutorial was folded
+    // into the access-control tutorial that follows it.
+    '/start/evaluate-evidence/': internalRedirect('/explanation/how-evidence-works/'),
+    '/operate/evidence-requirements/': internalRedirect('/explanation/how-evidence-works/'),
+    '/operate/evidence-requirements.md': internalRedirect('/explanation/how-evidence-works/'),
+    '/tutorials/refuse-unsafe-evidence-requests/': internalRedirect('/tutorials/control-who-can-request-evidence/'),
+    '/tutorials/refuse-unsafe-evidence-requests.md': internalRedirect('/tutorials/control-who-can-request-evidence/'),
+    // The deployment-configuration page and the evidencectl workflow page
+    // were absorbed by the build-and-deploy tutorial and the generated CLI
+    // reference: the tool introduces each noun once, where it is used.
+    '/configure/evidence/': internalRedirect('/tutorials/build-and-deploy-evidence-project/'),
+    '/configure/evidence.md': internalRedirect('/tutorials/build-and-deploy-evidence-project/'),
+    '/reference/evidencectl/': internalRedirect('/reference/cli/evidencectl/'),
+    '/reference/evidencectl.md': internalRedirect('/reference/cli/evidencectl/'),
     '/start/evaluate-breg/': internalRedirect('/operate/breg/'),
     ...bregRewriteRedirects(internalRedirect),
     // One client package documents the retained namespaces in one reference.
@@ -367,8 +419,20 @@ export default defineConfig({
     '/tutorials/first-run-with-registry-lab/': internalRedirect('/'),
     '/tutorials/query-a-spatial-registry-from-qgis/': internalRedirect('/start/breg-quickstart/'),
     '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/connect-an-institution-source/'),
-    // Retired monorepo lab tutorials redirect to the current integration guidance.
-    '/tutorials/configure-project-fhir-r4/': internalRedirect('/explanation/integration-patterns/'),
+    // The FHIR credential tutorial became the worked example of connecting an institution API.
+    '/tutorials/issue-fhir-evidence-as-vcs/': internalRedirect('/tutorials/connect-an-institution-source/'),
+    '/tutorials/issue-fhir-evidence-as-vcs.md': internalRedirect('/tutorials/connect-an-institution-source/'),
+    // The wallet interoperability checks are one section of the wallet delivery page.
+    '/tutorials/run-oid4vci-interoperability-checks/': internalRedirect('/configure/evidence-oid4vci/'),
+    '/tutorials/run-oid4vci-interoperability-checks.md': internalRedirect('/configure/evidence-oid4vci/'),
+    // Disclosure modes and computed answers are one section of How Evidence works.
+    '/explanation/disclosure-modes-and-computed-answers/': internalRedirect('/explanation/how-evidence-works/'),
+    '/explanation/disclosure-modes-and-computed-answers.md': internalRedirect('/explanation/how-evidence-works/'),
+    // Retired monorepo lab tutorials and the integration-patterns page redirect to
+    // the cross-product concepts page.
+    '/explanation/integration-patterns/': internalRedirect('/start/concepts/'),
+    '/explanation/integration-patterns.md': internalRedirect('/start/concepts/'),
+    '/tutorials/configure-project-fhir-r4/': internalRedirect('/start/concepts/'),
     '/tutorials/configure-project-snapshot-materialization/': internalRedirect('/decisions/registry-relay-retirement-2026-10-03/'),
     // Problems -> marketing /why
     '/problems/': `${marketing}/why/`,
@@ -414,7 +478,7 @@ export default defineConfig({
     }),
     starlight({
       title: 'Registry stack docs',
-      description: 'Documentation for Registry Stack: answer bounded questions with Evidence Gateway, build a writable registry with Base Registry Engine, and publish portable registry metadata.',
+      description: 'Documentation for Registry Stack: answer bounded questions with Registry Evidence, build a writable registry with Base Registry Engine, and publish portable registry metadata.',
       // Historical archives keep their sealed search posture. A new released
       // archive is built once on the release runner and carries its exact
       // Pagefind output into production.
@@ -443,15 +507,8 @@ export default defineConfig({
         // hand-authored narrative pages (reference/apis/registry-*), which link
         // into them; old /api/*.html links are preserved by redirects above.
         starlightOpenAPI([
-          {
-            base: 'reference/apis/evidence',
-            schema: './openapi/registry-evidence.render.openapi.json',
-            sidebar: {
-              label: 'API operations',
-              collapsed: true,
-              operations: { labels: 'path', badges: true },
-            },
-          },
+          evidenceOpenApiSchema,
+          ...[evidenceOid4vciOpenApiSchema].filter(() => hasEvidenceOid4vciOpenApi),
           ...[caseworkOpenApiSchema].filter(() => hasCasework),
           ...[schedulingOpenApiSchema].filter(() => hasScheduling),
           ...[messagingOpenApiSchema].filter(() => hasMessaging),
@@ -497,65 +554,59 @@ export default defineConfig({
           label: 'Start',
           items: [
             { label: 'Overview', link: '/' },
-            { label: 'Glossary', slug: 'reference/glossary' },
+            { label: 'How the products fit together', slug: 'start/concepts' },
           ],
         },
         {
-          label: 'Evidence Gateway',
+          label: 'Registry Evidence',
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'start/evidence-quickstart' },
             { label: 'Your first assertion', slug: 'tutorials/first-evidence-assertion' },
-            // Consumers need no deployment. Keep their path visible beside
-            // the provider's entry points, separate from wallet delivery.
+            { label: 'How Evidence works', slug: 'explanation/how-evidence-works' },
+            // The tutorials continue on the first assertion's running project.
+            {
+              label: 'Tutorials',
+              collapsed: true,
+              items: [
+                { label: 'Return a governed value', slug: 'tutorials/return-a-governed-value' },
+                { label: 'Control who can request evidence', slug: 'tutorials/control-who-can-request-evidence' },
+                { label: 'Assert a role-bound relationship', slug: 'tutorials/assert-a-role-bound-relationship' },
+                { label: 'Request evidence as an SD-JWT VC', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
+              ],
+            },
+            // Consumers need no deployment, but they do need the project the
+            // tutorials build on, so their path follows the tutorials and stays
+            // separate from wallet delivery.
             {
               label: 'Use from applications',
               collapsed: true,
               items: [
                 { label: 'Request an assertion', slug: 'tutorials/request-evidence-from-an-application' },
-                { label: 'Configure token acquisition', slug: 'configure/request-an-access-token' },
-                { label: 'Verify and retain assertions', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
+                { label: 'Request an access token', slug: 'configure/request-an-access-token' },
+                { label: 'Verify an assertion', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
                 { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
-              ],
-            },
-            {
-              label: 'Tutorials',
-              collapsed: true,
-              items: [
-                { label: 'Explore SD-JWT VC', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
-                { label: 'Return a governed value', slug: 'tutorials/return-a-governed-value' },
-                { label: 'Control caller access', slug: 'tutorials/control-who-can-request-evidence' },
-                { label: 'Handle safe refusals', slug: 'tutorials/refuse-unsafe-evidence-requests' },
-                { label: 'Model a relationship', slug: 'tutorials/assert-a-role-bound-relationship' },
               ],
             },
             {
               label: 'Connect a source',
               collapsed: true,
               items: [
-                { label: 'Connect with OpenAPI', slug: 'tutorials/connect-an-institution-source' },
+                { label: 'Connect an institution API', slug: 'tutorials/connect-an-institution-source' },
                 { label: 'Connect a SQLite extract', slug: 'tutorials/connect-a-sqlite-extract' },
-                { label: 'Integration patterns', slug: 'explanation/integration-patterns' },
+                { label: 'Package a lookup over a registry', slug: 'tutorials/evidence-from-breg' },
               ],
             },
             {
-              label: 'Source examples',
+              label: 'Prove and deploy',
               collapsed: true,
               items: [
-                { label: 'Compose a BReg lookup', slug: 'tutorials/evidence-from-breg' },
-                { label: 'FHIR R4: patient coverage', slug: 'tutorials/issue-fhir-evidence-as-vcs' },
-              ],
-            },
-            {
-              label: 'Deploy',
-              collapsed: true,
-              items: [
-                { label: 'What you need to run it', slug: 'operate/evidence-requirements' },
-                { label: 'Test with fixtures', slug: 'tutorials/prove-an-evidence-project' },
-                { label: 'Configure a deployment', slug: 'configure/evidence' },
-                { label: 'Build a production candidate', slug: 'tutorials/build-and-deploy-evidence-project' },
-                { label: 'Configure Transit signing', slug: 'tutorials/move-evidence-to-production-signing' },
-                { label: 'Deploy with Docker Compose', slug: 'tutorials/integrate-evidence-candidate-with-docker-compose' },
+                { label: 'Prove with fixtures', slug: 'tutorials/prove-an-evidence-project' },
+                { label: 'Build and deploy', slug: 'tutorials/build-and-deploy-evidence-project' },
+                { label: 'Sign with Vault Transit', slug: 'tutorials/move-evidence-to-production-signing' },
+                { label: 'Run with Docker Compose', slug: 'tutorials/integrate-evidence-candidate-with-docker-compose' },
+                { label: 'Rotate signing keys', slug: 'tutorials/rotate-evidence-signing-keys' },
+                { label: 'Audit log', slug: 'operate/evidence-audit' },
               ],
             },
             {
@@ -563,8 +614,7 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { label: 'Enable SD-JWT VC', slug: 'configure/enable-sd-jwt-vc' },
-                { label: 'Configure OID4VCI', slug: 'configure/evidence-oid4vci' },
-                { label: 'Check OID4VCI interoperability', slug: 'tutorials/run-oid4vci-interoperability-checks' },
+                { label: 'Deliver to a wallet', slug: 'configure/evidence-oid4vci' },
               ],
             },
             { label: 'Configuration reference', slug: 'reference/evidence-configuration' },
@@ -572,7 +622,8 @@ export default defineConfig({
             { label: 'API overview', slug: 'reference/apis/registry-evidence' },
             // The API plugin supplies its own operation groups. An extra HTTP
             // API wrapper would add a disclosure without helping navigation.
-            ...openAPISidebarGroups.slice(0, 1),
+            evidenceOpenApiSidebarGroup,
+            ...(hasEvidenceOid4vciOpenApi ? [evidenceOid4vciOpenApiSidebarGroup] : []),
             { label: 'Security model', slug: 'security/evidence' },
           ],
         },
@@ -656,14 +707,34 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'start/casework' },
-            { label: 'Decide your first review request', slug: 'tutorials/first-casework' },
-            { label: 'Review a Proposal in Casework', slug: 'tutorials/review-breg-changes-in-casework' },
+            { label: 'Decide your first ReviewRequest', slug: 'tutorials/first-casework' },
             { label: 'How Casework works', slug: 'explanation/how-casework-works' },
-            { label: 'Author a policy', slug: 'configure/casework' },
-            { label: 'Deploy Casework', slug: 'operate/casework' },
-            { label: 'Retention and audit', slug: 'operate/casework-retention' },
+            {
+              label: 'Author a policy',
+              collapsed: true,
+              items: [
+                { label: 'Author a policy', slug: 'configure/casework' },
+                { label: 'Staff the directory', slug: 'configure/casework-directory' },
+              ],
+            },
+            {
+              label: 'Deploy and operate',
+              collapsed: true,
+              items: [
+                { label: 'Deploy Casework', slug: 'operate/casework' },
+                { label: 'Change an active package', slug: 'operate/change-a-casework-package' },
+                { label: 'Retention and audit', slug: 'operate/casework-retention' },
+              ],
+            },
+            {
+              label: 'Compose',
+              collapsed: true,
+              items: [
+                { label: 'Review a Proposal in Casework', slug: 'tutorials/review-breg-changes-in-casework' },
+              ],
+            },
             { label: 'API contract', slug: 'reference/apis/registry-casework' },
-            ...openAPISidebarGroups.slice(1, 2),
+            caseworkOpenApiSidebarGroup,
             { label: 'Client API reference', slug: 'reference/client-api' },
           ],
         }] : []),
@@ -674,7 +745,7 @@ export default defineConfig({
             { label: 'Configuration reference', slug: 'reference/scheduling-configuration' },
             { label: 'API contract', slug: 'reference/apis/registry-scheduling' },
             { label: 'Audit upgrades and retention', slug: 'operate/retention-and-persistent-state' },
-            ...openAPISidebarGroups.slice(2, 3),
+            schedulingOpenApiSidebarGroup,
           ],
         }] : []),
         ...(hasRender ? [{
@@ -696,13 +767,7 @@ export default defineConfig({
             { label: 'Author a package', slug: 'configure/messaging' },
             { label: 'Deploy Messaging', slug: 'operate/messaging' },
             { label: 'API contract', slug: 'reference/apis/registry-messaging' },
-            // The Messaging operations follow Evidence, Casework, and
-            // Scheduling in the OpenAPI plugin list, and only the products this
-            // docset carries are registered there.
-            ...openAPISidebarGroups.slice(
-              1 + Number(hasCasework) + Number(hasScheduling),
-              2 + Number(hasCasework) + Number(hasScheduling),
-            ),
+            messagingOpenApiSidebarGroup,
             { label: 'Client API reference', slug: 'reference/client-api' },
           ],
         }] : []),
@@ -716,13 +781,7 @@ export default defineConfig({
             { label: 'Deploy Coordinator', slug: 'operate/coordinator' },
             { label: 'Configuration reference', slug: 'reference/coordinator-configuration' },
             { label: 'API contract', slug: 'reference/apis/registry-coordinator' },
-            // The Coordinator operations follow Evidence, Casework, Scheduling,
-            // and Messaging in the OpenAPI plugin list, and only the products
-            // this docset carries are registered there.
-            ...openAPISidebarGroups.slice(
-              1 + Number(hasCasework) + Number(hasScheduling) + Number(hasMessaging),
-              2 + Number(hasCasework) + Number(hasScheduling) + Number(hasMessaging),
-            ),
+            coordinatorOpenApiSidebarGroup,
           ],
         }] : []),
         {
@@ -740,9 +799,8 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'operate/advanced' },
             { label: 'Operator handoff', slug: 'operate' },
-            { label: 'Operate the Evidence audit log', slug: 'operate/evidence-audit' },
-            { label: 'Rotate Evidence signing keys', slug: 'tutorials/rotate-evidence-signing-keys' },
             { label: 'Rotate credentials and trust', slug: 'operate/advanced/rotate-credentials-and-trust' },
+            { label: 'Connect an OIDC issuer', slug: 'operate/advanced/connect-an-oidc-issuer' },
             { label: 'Inspect and diagnose', slug: 'operate/advanced/inspect-and-diagnose' },
             { label: 'Back up and restore', slug: 'operate/advanced/back-up-and-restore' },
             { label: 'Upgrade and retire', slug: 'operate/advanced/upgrade-and-retire' },
@@ -772,7 +830,6 @@ export default defineConfig({
             { label: 'Static metadata publication', slug: 'explanation/publishing-pipeline' },
             { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
             { label: 'Records stay home', slug: 'explanation/records-stay-home' },
-            { label: 'Disclosure modes', slug: 'explanation/disclosure-modes-and-computed-answers' },
             { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },
             { label: 'Trusted context', slug: 'explanation/trusted-context-constraints' },
             { label: 'DPI safeguards', slug: 'explanation/dpi-safeguards-alignment' },
@@ -796,7 +853,6 @@ export default defineConfig({
             { label: 'Environment variables', slug: 'reference/environment-variables' },
             { label: 'Configuration files', slug: 'reference/configuration-files' },
             { label: 'API overview', slug: 'reference/apis' },
-            { label: 'evidencectl workflows', slug: 'reference/evidencectl' },
             ...cliReferenceSidebar(undefined, { omit: omittedCliBinaries(selectedDocset) }),
             {
               label: 'Compatibility',
@@ -816,7 +872,7 @@ export default defineConfig({
                 { label: 'Documentation framework', slug: 'spec/rs-doc' },
                 { label: 'Terms', slug: 'spec/rs-terms' },
                 { label: 'Architecture', slug: 'spec/rs-arc-g' },
-                { label: 'Evidence Gateway protocol', slug: 'spec/rs-pr-evidence' },
+                { label: 'Registry Evidence protocol', slug: 'spec/rs-pr-evidence' },
                 { label: 'Security model', slug: 'spec/rs-sec-g' },
                 { label: 'Portable metadata model', slug: 'spec/rs-dm-manifest' },
               ],
@@ -829,18 +885,20 @@ export default defineConfig({
               items: flattenSidebarGroups(generatedProduct('Manifest').items),
             },
             // Older docsets can predate the generated Evidence product pages.
-            ...(optionalGeneratedProduct('Evidence Gateway')
+            ...(optionalGeneratedProduct('Registry Evidence')
               ? [
                   {
-                    label: 'Evidence Gateway',
+                    label: 'Registry Evidence',
                     collapsed: true,
-                    items: flattenSidebarGroups(generatedProduct('Evidence Gateway').items),
+                    items: flattenSidebarGroups(generatedProduct('Registry Evidence').items),
                   },
                 ]
               : []),
             { label: 'Changelog', slug: 'changelog' },
             { label: 'Privacy', slug: 'privacy' },
             { label: 'Accessibility', slug: 'accessibility' },
+            // The glossary is a lookup, not a first encounter, so it ends Reference.
+            { label: 'Glossary', slug: 'reference/glossary' },
           ],
         },
       ],

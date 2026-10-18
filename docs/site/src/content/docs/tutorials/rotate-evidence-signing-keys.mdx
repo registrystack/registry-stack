@@ -1,5 +1,5 @@
 ---
-title: Rotate Evidence Gateway signing keys
+title: Rotate Registry Evidence signing keys
 description: Distribute successor verification trust, deploy a new pinned Transit signer, and retire the predecessor after its validity window.
 status: current
 owner: registry-docs
@@ -16,100 +16,114 @@ tutorial_test:
   skip: drift-checked by evidence-production-build-docs.test.mjs; needs a deployed signing key
 ---
 
-Use this procedure after [configuring Transit signing](../move-evidence-to-production-signing/).
-Evidence Gateway signs with one active ES256 P-256 key whose `kid` is its RFC 7638 thumbprint.
-The normalized target binds that key through `signer.publicJwkFile` and `signer.keyVersion`.
-Coordinate new verification trust with consumers before replacing the signer.
+You run a candidate that signs through a Transit signer, as in
+[Configure Transit signing for Registry Evidence](../move-evidence-to-production-signing/). Move it
+to a successor key version without a gap in verification, then retire the predecessor.
 
-## Prepare the successor
+## Publish the successor
 
-You need an approved strict deployment, provider authority to rotate its named Transit key, and a
-consumer trust rollout that accepts both generations during the assertion validity window.
-Publishing a JWK does not make an independent consumer trust it.
+Rotate the Transit key, read its metadata, and convert the successor key version's public PEM:
 
-Create a new version of the non-exportable P-256 Transit key. Keep export and plaintext backup
-disabled. Read the successor's public PEM and convert it with `evidencectl jwk from-pem`, as in
-[publish the exact public projections](../move-evidence-to-production-signing/#publish-the-exact-public-projections).
-Commit only the public JWK under `public-keys/<thumbprint>.jwk.json`. Do not overwrite the active file.
+```sh test-skip="needs an authenticated Vault or OpenBao operator session"
+vault write -f transit/keys/evidence-signing/rotate
+vault read -format=json transit/keys/evidence-signing > "<operator-review-path>/evidence-key.json"
+```
 
-:::caution
-The private Transit key stays with its provider. Do not export it or replace it with a disposable
-local key. A version whose private material has left provider custody must be replaced.
-:::
+```sh
+jq -r '.data.keys["<successor-version>"].public_key' "<operator-review-path>/evidence-key.json" \
+  | evidencectl jwk from-pem - --output-dir "<target>/public-keys"
+```
 
-Distribute the successor public key, provider identity, `kid` and activation window through the
-approved onboarding channel. Consumers retain the predecessor and add the successor to their
-reviewed trust set. Confirm this rollout before activating the signer. The current normalized
-target selects one service key; it does not author a second published key set for a JWKS overlap.
-Consumers that rely only on cached service JWKS need a coordinated refresh or a cutover window.
+```text test-expect
+wrote <target>/public-keys/<successor-thumbprint>.jwk.json (kid <successor-thumbprint>)
+```
+
+Keep the predecessor's file. A deployment target cannot author a published-key overlap or a
+signing-key denylist (the bundle carries `publishedPublicJwkFiles: []` and `revokedKeyIds: []`), so
+rotation relies on overlap trust that consumers hold, set up as in
+[Manage verifier trust](../manage-evidence-verifier-trust/). Give consumers both keys as one set:
+
+```sh
+evidencectl jwks --output "<overlap.jwks.json>" \
+  "<target>/public-keys/<predecessor-thumbprint>.jwk.json" \
+  "<target>/public-keys/<successor-thumbprint>.jwk.json"
+```
+
+```text test-expect
+wrote <overlap.jwks.json>
+```
+
+Confirm every consumer trusts the successor before you switch the signer.
+
+{/* Evidence: crates/registry-evidencectl/src/authoring.rs, render_local_bundle; products/evidence/contracts/bundle.schema.yaml; crates/registry-evidencectl/src/jwk.rs, run_from_pem */}
 
 ## Build and activate the successor
 
-Set the successor's exact public-key reference and provider version together in `target.yaml`:
-
-```yaml
-signer:
-  type: transit
-  algorithm: ES256
-  publicJwkFile: public-keys/<next-thumbprint>.jwk.json
-  unixSocketPath: /run/registry-evidence/transit-proxy.sock
-  mount: transit
-  keyName: evidence-signing
-  keyVersion: <next-nonzero-version>
-  attemptTimeoutMilliseconds: 2000
-```
-
-Allow both old and new versions in the proxy policy during the rollout, and keep the provider's
-`min_encryption_version` low enough for replicas still pinned to the predecessor.
-Build a new candidate and run its fixtures:
+In `target.yaml`, set `signer.keyVersion` to the successor key version and `signer.publicJwkFile`
+to the successor's file. Allow both versions in the proxy policy, for example
+`"key_version" = [12, 13]`, and keep `min_encryption_version` at or below the predecessor while
+replicas still sign with it. Then package; `package` runs the fixtures:
 
 ```sh
-evidencectl package "<deployment-repository>/shared/evidence-project" \
-  --target "<deployment-repository>/environments/<environment>/evidence" \
-  --output "<new-candidate-directory>"
-evidencectl test "<deployment-repository>/shared/evidence-project" \
-  --target "<deployment-repository>/environments/<environment>/evidence"
+evidencectl package "<project>" --target "<target>/target.yaml" --output "<successor-candidate>"
 ```
 
-Install the exact `bundle/` at the emitted runtime's `package.root`, retain its runtime and compiled
-authority separately, and activate the complete authority before the target-host check:
+```text test-excerpt
+Package digest: sha256:<package-digest>
+Package: <successor-candidate>/bundle
+```
+
+Install the bundle at the runtime's `package.root`, then activate the authority and check:
 
 ```sh
-evidence authority activate --runtime-config "<candidate>/runtime.yaml" \
-  --document "<candidate>/compiled-authority.yaml"
-evidence check --require-runtime-dependencies --runtime-config "<candidate>/runtime.yaml"
+evidence authority activate --runtime-config "<successor-candidate>/runtime.yaml" \
+  --document "<successor-candidate>/compiled-authority.yaml"
+evidence check --runtime-config "<successor-candidate>/runtime.yaml" --require-runtime-dependencies
 ```
 
-Restart every replica to adopt the checked successor. Confirm readiness, send an authorized synthetic
-request, and verify the response with the consumer's approved overlap trust set. Missing or
-mismatched signing material refuses startup; signing never falls back to an unsigned success.
-Target signing changes do not alter a definition's `configurationRevision`.
+```text test-excerpt
+ACTIVATED sha256:<authority-revision> sha256:<authority-digest> sequence=<n>
+Evidence package sha256:<package-digest> passed check (<count> requirements)
+```
+
+The successor's public key is part of the package, so the activation records a new history entry.
+Running it again for the same candidate, for example after fixing a refused check, fails and
+reports that this authority revision is already active; continue with the check.
+
+Restart every replica, confirm readiness, and verify one synthetic response against the overlap
+trust set. Missing or mismatched signing material refuses startup.
+
+{/* Evidence: crates/registry-evidencectl/src/build.rs, prepare_candidate, run_bundle_fixture; crates/registry-evidence/src/authority.rs, activate */}
 
 ## Retire the predecessor
 
-Count the longest assertion validity plus accepted verifier clock skew from the last instant any
-replica could sign with the predecessor. Keep its public key in consumer trust for at least that
-window, and longer when consumers must reverify retained decisions.
+Wait for the longest assertion validity plus verifier clock skew after the last instant any replica
+could sign with the predecessor. Then remove the old version from the proxy policy and raise the
+key's `min_encryption_version` to the successor; the runtime refuses a pinned version below it:
 
-After every replica uses the successor and the window has elapsed, remove the old version from the
-proxy policy and raise `min_encryption_version` to the successor. Coordinate removal of the old
-public key from consumer trust. Keep prior approved candidates and audit history according to the
-operator's retention policy.
+```sh test-skip="needs an authenticated Vault or OpenBao operator session"
+vault write transit/keys/evidence-signing/config min_encryption_version=<successor-version>
+```
+
+:::caution
+Raising `min_encryption_version` stops every replica still pinned to the predecessor. Confirm all
+replicas run the successor first.
+:::
+
+Ask consumers to drop the predecessor from their trust set.
+
+{/* Evidence: crates/registry-platform-crypto/src/lib.rs, TransitSigner, min_encryption_version */}
 
 ## Revoke a compromised version
 
-Disable provider signing for the compromised version immediately, using `min_encryption_version`
-or removing the proxy identity's signing capability. Distribute its thumbprint through the emergency
-onboarding channel so every consumer denies it before resuming decisions. Deploy a checked successor
-or keep the service unavailable. The current normalized target does not author a service signing-key
-denylist; do not invent a target field or edit immutable bundle bytes to add one.
+Raise `min_encryption_version` past the compromised version, or remove the proxy identity's sign
+capability, at once. Distribute its thumbprint through the emergency channel so consumers deny it,
+then deploy a checked successor or keep the service unavailable. Do not edit bundle bytes to add a
+denylist.
 
-For a compromised caller-token issuer key, use `authentication.oidc.revokedKeyIds` in `target.yaml`,
-build a new candidate and restart Evidence Gateway. This changes token acceptance, not an Evidence
-credential-status or lifecycle feature.
+For a compromised caller-token issuer key, add its `kid` to `authentication.oidc.revokedKeyIds` in
+`target.yaml`, package, and restart.
 
 ## Next
 
-- [Manage Evidence Gateway verifier trust](../manage-evidence-verifier-trust/)
-- [Evidence Gateway security model](../../security/evidence/)
-- [Configure Evidence Gateway](../../configure/evidence/)
+[Operate the Registry Evidence audit log](../../operate/evidence-audit/)

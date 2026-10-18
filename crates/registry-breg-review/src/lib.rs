@@ -48,8 +48,8 @@ use registry_platform_httpsec::{security_headers, CspBuilder};
 use registry_platform_httputil::client::{PrivateKeyJwt, PrivateKeyJwtConfig};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    fetch_discovery_with_policy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
-    TokenVerifier, TokenVerifierConfig,
+    fetch_discovery_for_issuer, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig,
+    OidcDiscoveryConfig, TokenVerifier, TokenVerifierConfig,
 };
 use registry_platform_ratelimit::token_bucket::{
     TokenBucketConfig, TokenBucketError, TokenBucketLimiter,
@@ -507,14 +507,6 @@ fn discovered_endpoint(
         })
 }
 
-fn fetch_url_policy(config: &RuntimeConfig) -> FetchUrlPolicy {
-    if config.development() {
-        FetchUrlPolicy::dev()
-    } else {
-        FetchUrlPolicy::strict()
-    }
-}
-
 /// The confidential client the page redeems sign-in codes with. Building it
 /// makes no network call.
 fn sign_in_client(
@@ -641,17 +633,19 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
         global_sign_in,
     } = offline(&config)?;
     let development = config.development();
-    let policy = fetch_url_policy(&config);
-
     let issuer = config.sign_in.issuer.as_str().to_owned();
-    let discovery = fetch_discovery_with_policy(
+    // Sign-in sends client credentials to the token endpoint, so the page
+    // never opts in to plain HTTP beyond loopback.
+    let network = IssuerNetworkPolicy::new(&issuer, false)
+        .map_err(|error| RuntimeError::Discovery(error.to_string()))?;
+    let (discovery, jwks_policy) = fetch_discovery_for_issuer(
         &OidcDiscoveryConfig {
             issuer: issuer.clone(),
             jwks_uri_override: None,
             discovery_timeout: DISCOVERY_TIMEOUT,
             max_doc_bytes: MAXIMUM_DISCOVERY_BYTES,
         },
-        &policy,
+        false,
     )
     .await
     .map_err(|error| RuntimeError::Discovery(error.to_string()))?;
@@ -667,7 +661,7 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
     let jwks = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         discovery.jwks_uri.clone(),
         JwksFetcherConfig::defaults(),
-        policy.clone(),
+        jwks_policy,
     ));
     // The verifier accepts ID tokens only: with no access-token `typ`
     // allowed, it refuses every access token, which the page never reads.
@@ -682,7 +676,10 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
         .with_leeway(ID_TOKEN_LEEWAY),
         jwks,
     );
-    let sign_in_client = sign_in_client(&config, token_endpoint, client_key, policy)?;
+    let token_policy = network
+        .discovered_endpoint_fetch_policy(token_endpoint.as_str())
+        .map_err(|error| RuntimeError::Discovery(error.to_string()))?;
+    let sign_in_client = sign_in_client(&config, token_endpoint, client_key, token_policy)?;
 
     let writer = match writer {
         Some(writer) => writer,
@@ -871,6 +868,50 @@ pub async fn serve_until(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn production_sign_in_refuses_plain_http_beyond_loopback() {
+        let document = registry_platform_oidc::DiscoveryDocument {
+            issuer: "http://id.example:8090".to_owned(),
+            jwks_uri: "http://id.example:8090/jwks".to_owned(),
+            userinfo_endpoint: None,
+            extra: serde_json::Map::from_iter([
+                (
+                    "authorization_endpoint".to_owned(),
+                    serde_json::json!("http://id.example:8090/authorize"),
+                ),
+                (
+                    "token_endpoint".to_owned(),
+                    serde_json::json!("http://id.example:8090/token"),
+                ),
+            ]),
+        };
+        for member in ["authorization_endpoint", "token_endpoint"] {
+            assert!(discovered_endpoint(&document, member, false).is_err());
+            assert!(discovered_endpoint(&document, member, true).is_err());
+        }
+        assert!(matches!(
+            IssuerNetworkPolicy::new("http://id.example:8090", false),
+            Err(registry_platform_oidc::OidcError::InsecureHttpRequiresOptIn)
+        ));
+
+        let network = IssuerNetworkPolicy::new("https://id.example", false).unwrap();
+        for refused in [
+            Url::parse("https://10.20.30.40/token").unwrap(),
+            Url::parse("https://169.254.169.254/token").unwrap(),
+        ] {
+            let error = network
+                .discovered_endpoint_fetch_policy(refused.as_str())
+                .unwrap()
+                .validate_dns_pinned_for_immediate_fetch(&refused)
+                .expect_err("cross-origin private and metadata endpoints remain denied");
+            assert!(matches!(
+                error,
+                registry_platform_httputil::FetchUrlError::PrivateRangeDenied { .. }
+                    | registry_platform_httputil::FetchUrlError::CloudMetadataDenied { .. }
+            ));
+        }
+    }
 
     #[test]
     fn only_lowercase_hyphenated_uuids_are_canonical() {

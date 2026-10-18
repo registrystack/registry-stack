@@ -181,8 +181,9 @@ and bounded, signing and both audit gates remain fail-closed, and assertions
 are visibly marked `local`. A supervised local issuer may use only the exact
 canonical issuer origin `http://127.0.0.1:<non-zero-port>`, and its JWKS must
 be served from that exact origin at an absolute path with no query or fragment;
-other authentication URLs remain HTTPS. The route is the issuer's to choose;
-the origin is not.
+other authentication URLs remain HTTPS unless the local bundle sets
+`authentication.oidc.allowInsecureHttp: true`. The route is the issuer's to
+choose; the origin is not.
 
 `production` and `evidence-grade` are deployable profiles. Every requirement
 must reference a fixture suite, and the existing complete coverage validation
@@ -198,7 +199,8 @@ artifact, or alternate evaluator is introduced by the assurance profile.
 | `service.trustDomain` | yes | One operator-controlled trust-domain URI for the process. |
 | `issuer.uri` | yes | Legal issuer URI placed in evidence. Governance must authorize the provider to act for it. The key was `issuer.id`; a bundle that still writes `id` there is refused with `config.removed-key`. |
 | `authentication.oidc` | yes | The one OpenID Connect issuer whose access tokens this deployment accepts, and the rules a token from it must satisfy. Evidence accepts no other inbound credential. |
-| `authentication.oidc.issuer`, `authentication.oidc.jwksSource` | yes | Exact HTTPS token issuer and the fixed JWKS endpoint, written `jwksSource: {type: uri, uri: <JWKS URL>}`. `uri` is the only key-source type Evidence accepts; discovery and static key sets are refused. Path-based issuers are supported. The fixed JWKS endpoint may resolve to a public or private HTTPS address; DNS is pinned for each fetch, ambient proxies are disabled, and cloud-metadata destinations remain prohibited. |
+| `authentication.oidc.issuer`, `authentication.oidc.jwksSource` | yes | Exact HTTPS token issuer and the fixed JWKS endpoint, written `jwksSource: {type: uri, uri: <JWKS URL>}`. `uri` is the only key-source type Evidence accepts; discovery and static key sets are refused. Path-based issuers are supported. The fixed JWKS endpoint is declared by the operator, so it inherits the declared issuer's allowance on any origin: it may resolve to a public, private, or loopback address. Cloud-metadata and link-local destinations remain prohibited, DNS is pinned for each fetch, and ambient proxies and redirects are disabled. Evidence never follows a JWKS URI from a discovery document, so the stricter rule for discovered cross-origin endpoints does not arise. |
+| `authentication.oidc.allowInsecureHttp` | no | Permits plain HTTP to the issuer and the JWKS endpoint beyond loopback, under the `local` assurance profile only. Omission is false. `production` and `evidence-grade` bundles require HTTPS for both even when it is set: such a bundle that sets it to `true` is refused with a message naming the key, and so is one that writes a plain HTTP issuer or JWKS URI. When it is in force the runtime logs a warning at startup. |
 | `authentication.oidc.audience` | yes | The one exact audience an inbound token must carry. It is also the resource the deployment advertises in its protected-resource metadata. |
 | `authentication.oidc.tokenTypes` | yes | Non-empty allowlist containing only `at+jwt` and/or `application/at+jwt`. |
 | `authentication.oidc.algorithms` | yes | Non-empty allowlist containing only `EdDSA`, `ES256`, and/or `RS256`. No algorithm fallback is permitted. |
@@ -256,6 +258,7 @@ authority.
 |---|---|
 | `string` | `minimumBytes`, `maximumBytes` |
 | `date` | Canonical `YYYY-MM-DD` |
+| `uuid` | Exactly 36 ASCII characters: lowercase hexadecimal groups of 8-4-4-4-12 separated by hyphens; uppercase is refused, without normalization |
 | `integer` | Inclusive `minimum`, `maximum` within the safe integer bound |
 | `boolean` | No additional keys |
 | `controlled-code` | `codelist`, `codelistVersion`, `maximumBytes` |
@@ -287,7 +290,9 @@ ordered history and active compiled snapshot. Activation derives
 `authorityRevision` with a dedicated digest domain and `authorityDigest` from
 canonical document bytes, binds the exact package digest, and commits the state
 under a single-writer lock with file and directory synchronization. Repeating
-an exact activation is idempotent. Invalid documents and prepared temporary
+an exact activation is refused as already active. Each activation writes an
+audit request entry before it takes that lock and a response entry after it
+commits or refuses; refusals never touch the store. Invalid documents and prepared temporary
 files cannot replace the committed state. If the command cannot confirm a
 commit, inspect the committed history before retrying.
 
@@ -393,8 +398,15 @@ Each requirement declares these fields:
 | `type` | Other keys | Call ceiling |
 |---|---|---|
 | `single` | `source` | One. |
-| `search-then-fetch` | `search`, `fetch` (one source id) | Two. |
+| `search-then-fetch` | `search`, `fetch` (one source id), optional `onFetchNoMatch` | Two. |
 | `search-then-fetch-set` | `search`, `fetch` (2 through 4 members), `maximumAcquisitionMilliseconds` | One plus the declared member count. |
+
+For `search-then-fetch`, `onFetchNoMatch` defaults to `dependency-failure`.
+Set it to `unavailable` only when the fetch may legitimately find no record.
+A declared unresolved 404 or extracted no-match then returns 422
+`evidence.unavailable` and an `Unresolved` audit decision. Sequential request
+batches return an unavailable item. Ambiguous fetches and transport failures
+remain 503, and no absent record reaches derivation or assertion signing.
 
 `search-then-fetch-set` is a gated kind. It serves only where this bundle names
 it under `acquisitionCapabilities` and the operator separately names it under
@@ -1760,6 +1772,7 @@ authentication.oidc
 authentication.oidc.actorClaim
 authentication.oidc.algorithms
 authentication.oidc.algorithms[]
+authentication.oidc.allowInsecureHttp
 authentication.oidc.allowedClients
 authentication.oidc.allowedClients[]
 authentication.oidc.assertionIssuers
@@ -1843,6 +1856,7 @@ requirements[].acquisition.fetch[].factInputs
 requirements[].acquisition.fetch[].factInputs[]
 requirements[].acquisition.fetch[].source
 requirements[].acquisition.maximumAcquisitionMilliseconds
+requirements[].acquisition.onFetchNoMatch
 requirements[].acquisition.search
 requirements[].acquisition.source
 requirements[].acquisition.type

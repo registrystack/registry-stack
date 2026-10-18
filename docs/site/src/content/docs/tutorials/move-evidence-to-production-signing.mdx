@@ -1,5 +1,5 @@
 ---
-title: Configure Transit signing for Evidence Gateway
+title: Configure Transit signing for Registry Evidence
 description: Configure non-exportable P-256 signing through a workload-local Vault or OpenBao Transit proxy without giving provider credentials to the service.
 status: current
 owner: registry-docs
@@ -16,52 +16,38 @@ tutorial_test:
   skip: drift-checked by evidence-production-build-docs.test.mjs; needs a Transit signer
 ---
 
-Use this procedure to move Evidence Gateway from disposable local signing to a strict deployment.
-The service signs through its own workload-local Unix-socket proxy. The service
-process receives no Vault or OpenBao token, and the provider retains the private key.
+You have a candidate that serves with a local JWK signer. Move the same Evidence project to a
+Transit signer before it serves real callers: Vault or OpenBao holds the private key and never
+exports it, and Registry Evidence signs through a workload-local proxy socket. The service
+process receives no Vault or OpenBao token.
 
-## Prerequisites
+## What you need
 
-You need:
+- A Vault or OpenBao Transit mount administered outside the application workload, and an
+  authenticated operator session for it. The commands use a mount named `transit`.
+- A copy of the release's production example. Download the source archive of your release,
+  `https://github.com/registrystack/registry-stack/archive/refs/tags/v<version>.tar.gz`, where
+  `<version>` is the version `evidencectl --version` prints. It unpacks to
+  `registry-stack-<version>/`; copy its
+  `products/evidence/reference/deployment-targets/environments/production/` directory to
+  `production/` beside your project. The copy holds the Transit policy, the proxy configuration,
+  and the deployment target `production/evidence/target.yaml`; `<target>` in the commands is
+  `production/evidence`.
+- `evidencectl` and `evidence` from the same release, and [`jq`](https://jqlang.org/).
 
-- A Vault or OpenBao Transit mount administered outside the application workload.
-- A separate provider identity and Transit key for each environment.
-- An auto-auth method appropriate for the deployment platform.
-- A reviewed deployment target based on the ready-to-copy templates under
-  `products/evidence/reference/deployment-targets/`.
-- `evidencectl` from the same release as the Evidence Gateway runtime, and
-  [`jq`](https://jqlang.org/), to convert each service's public key from PEM to JWK.
-  [Publish the exact public projections](#publish-the-exact-public-projections) gives the exact
-  command for Evidence Gateway.
-
-The commands use a Transit mount named `transit`. Change the mount consistently when your provider
-uses another name.
-
-## Create one key per service
-
-Run the provider administration commands through an authenticated operator session, not from the
-Evidence Gateway container.
-
-Settle three things before you create the key. Decide which provider instance and mount hold this
-signing identity for as long as the key is in service. Confirm that the provider's own backup and
-restore covers that mount, because there is no key-level export or plaintext backup to fall back on.
-Record the mount, the key name, the service and environment the key serves, and the operator
-identity authorized to rotate it, in the deployment record rather than in application configuration.
+## Create the Transit key and its policy
 
 :::caution
-A key created with `exportable=false` and `allow_plaintext_backup=false` never releases its private
-material, and the pair is one-way in the permissive direction only: a provider administrator can set
-either field to `true` on this key later, and Vault and OpenBao then refuse to set it back to
-`false`. Evidence Gateway accepts a Transit key only while both fields read `false`, so exporting the key
-retires that key name permanently, for every version under it.
-There is no supported way to move this private key to another key manager or to sign with it outside
-the provider. The recovery path is a new key and
-[rotating the signing key](../rotate-evidence-signing-keys/), not export.
+`exportable=false` and `allow_plaintext_backup=false` are one-way in the permissive direction: a
+provider administrator can later set either to `true`, and Vault and OpenBao then refuse to set it
+back. Registry Evidence refuses a Transit key unless both read `false`, so exporting the key retires
+that key name for every version under it. The recovery path is a new key, never an export.
+Confirm the provider's own backup covers this mount before you create it.
 :::
 
-Create non-derived, non-exportable P-256 keys with plaintext backup disabled:
+Create a non-derived, non-exportable P-256 key with plaintext backup disabled:
 
-```sh
+```sh test-skip="needs an authenticated Vault or OpenBao operator session"
 vault write transit/keys/evidence-signing \
   type=ecdsa-p256 \
   derived=false \
@@ -69,85 +55,15 @@ vault write transit/keys/evidence-signing \
   allow_plaintext_backup=false
 ```
 
-Use the equivalent `bao` commands for OpenBao. The
-[Vault Transit API](https://developer.hashicorp.com/vault/api-docs/secret/transit) and
-[OpenBao Transit API](https://openbao.org/api-docs/secret/transit/) define the same fields used by
-the runtime checks.
+Read its metadata to a review file and record the key version you will pin:
 
-Read each key's metadata and record the nonzero version that the application will pin:
-
-```sh
+```sh test-skip="needs an authenticated Vault or OpenBao operator session"
 vault read -format=json transit/keys/evidence-signing > "<operator-review-path>/evidence-key.json"
 ```
 
-The reviewed metadata must report `type: ecdsa-p256`, `derived: false`, `exportable: false`,
-`allow_plaintext_backup: false`, and signing support. Remove the local review files after recording
-the approved public projection and controls. Do not commit provider responses.
-
-## Publish the exact public projections
-
-Convert the selected version's public PEM to an exact public JSON Web Key (JWK). The `kid` is the
-RFC 7638 thumbprint of `crv`, `kty`, `x`, and `y`, a 43-character value that also names the file:
-
-```json
-{
-  "kty": "EC",
-  "crv": "P-256",
-  "x": "<base64url-x-coordinate>",
-  "y": "<base64url-y-coordinate>",
-  "alg": "ES256",
-  "kid": "<rfc7638-thumbprint>"
-}
-```
-
-The object must contain exactly those six members and no private member. `evidencectl jwk from-pem`
-produces it: it reads one PEM public key, refuses a private key or an unsupported key type, derives
-`x` and `y` from the P-256 point, computes the thumbprint, and with `--output-dir` writes the JWK as
-`<thumbprint>.jwk.json`. Run it on the pinned version's PEM from each service's saved review
-metadata:
-
-```sh
-jq -r '.data.keys["<nonzero-version>"].public_key' "<operator-review-path>/evidence-key.json" \
-  | evidencectl jwk from-pem - --output-dir "environments/<environment>/evidence/public-keys"
-```
-
-The command prints the path it wrote and the thumbprint it used as the filename. The result lands
-in the same environment target the command publishes to:
-
-```text
-environments/<environment>/
-  evidence/public-keys/<evidence-thumbprint>.jwk.json
-```
-
-Keep Evidence Gateway signing, audit, subject-binding, and client keys distinct. Run the target's `check-public-key-separation.sh` before review when you
-start from the maintained deployment-target templates.
-
-## Configure the governed key and runtime signer
-
-Set the public key and matching provider binding together in `target.yaml`:
-
-```yaml
-signer:
-  type: transit
-  algorithm: ES256
-  publicJwkFile: public-keys/<evidence-thumbprint>.jwk.json
-  unixSocketPath: /run/registry-evidence/transit-proxy.sock
-  mount: transit
-  keyName: evidence-signing
-  keyVersion: <nonzero-version>
-  attemptTimeoutMilliseconds: 2000
-```
-
-`evidencectl package` compiles the public key into the immutable bundle and emits the process-local
-signer binding in the candidate's separate `runtime.yaml`. Install that bundle, provision its
-referenced secrets, and activate its `compiled-authority.yaml` before the target-host check.
-
-Do not put a provider token, auto-auth credential, or private JWK in this configuration.
-
-## Isolate provider access in local proxies
-
-Give each proxy identity only read access to its named key metadata and update access to its sign
-endpoint:
+The proxy identity needs read on the key's metadata and update on its sign endpoint, constrained to
+the pinned key version and the exact JWS request shape. This is
+`production/transit/policies/evidence-signing.hcl`, which pins key version 12:
 
 ```hcl
 path "transit/keys/evidence-signing" {
@@ -159,24 +75,31 @@ path "transit/sign/evidence-signing/sha2-256" {
   required_parameters = ["input", "key_version", "marshaling_algorithm", "prehashed"]
   allowed_parameters = {
     "input"                 = []
-    "key_version"           = [<nonzero-version>]
+    "key_version"           = [12]
     "marshaling_algorithm" = ["jws"]
     "prehashed"             = [true]
   }
 }
 ```
 
-The parameter constraints make the service identity usable only for the pinned version and exact
-JWS signing request shape. During a planned rotation,
-temporarily allow the old and new numeric versions, for example `"key_version" = [7, 8]`, then
-remove the retired version after the overlap window. The provider's `min_encryption_version`
-provides a second retirement control.
+The runtime also refuses a pinned key version below the key's `min_encryption_version`;
+[Rotate Registry Evidence signing keys](../rotate-evidence-signing-keys/) uses that control. The
+[Vault Transit API](https://developer.hashicorp.com/vault/api-docs/secret/transit) and the
+[OpenBao Transit API](https://openbao.org/api-docs/secret/transit/) document every other field;
+use the equivalent `bao` commands for OpenBao.
 
-The Evidence Gateway proxy's core boundary is:
+{/* Evidence: crates/registry-platform-crypto/src/lib.rs, TransitSigner, min_encryption_version; products/evidence/reference/deployment-targets/environments/production/transit/policies/evidence-signing.hcl */}
+
+## Run the proxy with a forced token
+
+The proxy holds the provider credential and Registry Evidence holds only the socket. This is
+`production/transit/proxy-configs/evidence.hcl`, without its `pid_file` and `auto_auth` method,
+which you replace with your platform's:
 
 ```hcl
 vault {
-  address = "https://vault.example.com:8200"
+  address = "https://vault.example.org:8200"
+  ca_cert = "/etc/registry-evidence/transit/ca.pem"
   retry {
     num_retries = -1
   }
@@ -190,65 +113,123 @@ listener "unix" {
   address                = "/run/registry-evidence/transit-proxy.sock"
   tls_disable            = true
   socket_mode            = "0660"
-  socket_user            = "<proxy-user>"
-  socket_group           = "<evidence-group>"
+  socket_user            = "vault"
+  socket_group           = "registry-evidence"
   require_request_header = true
 }
 ```
 
-Keep `use_auto_auth_token` at `"force"`. Under `"force"` the proxy replaces any token on the
-incoming request with its own auto-auth token, so the proxy identity is the only identity that
-reaches the provider through this socket. Under the weaker `true`, the proxy attaches its auto-auth
-token only when the request carries none, and a token supplied by whatever reached the socket is
-used instead.
-
-Add the deployment's reviewed `auto_auth` method and provider trust settings.
-
-Configure the proxy to:
-
-- Listen only on the service-specific Unix socket.
-- Force its auto-auth token for proxied requests.
-- Require the `X-Vault-Request` header.
-- Set `retry.num_retries` to `-1` and leave `VAULT_MAX_RETRIES` unset.
-- Set socket ownership so only the intended workload can connect.
-
-These settings make one application signing attempt one provider signing request. The application
-timeout remains the outer bound. The
+Keep `use_auto_auth_token = "force"`: the proxy replaces any token on an incoming request with its
+own, so the proxy identity is the only one that reaches the provider through this socket. Under
+`true`, a token supplied by whatever reached the socket would be used instead. `num_retries = -1`
+makes one signing attempt one provider request, and the socket group admits only the Evidence
+Gateway identity. The
 [Vault API proxy documentation](https://developer.hashicorp.com/vault/docs/agent-and-proxy/proxy/apiproxy)
-describes forced auto-auth, and the
-[Vault Agent configuration](https://developer.hashicorp.com/vault/docs/agent-and-proxy/agent)
-defines the retry and request-header controls. OpenBao deployments use the corresponding
-[OpenBao Agent configuration](https://openbao.org/docs/agent-and-proxy/agent/).
+and the [OpenBao Agent configuration](https://openbao.org/docs/agent-and-proxy/agent/) describe
+the rest.
 
-## Verify before routing traffic
+{/* Evidence: products/evidence/reference/deployment-targets/environments/production/transit/proxy-configs/evidence.hcl; crates/registry-platform-crypto/src/lib.rs, build_transit_client */}
 
-Start the proxy before checking Evidence Gateway. Run the checks from the final execution context so
-the commands see the same socket, public keys, paths, ownership, and secret roots as the service:
+## Export the public JWK file
+
+Convert the pinned key version's public PEM from the review file into the target's
+`public-keys/` directory:
 
 ```sh
-evidence check --runtime-config "<candidate>/runtime.yaml" --require-runtime-dependencies
+jq -r '.data.keys["<key-version>"].public_key' "<operator-review-path>/evidence-key.json" \
+  | evidencectl jwk from-pem - --output-dir "<target>/public-keys"
 ```
 
-Without `--require-runtime-dependencies` the check stays offline and never contacts the provider.
-With it, each check reads provider metadata, verifies the pinned version and custody controls, compares the
-provider public key with the governed JWK, and performs a sign-and-verify self-test. A mismatch,
-timeout, malformed response, or unavailable proxy fails the check.
+```text test-expect
+wrote <target>/public-keys/<thumbprint>.jwk.json (kid <thumbprint>)
+```
 
-Start the service only after the check passes. Route requests only after `/ready` reports ready. If provider access fails later, signing fails closed and readiness reports the signer
-unavailable. Readiness recovers after a successful provider self-test.
+The `kid` is the RFC 7638 thumbprint, and it names the public JWK file. The command refuses a
+private key. Commit only the public JWK file, then delete the review file; do not commit provider
+responses. See [`evidencectl jwk from-pem`](../../reference/cli/evidencectl/jwk/from-pem/).
 
-## Troubleshooting
+{/* Evidence: crates/registry-evidencectl/src/jwk.rs, run_from_pem, public_jwk_from_pem */}
 
-- If metadata validation fails, compare the key type, custody controls, signing support, and pinned
-  version with the governed configuration.
-- If public-key matching fails, regenerate the JWK from the pinned provider version. Do not edit
-  `x`, `y`, or `kid` by hand.
-- If the proxy refuses requests, check the named-key policy, forced auto-auth state, socket
-  ownership, and required request header.
-- If checks time out, inspect the workload-local proxy and provider path. Do not add application or
-  proxy retries.
+## Point the signer at the key version
+
+Replace the target's `signer` block. This is the one in `production/evidence/target.yaml`:
+
+```yaml
+signer:
+  type: transit
+  unixSocketPath: /run/registry-evidence/transit-proxy.sock
+  mount: transit
+  keyName: evidence-signing
+  keyVersion: 12
+  attemptTimeoutMilliseconds: 2000
+  algorithm: ES256
+  publicJwkFile: public-keys/PSmhXYjoKCBO6gCOMNHqMvnnsAC3m0aaLfXZDWJLmd4.jwk.json
+```
+
+`keyVersion` must be the version the policy allows, and `publicJwkFile` the file `jwk from-pem` wrote.
+Put no provider token or private key in the target.
+
+{/* Evidence: crates/registry-evidence-authoring/src/target_binding.rs, TargetSigner; products/evidence/reference/deployment-targets/environments/production/evidence/target.yaml */}
+
+## Check, package, and activate
+
+Check the project against the target for production:
+
+```sh
+evidencectl check "<project>" --target "<target>/target.yaml" --production
+```
+
+```text test-expect
+Evidence project check: complete
+Project: <project>
+Target: <target>/target.yaml
+0 errors, 0 warnings
+```
+
+Package the candidate. `package` runs the check and the fixtures again before it writes anything:
+
+```sh
+evidencectl package "<project>" --target "<target>/target.yaml" --output "<candidate>"
+```
+
+```text test-excerpt
+Package digest: sha256:<package-digest>
+Package: <candidate>/bundle
+Runtime: <candidate>/runtime.yaml
+Authority: <candidate>/compiled-authority.yaml
+```
+
+The public JWK file goes into the bundle, and the socket, mount, key name, and key version go into
+the candidate's `runtime.yaml`. Install the bundle and activate the target authority as in
+[Build and deploy a Registry Evidence project](../build-and-deploy-evidence-project/).
+
+{/* Evidence: crates/registry-evidencectl/src/build.rs, prepare_candidate, run_bundle_check, run_bundle_fixture */}
+
+## Run doctor, then serve
+
+Start the proxy first. Then, on the target host, run doctor:
+
+```sh
+evidencectl doctor --runtime-config "<candidate>/runtime.yaml"
+```
+
+Doctor reads the key's metadata, checks the custody fields and the key version, compares the
+provider's public key with the public JWK file, and signs and verifies a self-test message. When the
+proxy is not answering, it refuses:
+
+```text test-excerpt
+error[evidence.deployment.signing-unavailable] <candidate>/runtime.yaml
+  runtime signing initialization failed: the Transit provider did not answer on the configured Unix socket (missing socket, refused connection, or timeout)
+```
+
+When doctor passes, start the service with
+[`evidence serve`](../../reference/cli/evidence/serve/) and route traffic only after `/ready` reports
+ready. If the provider becomes unreachable later, signing fails closed and readiness reports the
+signer unavailable until a self-test succeeds. See
+[`evidencectl doctor`](../../reference/cli/evidencectl/doctor/).
+
+{/* Evidence: crates/registry-evidence/src/runtime.rs; crates/registry-platform-crypto/src/lib.rs, validate_transit_public_key; crates/registry-evidencectl/src/runtime.rs */}
 
 ## Next
 
-- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
-- [Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/)
+[Integrate a Registry Evidence candidate with Docker Compose](../integrate-evidence-candidate-with-docker-compose/)

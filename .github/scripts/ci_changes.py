@@ -249,17 +249,21 @@ EVIDENCE_TUTORIAL_INPUTS = (
     "docs/site/scripts/run-tutorial.mjs",
     "docs/site/scripts/tutorial-runner/**",
     "docs/site/scripts/fixtures/fhir-tutorial-mock.py",
+    "docs/site/scripts/generate-evidence-examples.mjs",
+    "docs/site/src/content/docs/configure/enable-sd-jwt-vc.mdx",
+    "docs/site/src/content/docs/configure/evidence-oid4vci.mdx",
     "docs/site/src/content/docs/tutorials/assert-a-role-bound-relationship.mdx",
+    "docs/site/src/content/docs/tutorials/build-and-deploy-evidence-project.mdx",
     "docs/site/src/content/docs/tutorials/connect-a-sqlite-extract.mdx",
+    "docs/site/src/content/docs/tutorials/connect-an-institution-source.mdx",
     "docs/site/src/content/docs/tutorials/control-who-can-request-evidence.mdx",
     "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
-    "docs/site/src/content/docs/tutorials/issue-fhir-evidence-as-vcs.mdx",
-    "docs/site/src/content/docs/tutorials/refuse-unsafe-evidence-requests.mdx",
+    "docs/site/src/content/docs/tutorials/prove-an-evidence-project.mdx",
     "docs/site/src/content/docs/tutorials/request-evidence-as-sd-jwt-vc.mdx",
     "docs/site/src/content/docs/tutorials/request-evidence-from-an-application.mdx",
-    "docs/site/src/content/docs/tutorials/run-oid4vci-interoperability-checks.mdx",
     "docs/site/src/content/docs/tutorials/return-a-governed-value.mdx",
     "docs/site/src/content/docs/tutorials/verify-an-assertion-as-a-consumer.mdx",
+    "products/evidence/examples/fhir/**",
     "products/evidence/examples/standalone/**",
     "products/evidence/fixtures/interoperability/inji-oid4vci/profile.json",
     "products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json",
@@ -327,6 +331,9 @@ CASEWORK_TUTORIAL_INPUTS = (
     "docs/site/package.json",
     "docs/site/scripts/run-tutorial.mjs",
     "docs/site/scripts/tutorial-runner/**",
+    "docs/site/src/content/docs/configure/casework-directory.mdx",
+    "docs/site/src/content/docs/configure/casework.mdx",
+    "docs/site/src/content/docs/operate/change-a-casework-package.mdx",
     "docs/site/src/content/docs/tutorials/first-casework.mdx",
 )
 
@@ -566,6 +573,7 @@ DOCS_ARCHIVE_INPUTS = frozenset(
         "docs/site/scripts/configuration-reference.mjs",
         "docs/site/scripts/docsets.mjs",
         "docs/site/scripts/generate-breg-configuration.mjs",
+        "docs/site/scripts/generate-casework-configuration.mjs",
         "docs/site/scripts/generate-configuration-formats.mjs",
         "docs/site/scripts/generate-evidence-configuration.mjs",
         "docs/site/scripts/generate-scheduling-configuration.mjs",
@@ -1232,7 +1240,13 @@ def classify(
             # them, so either going stale needs a docs rebuild.
             "products/evidence/contracts/*",
             "products/evidence/generated/registry-evidence.openapi.json",
+            # The wallet delivery API reference is generated from the
+            # supporting service's own description.
+            "products/evidence/generated/registry-evidence-oid4vci.openapi.json",
             "crates/registry-evidencectl/schemas/authoring/*",
+            # The same generator publishes the evidence-oid4vci runtime grammar
+            # for the supporting service's configure page.
+            "products/evidence/generated/oid4vci-runtime/*",
             "products/breg/generated/authoring/*",
             "products/breg/generated/runtime/*",
             # The Scheduling configuration reference page is generated from
@@ -1241,6 +1255,13 @@ def classify(
             "products/scheduling/generated/records/*",
             "products/scheduling/generated/fixture/*",
             "products/scheduling/generated/runtime/*",
+            # The Casework configure and operate pages render tables generated
+            # from these schemas.
+            "products/casework/generated/project/*",
+            "products/casework/generated/fixture/*",
+            "products/casework/generated/dev-clients/*",
+            "products/casework/generated/holiday-set/*",
+            "products/casework/generated/runtime/*",
             # The configuration files reference page is generated from the
             # format registry.
             "products/platform/config-formats.yaml",

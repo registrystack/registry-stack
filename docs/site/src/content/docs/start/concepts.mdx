@@ -1,0 +1,83 @@
+---
+title: How the products fit together
+description: The model every Registry Stack product shares, what you define, what runs, what a product owns, what none of them owns, how they compose, and where the stack sits beside an exchange layer.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+Every Registry Stack product follows the same model. Learn it once and each product's pages read
+as a variation on it.
+
+## What you define
+
+A product reads a project you keep in version control: YAML files and, for some products, small
+Rhai scripts. For Base Registry Engine that project declares
+[Record types](../../reference/glossary/#record-type), [Actions](../../reference/glossary/#action),
+and [access profiles](../../reference/glossary/#access-profile). For Registry Evidence it declares
+the questions the gateway may answer and the sources it reads. For Registry Casework it is a
+[ReviewPolicy](../../reference/glossary/#review-policy).
+
+No product has a built-in business model. A vehicle, a licence, or a residence region is
+something your project declares, never something the runtime knows about.
+
+{/* Evidence: README.md, "What It Includes"; AGENTS.md, product list. */}
+
+## What runs
+
+Each product runs as its own service with its own deployment contract, and every one of them is
+optional. Before a service opens its listener, its tooling checks, tests, and packages the
+project offline, and the service refuses a package that fails those checks. An institution with a
+registry already in production adds one product beside it; an institution without one starts from
+a Base Registry Engine project.
+
+{/* Evidence: README.md, "What It Includes"; AGENTS.md, "Registry Stack Agent Guidance". */}
+
+## What a product owns
+
+A product owns its own state, its [audit journal](../../reference/glossary/#audit-journal), and
+the decision about who may call its API. Base Registry Engine owns records, revision history, and
+[Proposals](../../reference/glossary/#proposal). Registry Evidence owns the
+[assertion](../../reference/glossary/#assertion) it signs and the minimum disclosure it holds to.
+Registry Casework owns review decisions and the
+[ReviewResult](../../reference/glossary/#review-result). Registry Scheduling owns its capacity
+ledger. Each product decides every call under its own access rules and records what it decided.
+
+## What no product owns
+
+Legal authority, data ownership, eligibility, and institutional approval stay with the responsible
+institutions. A signed assertion states what a source held at one moment; whether that is enough
+for a decision is the relying party's call. A review result records what reviewers decided; what
+happens next stays with the producer that asked for the review.
+
+{/* Evidence: AGENTS.md, "Registry Stack Agent Guidance"; products/casework/README.md. */}
+
+## How products compose
+
+Products compose over their public APIs, and none inherits another's permissions. Evidence
+Gateway may read a Base Registry Engine route as a source with its own credentials and gains none
+of that route's authorization. Casework may show reviewers a Base Registry Engine Proposal, and
+the registry still decides whether to apply it. Scheduling may publish bookable supply for work
+another product governs, and that product gains no say over Scheduling's ledger. No product writes
+to another product's database.
+
+{/* Evidence: AGENTS.md, "The products compose without merging their boundaries" and the
+    Scheduling, Messaging, and Coordinator paragraphs. */}
+
+## Where the stack sits
+
+Where a country already runs an exchange layer or integration bus, such as X-Road or a
+GovStack-style exchange, Registry Stack sits behind it. It adds the registry-facing surface behind
+that layer; it does not implement the exchange layer or claim conformance to it.
+
+{/* Evidence: README.md, "What It Includes"; AGENTS.md, "Registry Stack Agent Guidance". */}
+
+## Next
+
+- [Glossary](../../reference/glossary/)
+- [Architecture](../../explanation/architecture/) for how the services are deployed together

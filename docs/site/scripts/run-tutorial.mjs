@@ -24,8 +24,9 @@
 // A test-file block writes its file from the shell's current directory, and a
 // test-append block adds to the end of one there. A
 // test-background fence runs beside the journey until its ready URL answers,
-// and stays running until the next background fence starts or its page ends
-// (tutorial-runner/background.mjs). test-cwd moves the shell to a directory
+// and stays running until the next background fence starts or the journey
+// ends, so the service a reader leaves in another terminal is still there on
+// the next page (tutorial-runner/background.mjs). test-cwd moves the shell to a directory
 // under the reader directory before its fence runs. A test-retry fence runs
 // again, once a second, until the blocks below it match its output or its
 // seconds are up (tutorial-runner/again.mjs); they are checked against its
@@ -134,7 +135,7 @@ function printPlan(steps, checkout) {
 // A background fence starts with job control on, which gives it a process
 // group of its own that can be stopped whole. The file `background` holds the
 // group and output file of the one running now; `backgrounds` lists every
-// group started, for the cleanup after a journey that stopped early.
+// group started, for the cleanup when the journey ends or stops early.
 //
 // A retry fence runs in a `while` loop whose condition is again.mjs, which
 // counts the re-runs in a file beside the fence's output. A failing run stops
@@ -225,9 +226,11 @@ async function journeyScript(pages, outDir, readerDir) {
       index += 1;
     }
     const done = file(`page-${pageIndex}.done`);
-    lines.push(stopBackground, `: >${done}`, ')', `[[ -e ${done} ]] || exit 0`);
+    lines.push(`: >${done}`, ')', `[[ -e ${done} ]] || exit 0`);
   }
-  lines.push(`printf "\\n" >${file('complete')}`);
+  // The last background fence is stopped here, where its early exit still
+  // fails the journey, and not in the cleanup the runner does after it.
+  lines.push(stopBackground, `printf "\\n" >${file('complete')}`);
   return `${lines.join('\n')}\n`;
 }
 
@@ -273,11 +276,16 @@ async function stoppedAt(pages, outDir) {
   return { what: `${blockName(step)} at ${where(step)}`, output: existsSync(out) ? await readFile(out, 'utf8') : '' };
 }
 
-// Make everything under root writable and readable, so that a directory the
-// journey locked cannot stop the teardown from finding sessions or the work
-// directory from being removed.
+// Make every directory under root readable, writable and searchable, so that
+// a directory the journey locked cannot stop the teardown from finding
+// sessions or the work directory from being removed. Only directories change:
+// a session's control socket and runtime file keep the modes its tool checks
+// before it stops the session. find runs chmod on a directory before reading
+// it, so a locked directory's contents are reached.
 function unlock(root) {
-  const result = spawnSync('chmod', ['-R', 'u+rwX', root], { encoding: 'utf8' });
+  const result = spawnSync('find', [root, '-type', 'd', '-exec', 'chmod', 'u+rwx', '{}', ';'], {
+    encoding: 'utf8',
+  });
   if (result.status !== 0) console.error(`could not make ${root} writable:\n${result.stderr}`);
 }
 
@@ -352,7 +360,7 @@ async function replay(pages, toolset, checkout, keepFailed = false) {
   let prepared = false;
   let inherited = new Map();
   try {
-    const toolsetEnv = await toolset.prepare({ repoRoot: REPO_ROOT, binDir, workRoot, steps });
+    const toolsetEnv = await toolset.prepare({ repoRoot: REPO_ROOT, binDir, workRoot, readerDir, steps });
     prepared = true;
     if (checkout) {
       await copyCheckout(REPO_ROOT, readerDir);

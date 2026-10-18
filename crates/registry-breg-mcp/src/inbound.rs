@@ -21,10 +21,12 @@ use axum::{
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_authcommon::{parse_bearer_token, BearerParseError};
+#[cfg(test)]
 use registry_platform_httputil::FetchUrlPolicy;
+#[cfg(test)]
+use registry_platform_oidc::JwksFetcherConfig;
 use registry_platform_oidc::{
-    access_token_typ_set, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
-    TokenVerifierConfig, VerifiedToken,
+    access_token_typ_set, JwksFetcher, OidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
 };
 use registry_platform_ratelimit::token_bucket::{
     TokenBucketConfig, TokenBucketError, TokenBucketLimiter,
@@ -451,6 +453,7 @@ pub(crate) fn verifier(config: &ResourceServerConfig, fetcher: Arc<JwksFetcher>)
 
 /// A fetcher for a published key set, under the strict fetch policy, or the
 /// development one when the listener is the loopback development listener.
+#[cfg(test)]
 pub(crate) fn uri_fetcher(uri: &str, development_loopback: bool) -> JwksFetcher {
     JwksFetcher::new_with_fetch_url_policy(
         uri.to_owned(),
@@ -461,6 +464,7 @@ pub(crate) fn uri_fetcher(uri: &str, development_loopback: bool) -> JwksFetcher 
 
 /// The outbound URL policy for the key set: https to a public address in
 /// production, and plain http to loopback as well under development.
+#[cfg(test)]
 pub(crate) fn jwks_fetch_policy(development_loopback: bool) -> FetchUrlPolicy {
     if development_loopback {
         FetchUrlPolicy::dev()
@@ -515,6 +519,7 @@ mod tests {
             jwks_source: JwksSource::Uri {
                 uri: ConfigUrl::new(jwks).expect("valid JWKS URL"),
             },
+            allow_insecure_http: false,
             algorithms: UniqueList::new(vec![AccessTokenAlgorithm::EdDSA]).expect("algorithms"),
             allowed_clients: UniqueList::new(vec![ExternalId::new(CHAT_HOST).expect("client")])
                 .expect("clients"),

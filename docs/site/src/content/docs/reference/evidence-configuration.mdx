@@ -1,6 +1,6 @@
 ---
-title: Evidence Gateway configuration reference
-description: Generated key-path reference for the frozen Evidence Gateway configuration grammars and for the authoring form an adopter writes.
+title: Registry Evidence configuration reference
+description: Generated key-path reference for the frozen Registry Evidence configuration grammars and for the authoring form an adopter writes.
 status: current
 owner: registry-docs
 source_repos:
@@ -17,89 +17,39 @@ import ConfigurationFormatChecks from '../../../components/ConfigurationFormatCh
 import ConfigurationReference from '../../../components/ConfigurationReference.astro';
 import reference from '../../../data/generated/evidence-configuration.json';
 
-This generated reference lists the schema-visible key paths in the two frozen Version 1
-configuration grammars and in the authoring documents an adopter writes to define a project and target.
-
-Each entry reports only what the schema itself proves: the value type, whether the key is
-required, the fixed values it accepts, the bounds it enforces, and the schema's own description
-of what the key decides. Read an entry to confirm a key exists, spell the key correctly, and stay
-inside its accepted values.
+Look up any key of a file Registry Evidence (Evidence) reads: the deployment bundle and
+`runtime.yaml`, and the `evidence.yaml`, target, and target authority documents you write. Each
+entry gives the key's type, whether it is required, its accepted values and bounds, and the
+schema's own sentence on what the key decides.
 
 ## Contract status
 
-Two kinds of schema are published here, and they carry different promises. Every section on this
-page states which it is.
-
 | Schema | Status | Source |
 | ------ | ------ | ------ |
-| `bundle/evidence.yaml`, `runtime.yaml` | Frozen Version 1 contract | `products/evidence/contracts/bundle.schema.yaml` and `products/evidence/contracts/runtime.schema.yaml` |
-| `evidence.yaml`, target, target authority and local tooling documents | Adopter tooling, not frozen | `crates/registry-evidencectl/schemas/authoring/*.schema.json` |
+| `bundle/evidence.yaml`, `runtime.yaml` | Frozen Version 1 contract | [`bundle.schema.yaml`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/bundle.schema.yaml) and [`runtime.schema.yaml`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/runtime.schema.yaml) |
+| `evidence.yaml`, target, target authority and local tooling documents | Adopter tooling, not frozen | [Authoring schemas](https://github.com/registrystack/registry-stack/tree/main/crates/registry-evidencectl/schemas/authoring) |
 
-- Status: current, pre-1.0
-- Reference format: `1.2`
-- Generator: `npm run generate` in `docs/site`
-- Coverage gate: `products/evidence/scripts/check-config-key-paths.sh`
+JSON Schema is not the acceptance path: a document these schemas accept still has to pass
+`evidencectl check`, which applies the cross-field, file, and grant rules no schema can express
+([Build and deploy a Registry Evidence project](../../tutorials/build-and-deploy-evidence-project/)).
 
-The two frozen schemas are the published and editor-facing grammar. At startup, typed YAML decoding
-and Rust validation decide whether a deployment is accepted. JSON Schema validators are parity
-tools in tests, not a second production acceptance path. This page never adds a rule of its own and
-does not inspect a deployment, live configuration, environment variables, or secret stores.
+{/* Evidence: docs/site/scripts/generate-evidence-configuration.mjs, CONTRACTS and CONTRACT_STATUSES;
+    crates/registry-evidence-authoring/examples/authoring-schema.rs;
+    crates/registry-evidencectl/src/lib.rs, Command::Check and run_check_command. */}
 
-The authoring schemas are generated from the `registry-evidence-authoring` model that
-`evidencectl` and the language server share, so an editor's idea of the form and the command
-line's idea of the form come from one place. They sit outside the frozen Version 1 contract set
-and may change with the tooling that generates them. A project or target document these schemas accept
-still has to compile, and compiling is where the frozen contract applies.
+## How to read the tables
 
-The coverage gate holds every schema's key paths in exact parity with the product reference that
-explains it, so a key cannot reach one artifact and quietly skip the others.
+A property is written `name`, an array item `name[]`, and a map entry whose name you choose
+`name.*`, as in `assertionDefinitions.*.acquisition.fetch[]`. A recursive
+definition appears once, where it re-enters itself. Where a key has several alternative shapes,
+Accepted values is the union of what they accept, and constraints joined by *or* are alternatives.
+Required reads **Conditional** when the rest of the document decides whether you may or must write
+the key. Bounds under *where a rule elsewhere applies* tighten whichever alternative you took once
+the rule's condition holds: in the bundle, the `sources.*.baseUrl` of a source authenticating
+with `none` must also match the loopback pattern listed there.
 
-## Schema shape and accepted projects
-
-The authoring schemas describe the JSON-compatible shape that an editor and parser can read.
-They do not contain every field bound, cross-field rule, filename check, referenced-file check, or
-compiled-bundle invariant. The shared form validator, `evidencectl` compiler, and real `evidence`
-bundle check apply those additional gates in order.
-
-The normalized project owns named Sources and Functions, AssertionDefinitions, selector profiles
-and Outputs. A separate target binds that project to an environment, and a target authority
-supplies complete grants. Shape validation does not prove that a referenced Function implements
-the right interface or that a grant fits the definition's ceiling; shared authoring checks and the
-runtime-owned bundle validator establish those rules. The
-[Evidence authoring reference](../../products/registry-evidence/authoring-form/) explains the
-project, target and grant fields together.
-
-## Notation
-
-A property is written `name`, an item of an array `name[]`, and a value of a map `name.*`. A
-recursive definition, currently only nested adapter parameter values, appears once at the point
-it re-enters itself.
-
-Where a key is reachable through several alternative shapes, the entry shows the union of the
-types and values those alternatives accept. Accepted values is therefore the set the grammar
-accepts somewhere, not in every case; where a rule elsewhere fixes the value under a condition,
-the entry says so beneath the set.
-
-Required reads **Conditional** when whether you may or must write the key depends on the rest of
-the document: some alternative does not declare it at all, only some alternatives require it, or a
-rule elsewhere in the contract requires it once a condition holds. It may be mandatory in one
-shape and rejected in another. Required reads **Yes** whenever some part of the contract requires
-the key outright, including where the requirement is stated away from the place the key is
-declared, and a rule that only tightens a required key's bounds does not soften that to
-Conditional.
-
-Constraints are grouped per alternative and separated by *or*, because satisfying every printed
-bound at once can describe a value no alternative accepts. A group reading *No bound* is an
-alternative the grammar leaves unbounded, and it is printed rather than dropped so the bounds
-beside it are not read as holding in every case. The groups are the bound sets the grammar offers,
-not an enumeration of every combination; consult the configuration guide for how one key's shape
-constrains another's.
-
-Bounds under *where a rule elsewhere applies* are a second, independent reading. They do not
-replace the per-alternative constraints: a rule elsewhere in the contract tightens whichever
-alternative you took, once its condition holds. So `sources.*.baseUrl` always matches one of its
-two origin patterns, and a source authenticating with `none` must further match the narrower
-loopback pattern listed under *where a rule elsewhere applies*.
+{/* Evidence: docs/site/scripts/configuration-reference.mjs, collectFields();
+    docs/site/src/components/ConfigurationReference.astro, conditional_constraints. */}
 
 {/* Generated from src/data/generated/evidence-configuration.json, built from
     products/evidence/contracts/bundle.schema.yaml,
@@ -107,35 +57,25 @@ loopback pattern listed under *where a rule elsewhere applies*.
     crates/registry-evidencectl/schemas/authoring/*.schema.json.
     Run npm run generate from docs/site. */}
 
-<ConfigurationReference contracts={reference.contracts} prefix="evidence" />
+{/* The evidence-oid4vci runtime grammar is generated into the same data and
+    belongs to the supporting service's own page, configure/evidence-oid4vci. */}
+<ConfigurationReference
+  contracts={reference.contracts.filter((contract) => contract.id !== 'oid4vci-runtime')}
+  prefix="evidence"
+/>
 
-## What this page does not carry
+## How the keys fit together
 
-Each description here states what one key decides, in the sentence the schema itself carries. It
-cannot show you how the keys fit together, walk you through authoring a bundle, or explain why a
-deployment is shaped the way it is. The deployment grammar is explained in
-`products/evidence/reference/request-adapter/deployment-projects/CONFIG.md`. The published
-[Evidence authoring form reference](../../products/registry-evidence/authoring-form/) documents
-the authoring keys in the context of a whole project. Start with
-[Configure Evidence Gateway](../../configure/evidence/), or follow
-[Connect a published SQLite extract](../../tutorials/connect-a-sqlite-extract/) for that transport's
-complete authoring and deployment path.
-[Configuration files](../configuration-files/) describes the YAML rules and environment
-substitution that apply when the runtime reads its runtime file.
-
-A key path that this page lists is not a deployment that runs. `evidence check` proves the
-configuration offline, and `evidence check --require-runtime-dependencies` on the target host is
-the authoritative runtime acceptance gate. `evidencectl artifact inspect <deployment-target>` reports custody for the target and installed package, and
-`evidencectl doctor --runtime-config <absolute-file>` performs the live startup dependency
-preflight without opening the public listener or sending an Evidence request. `evidencectl test`
-invokes the real Evidence checks before evaluating fixtures offline.
-
-{/* Evidence: crates/registry-evidencectl/src/runtime.rs, DoctorArgs and run();
-    crates/registry-evidencectl/src/doctor.rs; crates/registry-evidencectl/src/fixtures.rs. */}
+An entry states what one key decides, not how keys combine. The deployment grammar is explained in
+[`deployment-projects/CONFIG.md`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/reference/request-adapter/deployment-projects/CONFIG.md)
+and the authoring keys in
+[`authoring-projects/CONFIG.md`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/reference/authoring-projects/CONFIG.md).
+[Configuration files](../configuration-files/) gives the YAML and environment substitution rules
+every product shares.
 
 ## Check commands
 
-Every file Evidence Gateway reads has a command that checks it offline, with no service running. Each prints
+Every file Evidence reads has a command that checks it offline, with no service running. Each prints
 the diagnostics, JSON output, and exit codes that
 [Check a file before you deploy it](../configuration-files/#check-a-file-before-you-deploy-it) describes.
 
@@ -143,7 +83,4 @@ the diagnostics, JSON output, and exit codes that
 
 ## Next
 
-- [Evidence authoring form reference](../../products/registry-evidence/authoring-form/)
-- [Evidencectl command reference](../evidencectl/)
-- [Evidence Gateway errors and problems reference](../evidence-problems/)
-- [Evidence Gateway API](../apis/registry-evidence/)
+[Registry Evidence errors and problems reference](../evidence-problems/)

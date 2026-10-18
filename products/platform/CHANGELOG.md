@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- BREAKING: token-verifying runtimes use one issuer network policy. Endpoints the operator
+  declares, the issuer and a configured JWKS URI, may resolve to private or loopback
+  addresses on any origin. A discovery `jwks_uri` inherits that allowance only on the
+  issuer's own origin; a discovered cross-origin key endpoint on a private or loopback
+  address is refused. Cloud metadata and link-local addresses are always refused, and a
+  policy refusal at startup names its remedy. Plain HTTP beyond IPv4 or IPv6 loopback
+  requires `allowInsecureHttp: true` and emits a startup warning; a discovered cross-origin
+  endpoint must use HTTPS even with that setting. Casework
+  also gains `revokedKeyIds` and `maximumTokenLifetimeSeconds` for immediate signing-key refusal
+  and an operator-bounded token lifetime.
+
 - `registry-platform-hooks` gains `receiver::verify_delivery`, behind the
   opt-in `receiver` feature: the one reading of a signed Version 1 delivery's
   headers, counters, body bound and signature, shared by the BReg client and

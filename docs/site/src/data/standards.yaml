@@ -116,17 +116,17 @@
     - registry-evidence
     - registry-evidence-oid4vci
   surfaces:
-    - Evidence Gateway fixed HTTP contract
+    - Registry Evidence fixed HTTP contract
     - OID4VCI wallet delivery fixed HTTP contract
   evidence_docs:
-    - label: Evidence Gateway OpenAPI generation
+    - label: Registry Evidence OpenAPI generation
       url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-evidence/src/contracts.rs
     - label: Evidence OID4VCI OpenAPI generation
       url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-evidence-oid4vci/src/contracts.rs
     - label: Registry Notary generated OpenAPI document (pinned)
       url: https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/products/notary/openapi/registry-notary.openapi.json
   last_checked: 2026-08-11
-  notes: Evidence Gateway and its separate OID4VCI supporting service each generate a fixed OpenAPI 3.1.0 contract. The Registry Notary link stays pinned as the record of a retired product, not as a surface an adopter can run.
+  notes: Registry Evidence and its separate OID4VCI supporting service each generate a fixed OpenAPI 3.1.0 contract. The Registry Notary link stays pinned as the record of a retired product, not as a surface an adopter can run.
 - id: geojson
   name: GeoJSON
   standards_body: Internet Engineering Task Force
@@ -326,16 +326,16 @@
     - credential issuance
     - selective disclosure contracts
     - shared SD-JWT VC issuance and holder-proof helpers
-    - Evidence Gateway SD-JWT VC response format
+    - Registry Evidence SD-JWT VC response format
     - holder-bound subject binding and key-binding JWT presentation verification
   evidence_docs:
-    - label: Evidence Gateway audience-scoped profile
+    - label: Registry Evidence audience-scoped profile
       url: https://github.com/registrystack/registry-stack/blob/v0.20.0/products/evidence/contracts/sd-jwt-vc-profile.yaml
-    - label: Evidence Gateway holder-bound profile
+    - label: Registry Evidence holder-bound profile
       url: https://github.com/registrystack/registry-stack/blob/v0.20.0/products/evidence/contracts/holder-bound-profile.yaml
-    - label: Evidence Gateway strict verification policy schema
+    - label: Registry Evidence strict verification policy schema
       url: https://github.com/registrystack/registry-stack/blob/v0.20.0/products/evidence/contracts/verification-policy.schema.yaml
-    - label: Evidence Gateway portable SD-JWT VC verifier
+    - label: Registry Evidence portable SD-JWT VC verifier
       url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-evidence-verifier/src/sdjwt_vc.rs
     - label: Registry Notary SD-JWT VC conformance profile
       url: https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/products/notary/docs/sd-jwt-vc-conformance-profile.md
@@ -346,7 +346,7 @@
   last_checked: 2026-08-08
   notes: >-
     Registry Platform owns reusable SD-JWT VC issuance and holder-proof helpers.
-    Evidence Gateway serializes its stateless assertion as an SD-JWT VC under its
+    Registry Evidence serializes its stateless assertion as an SD-JWT VC under its
     own frozen profile, and that profile is the source of truth for the claim set
     it emits. Two subject binding modes exist. Under the default audience-scoped
     mode the credential is meaningful only to the relying party the assertion
@@ -379,7 +379,7 @@
   surfaces:
     - W3C VCDM boundary for the IETF SD-JWT VC response and delivery format
   evidence_docs:
-    - label: Evidence Gateway SD-JWT VC profile
+    - label: Registry Evidence SD-JWT VC profile
       url: https://github.com/registrystack/registry-stack/blob/v0.20.0/products/evidence/contracts/sd-jwt-vc-profile.yaml
     - label: Registry Notary README
       url: https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/products/notary/README.md
@@ -428,7 +428,7 @@
     - label: Retired Registry Platform PDP ODRL enforcement profile constants
       url: https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-platform-pdp/src/lib.rs
   last_checked: 2026-08-11
-  notes: Registry Manifest renders ODRL policy metadata. That publication surface is descriptive and is not itself an access grant. The retired `registry-platform-pdp` crate is removed; Registry Manifest retains the enforcement profile vocabulary, including `odrl:purpose` and `odrl:spatial`, as descriptive metadata, so nothing in the stack enforces an ODRL term today. The technical identifier remains `registry-evidence-gateway-pdp/v1` for compatibility and does not name the Evidence Gateway product.
+  notes: Registry Manifest renders ODRL policy metadata. That publication surface is descriptive and is not itself an access grant. The retired `registry-platform-pdp` crate is removed; Registry Manifest retains the enforcement profile vocabulary, including `odrl:purpose` and `odrl:spatial`, as descriptive metadata, so nothing in the stack enforces an ODRL term today. The technical identifier remains `registry-evidence-gateway-pdp/v1` for compatibility and does not name the Registry Evidence product.
 - id: prov-o
   name: PROV-O
   standards_body: W3C
@@ -460,10 +460,10 @@
   evidence_docs:
     - label: Retired registryctl FHIR project-authoring fixture
       url: https://github.com/registrystack/registry-stack/tree/2dfcf2ddf22e2c0fa4bf5fd84eb06b8736057605/crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active
-    - label: Evidence Gateway FHIR source limitations
+    - label: Registry Evidence FHIR source limitations
       url: /explanation/known-limitations/
   last_checked: 2026-08-11
-  notes: No maintained Registry Stack surface parses or serves FHIR. Evidence Gateway's frozen fixed-source contract accepts `application/json`, not `application/fhir+json`, so FHIR compatibility runs through a local read-through adapter the operator writes. That adapter and its profile-specific matching are project code, not a Registry Stack surface. Registry Stack has never claimed to implement a FHIR server or broad FHIR conformance.
+  notes: No maintained Registry Stack surface parses or serves FHIR. Registry Evidence's frozen fixed-source contract accepts `application/json`, not `application/fhir+json`, so FHIR compatibility runs through a local read-through adapter the operator writes. That adapter and its profile-specific matching are project code, not a Registry Stack surface. Registry Stack has never claimed to implement a FHIR server or broad FHIR conformance.
 - id: universal-dpi-safeguards
   name: Universal DPI Safeguards Framework
   standards_body: United Nations DPI Safeguards initiative

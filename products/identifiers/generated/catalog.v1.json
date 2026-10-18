@@ -3816,7 +3816,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "d676449577a937668bd56038a7e7d80ad2b17bb262593dcf5775635f82c67b89",
+        "sha256": "e7ebb4c45984c87919a5c3b7d886488550bd4e45ec4a0213dc80dd2a722acc2e",
         "mediaType": "application/schema+json"
       }
     },
@@ -3960,7 +3960,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/review-runtime/review-runtime.schema.json",
-        "sha256": "b1034d6529887c685450a2ed13c90355c4725da6c452194abd61c1905b49897e",
+        "sha256": "25b93baf3a412d22d90d4d224560a18ae2d5499d8da11a93d090f4b0178c0002",
         "mediaType": "application/schema+json"
       }
     },
@@ -3996,7 +3996,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "986a4a0838726aa79b234dbaa170be7ebb0b67f01a8fd7925f14f78f1d5e6395",
+        "sha256": "5d5ae3f256d6cbfa520d08836428edbcc9f62972155e4875336b25ae2af8cd3e",
         "mediaType": "application/schema+json"
       }
     },
@@ -4118,11 +4118,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "63ab486420e268d89d13259718008773052c9ffadce27def0319a58b619deea5"
+        "sha256": "bccc84b7d08eb68cf9b953845f93ab3c545a647d2324a761248853cc2d89123a"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "d3edc783a9380b2bea17b731a4548c6bf1ab7e04c922be3682f208d7f456c741",
+        "sha256": "d2d840eaca8141caae26af9b6dca3afd9c396622e7d9365024cd3b03dd9c2036",
         "mediaType": "application/schema+json"
       }
     },
@@ -4158,7 +4158,7 @@
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
-        "sha256": "32f9b2b297dbd2e9c8ac367d22e72a23c21a0719736188b30f86a2d30c2ad535",
+        "sha256": "3b4c15c6da67f63aa66315649d64bd334e042c15dc2b980e3639da7ce0154922",
         "mediaType": "application/schema+json"
       }
     },
@@ -4280,11 +4280,11 @@
       "description": "Evidence frozen Version 1 contract and configuration schemas, written as YAML.",
       "source": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "6b9d16998d1bbee1c27336b5d4232ee6aa9f596da5792095a24714e960447f37"
+        "sha256": "43eb1560294204ef545bd6bf2dd5928aa25e84118d07e942eafe1923f1b32f78"
       },
       "artifact": {
         "path": "products/evidence/contracts/bundle.schema.yaml",
-        "sha256": "6b9d16998d1bbee1c27336b5d4232ee6aa9f596da5792095a24714e960447f37",
+        "sha256": "43eb1560294204ef545bd6bf2dd5928aa25e84118d07e942eafe1923f1b32f78",
         "mediaType": "application/yaml"
       }
     },
@@ -4410,7 +4410,7 @@
       },
       "artifact": {
         "path": "products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json",
-        "sha256": "b12dc4d6979d728fe30df5d3a254490d404819a9730fdcd2c4d0376e4571248c",
+        "sha256": "c17920e039dc46a3627cbd0091a3728732398e8d857cf30bc87c5ebdb2cf0ced",
         "mediaType": "application/schema+json"
       }
     },
@@ -4428,7 +4428,7 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/project.schema.json",
-        "sha256": "33766068244ac170b52a335353287d94e5a105ef82e8590d47beab1682fa06ea",
+        "sha256": "06939f1bfbecee443635734088f844273489b89974769e5b3e94b1cff314a5d8",
         "mediaType": "application/schema+json"
       }
     },
@@ -4626,7 +4626,7 @@
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "8f0e1f2ec7ccf046f9a80f541aafca071f792f11dc05451ad9b1441889c777f8",
+        "sha256": "d2c4ef5c2ca281c720117c95c5b136be7353d1da70a99f9c9455dd6b94dcae7b",
         "mediaType": "application/schema+json"
       }
     },
@@ -4806,7 +4806,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "7ecb960a2e3b2e9675bbda21ff13f403dd5b097d8decc132dcf18e4ea96c619e",
+        "sha256": "1500f7e2e90ad90139df9141d3d8ff1d850f9dca54469f469f7493ad96550103",
         "mediaType": "application/schema+json"
       }
     },

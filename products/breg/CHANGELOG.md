@@ -8,6 +8,17 @@
   application jobs. Late results and rollback cannot reopen the round. Recovery
   names the package-change block, and private metrics count its closed jobs.
 
+- Automatically erase expired Action and Proposal Evidence uses under the runtime
+  role after their fixed 24-hour window, in bounded, audited batches. Manual
+  `bregctl evidence-retention erase-expired` remains available to operators.
+- Prune terminal webhook metadata after both the receipt and payload retention
+  horizons permit it, preserving active and uncertain work, replay protection,
+  and audit records. Dead letters also require completed payload expiry.
+  Nonempty ticks report committed deletion counts; failures report a closed,
+  value-free reason and any prior committed progress. Idle ticks stay silent.
+- Include a closed `refusalReason` in read audit records where the refusal has a
+  defined reason, without recording caller selectors or record values.
+
 - BREAKING: request, operator, access-log and webhook audit records now name activation UUIDs
   `activationId`, reserving `packageRevision` for package digests. The affected
   audit schemas advance as documented in [audit identity](contracts/audit-identity.md).
@@ -305,6 +316,22 @@
   `apply.package.deployment-identity-refused` and `doctor` reports
   `startup.package.refused`. Point `canonicalBaseIri` at a hostname you
   control, rerun `schema-test`, and rebuild the package.
+
+- `authentication.oidc.allowInsecureHttp: true` permits plain HTTP beyond
+  loopback to the configured issuer and to a JWKS URI declared in
+  `jwksSource`. Without it, an HTTP issuer or key URI outside loopback is
+  refused. While it is set, `breg` logs a startup warning and `bregctl doctor`
+  reports the `authentication.insecure-http` warning advisory, in its JSON
+  `advisories` too. The doctor report heads its advisories `Advisories:`
+  (was `PostgreSQL advisories:`), since they are no longer only PostgreSQL's.
+
+- Unlike the token-verifying runtimes, `breg-review` gains no
+  `allowInsecureHttp` setting: it sends its client credentials to the
+  issuer's token endpoint, so it signs people in only with an HTTPS issuer,
+  or a loopback one under `listener.tlsTermination: development-loopback`.
+  `signIn.allowInsecureHttp` is refused as an unknown key, and a plain HTTP
+  issuer beyond loopback is refused at `breg-review check` with
+  `breg.review-runtime.plain-http-endpoint`.
 
 ## 0.41.0 - 2026-10-13
 

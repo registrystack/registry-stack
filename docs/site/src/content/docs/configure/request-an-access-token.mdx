@@ -7,106 +7,106 @@ source_repos:
   - registry-stack
 last_reviewed: "2026-09-13"
 doc_type: how-to
+persona:
+  - consumer or verifier
 locale: en
 standards_referenced: []
 ---
 
-Use a private key JWT client assertion when an application needs its own short-lived access token
-for Evidence Gateway or Base Registry Engine (BReg). The deployment's OAuth issuer owns
-client registration and token issuance. The resource server independently verifies the resulting
-token against its configured issuer, audience, algorithm, token type, and authority claims.
+If your code must present a bearer access token to Registry Evidence, Base Registry Engine (BReg),
+or another Registry Stack service, you get it from the deployment's OAuth issuer with the
+client-credentials grant, authenticating with a signed client assertion instead of a secret.
 
 ## Before you start
 
-Obtain these values from the issuer administrator:
+Get these values from the issuer administrator and the service's operator:
 
-- The exact HTTPS token endpoint.
-- The registered client identifier.
-- The client's private JWK and registered key identifier.
-- The client-assertion audience. This often equals the issuer identifier or token endpoint, but
-  the issuer contract decides the exact value.
-- The RFC 8707 resource identifier for the intended resource server.
-- The non-empty scopes approved for this client and resource.
+- The HTTPS token endpoint
+- Your registered client identifier
+- Your client's private JWK, with a `kid` and an `alg` the issuer accepts
+- The client-assertion audience, if not the token endpoint URL
+- The RFC 8707 resource identifier of the service you call
+- The scopes that service's deployment requires
 
-Keep the private key in the calling process's secret store. The issuer registration holds only the
-public key. Do not add a client secret as a fallback when assertion authentication fails.
+Keep the private key in a secret store, and never fall back to a client secret. Scopes are the
+deployment's choice: one target may require a scope such as `evidence:request`, another may
+require none. Request exactly the scopes your deployment names.
 
-## Configure a maintained client binding
+## With the Evidence client
 
-The Evidence Gateway Node binding performs the exchange, refreshes before token expiry, coalesces
-concurrent refreshes, and invalidates a cached token after an authentication refusal. Configure its
-credential source explicitly:
-
-```typescript
-const token = {
-  privateKeyJwt: {
-    tokenEndpoint: "https://issuer.example.org/oauth2/token",
-    clientId: "permit-desk",
-    clientKey: privateJwk,
-    audience: "https://issuer.example.org",
-    resource: "urn:registry:evidence",
-    scopes: ["evidence:evaluate"],
-  },
-};
-```
-
-The Python binding uses the same contract with snake-case field names:
+A client built with `EvidenceClient.from_profile`, as in
+[Request Evidence from your application](../../tutorials/request-evidence-from-an-application/),
+needs no token code: the client profile drives the exchange. The explicit constructor takes it as
+`token=`:
 
 ```python
-token = {
-    "private_key_jwt": {
-        "token_endpoint": "https://issuer.example.org/oauth2/token",
-        "client_id": "permit-desk",
-        "client_key": private_jwk,
-        "audience": "https://issuer.example.org",
-        "resource": "urn:registry:evidence",
-        "scopes": ["evidence:evaluate"],
-    }
-}
+client = EvidenceClient(
+    base_url, trusted_jwks, revoked_key_ids,
+    token={"private_key_jwt": private_key_jwt},
+)
 ```
 
-Pass this `token` value in the client configuration shown by
-[request Evidence from an application](../../tutorials/request-evidence-from-an-application/).
-The BReg client binding exposes a private key JWT credential provider for its
-own resource URLs and registered scopes.
+`private_key_jwt` holds `token_endpoint`, `client_id`, `client_key`, and optionally `audience`,
+`resource`, and `scopes`; the [client API reference](../../reference/client-api/#token-configurations)
+has the rest. The client builds and signs each client assertion for you.
 
-{/* Evidence: crates/registry-platform-httputil/src/client/private_key_jwt.rs;
-    crates/registry-evidence-client-node/client.d.ts;
-    crates/registry-evidence-client-py/src/convert.rs. */}
+{/* Evidence: crates/registry-evidence-client-py/src/convert.rs, private_key_jwt_provider_from_json; crates/registry-evidence-client-py/python/registry_evidence_client/__init__.pyi, EvidenceClient. */}
 
-## Raw token request contract
+## Without the client
 
-If another client library performs the exchange, it must create a fresh signed JWT assertion for
-each request. Its `iss` and `sub` are the registered client identifier, `aud` is the configured
-assertion audience, `jti` is fresh, and `iat` and `exp` fit the issuer's accepted lifetime. The
-protected header names the registered key with `kid` and uses the registered signing algorithm.
-
-Send the assertion in an OAuth form:
+Any other caller, BReg callers included, signs a client assertion and posts this form to the token
+endpoint:
 
 ```text
 grant_type=client_credentials
+client_id=<client-id>
 client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
 client_assertion=<signed-client-assertion>
-resource=urn:registry:evidence
-scope=evidence:evaluate
+resource=<resource-identifier>
+scope=<scopes>
 ```
 
-Treat the endpoint as HTTPS, disable redirects, apply a bounded timeout and response-size limit,
-and never log the assertion, private key, access token, or token response. Keep `resource` and
-`scope` immutable for one configured provider so a caller cannot redirect cached authority to a
-different service.
+Omit `scope` when the deployment requires none. Keep `resource` and `scope` fixed for the client's
+lifetime, so a cached token never serves another service. `resource` is a registered identifier,
+not a URL to fetch.
+
+The client assertion is a compact JWT signed with your private key. Its protected header carries:
+
+- `alg`: the algorithm your key signs with, one of `EdDSA`, `ES256`, `RS256`, `ES384`, or `RS384`
+- `kid`: your key's identifier, which the issuer uses to select your registered public key
+- `typ`: `JWT`
+
+Its claims carry:
+
+- `iss` and `sub`: your client identifier
+- `aud`: the token endpoint URL, or the audience the issuer names instead
+- `iat`: the current Unix time
+- `exp`: `iat` plus a short lifetime, at most 300 seconds and no longer than your issuer accepts
+  (the maintained clients default to 60)
+- `jti`: a fresh identifier for every assertion, because a replay-checking issuer refuses a
+  repeated one
+
+An issuer checks `iat` and `exp` against its own clock, so keep yours synchronized.
+
+{/* Evidence: crates/registry-platform-authcommon/src/client_assertion.rs, sign_client_assertion,
+    DEFAULT_ASSERTION_LIFETIME_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS, header_algorithm;
+    crates/registry-platform-httputil/src/client/private_key_jwt.rs, PrivateKeyJwtConfig,
+    with_audience, with_scopes, CLIENT_ASSERTION_TYPE;
+    crates/registry-evidencectl/src/client.rs, client_assertion_audience;
+    crates/registry-evidencectl/src/keygen.rs, ClientAssertionAlgorithm (ES384 default, RS384);
+    products/evidence/reference/deployment-targets/environments/production/evidence/target.yaml,
+    requiredScopes: unrestricted; products/evidence/examples/standalone/local-target.yaml,
+    requiredScopes. */}
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| The issuer returns `invalid_client` | Confirm the client identifier, registered public key, `kid`, signing algorithm, assertion audience, clock, and fresh `jti`. |
-| The issuer rejects the request shape | Confirm the exact token endpoint, `client_credentials` grant, assertion type URN, resource, and non-empty scopes. |
-| The resource server rejects the token | Confirm the token issuer, audience or resource, token type, algorithm, scopes, and configured authority claim names. |
-| A migrated configuration names `mint` | Replace the retired key with the owning component's `token_client` or private key JWT configuration and provide the explicit endpoint, audience, client, key, resource, and scopes. The retired key is rejected rather than aliased. |
+| The issuer returns `invalid_client` | Client identifier, header `kid` and `alg`, assertion audience, clock, `jti` |
+| The service rejects the token | Token issuer, resource, the scopes the deployment requires |
 
 ## Next
 
-- [Request Evidence from an application](../../tutorials/request-evidence-from-an-application/)
-- [Configure Evidence Gateway](../evidence/)
-- [Evidence Gateway security model](../../security/evidence/)
+- [Request Evidence from your application](../../tutorials/request-evidence-from-an-application/)
+- [Build and deploy a Registry Evidence project](../../tutorials/build-and-deploy-evidence-project/)
+- [Registry Evidence security model](../../security/evidence/)

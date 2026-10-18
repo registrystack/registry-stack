@@ -34,6 +34,7 @@ import {
 import { SOURCE as configurationFormatsSource } from './generate-configuration-formats.mjs';
 import { CONTRACTS as evidenceContracts } from './generate-evidence-configuration.mjs';
 import { CONTRACTS as schedulingContracts } from './generate-scheduling-configuration.mjs';
+import { CONTRACTS as caseworkContracts } from './generate-casework-configuration.mjs';
 
 const execFileAsync = promisify(execFile);
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
@@ -175,6 +176,7 @@ test('archive generation excludes current-source generators', async () => {
     'generate-evidence-configuration.mjs',
     'generate-breg-configuration.mjs',
     'generate-scheduling-configuration.mjs',
+    'generate-casework-configuration.mjs',
     'generate-configuration-formats.mjs',
     'generate-cli-reference.mjs',
   ]) {
@@ -193,11 +195,13 @@ test('archive generation excludes current-source generators', async () => {
   );
   assert.deepEqual(currentSourceGeneratedArtifacts, [
     'docs/site/public/examples/breg-evidence-starter.tar.gz',
+    'docs/site/public/examples/evidence-examples.tar.gz',
     'docs/site/src/content/docs/reference/cli',
     'docs/site/src/data/generated/cli-reference.json',
     'docs/site/src/data/generated/evidence-configuration.json',
     'docs/site/src/data/generated/breg-configuration.json',
     'docs/site/src/data/generated/scheduling-configuration.json',
+    'docs/site/src/data/generated/casework-configuration.json',
     'docs/site/src/data/generated/configuration-formats.json',
   ]);
 });
@@ -341,6 +345,7 @@ test('legacy archives retain pinned CLI bytes and generate missing current confi
   const evidencePath = resolve(siteRoot, 'src/data/generated/evidence-configuration.json');
   const bregPath = resolve(siteRoot, 'src/data/generated/breg-configuration.json');
   const schedulingPath = resolve(siteRoot, 'src/data/generated/scheduling-configuration.json');
+  const caseworkPath = resolve(siteRoot, 'src/data/generated/casework-configuration.json');
   const formatsPath = resolve(siteRoot, 'src/data/generated/configuration-formats.json');
   const legacyCli = 'exact committed legacy CLI bytes\n';
   await mkdir(dirname(cliPath), { recursive: true });
@@ -366,6 +371,7 @@ test('legacy archives retain pinned CLI bytes and generate missing current confi
       ...bregServiceContracts,
       ...evidenceContracts,
       ...schedulingContracts,
+      ...caseworkContracts,
     ].map((contract) => contract.file),
     bregClientCapabilities,
     configurationFormatsSource,
@@ -380,16 +386,19 @@ test('legacy archives retain pinned CLI bytes and generate missing current confi
   const currentEvidence = await readFile(evidencePath, 'utf8');
   const currentBreg = await readFile(bregPath, 'utf8');
   const currentScheduling = await readFile(schedulingPath, 'utf8');
+  const currentCasework = await readFile(caseworkPath, 'utf8');
   const currentFormats = await readFile(formatsPath, 'utf8');
   assert.equal(JSON.parse(currentEvidence).contracts.length, evidenceContracts.length);
   assert.equal(JSON.parse(currentBreg).contracts.length, bregContracts.length);
   assert.equal(JSON.parse(currentScheduling).contracts.length, schedulingContracts.length);
+  assert.equal(JSON.parse(currentCasework).contracts.length, caseworkContracts.length);
   assert.ok(JSON.parse(currentFormats).products.length > 0);
   await restore();
   await assert.rejects(readFile(cliPath), { code: 'ENOENT' });
   assert.equal(await readFile(evidencePath, 'utf8'), currentEvidence);
   assert.equal(await readFile(bregPath, 'utf8'), currentBreg);
   assert.equal(await readFile(schedulingPath, 'utf8'), currentScheduling);
+  assert.equal(await readFile(caseworkPath, 'utf8'), currentCasework);
   assert.equal(await readFile(formatsPath, 'utf8'), currentFormats);
 
   // Existing current tables are renderer inputs, not historical staged bytes.
@@ -398,6 +407,7 @@ test('legacy archives retain pinned CLI bytes and generate missing current confi
   assert.equal(await readFile(evidencePath, 'utf8'), currentEvidence);
   assert.equal(await readFile(bregPath, 'utf8'), currentBreg);
   assert.equal(await readFile(schedulingPath, 'utf8'), currentScheduling);
+  assert.equal(await readFile(caseworkPath, 'utf8'), currentCasework);
   assert.equal(await readFile(formatsPath, 'utf8'), currentFormats);
   await restoreAgain();
 });

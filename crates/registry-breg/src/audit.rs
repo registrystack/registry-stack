@@ -302,7 +302,26 @@ impl RefusalHttpMethod {
     }
 }
 
+/// Closed, value-free causes for a concealed read refusal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReadRefusalReason {
+    SurfaceUnavailable,
+    ProfileAdmission,
+    SelectOverreach,
+}
+
+impl ReadRefusalReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SurfaceUnavailable => "surface_unavailable",
+            Self::ProfileAdmission => "profile_admission",
+            Self::SelectOverreach => "select_overreach",
+        }
+    }
+}
+
 pub(crate) struct HttpRefusalAudit<'a> {
+    pub refusal_reason: Option<ReadRefusalReason>,
     pub grant: Option<GrantAuditContext>,
     pub method: RefusalHttpMethod,
     pub operation_id: &'a str,
@@ -882,6 +901,12 @@ async fn record_http_refusal_audit_inner(
         record.insert(
             "authorization".to_owned(),
             grant.record(profile, &expected.activation_id, event.operation_id, false)?,
+        );
+    }
+    if let Some(reason) = event.refusal_reason {
+        record.insert(
+            "refusalReason".to_owned(),
+            Value::String(reason.as_str().to_owned()),
         );
     }
     if let Some(slot_id) = attachment_slot {

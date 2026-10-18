@@ -23,7 +23,7 @@ snapshot coverage afterwards, drop expired Evidence and idempotency material, an
 journal.
 
 Every command here reads the runtime file and connects to PostgreSQL directly with the migration
-credential, so run it from the operator host. The erasures and the rebaseline take the registry's
+credential, so run it from the operator host. The erasures and the [rebaseline](../../reference/glossary/#rebaseline) take the registry's
 migration lock: run them while no activation is in progress. A database whose certificate a
 private authority issued is trusted through `database.trustedRootCertificateRef` in the same runtime
 file. Every path you pass must be absolute. Reports carry counts, never record values.
@@ -285,10 +285,11 @@ bucket's own retention policy still applies.
 An Action that declares `evidence` keeps each assertion it accepted: the signed response bytes,
 the verification context, and the times that bound it. Subject and selector values are never kept.
 Each kept assertion expires 24 hours after the registry accepted it. Erasing record history does
-not cover it, and nothing removes expired rows on its own, so schedule this command.
+not cover it. The runtime removes expired Action and Proposal Evidence uses every minute in
+bounded, audited batches. Use the manual command when you need cleanup before the next sweep.
 
 :::danger[Erased assertions cannot be restored]
-The command deletes the signed responses and verification context without taking a copy, so export what your retention policy requires before each window closes.
+The runtime and manual command delete the signed responses and verification context without taking a copy, so export what your retention policy requires before each window closes.
 :::
 
 ```sh test-skip="needs an active registry and its migration credential"
@@ -305,10 +306,12 @@ Erased expired action Evidence.
 The command removes every assertion whose window closed at or before `--before`, and none still
 inside its window. A cutoff in the future is refused. The receipts of the Actions that used the
 assertions stay replayable, so the registry can still account for what it decided. The runtime
-credential cannot run this deletion.
+credential can execute only the fixed expiry function. It cannot read retained assertions or run
+the manual command, which requires the migration credential.
 
 {/* Evidence: crates/registry-breg/src/action_evidence_client.rs,
     ACTION_EVIDENCE_RETENTION_SECONDS;
+    crates/registry-breg/src/action_evidence_retention.rs, install and erase_batch;
     crates/registry-breg/src/action_evidence_maintenance.rs, erase_expired and
     malformed_or_future_boundaries_fail_before_configuration_io;
     crates/registry-bregctl/src/lib.rs, EvidenceRetentionEraseArgs. */}

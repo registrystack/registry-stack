@@ -210,7 +210,153 @@ struct BregDeliverySeams {
     last_success: Arc<crate::metrics::LastSuccess>,
 }
 
+const MAX_RETENTION_BATCHES_PER_TICK: usize = 100;
+
+#[derive(Clone, Copy)]
+enum RetentionFailureReason {
+    RegistryNotReady,
+    LockTimeout,
+    QueryCancelled,
+    Database,
+}
+
+impl RetentionFailureReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RegistryNotReady => "registry-not-ready",
+            Self::LockTimeout => "lock-timeout",
+            Self::QueryCancelled => "query-cancelled",
+            Self::Database => "database",
+        }
+    }
+
+    fn sqlstate(code: Option<&str>) -> Self {
+        match code {
+            Some("55P03") => Self::LockTimeout,
+            Some("57014") => Self::QueryCancelled,
+            _ => Self::Database,
+        }
+    }
+
+    fn admission(error: crate::postgres::RegistryTransactionError) -> Self {
+        use crate::postgres::{PostgresKernelError, RegistryLockFailure, RegistryTransactionError};
+        match error {
+            RegistryTransactionError::Kernel(PostgresKernelError::RegistryUnavailable) => {
+                Self::RegistryNotReady
+            }
+            RegistryTransactionError::Lock(RegistryLockFailure::Timeout) => Self::LockTimeout,
+            RegistryTransactionError::Lock(RegistryLockFailure::QueryCancelled) => {
+                Self::QueryCancelled
+            }
+            _ => Self::Database,
+        }
+    }
+}
+
 impl BregDeliverySeams {
+    async fn run_retention(self, mut shutdown: watch::Receiver<bool>) {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            if *shutdown.borrow() {
+                return;
+            }
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() { return; }
+                }
+                _ = async {
+                    interval.tick().await;
+                    let _ = self.prune_terminal(MAX_RETENTION_BATCHES_PER_TICK).await;
+                } => {}
+            }
+        }
+    }
+
+    async fn prune_terminal(&self, max_batches: usize) -> Result<(u64, bool), DeliveryError> {
+        let mut removed = 0;
+        for _ in 0..max_batches {
+            let batch = match self.prune_terminal_batch().await {
+                Ok(batch) => batch,
+                Err(reason) => {
+                    tracing::error!(
+                        removed,
+                        reason = reason.as_str(),
+                        "hook metadata retention failed"
+                    );
+                    return Err(DeliveryError::Unavailable);
+                }
+            };
+            removed += batch;
+            // Hooks returns deleted rows, without exposing its page bound.
+            // An empty batch terminates without copying that private limit.
+            if batch == 0 {
+                if removed != 0 {
+                    tracing::info!(removed, "hook metadata retention completed");
+                }
+                return Ok((removed, false));
+            }
+        }
+        tracing::warn!(
+            removed,
+            "hook metadata retention reached its per-tick batch bound"
+        );
+        Ok((removed, true))
+    }
+
+    async fn prune_terminal_batch(&self) -> Result<u64, RetentionFailureReason> {
+        // Keep metadata for at least the receipt horizon and the payload replay
+        // window. The platform primitive also requires completed payload expiry
+        // for dead letters and never removes active or uncertain delivery work.
+        let horizon = Duration::from_secs(
+            u64::from(self.idempotency.receipt_retention_days()) * 24 * 60 * 60,
+        )
+        .max(self.destinations.payload_retention());
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| RetentionFailureReason::Database)?;
+        let mut guard =
+            crate::postgres::cancellation::QueryCancellationGuard::new(self.pool.clone(), client);
+        let transaction = crate::postgres::begin_registry_transaction_with_reason(
+            guard.client(),
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+        )
+        .await
+        .map_err(RetentionFailureReason::admission)?;
+        transaction
+            .set_statement_budget(Duration::from_secs(10))
+            .await
+            .map_err(|_| RetentionFailureReason::Database)?;
+        let now: std::time::SystemTime = transaction
+            .transaction()
+            .query_one("SELECT transaction_timestamp()", &[])
+            .await
+            .map_err(|error| {
+                RetentionFailureReason::sqlstate(error.code().map(|code| code.code()))
+            })?
+            .get(0);
+        let before = now
+            .checked_sub(horizon)
+            .ok_or(RetentionFailureReason::Database)?;
+        let removed = registry_platform_hooks::delivery::prune_terminal_deliveries(
+            transaction.transaction(),
+            DELIVERY_SCHEMA,
+            before,
+        )
+        .await
+        .map_err(|error| RetentionFailureReason::sqlstate(error.sqlstate()))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| RetentionFailureReason::Database)?;
+        guard.disarm();
+        Ok(removed)
+    }
+
     fn mutation_transaction(&self) -> MutationTransaction {
         let coordinator = MutationTransaction::new_with_event_destinations(
             self.lock_key,
@@ -769,10 +915,20 @@ fn transition_code(code: DeliveryTransitionCode) -> WebhookStateTransitionCode {
 #[derive(Clone)]
 pub struct WebhookDeliveryService {
     delivery: DeliveryService<BregDeliverySeams>,
+    retention: BregDeliverySeams,
     last_success: Arc<crate::metrics::LastSuccess>,
 }
 
 impl WebhookDeliveryService {
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    pub async fn prune_terminal_for_test(
+        &self,
+        max_batches: usize,
+    ) -> Result<(u64, bool), DeliveryError> {
+        self.retention.prune_terminal(max_batches).await
+    }
+
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -870,6 +1026,7 @@ impl WebhookDeliveryService {
             last_success: Arc::clone(&last_success),
         };
         Self {
+            retention: seams.clone(),
             delivery: DeliveryService::new(seams, config),
             last_success,
         }
@@ -960,7 +1117,12 @@ impl WebhookWorker {
                 return;
             }
         };
-        DeliveryWorker::new(service.delivery).run(shutdown).await;
+        // Both loops observe shutdown, but the delivery loop must finish its
+        // in-flight attempt during the server's existing grace period.
+        tokio::join!(
+            DeliveryWorker::new(service.delivery).run(shutdown.clone()),
+            service.retention.run_retention(shutdown),
+        );
     }
 }
 

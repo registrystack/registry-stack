@@ -2,7 +2,22 @@ contract: registry.evidence.security-test-traceability/v1
 entries:
   - id: sec-target-authority-atomic-activation
     tests:
-      - {file: crates/registry-evidence/src/authority.rs, name: authority_activation_is_atomic_idempotent_and_keeps_durable_history}
+      - {file: crates/registry-evidence/src/authority.rs, name: authority_activation_is_atomic_refuses_a_repeat_and_keeps_durable_history}
+      - {file: crates/registry-evidence/src/authority.rs, name: applied_activation_writes_a_correlated_request_and_response}
+      - {file: crates/registry-evidence/src/authority.rs, name: invalid_operator_references_are_audited_without_values_or_mutation}
+      - {file: crates/registry-evidence/src/authority.rs, name: invalid_operator_reference_preserves_audit_failure_semantics}
+      - {file: crates/registry-evidence/src/authority.rs, name: boundary_length_operator_references_remain_keyed_and_scoped}
+      - {file: crates/registry-evidence/tests/cli.rs, name: authority_activation_audits_invalid_operator_references_without_values}
+      - {file: crates/registry-evidence/src/authority.rs, name: audited_post_rename_sync_failure_is_unfinished}
+      - {file: crates/registry-evidence/src/audit.rs, name: activation_response_sequence_is_reserved_for_applied}
+      - {file: crates/registry-evidence/src/authority.rs, name: audited_pre_rename_sync_failure_leaves_authority_unchanged}
+      - {file: crates/registry-evidence/src/authority.rs, name: refused_request_entry_leaves_authority_state_untouched}
+      - {file: crates/registry-evidence/src/authority.rs, name: validation_refusals_are_audited_and_never_fill_history}
+      - {file: crates/registry-evidence/src/authority.rs, name: response_refused_after_commit_reports_applied_unaudited}
+      - {file: crates/registry-evidence/src/authority.rs, name: audited_activations_stay_serialized_by_the_authority_lock}
+      - {file: crates/registry-evidence/tests/cli.rs, name: authority_activation_uses_configured_audit_without_source_or_signer_initialization}
+      - {file: crates/registry-evidence/tests/cli.rs, name: authority_activation_succeeds_while_the_service_holds_the_audit_lock}
+      - {file: crates/registry-evidence/tests/cli.rs, name: authority_activation_reports_why_the_companion_audit_is_unavailable}
       - {file: crates/registry-evidence/src/authority.rs, name: activation_retry_requires_durable_state_and_parent_entries}
       - {file: crates/registry-evidence/src/authority.rs, name: invalid_or_out_of_ceiling_authority_never_replaces_active_snapshot}
       - {file: crates/registry-evidence/src/authority.rs, name: authority_activation_serializes_concurrent_writers}
@@ -52,12 +67,15 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: assurance_profile_is_explicit_and_strict_profiles_require_fixtures}
       - {file: crates/registry-evidence/src/config.rs, name: only_local_assurance_accepts_a_canonical_loopback_issuer_with_same_origin_jwks}
-      - {file: crates/registry-evidence/src/auth.rs, name: jwks_fetch_policy_opens_http_only_for_the_supervised_local_issuer}
       - {file: crates/registry-evidence/src/bundle.rs, name: local_bundle_may_omit_fixtures_but_strict_bundles_remain_complete}
       - {file: crates/registry-evidence/src/bundle.rs, name: fixture_coverage_follows_bundle_assurance_profile}
       - {file: crates/registry-evidence/src/fixture.rs, name: focused_coverage_is_local_only}
       - {file: crates/registry-evidence/src/fixture.rs, name: focused_local_coverage_preserves_structural_and_private_refusals}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: local_runtime_prepares_a_bearer_free_procedure_and_keeps_the_real_security_path}
+  - id: sec-issuer-key-transport
+    tests:
+      - {file: crates/registry-evidence/src/auth.rs, name: jwks_fetch_policy_uses_the_shared_declared_endpoint_rule}
+      - {file: crates/registry-evidence/src/config.rs, name: deployable_profiles_refuse_plain_http_and_the_insecure_http_opt_in}
   - id: sec-admission-clients-and-scopes
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: admission_gates_are_stated_and_a_list_is_nonempty_and_bounded}
@@ -437,6 +455,7 @@ entries:
       - {file: crates/registry-evidence/src/source.rs, name: path_selector_encoding_is_single_pass_and_hostile_values_fail_closed}
   - id: sec-search-then-fetch-bounded
     tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: optional_fetch_policy_preserves_failure_classes_in_single_and_batch_requests}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_is_two_fixed_audited_calls_with_validated_fact_handoff}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_stops_after_an_unresolved_search}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: search_then_fetch_treats_an_unresolved_fetch_as_dependency_failure}

@@ -39,7 +39,7 @@ lists them.
 
 ## Minimization at the output: closed value forms
 
-Minimization also applies to what leaves the boundary. Evidence Gateway has no caller-selectable
+Minimization also applies to what leaves the boundary. Registry Evidence has no caller-selectable
 disclosure at all, so there is no request-time negotiation to review.
 
 Instead, a requirement declares one to sixteen *concepts*, and each concept fixes the exact *value
@@ -52,8 +52,8 @@ degenerate reference. The answer carries a value for each declared concept and n
 assertion schema rejects additional properties.
 For a reviewer, this moves the disclosure decision from request time, where a caller could argue
 for more, to authoring and review time, where an operator justifies it once and can be held to it.
-(The forms themselves are catalogued in [Disclosure modes and computed
-answers](../disclosure-modes-and-computed-answers/) and are out of scope here.)
+(The forms themselves are catalogued in [How Evidence
+works](../how-evidence-works/) and are out of scope here.)
 
 There is no equivalent of the retired redacted mode, and this is structural rather than an
 omission: an assertion must carry at least one supported value, so an assertion with nothing in it
@@ -66,8 +66,8 @@ present a subset. A value uses one disclosure by default. A governed structured 
 place each direct field in a separate disclosure while keeping nested field values atomic. Two
 limits matter to a reviewer. The issuer appends every disclosure, so the response the caller
 receives reveals the same set as the signed JWS, and holder-side omission is outside this version.
-Evidence Gateway also runs no wallet interaction and speaks no part of OID4VCI. Under the default
-audience-scoped binding mode a caller may supply a holder public key that Evidence Gateway echoes
+Registry Evidence also runs no wallet interaction and speaks no part of OID4VCI. Under the default
+audience-scoped binding mode a caller may supply a holder public key that Registry Evidence echoes
 into the `cnf` claim for a relying party to check itself, and nothing verifies it.
 
 A requirement may instead declare the holder-bound subject binding mode, which changes what the
@@ -125,7 +125,7 @@ Every request that returns person-level records or an assertion must be recorded
 the caller principal, the scopes exercised, a request identifier, and the purpose value where one
 was supplied, and a deployment can run audit fail-closed so that a request whose audit record
 cannot be written does not succeed.
-Evidence Gateway takes that further and is fail-closed by construction rather than by configuration: it
+Registry Evidence takes that further and is fail-closed by construction rather than by configuration: it
 writes an access record before it contacts any source and a release record after signing and
 before release, and an audit failure fails the request. Selector, source, and disclosed values
 never appear in those records or in logs, and raw source responses are never persisted.
@@ -165,7 +165,7 @@ design, for each one.
 The main conditional control is the authored projection. A runtime can stop a caller from reaching
 past the reviewed contract, but it cannot decide which values an institution has a lawful reason to
 expose. Project reviewers must confirm the source authority, selector inputs, output projection,
-purpose, requirements, and declared value forms together, and Evidence Gateway expects the complete
+purpose, requirements, and declared value forms together, and Registry Evidence expects the complete
 simultaneously enabled configuration to be reviewed as one disclosure surface, since two answers
 that are each defensible alone can reconstruct a protected value between them. Operators must then
 bind only the reviewed source and workload credentials to the generated product inputs.
@@ -183,7 +183,7 @@ whether it meets any legal obligation) depends on how the operator configures an
 
 ## Related
 
-- [Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/)
+- [How Evidence works](../how-evidence-works/)
 - [Threat model](../threat-model/)
 - [Known limitations and non-guarantees](../known-limitations/)
 - [Records stay home](../records-stay-home/)

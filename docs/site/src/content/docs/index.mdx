@@ -1,6 +1,6 @@
 ---
 title: Registry Stack documentation
-description: Choose a focused Registry Stack component for governed records, bounded evidence, casework, scheduling, rendering, or discovery.
+description: Pick the Registry Stack product that answers your need, from a signed answer about a record to a registry you do not have yet, and start with its first tutorial.
 status: current
 owner: registry-docs
 source_repos:
@@ -11,80 +11,52 @@ locale: en
 standards_referenced: []
 ---
 
-Registry Stack provides focused components for institutions that manage authoritative data and the
-services around it.
+Registry Stack is a set of services for institutions that hold authoritative records, or need to.
+Each product does one job, runs on its own, and is optional. Pick the one that matches what you
+need today; [how the products fit together](start/concepts/) describes the model they all share.
 
-## Answer a bounded question with Evidence Gateway
+## Pick a product
 
-Use Evidence Gateway when a caller needs a signed, minimum-disclosure answer rather than a record.
-Start with the [Evidence Gateway overview](start/evidence-quickstart/) and
-[your first assertion](tutorials/first-evidence-assertion/).
-
-## Build a writable registry with Base Registry Engine
-
-Use Base Registry Engine (BReg) when an institution needs a governed system of record backed by
-PostgreSQL. Start with the [BReg overview](start/breg-quickstart/) and
-[create and query your first registry](tutorials/first-breg/). Continue by
-[deploying it](operate/breg/) and
-[querying it from an application](tutorials/query-breg-client/).
-
-## Coordinate review with Registry Casework
-
-Use Registry Casework when authorized people must review a bounded request before its producer
-continues under independent business authority. Start with the [Casework overview](start/casework/) and
-[decide your first review request](tutorials/first-casework/).
+| You need | Product | Start here |
+|---|---|---|
+| A signed answer to one question about a record, without handing over the record | Registry Evidence | [Overview](start/evidence-quickstart/), then [your first assertion](tutorials/first-evidence-assertion/) |
+| A registry you do not have yet: records, an API, permissions, and history, on PostgreSQL | Base Registry Engine (BReg) | [Overview](start/breg-quickstart/), then [your first registry](tutorials/first-breg/); later, [deploy it](operate/breg/) and [query it from an application](tutorials/query-breg-client/) |
+| Authorized people to review a request before its sender continues | Registry Casework | [Overview](start/casework/), then [decide your first ReviewRequest](tutorials/first-casework/) |
+| Bookable appointments over capacity you anchor, with short holds | Registry Scheduling | [Configuration reference](reference/scheduling-configuration/) and [API contract](reference/apis/registry-scheduling/) |
+| A PDF from registry data that renders to the same bytes every time | Registry Render | [Overview](start/registry-render/), then [render your first document](tutorials/first-render-document/) |
+| A curated index of providers that relying applications can search | Registry Discovery | [How the index works](explanation/discovery-as-an-index/), then [publish and consume an index](tutorials/publish-and-consume-discovery-index/) |
+| Portable, standards-shaped metadata about what a registry exposes | Registry Manifest | [Reference](products/registry-manifest/) |
 
 <DocsetProduct product="registry-messaging">
 
-## Send operational messages with Registry Messaging
-
-Use Registry Messaging to send one reviewed email or SMS through an operator-connected provider.
-See the [Registry Messaging overview](start/messaging/).
+Registry Messaging sends one reviewed email or SMS through a provider you connect. Start with the
+[Registry Messaging overview](start/messaging/).
 
 </DocsetProduct>
 
 <DocsetProduct product="registry-coordinator">
 
-## Run declared flows with Registry Coordinator
-
-Use Registry Coordinator to run a reviewed, declared flow of calls to other products' public APIs
-that has to continue across waits and outages. See the
-[Registry Coordinator overview](start/coordinator/).
+Registry Coordinator runs a reviewed flow of calls to the other products' APIs and keeps its place
+across waits and outages. Start with the [Registry Coordinator overview](start/coordinator/).
 
 </DocsetProduct>
 
-## Publish portable metadata with Registry Manifest
-
-Use Registry Manifest to validate metadata and render static, standards-shaped publication
-artifacts. It does not serve records or authorize callers.
-
-## Retired Registry Relay
-
-Registry Relay was retired in Registry Stack 0.39.0. Read the
-[retirement decision](decisions/registry-relay-retirement-2026-10-03/) for the scope, rationale,
-support boundary, where the 0.38.0 release and its documentation remain available, and bounded
-alternatives.
-
-## Keep the product boundaries clear
-
-BReg owns its PostgreSQL records and API. Evidence Gateway owns bounded question answering, signing,
-and minimum disclosure against its configured sources. Manifest publishes static metadata. These
-components do not configure or deploy one another.
-
-Registry Stack does not decide legal authority, data ownership, eligibility, or institutional
-approval. The responsible institutions still make those decisions.
+Registry Relay was retired in Registry Stack 0.39.0. Its
+[retirement decision](decisions/registry-relay-retirement-2026-10-03/) names where the last
+release and its documentation remain and what replaces it.
 
 ## Who does what
 
-- The assertion provider is the institution that answers requests with signed facts through Evidence Gateway.
-- The data publisher is the institution that maintains records through BReg or publishes static metadata through Manifest.
-- The consumer or verifier is the relying service that calls a product API and verifies the answers it receives.
-- The operator is whoever runs the deployment.
+Every tutorial names the role it is written for. One institution often holds several.
 
-One institution can hold several roles.
+- The assertion provider is the institution that answers questions about its records with signed facts through Registry Evidence.
+- The data publisher is the institution that maintains records through BReg or publishes metadata through Manifest.
+- The consumer or verifier is the service that calls a product API and verifies what it receives.
+- The operator is whoever installs, configures, and runs a deployment.
 
-## Move beyond the first run
+## Beyond the first run
 
+- [How the products fit together](start/concepts/)
 - [Prepare an operator handoff](operate/)
 - [Review the architecture](explanation/architecture/)
 - [Review security boundaries](security/)

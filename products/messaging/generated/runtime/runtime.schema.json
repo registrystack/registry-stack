@@ -439,7 +439,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Fetch the key set from this absolute `https` URI, skipping discovery.",
+          "description": "Fetch the key set from this absolute `https` URI, skipping discovery.\nA plain `http` URI is accepted on loopback for supervised local\ndevelopment, and beyond loopback only when the issuer block sets\n`allowInsecureHttp`.",
           "properties": {
             "type": {
               "const": "uri",
@@ -511,6 +511,11 @@
       "additionalProperties": false,
       "description": "The OIDC issuer whose access tokens this runtime accepts, the clients it\nadmits, and the claim carrying their scopes.",
       "properties": {
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
+          "type": "boolean"
+        },
         "allowedClients": {
           "description": "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list, an empty or repeated client, and\n`unrestricted` are refused.",
           "items": {
@@ -550,7 +555,7 @@
         },
         "issuer": {
           "$ref": "#/$defs/Url",
-          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL."
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set."
         },
         "jwksSource": {
           "$ref": "#/$defs/JwksSource",
