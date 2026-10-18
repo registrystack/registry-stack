@@ -58,11 +58,13 @@ pub struct OidcDiscoveryConfig {
 ///
 /// Every endpoint the operator declares in configuration, the issuer and a
 /// declared JWKS URI alike, is trusted to live on a private network or on
-/// loopback. An endpoint returned by a discovery document inherits that trust
-/// only on the declared issuer's own origin; a discovered endpoint on another
-/// origin remains under the strict public-network policy. Cloud metadata and
-/// link-local addresses are denied in every case, and plain HTTP beyond
-/// loopback requires the explicit operator setting represented by
+/// loopback. Loopback here means a host written as a literal loopback address
+/// or `localhost`; a name that resolves to a loopback address is resolved
+/// off-host and is refused. An endpoint returned by a discovery document
+/// inherits that trust only on the declared issuer's own origin; a discovered
+/// endpoint on another origin remains under the strict public-network policy.
+/// Cloud metadata and link-local addresses are denied in every case, and plain
+/// HTTP beyond loopback requires the explicit operator setting represented by
 /// `allow_insecure_http`.
 #[derive(Debug, Clone)]
 pub struct IssuerNetworkPolicy {
@@ -91,9 +93,7 @@ impl IssuerNetworkPolicy {
                     .is_ok_and(|address| address.is_loopback())
         });
         if issuer.scheme() == "http" && !loopback && !allow_insecure_http {
-            return Err(OidcError::InsecureHttpRequiresOptIn {
-                issuer: issuer.to_string(),
-            });
+            return Err(OidcError::InsecureHttpRequiresOptIn);
         }
         Ok(Self {
             issuer,
@@ -1809,8 +1809,8 @@ pub enum OidcError {
     MissingIssuer,
     #[error("OIDC discovery and JWKS endpoint overrides are mutually exclusive")]
     ConflictingEndpointConfiguration,
-    #[error("issuer {issuer}; plain http needs allowInsecureHttp: true")]
-    InsecureHttpRequiresOptIn { issuer: String },
+    #[error("the issuer uses plain http beyond loopback; set allowInsecureHttp: true")]
+    InsecureHttpRequiresOptIn,
     #[error("{} refused by the issuer network policy: {remedy}", endpoint.describe())]
     EndpointRefused {
         endpoint: OidcEndpoint,
@@ -1883,6 +1883,15 @@ mod tests {
         let error = IssuerNetworkPolicy::new("http://10.20.30.40:8080", false)
             .expect_err("private-network HTTP needs an explicit opt-in");
         assert!(error.to_string().contains("allowInsecureHttp: true"));
+
+        let error = IssuerNetworkPolicy::new("http://marker-issuer.internal:8080/realm", false)
+            .expect_err("a named private host needs the same opt-in");
+        let rendered = error.to_string();
+        assert!(rendered.contains("allowInsecureHttp: true"));
+        assert!(
+            !rendered.contains("marker-issuer"),
+            "the refusal must not repeat the configured issuer: {rendered}"
+        );
 
         let opted_in = IssuerNetworkPolicy::new("http://10.20.30.40:8080", true).unwrap();
         opted_in
