@@ -20,24 +20,23 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 If you write assertion definitions, this tutorial shows you one that binds two subjects in distinct
 roles and releases one Boolean: is the candidate in the child's complete legal-parent set? You
-continue the project from [Control who can request evidence](../control-who-can-request-evidence/).
+continue in the project from [Control who can request evidence](../control-who-can-request-evidence/),
+with the source and Evidence Gateway still running.
 
 <QuickstartMeta
   outcome="A verified relationship assertion bound to a child and a candidate parent."
   time="About 10 minutes"
   level="Local development with synthetic data"
   prerequisites={[
-    'The project from Control who can request evidence',
-    'Docker, Python 3, curl, and jq',
+    'The project, source, and Evidence Gateway left running by Control who can request evidence',
   ]}
 />
 
 ## Check the relationship definition
 
-Run the relationship fixture on its own:
+In `first-evidence-assertion/adult-status`, run the relationship fixture on its own:
 
-```sh test-cwd="first-evidence-assertion"
-cd adult-status
+```sh test-cwd="first-evidence-assertion/adult-status"
 evidencectl test . \
   --target local-target.yaml \
   --fixture fixtures/legal-parent-relationship.yaml
@@ -60,36 +59,13 @@ subjects:
 ```
 
 Each role selects a record through the `record-by-id`
-[selector profile](../../explanation/how-evidence-works/). The `parent-record` source fetches the
+[selector profile](../../reference/glossary/#selector-profile). The `parent-record` source fetches the
 parent set with the `child` selector alone, and its response shape requires `complete: true`, so an
 incomplete set is refused before any Function runs. `outputs` declares one Boolean, `is-parent`, so
 the parent list never enters the assertion.
 
 {/* Evidence: products/evidence/examples/standalone/evidence.yaml, selectorInputs;
     fixtures/legal-parent-relationship.yaml, incomplete-set. */}
-
-## Start the source and Evidence Gateway
-
-In another terminal, start the synthetic source:
-
-```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
-python3 serve-source.py \
-  --port 8081 \
-  --token-file .generated/secrets/synthetic-source-token
-```
-
-Back in the project terminal, start Evidence Gateway:
-
-```sh
-evidencectl dev start . \
-  --target local-target.yaml \
-  --evidence-port 18080 \
-  --issuer-port 8082
-```
-
-```text test-excerpt
-Evidence ready at http://127.0.0.1:18080
-```
 
 ## Request and verify the relationship
 
@@ -125,7 +101,7 @@ VERIFIED
 {"providesValueFor":"urn:example:concept:legal-parent-relationship:v1","value":true}
 ```
 
-Each role carries its own subject binding, an opaque value scoped to your audience
+Each role carries its own [subject binding](../../reference/glossary/#subject-binding), an opaque value scoped to your audience
 (`subjectBinding: audience-scoped`), in place of the record identifier.
 
 ## Prove the role boundary
@@ -189,26 +165,10 @@ evidence.unavailable
 Evidence Gateway returns `evidence.unavailable` for any subject it cannot resolve, so the refusal
 does not say which record was missing.
 
+Leave the source and Evidence Gateway running; the next tutorial continues with them.
+
 {/* Evidence: crates/registry-evidencectl/src/request.rs, validate_closed_inputs;
     crates/registry-evidence/src/problem.rs, EvidenceNotAvailable. */}
-
-## Stop and read the audit
-
-```sh
-evidencectl dev stop .
-evidencectl audit show --last-operation
-evidencectl dev clean .
-```
-
-```text test-expect
-Local Evidence stopped
-ACCESS AUTHORIZED legal-parent-relationship relationship-check requester=<pseudonym>
-DISCLOSURE DENIED reason=no-match
-Removed stopped local Evidence state
-```
-
-The audit records the refusal class, not the selector values. Press `Ctrl+C` in the source's
-terminal; the next tutorial continues with this project.
 
 ## Next
 

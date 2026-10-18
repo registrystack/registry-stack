@@ -1,6 +1,6 @@
 ---
 title: Evidence Gateway overview
-description: What Evidence Gateway does, the three tutorials every reader starts with, and where an author, an operator, or an application developer goes next.
+description: What a caller gets from Evidence Gateway, what you define and run to answer it, what it refuses, and when another product fits better.
 status: current
 owner: registry-docs
 source_repos:
@@ -12,65 +12,58 @@ standards_referenced: []
 ---
 
 If another service needs to check something your institution's records settle, such as whether a
-person is an adult, [Evidence Gateway](../../reference/glossary/#evidence-gateway) lets you answer that one question with a signed assertion
-instead of sharing the record. Three short tutorials take you from a copied example to a
-verified answer, a value richer than yes or no, and a choice of who may ask.
+person is an adult, [Evidence Gateway](../../reference/glossary/#evidence-gateway) lets you answer
+that one question without sharing the record.
 
-## What you work with
+## What a caller gets
 
-Evidence answers with an [assertion](../../reference/glossary/#assertion): a signed payload that
-carries the answer and none of the record behind it. Each question has a
-[Requirement URI](../../reference/glossary/#requirement), such as
-`urn:example:requirement:adult-status:v1`, and a caller names that URI to ask it.
+The caller names a fixed question by its [Requirement URI](../../reference/glossary/#requirement),
+such as `urn:example:requirement:adult-status:v1`, and the subject it is about. It gets back an
+[assertion](../../reference/glossary/#assertion): a signed answer it can verify offline, carrying
+only the values the question declares. Asked whether a person is an adult, Evidence Gateway reads
+a birth date from your system and returns `true`; the date stays with you.
 
-You declare the questions, and how your own system answers each one, in an [Evidence project](../../reference/glossary/#evidence-project): YAML
-files and small scripts you keep in version control. `evidencectl` checks, tests, and packages the
-project; `evidence` serves the package and signs each assertion.
+## What you define and run
 
-{/* Evidence: products/evidence/examples/standalone/evidence.yaml, assertionDefinitions and
-    semantics.requirement; crates/registry-evidencectl/src/check.rs, render_human();
-    crates/registry-evidence/src/runtime.rs, AuditPhase::DisclosureRelease;
-    products/evidence/OPERATOR-CONTRACT.md, "Supported deployment". */}
+You write an [Evidence project](../../reference/glossary/#evidence-project), YAML files and small
+scripts kept in version control. Its
+[assertion definitions](../../reference/glossary/#assertion-definition) are the questions; its
+sources are the fixed reads of your own systems that answer them; its fixtures are synthetic cases
+that prove each answer offline. A target binds the project to one deployment: your token issuer,
+source credentials, and signing keys.
 
-## Start here, whatever your role
+`evidencectl` checks, tests, and packages the project. `evidence` serves the package, signs each
+answer, and records who asked and what was released in an audit trail.
 
-1. [Your first assertion](../../tutorials/first-evidence-assertion/): copy the example project,
-   check it, start it beside a synthetic source, prepare and send one request, and verify the
-   signed response offline. The source returns a birth date and a private address; the
-   assertion carries only `true`.
-2. [Return a governed value](../../tutorials/return-a-governed-value/): ask the same project which
-   region the subject lives in, and get back one of the values the project allows.
-3. [Control who can request evidence](../../tutorials/control-who-can-request-evidence/): add a
-   second caller and read the refusal Evidence returns when it asks what it was never granted.
+{/* Evidence: products/evidence/examples/standalone/evidence.yaml, assertionDefinitions;
+    products/evidence/examples/standalone/local-target.yaml; crates/registry-evidencectl/src/check.rs;
+    crates/registry-evidence/src/runtime.rs, AuditPhase::AccessAttempt and AuditPhase::DisclosureRelease. */}
 
-All three run locally on synthetic data, with token checks, signing, and audit on.
+## What it refuses
 
-{/* Evidence: products/evidence/examples/standalone/README.md;
-    products/evidence/examples/standalone/serve-source.py;
-    products/evidence/examples/standalone/functions/derive-adult-status.rhai;
-    crates/registry-evidencectl/src/dev.rs. */}
+Evidence Gateway refuses a caller whose grant does not cover the question, a purpose the question
+does not declare, and a value its scripts compute outside the declared outputs. A subject it
+cannot resolve gets the same refusal as any other unavailable answer, so a refusal does not reveal
+whether a record exists.
 
-## Then follow your role
+{/* Evidence: crates/registry-evidence/src/problem.rs, NotAuthorized and EvidenceNotAvailable;
+    crates/registry-evidencectl/src/request.rs, validate_closed_inputs;
+    products/evidence/examples/standalone/fixtures/residence-region.yaml, negative-outside-controlled-values. */}
 
-- **You build an application that asks.**
-  [Request Evidence from your application](../../tutorials/request-evidence-from-an-application/)
-  sends the request and verifies the answer from code.
-- **You run the service.**
-  [Build and deploy an Evidence Gateway project](../../tutorials/build-and-deploy-evidence-project/)
-  takes the project to a running deployment.
-- **You design the questions.** [How Evidence works](../../explanation/how-evidence-works/) gives
-  the model; then
-  [Connect an institution API](../../tutorials/connect-an-institution-source/)
-  starts a project from your own system's API description.
+## When it is not the right product
 
-## Where the product stops
+If the other service needs the record itself, or needs to change it, hold the record in
+[Base Registry Engine](../breg-quickstart/) and give that service an access profile there. If you
+need credentials with a lifecycle, such as revocation, look elsewhere: an SD-JWT VC answer from
+Evidence Gateway is one more encoding of the same signed answer, with no lifecycle behind it.
 
-Evidence keeps no copy of your records: each answer comes from a fixed read of the system that holds
-them. To hold and change the records themselves, use
-[Base Registry Engine](../breg-quickstart/).
+{/* Evidence: products/evidence/CONCEPT.md; products/evidence/contracts/sd-jwt-vc-profile.yaml. */}
 
-{/* Evidence: products/evidence/OPERATOR-CONTRACT.md, "Supported deployment";
-    products/evidence/examples/standalone/evidence.yaml, sources. */}
+## Where to start
+
+[Your first assertion](../../tutorials/first-evidence-assertion/) installs the tools, runs the
+example project over a synthetic source, and verifies one signed answer in about fifteen minutes.
+[How Evidence works](../../explanation/how-evidence-works/) gives the model behind it.
 
 ## Next
 

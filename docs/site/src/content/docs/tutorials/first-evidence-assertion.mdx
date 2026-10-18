@@ -23,20 +23,32 @@ shows you what Evidence Gateway gives them. You run it over a synthetic source, 
 test person is an adult, and read `"value": true` from a verified response with no birth date.
 
 <QuickstartMeta
-  outcome="A verified adult-status assertion."
-  time="About 15 minutes"
+  outcome="A verified adult-status assertion, with the source and Evidence Gateway left running."
+  time="About 15 minutes, plus the first image download"
   level="Local development with synthetic data"
   prerequisites={[
-    'evidence and evidencectl on PATH',
-    'The source archive of the same release',
     'Running Docker',
-    'Python 3, curl, and jq',
+    'Python 3, curl, tar, and jq',
+    'Free loopback ports 8081, 8082, and 18080',
   ]}
 />
 
-## Confirm the toolset
+## Install evidence and evidencectl
 
-`evidencectl` refuses an `evidence` binary from another release.
+`evidence` is Evidence Gateway, the service that answers requests, and
+[`evidencectl`](/reference/cli/evidencectl/) the tool you check and drive a project with. The
+installer checks every download against the release's `SHA256SUMS`, then puts `evidence`,
+`evidencectl`, and `evidence-oid4vci` in `~/.local/bin` together; keep that directory on your
+`PATH`.
+
+{/* Evidence: crates/registry-evidencectl/install.sh, binaries, EVIDENCECTL_INSTALL_DIR, SHA256SUMS. */}
+
+```sh test-skip="downloads a release; the gate uses binaries built from this checkout"
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
+```
+
+`evidencectl` refuses an `evidence` binary from another release, so check that both report the
+same version:
 
 ```sh
 evidence --version
@@ -48,10 +60,19 @@ evidence <version>
 evidencectl <version>
 ```
 
-## Copy the project
+## Get the example project
 
-From the archive root, copy the standalone example out of the tree, because the next commands
-write keys and responses into it.
+The example project ships in the source archive of the same release. Download and extract it,
+then work from the archive's root:
+
+```sh test-skip="downloads the release source; the gate starts at the root of this checkout"
+version="$(evidencectl --version | cut -d ' ' -f 2)"
+curl -fsSL "https://github.com/registrystack/registry-stack/archive/refs/tags/v${version}.tar.gz" | tar -xz
+cd "registry-stack-${version}"
+```
+
+Copy the standalone example out of the tree, because the next commands write keys and responses
+into it:
 
 ```sh
 mkdir first-evidence-assertion
@@ -96,7 +117,7 @@ Definition adult-status: urn:example:requirement:adult-status:v1
 ```
 
 `adult-status` is an [assertion definition](../../reference/glossary/#assertion-definition): one fixed question, named by its
-[Requirement URI](../../reference/glossary/#requirement). It reads the source `person-record`
+[Requirement URI](../../reference/glossary/#requirement). It reads the [source](../../reference/glossary/#source) `person-record`
 and may return one output, the Boolean `adult`. The report goes on to three other definitions.
 
 Run the fixture cases offline:
@@ -191,15 +212,12 @@ curl --silent --show-error --fail-with-body \
   --output adult-status.jws.json
 ```
 
-Verify the response offline, recording when, so you can re-verify it at that instant later:
+Verify the response offline against what `request prepare` fixed:
 
 ```sh
-umask 077
-verified_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 evidencectl verify adult-status.jws.json \
   --context .evidence/requests/adult-status/verification.json \
   --output adult-status.verified.json
-printf '%s\n' "$verified_at" > .evidence/requests/adult-status/verified-at.txt
 ```
 
 ```text test-expect
@@ -231,36 +249,11 @@ assertion carries only `true`.
 {/* Evidence: crates/registry-evidencectl/src/{request,dev,verify}.rs, prepare_local, obtain_issuer_token,
     rename_noreplace; products/evidence/examples/standalone/serve-source.py, birth_date. */}
 
-## Inspect the audit and stop
+## Leave it running
 
-`audit show` reads only a stopped session:
-
-```sh
-evidencectl dev stop .
-evidencectl audit show --last-operation
-```
-
-```text test-excerpt
-ACCESS AUTHORIZED adult-status age-check requester=<pseudonym>
-DISCLOSURE RELEASED adult
-```
-
-A pseudonymous requester was authorized for `adult-status` and `age-check`, and `adult` was
-released. The value is not shown.
-
-Remove the stopped session's generated state. The project, its clients, and its audit stay:
-
-```sh
-evidencectl dev clean .
-```
-
-```text test-expect
-Removed stopped local Evidence state
-```
-
-Press `Ctrl+C` in the source's terminal. Keep the project: the next tutorial continues from it.
-
-{/* Evidence: crates/registry-evidencectl/src/audit_view.rs, no_stopped_session, render_authorized. */}
+The next tutorial continues with this project, with the source and Evidence Gateway still
+running, so leave both as they are. When you are finished with them, run `evidencectl dev stop .`
+and then `evidencectl dev clean .` in this directory, and press `Ctrl+C` in the source's terminal.
 
 ## Next
 
