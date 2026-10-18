@@ -268,11 +268,13 @@ a fresh database as [the Casework upgrade step](../../operate/advanced/upgrade-a
 describes. The forward-state rehearsal does not claim that this replacement preserves old
 Casework work in place.
 
-Messaging's `v0.42.0` schema starts a new baseline. It installs its complete schema as one
-baseline, and `messagingctl plan`, `messagingctl apply`, and startup refuse a database whose
-ledger holds a pre-1.0 version, naming the fresh-install recovery. Retain the previous database
-and audit journal for reconciliation, and apply the current package to a fresh database. Messages
-still queued in the previous database are not carried forward.
+Messaging's and Scheduling's `v0.42.0` schemas start new baselines. Each installs its complete
+schema as one baseline, and its `plan`, `apply`, and startup refuse a database whose ledger holds a
+pre-1.0 version, naming the fresh-install recovery. Retain the previous database and audit journal
+for reconciliation, and apply the current package to a fresh database as
+[the upgrade runbook](../../operate/advanced/upgrade-and-retire/#upgrade-in-this-order) describes.
+Messages still queued, and Scheduling holds and appointments, in the previous database are not
+carried forward.
 
 Upgrades are forward-only: no release reads state a later release wrote. To roll back, restore the
 backup taken before the upgrade and run the previous release, as
@@ -296,7 +298,8 @@ Base Registry Engine's Beta pilot conditions are under
     release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR, check_forward_path(),
     select_from_tag(), check_floor_is_current(), and select_products();
     products/evidence/CHANGELOG.md, Unreleased; products/messaging/CHANGELOG.md, Unreleased;
-    crates/registry-messaging/src/store.rs; crates/registry-discovery/Cargo.toml;
+    crates/registry-messaging/src/store.rs; products/scheduling/CHANGELOG.md, Unreleased;
+    crates/registry-scheduling/src/store.rs; crates/registry-discovery/Cargo.toml;
     crates/registry-casework/src/store.rs; crates/registry-casework/migrations/0100_reviews.sql. */}
 
 ## Enforcement
@@ -316,7 +319,7 @@ The promise is machine-checked where a checker exists:
   views differ, retained tables lose rows, or an audit file loses entries. It starts from the newest
   published release at or below the workspace version, so it rehearses the immediate predecessor,
   and it refuses to start from a release before `v0.42.0`, where Evidence's normalized baseline
-  and Messaging's fresh schema baseline start.
+  and the Messaging and Scheduling fresh schema baselines start.
   While no release from that floor onward is published, the rehearsal uses the binaries under test
   on both sides and reports that it has no published predecessor. This exercises the scenarios with
   the same build; it does not demonstrate compatibility between releases. Once a release on the

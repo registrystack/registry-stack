@@ -801,8 +801,8 @@ earliest release this source reads state from, `v0.42.0`, and the script
 refuses to start from any earlier release rather than skipping the check.
 The forward state path starts there because no product reads `v0.41.0` state:
 BReg and Casework start on a fresh database, Evidence starts at its normalized
-`v0.42.0` baseline, and Messaging installs a fresh schema baseline and refuses
-a pre-1.0 ledger. The earlier `v0.40.0` fresh-install boundary still excludes
+`v0.42.0` baseline, and Messaging and Scheduling each install a fresh schema
+baseline and refuse a pre-1.0 ledger. The earlier `v0.40.0` fresh-install boundary still excludes
 `v0.39.0` state. The script also refuses to run when the floor is older than
 the newest release manifest recorded as `status: released` below the first
 release of the
@@ -810,7 +810,8 @@ workspace version's minor line, or newer than the workspace version.
 While no release from the floor onward is published there is no predecessor to
 download. A run that names neither `--from-tag` nor `--from-bin-dir` then says
 so and rehearses every leg with the binaries under test on both sides, so the
-legs stay exercised; `--fetch-only` says so and stops. Once the floor's release
+legs stay exercised; `--fetch-only` says so, writes a `--report` that names no
+predecessor, and stops. Once the floor's release
 is published the same run downloads it, with no change to the script or the
 workflow.
 Casework and Scheduling state are not rehearsed: `PRODUCTS` in the script
