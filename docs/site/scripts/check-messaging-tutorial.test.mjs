@@ -12,7 +12,6 @@ const execFileAsync = promisify(execFile);
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const gate = resolve(scriptDir, 'check-messaging-tutorial.sh');
 const docsRoot = resolve(scriptDir, '../src/content/docs');
-const firstMessaging = resolve(docsRoot, 'tutorials/first-messaging.mdx');
 
 async function runGate(env = {}, args = ['--dry-run']) {
   try {
@@ -75,7 +74,7 @@ function reportBlocks(output) {
   const blocks = new Map();
   let current = null;
   for (const line of output.split('\n')) {
-    const header = line.match(/^(tutorials\/[a-z0-9-]+): \d+ sh fences, \d+ executed$/u);
+    const header = line.match(/^([a-z]+\/[a-z0-9-]+): \d+ sh fences, \d+ executed$/u);
     if (header) {
       current = [];
       blocks.set(header[1], current);
@@ -89,11 +88,32 @@ function reportBlocks(output) {
 // Counts are reported, never required: a writer who adds or removes a command
 // block under an existing heading changes these numbers and neither the gate
 // nor this test may object. Only the registration is asserted.
+async function registeredPages() {
+  return extractBashArray(await readFile(gate, 'utf8'), 'MESSAGING_TUTORIALS');
+}
+
 test('the dry-run gate resolves every registered Registry Messaging tutorial', async () => {
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
-  assert.match(output, /tutorials\/first-messaging: \d+ sh fences, \d+ executed/u);
-  assert.match(output, /Checked 1 tutorial\./u);
+  const registered = await registeredPages();
+  for (const slug of registered) {
+    assert.match(output, new RegExp(`^${slug}: \\d+ sh fences, \\d+ executed$`, 'mu'));
+  }
+  assert.match(output, new RegExp(`Checked ${registered.length} tutorials?\\.`, 'u'));
+});
+
+// The Author page continues in the tutorial's project, so it must replay
+// after the tutorial and in its reader directory.
+test('the Author page replays in the tutorial project, after the tutorial', async () => {
+  const source = await readFile(gate, 'utf8');
+  const registered = await registeredPages();
+  assert.ok(
+    registered.indexOf('tutorials/first-messaging') < registered.indexOf('configure/messaging'),
+    registered.join(', '),
+  );
+  const branch = source.match(/\n\tconfigure\/messaging\)[\s\S]*?\n\t\t;;/u)?.[0];
+  assert.ok(branch, 'the configure/messaging replay spec must exist');
+  assert.match(branch, /SPEC_READER=first-messaging/u);
 });
 
 // The source build reaches the network and a Rust toolchain, and the gate
@@ -363,6 +383,7 @@ const STAND_IN_PAGE = [
   '',
   '```sh',
   'messagingctl init tutorial-work/notices',
+  `mkdir -p tutorial-work && printf 'kind: starter\\nid: one\\n' >tutorial-work/starter.yaml`,
   '```',
   '',
   '## Start the session',
@@ -408,12 +429,65 @@ function standInMessagingctl({ ready = true, stopReport = true } = {}) {
   ].join('\n');
 }
 
+// The Author and Deploy stand-ins continue in the tutorial's reader
+// directory and show a file the tutorial stand-in wrote, as an excerpt.
+function standInAuthorPage({ excerpt = 'id: one', path = 'tutorial-work/starter.yaml' } = {}) {
+  return [
+    '---',
+    'title: stub',
+    '---',
+    '',
+    '## Check the project',
+    '',
+    '```sh',
+    'messagingctl check --project tutorial-work/notices',
+    '```',
+    '',
+    `\`\`\`yaml title="starter.yaml" test-excerpt="${path}"`,
+    excerpt,
+    '```',
+    '',
+    '## Add a French SMS',
+    '',
+    '```sh',
+    'test -f tutorial-work/starter.yaml',
+    '```',
+    '',
+    '## Package the project',
+    '',
+    '```sh',
+    'messagingctl package tutorial-work/notices --output tutorial-work/notices-package',
+    '```',
+    '',
+  ].join('\n');
+}
+
+const STAND_IN_DEPLOY_PAGE = [
+  '---',
+  'title: stub',
+  '---',
+  '',
+  '## Install the binaries',
+  '',
+  '```yaml title="starter.yaml" test-excerpt="tutorial-work/starter.yaml"',
+  'kind: starter',
+  '```',
+  '',
+  '```sh',
+  'messaging --version',
+  '```',
+  '',
+].join('\n');
+
 async function replayStandIn(options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'messaging-replay-test-'));
   try {
-    await mkdir(join(root, 'docs/start'), { recursive: true });
-    await mkdir(join(root, 'docs/tutorials'), { recursive: true });
+    for (const section of ['start', 'tutorials', 'configure', 'operate']) {
+      await mkdir(join(root, 'docs', section), { recursive: true });
+    }
     await writeFile(join(root, 'docs/tutorials/first-messaging.mdx'), STAND_IN_PAGE);
+    await writeFile(join(root, 'docs/configure/messaging.mdx'), standInAuthorPage(options.author));
+    await writeFile(join(root, 'docs/operate/messaging.mdx'), STAND_IN_DEPLOY_PAGE);
     const bin = join(root, 'messagingctl');
     await writeFile(bin, standInMessagingctl(options), { mode: 0o755 });
     return await runGate(
@@ -439,6 +513,36 @@ test('the replay leaves the session running, then stops it with SIGINT', async (
   assert.match(output, /stop the session \(Ctrl-C\)/u);
   assert.match(output, /containers are removed/u);
   assert.match(output, /Registry Messaging tutorial gate: PASS/u);
+});
+
+test('the replay checks each file excerpt in the reader directory it shares', async () => {
+  const { code, output } = await replayStandIn();
+  assert.equal(code, 0, output);
+  assert.match(output, /^configure\/messaging: 3 sh fences, 3 executed$/mu);
+  assert.match(output, /^ {2}file excerpts: 1, checked after the journey$/mu);
+  assert.match(output, /messagingctl package tutorial-work\/notices/u);
+  assert.match(output, /Checked 3 tutorials\./u);
+});
+
+// A page that shows a file as it no longer is fails, naming the page and
+// the file, even though every command exited zero.
+test('an excerpt the file no longer holds fails the replay', async () => {
+  const { code, output } = await replayStandIn({ author: { excerpt: 'id: two' } });
+  assert.notEqual(code, 0, output);
+  assert.match(output, /excerpt drift in configure\/messaging: excerpt 01 is not in tutorial-work\/starter\.yaml/u);
+  assert.match(output, /no run of lines matches the excerpt/u);
+});
+
+test('an excerpt of a file the journey did not leave fails the replay', async () => {
+  const { code, output } = await replayStandIn({ author: { path: 'tutorial-work/missing.yaml' } });
+  assert.notEqual(code, 0, output);
+  assert.match(output, /excerpt 01 shows tutorial-work\/missing\.yaml, which the journey did not leave behind/u);
+});
+
+test('an excerpt outside the reader directory fails the replay', async () => {
+  const { code, output } = await replayStandIn({ author: { path: '../reader/first-messaging/x' } });
+  assert.notEqual(code, 0, output);
+  assert.match(output, /which is not inside the reader directory/u);
 });
 
 test('a session that stops before it is ready fails the replay', async () => {
@@ -468,8 +572,8 @@ test('the gate sets none of the development port overrides', async () => {
 // Page coverage
 // ---------------------------------------------------------------------------
 
-// Build a docs root the gate will accept: the registered page is the real one,
-// with an optional edit.
+// Build a docs root the gate will accept: the registered pages are the real
+// ones, with an optional edit to the tutorial.
 async function docsFixtureRoot(edit = (page) => page) {
   const source = await readFile(gate, 'utf8');
   const sections = extractBashArray(source, 'MESSAGING_DOC_SECTIONS');
@@ -477,8 +581,10 @@ async function docsFixtureRoot(edit = (page) => page) {
   for (const section of sections) {
     await mkdir(join(root, section), { recursive: true });
   }
-  const page = await readFile(firstMessaging, 'utf8');
-  await writeFile(join(root, 'tutorials/first-messaging.mdx'), edit(page));
+  for (const slug of extractBashArray(source, 'MESSAGING_TUTORIALS')) {
+    const page = await readFile(resolve(docsRoot, `${slug}.mdx`), 'utf8');
+    await writeFile(join(root, `${slug}.mdx`), slug === 'tutorials/first-messaging' ? edit(page) : page);
+  }
   return root;
 }
 

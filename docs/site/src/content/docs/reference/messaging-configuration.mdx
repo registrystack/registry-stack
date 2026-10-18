@@ -1,0 +1,69 @@
+---
+title: Registry Messaging configuration reference
+description: Generated fields, accepted values, defaults, and constraints for Registry Messaging projects, templates, provider packages, and runtime configuration.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: reference
+locale: en
+standards_referenced:
+  - json-schema
+wide: true
+---
+
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+import ConfigurationReference from '../../../components/ConfigurationReference.astro';
+import reference from '../../../data/generated/messaging-configuration.json';
+
+Look up configuration keys for `messaging.yaml`, each template version's `template.yaml`, each
+provider package's `provider.yaml`, and the operator's `runtime.yaml`.
+
+## Scope
+
+Keys follow the current grammar, which is not frozen.
+
+`messaging.yaml` is the authored package: sender profiles, access profiles, and the templates and
+providers it uses. `templates/<id>/<version>/template.yaml` declares one template version's channel,
+locales, and parts. `providers/<id>/provider.yaml` declares an HTTP provider package and its
+capabilities. `runtime.yaml` is the operator's deployment file: listener, database, package,
+identity, authentication, provider connections, audit, and retention.
+
+A schema-valid document still needs the checks `messagingctl check` runs, because cross-file
+references, template rendering, and provider scripts cannot be expressed in a schema.
+[Configuration files](../configuration-files/) describes the YAML rules and environment
+substitution that apply when the runtime reads `runtime.yaml`.
+
+{/* Evidence: crates/registry-messaging-core/src/package.rs, MessagingProject;
+    crates/registry-messaging/src/config.rs, RuntimeConfig;
+    crates/registry-messaging/src/package.rs, load_project();
+    docs/site/scripts/generate-messaging-configuration.mjs. */}
+
+## Read the tables
+
+`fields[]` means an array item; `providers.*` means a map entry whose name you choose.
+Required fields inside an optional object apply when that object is present.
+Conditional fields depend on the selected variant or another configuration value.
+Accepted values list the union across variants; constraints separated by `or` are alternatives.
+A schema default applies only where that variant declares it. `Not specified` does not mean
+that every value is accepted.
+
+<ConfigurationReference contracts={reference.contracts} prefix="messaging" />
+
+{/* Generated from src/data/generated/messaging-configuration.json by
+    docs/site/scripts/generate-messaging-configuration.mjs. Run npm run generate from docs/site. */}
+
+## Check commands
+
+Every file Registry Messaging reads has a command that checks it offline, with no service running.
+Each prints the diagnostics, JSON output, and exit codes that
+[Check a file before you deploy it](../configuration-files/#check-a-file-before-you-deploy-it) describes.
+
+<ConfigurationFormatChecks product="messaging" />
+
+## Next
+
+- [Author a Messaging package](../../configure/messaging/) to change templates and sender profiles.
+- [Registry Messaging API contract](../apis/registry-messaging/) for routes, limits, and problem codes.
+- [Deploy Registry Messaging](../../operate/messaging/) to write and check `runtime.yaml`.

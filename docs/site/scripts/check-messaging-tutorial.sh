@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # Execute the current Registry Messaging tutorials from a fresh reader
-# directory.
+# directory, and check that every file excerpt a Messaging page shows is in
+# the file the journey left behind.
 #
 # What this gate is for: proving that the commands the Messaging tutorials
 # document still run, and that a short list of behaviours a successful exit
@@ -31,7 +32,7 @@
 # is what lets it run in the docs checks.
 #
 # Registering a tutorial means adding its slug to MESSAGING_TUTORIALS and a
-# branch to load_spec. Each spec holds two things:
+# branch to load_spec. Each spec holds up to three things:
 #
 #   SPEC_STEPS    the reader journey, in order. Fences are addressed by the
 #                 heading they sit under, never by position, so inserting a
@@ -63,6 +64,18 @@
 #                 than failing, so they exit zero whatever Messaging answers,
 #                 which is exactly the kind of regression only an assertion
 #                 catches. Do not grow this into a transcript pin.
+#
+#   SPEC_READER   the reader directory the journey runs in, under the work
+#                 root. It defaults to the page's own name. A page that
+#                 continues in another page's project names that page's
+#                 reader, and is registered after it in MESSAGING_TUTORIALS.
+#
+# A fence whose opener carries test-excerpt="PATH" shows part of a file. After
+# the page's journey runs, the gate checks it against PATH, relative to the
+# page's reader directory, with tutorial-runner/excerpt.mjs: a JSON fence by
+# structure, any other as a run of consecutive lines at one indentation. The
+# gate reads the paths, never the excerpts' text, so this pins nothing about a
+# page: it fails only when a page shows a file as it no longer is.
 #
 # Renaming a heading breaks the steps that name it, by name, in --dry-run. That
 # is the trade: a renamed heading is a structural edit to the journey, it fails
@@ -106,10 +119,14 @@ OWNER_LABEL='org.registrystack.messagingctl.dev-owner'
 MESSAGING_DOC_SECTIONS=(
 	start
 	tutorials
+	configure
+	operate
 )
 
 MESSAGING_TUTORIALS=(
 	tutorials/first-messaging
+	configure/messaging
+	operate/messaging
 )
 
 # Every other page that runs Registry Messaging commands, and the reason it is
@@ -194,6 +211,7 @@ check_tutorial_coverage
 load_spec() {
 	SPEC_STEPS=()
 	SPEC_ASSERTS=()
+	SPEC_READER="$(basename "$1")"
 
 	case "$1" in
 	tutorials/first-messaging)
@@ -219,6 +237,25 @@ load_spec() {
 			"Subject: Votre rendez-vous du 01/10/2026"
 			"containers are removed"
 		)
+		;;
+	configure/messaging)
+		# The page continues in the tutorial's project, after its session
+		# stopped: it edits a template, previews it, and packages the
+		# project. Every command fails on a refusal, so no assertion is
+		# needed.
+		SPEC_READER=first-messaging
+		SPEC_STEPS=(
+			"run:Check the project"
+			"run:Add a French SMS"
+			"run:Package the project"
+		)
+		;;
+	operate/messaging)
+		# Every command on the page needs a production host: PostgreSQL over
+		# TLS, an issuer, and secrets under /run. The journey runs none of
+		# them; the gate checks the page's runtime-file excerpts against the
+		# example the tutorial's project carries.
+		SPEC_READER=first-messaging
 		;;
 	*)
 		printf '%s is not a registered Registry Messaging tutorial in %s\n' \
@@ -586,6 +623,47 @@ assert_transcript() {
 	done
 }
 
+# Check every file excerpt the page shows against the file it names, in the
+# reader directory the journey left behind.
+check_excerpts() {
+	local slug="$1" fence_dir="$2" reader_dir="$3"
+	local number language path format failed=0
+	while IFS=$'\t' read -r number language path; do
+		case "$path" in
+		/* | ../* | */../*)
+			printf 'excerpt drift in %s: excerpt %s names %s, which is not inside the reader directory\n' \
+				"$slug" "$number" "$path" >&2
+			failed=1
+			continue
+			;;
+		esac
+		if [[ ! -f "$reader_dir/$path" ]]; then
+			printf 'excerpt drift in %s: excerpt %s shows %s, which the journey did not leave behind\n' \
+				"$slug" "$number" "$path" >&2
+			failed=1
+			continue
+		fi
+		format=text
+		[[ "$language" == json ]] && format=json
+		if ! node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            import { pathToFileURL } from "node:url";
+            const [module, format, excerpt, source] = process.argv.slice(1);
+            const { checkExcerpt } = await import(pathToFileURL(module).href);
+            const problem = checkExcerpt(format, readFileSync(excerpt, "utf8"), readFileSync(source, "utf8"));
+            if (problem) {
+                console.error(problem);
+                process.exit(1);
+            }
+        ' "$SITE_ROOT/scripts/tutorial-runner/excerpt.mjs" "$format" \
+			"$fence_dir/excerpt-$number.txt" "$reader_dir/$path"; then
+			printf 'excerpt drift in %s: excerpt %s is not in %s\n' "$slug" "$number" "$path" >&2
+			failed=1
+		fi
+	done <"$fence_dir/excerpts.tsv"
+	return "$failed"
+}
+
 # ---------------------------------------------------------------------------
 # Replay
 # ---------------------------------------------------------------------------
@@ -606,28 +684,44 @@ for slug in "${MESSAGING_TUTORIALS[@]}"; do
 	# by the heading it sits under and its occurrence there. A level-2 heading
 	# opens a section, so a fence under a deeper heading answers to the level-2
 	# heading above it, and occurrences are counted per heading.
+	#
+	# A fence whose opener carries test-excerpt="PATH" is saved beside them
+	# and indexed by its language and PATH, for check_excerpts.
 	fence_dir="$WORK_ROOT/fences/$slug"
 	mkdir -p "$fence_dir"
 	: >"$fence_dir/index.tsv"
-	fence_count="$(awk -v outdir="$fence_dir" -v index_file="$fence_dir/index.tsv" '
+	: >"$fence_dir/excerpts.tsv"
+	fence_count="$(awk -v outdir="$fence_dir" -v index_file="$fence_dir/index.tsv" \
+		-v excerpt_file="$fence_dir/excerpts.tsv" '
         in_fence == 0 && /^##[ \t]+/ {
             heading = $0
             sub(/^##[ \t]+/, "", heading)
             sub(/[ \t]+$/, "", heading)
             next
         }
-        in_fence == 0 && /^```[A-Za-z0-9_-]+$/ {
+        in_fence == 0 && /^```[A-Za-z0-9_-]+([ \t].*)?$/ {
             in_fence = 1
             capture = ($0 == "```sh")
+            excerpt = 0
             if (capture) {
                 count += 1
                 occurrence[heading] += 1
                 printf "%02d\t%d\t%s\n", count, occurrence[heading], heading > index_file
             }
+            if (match($0, /test-excerpt="[^"]+"/)) {
+                path = substr($0, RSTART + 14, RLENGTH - 15)
+                language = substr($0, 4)
+                sub(/[ \t].*/, "", language)
+                excerpts += 1
+                excerpt = excerpts
+                printf "%02d\t%s\t%s\n", excerpt, language, path > excerpt_file
+                printf "" > (outdir "/excerpt-" sprintf("%02d", excerpt) ".txt")
+            }
             next
         }
-        in_fence && /^```$/ { in_fence = 0; capture = 0; next }
+        in_fence && /^```$/ { in_fence = 0; capture = 0; excerpt = 0; next }
         in_fence && capture { print > (outdir "/fence-" sprintf("%02d", count) ".sh") }
+        in_fence && excerpt { print > (outdir "/excerpt-" sprintf("%02d", excerpt) ".txt") }
         END { print count + 0 }
     ' "$tutorial_file")"
 
@@ -636,6 +730,10 @@ for slug in "${MESSAGING_TUTORIALS[@]}"; do
 	printf '%s: %s sh fences, %s executed\n' \
 		"$slug" "$fence_count" "${#EXECUTED_FENCES[@]}"
 	report_unexecuted_fences "$slug" "$fence_dir"
+	excerpt_count="$(wc -l <"$fence_dir/excerpts.tsv" | tr -d ' ')"
+	if ((excerpt_count > 0)); then
+		printf '  file excerpts: %s, checked after the journey\n' "$excerpt_count"
+	fi
 
 	if ((DRY_RUN)); then
 		continue
@@ -644,16 +742,17 @@ for slug in "${MESSAGING_TUTORIALS[@]}"; do
 	# Replay the journey in one shell so variables persist exactly as a
 	# reader's second terminal keeps them, from the empty directory the page
 	# tells them to change to.
-	reader_dir="$READER_DIR/$(basename "$slug")"
+	reader_dir="$READER_DIR/$SPEC_READER"
 	mkdir -p "$reader_dir"
-	run_script="$WORK_ROOT/run-$(basename "$slug").sh"
+	run_name="${slug//\//-}"
+	run_script="$WORK_ROOT/run-$run_name.sh"
 	emit_journey "$slug" "$fence_dir" >"$run_script"
 
-	run_log="$WORK_ROOT/run-$(basename "$slug").log"
+	run_log="$WORK_ROOT/run-$run_name.log"
 	if ! (
 		unset CARGO_TARGET_DIR
 		cd "$reader_dir"
-		MESSAGING_TUTORIAL_SESSION_LOG="$WORK_ROOT/session-$(basename "$slug").log" \
+		MESSAGING_TUTORIAL_SESSION_LOG="$WORK_ROOT/session-$run_name.log" \
 		MESSAGING_TUTORIAL_SESSION_PID_FILE="$SESSION_PID_FILE" \
 		MESSAGING_TUTORIAL_READY_SECONDS="$READY_SECONDS" \
 		PATH="$SHIM_DIR:$PATH" bash "$run_script"
@@ -664,6 +763,7 @@ for slug in "${MESSAGING_TUTORIALS[@]}"; do
 	fi
 
 	assert_transcript "$slug" "$run_log"
+	check_excerpts "$slug" "$fence_dir" "$reader_dir"
 done
 
 if ((${#MESSAGING_TUTORIALS[@]} == 1)); then

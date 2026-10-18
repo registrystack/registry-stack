@@ -1,0 +1,114 @@
+---
+title: How Registry Messaging works
+description: What a Registry Messaging package defines, what a message is once accepted, who owns each answer about it, and how a caller or operator inspects and recovers it.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: explanation
+locale: en
+standards_referenced: []
+persona:
+  - operator
+---
+
+An SMS can reach `delivered` while an email stays `submitted`; the difference is who reports
+delivery.
+
+## What do you define?
+
+You define a package, and an operator defines a runtime file. The package is reviewed configuration
+that a deployment serves unchanged:
+
+- **Templates.** Each version declares a channel, its locales, and its parts, with a JSON Schema
+  for the data a request must carry and a sample `messagingctl check` renders.
+- **Sender profiles.** Each fixes a channel to one provider and one sender identity, and says how
+  a failed send is retried, how long a message may wait, and what happens when a send may have
+  reached the provider.
+- **Access profiles.** Each names the OAuth clients it admits, the scopes their tokens carry, the
+  sender profiles and templates a sender may use, and its rate.
+
+A provider in the package is only a type, `smtp` or `http`. An `http` provider also carries scripts
+that turn a rendered message into the gateway's request and read the gateway's answers. The
+endpoint, credentials, and callback secret belong to the runtime file, together with the database,
+the token issuer, the audit journal, and retention.
+
+`messagingctl dev` writes this runtime file for local runs and points both providers at local
+stand-ins.
+
+{/* Evidence: crates/registry-messaging-core/src/package.rs, MessagingProject, SenderProfile,
+    and RetryPolicy; crates/registry-messaging/src/config.rs, RuntimeConfig;
+    crates/registry-messagingctl/src/dev/config.rs. */}
+
+## What exists at runtime?
+
+A message. When a caller submits, Messaging resolves the caller's access profile, checks the data
+against the template's schema, renders every part, and stores the message with its recipient and
+rendered content before it answers `202`. Nothing renders later, so a package change never alters a
+message already accepted.
+
+A worker then sends it. Each try is an attempt, and the message carries two separate facts:
+
+- **Dispatch** is what Messaging did: `queued`, `sending`, `submitted`, `failed`, `unknown`,
+  `cancelled`, or `expired`. `submitted` means the provider accepted the message.
+- **Report** is what the provider said afterwards: `none`, `sent`, `delivered`, `undelivered`, or
+  `unavailable`, only moving forward. A provider that sends no receipts, such as an SMTP relay,
+  leaves it `unavailable`.
+
+`status` is the dispatch state, except that a submitted message reported delivered reads
+`delivered`, and one reported undelivered reads `failed`. An HTTP gateway that posts signed reports
+moves the status on; an SMTP relay never does.
+
+A send that definitely failed is retried after a delay that doubles each time, up to five attempts
+by default, until it succeeds, runs out of attempts, or passes its expiry, one day by default.
+
+{/* Evidence: crates/registry-messaging/src/messages.rs, prepare_submission();
+    crates/registry-messaging-core/src/wire.rs, MessageDispatch, MessageReport, derive_status();
+    crates/registry-messaging-core/src/package.rs, RetryPolicy, DEFAULT_MAXIMUM_ATTEMPTS and
+    DEFAULT_EXPIRY_SECONDS; crates/registry-messaging/src/callbacks.rs. */}
+
+## Who owns the result?
+
+Three parties own three different answers:
+
+- **The caller's source of record** owns why and when to send, the recipient, and consent. Messaging
+  accepts what a request carries and keeps no contact directory.
+- **Messaging** owns rendering, the queue, attempts, receipts, retention, and its audit journal. Its
+  access profile decides whether a caller may send; an authorization the caller holds in another
+  product does not carry over.
+- **The provider** owns delivery. Messaging repeats what the provider reported and never more, which
+  is why the email stops at `submitted`.
+
+One state belongs to nobody yet. `unknown` means a send may have reached the provider and nobody can
+tell. Under the sender profile's default `onUncertain: hold`, the worker sends nothing more until an
+operator who has asked the provider settles it.
+
+{/* Evidence: products/messaging/README.md; crates/registry-messaging-core/src/access.rs,
+    AccessProfile; crates/registry-messaging/src/dispatch.rs; products/messaging/contracts/. */}
+
+## How do you inspect or recover it?
+
+A caller reads its own messages with `GET /v1/messages/{id}`, which names the channel but never the
+recipient, and cancels one with `POST /v1/messages/{id}/cancel` while it is still queued. A caller
+that lost the answer to a submission sends the same body under the same `Idempotency-Key` and gets
+the original answer back, never a second message.
+
+An operator works through `messagingctl messages`: `list` and `show` read any message, `retry` queues
+a failed one again, `settle` resolves an unknown one as sent or not sent, and `cancel` stops a queued
+one. Each previews first and writes to the audit journal when applied.
+
+Nothing is kept forever. The rendered content and the recipient go first after a message reaches a
+final state, then the content-free record. The runtime erases what has expired every hour, and
+`messagingctl retention erase-expired` does the same on demand.
+
+{/* Evidence: products/messaging/generated/registry-messaging.openapi.json, getMessage and
+    cancelMessage; crates/registry-messaging/src/messages.rs, OperatorAction and lookup_key();
+    crates/registry-messaging/src/retention.rs, SWEEP_INTERVAL and erase_expired(). */}
+
+## Next
+
+- [Author a Messaging package](../../configure/messaging/) to add a locale and package your change.
+- [Deploy Registry Messaging](../../operate/messaging/) to serve a package and recover messages.
+- [Registry Messaging API](../../reference/apis/registry-messaging/) for routes, limits, and problem
+  codes.
