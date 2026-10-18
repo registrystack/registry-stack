@@ -1272,6 +1272,10 @@ formats:
         whenOmitted: refused
       - pointer: /authentication/oidc/allowInsecureHttp
         whenOmitted: closed
+      - pointer: /authentication/oidc/deniedKids
+        whenOmitted: open
+      - pointer: /authentication/oidc/maximumTokenLifetimeSeconds
+        whenOmitted: open
       - pointer: /authentication/oidc/assertionIssuers
         whenOmitted: open
       - pointer: /package/expectedDigest
