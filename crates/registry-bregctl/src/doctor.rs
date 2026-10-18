@@ -5,7 +5,7 @@ use std::path::Path;
 
 use registry_breg::postgres::DatabaseConnectionCause;
 use registry_breg::runtime_config::load_runtime_config;
-use registry_breg::startup::{check, CheckedStartup, StartupError};
+use registry_breg::startup::{check_loaded, CheckedStartup, StartupError};
 use registry_breg::{Diagnostic, DiagnosticSeverity};
 
 /// The startup dependencies `prepare()` checks, in the order it checks them.
@@ -75,7 +75,7 @@ pub(crate) fn run(runtime_config: &Path) -> Result<DoctorSuccess, DoctorRefusal>
             runtime_configuration: false,
         })?;
     let checked = runtime
-        .block_on(check(runtime_config))
+        .block_on(check_loaded(config))
         .map_err(startup_refusal)?;
     Ok(DoctorSuccess {
         checked,
