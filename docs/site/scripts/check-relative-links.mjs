@@ -12,8 +12,9 @@
 // does. A relative link resolves inside whichever docset carries the page.
 //
 // Links are read from the parsed Markdown, so code spans and fenced code are
-// not links. Frontmatter is out of scope. External URLs, protocol-relative
-// `//` URLs, and fragment-only links pass.
+// not links; raw HTML contributes its `href` and `src` attributes outside
+// HTML comments. Frontmatter is out of scope. External URLs,
+// protocol-relative `//` URLs, and fragment-only links pass.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -62,6 +63,17 @@ function isRootAbsolute(target) {
   return target.startsWith('/') && !target.startsWith('//');
 }
 
+// An `href` or `src` attribute in any valid HTML spelling: any case, optional
+// spaces around `=`, and a double-quoted, single-quoted, or bare value.
+const htmlUrlAttribute =
+  /(?<![\w-])(?:href|src)\s*=\s*(?:"(?<double>[^"]*)"|'(?<single>[^']*)'|(?<bare>[^\s"'=<>`]+))/giu;
+
+// Blanks HTML comments, keeping their newlines so offsets and lines after
+// them stay those of the node.
+function withoutHtmlComments(html) {
+  return html.replace(/<!--[\s\S]*?-->/gu, (comment) => comment.replace(/[^\n]/gu, ' '));
+}
+
 // The root-absolute link targets on a page, each with its 1-based line.
 export function rootAbsoluteLinks(text) {
   const found = [];
@@ -69,10 +81,12 @@ export function rootAbsoluteLinks(text) {
     if (['link', 'image', 'definition'].includes(node.type)) {
       if (isRootAbsolute(node.url)) found.push({ line: node.position.start.line, target: node.url });
     } else if (node.type === 'html') {
-      for (const match of node.value.matchAll(/\bhref=(?<quote>["'])(?<target>.*?)\k<quote>/gu)) {
-        if (!isRootAbsolute(match.groups.target)) continue;
-        const line = node.position.start.line + (node.value.slice(0, match.index).match(/\n/gu)?.length ?? 0);
-        found.push({ line, target: match.groups.target });
+      const html = withoutHtmlComments(node.value);
+      for (const match of html.matchAll(htmlUrlAttribute)) {
+        const target = match.groups.double ?? match.groups.single ?? match.groups.bare;
+        if (!isRootAbsolute(target)) continue;
+        const line = node.position.start.line + (html.slice(0, match.index).match(/\n/gu)?.length ?? 0);
+        found.push({ line, target });
       }
     }
   }
