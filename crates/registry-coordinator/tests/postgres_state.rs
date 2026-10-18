@@ -5081,6 +5081,12 @@ async fn store_operations_reuse_pooled_sessions_and_replace_an_ended_one() {
     assert!(replaced.iter().all(|pid| !open.contains(pid)));
 }
 
+/// How long the pool saturation proof waits for its calls before it reports a
+/// hang. Reaching the lock first opens every pooled session the harness has
+/// not opened yet, which takes seconds on a loaded runner; the bound only
+/// stops a deadlocked or leaking pool from hanging the suite.
+const POOL_SATURATION_LIVENESS: std::time::Duration = std::time::Duration::from_secs(30);
+
 async fn assert_all_pool_sessions_reach_the_nested_store_call(
     h: &Harness,
     mut spawn: impl FnMut() -> tokio::task::JoinHandle<registry_coordinator::Result<()>>,
@@ -5104,7 +5110,7 @@ async fn assert_all_pool_sessions_reach_the_nested_store_call(
     for _ in 0..32 {
         calls.push(spawn());
     }
-    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+    tokio::time::timeout(POOL_SATURATION_LIVENESS, async {
         loop {
             let waiting: i64 = lock
                 .query_one(
@@ -5117,6 +5123,15 @@ async fn assert_all_pool_sessions_reach_the_nested_store_call(
             if waiting == 32 {
                 break;
             }
+            // A call that ends while the lock is held never reached the read
+            // and can never be counted, so report its outcome now.
+            if let Some(ended) = calls.iter().position(|call| call.is_finished()) {
+                let outcome = calls.swap_remove(ended).await.unwrap();
+                panic!(
+                    "a call ended before reaching the authorization read: {:?}",
+                    outcome.map_err(|error| error.code)
+                );
+            }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
     })
@@ -5124,7 +5139,7 @@ async fn assert_all_pool_sessions_reach_the_nested_store_call(
     .expect("every pooled session reaches the authorization read");
     lock.commit().await.unwrap();
 
-    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+    tokio::time::timeout(POOL_SATURATION_LIVENESS, async {
         for call in calls {
             if let Err(error) = call.await.unwrap() {
                 assert_ne!(error.code, "store-unavailable");
