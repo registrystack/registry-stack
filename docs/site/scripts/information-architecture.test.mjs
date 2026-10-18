@@ -199,12 +199,15 @@ const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true
 const messagingPageRoutes = [
   '/start/messaging/',
   '/tutorials/first-messaging/',
+  '/explanation/how-messaging-works/',
   '/configure/messaging/',
   '/operate/messaging/',
+  '/reference/messaging-configuration/',
   '/reference/apis/registry-messaging/',
 ];
 const coordinatorPageRoutes = [
   '/start/coordinator/',
+  '/explanation/how-coordinator-works/',
   '/configure/coordinator/',
   '/operate/coordinator/',
   '/reference/coordinator-configuration/',
@@ -1023,6 +1026,7 @@ test('keeps the Coordinator journey in one product lane', () => {
   assert.deepEqual(slugs, [
     'start/coordinator',
     'tutorials/review-an-application-and-send-a-notice',
+    'explanation/how-coordinator-works',
     'configure/coordinator',
     'operate/coordinator',
     'reference/coordinator-configuration',

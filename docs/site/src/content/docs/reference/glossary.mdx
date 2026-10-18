@@ -33,6 +33,9 @@ Product names are always in English, including on future translated pages.
   <dt id="action-receipt">ActionReceipt</dt>
   <dd>The response to a successful immediate <a href="#action">Action</a>: its `applicationId` and, under `results`, the Record type, `recordId`, and new revision of each effect the caller may see. A refused invocation leaves no partial change.</dd>
 
+  <dt id="appointment">appointment</dt>
+  <dd>A confirmed claim on Registry Scheduling capacity, made from a <a href="#hold">hold</a> or directly, that the caller may reschedule or cancel within the <a href="#offering">offering</a>'s cutoff. Each change advances its revision.</dd>
+
   <dt id="assertion">assertion</dt>
   <dd>Registry Evidence's answer: a signed payload that carries the answer to one <a href="#requirement">requirement</a> and none of the record behind it. Signed flattened JSON Web Signature (JWS) is the default serialization; <a href="#sd-jwt-vc">SD-JWT VC</a> carries the same assertion.</dd>
 
@@ -82,10 +85,16 @@ Product names are always in English, including on future translated pages.
   <dd>An `evidence.yaml` file and the scripts it names, kept in version control, declaring <a href="#assertion-definition">assertion definitions</a>, sources, selector profiles, and Functions. `evidencectl` checks, tests, and packages it with a target into a <a href="#deployment-candidate">deployment candidate</a>.</dd>
 
   <dt id="function">Function</dt>
-  <dd>A project-local typed implementation asset. In BReg, an Action's <a href="#planner">Plan</a> uses one to compute effects within the Action's declared write ceiling; it cannot grant authority or invent a review decision. In an <a href="#evidence-project">Evidence project</a>, a <a href="#rhai">Rhai</a> script with a declared interface that turns a <a href="#source">source</a> response into facts or facts into declared outputs, under fixed operation and size limits.</dd>
+  <dd>A project-local typed implementation asset. In BReg, an Action's <a href="#planner">Plan</a> uses one to compute effects within the Action's declared write ceiling; it cannot grant authority or invent a review decision. In an <a href="#evidence-project">Evidence project</a>, a <a href="#rhai">Rhai</a> script with a declared interface that turns a <a href="#source">source</a> response into facts or facts into declared outputs, under fixed operation and size limits. In a Registry Coordinator <a href="#workflow">workflow</a>, a Rhai script that routes a `choose` step or computes a value a call's input maps with `type: function`, with no clock, file, network, database, or credentials.</dd>
 
   <dt id="grant-ceiling">grant ceiling</dt>
   <dd>The widest authority a Registry Evidence <a href="#assertion-definition">assertion definition</a> lets any grant give for it: the authorities, actor kinds, value origins, and audiences a grant may name. A <a href="#target">target</a> authority's grant may only narrow it; Registry Evidence refuses to activate one that widens it.</dd>
+
+  <dt id="hold">hold</dt>
+  <dd>A short-lived claim on Registry Scheduling capacity that expires on its own unless the caller confirms it into an <a href="#appointment">appointment</a>.</dd>
+
+  <dt id="holiday-set">holiday set</dt>
+  <dd>A named list of dates an <a href="#opening">opening</a> excludes.</dd>
 
   <dt id="holder-bound">holder-bound</dt>
   <dd>The Registry Evidence subject binding mode in which the binding derives from the holder key's RFC 7638 thumbprint instead of the audience. Its requirement returns only <a href="#sd-jwt-vc">SD-JWT VC</a>, and the relying party checks the audience at presentation by verifying a key-binding JWT.</dd>
@@ -96,11 +105,17 @@ Product names are always in English, including on future translated pages.
   <dt id="module">module</dt>
   <dd>A reusable `modules/<id>/module.yaml` file that contributes Record types, value types, Functions, Actions, and additive extensions to a Base Registry Engine <a href="#registry-project">registry project</a>.</dd>
 
+  <dt id="offering">offering</dt>
+  <dd>One bookable Registry Scheduling service at one location, in exact-time or arrival-window mode, drawing on a <a href="#resource-pool">resource pool</a> or on published windows.</dd>
+
   <dt id="oid4vci">OID4VCI</dt>
   <dd>OpenID for Verifiable Credential Issuance. The `registry-evidence-oid4vci` supporting service implements a frozen OID4VCI 1.0 Final profile to deliver holder-bound `dc+sd-jwt` credentials to a wallet; Registry Evidence signs them.</dd>
 
+  <dt id="opening">opening</dt>
+  <dd>The weekly hours on which an exact-time <a href="#offering">offering</a> publishes start times, minus its <a href="#holiday-set">holiday sets</a>.</dd>
+
   <dt id="outbox">outbox</dt>
-  <dd>A table in a Base Registry Engine registry's own database that takes one row per configured event, written in the same transaction as the record change, which the webhook worker inside `breg` delivers.</dd>
+  <dd>A table in a product's own database that takes one row per event or intent to deliver, written in the same transaction as the change that caused it, so a worker delivers it after the commit and a slow receiver never blocks the change. A Base Registry Engine registry's outbox feeds the webhook worker inside `breg`; Registry Scheduling's holds reminder intents and observer events.</dd>
 
   <dt id="package">package</dt>
   <dd>The compiled and verified form of one product's reviewed authoring input.</dd>
@@ -141,17 +156,35 @@ Product names are always in English, including on future translated pages.
   <dt id="registry-casework">Registry Casework</dt>
   <dd>The human-review product: a <a href="#producer">producer</a> sends a <a href="#review-request">ReviewRequest</a>, authorized people decide its <a href="#review-task">ReviewTasks</a>, and the producer reads the result. The source keeps its data, its disclosure, and all authority to change it. See the <a href="../../start/casework/">Registry Casework overview</a>.</dd>
 
+  <dt id="registry-coordinator">Registry Coordinator</dt>
+  <dd>The workflow product: it runs a reviewed <a href="#workflow">workflow</a> of product calls and <a href="#wait">waits</a>, started by an authorized caller or by a signed event from a trusted event source, and keeps each <a href="#run">run</a> going across outages and restarts. Every product it calls keeps its own authority and data, and the Coordinator is never a review provider. See the <a href="../../start/coordinator/">Registry Coordinator overview</a>.</dd>
+
+  <dt id="registry-discovery">Registry Discovery</dt>
+  <dd>A curated, read-only index that tells an application which Evidence types meet a requirement and which Registry Evidence services assert them. It holds no credentials and vouches for no provider; trust stays with the application. See the <a href="../../start/discovery/">Registry Discovery overview</a>.</dd>
+
   <dt id="registry-manifest">Registry Manifest</dt>
-  <dd>The Rust library and CLI that validate and render portable, standards-shaped registry metadata without running a service. The <a href="../../products/registry-manifest/reference/">Registry Manifest reference</a> is authoritative for the current top-level keys and field schemas.</dd>
+  <dd>The Rust library and `registry-manifest` command that check one portable `metadata.yaml` and render it into standards-shaped metadata, without running a service. See the <a href="../../products/registry-manifest/">Registry Manifest overview</a>; the <a href="../../products/registry-manifest/reference/">Registry Manifest reference</a> is authoritative for the current top-level keys.</dd>
+
+  <dt id="registry-messaging">Registry Messaging</dt>
+  <dd>The notification product: it sends one message to one destination over one channel for an authorized caller, rendered from a reviewed template through an operator-configured provider, and reports what is known about delivery. Why and when to send, to whom, and whether the person agreed to be contacted stay with the caller. See the <a href="../../start/messaging/">Registry Messaging overview</a>.</dd>
 
   <dt id="registry-project">registry project</dt>
   <dd>The directory of YAML files an adopter writes for one Base Registry Engine registry: `registry.yaml` plus optional <a href="#module">modules</a> and <a href="#journey">journeys</a>. `bregctl` checks, tests, and packages it. See <a href="../../configure/breg/">Author a registry project</a>.</dd>
+
+  <dt id="registry-render">Registry Render</dt>
+  <dd>The document product: it renders PDF documents from registry data through Typst, byte for byte the same for the same inputs, as a service with an audit journal or as a command line for authoring and counter printing. See the <a href="../../start/registry-render/">Registry Render overview</a>.</dd>
+
+  <dt id="registry-scheduling">Registry Scheduling</dt>
+  <dd>The booking product: it publishes bookable services over supply the operator anchored and gives authorized callers short <a href="#hold">holds</a> and confirmed <a href="#appointment">appointments</a>, with every capacity decision made in one transaction under a <a href="#task-grant">task grant</a>. See the <a href="../../start/scheduling/">Registry Scheduling overview</a>.</dd>
 
   <dt id="registry-source-profile">`Registry-Source-Profile`</dt>
   <dd>The header a Casework reviewer sends to select the source's access profile for work whose context comes from a <a href="#context-provider">context provider</a>, which reads under that profile and the reviewer's own credential. Producer, policy, and accountability routes refuse it.</dd>
 
   <dt id="requirement">requirement</dt>
   <dd>The question a Registry Evidence <a href="#assertion-definition">assertion definition</a> answers, named by a stable Requirement URI such as `urn:example:requirement:adult-status:v1` that a caller sends. A change in meaning gets a new URI.</dd>
+
+  <dt id="resource-pool">resource pool</dt>
+  <dd>The operator-anchored set of resources, such as counter stations, that an exact-time <a href="#offering">offering</a> draws on. It is an environment record applied to the database, not part of the policy package.</dd>
 
   <dt id="review-policy">`ReviewPolicy`</dt>
   <dd>The Casework declaration under `reviewPolicies` that fixes a review's context, <a href="#stage">stages</a>, schemas, outcomes, routing, clocks, and retention; its ID, version, and digest are pinned at acceptance. See <a href="../../configure/casework/">Author a Casework policy</a>.</dd>
@@ -166,10 +199,19 @@ Product names are always in English, including on future translated pages.
   <dd>One human contribution to a <a href="#review-request">ReviewRequest</a>, created when a <a href="#stage">stage</a> becomes active, with its queue, revision, holder, and <a href="#decision">Decision</a>.</dd>
 
   <dt id="rhai">Rhai</dt>
-  <dd>The bounded scripting language for adopter-authored Functions, run under fixed operation and size limits. Registry Evidence Functions extract facts and derive outputs; Base Registry Engine Functions compute an Action's effects.</dd>
+  <dd>The bounded scripting language for adopter-authored Functions, run under fixed operation and size limits. Registry Evidence Functions extract facts and derive outputs; Base Registry Engine Functions compute an Action's effects; Registry Coordinator Functions route a `choose` step or compute a mapped call input.</dd>
 
   <dt id="row-boundary">row boundary</dt>
   <dd>A rule in a Base Registry Engine <a href="#access-profile">access profile</a> that binds one record field to a verified token claim with `equals` or `in`, so a request reaches only matching rows.</dd>
+
+  <dt id="run">run</dt>
+  <dd>One admitted execution of a Registry Coordinator <a href="#workflow">workflow</a>. A run keeps the workflow revision it was admitted under, so a later upgrade never changes a run in flight.</dd>
+
+  <dt id="scheduling-fixture">scheduling fixture</dt>
+  <dd>A YAML case that `schedulingctl test` replays offline against a Registry Scheduling policy and its records, stating the bookings it expects to succeed or be refused.</dd>
+
+  <dt id="scheduling-hook">scheduling hook</dt>
+  <dd>An `after` URL observer for `appointment.confirmed`, `appointment.rescheduled`, or `appointment.cancelled`. It receives a closed projection of the <a href="#appointment">appointment</a> after the capacity transaction commits and cannot change the outcome.</dd>
 
   <dt id="sd-jwt-vc">SD-JWT VC</dt>
   <dd>Selective Disclosure JWT Verifiable Credential (IETF draft), the second serialization Registry Evidence offers for the same stateless <a href="#assertion">assertion</a> under its frozen profile. It adds no credential lifecycle. Media type: `application/dc+sd-jwt`.</dd>
@@ -189,8 +231,17 @@ Product names are always in English, including on future translated pages.
   <dt id="target">target</dt>
   <dd>The operator-owned file, such as `local-target.yaml`, that binds an <a href="#evidence-project">Evidence project</a> to one deployment: the token issuer, each <a href="#source">source</a>'s endpoint and credential, the signer, and the audit path. Its target authority names the <a href="#access-profile">access profiles</a> that may call and the grants each holds.</dd>
 
+  <dt id="task-grant">task grant</dt>
+  <dd>The signed claim in a caller's access token that names the Registry Scheduling service, location, and actions another system has allowed. It is matched exactly before the capacity transaction opens, and its expiry is checked again immediately before the claim commits.</dd>
+
   <dt id="team">team</dt>
   <dd>A named Casework group that serves <a href="#queue">queues</a> and declares the profiles its members and supervisors must hold; its membership lives in the <a href="#directory">directory</a>.</dd>
+
+  <dt id="wait">wait</dt>
+  <dd>A Registry Coordinator step that holds a <a href="#run">run</a> until an instant (`wait-until`) or until a named completion an earlier accepted call exposes (`wait-for`), such as a Casework <a href="#review-result">ReviewResult</a>. A wait never renews an approval or creates downstream authority.</dd>
+
+  <dt id="workflow">workflow</dt>
+  <dd>A finite graph of steps in YAML that Registry Coordinator checks offline and packages into an immutable artifact an operator pins by digest. Its five step types call one product operation, choose the next step, wait, or finish.</dd>
 
 </dl>
 

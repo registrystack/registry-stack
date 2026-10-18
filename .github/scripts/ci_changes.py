@@ -233,6 +233,7 @@ DISCOVERY_TUTORIAL_INPUTS = (
     "docs/site/scripts/run-tutorial.mjs",
     "docs/site/scripts/tutorial-runner/**",
     "docs/site/src/content/docs/tutorials/publish-and-consume-discovery-index.mdx",
+    "docs/site/src/content/docs/configure/discovery.mdx",
 )
 
 # Every input the Evidence tutorial gate replays or is built from: the page
@@ -348,7 +349,37 @@ MESSAGING_TUTORIAL_INPUTS = (
     "docs/site/package.json",
     "docs/site/scripts/check-messaging-tutorial.sh",
     "docs/site/scripts/check-messaging-tutorial.test.mjs",
+    "docs/site/scripts/tutorial-runner/excerpt.mjs",
     "docs/site/src/content/docs/tutorials/first-messaging.mdx",
+    "docs/site/src/content/docs/configure/messaging.mdx",
+    "docs/site/src/content/docs/operate/messaging.mdx",
+)
+
+# Every input the Registry Render tutorial gate replays or is built from. The
+# page runs against the registry-render binary built from the workspace and
+# starts no container; package routing carries the crate itself.
+RENDER_TUTORIAL_INPUTS = (
+    "Cargo.lock",
+    "Cargo.toml",
+    "docs/site/package-lock.json",
+    "docs/site/package.json",
+    "docs/site/scripts/run-tutorial.mjs",
+    "docs/site/scripts/tutorial-runner/**",
+    "docs/site/src/content/docs/tutorials/first-render-document.mdx",
+)
+
+# Every input the Registry Scheduling tutorial gate replays or is built from.
+# The pages run offline against schedulingctl built from the workspace and
+# start no service or container; package routing carries the crates.
+SCHEDULING_TUTORIAL_INPUTS = (
+    "Cargo.lock",
+    "Cargo.toml",
+    "docs/site/package-lock.json",
+    "docs/site/package.json",
+    "docs/site/scripts/run-tutorial.mjs",
+    "docs/site/scripts/tutorial-runner/**",
+    "docs/site/src/content/docs/configure/scheduling.mdx",
+    "docs/site/src/content/docs/tutorials/first-scheduling.mdx",
 )
 
 # This guide explains the authoring form across three intentionally separate
@@ -481,6 +512,13 @@ CASEWORK_TUTORIAL_PACKAGES = frozenset(
 # replayed path.
 MESSAGING_TUTORIAL_PACKAGES = frozenset({"registry-messaging", "registry-messagingctl"})
 
+# The Render tutorial replays against the one registry-render binary.
+RENDER_TUTORIAL_PACKAGES = frozenset({"registry-render"})
+
+# The Scheduling tutorial builds and runs schedulingctl and scheduling; the
+# runner also needs the runtime binary on its path.
+SCHEDULING_TUTORIAL_PACKAGES = frozenset({"registry-scheduling", "registry-schedulingctl"})
+
 # The offline proof of the native BReg to Evidence composition drives bregctl,
 # evidencectl and the Evidence runtime over the reviewed teaching inputs. It
 # starts no container, so it is selected on its own rather than through the
@@ -576,7 +614,10 @@ DOCS_ARCHIVE_INPUTS = frozenset(
         "docs/site/scripts/generate-breg-configuration.mjs",
         "docs/site/scripts/generate-casework-configuration.mjs",
         "docs/site/scripts/generate-configuration-formats.mjs",
+        "docs/site/scripts/generate-coordinator-configuration.mjs",
         "docs/site/scripts/generate-evidence-configuration.mjs",
+        "docs/site/scripts/generate-messaging-configuration.mjs",
+        "docs/site/scripts/generate-render-configuration.mjs",
         "docs/site/scripts/generate-scheduling-configuration.mjs",
         "docs/site/scripts/retry.mjs",
         "docs/site/src/data/archive-lock.yaml",
@@ -1392,6 +1433,18 @@ def classify(
         or bool(affected & MESSAGING_TUTORIAL_PACKAGES)
     )
 
+    render_tutorial = (
+        complete
+        or any(matches(path, *RENDER_TUTORIAL_INPUTS) for path in paths)
+        or bool(affected & RENDER_TUTORIAL_PACKAGES)
+    )
+
+    scheduling_tutorial = (
+        complete
+        or any(matches(path, *SCHEDULING_TUTORIAL_INPUTS) for path in paths)
+        or bool(affected & SCHEDULING_TUTORIAL_PACKAGES)
+    )
+
     breg_evidence_composition = integration and (
         complete
         or any(matches(path, *BREG_EVIDENCE_COMPOSITION_INPUTS) for path in paths)
@@ -1475,6 +1528,8 @@ def classify(
         "breg_tutorial": breg_tutorial,
         "casework_tutorial": casework_tutorial,
         "messaging_tutorial": messaging_tutorial,
+        "render_tutorial": render_tutorial,
+        "scheduling_tutorial": scheduling_tutorial,
         "breg_evidence_composition": breg_evidence_composition,
         "identifiers": identifiers,
     }

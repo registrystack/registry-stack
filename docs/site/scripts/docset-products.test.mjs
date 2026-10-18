@@ -164,13 +164,16 @@ test('every gated page exists and maps to its route', () => {
   assert.deepEqual(productRoutes('registry-messaging'), [
     '/start/messaging/',
     '/tutorials/first-messaging/',
+    '/explanation/how-messaging-works/',
     '/configure/messaging/',
     '/operate/messaging/',
+    '/reference/messaging-configuration/',
     '/reference/apis/registry-messaging/',
   ]);
   assert.deepEqual(productRoutes('registry-breg-services'), ['/configure/breg-mcp/']);
   assert.deepEqual(productRoutes('registry-coordinator'), [
     '/start/coordinator/',
+    '/explanation/how-coordinator-works/',
     '/configure/coordinator/',
     '/operate/coordinator/',
     '/reference/coordinator-configuration/',

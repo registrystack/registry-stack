@@ -35,6 +35,12 @@ import { SOURCE as configurationFormatsSource } from './generate-configuration-f
 import { CONTRACTS as evidenceContracts } from './generate-evidence-configuration.mjs';
 import { CONTRACTS as schedulingContracts } from './generate-scheduling-configuration.mjs';
 import { CONTRACTS as caseworkContracts } from './generate-casework-configuration.mjs';
+import { CONTRACTS as renderContracts } from './generate-render-configuration.mjs';
+import { CONTRACTS as messagingContracts } from './generate-messaging-configuration.mjs';
+import {
+  CONTRACTS as coordinatorContracts,
+  OPERATION_CATALOG as coordinatorOperationCatalog,
+} from './generate-coordinator-configuration.mjs';
 
 const execFileAsync = promisify(execFile);
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
@@ -177,6 +183,9 @@ test('archive generation excludes current-source generators', async () => {
     'generate-breg-configuration.mjs',
     'generate-scheduling-configuration.mjs',
     'generate-casework-configuration.mjs',
+    'generate-render-configuration.mjs',
+    'generate-messaging-configuration.mjs',
+    'generate-coordinator-configuration.mjs',
     'generate-configuration-formats.mjs',
     'generate-cli-reference.mjs',
   ]) {
@@ -202,6 +211,9 @@ test('archive generation excludes current-source generators', async () => {
     'docs/site/src/data/generated/breg-configuration.json',
     'docs/site/src/data/generated/scheduling-configuration.json',
     'docs/site/src/data/generated/casework-configuration.json',
+    'docs/site/src/data/generated/render-configuration.json',
+    'docs/site/src/data/generated/messaging-configuration.json',
+    'docs/site/src/data/generated/coordinator-configuration.json',
     'docs/site/src/data/generated/configuration-formats.json',
   ]);
 });
@@ -347,6 +359,9 @@ test('legacy archives retain pinned CLI bytes and generate missing current confi
   const schedulingPath = resolve(siteRoot, 'src/data/generated/scheduling-configuration.json');
   const caseworkPath = resolve(siteRoot, 'src/data/generated/casework-configuration.json');
   const formatsPath = resolve(siteRoot, 'src/data/generated/configuration-formats.json');
+  const renderPath = resolve(siteRoot, 'src/data/generated/render-configuration.json');
+  const messagingPath = resolve(siteRoot, 'src/data/generated/messaging-configuration.json');
+  const coordinatorPath = resolve(siteRoot, 'src/data/generated/coordinator-configuration.json');
   const legacyCli = 'exact committed legacy CLI bytes\n';
   await mkdir(dirname(cliPath), { recursive: true });
   await mkdir(dirname(evidencePath), { recursive: true });
@@ -372,9 +387,13 @@ test('legacy archives retain pinned CLI bytes and generate missing current confi
       ...evidenceContracts,
       ...schedulingContracts,
       ...caseworkContracts,
+      ...renderContracts,
+      ...messagingContracts,
+      ...coordinatorContracts,
     ].map((contract) => contract.file),
     bregClientCapabilities,
     configurationFormatsSource,
+    coordinatorOperationCatalog,
   ]) {
     const destination = resolve(repoRoot, file);
     await mkdir(dirname(destination), { recursive: true });
@@ -393,6 +412,11 @@ test('legacy archives retain pinned CLI bytes and generate missing current confi
   assert.equal(JSON.parse(currentScheduling).contracts.length, schedulingContracts.length);
   assert.equal(JSON.parse(currentCasework).contracts.length, caseworkContracts.length);
   assert.ok(JSON.parse(currentFormats).products.length > 0);
+  assert.equal(JSON.parse(await readFile(renderPath, 'utf8')).contracts.length, renderContracts.length);
+  assert.equal(JSON.parse(await readFile(messagingPath, 'utf8')).contracts.length, messagingContracts.length);
+  const currentCoordinator = JSON.parse(await readFile(coordinatorPath, 'utf8'));
+  assert.equal(currentCoordinator.contracts.length, coordinatorContracts.length);
+  assert.ok(currentCoordinator.operations.length > 0);
   await restore();
   await assert.rejects(readFile(cliPath), { code: 'ENOENT' });
   assert.equal(await readFile(evidencePath, 'utf8'), currentEvidence);

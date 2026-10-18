@@ -47,7 +47,7 @@ the reference wins.
 | Base Registry Engine | [`registry.yaml`, `module.yaml`, and `runtime.yaml`](../breg-configuration/), including the Rhai action handler ABI `registry.action-plan/v1` | [Base Registry Engine API](../breg-api/) |
 | Registry Evidence | [Bundle and runtime files](../evidence-configuration/) | [Registry Evidence API](../apis/registry-evidence/) and [problem types](../evidence-problems/), including the signed JWS, unsigned JSON envelope, SD-JWT VC, and holder-bound issuance envelope response formats |
 | Registry Casework | [Casework policy](../../configure/casework/) and [runtime file](../../operate/casework/#write-the-runtime-file) | [Casework API](../apis/registry-casework/) |
-| Registry Discovery | [Origins, evidence-type mappings, and runtime file](../../configure/discovery/) | [`GET /v1/services` and `POST /v1/evidence-types/resolve`](../../configure/discovery/#verify-resolution-and-exact-search) |
+| Registry Discovery | [Origins, evidence-type mappings, and runtime file](../../configure/discovery/) | [`GET /v1/services` and `POST /v1/evidence-types/resolve`](../../tutorials/publish-and-consume-discovery-index/#resolve-a-requirement) |
 | Registry Manifest | [`registry-manifest/v1` metadata documents](../../spec/rs-dm-manifest/) | None |
 
 Registry Evidence's versioned routes are `POST /v1/evidence`, `POST /v1/evidence/batch`, and

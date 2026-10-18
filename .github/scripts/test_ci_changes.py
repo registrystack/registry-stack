@@ -33,6 +33,8 @@ from ci_changes import (
     CASEWORK_PACKAGES,
     MESSAGING_PACKAGES,
     MESSAGING_TUTORIAL_INPUTS,
+    RENDER_TUTORIAL_INPUTS,
+    SCHEDULING_TUTORIAL_INPUTS,
     STACK_CLIENT_PACKAGES,
     CONFIG_CHECK_PACKAGES,
     CONFIG_CONFORMANCE_INPUTS,
@@ -369,6 +371,10 @@ class CiChangesTest(unittest.TestCase):
             "messaging-tutorial": (
                 "needs.changes.outputs.messaging_tutorial == 'true'"
             ),
+            "render-tutorial": "needs.changes.outputs.render_tutorial == 'true'",
+            "scheduling-tutorial": (
+                "needs.changes.outputs.scheduling_tutorial == 'true'"
+            ),
             "breg-evidence-composition": (
                 "needs.changes.outputs.breg_evidence_composition == 'true'"
             ),
@@ -484,6 +490,8 @@ class CiChangesTest(unittest.TestCase):
             "breg-tutorial",
             "casework-tutorial",
             "messaging-tutorial",
+            "render-tutorial",
+            "scheduling-tutorial",
             "breg-evidence-composition",
             "evidence-anchors",
             "docs",
@@ -550,6 +558,8 @@ class CiChangesTest(unittest.TestCase):
                 "breg-tutorial",
                 "casework-tutorial",
                 "messaging-tutorial",
+                "render-tutorial",
+                "scheduling-tutorial",
                 "breg-evidence-composition",
                 "evidence-anchors",
                 "docs",
@@ -589,6 +599,8 @@ class CiChangesTest(unittest.TestCase):
             "breg-tutorial",
             "casework-tutorial",
             "messaging-tutorial",
+            "render-tutorial",
+            "scheduling-tutorial",
             "breg-evidence-composition",
             "evidence-anchors",
             "docs",
@@ -600,7 +612,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(35, len(final_needs))
+        self.assertEqual(37, len(final_needs))
         # Platform line coverage publishes from main and the nightly sweep;
         # it does not hold the merge queue.
         self.assertNotIn("platform-coverage", final_needs)
@@ -1798,6 +1810,46 @@ class CiChangesTest(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["messaging_tutorial"])
+
+    def test_render_tutorial_inputs_cover_the_replayed_tutorial(self) -> None:
+        # The Render page runs under the runner's `none` toolset from the
+        # package.json script, so the script is the registry of what it
+        # replays.
+        package = json.loads(
+            (
+                Path(__file__).resolve().parents[2] / "docs/site/package.json"
+            ).read_text()
+        )
+        script = package["scripts"]["check:tutorial:render"]
+        pages = [
+            f"docs/site/{word}" for word in script.split() if word.endswith(".mdx")
+        ]
+        self.assertTrue(pages, "the script must name at least one page")
+        for page in pages:
+            with self.subTest(page=page):
+                self.assertTrue(
+                    any(
+                        fnmatch.fnmatchcase(page, pattern)
+                        for pattern in RENDER_TUTORIAL_INPUTS
+                    )
+                )
+
+    def test_render_tutorial_routing(self) -> None:
+        infrastructure = (
+            "docs/site/scripts/run-tutorial.mjs",
+            "docs/site/scripts/tutorial-runner/toolsets.mjs",
+            "docs/site/src/content/docs/tutorials/first-render-document.mdx",
+            "docs/site/package.json",
+            "crates/registry-render/src/server.rs",
+        )
+        for path in infrastructure:
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["render_tutorial"])
+        self.assertFalse(
+            classify(self.workspace, ("docs/site/src/content/docs/start/registry-render.mdx",))[
+                "render_tutorial"
+            ]
+        )
         # The source-neutral core is linked by the runtime, so a change to it
         # reaches the replay through reverse dependencies.
         self.assertTrue(
@@ -1813,6 +1865,52 @@ class CiChangesTest(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertFalse(classify(self.workspace, (path,))["messaging_tutorial"])
+
+    def test_scheduling_tutorial_inputs_cover_every_replayed_tutorial(self) -> None:
+        # Each page's tutorial_test frontmatter is the source of truth for
+        # which pages the gate replays; a replayed page missing here would not
+        # trigger the job that replays it.
+        slugs = replayed_tutorial_pages("scheduling")
+        self.assertIn("tutorials/first-scheduling", slugs)
+        self.assertIn("configure/scheduling", slugs)
+        for slug in slugs:
+            with self.subTest(slug=slug):
+                page = f"docs/site/src/content/docs/{slug}.mdx"
+                self.assertTrue(
+                    any(
+                        fnmatch.fnmatchcase(page, pattern)
+                        for pattern in SCHEDULING_TUTORIAL_INPUTS
+                    )
+                )
+
+    def test_scheduling_tutorial_routing(self) -> None:
+        infrastructure = (
+            "docs/site/scripts/run-tutorial.mjs",
+            "docs/site/scripts/tutorial-runner/toolsets.mjs",
+            "docs/site/src/content/docs/tutorials/first-scheduling.mdx",
+            "docs/site/src/content/docs/configure/scheduling.mdx",
+            "docs/site/package.json",
+            "crates/registry-schedulingctl/src/lib.rs",
+            "crates/registry-scheduling/src/http.rs",
+        )
+        for path in infrastructure:
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["scheduling_tutorial"])
+        # The source-neutral core is linked by both binaries, so a change to
+        # it reaches the replay through reverse dependencies.
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-scheduling-core/src/lib.rs",))[
+                "scheduling_tutorial"
+            ]
+        )
+        # Pages that share the directories and reach none of the replay.
+        for path in (
+            "docs/site/src/content/docs/start/scheduling.mdx",
+            "docs/site/src/content/docs/tutorials/first-casework.mdx",
+            "docs/site/scripts/check-messaging-tutorial.sh",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(classify(self.workspace, (path,))["scheduling_tutorial"])
 
     def test_breg_evidence_composition_routing(self) -> None:
         # The proof drives bregctl, evidencectl and the Evidence runtime over

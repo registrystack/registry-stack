@@ -516,6 +516,24 @@ const discovery = productToolset({
   sessions: [],
 });
 
+// Registry Scheduling: scheduling and schedulingctl. A page authors and
+// checks a project offline with schedulingctl; there is no local development
+// session to stop here.
+const scheduling = productToolset({
+  label: 'scheduling and schedulingctl',
+  // Not the ./scheduling project directory or the scheduling.yaml a page
+  // names.
+  commands: /(^|[^\w./=-])(schedulingctl|scheduling)([^\w./-]|$)/mu,
+  binaries: [
+    ['scheduling', 'SCHEDULING_BIN'],
+    ['schedulingctl', 'SCHEDULINGCTL_BIN'],
+  ],
+  cargoArgs: ['-p', 'registry-scheduling', '-p', 'registry-schedulingctl'],
+  profileVariable: 'SCHEDULING_TUTORIAL_CARGO_PROFILE',
+  targetName: 'scheduling-tutorial-source',
+  sessions: [],
+});
+
 // Evidence: evidence, evidencectl, and evidence-oid4vci. Three things a reader
 // sets up themselves are set up here instead:
 //
@@ -633,4 +651,4 @@ const none = {
   },
 };
 
-export const TOOLSETS = { breg, casework, coordinator, discovery, evidence, none };
+export const TOOLSETS = { breg, casework, coordinator, discovery, evidence, scheduling, none };

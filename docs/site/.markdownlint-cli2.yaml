@@ -39,6 +39,7 @@ config:
       - ConfigurationFormatsTable
       - ConfigurationFormatChecks
       - EventReferenceTable
+      - CoordinatorOperationsTable
       - DiagnosticReference
       - DocsetProduct
       - Steps
