@@ -61,8 +61,8 @@ registry-render init render-work/bundle
 
 The bundle holds `manifest.yaml`, which declares one document type, `letter`; its Typst template;
 a JSON Schema for its data; an English label table; fonts; and a fixture. `init` also prints a
-first-render command, but its `--data` path is wrong relative to this directory, so run this one
-instead:
+first-render command; this one gives paths relative to this directory and the issuance time the
+rest of the tutorial uses:
 
 ```sh
 registry-render compile \
@@ -165,13 +165,16 @@ curl -s http://127.0.0.1:64123/health
 
 ## Render over HTTP
 
-Send the fixture data with the same issuance time:
+Send the fixture data with the same issuance time. The key goes in a header file, which keeps it
+out of curl's command line, where `ps` would show it to other local users:
 
 ```sh
+(umask 077; printf 'Authorization: Bearer %s\n' "$(cat render-work/deploy/api.key)" \
+  > render-work/deploy/auth.header)
 jq -c '{issuedAt: "2026-09-16T10:32:00Z", data: .}' render-work/bundle/fixtures/data.json \
   > render-work/request.json
 curl -s -X POST http://127.0.0.1:64123/v1/render/letter \
-  -H "Authorization: Bearer $(cat render-work/deploy/api.key)" \
+  -H @render-work/deploy/auth.header \
   -H "Content-Type: application/json" \
   -d @render-work/request.json \
   -o render-work/served.pdf -D render-work/headers.txt
@@ -209,7 +212,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:64123/v1/rende
   -H "Content-Type: application/json" \
   -d @render-work/request.json
 curl -s -X POST http://127.0.0.1:64123/v1/render/letter \
-  -H "Authorization: Bearer $(cat render-work/deploy/api.key)" \
+  -H @render-work/deploy/auth.header \
   -H "Content-Type: application/json" \
   -d '{"data":{}}'
 ```

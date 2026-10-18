@@ -11,8 +11,9 @@ locale: en
 standards_referenced: []
 ---
 
-If your registry hands people printed letters, receipts, or certificates, Registry Render turns
-record data into those PDFs, and the same inputs always give the same bytes.
+If your registry hands people printed letters, receipts, or certificates,
+[Registry Render](../../reference/glossary/#registry-render) turns record data into those PDFs,
+and the same inputs always give the same bytes.
 
 ## What a caller gets
 
@@ -29,10 +30,11 @@ and `registry-render package` turns it into a package whose digest names its exa
 
 ## What runs
 
-`registry-render compile` renders one document at a terminal, for authoring and branch printing.
-`registry-render serve` is a small HTTP service behind a static API key that renders from one
-package in supervised worker processes. For every call it appends an audit entry that carries
-hashes and versions, never the document's data. It keeps no database and makes no outbound calls.
+`registry-render compile` renders one document at a terminal, for authoring and for printing at
+a counter without a service. `registry-render serve` is a small HTTP service behind a static API
+key that renders from one package in supervised worker processes. For every call it appends an
+audit entry that carries hashes and versions, never the document's data. It keeps no database and
+makes no outbound calls.
 
 ## What Render refuses
 

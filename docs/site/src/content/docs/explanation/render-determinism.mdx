@@ -12,7 +12,7 @@ standards_referenced: []
 ---
 
 Registry Render promises that fixed inputs produce identical PDF bytes, on one machine and across
-machines. Everything below is how it keeps that promise.
+machines.
 
 ## What do you define?
 
@@ -48,12 +48,13 @@ set and then the bundle's sorted by path, because order decides fallback.
 
 The PDF names a fixed creator with no version, so an upgrade that changes no layout changes no
 bytes. Below Typst, the workspace lockfile pins the compression libraries, because a patch release
-there can re-encode a stream and move every byte after it. Render's own golden hashes are checked
-on Linux and macOS for every change to the renderer or its dependencies.
+there can re-encode a stream and move every byte after it. The same inputs give the same bytes
+on Linux and macOS.
 
 {/* Evidence: crates/registry-render/src/envelope.rs, canonical_bytes;
     crates/registry-render/tests/golden.rs, injected_bytes_are_the_hashed_canonical_bytes,
-    data_paths_cannot_escape_the_bundle, pdf_bytes_carry_no_renderer_version, golden_hashes_match;
+    data_paths_cannot_escape_the_bundle, compile_diagnostics_report_virtual_paths_only,
+    pdf_bytes_carry_no_renderer_version, golden_hashes_match;
     crates/registry-render/src/world.rs, today, normalize_virtual_path, redact_host_paths;
     crates/registry-render/src/bundle.rs, load_fonts;
     .github/workflows/render-golden.yml. */}
@@ -95,8 +96,8 @@ auditor match paper to the log. `GET /health` names the live package digest as `
 every audit entry carries the bundle hash and renderer version.
 
 When a hash moved, one of three things changed: an input, the package, or the renderer. A Typst
-or compression upgrade that changes output shows up as a golden-hash change in Render's own
-review before it ships.
+or compression upgrade can change the bytes, so
+[check a new binary before you switch to it](../../operate/registry-render/#upgrade).
 
 `registry-render check` prints a hash for a source directory too, but for unpackaged source it
 covers `manifest.yaml` only. Compare packages, not source directories.
