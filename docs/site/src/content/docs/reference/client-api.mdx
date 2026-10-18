@@ -1001,7 +1001,7 @@ performs no I/O.
 Select the policy by ID in `ReviewCreateRequest.policy`; Casework freezes its concrete version and
 digest at acceptance. To require an exact pin, use `review_policy` (`reviewPolicy` in Node) to
 discover a compiled closure and supply its complete `identity`, or use your reviewed project's
-binding. See the [Casework API policy contract](../apis/registry-casework/#policy-and-submission-binding)
+binding. See the [Casework API policy contract](../apis/registry-casework/#policy-pins-and-retries)
 for selector validation. Submitted context uses `mode: submitted` and a bounded snapshot;
 current-source context uses `mode: current-source` and a reference binding.
 The subject supplies all five immutable binding fields.

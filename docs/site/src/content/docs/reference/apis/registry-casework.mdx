@@ -14,135 +14,135 @@ standards_referenced:
 
 import ApiReferenceTable from '../../../../components/ApiReferenceTable.astro';
 
-Look up here how you authenticate to Registry Casework, how a lost response or a stale read
-recovers, and what a refusal carries. Every route, parameter, schema, and status is in the
-[generated Casework API operations](../casework/), rendered from
-[`registry-casework.openapi.json`](https://github.com/registrystack/registry-stack/blob/main/products/casework/generated/registry-casework.openapi.json).
-[API stability](../../api-stability/) states the versioning contract.
+Look up here which route a caller uses, which headers it sends, and how a refusal recovers. Every
+parameter, schema, and status is in the [generated Casework API operations](../casework/), rendered
+from
+[`registry-casework.openapi.json`](https://github.com/registrystack/registry-stack/blob/main/products/casework/generated/registry-casework.openapi.json);
+the service does not serve that document. [API stability](../../api-stability/) states the versioning contract.
 
 {/* Evidence: docs/site/astro.config.mjs, caseworkOpenApiSchema;
-    products/casework/generated/registry-casework.openapi.json. */}
+    products/casework/scripts/generate_openapi.py; products/casework/scripts/check-schemas.sh. */}
 
-## Authentication and profiles
+## Routes
 
-Every route except `/health`, `/ready`, and `/.well-known/jwks.json` takes
-`Authorization: Bearer <token>`. The producer routes that submit, read, cancel, and collect a
-review request read the access profile from `Registry-Review-Profile`; every other route reads
-`Registry-Casework-Profile`, except the two `/v1/task-grants` service routes, which take none. A
-profile selects authority the token already holds and adds no scope. A refused token is
-`authentication.refused` (401); a profile that does not cover the route is
-`profile.not-authorized` (403).
+The caller is the role of the access profile the call selects: `requester` for a producer,
+`staff` and `supervisor` for reviewers, `administrator` for the directory owner. A role that a row
+does not name is refused with `operation.not-authorized`.
 
-Task, history, clock, and note routes also accept [`Registry-Source-Profile`](../../glossary/#registry-source-profile), which work whose context
-comes from a context provider requires (`source-profile.required`). Producer, policy, and
-accountability routes refuse it with `source-profile.not-applicable`.
-
-{/* Evidence: crates/registry-casework/src/http.rs, HttpContract::profile_header,
-    reject_source_profile, source_profile_optional;
-    crates/registry-casework-core/src/http.rs, CASEWORK_PROFILE_HEADER, SOURCE_PROFILE_HEADER;
-    crates/registry-review-protocol/src/lib.rs, REVIEW_PROFILE_HEADER;
-    crates/registry-casework/src/review.rs, SourceProfileRequired;
-    products/casework/scripts/generate_openapi.py, REVIEW_PROFILE. */}
-
-## Policy and submission binding
-
-`POST /v1/review-requests` submits a [ReviewRequest](../../glossary/#review-request) whose `policy`
-names an `id`. Omit `version` and `digest` to take the policy active at admission, or send both to
-require that exact `identity` from `GET /v1/review-policies/{policy_id}`; a differing pin is
-`review.policy-mismatch`. Casework retains the binding it accepted, and the ReviewResult repeats it
-with the subject and `submissionDigest`. The consumer checks that correlation and authorizes any
-business change itself.
-
-{/* Evidence: crates/registry-review-protocol/src/lib.rs;
-    crates/registry-casework/tests/review_acceptance_postgres.rs,
-    current_policy_selection_recovers_before_updates_and_requires_live_authority(). */}
-
-## Revisions and retries
-
-A task or directory mutation sends the revision you read, quoted, in `If-Match` (`If-Match: "2"`).
-Without it the call is `precondition.required` (428). A decision under a stale revision returned:
-
-```json
-{
-  "status": 412,
-  "code": "precondition.failed",
-  "detail": "The item or directory changed since you loaded it. Reload and try again."
-}
-```
-
-Keyed mutations, `POST /v1/review-requests` among them, send an `Idempotency-Key` of at most 128
-bytes. After a lost response, resend the same key and body: the first submission returned `201`,
-the resend `200` with the same `requestId`. A changed body under that key is
-`idempotency.key-reused`; a fresh key is a fresh operation.
-
-{/* Evidence: crates/registry-casework-core/src/http.rs, IF_MATCH_HEADER,
-    MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES;
-    crates/registry-casework/src/http.rs, if_match_with_minimum, idempotency_key,
-    create_review_request. */}
-
-## Results
-
-`GET /v1/review-requests/{request_id}/result` returns `202` with no body while the review is
-pending, `200` with the ReviewResult once it settles, and `410` with no body after its retention
-ends. `GET /v1/review-results` pages settled results as a resumable feed.
-
-{/* Evidence: crates/registry-casework/src/http.rs, get_review_result, review_result_feed. */}
-
-## Problems and validation
-
-A refusal is `application/problem+json` with `type`, `title`, `status`, a fixed `detail`, a closed
-`code`, and a `traceId`, and echoes nothing you sent. A decision naming an undeclared outcome
-returned `request.invalid` (400) with these headers:
-
-```text
-registry-casework-validation-path: $.outcome
-registry-casework-validation-reason: outcome-not-declared
-registry-casework-validation-allowed: confirmed,rejected
-```
-
-Producer routes spell the first two `registry-review-validation-path` and
-`registry-review-validation-reason`. Give your operator the `traceId`, never a token or body.
-
-<ApiReferenceTable id="problem-codes" source="casework-api" />
-
-{/* Generated from docs/site/src/data/casework-api.yaml by docs/site/scripts/generate-data.mjs.
-    Evidence: crates/registry-casework/src/problem.rs;
-    crates/registry-casework-core/src/http.rs, VALIDATION_ALLOWED_HEADER;
-    crates/registry-review-protocol/src/lib.rs, REVIEW_VALIDATION_PATH_HEADER;
-    crates/registry-casework/tests/problem_code_catalogue.rs. */}
-
-## Route families
-
-Review policies: `/v1/review-policies` returns compiled policy closures, and `/v1/casework`
-describes the deployed project.
-
-Review requests and results: `/v1/review-requests` and `/v1/review-results` serve the producer;
-history, clocks, and notes hang off one request.
-
-Review tasks: `/v1/review-tasks` lists eligible work and carries claims, assignment, drafts,
-decisions, holdings, supervision, and, where a project enables them, task grants.
-`/v1/review-accountability/{event_id}` resolves a retained accountability record.
-
-Directory and calendars: `/v1/directory` manages teams, absences, and holidays, and previews then
-applies caseload moves and clock recomputation.
+| Method | Path | Caller | Returns |
+| --- | --- | --- | --- |
+| GET | `/health`, `/ready` | Anyone, no token | `200`; `/ready` answers `503` while storage or the audit journal is unavailable |
+| GET | `/.well-known/jwks.json` | Anyone, no token | Keys that verify task assertions |
+| GET | `/v1/casework` | Any profile | The deployed project, without providers, calendars, or clocks for a requester |
+| GET | `/v1/review-policies`, `/v1/review-policies/{policy_id}` | Any profile | The compiled ReviewPolicy closures the caller may use |
+| POST | `/v1/review-requests` | Requester | `201` with the accepted [ReviewRequest](../../glossary/#review-request), `200` on recovery |
+| GET | `/v1/review-requests/{request_id}` | Requester | The request's state |
+| POST | `/v1/review-requests/{request_id}/cancel` | Requester | The cancellation |
+| GET | `/v1/review-requests/{request_id}/result` | Requester | `200` with the ReviewResult; bodiless `202` pending, `410` erased |
+| GET | `/v1/review-results` | Requester | A resumable page of settled results |
+| GET | `/v1/review-requests/{request_id}/history`, `/clocks` | Reviewer or requester | History; clocks |
+| POST | `/v1/review-requests/{request_id}/notes` | Reviewer; requester for requester-audience notes | The entry |
+| GET | `/v1/review-tasks`, `/next`, `/holdings`, `/own-decisions` | Staff, supervisor | ReviewTasks |
+| GET | `/v1/review-tasks/supervision` | Supervisor | Tasks in served queues |
+| GET | `/v1/review-tasks/{task_id}`, `/context` | Staff, supervisor | The task; its review context |
+| POST | `/v1/review-tasks/{task_id}/claim`, `/release` | Staff, supervisor | The task |
+| POST | `/v1/review-tasks/{task_id}/assign` | Supervisor serving the queue | The task |
+| POST | `/v1/review-tasks/{task_id}/delegate` | A reviewer whose profile decides the stage | The task |
+| GET, PUT, DELETE | `/v1/review-tasks/{task_id}/draft` | The holder | The private draft; `204` on delete |
+| POST | `/v1/review-tasks/{task_id}/decisions` | The holder | `204` |
+| GET | `/v1/review-tasks/{task_id}/task-templates` | Staff, supervisor | Task grant previews |
+| GET, POST | `/v1/review-tasks/{task_id}/task-grants` | Staff, supervisor | Grants on the task; the approved grant |
+| POST | `/v1/review-tasks/{task_id}/task-grants/{grant_id}/revoke` | Staff, supervisor | The revocation |
+| POST | `/v1/task-grants/{grant_id}/assertion` | The grant's agent, scope `casework:grants:assert` | A signed task assertion |
+| GET | `/v1/task-grants/{grant_id}/status` | A service, scope `casework:grants:status` | Current status |
+| GET | `/v1/review-accountability/{event_id}` | Supervisor | The accountability record |
+| GET, PUT | `/v1/directory`, `/v1/directory/teams/{team_id}`; POST `/v1/directory/bootstrap` | Administrator | The directory |
+| GET | `/v1/directory/targets` | By purpose | Nameable people and queues |
+| GET, POST, PUT, DELETE | `/v1/directory/absences`, `/{absence_id}` | Staff for self, supervisor for team, administrator | Absences |
+| POST, GET | `/v1/directory/holidays`, `/{id}/revisions/{revision}` | Administrator | Holiday set revisions |
+| POST | `/v1/directory/clocks/recompute/preview`, `/apply` | Administrator | Preview, then result |
+| POST | `/v1/directory/caseload/preview`, `/apply` | Supervisor | Preview, then result |
 
 Activation has no HTTP route: [`caseworkctl apply`](../../cli/caseworkctl/apply/) activates a
 package ([Deploy Registry Casework](../../../operate/casework/)).
 
-{/* Evidence: crates/registry-casework/src/http.rs, router();
-    products/casework/generated/registry-casework.openapi.json, describeCasework,
-    listReviewResults, approveReviewTaskGrant, getReviewAccountability, previewReviewCaseload. */}
+{/* Evidence: crates/registry-casework/src/http.rs, router(), description(), task_client();
+    crates/registry-casework/src/review.rs, review_history, review_clocks, add_review_note,
+    review_accountability, supervisory_review_tasks, assign_review_task;
+    crates/registry-casework/src/review/staffing.rs; crates/registry-casework/src/clocks.rs;
+    crates/registry-casework/src/assignment.rs; crates/registry-casework/src/store.rs, directory;
+    crates/registry-casework/src/task_grants.rs, membership_kind;
+    crates/registry-casework-core/src/model.rs, CaseworkRole;
+    products/casework/generated/registry-casework.openapi.json. */}
 
-## Source of truth
+## Headers
 
-`generate_openapi.py` derives the OpenAPI document from the Rust DTOs, routes, and operation
-contracts; `check-schemas.sh` refuses a committed document that differs. The service does not
-serve the document. A runtime test holds the problem table's data to the problem catalogue.
+| Header | Sent on | Rule |
+| --- | --- | --- |
+| `Authorization: Bearer <token>` | Every route except `/health`, `/ready`, and the key set | A missing, invalid, or expired token is `authentication.refused` (401) |
+| `Registry-Review-Profile` | The five requester routes: submit, read, cancel, result, results feed | Names the access profile; at most 128 bytes of letters, digits, and `.`, `_`, `:`, `-` |
+| `Registry-Casework-Profile` | Every other authenticated route except `/v1/task-grants/*` | Same bounds; a profile that does not cover the route is `profile.not-authorized` (403) |
+| [`Registry-Source-Profile`](../../glossary/#registry-source-profile) | Task, history, clock, note, task grant, caseload, and clock recompute routes, by a reviewer | Selects the reviewer's source profile; work whose context comes from a context provider requires it (`source-profile.required`) |
+| `If-Match: "<revision>"` | Task mutations and directory mutations | The revision you read, quoted; `"0"` creates a directory entry. Missing is `precondition.required` (428), stale is `precondition.failed` (412) |
+| `Idempotency-Key` | Every mutation except previews, the two `/apply` routes, and grant revocation | 1 to 128 printable ASCII bytes, kept with the request body for recovery |
+| `traceparent` | Any route, optional | W3C trace context; every response carries one |
 
-{/* Evidence: products/casework/scripts/generate_openapi.py;
-    products/casework/scripts/check-schemas.sh;
+A profile selects authority the token already holds and adds no scope. The `/v1/task-grants/*`
+routes take a bare service token: either profile header there is `authentication.refused`.
+`Registry-Source-Profile` is `source-profile.not-applicable` on the requester routes, the policy
+routes, `/v1/directory/targets`, task release, and accountability, and from a requester on
+history, clocks, and notes. Every response carries `Cache-Control: no-store`.
+
+{/* Evidence: crates/registry-casework-core/src/http.rs, CASEWORK_PROFILE_HEADER,
+    SOURCE_PROFILE_HEADER, IF_MATCH_HEADER, IDEMPOTENCY_KEY_HEADER,
+    MAXIMUM_CASEWORK_PROFILE_BYTES, MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES;
+    crates/registry-review-protocol/src/lib.rs, REVIEW_PROFILE_HEADER;
+    crates/registry-casework/src/http.rs, HttpContract::profile_header, reject_source_profile,
+    source_profile_optional, if_match_with_minimum, idempotency_key, task_client, http_boundary;
+    products/casework/scripts/generate_openapi.py, ENDPOINTS. */}
+
+## Policy pins and retries
+
+`POST /v1/review-requests` names a policy `id`. Omit `version` and `digest` to take the
+ReviewPolicy active at admission, or send both to require the `identity` that
+`GET /v1/review-policies/{policy_id}` returned; a differing pin is `review.policy-mismatch`. The
+ReviewResult repeats the accepted binding with the subject and `submissionDigest`; the consumer
+checks that correlation and authorizes any business change itself.
+
+After a lost response, resend the same `Idempotency-Key` and the same body: the first submission
+answered `201`, the resend `200` with the same `requestId`. A changed body under that key is
+`idempotency.key-reused`, and a fresh key is a fresh operation. A `503` on a mutation does not say
+whether the change committed, so recover it the same way before you choose another operation.
+
+{/* Evidence: crates/registry-review-protocol/src/lib.rs;
+    crates/registry-casework/src/http.rs, create_review_request, get_review_result;
+    crates/registry-casework/src/audit.rs, AuditOperation::commit and complete;
+    crates/registry-casework/tests/review_acceptance_postgres.rs,
+    current_policy_selection_recovers_before_updates_and_requires_live_authority(). */}
+
+## Problems
+
+A refusal is `application/problem+json` with `type`, `title`, `status`, a fixed `detail`, a closed
+`code`, and a `traceId`, and echoes nothing you sent. A validation refusal names the field and
+the reason in `registry-casework-validation-path` and `registry-casework-validation-reason`, plus
+the accepted values in `registry-casework-validation-allowed` when the field takes a closed set;
+requester routes spell the first two `registry-review-validation-path` and
+`registry-review-validation-reason`. Give your operator the `traceId`, never a token or a body.
+
+The table lists every code the Rust, Node.js, and Python clients recognize. A code outside it comes
+from a newer service; treat it by its status.
+
+<ApiReferenceTable id="problem-codes" source="casework-api" />
+
+{/* Generated from docs/site/src/data/casework-api.yaml by docs/site/scripts/generate-data.mjs;
+    the rows are written by products/casework/scripts/generate_openapi.py from the Rust catalogue.
+    Evidence: crates/registry-casework/src/problem.rs;
+    crates/registry-casework-client/src/error.rs, CaseworkProblemCode::ALL and Unknown;
+    crates/registry-casework-core/src/http.rs, VALIDATION_ALLOWED_HEADER;
+    crates/registry-review-protocol/src/lib.rs, REVIEW_VALIDATION_PATH_HEADER;
     crates/registry-casework/tests/problem_code_catalogue.rs. */}
 
 ## Next
 
-[Client API reference](../../client-api/)
+- [Client API reference](../../client-api/)
+- [Review retention and audit](../../../operate/casework-retention/)

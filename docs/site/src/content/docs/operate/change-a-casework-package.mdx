@@ -1,0 +1,175 @@
+---
+title: Change an active package
+description: Package a changed Casework project, plan it against the running database, apply it as the successor, and read the activation history.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-28"
+doc_type: how-to
+persona:
+  - operator
+locale: en
+standards_referenced: []
+tutorial_test:
+  toolset: casework
+  after: configure/casework-directory
+---
+
+If you operate Registry Casework, a policy change reaches reviewers as a successor
+[policy package](../../reference/glossary/#policy-package) applied to the database the runtime
+serves. Here you make one against the development session you left running in
+[Staff the directory](../../configure/casework-directory/), on the project as
+[Author a Casework policy](../../configure/casework/) left it. In
+production the order differs in one respect: stop every process serving the old package before
+you apply, as [Deploy Registry Casework](../casework/#change-the-active-package) explains.
+
+## Change the project
+
+Open a terminal in the directory that holds `tutorial-work` and go to the project. Make sure the
+session is running before you edit anything; `dev start` reuses a running session and restarts a
+stopped one on its ports:
+
+```sh test-cwd="tutorial-work/casework"
+caseworkctl dev start
+```
+
+```json test-excerpt
+{"directory": {"revision": 1, "teams": 1}, "state": "ready"}
+```
+
+Rename the queue reviewers see. In `casework.yaml`, change the `decisions` label you set when you
+authored the policy:
+
+```diff test-edit title="casework.yaml"
+   decisions:
+-    label: Licence decisions
++    label: Licence applications
+```
+
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, standalone-decision template;
+    crates/registry-caseworkctl/src/dev/mod.rs, StartArgs. */}
+
+## Package the successor
+
+Write the changed project as a package of its own. The running session keeps serving its own
+package, which stays untouched:
+
+```sh
+caseworkctl package . --output package-2
+```
+
+```json test-excerpt
+{"command": "package", "packageDigest": "sha256:<digest>", "secretsIncluded": false}
+```
+
+The [package digest](../../reference/glossary/#package-digest) identifies these exact bytes; a
+change record keeps it.
+
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, package(). */}
+
+## Point a runtime file at it
+
+The session's runtime file is `.casework/dev/operator.yaml`, and its `package.root` names the
+session's package. Copy it and point the copy at `package-2`. The `caseworkctl` operator commands
+take the file as an absolute path:
+
+```sh
+sed "s#^  root: .*#  root: $PWD/package-2#" .casework/dev/operator.yaml > successor.yaml
+next="$PWD/successor.yaml"
+```
+
+Only the two-space `root:` line under `package` changes; `secretProviders.file.root` is indented
+further and stays as it was.
+
+{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, operator.yaml;
+    crates/registry-platform-config/src/loader.rs, validate_absolute_lexical_path(). */}
+
+## Plan the change
+
+`plan` compares the candidate with the database's activation ledger and its open reviews, and
+writes nothing:
+
+```sh
+caseworkctl plan --runtime-config "$next"
+```
+
+```json test-excerpt
+{"changesPending": true, "planKind": "successor", "refusals": []}
+```
+
+A successor with no refusals strands no open review. A candidate that removed the `decisions`
+queue while a request still waited in it would be refused here with
+`casework.activation.stranded-work`.
+
+{/* Evidence: crates/registry-casework/src/activation.rs, plan_activation();
+    crates/registry-casework/src/pinned_work.rs, compare_pinned_work(). */}
+
+## Apply it
+
+Apply under a reference your change record keeps:
+
+```sh
+caseworkctl apply --runtime-config "$next" --operator-reference tutorial-change-1
+```
+
+```json test-excerpt
+{"applyOrder": 2, "planKind": "successor", "predecessorPackageDigest": "sha256:<digest>"}
+```
+
+The ledger now names `package-2` as active, with the session's package as its predecessor.
+Applying it again is refused, because there is nothing left to apply:
+
+```sh test-exit="1"
+caseworkctl apply --runtime-config "$next"
+```
+
+```text test-expect
+error[casework.activation.already-active] runtime.yaml:/package
+  package sha256:<digest> is already the active package in this database; nothing needs applying
+  next: The package is already active. Check caseworkctl status before choosing a different package.
+1 error, 0 warnings
+```
+
+{/* Evidence: crates/registry-casework/src/activation.rs, apply_activation() and already-active;
+    crates/registry-caseworkctl/src/project.rs, apply(). */}
+
+## Read the activation history
+
+```sh
+caseworkctl status --runtime-config "$next"
+```
+
+```json test-excerpt
+{"singleRoleStatement": "single-role mode: the ledger check catches a wrong package, but not someone holding this credential"}
+```
+
+`history` lists both activations. Single-role mode means the session's runtime credential can
+write the ledger; a deployment gives the runtime a role of its own.
+
+The session's runtime is still serving the package it started with: a running process never
+rereads the ledger, and it would go on admitting work under the old package. That is why a
+deployment stops the predecessor before apply and starts the successor straight after.
+
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, status();
+    crates/registry-casework/src/service.rs, ready();
+    crates/registry-casework/src/runtime.rs, serve_from_path() and check_pinned_work(). */}
+
+## Stop the session
+
+The session cannot pick up the successor, so stop it:
+
+```sh
+caseworkctl dev stop
+```
+
+Because `casework.yaml` changed while the session holds records, it refuses to start again. When
+you are done with it, `caseworkctl dev stop --remove` deletes its database, credentials, and audit
+journal; keep anything you need first.
+
+{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, stop and InputsChanged. */}
+
+## Next
+
+- [Deploy Registry Casework](../casework/)
+- [Review retention and audit](../casework-retention/)
