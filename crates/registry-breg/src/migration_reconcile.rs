@@ -217,7 +217,8 @@ impl From<PostgresKernelError> for ReconcileError {
             | PostgresKernelError::PoolBuild
             | PostgresKernelError::CatalogInvariant(_)
             | PostgresKernelError::RegistryUnavailable
-            | PostgresKernelError::HistoryCoverageIncomplete => Self::Unavailable,
+            | PostgresKernelError::HistoryCoverageIncomplete
+            | PostgresKernelError::RetainedLocalHooks(_) => Self::Unavailable,
         }
     }
 }
@@ -233,6 +234,7 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::AlreadyActive
             | MigrationError::DatabaseMismatch
             | MigrationError::HistoryCoverage
+            | MigrationError::RetainedLocalHooks(_)
             | MigrationError::DatabaseUnavailable
             | MigrationError::FieldPatternSyntax { .. }
             | MigrationError::FieldPatternExistingRows { .. }
@@ -242,6 +244,7 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::BackupEvidence
             | MigrationError::BackupBindingDocument(_)
             | MigrationError::ActivationAuditIncomplete
+            | MigrationError::ActivationRefusalAuditIncomplete
             | MigrationError::ActivationAuditUnavailable
             | MigrationError::UnrecognizedDatabase => Self::Unavailable,
             MigrationError::OperatorReference => Self::InvalidInput,

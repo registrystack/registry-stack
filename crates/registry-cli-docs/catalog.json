@@ -3587,6 +3587,72 @@
               "subcommands": []
             },
             {
+              "name": "drain",
+              "invocation": "bregctl webhook drain",
+              "about": "Attempt due local hooks under the active package with bounded time and attempts",
+              "long_about": null,
+              "usage": "bregctl webhook drain [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--max-attempts <COUNT>",
+                  "description": "Maximum local attempts to start, from 1 to 1000",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "100"
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--timeout-seconds <SECONDS>",
+                  "description": "Time budget in seconds, from 1 to 300. Unfinished leases remain for recovery",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "30"
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
               "name": "replay",
               "invocation": "bregctl webhook replay",
               "about": "Replay one eligible retained dead-letter using optimistic generation binding",

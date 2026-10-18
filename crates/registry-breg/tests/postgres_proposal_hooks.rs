@@ -269,7 +269,13 @@ async fn native_observers_capture_filter_fanout_replay_and_private_values_atomic
         assert_eq!(envelope.data.as_object().unwrap().len(), 12);
     }
     let service = service(&fixture, destinations);
-    for _ in 0..5 {
+    let drained = service
+        .drain_local(3, Duration::from_secs(10))
+        .await
+        .unwrap();
+    assert_eq!(drained.delivered, 3);
+    assert_eq!(drained.remaining.retained_deliveries, 2);
+    for _ in 0..2 {
         assert_eq!(
             service.deliver_once().await,
             Ok(WebhookWorkOutcome::Delivered)

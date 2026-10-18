@@ -99,10 +99,35 @@ pub enum WebhookOperatorError {
 /// SQL, retry transition, or signing behavior.
 pub struct WebhookOperatorService {
     delivery: WebhookDeliveryService,
+    #[cfg(feature = "wasm")]
+    _wasm_runtime: Option<crate::wasm_runtime::ConfiguredWasmRuntime>,
 }
 
 impl WebhookOperatorService {
     pub async fn from_runtime_config(path: &Path) -> Result<Self, WebhookOperatorError> {
+        Self::from_runtime_config_with_execution(path, false).await
+    }
+
+    /// Drain only due local work using the active runtime's execution bindings.
+    pub async fn drain_local(
+        path: &Path,
+        max_attempts: u16,
+        timeout: Duration,
+    ) -> Result<WebhookDrainReport, WebhookOperatorError> {
+        validate_drain_budget(max_attempts, timeout)
+            .map_err(|_| WebhookOperatorError::Unavailable)?;
+        let service = Self::from_runtime_config_with_execution(path, true).await?;
+        service
+            .delivery
+            .drain_local(max_attempts, timeout)
+            .await
+            .map_err(|_| WebhookOperatorError::Unavailable)
+    }
+
+    async fn from_runtime_config_with_execution(
+        path: &Path,
+        execute_local_hooks: bool,
+    ) -> Result<Self, WebhookOperatorError> {
         let config = load_runtime_config(path).map_err(|_| WebhookOperatorError::Unavailable)?;
         let package = config.load_active_package().map_err(|error| match error {
             PackageError::ExpectedDigestMismatch(mismatch) => {
@@ -142,7 +167,61 @@ impl WebhookOperatorService {
             startup.package().registry(),
             &startup.expected_identity().activation_id,
         ));
-        let delivery = WebhookDeliveryService::new(
+        // Inspection and explicit recovery need no executable handler or
+        // encryption key. A drain does, and uses the same active bindings
+        // and custody checks as the serving mutation path.
+        let registry = startup.package().registry();
+        let field_encryption = if execute_local_hooks
+            && registry.entities().values().any(|entity| {
+                entity
+                    .fields
+                    .values()
+                    .any(|field| field.encryption.is_some())
+            }) {
+            let provider = config
+                .field_encryption()
+                .provider()
+                .ok_or(WebhookOperatorError::Unavailable)?;
+            if matches!(
+                provider,
+                crate::field_encryption::FieldEncryptionProvider::LocalFile { .. }
+            ) && config.identity().database_initialization_environment() != "local"
+            {
+                return Err(WebhookOperatorError::Unavailable);
+            }
+            let secrets = config
+                .secret_resolver()
+                .map_err(|_| WebhookOperatorError::Unavailable)?;
+            let client = pool
+                .get()
+                .await
+                .map_err(|_| WebhookOperatorError::Unavailable)?;
+            Some(Arc::new(
+                FieldEncryptionService::open_existing(
+                    provider,
+                    registry.registry_id(),
+                    &secrets,
+                    &**client,
+                )
+                .await
+                .map_err(|_| WebhookOperatorError::Unavailable)?,
+            ))
+        } else {
+            None
+        };
+        #[cfg(feature = "wasm")]
+        let wasm_runtime = if execute_local_hooks {
+            Some(
+                crate::wasm_runtime::install_configured(*config.wasm_execution())
+                    .map_err(|_| WebhookOperatorError::Unavailable)?,
+            )
+        } else {
+            None
+        };
+        let idempotency = config
+            .idempotency_policy()
+            .map_err(|_| WebhookOperatorError::Unavailable)?;
+        let delivery = WebhookDeliveryService::new_with_runtime_bindings(
             pool,
             destinations,
             handlers,
@@ -152,8 +231,14 @@ impl WebhookOperatorService {
             startup.lock_key(),
             config.operational_timeouts().record_lock,
             audit,
+            field_encryption,
+            idempotency,
         );
-        Ok(Self { delivery })
+        Ok(Self {
+            delivery,
+            #[cfg(feature = "wasm")]
+            _wasm_runtime: wasm_runtime,
+        })
     }
 
     pub async fn list(
@@ -208,6 +293,14 @@ struct BregDeliverySeams {
     field_encryption: Option<Arc<FieldEncryptionService>>,
     idempotency: IdempotencyPolicy,
     last_success: Arc<crate::metrics::LastSuccess>,
+    #[cfg(feature = "postgres-test")]
+    completion_barrier: Arc<tokio::sync::Mutex<Option<ProposalCompletionBarrier>>>,
+}
+
+#[cfg(feature = "postgres-test")]
+struct ProposalCompletionBarrier {
+    reached: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
 }
 
 const MAX_RETENTION_BATCHES_PER_TICK: usize = 100;
@@ -254,6 +347,58 @@ impl RetentionFailureReason {
 }
 
 impl BregDeliverySeams {
+    async fn verify_delivery_transaction(
+        &self,
+        transaction: &Transaction<'_>,
+        allow_superseded_package: bool,
+    ) -> Result<(), DeliveryError> {
+        if self.lock_timeout.is_zero() || self.lock_timeout > Duration::from_secs(30) {
+            return Err(DeliveryError::Unavailable);
+        }
+        let timeout_millis =
+            i32::try_from(self.lock_timeout.as_millis()).map_err(|_| DeliveryError::Unavailable)?;
+        transaction
+            .execute(
+                "SELECT set_config('lock_timeout', $1::text, true)",
+                &[&format!("{timeout_millis}ms")],
+            )
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?;
+        transaction
+            .execute(
+                "SELECT pg_advisory_xact_lock_shared($1)",
+                &[&self.lock_key.get()],
+            )
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?;
+        let state = transaction
+            .query_opt(
+                "SELECT package_id, database_id, active_package_digest,
+                        active_activation_id::text, schema_fingerprint, maintenance_status
+                 FROM registry_internal.registry_state
+                 WHERE singleton",
+                &[],
+            )
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?
+            .ok_or(DeliveryError::Unavailable)?;
+        let ready = state.try_get::<_, String>(5).ok().as_deref() == Some("ready")
+            && state.try_get::<_, String>(0).ok().as_deref()
+                == Some(self.expected.package_id.as_str())
+            && state.try_get::<_, String>(1).ok().as_deref()
+                == Some(self.expected.database_id.as_str());
+        let active_package_matches = state.try_get::<_, String>(2).ok().as_deref()
+            == Some(self.expected.package_digest.as_str())
+            && state.try_get::<_, String>(3).ok().as_deref()
+                == Some(self.expected.activation_id.as_str())
+            && state.try_get::<_, String>(4).ok().as_deref()
+                == Some(self.expected.schema_fingerprint.as_str());
+        if !ready || (!allow_superseded_package && !active_package_matches) {
+            return Err(DeliveryError::Unavailable);
+        }
+        Ok(())
+    }
+
     async fn run_retention(self, mut shutdown: watch::Receiver<bool>) {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -381,6 +526,10 @@ impl DeliverySeams for BregDeliverySeams {
     type Destination = DestinationBinding;
     type Handler = BregHookHandler;
 
+    fn proposal_replay_allowed(&self, code: Option<&str>) -> bool {
+        code != Some("hook.proposal.package_unavailable")
+    }
+
     async fn apply_proposal(
         &self,
         application: ProposalApplication<'_>,
@@ -415,6 +564,17 @@ impl DeliverySeams for BregDeliverySeams {
             .await;
         application_lock.release(&coordinator).await?;
         let outcome = outcome.map_err(|_| DeliveryError::Unavailable)?;
+        #[cfg(feature = "postgres-test")]
+        {
+            let barrier = self.completion_barrier.lock().await.take();
+            if let Some(barrier) = barrier {
+                let _ = barrier.reached.send(());
+                barrier
+                    .release
+                    .await
+                    .map_err(|_| DeliveryError::Unavailable)?;
+            }
+        }
         Ok(match outcome {
             HookChangeOutcome::Applied(resulting_revision) => {
                 ProposalOutcome::Applied { resulting_revision }
@@ -512,51 +672,25 @@ impl DeliverySeams for BregDeliverySeams {
     }
 
     async fn verify_transaction(&self, transaction: &Transaction<'_>) -> Result<(), DeliveryError> {
-        if self.lock_timeout.is_zero() || self.lock_timeout > Duration::from_secs(30) {
-            return Err(DeliveryError::Unavailable);
+        self.verify_delivery_transaction(transaction, false).await
+    }
+
+    async fn verify_proposal_completion(
+        &self,
+        transaction: &Transaction<'_>,
+        outcome: &ProposalOutcome,
+    ) -> Result<(), DeliveryError> {
+        // Hooks admits only consistent terminal URL outcome pairs here.
+        // Classification held the activation lock, or recovered an existing
+        // receipt. Record that settled decision without granting new work
+        // authority to this worker. A new outcome variant requires review.
+        match outcome {
+            ProposalOutcome::Applied { .. }
+            | ProposalOutcome::Refused { .. }
+            | ProposalOutcome::DeadLettered { .. } => {
+                self.verify_delivery_transaction(transaction, true).await
+            }
         }
-        let timeout_millis =
-            i32::try_from(self.lock_timeout.as_millis()).map_err(|_| DeliveryError::Unavailable)?;
-        transaction
-            .execute(
-                "SELECT set_config('lock_timeout', $1::text, true)",
-                &[&format!("{timeout_millis}ms")],
-            )
-            .await
-            .map_err(|_| DeliveryError::Unavailable)?;
-        transaction
-            .execute(
-                "SELECT pg_advisory_xact_lock_shared($1)",
-                &[&self.lock_key.get()],
-            )
-            .await
-            .map_err(|_| DeliveryError::Unavailable)?;
-        let state = transaction
-            .query_opt(
-                "SELECT package_id, database_id, active_package_digest,
-                        active_activation_id::text, schema_fingerprint, maintenance_status
-                 FROM registry_internal.registry_state
-                 WHERE singleton",
-                &[],
-            )
-            .await
-            .map_err(|_| DeliveryError::Unavailable)?
-            .ok_or(DeliveryError::Unavailable)?;
-        let ready = state.try_get::<_, String>(5).ok().as_deref() == Some("ready")
-            && state.try_get::<_, String>(0).ok().as_deref()
-                == Some(self.expected.package_id.as_str())
-            && state.try_get::<_, String>(1).ok().as_deref()
-                == Some(self.expected.database_id.as_str())
-            && state.try_get::<_, String>(2).ok().as_deref()
-                == Some(self.expected.package_digest.as_str())
-            && state.try_get::<_, String>(3).ok().as_deref()
-                == Some(self.expected.activation_id.as_str())
-            && state.try_get::<_, String>(4).ok().as_deref()
-                == Some(self.expected.schema_fingerprint.as_str());
-        if !ready {
-            return Err(DeliveryError::Unavailable);
-        }
-        Ok(())
     }
 
     fn destination(&self, logical_destination_id: &str) -> Option<Self::Destination> {
@@ -910,23 +1044,73 @@ fn transition_code(code: DeliveryTransitionCode) -> WebhookStateTransitionCode {
     }
 }
 
+/// Why a bounded local drain stopped starting attempts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WebhookDrainStopReason {
+    Idle,
+    AttemptBudget,
+    TimeBudget,
+}
+
+/// Value-free result of a bounded attempt to settle local hooks.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookDrainReport {
+    pub activation_id: String,
+    pub completed_attempts: u16,
+    pub delivered: u16,
+    pub retry_scheduled: u16,
+    pub dead_lettered: u16,
+    pub stop_reason: WebhookDrainStopReason,
+    pub remaining: crate::postgres::RetainedLocalHookDeliveries,
+}
+
+fn validate_drain_budget(max_attempts: u16, timeout: Duration) -> Result<(), WebhookDeliveryError> {
+    if !(1..=1000).contains(&max_attempts)
+        || !(Duration::from_secs(1)..=Duration::from_secs(300)).contains(&timeout)
+    {
+        return Err(WebhookDeliveryError::Unavailable);
+    }
+    Ok(())
+}
+
 /// Base Registry Engine's delivery service: the platform delivery worker
 /// bound to Base Registry Engine's seams and constants.
 #[derive(Clone)]
 pub struct WebhookDeliveryService {
     delivery: DeliveryService<BregDeliverySeams>,
-    retention: BregDeliverySeams,
+    seams: BregDeliverySeams,
     last_success: Arc<crate::metrics::LastSuccess>,
 }
 
 impl WebhookDeliveryService {
+    /// Pause after proposal classification releases its locks, before the
+    /// shared dispatcher starts finalization. Only the test build has this seam.
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    pub async fn pause_proposal_completion_for_test(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (reached, observed) = tokio::sync::oneshot::channel();
+        let (release, resumed) = tokio::sync::oneshot::channel();
+        *self.seams.completion_barrier.lock().await = Some(ProposalCompletionBarrier {
+            reached,
+            release: resumed,
+        });
+        (observed, release)
+    }
+
     #[cfg(feature = "postgres-test")]
     #[doc(hidden)]
     pub async fn prune_terminal_for_test(
         &self,
         max_batches: usize,
     ) -> Result<(u64, bool), DeliveryError> {
-        self.retention.prune_terminal(max_batches).await
+        self.seams.prune_terminal(max_batches).await
     }
 
     #[must_use]
@@ -1024,10 +1208,12 @@ impl WebhookDeliveryService {
             field_encryption,
             idempotency,
             last_success: Arc::clone(&last_success),
+            #[cfg(feature = "postgres-test")]
+            completion_barrier: Arc::default(),
         };
         Self {
-            retention: seams.clone(),
-            delivery: DeliveryService::new(seams, config),
+            delivery: DeliveryService::new(seams.clone(), config),
+            seams,
             last_success,
         }
     }
@@ -1047,6 +1233,68 @@ impl WebhookDeliveryService {
     /// finalization.
     pub async fn deliver_once(&self) -> Result<WebhookWorkOutcome, WebhookDeliveryError> {
         self.delivery.deliver_once().await
+    }
+
+    /// Attempt due local work under this active package, without replaying
+    /// dead letters, sending URL work, or borrowing a successor's authority.
+    /// A deadline may leave a lease unfinished for ordinary expiry recovery.
+    pub async fn drain_local(
+        &self,
+        max_attempts: u16,
+        timeout: Duration,
+    ) -> Result<WebhookDrainReport, WebhookDeliveryError> {
+        validate_drain_budget(max_attempts, timeout)?;
+        let deadline = tokio::time::Instant::now() + timeout;
+        let local = self
+            .delivery
+            .local_only_for_package(&self.seams.expected.activation_id, deadline)?;
+        let mut report = WebhookDrainReport {
+            activation_id: self.seams.expected.activation_id.clone(),
+            completed_attempts: 0,
+            delivered: 0,
+            retry_scheduled: 0,
+            dead_lettered: 0,
+            stop_reason: WebhookDrainStopReason::AttemptBudget,
+            remaining: crate::postgres::RetainedLocalHookDeliveries::default(),
+        };
+        for _ in 0..max_attempts {
+            let outcome = match tokio::time::timeout_at(deadline, local.deliver_once()).await {
+                Ok(result) => result?,
+                Err(_) => {
+                    report.stop_reason = WebhookDrainStopReason::TimeBudget;
+                    break;
+                }
+            };
+            match outcome {
+                WebhookWorkOutcome::Idle => {
+                    report.stop_reason = WebhookDrainStopReason::Idle;
+                    break;
+                }
+                WebhookWorkOutcome::Delivered => report.delivered += 1,
+                WebhookWorkOutcome::RetryScheduled => report.retry_scheduled += 1,
+                WebhookWorkOutcome::DeadLettered => report.dead_lettered += 1,
+            }
+            report.completed_attempts += 1;
+        }
+        let mut client = self
+            .seams
+            .pool
+            .get()
+            .await
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        self.seams.verify_transaction(&transaction).await?;
+        report.remaining = crate::postgres::retained_local_hook_deliveries(&*transaction)
+            .await
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+        Ok(report)
     }
 
     /// Refuse startup or operator use if retained work cannot use its exact
@@ -1121,7 +1369,7 @@ impl WebhookWorker {
         // in-flight attempt during the server's existing grace period.
         tokio::join!(
             DeliveryWorker::new(service.delivery).run(shutdown.clone()),
-            service.retention.run_retention(shutdown),
+            service.seams.run_retention(shutdown),
         );
     }
 }

@@ -235,6 +235,10 @@ hard link. [Backup binding](../../reference/breg-configuration/#backup-binding) 
 a binding that fails a check refuses the apply with `apply.backup-evidence.refused` before anything
 changes.
 
+If `plan` or `apply` reports `apply.hooks.local-retained`, the active package stays ready and no
+target is pinned. [Settle local hooks before go-live](../breg-webhooks/#settle-local-hooks-before-go-live),
+then run `plan` again. This refusal needs no migration reconciliation.
+
 Pass the digest you reviewed as `--expected-digest`, so a package directory replaced since the
 review is refused with `apply.package.digest-mismatch` before any database contact:
 
@@ -267,6 +271,7 @@ is bound to the package it opened under; open a new one to continue a load, as
 {/* Evidence: crates/registry-bregctl/src/lib.rs, ApplyArgs, PlanArgs, and PlanSuccessReport;
     crates/registry-breg/src/migration.rs, apply_verified_package(), MigrationError::AlreadyActive,
     verify_successor_package_binding(), open_bound_backup(), and check_backup_binding();
+    crates/registry-breg/src/postgres/interlock.rs, retained_local_hook_deliveries();
     crates/registry-breg/src/import_authority.rs, supersede_every_open();
     crates/registry-breg/src/postgres/context.rs, begin_record_transaction().
     Outputs observed with bregctl 0.42.0 on a disposable PostgreSQL 17. */}

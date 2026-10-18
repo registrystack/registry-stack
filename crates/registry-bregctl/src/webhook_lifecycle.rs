@@ -11,8 +11,8 @@ use std::path::Path;
 use registry_breg::contract::{Crs84BboxSource, EventTrigger, FieldTypeSource};
 use registry_breg::model::CompiledRegistry;
 use registry_breg::webhook::{
-    WebhookDeliveryStatus, WebhookDeliveryStatusKind, WebhookOperatorError, WebhookOperatorService,
-    MAX_WEBHOOK_STATUS_RESULTS,
+    WebhookDeliveryStatus, WebhookDeliveryStatusKind, WebhookDrainReport, WebhookOperatorError,
+    WebhookOperatorService, MAX_WEBHOOK_STATUS_RESULTS,
 };
 use registry_platform_config::PackageDigestMismatch;
 use registry_platform_hooks::{Causation, EnvelopeLimits, EventSubject, HookEnvelope};
@@ -81,6 +81,10 @@ pub(crate) struct WebhookListItem {
     pub binding_active: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dead_letter_reason: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposal_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposal_summary: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -268,6 +272,26 @@ fn list_with(
     })
 }
 
+pub(crate) fn drain(
+    runtime_config: &Path,
+    max_attempts: u16,
+    timeout_seconds: u16,
+) -> Result<WebhookDrainReport, WebhookLifecycleError> {
+    if !runtime_config.is_absolute()
+        || !(1..=1000).contains(&max_attempts)
+        || !(1..=300).contains(&timeout_seconds)
+    {
+        return Err(WebhookLifecycleError::Operator);
+    }
+    operator_runtime()?
+        .block_on(WebhookOperatorService::drain_local(
+            runtime_config,
+            max_attempts,
+            std::time::Duration::from_secs(u64::from(timeout_seconds)),
+        ))
+        .map_err(operator_failure)
+}
+
 pub(crate) fn replay(
     runtime_config: &Path,
     event_id: &str,
@@ -382,15 +406,17 @@ fn operator_runtime() -> Result<tokio::runtime::Runtime, WebhookLifecycleError> 
 }
 
 fn list_item(status: WebhookDeliveryStatus) -> WebhookListItem {
-    let (state, replay_eligible) = match status.state {
-        WebhookDeliveryStatusKind::Pending => ("pending", false),
-        WebhookDeliveryStatusKind::Leased => ("leased", false),
-        WebhookDeliveryStatusKind::DeadLettered => (
-            "dead-lettered",
-            status.payload_available && status.binding_active,
-        ),
-        WebhookDeliveryStatusKind::Expired => ("expired", false),
+    let state = match status.state {
+        WebhookDeliveryStatusKind::Pending => "pending",
+        WebhookDeliveryStatusKind::Leased => "leased",
+        WebhookDeliveryStatusKind::DeadLettered => "dead-lettered",
+        WebhookDeliveryStatusKind::Expired => "expired",
     };
+    // This product-owned diagnostic contains activation identities only.
+    // Other proposal summaries may contain handler-authored text and are
+    // not part of the value-free operator list.
+    let package_unavailable =
+        status.proposal_code.as_deref() == Some("hook.proposal.package_unavailable");
     WebhookListItem {
         event_id: status.event_id.to_string(),
         delivery_id: status.compiled_delivery_id,
@@ -399,10 +425,12 @@ fn list_item(status: WebhookDeliveryStatus) -> WebhookListItem {
         attempt: status.attempt,
         payload_available: status.payload_available,
         payload_expires_at: status.payload_expires_at,
-        replay_eligible,
+        replay_eligible: status.replay_eligible,
         discard_eligible: status.discard_eligible,
         binding_active: status.binding_active,
         dead_letter_reason: status.dead_letter_reason.map(|reason| reason.as_str()),
+        proposal_code: status.proposal_code,
+        proposal_summary: status.proposal_summary.filter(|_| package_unavailable),
     }
 }
 
@@ -686,6 +714,9 @@ mod tests {
                     dead_letter_reason: Some(WebhookDeliveryFailureReason::AlwaysDeniedAddress),
                     binding_active: true,
                     discard_eligible: true,
+                    replay_eligible: true,
+                    proposal_code: None,
+                    proposal_summary: None,
                 }])
             },
         )
@@ -700,6 +731,35 @@ mod tests {
             outcome.deliveries[0].dead_letter_reason,
             Some("always-denied-address")
         );
+    }
+
+    #[test]
+    fn operator_list_exposes_activation_refusal_but_omits_other_summaries() {
+        let mut status = WebhookDeliveryStatus {
+            event_id: Uuid::parse_str(SAMPLE_EVENT_ID).unwrap(),
+            compiled_delivery_id: "record.created".to_owned(),
+            generation: 1,
+            state: WebhookDeliveryStatusKind::DeadLettered,
+            attempt: 1,
+            payload_available: true,
+            payload_expires_at: "2026-01-02T00:00:00Z".to_owned(),
+            dead_letter_reason: None,
+            binding_active: true,
+            discard_eligible: true,
+            replay_eligible: false,
+            proposal_code: Some("hook.proposal.package_unavailable".to_owned()),
+            proposal_summary: Some(
+                "Captured activation A, replaced by active activation B.".to_owned(),
+            ),
+        };
+        let item = list_item(status.clone());
+        assert!(!item.replay_eligible);
+        assert!(item.discard_eligible);
+        assert_eq!(item.proposal_summary, status.proposal_summary);
+        status.proposal_code = Some("hook.proposal.document_refused".to_owned());
+        status.proposal_summary = Some("handler-authored-value-canary".to_owned());
+        let encoded = serde_json::to_string(&list_item(status)).unwrap();
+        assert!(!encoded.contains("handler-authored-value-canary"));
     }
 
     #[test]

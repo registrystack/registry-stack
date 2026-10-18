@@ -20,6 +20,12 @@
   Reference-hash inputs and domains are unchanged.
 - Expire and audit every webhook delivery after its shared payload expires,
   including siblings whose payload was already erased.
+- Refuse activation before maintenance with `apply.hooks.local-retained` when
+  local hook work still needs the active package. `bregctl webhook drain`
+  attempts due local work under that package with attempt and time bounds.
+  Settled URL proposal decisions can finish delivery after activation;
+  uncommitted superseded answers become non-replayable dead letters, while
+  committed answers retain receipt recovery without applying twice.
 - Classify added events as disclosure widening and removed events as narrowing.
   Changed projections and destinations require disclosure review in diff output;
   event changes remain applicable without reviewed migration SQL.

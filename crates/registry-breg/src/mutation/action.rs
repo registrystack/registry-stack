@@ -96,13 +96,24 @@ impl MutationTransaction {
         client: &Client,
         key_reference: &str,
     ) -> Result<(), UncertainApply> {
-        tokio::time::timeout(
-            self.lock_timeout,
-            client.query_one(
-                "SELECT pg_advisory_lock(pg_catalog.hashtextextended($1, 0))",
-                &[&key_reference],
-            ),
-        )
+        // Match the transaction-side lock order: activation before the
+        // delivery key. Hold activation stable through receipt lookup and
+        // application, including the mutation's separate transactions.
+        // This lock starts after the handler answers, never during egress.
+        tokio::time::timeout(self.lock_timeout, async {
+            client
+                .query_one(
+                    "SELECT pg_advisory_lock_shared($1)",
+                    &[&self.lock_key.get()],
+                )
+                .await?;
+            client
+                .query_one(
+                    "SELECT pg_advisory_lock(pg_catalog.hashtextextended($1, 0))",
+                    &[&key_reference],
+                )
+                .await
+        })
         .await
         .map_err(|_| UncertainApply)?
         .map_err(|_| UncertainApply)?;
@@ -145,7 +156,15 @@ impl MutationTransaction {
             .await
             .map_err(|_| UncertainApply)?
             .get::<_, bool>(0);
-        if released {
+        let activation_released = client
+            .query_one(
+                "SELECT pg_advisory_unlock_shared($1)",
+                &[&self.lock_key.get()],
+            )
+            .await
+            .map_err(|_| UncertainApply)?
+            .get::<_, bool>(0);
+        if released && activation_released {
             Ok(())
         } else {
             Err(UncertainApply)
@@ -420,6 +439,37 @@ impl MutationTransaction {
         application: &HookChangeApplication<'_>,
         idempotency_key: &str,
     ) -> Result<HookChangeOutcome, UncertainApply> {
+        // The worker may have sent before activation and received its
+        // answer afterward. Classify against the live ready activation,
+        // held stable by the shared activation lock, not the worker's pin.
+        // Receipt recovery already returned above; a failed state read is
+        // uncertainty, never proof of a terminal package refusal.
+        let active_activation_id: String = client
+            .query_opt(
+                "SELECT active_activation_id::text
+                   FROM registry_internal.registry_state
+                  WHERE singleton AND package_id = $1 AND database_id = $2
+                    AND maintenance_status = 'ready'",
+                &[&self.expected.package_id, &self.expected.database_id],
+            )
+            .await
+            .map_err(|_| UncertainApply)?
+            .ok_or(UncertainApply)?
+            .try_get(0)
+            .map_err(|_| UncertainApply)?;
+        if application.package_revision != active_activation_id {
+            return dead_lettered_proposal(
+                "hook.proposal.package_unavailable",
+                format!(
+                    "The delivery was captured under activation {}, replaced by active activation {}. Derive a new change from a fresh event; this answer cannot be replayed.",
+                    application.package_revision, active_activation_id,
+                ),
+            );
+        }
+        if application.package_revision != self.expected.activation_id {
+            return Err(UncertainApply);
+        }
+
         // The envelope the worker delivered, re-read from the exact stored
         // bytes so the chain position comes from what was delivered, not
         // from anything reconstructed.
@@ -532,14 +582,6 @@ impl MutationTransaction {
             }
         }
 
-        // The compiled delivery the proposal arrived under, and the package
-        // revision it must still match.
-        if application.package_revision != self.expected.activation_id {
-            return dead_lettered_proposal(
-                "hook.proposal.package_unavailable",
-                "The delivery row was captured under a package this deployment no longer holds.",
-            );
-        }
         let Some(delivery) = registry
             .event_deliveries()
             .deliveries

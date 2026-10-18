@@ -233,9 +233,14 @@ state, and the instance claim.
    revision, the plan kind, the database id, environment, and instance id,
    the role mode, and the operator reference hash. An audit that refuses the
    request leaves the database as apply found it and reports
-   `ActivationAuditUnavailable`. After the activation commits, apply writes
-   the response (`phase: terminal`, `outcome: applied`); an activation that
-   fails after its request answers `failed` once the durable state shows the
+   `ActivationAuditUnavailable`. If retained local hook work refuses apply
+   before maintenance, the accepted request receives a terminal `refused`
+   response. Failure to record that response reports
+   `ActivationRefusalAuditIncomplete`: the active package is unchanged, the
+   registry remains ready, and no target is pinned. After the activation
+   commits, apply writes the response (`phase: terminal`, `outcome: applied`);
+   an activation that fails after its request answers `failed` once the
+   durable state shows the
    target did not land, and one interrupted mid-plan leaves the registered
    `unfinished` response. A response the audit refuses after the commit is
    reported as `ActivationAuditIncomplete`, never as a failed activation.
@@ -245,6 +250,9 @@ state, and the instance claim.
    `real_postgres_a_failed_activation_audits_its_failed_response`,
    `real_postgres_a_refused_activation_request_entry_changes_nothing`,
    `real_postgres_a_refused_supersession_record_reports_the_activation_audit_incomplete`.
+   Retained-local refusal coverage:
+   `crates/registry-breg/tests/support/hook_activation.rs`,
+   `retained_hook_refusal_audit_failures_preserve_ready_state`.
 5. **Operator-reference hashing.** `--operator-reference` is refused offline,
    before any connection, when it is empty, longer than 512 bytes, contains a
    control character, or the audit profile is not keyed. The ledger stores
@@ -1049,6 +1057,57 @@ sibling delivery needs it. The request is audited before the mutation and
 answered after commit through a readback. Refusals before the request is
 recorded (stale generation, ineligible state, active lease, no payload) are
 not audited.
+
+### Local hook activation and settled URL completion
+
+Activation must neither strand local work under an unavailable package nor
+give a late predecessor answer successor authority. The retained-local
+inventory in `crates/registry-breg/src/postgres/interlock.rs` guards plan and
+apply before maintenance in `migration.rs`. `bregctl webhook drain` attempts
+only due local work for the active activation, with attempt and time bounds.
+It preserves URL work, live leases, future retries and dead letters for their
+existing recovery paths; a drain can itself produce more governed hook work.
+Apply rechecks retention under its activation lock.
+
+Drain executes reviewed Rhai/Wasm handlers in the `bregctl` process. In
+`crates/registry-breg/src/webhook.rs`,
+`WebhookOperatorService::from_runtime_config_with_execution` loads the active
+package and execution configuration and uses the runtime database connection.
+It needs the configured destination and audit secrets, handler assets, and,
+when fields are encrypted, the existing field-encryption provider and keys.
+It preserves serving-path custody restrictions, including the local-only
+file key provider; it does not require a migration credential. Listing,
+replay and discard do not enable the execution-only Wasm runtime or
+field-encryption service.
+
+`crates/registry-breg/src/mutation/action.rs::apply_hook_change` recovers a
+committed receipt before classifying an uncommitted answer against the live,
+ready activation. A superseded answer is a non-replayable dead letter.
+For a decision already settled, `settled_url_proposal` in
+`crates/registry-platform-hooks/src/delivery/store.rs` admits completion only
+for a URL handler with `Accepted` plus `Applied` or
+`Refused`, or `Permanent` plus `DeadLettered`. Dispatch's
+`crates/registry-platform-dispatch/src/postgres/dispatcher.rs` invokes its
+separate finish verifier only while completing the attempt. BReg's
+`verify_proposal_completion` retains the same registry and database, ready
+state and shared activation lock, while the store preserves exact lease,
+generation and attempt comparisons, audit ordering and commit-fate handling.
+Claims, source reads, mutations, recovery and operator replay/discard/cancel
+retain the ordinary active-package check. So do local, non-proposal,
+transient, maybe-sent and inconsistent outcome pairs. The shared Dispatch
+default remains strict for other consumers.
+
+Coverage in `crates/registry-breg/tests/support/hook_activation.rs` includes
+`retained_local_hooks_refuse_plan_and_apply_before_maintenance`,
+`retained_hook_refusal_audit_failures_preserve_ready_state`, the local drain
+scope, time-budget and Wasm tests, the in-flight predecessor answer and
+committed-receipt tests, and
+`classified_proposal_completion_preserves_registry_and_lease_fences`.
+`crates/registry-platform-hooks/src/delivery/store.rs` tests the 48 typed
+outcome combinations in
+`only_consistent_terminal_url_proposals_use_completion_verification`.
+`crates/registry-platform-dispatch/tests/postgres_dispatch.rs` covers the
+default in `default_finish_verification_preserves_the_consumer_identity_fence`.
 
 ### Loopback destination names
 

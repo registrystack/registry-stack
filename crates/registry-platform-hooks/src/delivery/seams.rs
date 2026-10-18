@@ -55,10 +55,24 @@ pub trait DeliverySeams: Send + Sync + 'static {
     /// One pooled connection for a worker transaction.
     async fn connection(&self) -> Result<DeliveryConnection, DeliveryError>;
 
-    /// The product's identity preflight, called inside every worker
-    /// transaction at the point where the product verified its deployment
-    /// identity before the move.
+    /// The product's identity preflight for new work, material reads,
+    /// recovery, and operator transitions. Completion uses this check too,
+    /// unless the product overrides [`Self::verify_proposal_completion`].
     async fn verify_transaction(&self, transaction: &Transaction<'_>) -> Result<(), DeliveryError>;
+
+    /// Verify the transaction recording a settled URL proposal outcome.
+    ///
+    /// This runs only after the product has classified the proposal, with
+    /// the original lease fence still required by dispatch. It cannot admit
+    /// a claim, read source material, apply a proposal, or authorize replay.
+    /// The default preserves the ordinary deployment identity check.
+    async fn verify_proposal_completion(
+        &self,
+        transaction: &Transaction<'_>,
+        _outcome: &ProposalOutcome,
+    ) -> Result<(), DeliveryError> {
+        self.verify_transaction(transaction).await
+    }
 
     /// The activated destination for a compiled logical destination id, or
     /// `None` when that id is not activated.
@@ -74,6 +88,14 @@ pub trait DeliverySeams: Send + Sync + 'static {
     /// back bytes and a failure category, so no script engine, module
     /// format, or executor type crosses into this crate.
     fn handler(&self, binding: HookHandlerBinding<'_>) -> Option<Self::Handler>;
+
+    /// Whether a recorded proposal outcome still permits operator replay.
+    /// This can only narrow the captured replay permission; the worker also
+    /// checks the retained payload, terminal state, generation, and binding.
+    /// Products that do not narrow outcomes retain their existing behavior.
+    fn proposal_replay_allowed(&self, _code: Option<&str>) -> bool {
+        true
+    }
 
     /// Apply one accepted proposal and report what became of it.
     ///
