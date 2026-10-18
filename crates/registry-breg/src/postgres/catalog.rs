@@ -129,6 +129,7 @@ const SUBJECT_ACCESS_LOG_EXPIRY: &str = "registry_internal.expire_subject_access
 /// actual installed catalog, so a new installer-owned index cannot silently
 /// fall out of drift localization.
 const MANAGED_INTERNAL_INDEXES: &[&str] = &[
+    "registry_internal.registry_action_evidence_uses_expiry",
     "registry_internal.registry_attachment_live_references",
     "registry_internal.registry_attachment_verification_pending",
     "registry_internal.registry_field_encryption_lifecycle_progress_idx",
@@ -136,6 +137,7 @@ const MANAGED_INTERNAL_INDEXES: &[&str] = &[
     "registry_internal.registry_import_authorities_one_open",
     "registry_internal.registry_ingestion_run_chunk_records_erased_record",
     "registry_internal.registry_migrations_one_open_activation_per_digest",
+    "registry_internal.registry_proposal_evidence_uses_expiry",
     "registry_internal.registry_proposal_idempotency_by_request",
     "registry_internal.registry_proposal_pending_targets",
     "registry_internal.registry_proposal_queue",
