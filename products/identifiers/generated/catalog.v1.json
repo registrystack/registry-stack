@@ -3816,7 +3816,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "30731fc849c46f4377b3f3e8dd63c1536bd422e262c59cae55f37761f15c4334",
+        "sha256": "e7ebb4c45984c87919a5c3b7d886488550bd4e45ec4a0213dc80dd2a722acc2e",
         "mediaType": "application/schema+json"
       }
     },
@@ -3996,7 +3996,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "c4d8aec6b4a18f2c2d8d8804d9dd46a1c71bdf714d5ac6547aac4091fef12a49",
+        "sha256": "5d5ae3f256d6cbfa520d08836428edbcc9f62972155e4875336b25ae2af8cd3e",
         "mediaType": "application/schema+json"
       }
     },
@@ -4122,7 +4122,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "0beddc2377e04dfea11b68afc27170f71f7b469e54c839cc918a77e5cfd35053",
+        "sha256": "ffdd613e35a02033631beda3f1ff20ef5a95ca40fc87428da2009b5d8433b75f",
         "mediaType": "application/schema+json"
       }
     },
@@ -4158,7 +4158,7 @@
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
-        "sha256": "0073fcd14aeeed0f345ea7e77b6f7cfedbfd29b2af2fec428da1fded9132e75e",
+        "sha256": "3b4c15c6da67f63aa66315649d64bd334e042c15dc2b980e3639da7ce0154922",
         "mediaType": "application/schema+json"
       }
     },
@@ -4626,7 +4626,7 @@
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "ecf6de95f870e0a3c6bfde4d4baf490b1c39a664ee35efd4088905ee79285b1a",
+        "sha256": "d2c4ef5c2ca281c720117c95c5b136be7353d1da70a99f9c9455dd6b94dcae7b",
         "mediaType": "application/schema+json"
       }
     },
@@ -4806,7 +4806,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "4cd415360fad4e095090b5cc899c2af075a75bc44e131473cbf4722254e92c2d",
+        "sha256": "1500f7e2e90ad90139df9141d3d8ff1d850f9dca54469f469f7493ad96550103",
         "mediaType": "application/schema+json"
       }
     },

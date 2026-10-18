@@ -313,6 +313,9 @@ pub enum JwksSource {
     // members on a unit variant of an internally tagged enum.
     Discovery {},
     /// Fetch the key set from this absolute `https` URI, skipping discovery.
+    /// A plain `http` URI is accepted on loopback for supervised local
+    /// development, and beyond loopback only when the issuer block sets
+    /// `allowInsecureHttp`.
     Uri { uri: Url },
     /// Read the key set from a secret, for deployments without network access
     /// to the issuer.
