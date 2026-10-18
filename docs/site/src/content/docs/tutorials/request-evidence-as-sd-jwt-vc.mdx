@@ -21,20 +21,28 @@ tutorial_test:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 If your relying parties expect a Selective Disclosure JWT Verifiable Credential (SD-JWT VC),
-permit that representation for `adult-status`, then request and verify one. You continue the
-project from [Assert a role-bound relationship](../assert-a-role-bound-relationship/).
+permit that representation for `adult-status`, then request and verify one. You continue in the
+project from [Assert a role-bound relationship](../assert-a-role-bound-relationship/), with the
+source and Evidence Gateway still running, and finish by stopping both and reading the audit.
 
 <QuickstartMeta
-  outcome="A verified SD-JWT VC adult-status response and a refused tampered copy."
+  outcome="A verified SD-JWT VC adult-status response, a refused tampered copy, and the audit of the request."
   time="About 10 minutes"
   level="Local development with synthetic data"
-  prerequisites={['The project from Assert a role-bound relationship', 'Docker, Python 3, curl, and jq']}
+  prerequisites={['The project, source, and Evidence Gateway left running by Assert a role-bound relationship']}
 />
 
 ## Permit the representation
 
-```sh test-cwd="first-evidence-assertion"
-cd adult-status
+Evidence Gateway reads the project only as it starts. In `first-evidence-assertion/adult-status`,
+stop it while you change the project; the source keeps running:
+
+```sh test-cwd="first-evidence-assertion/adult-status"
+evidencectl dev stop .
+```
+
+```text test-expect
+Local Evidence stopped
 ```
 
 A definition's `representations` lists the encodings it may emit. Add `sd-jwt-vc` to
@@ -62,33 +70,24 @@ Add it to the `adult-status` grant too:
       subjectBinding: audience-scoped
 ```
 
-Both lists must name it. Check the project and add a client:
+Both lists must name it. The grant belongs to the `standalone-service` profile, so every client
+on that profile, `tutorial-client` and `example-caller` alike, may now ask for the SD-JWT VC
+representation. Check the project:
 
 ```sh
 evidencectl check . --target local-target.yaml
-evidencectl access client add wallet-client \
-  --access-profile standalone-service \
-  --generate-local-key
 ```
 
 ```text test-excerpt
-Added client wallet-client with access profile standalone-service.
+0 errors, 0 warnings
 ```
 
 {/* Evidence: products/evidence/examples/standalone/evidence.yaml, representations;
     products/evidence/examples/standalone/dev-authority.yaml, standalone-service. */}
 
-## Start the source and Evidence Gateway
+## Start Evidence Gateway with the change
 
-In another terminal, start the synthetic source:
-
-```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
-python3 serve-source.py \
-  --port 8081 \
-  --token-file .generated/secrets/synthetic-source-token
-```
-
-Back in the project terminal, start a generation, which loads the changed grant:
+Start Evidence Gateway again with the same ports, so it loads the changed definition and grant:
 
 ```sh
 evidencectl dev start . \
@@ -108,7 +107,7 @@ response:
 
 ```sh
 evidencectl request prepare adult-status \
-  --client wallet-client \
+  --client tutorial-client \
   --purpose age-check \
   --subject subject:record-id=adult \
   --response-format sd-jwt-vc \
@@ -184,24 +183,40 @@ evidencectl: Evidence response verification failed
 
 {/* Evidence: crates/registry-platform-sdjwt/src/lib.rs, issue_disclosure. */}
 
-## Clean up
+## Stop and read the audit
 
-Stop Evidence Gateway, revoke the client (which deletes its private key), and remove the
-generated state:
+Evidence Gateway wrote an audit event before it read the source and another before the response
+left. `evidencectl audit show` reads them only from a stopped session, so stop it and show the last
+operation, your SD-JWT VC request:
 
 ```sh
 evidencectl dev stop .
-evidencectl access client revoke wallet-client
+evidencectl audit show --last-operation
+```
+
+```text test-excerpt
+ACCESS AUTHORIZED adult-status age-check requester=<pseudonym>
+DISCLOSURE RELEASED adult
+```
+
+A pseudonymous requester was authorized for `adult-status` under `age-check`, and the `adult`
+output was released. The value is not shown.
+
+`dev clean` removes the stopped session's generated state, including those audit files. The
+project, its keys, and its clients stay:
+
+```sh
 evidencectl dev clean .
 ```
 
 ```text test-expect
-Local Evidence stopped
-Revoked client wallet-client (removed local private key .evidence/clients/wallet-client).
 Removed stopped local Evidence state
 ```
 
-Press `Ctrl+C` in the source's terminal.
+Press `Ctrl+C` in the source's terminal to stop the source.
+
+{/* Evidence: crates/registry-evidencectl/src/audit_view.rs, no_stopped_session, render_authorized;
+    crates/registry-evidencectl/src/dev.rs, clean_dev, remove_completed_dev_root. */}
 
 ## Next
 

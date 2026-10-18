@@ -19,116 +19,23 @@ tutorial_test:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 In about ten minutes you will ask the project from [Your first assertion](../first-evidence-assertion/)
-which region a synthetic person lives in, and read `north` from a verified response. The project
-lists every value the answer may take, so a Function cannot return any other.
+which region a synthetic person lives in, and read `north` from a verified response. Then you will
+see why no other answer could have come back: the project lists every value the answer may take.
 
 <QuickstartMeta
   outcome="A verified residence-region assertion carrying one declared value."
   time="About 10 minutes"
   level="Local development with synthetic data"
-  prerequisites={['The project from Your first assertion', 'Docker, Python 3, curl, and jq']}
+  prerequisites={['The project, source, and Evidence Gateway left running by Your first assertion']}
 />
-
-## Read the region's declared values
-
-```sh test-cwd="first-evidence-assertion"
-cd adult-status
-```
-
-In `evidence.yaml`, the `residence-region` assertion definition's `region` output is a
-`controlled-category`: `values` lists every value it may carry.
-
-```yaml title="evidence.yaml" test-excerpt="evidence.yaml"
-outputs:
-  region:
-    concept: urn:example:concept:residence-region:v1
-    type: controlled-category
-    values:
-    - north
-    - south
-```
-
-One fixture case returns a value outside that list. Run the region fixtures with their trace:
-
-```sh
-evidencectl test . --target local-target.yaml --fixture fixtures/residence-region.yaml --explain
-```
-
-```text test-excerpt
-"id": "negative-outside-controlled-values",
-"observedResult": {
-  "class": "service-unavailable"
-},
-"reasonCode": "output-refused",
-```
-
-Evidence Gateway refused that output.
-
-## Read who may ask
-
-The same definition sets a `grantCeiling`, the widest authority any grant may give for it:
-
-```yaml title="evidence.yaml" test-excerpt="evidence.yaml"
-purpose: residence-check
-grantCeiling:
-  authorities:
-  - organizational
-  actorKinds:
-  - service
-  valueOrigins:
-  - request
-  audiences:
-  - urn:example:audience:standalone-app
-```
-
-`dev-authority.yaml` grants one exact request shape within it:
-
-```yaml title="dev-authority.yaml" test-excerpt="dev-authority.yaml"
-- definition: residence-region
-  purpose: residence-check
-  audienceFrom: authenticated-requester
-  representations:
-  - signed-jws
-  subjectBinding: audience-scoped
-  subjects:
-  - role: subject
-    selectorProfile: record-by-id
-    valueOrigin: request
-```
-
-This grant belongs to the `standalone-service` access profile, the one `tutorial-client` holds.
-
-{/* Evidence: products/evidence/examples/standalone/evidence.yaml, assertionDefinitions.residence-region.grantCeiling;
-    products/evidence/examples/standalone/dev-authority.yaml, accessProfiles.standalone-service;
-    products/evidence/examples/standalone/fixtures/residence-region.yaml, negative-outside-controlled-values;
-    crates/registry-evidence/src/main.rs, validate_injected_rejection, ReasonCode::OutputRefused. */}
-
-## Start the source and Evidence Gateway
-
-In another terminal, start the synthetic source from this directory:
-
-```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
-python3 serve-source.py \
-  --port 8081 \
-  --token-file .generated/secrets/synthetic-source-token
-```
-
-Back in the first terminal, start Evidence Gateway:
-
-```sh
-evidencectl dev start . \
-  --target local-target.yaml \
-  --evidence-port 18080 \
-  --issuer-port 8082
-```
-
-```text test-excerpt
-Evidence ready at http://127.0.0.1:18080
-```
 
 ## Request the region
 
-```sh
+Work in `first-evidence-assertion/adult-status`, where the source and Evidence Gateway from
+Your first assertion are still running. Prepare a request for the `residence-region` assertion
+definition:
+
+```sh test-cwd="first-evidence-assertion/adult-status"
 evidencectl request prepare residence-region \
   --client tutorial-client \
   --purpose residence-check \
@@ -175,21 +82,83 @@ jq '.supportedValues' residence-region.verified.json
 ]
 ```
 
-## Stop Evidence Gateway
+The source holds a birth date and a private address beside the region; the assertion carries
+only `north`.
+
+{/* Evidence: products/evidence/examples/standalone/serve-source.py, residence_region, address_canary. */}
+
+## See which values the answer may take
+
+In `evidence.yaml`, the `residence-region` definition's `region` output is a
+`controlled-category`: `values` lists every value it may carry.
+
+```yaml title="evidence.yaml" test-excerpt="evidence.yaml"
+outputs:
+  region:
+    concept: urn:example:concept:residence-region:v1
+    type: controlled-category
+    values:
+    - north
+    - south
+```
+
+A [Function](../../reference/glossary/#function) that computed any other value would not get it
+past Evidence Gateway. One fixture case proves that by returning a value outside the list; run the
+region fixtures with their trace:
 
 ```sh
-evidencectl dev stop .
-evidencectl dev clean .
+evidencectl test . --target local-target.yaml --fixture fixtures/residence-region.yaml --explain
 ```
 
-```text test-expect
-Local Evidence stopped
-Removed stopped local Evidence state
+```text test-excerpt
+"id": "negative-outside-controlled-values",
+"observedResult": {
+  "class": "service-unavailable"
+},
+"reasonCode": "output-refused",
 ```
 
-Stop the source with `Ctrl+C` in its terminal. The next tutorial starts both again.
+Evidence Gateway refused the output, so the caller would have received a refusal, not the value.
 
-{/* Evidence: products/evidence/examples/standalone/serve-source.py, residence_region. */}
+## See who may ask
+
+The same definition sets a `grantCeiling`, the [grant ceiling](../../reference/glossary/#grant-ceiling): the widest authority any grant may give for it:
+
+```yaml title="evidence.yaml" test-excerpt="evidence.yaml"
+purpose: residence-check
+grantCeiling:
+  authorities:
+  - organizational
+  actorKinds:
+  - service
+  valueOrigins:
+  - request
+  audiences:
+  - urn:example:audience:standalone-app
+```
+
+`dev-authority.yaml` grants one exact request shape within it, to the `standalone-service`
+access profile that `tutorial-client` holds:
+
+```yaml title="dev-authority.yaml" test-excerpt="dev-authority.yaml"
+- definition: residence-region
+  purpose: residence-check
+  audienceFrom: authenticated-requester
+  representations:
+  - signed-jws
+  subjectBinding: audience-scoped
+  subjects:
+  - role: subject
+    selectorProfile: record-by-id
+    valueOrigin: request
+```
+
+Leave the source and Evidence Gateway running; the next tutorial continues with them.
+
+{/* Evidence: products/evidence/examples/standalone/evidence.yaml, assertionDefinitions.residence-region.grantCeiling;
+    products/evidence/examples/standalone/dev-authority.yaml, accessProfiles.standalone-service;
+    products/evidence/examples/standalone/fixtures/residence-region.yaml, negative-outside-controlled-values;
+    crates/registry-evidence/src/main.rs, validate_injected_rejection, ReasonCode::OutputRefused. */}
 
 ## Next
 

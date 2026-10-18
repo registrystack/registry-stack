@@ -1,6 +1,6 @@
 ---
 title: Control who can request evidence
-description: Give two applications their own access profiles, see one receive the residence region and the other refused, and read the refusal in the audit view.
+description: Give two applications their own access profiles, see one receive the residence region and the other refused, and read what the refusal tells the caller.
 status: current
 owner: registry-docs
 source_repos:
@@ -19,24 +19,38 @@ tutorial_test:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 In about fifteen minutes you will register two applications under access profiles of their own,
-send the same region request as each, and see one answered and the other refused, in the
-response and in the audit view.
+send the same region request as each, and see one answered and the other refused. You continue in
+the project from [Return a governed value](../return-a-governed-value/), with the source and
+Evidence Gateway still running.
 
 <QuickstartMeta
   outcome="Two clients with distinct access profiles, one region request answered and one refused."
   time="About 15 minutes"
   level="Local development with synthetic data"
-  prerequisites={['The project from Return a governed value', 'Docker, Python 3, curl, and jq']}
+  prerequisites={['The project, source, and Evidence Gateway left running by Return a governed value']}
 />
+
+## See who may ask today
+
+In `first-evidence-assertion/adult-status`, list the clients the project knows:
+
+```sh test-cwd="first-evidence-assertion/adult-status"
+evidencectl access client list --format json | jq -c '.entries[]'
+```
+
+```text test-expect
+{"accessProfiles":["standalone-service"],"id":"example-caller","status":"active"}
+{"accessProfiles":["standalone-service"],"id":"tutorial-client","status":"active"}
+```
+
+A client is one application's identity. Both hold `standalone-service`, so both may ask every
+question that access profile grants. `example-caller`
+comes with the project; you added `tutorial-client` in Your first assertion.
 
 ## Add two access profiles
 
-```sh test-cwd="first-evidence-assertion"
-cd adult-status
-```
-
-Add these profiles to the end of `dev-authority.yaml`, at the same indentation as
-`standalone-service`:
+Give each new application a profile with one grant. Add these profiles to the end of
+`dev-authority.yaml`, at the same indentation as `standalone-service`:
 
 ```yaml title="dev-authority.yaml" test-append
   age-checker-service:
@@ -89,6 +103,19 @@ evidencectl check . --target local-target.yaml
 
 ## Register a client for each profile
 
+Evidence Gateway reads profiles and clients only as it starts, and `evidencectl` refuses a client
+change while it runs, so stop it first:
+
+```sh
+evidencectl dev stop .
+```
+
+```text test-expect
+Local Evidence stopped
+```
+
+Register one client per profile; the local issuer puts each profile's tags in its client's tokens:
+
 ```sh
 evidencectl access client add age-checker \
   --access-profile age-checker-service \
@@ -103,36 +130,7 @@ Added client age-checker with access profile age-checker-service.
 Added client region-router with access profile region-router-service.
 ```
 
-A client is one application's identity, bound to access profiles; the local issuer puts its
-profiles' tags in its tokens. List the clients:
-
-```sh
-evidencectl access client list --format json | jq -c '.entries[]'
-```
-
-```text test-expect
-{"accessProfiles":["age-checker-service"],"id":"age-checker","status":"active"}
-{"accessProfiles":["standalone-service"],"id":"example-caller","status":"active"}
-{"accessProfiles":["region-router-service"],"id":"region-router","status":"active"}
-{"accessProfiles":["standalone-service"],"id":"tutorial-client","status":"active"}
-```
-
-`example-caller` comes with the project, from `access/clients/example-caller.yaml`.
-
-{/* Evidence: crates/registry-evidencectl/src/access.rs, load_active_clients, requester_tags. */}
-
-## Start the source and Evidence Gateway
-
-In another terminal, start the synthetic source from this directory:
-
-```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
-python3 serve-source.py \
-  --port 8081 \
-  --token-file .generated/secrets/synthetic-source-token
-```
-
-Back in the first terminal, start Evidence Gateway. It reads profiles and clients only as it
-starts.
+Start Evidence Gateway again with the same ports, so it loads the profiles and clients:
 
 ```sh
 evidencectl dev start . \
@@ -144,6 +142,11 @@ evidencectl dev start . \
 ```text test-excerpt
 Evidence ready at http://127.0.0.1:18080
 ```
+
+The source kept running throughout.
+
+{/* Evidence: crates/registry-evidencectl/src/access.rs, require_stopped_or_absent_session, requester_tags;
+    crates/registry-evidencectl/src/dev.rs, retain_completed_dev_root. */}
 
 ## Ask for a purpose the definition does not declare
 
@@ -221,37 +224,11 @@ jq . region-by-checker.response
 `evidence.denied` does not name the missing grant.
 [Evidence problems](../../reference/evidence-problems/) lists every code.
 
+Leave the source and Evidence Gateway running; the next tutorial continues with them.
+
 {/* Evidence: crates/registry-evidencectl/src/request.rs, validate_closed_inputs;
     crates/registry-evidence/src/problem.rs, NotAuthorized;
     products/evidence/reference/request-adapter/deployment-projects/CONFIG.md, requesterTags. */}
-
-## Read the refusal in the audit view
-
-```sh
-evidencectl dev stop .
-evidencectl audit show --last-operation
-```
-
-```text test-excerpt
-ACCESS REFUSED requester=<pseudonym> reason=not-authorized
-```
-
-The audit view records the requester as a pseudonym and the reason, nothing more. A response
-changed after signing fails at the verifier instead; see
-[Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/).
-
-Remove the stopped session's state, then stop the source with `Ctrl+C`. The project and its
-clients stay for the next tutorial:
-
-```sh
-evidencectl dev clean .
-```
-
-```text test-expect
-Removed stopped local Evidence state
-```
-
-{/* Evidence: crates/registry-evidencectl/src/audit_view.rs, render_refusal. */}
 
 ## Next
 
