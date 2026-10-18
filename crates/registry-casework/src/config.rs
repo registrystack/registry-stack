@@ -701,9 +701,11 @@ impl<'de> Deserialize<'de> for DeniedKeyIds {
             .into_error());
         }
         if kids.len() > 128 {
-            return Err(serde::de::Error::custom(
-                "deniedKids must list at most 128 key identifiers",
-            ));
+            return Err(registry_platform_yaml::Invalid::expected(
+                "at most 128 key identifiers",
+                "Remove key identifiers from deniedKids until it lists at most 128.",
+            )
+            .into_error());
         }
         Ok(Self(kids))
     }
@@ -1902,6 +1904,18 @@ mod tests {
             error.contains(
                 "List at least one key identifier to deny, or delete deniedKids to deny no key."
             ),
+            "{error}"
+        );
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["deniedKids"] =
+            json!((0..129).map(|n| format!("signing-{n}")).collect::<Vec<_>>());
+        let path = write_operator(&value, directory.path());
+        let error = RuntimeConfig::loader()
+            .load::<RuntimeConfig>(&path)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Remove key identifiers from deniedKids until it lists at most 128."),
             "{error}"
         );
         let mut value = operator_value(directory.path(), directory.path());
