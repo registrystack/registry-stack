@@ -1,0 +1,245 @@
+---
+title: Prove your first booking policy
+description: Create a Registry Scheduling project, read the offering and resource pool it publishes, and change its fixture to prove what happens when a station closes.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: tutorial
+persona:
+  - operator
+locale: en
+standards_referenced: []
+tutorial_test:
+  toolset: scheduling
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+You will create a booking policy for a registry counter, read what it publishes, and prove with a
+fixture what callers get when one of its two stations closes. Everything runs offline: no
+database, no token issuer, no network.
+
+<QuickstartMeta
+  outcome="A checked booking policy whose fixture proves who gets a station when one is closed."
+  time="About 10 minutes"
+  level="Local evaluation only"
+  prerequisites={['curl 7.76 or later', 'Linux amd64, Linux arm64, or macOS arm64']}
+/>
+
+## Install schedulingctl
+
+[`schedulingctl`](../../reference/cli/schedulingctl/) is the authoring and operator tool for
+Registry Scheduling. The installer resolves the latest numbered release, checks each download
+against the release's `SHA256SUMS`, and puts the binaries in `~/.local/bin`; keep that directory on
+your `PATH`. On Linux amd64 it also installs the `scheduling` runtime, which this tutorial does
+not use.
+
+{/* Evidence: crates/registry-scheduling/install.sh, SCHEDULING_INSTALL_DIR and the platform
+    note in usage(); release/NIGHTLY.md, the source installer table. */}
+
+```sh test-skip="downloads a release; the gate uses binaries built from this checkout"
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registry-scheduling/install.sh | bash
+```
+
+```sh
+schedulingctl --version
+```
+
+```text test-expect
+schedulingctl <version>
+```
+
+## Create the project
+
+Create a project from the exact-time template:
+
+```sh
+schedulingctl init ./scheduling --template standalone-exact-time --format json
+```
+
+```json test-excerpt
+{
+  "command": "init",
+  "created": [
+    "scheduling.yaml",
+    "runtime.example.yaml",
+    "records.yaml",
+    "fixtures/counter-stations.yaml",
+    "fixtures/fold-day-rebooking.yaml"
+  ],
+  "template": "standalone-exact-time"
+}
+```
+
+`scheduling.yaml` is the policy: what callers may book and when. `records.yaml` holds the
+locations and staff stations a running deployment loads separately, and the two `fixtures` prove
+the policy offline. You meet `runtime.example.yaml` only when you deploy.
+
+## Check the policy
+
+```sh
+schedulingctl check ./scheduling --format json
+```
+
+```json test-excerpt
+{
+  "offerings": {
+    "count": 2,
+    "ids": [
+      "registry-update-30",
+      "fold-day-update-30"
+    ]
+  },
+  "projectId": "registry-updates"
+}
+```
+
+The report's `effective` section also prints a `policyDigest`, which changes whenever the booking
+behaviour changes, while `databaseAccess` and `networkAccess` are both `false`: the check touched neither. An
+[offering](../../reference/glossary/#offering) is one thing a caller can book. Ask
+`schedulingctl` what the first one means:
+
+```sh
+schedulingctl explain ./scheduling --format json
+```
+
+```json test-excerpt
+{
+  "exactTime": {
+    "bufferAfterMinutes": 5,
+    "bufferBeforeMinutes": 5,
+    "durationMinutes": 30,
+    "horizonDays": 60,
+    "leadTimeMinutes": 120,
+    "maximumRecipients": 1,
+    "pool": "update-stations",
+    "startIncrementMinutes": 30
+  },
+  "id": "registry-update-30",
+  "location": "bangkok-counter",
+  "mode": "exact-time"
+}
+```
+
+`registry-update-30` is a 30-minute appointment at `bangkok-counter`, starting on the half hour,
+bookable from two hours to 60 days ahead, with five minutes kept free on each side. Each booking
+takes one station from `update-stations`, a [resource pool](../../reference/glossary/#resource-pool)
+of interchangeable stations. The policy names the pool; `records.yaml` lists its members:
+
+```yaml title="scheduling/records.yaml" test-excerpt="scheduling/records.yaml"
+- id: update-stations
+  members:
+    - resourceId: station-1
+      available: true
+    - resourceId: station-2
+      available: true
+```
+
+{/* Evidence: crates/registry-schedulingctl/src/project.rs, init(), check() and explain();
+    crates/registry-schedulingctl/src/templates.rs, standalone-exact-time. */}
+
+## Run the fixtures
+
+A [fixture](../../reference/glossary/#scheduling-fixture) states a moment in time, the pools as they
+stand then, and booking requests with the answer each must get. Run both:
+
+```sh
+schedulingctl test ./scheduling --format json
+```
+
+```json test-excerpt
+{
+  "cases": [
+    {
+      "detail": "admitted onto station-1 for 1 unit(s)",
+      "name": "first-caller-takes-a-station",
+      "status": "pass"
+    },
+    {
+      "detail": "refused booking.duplicate-active (detailed: booking.duplicate-active)",
+      "name": "same-key-retry-is-refused",
+      "status": "pass"
+    },
+    {
+      "detail": "admitted onto station-2 for 1 unit(s)",
+      "name": "second-caller-gets-the-other-station",
+      "status": "pass"
+    },
+    {
+      "detail": "refused capacity.exhausted (detailed: capacity.exhausted)",
+      "name": "both-stations-busy-refuses-another-caller",
+      "status": "pass"
+    }
+  ],
+  "file": "fixtures/counter-stations.yaml",
+  "status": "passed"
+}
+```
+
+The first caller asks for 09:00 Bangkok time (02:00 UTC) and takes `station-1`. The same caller
+asking for 09:30 is refused, because the offering allows one active booking per subject. A second
+caller takes `station-2` at 09:00, and a third is refused because both stations are taken. Each
+case's `duplicateKey` names the subject, not the idempotency key: a retry under the same
+idempotency key returns the first answer instead.
+
+## Close a station
+
+Suppose `station-2` is out of service that morning. Say so in the fixture's facts:
+
+```diff test-edit title="scheduling/fixtures/counter-stations.yaml"
+ - resourceId: station-2
+-  available: true
++  available: false
+```
+
+Run the fixtures again:
+
+```sh test-exit="1"
+schedulingctl test ./scheduling --format json
+```
+
+```json test-excerpt
+{
+  "detail": "expected admitted onto station-2 for 1 unit(s), actual refused capacity.exhausted (detailed: capacity.exhausted)",
+  "name": "second-caller-gets-the-other-station",
+  "status": "fail"
+}
+```
+
+The command exits with status 1. With one station open, the second caller is refused like the
+third. That is the behaviour you want, so the case expectation is what is wrong. Correct it:
+
+```diff test-edit title="scheduling/fixtures/counter-stations.yaml"
+ expect:
+-  type: admitted
+-  units: 1
+-  resource: station-2
++  type: refused
++  code: capacity.exhausted
+```
+
+```sh
+schedulingctl test ./scheduling --format json
+```
+
+```json test-excerpt
+{
+  "ok": true,
+  "status": "passed",
+  "proofBoundary": "offline-synthetic"
+}
+```
+
+`offline-synthetic` marks the limit of this proof: the fixtures exercise the policy against facts
+you wrote, not against a running deployment's ledger.
+
+{/* Evidence: crates/registry-scheduling-core/src/fixture.rs, case evaluation and the
+    expected/actual detail; crates/registry-schedulingctl/src/project.rs, test(). */}
+
+## Next
+
+[How Registry Scheduling works](../../explanation/how-scheduling-works/) follows a booking through
+the running service: the hold a caller takes, the appointment it confirms, and the grant that
+allows both.

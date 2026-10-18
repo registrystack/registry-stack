@@ -22,58 +22,7 @@ ships in releases as an [experimental surface](../../api-stability/#experimental
 outside the compatibility promise and may change in any minor release.
 
 [Open the Registry Scheduling API operations](../scheduling/) for every route, parameter, schema, and
-reachable problem code. This page holds the authority, revision, and recovery rules those operations
-assume.
-
-## Obtain the operator tool and runtime
-
-Registry Stack releases publish `schedulingctl` for Linux amd64, Linux arm64, and macOS arm64. Pick
-a published tag from the
-[latest release](https://github.com/registrystack/registry-stack/releases/latest), authenticate the
-asset for your platform through
-`https://github.com/registrystack/registry-stack/blob/<tag>/release/VERIFY.md`, then install it. For
-Linux amd64:
-
-```sh
-tag="${TAG:?set TAG to a published Registry Stack tag}"
-mkdir -p ~/.local/bin
-install -m 0755 "schedulingctl-${tag}-linux-amd64" "$HOME/.local/bin/schedulingctl"
-export PATH="$HOME/.local/bin:$PATH"
-schedulingctl --version
-```
-
-From v0.38.0, the release also includes the Linux amd64 runtime binary
-`scheduling-<tag>-linux-amd64`. Authenticate it through the same checksum chain, install it alongside
-`schedulingctl`, and run `scheduling --runtime-config /etc/registry-scheduling/runtime.yaml serve`.
-Earlier releases ship the runtime through its image.
-
-The runtime is published as `ghcr.io/registrystack/scheduling:<tag>`. Authenticate the image digest
-through the release manifest and deploy the digest instead of the mutable tag. The Distroless
-`cc-debian13` image runs `/usr/local/bin/scheduling` as the nonroot user, reads
-`/etc/registry-scheduling/runtime.yaml`, and uses `/var/lib/registry-scheduling` as its working
-directory. Mount the runtime file, package, and serving secrets read-only, and mount the audit
-directory read-write.
-
-Images published from v0.36.0 also contain the matching `/usr/local/bin/schedulingctl`. Run
-`plan`, `apply`, or `status` against the exact image bytes by overriding the entrypoint:
-
-```sh
-docker run --rm \
-  --entrypoint /usr/local/bin/schedulingctl \
-  -v /etc/registry-scheduling/runtime.yaml:/etc/registry-scheduling/runtime.yaml:ro \
-  -v /etc/registry-scheduling/package:/etc/registry-scheduling/package:ro \
-  -v /etc/registry-scheduling/operator-secrets:/etc/registry-scheduling/secrets:ro \
-  -v /var/lib/registry-scheduling/audit:/var/lib/registry-scheduling/audit:rw \
-  "ghcr.io/registrystack/scheduling@sha256:<verified-digest>" \
-  plan --runtime-config /etc/registry-scheduling/runtime.yaml
-```
-
-Use the same mounts for `apply` or `status`. The migration secret needed by `apply` should stay out
-of the serving container.
-
-{/* Evidence: release/scripts/release_candidate.py, _release_payload_inventory and
-    OPERATOR_TOOL_MINIMUM_VERSION; release/docker/Dockerfile.scheduling;
-    products/scheduling/README.md, Start from an authored project. */}
+reachable problem code. A running Scheduling process does not serve the document itself.
 
 ## Contract boundary
 
@@ -88,8 +37,7 @@ The four caller-driven commitments carry an `Idempotency-Key` the caller chooses
 bytes: creating a hold, creating an appointment, rescheduling one, and cancelling one. A retry under
 the same key with the same request returns the stored first answer, and the same key with a different
 request is refused with `idempotency.key-reused`. Releasing a hold carries no caller key: the hold's
-own identifier is the idempotency key, so a retried release replays the first answer without the
-caller holding anything back.
+own identifier is the idempotency key, so a retried release returns the first answer.
 
 {/* Evidence: crates/registry-scheduling/src/http.rs, idempotency_key() and router();
     crates/registry-scheduling/src/service.rs, release_hold();
@@ -101,7 +49,8 @@ or settles the command, while a new key can commit it twice. The Rust client in
 `registry-scheduling-client` does this for the four keyed commitments: its error's
 `is_outcome_unknown()` is true in those cases and false for a typed 4xx refusal, and it resends the
 identical request at most twice by default, waiting 250 ms and then 500 ms, or the runtime's
-`Retry-After` when that is longer and at most 5 seconds. `with_max_mutation_retries` on its
+`Retry-After` when that is longer. A `Retry-After` over 5 seconds ends the retries and returns
+the answer. `with_max_mutation_retries` on its
 configuration sets the count from 0, which sends once, to 2. It never resends a read or a release.
 
 {/* Evidence: crates/registry-scheduling-client/src/error.rs, is_outcome_unknown;
@@ -221,8 +170,8 @@ not make revocation atomic across products. A runtime that writes
 authority, performs no revocation check, and accepts only grants with no more than 900 seconds remaining.
 A list of authorities disables that path for every source, so a grant from an unlisted source is refused
 even with less than 15 minutes left. Because the token does not name the original authorization mode, the
-final 15 minutes of a deferred grant can use the offline path on a deployment that writes the keyword;
-deployments accepting deferred grants should list their task authorities.
+final 15 minutes of a deferred grant can use the offline path on a deployment that writes the keyword,
+so a deployment that accepts deferred grants lists its task authorities.
 
 {/* Evidence: products/scheduling/contracts/security-invariant-matrix.yaml, SCHEDULING-SEC-03;
     crates/registry-scheduling/src/config.rs, TaskGrantStatus and
@@ -307,13 +256,10 @@ Every Scheduling problem response carries one `code` from this closed catalogue,
 the HTTP status listed beside it.
 
 Two codes are reserved: `eligibility.unavailable` and `hook.unavailable` are defined, titled, and
-status-pinned for future synchronous decision paths, and no path in this milestone answers them yet.
-Scheduling hooks are asynchronous observers, so their delivery failures never become caller problem
-responses. The authored policy accepts only `after` URL handlers for `appointment.confirmed`,
-`appointment.rescheduled`, and `appointment.cancelled`. Confirmed and rescheduled events may project
-the appointment identifier, revision, offering, start, end, state, and policy revision. Cancelled
-events may project only the appointment identifier, revision, and state. Conditions, principals,
-local handlers, and observer proposals are refused.
+status-pinned for synchronous decision paths. No route answers them. Hooks are asynchronous
+observers, so their delivery failures never become caller problem responses;
+[Author a Scheduling policy](../../../configure/scheduling/#tell-another-system-when-an-appointment-is-confirmed)
+lists what a hook may send.
 
 {/* Evidence: crates/registry-scheduling-core/src/{policy,problem}.rs, SchedulingPolicy::check() and ProblemCode;
     crates/registry-scheduling/src/hooks.rs;
@@ -343,31 +289,14 @@ checked per route.
 | Appointment receipt observation | `/v1/appointments/receipt` | Catalogue read, matching the exact original owner, key, and creation request |
 | Liveness and readiness | `/healthz`, `/readyz` | Any caller, without a token |
 
-`/readyz` answers `service.unavailable` while PostgreSQL is unreachable or the audit writer is not
-ready.
+`/readyz` answers `service.unavailable` while PostgreSQL is unreachable, while the schema is not
+the one this release expects, and while the audit writer is not ready.
 
 {/* Evidence: crates/registry-scheduling/src/http.rs, router() and readyz();
     crates/registry-scheduling-core/src/naming.rs, SCHEDULING_PATH, SERVICES_PATH, OFFERINGS_PATH,
     RESOURCES_PATH, LOCATIONS_PATH, AVAILABILITY_PATH, AVAILABILITY_EXPLAIN_PATH, HOLDS_PATH, and
-    APPOINTMENTS_PATH and APPOINTMENT_RECEIPT_PATH. */}
-
-## Source of truth
-
-The implementation is the source of truth, and the generated document is the published form of it.
-The product generator builds the OpenAPI document from the Rust-owned route inventory, authority
-profiles, wire schemas, and the exported problem catalogue, and the product check regenerates the
-document and refuses byte drift. A running Scheduling process serves the routes in that document, and
-does not serve the document itself.
-
-{/* Evidence: products/scheduling/scripts/{generate_openapi.py,check-checkpoint.sh};
-    products/scheduling/generated/registry-scheduling.openapi.json. */}
-
-The problem code table is generated from maintained data whose codes and statuses match the generated
-document. The route families table and the header rules are maintained by hand against the cited
-source.
-
-{/* Evidence: docs/site/src/data/scheduling-api.yaml;
-    products/scheduling/scripts/test_generate_openapi.py. */}
+    APPOINTMENTS_PATH and APPOINTMENT_RECEIPT_PATH; crates/registry-scheduling/src/store.rs,
+    ready(). */}
 
 ## Next
 
