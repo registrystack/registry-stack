@@ -16,14 +16,13 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
-Use this page to look up unfamiliar terms.
 Product names are always in English, including on future translated pages.
 {/* Do not translate contract identifiers, env vars, media types, route paths, schema versions,
     crate names, or Docker image names. */}
 
 <dl class="glossary-dl">
   <dt id="access-profile">access profile</dt>
-  <dd>A named Base Registry Engine (BReg) grant stating which scopes, purposes, claims, operations, fields, and rows a caller may reach. See <a href="../../configure/breg-access/">Control access per profile</a>.</dd>
+  <dd>A named grant a caller selects with its token. In Base Registry Engine (BReg), it states which scopes, purposes, claims, operations, fields, and rows the caller may reach; see <a href="../../configure/breg-access/">Control access per profile</a>. In Registry Casework, an entry under `accessProfiles` admits a token carrying its `requiredScopes`, takes the caller's identity from `principalClaim`, and gives one role: staff, supervisor, administrator, or requester; see <a href="../../configure/casework/">Author a Casework policy</a>.</dd>
 
   <dt id="accountability-record">accountability record</dt>
   <dd>The protected record Registry Casework keeps of who made a <a href="#decision">Decision</a> and their private reason, held for the pinned policy's `accountabilityRetentionDays` and never sent to the producer. See <a href="../../operate/casework-retention/">Retention in Casework</a>.</dd>
@@ -44,7 +43,7 @@ Product names are always in English, including on future translated pages.
   <dd>The minimized request and response entries Base Registry Engine writes to a per-process file or stdout stream, separately from PostgreSQL; operators ship it to append-only storage. An <a href="#erasure">erasure</a> does not remove audit entries. See <a href="../../operate/breg-retention/">Retain, erase, and audit</a>.</dd>
 
   <dt id="base-registry-engine">Base Registry Engine (BReg)</dt>
-  <dd>The PostgreSQL system of record whose data model and REST API are compiled from a <a href="#registry-project">registry project</a>, with no built-in domain types. Write `Base Registry Engine (BReg)` on a page's first use and `BReg` after; crate `crates/registry-breg`, binaries `breg` and `bregctl`.</dd>
+  <dd>The PostgreSQL system of record whose data model and REST API are compiled from a <a href="#registry-project">registry project</a>, with no built-in domain types. Binaries `breg` and `bregctl`.</dd>
 
   <dt id="calendar">calendar</dt>
   <dd>In Registry Casework, the working week and time zone a <a href="#clock">clock</a> counts working days against, with a named holiday set whose dates arrive as a separate revision.</dd>
@@ -71,13 +70,13 @@ Product names are always in English, including on future translated pages.
   <dd>The directory `evidencectl package` writes from an <a href="#evidence-project">Evidence project</a> and one target: an immutable `bundle/`, a runtime file, and a compiled authority. Its <a href="#package-digest">package digest</a> identifies the bundle.</dd>
 
   <dt id="directory">directory</dt>
-  <dd>Registry Casework's runtime record of <a href="#team">teams</a>, their staff and supervisors, and the <a href="#queue">queues</a> they serve, maintained by an administrator through the directory API under revisions. See <a href="../../operate/casework/">Deploy Registry Casework</a>.</dd>
+  <dd>Registry Casework's runtime record of <a href="#team">teams</a>, their staff and supervisors, and the <a href="#queue">queues</a> they serve, maintained by an administrator through the directory API under revisions. See <a href="../../configure/casework-directory/">Staff the directory</a>.</dd>
 
   <dt id="erasure">erasure</dt>
   <dd>The irreversible removal of retained detail under an approved retention request. In Base Registry Engine, `bregctl history erase` and `bregctl proposal-retention erase` remove retained revisions or Proposal detail, never the current record or the <a href="#audit-journal">audit journal</a>; Registry Casework erases expired review data through runtime maintenance.</dd>
 
   <dt id="evidence-gateway">Evidence Gateway</dt>
-  <dd>The minimum-disclosure assertion product: it answers one predefined question from a fixed read of your system with a signed <a href="#assertion">assertion</a>, never the source record. Crate `crates/registry-evidence`, binaries `evidence` and `evidencectl`.</dd>
+  <dd>The minimum-disclosure assertion product: it answers one predefined question from a fixed read of your system with a signed <a href="#assertion">assertion</a>, never the source record. Binaries `evidence` and `evidencectl`.</dd>
 
   <dt id="evidence-project">Evidence project</dt>
   <dd>An `evidence.yaml` file and the scripts it names, kept in version control, declaring <a href="#assertion-definition">assertion definitions</a>, sources, selector profiles, and Functions. `evidencectl` checks, tests, and packages it with a target into a <a href="#deployment-candidate">deployment candidate</a>.</dd>

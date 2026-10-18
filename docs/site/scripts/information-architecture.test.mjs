@@ -596,11 +596,11 @@ test('keeps consumer and wallet-provider guidance in separate Evidence groups', 
   assert.deepEqual(wallet.items.map((item) => item.slug), [
     'configure/enable-sd-jwt-vc',
     'configure/evidence-oid4vci',
-    'tutorials/run-oid4vci-interoperability-checks',
   ]);
   assert.equal(evidence.items[1].slug, 'tutorials/first-evidence-assertion');
   assert.equal(evidence.items[2].slug, 'explanation/how-evidence-works');
-  assert.equal(evidence.items[3], consumer, 'consumer entry point must precede provider phases');
+  assert.equal(evidence.items[3].label, 'Tutorials', 'the tutorials continue the first assertion');
+  assert.equal(evidence.items[4], consumer, 'consumer entry point follows the tutorials it builds on');
 });
 
 test('seats generated product references directly below Reference without losing leaf attributes', () => {
@@ -853,6 +853,26 @@ test('redirects each page the Base Registry Engine rewrite retired and its Markd
   assert.equal(Object.keys(redirects).length, 2 * routes.length);
 });
 
+test('redirects each page the Evidence and Casework rewrite retired and its Markdown twin to one target', () => {
+  for (const [route, target] of [
+    ['/operate/evidence-requirements/', '/explanation/how-evidence-works/'],
+    ['/tutorials/refuse-unsafe-evidence-requests/', '/tutorials/control-who-can-request-evidence/'],
+    ['/configure/evidence/', '/tutorials/build-and-deploy-evidence-project/'],
+    ['/reference/evidencectl/', '/reference/cli/evidencectl/'],
+    ['/tutorials/issue-fhir-evidence-as-vcs/', '/tutorials/connect-an-institution-source/'],
+    ['/explanation/integration-patterns/', '/start/concepts/'],
+    ['/tutorials/run-oid4vci-interoperability-checks/', '/configure/evidence-oid4vci/'],
+    ['/explanation/disclosure-modes-and-computed-answers/', '/explanation/how-evidence-works/'],
+  ]) {
+    const twin = `${route.slice(0, -1)}.md`;
+    for (const path of [route, twin]) {
+      const entry = `'${path}': internalRedirect('${target}'),`;
+      assert.ok(configSource.includes(entry), `${entry} must be a redirect`);
+    }
+    assert.equal(hasDocForSlug(route.slice(1, -1)), false, `${route} must not be a published page`);
+  }
+});
+
 test('redirects the retired Server webhook, history, and event pages to their merged pages', () => {
   assert.match(
     configSource,
@@ -900,8 +920,8 @@ test('organizes Registry Evidence tasks without publishing the obsolete Relay co
       // The first hands-on tutorial sits beside the overview, so opening the
       // product section reveals both starting points.
       "slug: 'tutorials/first-evidence-assertion'",
-      "label: 'Use from applications'",
       "label: 'Tutorials'",
+      "label: 'Use from applications'",
       "label: 'Connect a source'",
       "label: 'Prove and deploy'",
       "label: 'Wallet delivery'",
@@ -967,14 +987,27 @@ test('keeps the Casework journey in one product lane', () => {
   assert.deepEqual(slugs, [
     'start/casework',
     'tutorials/first-casework',
-    'tutorials/review-breg-changes-in-casework',
     'explanation/how-casework-works',
     'configure/casework',
+    'configure/casework-directory',
     'operate/casework',
+    'operate/change-a-casework-package',
     'operate/casework-retention',
+    'tutorials/review-breg-changes-in-casework',
     'reference/apis/registry-casework',
     'reference/client-api',
   ]);
+  assertOrdered(
+    casework,
+    [
+      "slug: 'tutorials/first-casework'",
+      "label: 'Author a policy'",
+      "label: 'Deploy and operate'",
+      "label: 'Compose'",
+      "slug: 'reference/apis/registry-casework'",
+    ],
+    'Registry Casework',
+  );
   for (const slug of slugs) {
     assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the Casework journey`);
   }

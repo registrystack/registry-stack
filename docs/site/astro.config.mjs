@@ -295,7 +295,9 @@ const caseworkRoutes = [
   '/tutorials/review-breg-changes-in-casework/',
   '/explanation/how-casework-works/',
   '/configure/casework/',
+  '/configure/casework-directory/',
   '/operate/casework/',
+  '/operate/change-a-casework-package/',
   '/operate/casework-retention/',
   '/reference/apis/registry-casework/',
 ];
@@ -384,12 +386,16 @@ export default defineConfig({
     // into the access-control tutorial that follows it.
     '/start/evaluate-evidence/': internalRedirect('/explanation/how-evidence-works/'),
     '/operate/evidence-requirements/': internalRedirect('/explanation/how-evidence-works/'),
+    '/operate/evidence-requirements.md': internalRedirect('/explanation/how-evidence-works/'),
     '/tutorials/refuse-unsafe-evidence-requests/': internalRedirect('/tutorials/control-who-can-request-evidence/'),
+    '/tutorials/refuse-unsafe-evidence-requests.md': internalRedirect('/tutorials/control-who-can-request-evidence/'),
     // The deployment-configuration page and the evidencectl workflow page
     // were absorbed by the build-and-deploy tutorial and the generated CLI
     // reference: the tool introduces each noun once, where it is used.
     '/configure/evidence/': internalRedirect('/tutorials/build-and-deploy-evidence-project/'),
+    '/configure/evidence.md': internalRedirect('/tutorials/build-and-deploy-evidence-project/'),
     '/reference/evidencectl/': internalRedirect('/reference/cli/evidencectl/'),
+    '/reference/evidencectl.md': internalRedirect('/reference/cli/evidencectl/'),
     '/start/evaluate-breg/': internalRedirect('/operate/breg/'),
     ...bregRewriteRedirects(internalRedirect),
     // One client package documents the retained namespaces in one reference.
@@ -415,9 +421,17 @@ export default defineConfig({
     '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/connect-an-institution-source/'),
     // The FHIR credential tutorial became the worked example of connecting an institution API.
     '/tutorials/issue-fhir-evidence-as-vcs/': internalRedirect('/tutorials/connect-an-institution-source/'),
+    '/tutorials/issue-fhir-evidence-as-vcs.md': internalRedirect('/tutorials/connect-an-institution-source/'),
+    // The wallet interoperability checks are one section of the wallet delivery page.
+    '/tutorials/run-oid4vci-interoperability-checks/': internalRedirect('/configure/evidence-oid4vci/'),
+    '/tutorials/run-oid4vci-interoperability-checks.md': internalRedirect('/configure/evidence-oid4vci/'),
+    // Disclosure modes and computed answers are one section of How Evidence works.
+    '/explanation/disclosure-modes-and-computed-answers/': internalRedirect('/explanation/how-evidence-works/'),
+    '/explanation/disclosure-modes-and-computed-answers.md': internalRedirect('/explanation/how-evidence-works/'),
     // Retired monorepo lab tutorials and the integration-patterns page redirect to
     // the cross-product concepts page.
     '/explanation/integration-patterns/': internalRedirect('/start/concepts/'),
+    '/explanation/integration-patterns.md': internalRedirect('/start/concepts/'),
     '/tutorials/configure-project-fhir-r4/': internalRedirect('/start/concepts/'),
     '/tutorials/configure-project-snapshot-materialization/': internalRedirect('/decisions/registry-relay-retirement-2026-10-03/'),
     // Problems -> marketing /why
@@ -550,8 +564,20 @@ export default defineConfig({
             { label: 'Overview', slug: 'start/evidence-quickstart' },
             { label: 'Your first assertion', slug: 'tutorials/first-evidence-assertion' },
             { label: 'How Evidence works', slug: 'explanation/how-evidence-works' },
-            // Consumers need no deployment. Keep their path visible beside
-            // the provider's entry points, separate from wallet delivery.
+            // The tutorials continue on the first assertion's running project.
+            {
+              label: 'Tutorials',
+              collapsed: true,
+              items: [
+                { label: 'Return a governed value', slug: 'tutorials/return-a-governed-value' },
+                { label: 'Control who can request evidence', slug: 'tutorials/control-who-can-request-evidence' },
+                { label: 'Assert a role-bound relationship', slug: 'tutorials/assert-a-role-bound-relationship' },
+                { label: 'Request evidence as an SD-JWT VC', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
+              ],
+            },
+            // Consumers need no deployment, but they do need the project the
+            // tutorials build on, so their path follows the tutorials and stays
+            // separate from wallet delivery.
             {
               label: 'Use from applications',
               collapsed: true,
@@ -563,22 +589,12 @@ export default defineConfig({
               ],
             },
             {
-              label: 'Tutorials',
-              collapsed: true,
-              items: [
-                { label: 'Return a governed value', slug: 'tutorials/return-a-governed-value' },
-                { label: 'Control who can request evidence', slug: 'tutorials/control-who-can-request-evidence' },
-                { label: 'Assert a role-bound relationship', slug: 'tutorials/assert-a-role-bound-relationship' },
-                { label: 'Request evidence as an SD-JWT VC', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
-              ],
-            },
-            {
               label: 'Connect a source',
               collapsed: true,
               items: [
                 { label: 'Connect an institution API', slug: 'tutorials/connect-an-institution-source' },
                 { label: 'Connect a SQLite extract', slug: 'tutorials/connect-a-sqlite-extract' },
-                { label: 'Compose a BReg lookup', slug: 'tutorials/evidence-from-breg' },
+                { label: 'Package a lookup over a registry', slug: 'tutorials/evidence-from-breg' },
               ],
             },
             {
@@ -599,7 +615,6 @@ export default defineConfig({
               items: [
                 { label: 'Enable SD-JWT VC', slug: 'configure/enable-sd-jwt-vc' },
                 { label: 'Deliver to a wallet', slug: 'configure/evidence-oid4vci' },
-                { label: 'Check wallet interoperability', slug: 'tutorials/run-oid4vci-interoperability-checks' },
               ],
             },
             { label: 'Configuration reference', slug: 'reference/evidence-configuration' },
@@ -693,11 +708,31 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'start/casework' },
             { label: 'Decide your first ReviewRequest', slug: 'tutorials/first-casework' },
-            { label: 'Review a Proposal in Casework', slug: 'tutorials/review-breg-changes-in-casework' },
             { label: 'How Casework works', slug: 'explanation/how-casework-works' },
-            { label: 'Author a policy', slug: 'configure/casework' },
-            { label: 'Deploy Casework', slug: 'operate/casework' },
-            { label: 'Retention and audit', slug: 'operate/casework-retention' },
+            {
+              label: 'Author a policy',
+              collapsed: true,
+              items: [
+                { label: 'Author a policy', slug: 'configure/casework' },
+                { label: 'Staff the directory', slug: 'configure/casework-directory' },
+              ],
+            },
+            {
+              label: 'Deploy and operate',
+              collapsed: true,
+              items: [
+                { label: 'Deploy Casework', slug: 'operate/casework' },
+                { label: 'Change an active package', slug: 'operate/change-a-casework-package' },
+                { label: 'Retention and audit', slug: 'operate/casework-retention' },
+              ],
+            },
+            {
+              label: 'Compose',
+              collapsed: true,
+              items: [
+                { label: 'Review a Proposal in Casework', slug: 'tutorials/review-breg-changes-in-casework' },
+              ],
+            },
             { label: 'API contract', slug: 'reference/apis/registry-casework' },
             caseworkOpenApiSidebarGroup,
             { label: 'Client API reference', slug: 'reference/client-api' },
@@ -795,7 +830,6 @@ export default defineConfig({
             { label: 'Static metadata publication', slug: 'explanation/publishing-pipeline' },
             { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
             { label: 'Records stay home', slug: 'explanation/records-stay-home' },
-            { label: 'Disclosure modes', slug: 'explanation/disclosure-modes-and-computed-answers' },
             { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },
             { label: 'Trusted context', slug: 'explanation/trusted-context-constraints' },
             { label: 'DPI safeguards', slug: 'explanation/dpi-safeguards-alignment' },

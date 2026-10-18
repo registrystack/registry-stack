@@ -539,6 +539,33 @@ test('the work directory is removed after a journey, even where it made a direct
   });
 });
 
+test('teardown finds a session\'s control socket and runtime file as the journey left them', async () => {
+  const body =
+    '## Start\n\n' +
+    fence(
+      'sh',
+      'mkdir -p project/.breg/dev\ncd project/.breg/dev\necho {} >state.json\n' +
+        "python3 -c 'import socket; socket.socket(socket.AF_UNIX).bind(\"control.sock\")'\n" +
+        'chmod 600 control.sock\ntouch runtime.yaml\nchmod 400 runtime.yaml',
+    );
+  await withPage(body, async ({ dir, page }) => {
+    const modes = join(dir, 'modes.log');
+    await writeFile(join(dir, 'breg'), '#!/bin/sh\n');
+    await writeFile(
+      join(dir, 'bregctl'),
+      `#!/bin/sh\npython3 -c 'import os, sys; print(*(oct(os.lstat(p).st_mode & 0o777) for p in sys.argv[1:]))' "$3/.breg/dev/control.sock" "$3/.breg/dev/runtime.yaml" >'${modes}'\n`,
+    );
+    await chmod(join(dir, 'breg'), 0o755);
+    await chmod(join(dir, 'bregctl'), 0o755);
+    const { code, output } = await run(['--toolset', 'breg', page], {
+      BREG_BIN: join(dir, 'breg'),
+      BREGCTL_BIN: join(dir, 'bregctl'),
+    });
+    assert.equal(code, 0, output);
+    assert.equal(await readFile(modes, 'utf8'), '0o600 0o400\n');
+  });
+});
+
 test('--keep-failed retains private diagnostics after stopping owned sessions', async () => {
   const body = '## Fail\n\n' + fence('sh', 'mkdir -p project/.breg/dev\necho {} >project/.breg/dev/state.json\necho startup-category >diagnostic.log\nfalse');
   await withPage(body, async ({ dir, page }) => {
@@ -876,9 +903,10 @@ test('the evidence toolset serves its binaries, the client package, and the FHIR
       'evidence --version\nevidencectl dev\n"$EVIDENCE_OID4VCI_BIN" --version\n' +
         'python3 -c "import tutorial_fake_client; print(tutorial_fake_client.NAME)"\n' +
         'python3 -c "import os, urllib.request; print(urllib.request.urlopen(os.environ[\'FHIR_TUTORIAL_TEST_BASE_URL\'] + \'/healthz\').status)"\n' +
+        'tar -tzf evidence-examples.tar.gz | head -n 1\n' +
         'mkdir -p work/project/.evidence/dev\ntouch work/project/.evidence/dev/control.sock',
     ) +
-    fence('text test-expect', 'unpacked\n200') +
+    fence('text test-expect', 'unpacked\n200\nfhir/.gitignore') +
     fence('sh', 'false');
   await withPage(body, async ({ dir, page }) => {
     const calls = join(dir, 'calls.log');

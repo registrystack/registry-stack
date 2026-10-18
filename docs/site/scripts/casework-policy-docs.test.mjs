@@ -8,10 +8,14 @@ import { parse } from 'yaml';
 // Holds every YAML fence on the Casework authoring page to the tracked product
 // file it was copied from, so the page's YAML cannot drift from the product.
 // A fence names its source in `title`: a tracked file under
-// products/casework/examples/, or a file of the tutorial project, which
-// `caseworkctl init --template standalone-decision` writes from the
-// standalone-decision example and from the template constants in
-// crates/registry-caseworkctl/src/project.rs.
+// products/casework/examples/, or a file of the tutorial project, relative to
+// the project directory the page works in. An excerpted project file is held
+// to what `caseworkctl init --template standalone-decision` writes it from:
+// the standalone-decision example and the template constants in
+// crates/registry-caseworkctl/src/project.rs. A file the reader writes into
+// the project (`test-file`, `test-append`) is proved by the replay, which
+// checks the project after it, and is held here to the example it was copied
+// from when `copiedFiles` names one.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../..');
@@ -19,6 +23,9 @@ const pagePath = resolve(here, '../src/content/docs/configure/casework.mdx');
 const page = readFileSync(pagePath, 'utf8');
 const examples = 'products/casework/examples';
 const tutorialProject = 'tutorial-work/casework/';
+const copiedFiles = new Map([
+  ['holiday-sets/office-holidays-7.yaml', `${examples}/multi-stage-routing-clocks/holiday-sets/office-holidays-7.yaml`],
+]);
 
 // The init template constants for the standalone-decision project, by the
 // project-relative path init writes each one to.
@@ -46,24 +53,29 @@ function yamlFences(text) {
   return fences;
 }
 
-// The tracked sources a fence is held to: the example file it names, or, for
-// a tutorial project file, both the standalone-decision example and the init
-// template that writes it.
-function sourcesFor(title) {
+// The tracked sources a fence is held to: the example file it names; for an
+// excerpted tutorial project file, both the standalone-decision example and
+// the init template that writes it; for a file the reader writes, the example
+// it was copied from, or none.
+function sourcesFor(fence) {
+  const { title } = fence;
   if (title.startsWith(`${examples}/`)) {
     return [{ name: title, text: readFileSync(resolve(repoRoot, title), 'utf8') }];
   }
-  if (title.startsWith(tutorialProject)) {
-    const relative = title.slice(tutorialProject.length);
-    const tracked = `${examples}/standalone-decision/${relative}`;
-    const template = templates.get(relative);
-    assert.ok(template !== undefined, `${title} is not a file the standalone-decision template writes`);
-    return [
-      { name: tracked, text: readFileSync(resolve(repoRoot, tracked), 'utf8') },
-      { name: `the init template for ${relative}`, text: template },
-    ];
+  const relative = title.startsWith(tutorialProject) ? title.slice(tutorialProject.length) : title;
+  if (/\btest-(file|append)\b/u.test(fence.info)) {
+    const copiedFrom = copiedFiles.get(relative);
+    return copiedFrom === undefined
+      ? []
+      : [{ name: copiedFrom, text: readFileSync(resolve(repoRoot, copiedFrom), 'utf8') }];
   }
-  assert.fail(`YAML fence titled ${title} names no tracked Casework source`);
+  const tracked = `${examples}/standalone-decision/${relative}`;
+  const template = templates.get(relative);
+  assert.ok(template !== undefined, `${title} is not a file the standalone-decision template writes`);
+  return [
+    { name: tracked, text: readFileSync(resolve(repoRoot, tracked), 'utf8') },
+    { name: `the init template for ${relative}`, text: template },
+  ];
 }
 
 // The extra indentation `line` carries beyond `expected`, or undefined when
@@ -120,7 +132,7 @@ test('every YAML fence on the page names its tracked source', () => {
 
 test('every YAML fence equals, or is a line subset of, each tracked source it names', () => {
   for (const fence of fences) {
-    for (const source of sourcesFor(fence.title)) {
+    for (const source of sourcesFor(fence)) {
       assert.ok(
         isLineSubset(fence.body, source.text),
         `the fence titled ${fence.title} is not a run of lines of ${source.name}:\n${fence.body}`,
@@ -129,25 +141,20 @@ test('every YAML fence equals, or is a line subset of, each tracked source it na
   }
 });
 
-test('the page copies from the standalone, canonical-review and multi-stage examples', () => {
+test('the page excerpts the tutorial project and copies the multi-stage holiday set', () => {
   const titles = new Set(fences.map((fence) => fence.title));
-  for (const required of [
-    'tutorial-work/casework/casework.yaml',
-    'tutorial-work/casework/dev-clients.yaml',
-    'tutorial-work/casework/fixtures/standalone-decision.yaml',
-    `${examples}/canonical-review/casework.yaml`,
-    `${examples}/multi-stage-routing-clocks/casework.yaml`,
-    `${examples}/multi-stage-routing-clocks/holiday-sets/office-holidays-7.yaml`,
-  ]) {
-    assert.ok(titles.has(required), `the page shows nothing copied from ${required}`);
+  for (const required of ['casework.yaml', 'holiday-sets/office-holidays-7.yaml']) {
+    assert.ok(titles.has(required), `the page shows nothing from ${required}`);
   }
+  const holidaySet = fences.find((fence) => fence.title === 'holiday-sets/office-holidays-7.yaml');
+  assert.match(holidaySet.info, /\btest-file\b/u, 'the holiday set is written into the project');
 });
 
 test('the excerpted keys exist in the generated project schema', () => {
   const schema = JSON.parse(
     readFileSync(resolve(repoRoot, 'products/casework/generated/project/project.schema.json'), 'utf8'),
   );
-  for (const fence of fences.filter((candidate) => candidate.title.endsWith('/casework.yaml'))) {
+  for (const fence of fences.filter((candidate) => /(^|\/)casework\.yaml$/u.test(candidate.title))) {
     const lines = fence.body.split('\n');
     if (/^\s/u.test(lines[0])) continue;
     for (const key of Object.keys(parse(fence.body))) {
