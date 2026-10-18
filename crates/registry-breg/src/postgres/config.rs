@@ -424,6 +424,7 @@ pub struct RuntimePool {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DatabaseConnectionCause {
     Unreachable,
+    Capacity,
     Tls,
     Authentication,
     DatabaseMissing,
@@ -437,6 +438,7 @@ impl DatabaseConnectionCause {
     pub const fn code(self) -> &'static str {
         match self {
             Self::Unreachable => "startup.database.unreachable",
+            Self::Capacity => "startup.database.capacity-exhausted",
             Self::Tls => "startup.database.tls-refused",
             Self::Authentication => "startup.database.authentication-refused",
             Self::DatabaseMissing => "startup.database.missing",
@@ -453,7 +455,9 @@ impl DatabaseConnectionCause {
                 "database.runtimeUrlRef"
             }
             // The URL and trust-root references refuse as one class.
-            Self::Tls | Self::Timeout | Self::Configuration | Self::Secret => "database",
+            Self::Capacity | Self::Tls | Self::Timeout | Self::Configuration | Self::Secret => {
+                "database"
+            }
         }
     }
 
@@ -461,7 +465,10 @@ impl DatabaseConnectionCause {
     pub const fn message(self) -> &'static str {
         match self {
             Self::Unreachable => {
-                "the database could not be reached or refused a new connection; verify its address, network path, availability, and connection limit"
+                "the database could not be reached; verify its address, network path, and availability"
+            }
+            Self::Capacity => {
+                "the database connection capacity is exhausted; free connections or increase PostgreSQL connection capacity"
             }
             Self::Tls => {
                 "the database TLS connection was refused; verify the server certificate, name, and configured trust roots"
@@ -541,6 +548,8 @@ fn database_error_cause(code: &tokio_postgres::error::SqlState) -> DatabaseConne
         DatabaseConnectionCause::Authentication
     } else if code == &SqlState::INVALID_CATALOG_NAME {
         DatabaseConnectionCause::DatabaseMissing
+    } else if code == &SqlState::TOO_MANY_CONNECTIONS {
+        DatabaseConnectionCause::Capacity
     } else {
         // A server SQLSTATE proves that PostgreSQL was reached and completed
         // the transport handshake. Keep other server availability refusals in
@@ -664,16 +673,13 @@ mod tests {
     }
 
     #[test]
-    fn explicit_server_availability_refusal_is_not_mislabeled_as_tls() {
+    fn explicit_server_capacity_refusal_has_its_own_value_free_diagnostic() {
+        let cause = database_error_cause(&tokio_postgres::error::SqlState::TOO_MANY_CONNECTIONS);
+        assert_eq!(cause.code(), "startup.database.capacity-exhausted");
         assert_eq!(
-            database_error_cause(&tokio_postgres::error::SqlState::TOO_MANY_CONNECTIONS),
-            DatabaseConnectionCause::Unreachable
+            cause.message(),
+            "the database connection capacity is exhausted; free connections or increase PostgreSQL connection capacity"
         );
-        // A server at its connection limit completed the handshake, so the
-        // recovery names the limit beside the network checks.
-        assert!(DatabaseConnectionCause::Unreachable
-            .message()
-            .contains("connection limit"));
     }
 
     #[cfg(feature = "postgres-test")]

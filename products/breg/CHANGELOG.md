@@ -264,11 +264,11 @@
   kind `webhook-verification`. The durable receiver example verifies with it
   instead of its own HMAC code.
 - BREAKING: `bregctl doctor` names why a database connection was refused:
-  `startup.database.unreachable`, `startup.database.tls-refused`,
+  `startup.database.unreachable`, `startup.database.capacity-exhausted`,
+  `startup.database.tls-refused`,
   `startup.database.authentication-refused`, `startup.database.missing`,
   `startup.database.timeout`, `startup.database.configuration-refused`, or
   `startup.database.secret-refused`, replacing `startup.database.connection-refused`.
-  A server at its connection limit reports `startup.database.unreachable`.
   Missing or extra managed schemas, tables, views, sequences, functions, and indexes, and a
   removed unique constraint, required column, or required column's `NOT NULL`
   marker, report `startup.database.catalog-drift` and name up to 64 affected

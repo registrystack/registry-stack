@@ -543,6 +543,11 @@ mod tests {
                 "database.runtimeUrlRef",
             ),
             (
+                StartupError::DatabaseConnection(DatabaseConnectionCause::Capacity),
+                "startup.database.capacity-exhausted",
+                "database",
+            ),
+            (
                 StartupError::DatabaseConnection(DatabaseConnectionCause::Tls),
                 "startup.database.tls-refused",
                 "database",
@@ -676,6 +681,14 @@ mod tests {
             assert_eq!(diagnostic.path, expected_path);
             assert!(!diagnostic.message.contains(&rendered_dependency_error));
         }
+
+        let capacity = startup_diagnostic(StartupError::DatabaseConnection(
+            DatabaseConnectionCause::Capacity,
+        ));
+        assert_eq!(
+            capacity.message,
+            "the database connection capacity is exhausted; free connections or increase PostgreSQL connection capacity"
+        );
     }
 
     #[test]
