@@ -1,6 +1,6 @@
 ---
 title: How the products fit together
-description: What you define, what exists when Registry Stack runs, what each product owns, what none of them owns, and where the stack sits beside an exchange layer.
+description: The model every Registry Stack product shares, what you define, what runs, what a product owns, what none of them owns, how they compose, and where the stack sits beside an exchange layer.
 status: current
 owner: registry-docs
 source_repos:
@@ -11,72 +11,60 @@ locale: en
 standards_referenced: []
 ---
 
-If you have not chosen a product yet, this page shows what each one does and how they combine.
+Every Registry Stack product follows the same model. Learn it once and each product's pages read
+as a variation on it.
 
-## What every registry needs
+## What you define
 
-Every registry holds data behind an API with permissions and accounts for every change. It shares
-answers with other services rather than copies of its records. It supports the people who review
-requests and the people who must be informed.
+A product reads a project you keep in version control: YAML files and, for some products, small
+Rhai scripts. For Base Registry Engine that project declares
+[Record types](../../reference/glossary/#record-type), [Actions](../../reference/glossary/#action),
+and [access profiles](../../reference/glossary/#access-profile). For Evidence Gateway it declares
+the questions the gateway may answer and the sources it reads. For Registry Casework it is a
+[ReviewPolicy](../../reference/glossary/#review-policy).
 
-Registry Stack offers a base for a registry that does not exist yet, and components an existing
-registry adds without being replaced. The usual first component shares limited data securely: an
-[Evidence Gateway](../../reference/glossary/#evidence-gateway) answers one question from your
-records with a signed [assertion](../../reference/glossary/#assertion) instead of the record.
+No product has a built-in business model. A vehicle, a licence, or a residence region is
+something your project declares, never something the runtime knows about.
 
 {/* Evidence: README.md, "What It Includes"; AGENTS.md, product list. */}
 
-## The stack in four questions
+## What runs
 
-- **What you define.** Each product reads a project you keep in version control: YAML files and,
-  for some products, small Rhai scripts. Tooling checks, tests, and packages it offline.
-- **What exists when it runs.** Each product runs as its own service with its own deployment
-  contract, and each one is optional.
-- **What a product owns.** Its own state, its audit record, and who may call its API.
-- **What no product owns.** Legal authority, data ownership, eligibility, and institutional
-  approval, which stay with the responsible institutions.
+Each product runs as its own service with its own deployment contract, and every one of them is
+optional. Before a service opens its listener, its tooling checks, tests, and packages the
+project offline, and the service refuses a package that fails those checks. An institution with a
+registry already in production adds one product beside it; an institution without one starts from
+a Base Registry Engine project.
 
 {/* Evidence: README.md, "What It Includes"; AGENTS.md, "Registry Stack Agent Guidance". */}
 
-## What each product does
+## What a product owns
 
-| Product | What you define | What exists when it runs | What it owns |
-|---|---|---|---|
-| [Base Registry Engine (BReg)](../breg-quickstart/) | A [registry project](../../reference/glossary/#registry-project): [Record types](../../reference/glossary/#record-type), [Actions](../../reference/glossary/#action), [access profiles](../../reference/glossary/#access-profile) | A REST API over a PostgreSQL database | Records, revision history, [Proposals](../../reference/glossary/#proposal), the [audit journal](../../reference/glossary/#audit-journal) |
-| [Evidence Gateway](../evidence-quickstart/) | An Evidence project: assertion definitions, sources, fixtures | A service that answers each [requirement](../../reference/glossary/#requirement) from a packaged bundle | Signing, minimum disclosure, its audit trail |
-| [Registry Casework](../casework/) | A [ReviewPolicy](../../reference/glossary/#review-policy) | [ReviewTasks](../../reference/glossary/#review-task) for authorized people | Decisions and the [ReviewResult](../../reference/glossary/#review-result) |
-| [Registry Scheduling](../../reference/apis/registry-scheduling/) | Offerings over supply the operator anchored | Holds and appointments, each made under a task grant | Its capacity ledger |
-| [Registry Render](../registry-render/) | A template package | A rendered document, byte-stable for the same inputs | Rendering and its audit entries |
-| [Registry Discovery](../../explanation/discovery-as-an-index/) | An operator-approved origin list | One immutable index of provider descriptions | The index, never trust in a provider |
-| [Registry Manifest](../../products/registry-manifest/) | A manifest of what a registry exposes | Static artifacts from its renderers | Validation and rendering of metadata |
+A product owns its own state, its [audit journal](../../reference/glossary/#audit-journal), and
+the decision about who may call its API. Base Registry Engine owns records, revision history, and
+[Proposals](../../reference/glossary/#proposal). Evidence Gateway owns the
+[assertion](../../reference/glossary/#assertion) it signs and the minimum disclosure it holds to.
+Registry Casework owns review decisions and the
+[ReviewResult](../../reference/glossary/#review-result). Registry Scheduling owns its capacity
+ledger. Each product decides every call under its own access rules and records what it decided.
 
-<DocsetProduct product="registry-messaging">
+## What no product owns
 
-[Registry Messaging](../messaging/) sends one message from a reviewed template through an
-operator-connected provider. It owns its dispatch queue and receipts. Why to send, and
-to whom, stay with the caller.
+Legal authority, data ownership, eligibility, and institutional approval stay with the responsible
+institutions. A signed assertion states what a source held at one moment; whether that is enough
+for a decision is the relying party's call. A review result records what reviewers decided; what
+happens next stays with the producer that asked for the review.
 
-</DocsetProduct>
-
-<DocsetProduct product="registry-coordinator">
-
-[Registry Coordinator](../coordinator/) runs a reviewed workflow package of calls to other
-products' public APIs. A run keeps its progress, including each wait, across outages and restarts.
-It owns run state, never product authority or product data.
-
-</DocsetProduct>
-
-{/* Evidence: AGENTS.md, per-product paragraphs; README.md, "What It Includes";
-    products/breg/README.md; products/evidence/README.md; products/casework/README.md;
-    products/scheduling/README.md; products/render/README.md; products/discovery/README.md;
-    products/manifest/README.md; products/messaging/README.md; products/coordinator/README.md. */}
+{/* Evidence: AGENTS.md, "Registry Stack Agent Guidance"; products/casework/README.md. */}
 
 ## How products compose
 
-Products compose over their public APIs, and none inherits another's permissions. Evidence Gateway
-may read a BReg route as a source with its own credentials and gains none of that route's
-authorization. Casework may show reviewers a BReg Proposal, and BReg still decides whether to
-apply it. No product writes to another product's database.
+Products compose over their public APIs, and none inherits another's permissions. Evidence
+Gateway may read a Base Registry Engine route as a source with its own credentials and gains none
+of that route's authorization. Casework may show reviewers a Base Registry Engine Proposal, and
+the registry still decides whether to apply it. Scheduling may publish bookable supply for work
+another product governs, and that product gains no say over Scheduling's ledger. No product writes
+to another product's database.
 
 {/* Evidence: AGENTS.md, "The products compose without merging their boundaries" and the
     Scheduling, Messaging, and Coordinator paragraphs. */}
@@ -84,14 +72,12 @@ apply it. No product writes to another product's database.
 ## Where the stack sits
 
 Where a country already runs an exchange layer or integration bus, such as X-Road or a
-GovStack-style exchange, Registry Stack sits behind it. Registry Stack adds the registry-facing
-surface behind that layer; it does not implement the exchange layer itself or claim conformance to
-it.
+GovStack-style exchange, Registry Stack sits behind it. It adds the registry-facing surface behind
+that layer; it does not implement the exchange layer or claim conformance to it.
 
 {/* Evidence: README.md, "What It Includes"; AGENTS.md, "Registry Stack Agent Guidance". */}
 
 ## Next
 
-- [Evidence Gateway overview](../evidence-quickstart/)
-- [BReg overview](../breg-quickstart/)
-- [Registry Casework overview](../casework/)
+- [Glossary](../../reference/glossary/) for the terms this page used
+- [Architecture](../../explanation/architecture/) for how the services are deployed together
