@@ -725,7 +725,7 @@ fn refuse_foreign_scheduling_id(
 /// Whether the database may retain hook events a candidate must still
 /// deliver: a policy was published and the delivery tables exist.
 fn retains_hook_state(deployed: &DeployedPolicy, schema: &SchemaState) -> bool {
-    !deployed.policy_digest.is_empty() && schema.applied.contains(&1)
+    !deployed.policy_digest.is_empty() && schema.applied.contains(&SCHEMA_VERSIONS[0])
 }
 
 /// The pool anchors the policy's exact-time offerings name, sorted and
