@@ -38,6 +38,33 @@ test('rootAbsoluteLinks reports root-absolute images, definitions, and HTML href
   ]);
 });
 
+test('rootAbsoluteLinks reads HTML href and src in every valid attribute spelling', () => {
+  const links = rootAbsoluteLinks(
+    '<a href = "/spaced/">spaced</a>\n\n' +
+      '<A HREF="/upper/">upper</A>\n\n' +
+      '<a href=/bare/>bare</a>\n\n' +
+      '<img alt="flow" src="/images/flow.svg">\n',
+  );
+  assert.deepEqual(links, [
+    { line: 1, target: '/spaced/' },
+    { line: 3, target: '/upper/' },
+    { line: 5, target: '/bare/' },
+    { line: 7, target: '/images/flow.svg' },
+  ]);
+});
+
+test('rootAbsoluteLinks ignores HTML comments but keeps the lines after them', () => {
+  const links = rootAbsoluteLinks(
+    '<div>\n<!-- <a href="/old/">old</a>\n<img src="/old.svg"> -->\n<a href="/kept/">kept</a>\n</div>\n',
+  );
+  assert.deepEqual(links, [{ line: 4, target: '/kept/' }]);
+});
+
+test('rootAbsoluteLinks does not read attributes that only end in href or src', () => {
+  const links = rootAbsoluteLinks('<a data-href="/data/" href="../rel/">x</a> <img data-src="/lazy.svg" src="x.svg">\n');
+  assert.deepEqual(links, []);
+});
+
 test('rootAbsoluteLinks ignores relative, external, protocol-relative, and fragment links', () => {
   const links = rootAbsoluteLinks(
     '[rel](../how-evidence-works/) [deep](../../explanation/x/#part) ' +
