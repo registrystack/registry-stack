@@ -60,7 +60,11 @@ caseworkctl package . --output package-2
 ```
 
 ```json test-excerpt
-{"command": "package", "packageDigest": "sha256:<digest>", "secretsIncluded": false}
+{
+  "output": "package-2",
+  "packageDigest": "sha256:<digest>",
+  "secretsIncluded": false
+}
 ```
 
 The [package digest](../../reference/glossary/#package-digest) identifies these exact bytes; a
