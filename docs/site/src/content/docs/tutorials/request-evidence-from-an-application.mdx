@@ -19,9 +19,8 @@ tutorial_test:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 If you build an application that asks Evidence Gateway for an assertion, you give it its own
-client identity, request one assertion through the maintained Python or Node client, and keep what
-it needs to re-verify the decision later, continuing the project from
-[Your first assertion](../first-evidence-assertion/).
+client identity, request one assertion through the maintained Python client, decide from the
+verified value, and keep what you need to stand behind that decision later.
 
 <QuickstartMeta
   outcome="An application that decides from a verified assertion and keeps it for replay."
@@ -33,16 +32,25 @@ it needs to re-verify the decision later, continuing the project from
   ]}
 />
 
-## Register the application
+## Before you begin
 
-```sh test-cwd="first-evidence-assertion"
-cd adult-status
+You continue the `adult-status` project from
+[Your first assertion](../first-evidence-assertion/), with its synthetic source answering on port
+8081. If you stopped it, start it again in another terminal:
+
+```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
+python3 serve-source.py \
+  --port 8081 \
+  --token-file .generated/secrets/synthetic-source-token
 ```
 
-The deployment's operator registers your application as a client under an
-[access profile](../control-who-can-request-evidence/). Here you play the operator:
+## Register the application
 
-```sh
+The deployment's operator registers your application as a client under an
+[access profile](../../reference/glossary/#access-profile). Here you play the operator, from the
+project directory:
+
+```sh test-cwd="first-evidence-assertion/adult-status"
 evidencectl access client add age-check-app \
   --access-profile standalone-service \
   --generate-local-key
@@ -54,9 +62,27 @@ Added client age-check-app with access profile standalone-service.
 
 The client's private key stays owner-only at `.evidence/clients/age-check-app/private.jwk`.
 
-{/* Evidence: crates/registry-evidencectl/src/access.rs, add_client. */}
+Evidence Gateway admits only the clients registered when its session starts, so start it again.
+On a session that is already running, `dev start` restarts it:
+
+```sh
+evidencectl dev start . \
+  --target local-target.yaml \
+  --evidence-port 18080 \
+  --issuer-port 8082
+```
+
+```text test-excerpt
+Evidence ready at http://127.0.0.1:18080
+Issuer ready at http://127.0.0.1:8082
+```
+
+{/* Evidence: crates/registry-evidencectl/src/access.rs, add_client, active_client_ids;
+    crates/registry-evidencectl/src/dev.rs, start or restart. */}
 
 ## Create the client profile
+
+A client profile holds everything your code would otherwise hard-code about the deployment:
 
 ```sh
 evidencectl client profile create \
@@ -77,46 +103,25 @@ evidencectl client profile create \
 Created client profile
 ```
 
-The client profile pins the base URL, issuer, provider, and audience the client will insist on,
-so your code never types them. It refers to the private key without containing it. For a deployed
-service the operator gives you each value; `--local-loopback-discovery` is for loopback only.
+It pins the base URL, issuer, provider, and audience the client insists on, and the token request
+it makes ([Request an access token](../../configure/request-an-access-token/) explains those
+values). It refers to the private key without containing it. For a deployed service the operator
+gives you each value; `--local-loopback-discovery` is for loopback only.
 
 {/* Evidence: crates/registry-evidencectl/src/client.rs, create_profile, validate_base_url;
     crates/registry-evidence-client/src/profile.rs, EvidenceClientProfile, ExpectedServiceProfile. */}
 
-## Start the source and Evidence Gateway
-
-In another terminal, start the synthetic source:
-
-```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
-python3 serve-source.py \
-  --port 8081 \
-  --token-file .generated/secrets/synthetic-source-token
-```
-
-Back in the project terminal:
-
-```sh
-evidencectl dev start . \
-  --target local-target.yaml \
-  --evidence-port 18080 \
-  --issuer-port 8082
-```
-
-```text test-excerpt
-Evidence ready at http://127.0.0.1:18080
-Issuer ready at http://127.0.0.1:8082
-```
-
 ## Request and decide in Python
 
-Install `registry-stack-client` at the service's version (`evidencectl --version`):
+Install `registry-stack-client` at the version `evidencectl --version` prints:
 
 ```sh test-skip="the gate installs the matching client wheel before replaying this page"
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install "registry-stack-client==<version>"
 ```
+
+Save this program as `request_adult_status.py`:
 
 ```python title="request_adult_status.py" test-file
 import time
@@ -137,9 +142,19 @@ if verified.values["adult"] is not True:
 print("VERIFIED adult=true")
 ```
 
-The first argument of `request` is the assertion definition's handle; selectors are keyword
-arguments. `request` gets a token, sends once, and verifies before it returns. Decide from
-`verified.values`, never from an undecoded response body.
+`from_profile` reads the client profile. The first argument of `request` is the assertion
+definition's handle, and each selector is a keyword argument (`record-id` is spelled as a dictionary
+because of its hyphen). `request` gets a token, sends once, and verifies the signed response before
+it returns, so `verified.values` is the only thing to decide from.
+
+The program keeps three files:
+
+- `adult-status.response.jws`, the signed assertion exactly as received.
+- `adult-status.retained.json`, the retained verification: the keys and expectations fixed before
+  the request was sent, without selector values.
+- `adult-status.verified-at.txt`, the decision instant in Unix seconds.
+
+Run it:
 
 ```sh
 python3 request_adult_status.py
@@ -149,18 +164,14 @@ python3 request_adult_status.py
 VERIFIED adult=true
 ```
 
-`adult-status.response.jws` holds the signed assertion as received.
-`adult-status.retained.json` holds the retained verification: the keys and expectations fixed
-before sending, without selector values. `adult-status.verified-at.txt` holds the decision instant
-in Unix seconds. The next tutorial replays the decision from these three files.
-
 {/* Evidence: crates/registry-evidence-client-py/python/registry_evidence_client/__init__.pyi,
     VerifiedAssertion, retained_verification;
     crates/registry-evidence-client/src/retained.rs, RetainedEvidenceVerification. */}
 
 ### The same program in Node
 
-With `@registrystack/client` at the same version, this writes the same three files:
+With `@registrystack/client` at the same version, this writes the same three files and prints the
+same line. Run one program, not both.
 
 ```js title="request_adult_status.js"
 const fs = require('node:fs');
@@ -189,13 +200,12 @@ const { evidence } = require('@registrystack/client');
 node request_adult_status.js
 ```
 
-It prints the same line. Run one program, not both.
-
 {/* Evidence: crates/registry-evidence-client-node/client.d.ts, AudienceScopedRequest,
-    retainedVerification; crates/registry-stack-client-node/evidence/client.d.ts, fromProfile;
-    crates/registry-evidence-client-node/index.d.ts, verifyRetainedAsOf. */}
+    retainedVerification; crates/registry-stack-client-node/evidence/client.d.ts, fromProfile. */}
 
 ## Stop and inspect the audit
+
+The audit view reads a stopped session, so stop Evidence Gateway first:
 
 ```sh
 evidencectl dev stop .
@@ -208,7 +218,9 @@ ACCESS AUTHORIZED adult-status age-check requester=<pseudonym>
 DISCLOSURE RELEASED adult
 ```
 
-Press `Ctrl+C` in the source's terminal. Keep the project and the three files.
+The gateway recorded who asked, for which purpose, and which value it released, under a pseudonym
+rather than your client identifier. Press `Ctrl+C` in the source's terminal. Keep the project and
+the three files.
 
 {/* Evidence: crates/registry-evidencectl/src/audit_view.rs, render_authorized. */}
 
