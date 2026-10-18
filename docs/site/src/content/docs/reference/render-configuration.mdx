@@ -1,0 +1,69 @@
+---
+title: Registry Render configuration reference
+description: Generated fields, accepted values, defaults, and constraints for a Registry Render bundle manifest, its label tables, and the serve runtime configuration.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: reference
+locale: en
+standards_referenced:
+  - json-schema
+wide: true
+---
+
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+import ConfigurationReference from '../../../components/ConfigurationReference.astro';
+import reference from '../../../data/generated/render-configuration.json';
+
+Look up the keys of a Registry Render bundle's `manifest.yaml` and `labels/*.yaml`, and of the
+operator's `runtime.yaml`. The tables are generated from Render's Rust-derived JSON Schemas.
+
+## Scope
+
+This reference describes the current grammar, not a frozen contract. Types, required fields,
+accepted values, defaults, and constraints come from the schemas, with descriptions where the
+Rust definition supplies them.
+
+`manifest.yaml` declares the bundle's document types: each one's template, data schema, label
+locales, version, and PDF standard. Each `labels/<locale>.yaml` holds one label table, and every
+table must carry the same keys. `runtime.yaml` is what `registry-render serve` reads: listener,
+package, secret providers, API key, limits, and audit.
+
+The JSON Schema a document type names for its data is yours to write; Render applies it to every
+request and has no schema of its own for it. A schema-valid file still needs `registry-render
+check`, because rules across files, such as a label key the template reads, are not in these
+tables. [Configuration files](../configuration-files/) describes the YAML rules and environment
+substitution that apply when serve reads `runtime.yaml`.
+
+{/* Evidence: crates/registry-render/src/manifest.rs, Manifest;
+    crates/registry-render/src/labels.rs;
+    crates/registry-render/src/runtime.rs, RenderRuntime;
+    crates/registry-render/src/check.rs, run;
+    docs/site/scripts/generate-render-configuration.mjs. */}
+
+## Read the tables
+
+`documents[]` means an array item; `labels.*` means a map entry whose name you choose. Required
+fields inside an optional object apply when that object is present. Conditional fields depend on
+another value, such as `audit.path` on `audit.destination`. A schema default applies only where
+the schema declares it: the audit writer rotates at 100 MiB and keeps sealed files 90 days when
+`rotateBytes` and `retentionDays` are unset, although the tables show no default for them.
+
+<ConfigurationReference contracts={reference.contracts} prefix="render" />
+
+{/* Generated from src/data/generated/render-configuration.json by
+    docs/site/scripts/generate-render-configuration.mjs. Run npm run generate from docs/site. */}
+
+{/* Evidence: crates/registry-platform-audit/src/writer.rs, DEFAULT_AUDIT_ROTATE_BYTES and
+    DEFAULT_AUDIT_RETAIN_DAYS. */}
+
+## Check commands
+
+<ConfigurationFormatChecks product="render" />
+
+## Next
+
+- [Render your first document](../../tutorials/first-render-document/)
+- [Deploy Registry Render](../../operate/registry-render/)

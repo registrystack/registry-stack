@@ -1,6 +1,6 @@
 ---
-title: How Registry Render stays byte-stable
-description: The mechanisms that make a Registry Render document reproducible, what fixes the bytes, what changes them, and where the proof runs.
+title: How Registry Render works
+description: What a Registry Render bundle defines, what fixes a document's bytes, what runs in serve mode, who keeps the result, and how to check a document later.
 status: draft
 owner: registry-docs
 source_repos:
@@ -11,116 +11,102 @@ locale: en
 standards_referenced: []
 ---
 
-Registry Render promises that fixed inputs produce identical PDF bytes, on the same machine and
-across machines. This page explains the model behind that promise: which values fix the bytes,
-which mechanisms hold them fixed, and what a change to any of them means operationally. There is
-nothing to run here; read it to understand what you are trusting when you store a render's hash.
+Registry Render promises that fixed inputs produce identical PDF bytes, on one machine and across
+machines. Everything below is how it keeps that promise.
 
-## What fixes a document
+## What do you define?
 
-A rendered document is a function of five inputs: the verified package, the document type, the
-locale, the request, and the issuance time. The request is two parts, `data` (validated against
-the document's JSON Schema) and `assets` (base64 images decoded and served to the template as
-virtual files). Nothing else enters: no host fonts, no environment, no machine clock.
+A bundle. Its `manifest.yaml` declares each document type with a version, a Typst entry file, a
+JSON Schema for the document's data, and the label locales it uses. Label tables hold the words a
+template prints in each language, and every table carries the same keys. Fonts ship in the bundle.
+[The configuration reference](../../reference/render-configuration/) lists every key.
 
-{/* Evidence: crates/registry-render/src/render.rs, render_with_limits and RenderRequest;
-    crates/registry-render/src/world.rs, RenderWorld. */}
+A template reads one input: an envelope holding the request's `data`, its decoded image `assets`,
+the label tables, the locale when one is sent, the issuance time, and the document's id and
+version. Nothing else reaches it: no host fonts, no environment, no clock, no network.
 
-The renderer builds one envelope holding those inputs plus the bundle's label tables and the
-document's own version, canonicalizes it with RFC 8785 (JSON Canonicalization Scheme), and injects
-the resulting string into the template as the single Typst input. The `dataSha256` a caller stores
-is the sha256 of exactly those injected bytes, so the hash, the template's view of the request,
-and the canonical envelope are one thing, not three.
-
-{/* Evidence: crates/registry-render/src/envelope.rs, build_envelope and canonical_bytes;
-    crates/registry-render/tests/golden.rs, injected_bytes_are_the_hashed_canonical_bytes. */}
-
-`issuedAt` is the document's issuance claim and the only clock. `datetime.today()` in a template
-and the PDF creation date both derive from it, so a re-render with the same claim is identical and
-a different claim produces different bytes. The instant is normalized to UTC: `10:32Z` and
-`13:32+03:00` render identically, and the caller's offset is deliberately not preserved. A
-template that needs a local date shifts the instant itself, at full-second precision, with
-`datetime.today(offset: ...)`.
-
-{/* Evidence: crates/registry-render/src/world.rs, today;
-    crates/registry-render/src/render.rs, PdfOptions;
+{/* Evidence: crates/registry-render/src/manifest.rs, Manifest and DocumentSpec;
+    crates/registry-render/src/envelope.rs, build_envelope;
     products/render/PAYLOAD.md. */}
 
-## What holds the bytes fixed
+## What fixes the bytes?
 
-Each render runs in a fresh Typst world and library, because a template's inputs ride the library
-and any reuse would leak state or memoized layout between requests. The world offers the template
-exactly three roots: the bundle, the request's decoded assets under a virtual `assets/` namespace,
-and the vendored package tree. There is no host font discovery and no network path, and path
-containment is enforced by the world itself, so a template that passes request-controlled text to
-`image()` still cannot read outside the bundle. Failure messages name virtual paths, never the
-host's directory layout.
+Render canonicalizes the envelope with RFC 8785 (JSON Canonicalization Scheme) and hands the
+template that exact string. The `dataSha256` a caller stores is the sha256 of those bytes, so the
+hash and the template's view of the request are the same thing.
 
-{/* Evidence: crates/registry-render/src/world.rs, normalize_virtual_path, snapshot_path, and
-    redact_host_paths;
+`issuedAt` is the document's issuance claim and its only clock: `datetime.today()` in a template
+and the PDF creation date both come from it. Render normalizes it to UTC, so `10:32Z` and
+`13:32+03:00` render identically and the caller's offset is not kept. A template that prints a
+local date shifts the instant itself with `datetime.today(offset: ...)`.
+
+Each render starts a fresh Typst world, so no state or cached layout passes between requests. The
+world offers three roots: the bundle, the request's assets under a virtual `assets/` path, and the
+vendored packages. A path outside them is refused even when request data supplies it, and error
+messages name virtual paths, never the host's. Fonts load in a fixed order, the binary's baseline
+set and then the bundle's sorted by path, because order decides fallback.
+
+The PDF names a fixed creator with no version, so an upgrade that changes no layout changes no
+bytes. Below Typst, the workspace lockfile pins the compression libraries, because a patch release
+there can re-encode a stream and move every byte after it. Render's own golden hashes are checked
+on Linux and macOS for every change to the renderer or its dependencies.
+
+{/* Evidence: crates/registry-render/src/envelope.rs, canonical_bytes;
+    crates/registry-render/tests/golden.rs, injected_bytes_are_the_hashed_canonical_bytes,
+    data_paths_cannot_escape_the_bundle, pdf_bytes_carry_no_renderer_version, golden_hashes_match;
+    crates/registry-render/src/world.rs, today, normalize_virtual_path, redact_host_paths;
     crates/registry-render/src/bundle.rs, load_fonts;
-    crates/registry-render/tests/golden.rs, data_paths_cannot_escape_the_bundle. */}
-
-Font order is fixed: the binary's baseline set first, then the bundle's fonts sorted by path,
-mirroring the book order the Typst CLI builds. Font order decides fallback, so it may never
-depend on filesystem iteration order.
-
-{/* Evidence: crates/registry-render/src/bundle.rs, load_fonts. */}
-
-The PDF metadata carries a fixed, version-free creator string, so the renderer version appears
-nowhere in the envelope or the PDF bytes. A Typst upgrade that changes no layout therefore
-changes no bytes.
-
-{/* Evidence: crates/registry-render/src/{lib,render}.rs, PDF_CREATOR;
-    crates/registry-render/tests/golden.rs, pdf_bytes_carry_no_renderer_version. */}
-
-Below the renderer sits the compression stack, and it is part of the contract: the workspace
-lockfile pins the Typst release's own versions of the deflate stack, because a patch-level change
-there can re-encode a compressed stream and move every byte after it. An upgrade to Typst or to
-the deflate stack is a reviewed golden-hash change, never a silent pass.
-
-{/* Evidence: products/render/EVIDENCE.md;
     .github/workflows/render-golden.yml. */}
 
-The template source is built with `registry-render package` before serving. The shared
-`SHA256SUMS` envelope covers every product file and optional `REVISION`; the package digest is
-the sha256 of those exact sum-file bytes. Startup verifies the envelope and optional
-`package.expectedDigest`, then binds every captured file back to the recorded digest before
-validation or rendering. Each worker repeats that process per request, and the parent requires
-the worker's package digest to equal startup. Changed, missing, and extra files are refused by
-name, including drift introduced after the service began.
+## What exists at runtime?
 
-{/* Evidence: crates/registry-render/src/runtime.rs, load_package;
-    crates/registry-render/src/bundle.rs, load_package and bind_verified_snapshot;
-    crates/registry-render/src/worker.rs, render_in_worker;
+`registry-render serve` serves one package. `registry-render package` copies validated source into
+a new directory and writes a sorted `SHA256SUMS` file covering every file, plus an optional
+`REVISION`; the package digest is the sha256 of that checksum file. The package writer refuses an
+existing directory, so a digest never gains different bytes.
+
+At startup serve verifies the checksums and, when configured, `package.expectedDigest`. Each render
+runs in a worker process that verifies the package again, and the parent requires the worker's
+digest to equal the startup digest, so a file changed after startup is refused by name. A worker
+that passes its timeout is killed, and on Linux its address space is capped.
+
+The service keeps no database and no rendered document. Its one file is the audit log: a `request`
+entry before each render starts and a `response` entry, with both hashes, before the PDF leaves.
+If either write fails, the call fails and no document is returned.
+
+{/* Evidence: crates/registry-render/src/bundle.rs, load_package and bind_verified_snapshot;
+    crates/registry-render/src/worker.rs, render_in_worker, supervise and cap_address_space;
+    crates/registry-render/src/server.rs, render_route;
     crates/registry-render/tests/serve.rs, bundle_drift_after_serve_starts_is_refused_per_render. */}
 
-## Where the proof runs
+## Who owns the result?
 
-Three example bundles, one per shape of document, are the acceptance fixtures. The golden test
-pins each bundle's PDF hash, envelope hash, and file closure, and a two-OS job in CI re-runs it
-on Linux and macOS for every change to the renderer, its platform dependencies, or the bundles.
-Identical hashes across both operating systems are the cross-machine proof; a hash that moved is
-a review, not a failure to suppress.
+The caller does. Render returns the PDF and forgets it; the record the document was made from
+should keep `pdfSha256` for the file and `dataSha256` for the exact input. The audit log holds
+hashes, versions, and a fingerprint of the caller's key, never data values or image bytes. What a
+template prints is a disclosure decision that belongs to its author: once on paper, it has left
+every access profile behind.
 
-{/* Evidence: products/render/golden.json;
-    crates/registry-render/tests/golden.rs, golden_hashes_match;
-    .github/workflows/render-golden.yml. */}
+## How do you check a document later?
 
-## What this means operationally
+Re-render it. The same package, document type, locale, data, assets, and `issuedAt` reproduce the
+stored `pdfSha256` byte for byte, which is what makes a replay after a failure safe and lets an
+auditor match paper to the log. `GET /health` names the live package digest as `bundleHash`, and
+every audit entry carries the bundle hash and renderer version.
 
-Store both hashes with the record the document was made from: `pdfSha256` for the artifact,
-`dataSha256` for the exact request the artifact renders. A later re-render from the same stored
-inputs reproduces the first byte for byte, which is what makes a dead-letter replay safe and what
-lets an auditor compare the paper against the audit log. If a hash changes, one of the five inputs
-changed, the package digest changed, or a dependency upgrade changed output, and the last case
-arrives as a golden-hash review, not silently.
+When a hash moved, one of three things changed: an input, the package, or the renderer. A Typst
+or compression upgrade that changes output shows up as a golden-hash change in Render's own
+review before it ships.
 
-{/* Evidence: products/render/integrations/openfn/JOURNEY.md;
+`registry-render check` prints a hash for a source directory too, but for unpackaged source it
+covers `manifest.yaml` only. Compare packages, not source directories.
+
+{/* Evidence: crates/registry-render/src/bundle.rs, bundle_hash for authored bundles;
+    crates/registry-render/src/server.rs, health;
+    products/render/integrations/openfn/JOURNEY.md;
     products/render/SECURITY-MATRIX.md. */}
 
 ## Next
 
 - [Render your first document](../../tutorials/first-render-document/)
-- [Run Registry Render in serve mode](../../operate/registry-render/)
-- [Registry Render overview](../../start/registry-render/)
+- [Deploy Registry Render](../../operate/registry-render/)
