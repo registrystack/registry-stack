@@ -20,19 +20,21 @@ tutorial_test:
 import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
 
 If you run the index that applications search, you maintain one project directory, package each
-revision of it into a new directory, and restart Discovery on that package. You continue in
-`discovery-project` from [Publish and consume a Registry Discovery
-index](../../tutorials/publish-and-consume-discovery-index/), at the checkout root, with the same
-two shells.
+revision of it into a new directory, and restart Discovery on that package. You need the
+`discovery-project` directory and the running `discovery` from [Publish and consume a Registry
+Discovery index](../../tutorials/publish-and-consume-discovery-index/), and a second shell at the
+checkout root for the commands that run beside it.
 
 {/* Evidence: products/discovery/README.md, the check, package, deploy, restart loop;
     crates/registry-discoveryctl/src/lib.rs exposes only `check` and `package`. */}
 
 ## Install the binaries
 
-Each release publishes Linux amd64 assets `discovery-<tag>-linux-amd64` and
-`discoveryctl-<tag>-linux-amd64`. Authenticate them through the release's `SHA256SUMS` as
-[Verify a release](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
+Releases from v0.38.0 publish Linux amd64 assets `discovery-<tag>-linux-amd64` and
+`discoveryctl-<tag>-linux-amd64`, with `<tag>` from the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest). Authenticate
+them through the release's `SHA256SUMS` as the
+[verification guide](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
 describes, then install them under their plain names:
 
 ```sh test-skip="installs release assets; the runner serves the binaries under test"
@@ -49,8 +51,8 @@ records, not by the tag. It runs `discovery` as a nonroot user and reads
 `/etc/registry-discovery/runtime.yaml`. Mount that file and the package directory read-only;
 Discovery writes nothing.
 
-{/* Evidence: release/scripts/release_roster.py; release/docker/Dockerfile.discovery, ENTRYPOINT
-    and CMD; release/VERIFY.md. */}
+{/* Evidence: release/scripts/release_roster.py, DISCOVERYCTL_FIRST_RELEASE;
+    release/docker/Dockerfile.discovery, ENTRYPOINT, CMD, and "writes nothing"; release/VERIFY.md. */}
 
 ## Approve HTTPS origins
 
@@ -84,7 +86,7 @@ it exactly when it is set.
 
 ## Package a revision
 
-In the first shell, stop Discovery with `Ctrl+C`. In the second shell, start the publication server
+Stop the running `discovery` with `Ctrl+C`. In the second shell, start the publication server
 again:
 
 ```sh test-background="http://127.0.0.1:38090/evidence.jsonld"
@@ -92,8 +94,8 @@ python3 products/discovery/tutorial/publication_server.py \
   --descriptions products/discovery/fixtures/descriptions
 ```
 
-A package is never replaced in place. In the first shell, packaging into the existing directory is
-refused:
+A package is never replaced in place. In the shell where `discovery` ran, packaging into the
+existing directory is refused:
 
 ```sh test-exit="1"
 discoveryctl package \
@@ -154,7 +156,7 @@ Pin the package you reviewed, so that Discovery refuses any other. Add the pin t
 ```
 
 Set both values. In production, copy the digest from the `packaged` line; here, compute it from the
-same file:
+same file (`shasum -a 256` on macOS, `sha256sum` on Linux):
 
 ```sh
 export DISCOVERY_PACKAGE_ROOT="$PWD/discovery-project/package-2"
@@ -207,9 +209,10 @@ extra file by name. It serves that index until it stops; a new revision always m
 and a restart.
 
 The runtime file is the whole runtime configuration: the listener, the package root and pin, the
-limits, and the log level. It holds no origin, mapping, credential, or trust setting. In
-production, set `listener.bind` to the address your proxy reaches, and keep both paths absolute
-and free of symbolic links.
+limits, and the log level. It holds no origin, mapping, credential, or trust setting. Discovery
+serves plain HTTP without authentication on whatever address `listener.bind` names, the example
+being `127.0.0.1:8080`, so terminate TLS in front of it. Keep both paths absolute and free of
+symbolic links.
 
 {/* Evidence: crates/registry-discovery/src/startup.rs, load_runtime(),
     startup_verifies_package_and_refuses_expected_digest_mismatch_with_common_shape,
@@ -224,7 +227,7 @@ and free of symbolic links.
 | Operator | `origins.yaml`, mappings, `runtime.yaml`, the deployed package | An origin or mapping changes, or a provider republishes | Check, package into a new directory, pin, restart |
 | Application | Its saved selections and its own Evidence trust | A revision or `originContentDigest` it saved changes | Re-deciding trust, then calling the provider directly |
 
-Discovery never trusts a provider for the application: [How the index
+Discovery never trusts a provider for the application: [How Registry Discovery
 works](../../explanation/discovery-as-an-index/) explains that boundary.
 
 ## Troubleshooting

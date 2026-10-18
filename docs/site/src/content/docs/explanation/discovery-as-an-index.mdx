@@ -1,7 +1,7 @@
 ---
-title: Discovery as an index
-description: How Registry Discovery publishes an inert, curated index of Registry Evidence providers.
-status: current
+title: How Registry Discovery works
+description: Why the Discovery index is curated, what a requirement resolves to, how an application finds the provider that serves it, what a saved selection holds, and what changes when a provider republishes.
+status: draft
 owner: registry-docs
 source_repos:
   - registry-discovery
@@ -14,56 +14,125 @@ standards_referenced:
   - bregdcat-ap
 ---
 
-Registry Discovery is a curated, read-only index of public Registry Evidence descriptions. A catalog
-operator chooses which descriptions to publish. Applications can search those descriptions and make
-their own explicit selection.
+You have packaged an index, resolved one requirement, and found one provider. An application asks
+Discovery two questions: what a requirement resolves to, and which provider serves each answer.
 
-## What the index does
+## Why is the index curated?
 
-The index publishes inert public metadata:
+A Registry Evidence deployment can publish a public description of itself: its service
+identifier, its endpoint, the Evidence types it asserts, its jurisdictions, and optional
+publisher, operator, and issuer identifiers. Private configuration never enters that
+description. Anyone can publish such a file, so Discovery lists only the descriptions an operator
+approved, by URL, in `origins.yaml`.
 
-- provider and service identifiers;
-- operator and jurisdiction identifiers;
-- Evidence Type mappings and capability identifiers;
-- provider base URLs; and
-- catalog revision and origin provenance.
+Approval is the whole meaning of a listing: the operator chose that origin, and the provider
+published those bytes. Discovery does not authenticate the provider, rank one provider above
+another, or attach trust to the publisher and issuer identifiers. They describe a service; they do
+not vouch for it.
 
-Discovery does not authenticate a provider, authorize a caller, proxy a native request, carry a
-credential, issue an assertion, or rank providers.
+{/* Evidence: crates/registry-evidence/src/discovery.rs, render();
+    products/discovery/contracts/security-invariant-matrix.yaml, sec-provider-public-projection;
+    products/discovery/DECISIONS.md, ADR-001 and ADR-004;
+    crates/registry-discovery-profile/src/lib.rs accepts only the Evidence service kind. */}
 
-## Selection and trust
+## What does a requirement resolve to?
 
-An application resolves a requirement and jurisdiction to Evidence Type alternatives. Each
-alternative is an AND-list, so the application searches and selects one provider for every required
-type. The client validates the closed selection structure and capability binding before an
-application-supplied local policy accepts it.
+An application knows what it must establish, such as adult status, but not which Evidence types
+prove it. The operator writes that answer as a mapping: a requirement, an optional jurisdiction,
+and one or more alternatives. Each alternative is a list of Evidence types that are all required
+together; the application satisfies the requirement by meeting any one alternative.
 
-Acceptance is synchronous and local. Successful acceptance creates an ephemeral object exposing the
-advertised base URL. The application supplies credentials and invokes Registry Evidence only after
-that decision. Persisted selections can be revalidated, but a selection never becomes a trust
-anchor.
+A resolve request matches a mapping by its exact requirement and jurisdiction. Identifiers are
+compared exactly, with no normalization, so a request for another jurisdiction finds nothing
+rather than a near match. Every alternative carries the `mappingId` and the `mappingAuthorityId`,
+the body that stated the mapping.
 
-## Published profile and current subset
+The response also carries `mappingRevision`, a SHA-256 digest of every mapping in the index. It
+changes only when what the mappings say changes.
 
-The published `registry-discovery-v1alpha1` profile resources are immutable and continue to
-validate historical provider descriptions, including capabilities no longer maintained by the
-current stack. Current publication, index, query, and client contracts support Registry Evidence
-only.
+{/* Evidence: crates/registry-discovery/src/query.rs, resolve_evidence_types() and
+    resolver_preserves_and_within_lists_or_across_alternatives_and_refuses_over_bound;
+    crates/registry-discovery/src/model.rs, mapping_revision(); products/discovery/DECISIONS.md,
+    ADR-003. */}
 
-An operator upgrading a mixed pre-retirement index must remove retired-provider origins and rebuild
-the package. Existing wire hashes and published profile resources do not change.
+## Which provider serves it?
 
-{/* Evidence: products/discovery/README.md; products/discovery/profile/;
-    products/discovery/contracts/standards-profile.yaml;
-    crates/registry-discovery/src/query.rs;
-    crates/registry-discovery-client/src/selection.rs. */}
+For each Evidence type in the chosen alternative, the application searches for services that
+assert it, optionally narrowed by jurisdiction, service identifier, or conformance profile. Every
+filter is an exact match and the results are not ranked. When more services match than the
+configured limit allows, Discovery refuses the search instead of returning a partial list.
 
-## Operational model
+Each result is one record: one exact capability of one service, as one approved origin published
+it. Its `bindingId` is a digest of the service identifier, endpoint, profiles, and Evidence types,
+and its `recordId` is a digest of the origin and the binding. Two origins that describe the same
+service produce two records that never merge, so an application always knows which publication it
+read.
 
-`discoveryctl check` validates the authored project, and `discoveryctl package` creates an
-immutable package. The runtime verifies `SHA256SUMS` and an optional expected digest before serving
-the package. Updating the index means building and reviewing a new package, then restarting the
-runtime.
+The response carries `catalogRevision`, a SHA-256 digest of what every service record says. Fetch
+times and the raw bytes are left out, so packaging the same descriptions again gives the same
+revision.
+
+{/* Evidence: crates/registry-discovery/src/query.rs, search_services() and
+    service_matches_filters(); crates/registry-discovery-profile/src/lib.rs, derive_binding_id();
+    crates/registry-discoveryctl/src/build.rs, record_id(); crates/registry-discovery/src/model.rs,
+    catalog_revision() and records_from_distinct_origins_never_merge. */}
+
+## What does a selection hold, and what does it not do?
+
+The application saves a selection for each type it needs: the chosen record and binding, the
+Evidence type it matched, the whole alternative it came from, both revisions, and the origin's
+provenance. The Registry Stack client refuses a selection whose binding no longer matches its
+fields, whose service does not assert the matched type, or whose service does not cover the
+resolved jurisdiction. Keeping the whole alternative stops a set of types required together from shrinking to
+one.
+
+A selection is public metadata, never a credential or a trust decision. Before calling the
+provider, the application applies its own policy to the selection. Only when that policy accepts it
+does the client hand over the provider's base URL, and that handoff exists in memory only: it is
+never saved, so the policy runs again each time. The application then calls Registry Evidence
+directly, with its own credentials and its own Evidence trust configuration. Discovery is never on
+that path.
+
+{/* Evidence: crates/registry-discovery-client/src/selection.rs, select_evidence(),
+    validate_service_selection_structure(), accept_service_selection(),
+    AcceptedServiceSelection, and discovery_metadata_has_no_trust_or_native_io_capability;
+    products/discovery/DECISIONS.md, ADR-001. */}
+
+## What happens when a provider republishes?
+
+Nothing, until the operator packages again. Discovery fetches each approved description once,
+while packaging, and never contacts a provider while it serves. Each record keeps
+`originContentDigest`, the SHA-256 of the exact bytes that fetch received, and the time of the
+fetch. The digest lets anyone compare what the index was built from with what the provider
+publishes now. It is not a signature: it records which bytes were fetched, not who wrote them.
+
+When the operator packages again, a republish that changes only formatting moves
+`originContentDigest` but leaves `catalogRevision` and every record identity alone. A change to an
+endpoint or a type changes the binding, and any change to what a record says changes
+`catalogRevision`. An application that
+saved a selection can renew it from a fresh search only when everything that bears on trust is
+unchanged: the service, endpoint, roles, jurisdictions, capability, mapping, and origin. Fetch
+provenance and the catalog revision may move. Any other change asks the application's policy to
+accept the selection again.
+
+{/* Evidence: crates/registry-discoveryctl/src/build.rs, fetch loop and sha256_digest();
+    crates/registry-discovery/src/model.rs, build_time_provenance_does_not_change_semantic_revisions;
+    products/discovery/DECISIONS.md, ADR-003; crates/registry-discovery-client/src/selection.rs,
+    renew_unchanged_service_selection(). */}
+
+## Why does a new revision need a new package?
+
+`discoveryctl package` writes the index and a `SHA256SUMS` file into a directory that did not
+exist before, and the package digest is the SHA-256 of that `SHA256SUMS` file. `discovery`
+recomputes every entry before it listens, refuses a changed, missing, or extra file, and refuses a
+package other than the one `package.expectedDigest` pins. It then serves that one index read-only
+until it stops. An index that changed in place would be one nobody reviewed, so a revision always
+means a new package, a new pin, and a restart.
+
+{/* Evidence: crates/registry-discoveryctl/src/build.rs, write_index_package();
+    crates/registry-discovery/src/startup.rs,
+    startup_verifies_package_and_refuses_expected_digest_mismatch_with_common_shape;
+    products/discovery/README.md. */}
 
 ## Next
 
