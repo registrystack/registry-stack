@@ -57,7 +57,7 @@ receives the call, which decides it under its own authorization.
   drifts, and `README.md` gives the commands.
 - Changes to authentication, authorization, audit, data minimization,
   retention, or recovery are security-sensitive and need explicit review
-  notes.
+  notes in `SECURITY-REVIEW-NOTES.md`.
 - PostgreSQL verification requires disposable databases and the
   `postgres-test` feature. A test binary that skips because its database URL
   is absent is not database verification.
