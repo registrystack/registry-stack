@@ -1,6 +1,6 @@
 ---
-title: Run Registry Render in serve mode
-description: Install or build Registry Render, write its runtime configuration, provision its API key, start serve mode behind your TLS proxy, and read and ship its audit log.
+title: Deploy Registry Render
+description: Install Registry Render, write and check its runtime configuration, start serve mode behind your TLS proxy, answer callers, and keep its audit file.
 status: draft
 owner: registry-docs
 source_repos:
@@ -13,59 +13,44 @@ standards_referenced: []
 
 import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
 
-You have a verified template package and callers that need PDFs, and you want `registry-render serve`
-answering them. At the end of this page one `registry-render` process serves your package on a private
-address behind your TLS proxy, answers `GET /health` and `GET /ready`, renders under API-key
-authentication with a per-render audit trail, and shuts down within a bounded window.
+You have a package built with `registry-render package` and callers that need PDFs. At the end of
+this page one `registry-render serve` process serves that package on a private address behind
+your TLS proxy, under API-key authentication, with an audit file you ship to append-only storage.
+[Render your first document](../../tutorials/first-render-document/) builds a package.
 
-Registry Render is pre-1.0 software for institutional pilots. Releases from v0.38.0 publish its
-Linux amd64 binary and container image, and it remains an
-[experimental surface](../../reference/api-stability/#experimental-surfaces) outside the
-compatibility promise. Build the binary from source for another platform.
+Registry Render is pre-1.0 and an
+[experimental surface](../../reference/api-stability/#experimental-surfaces), outside the
+compatibility promise.
 
 {/* Evidence: products/render/ACCEPTANCE.md;
     products/render/DEFINITION-OF-DONE.md;
-    release/scripts/release_roster.py, RENDER_FIRST_RELEASE and render_in_release;
-    release/scripts/build-release-binaries.sh, registry-render asset staging. */}
-
-[Rendering your first document](../../tutorials/first-render-document/) covers the bundle side:
-scaffolding, authoring, and packaging. This page starts from a package directory.
+    release/scripts/release_roster.py, RENDER_FIRST_RELEASE and render_in_release. */}
 
 ## What you provide
 
-- **One package directory, mounted read-only.** `registry-render package` validates authoring
-  source and writes a new directory with the shared `SHA256SUMS` envelope plus optional
-  `REVISION`. Serve verifies the envelope at startup and again in the worker on every request,
-  then binds the exact captured files to the recorded digests before any validation or render.
-  A package that drifts while the service runs is refused, not rendered.
-- **One secret in an owner-only file: the caller API key.** The key is at least 32 bytes of
-  ASCII material; serve trims exactly one trailing line ending from the file and refuses to start
-  if the key carries any other whitespace, because a silently mis-armed key would reject every
-  caller while health stays green.
-- **One path for the audit file, or a log collector on standard output.** The process appends
-  one JSON line per audit entry and refuses a directory that group or others can write. One
-  process writes one file, and a second process pointed at the same path refuses to start; give
-  each replica its own path.
-- **A TLS proxy or ingress in front of the listener.** The process serves plain HTTP, defaults to
-  `127.0.0.1:8080`, and refuses to start on a public or all-interfaces address. TLS termination,
-  HSTS, and client addresses stay with your proxy, and the listener reads no forwarded header.
-- **A host for one process.** Renders run in supervised worker processes that are killed at the
-  configured timeout and capped in address space on Linux, so one pathological template costs its
-  timeout, not the service.
+- **One package directory, mounted read-only.** Serve verifies it at startup and in the worker on
+  every request, and refuses a package that changes while it runs.
+- **One API key in an owner-only file.** At least 32 bytes of ASCII. Serve trims one trailing line
+  ending and refuses any other whitespace, because a mis-read key would reject every caller while
+  health stays green.
+- **A writable audit directory, or a log collector on standard output.** Serve refuses a directory
+  that group or others can write.
+- **A TLS proxy in front.** The listener serves plain HTTP, reads no forwarded header, and accepts
+  only a loopback, private, or link-local address.
+- **A host for one process and its render workers.** Each render runs in a worker that is killed at
+  the timeout and, on Linux, capped in address space.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, RenderRuntime and validate_bind;
     crates/registry-render/src/server.rs, normalize_api_key;
     crates/registry-render/src/worker.rs, supervise and cap_address_space;
-    crates/registry-render/src/audit.rs, RenderAudit;
-    crates/registry-render/src/bundle.rs, load_package and bind_verified_snapshot. */}
+    crates/registry-render/src/audit.rs, RenderAudit. */}
 
-## Install or build the binary
+## Install the binary
 
-For a published v0.38.0 or later release, choose `<tag>` from the
-[latest release](https://github.com/registrystack/registry-stack/releases/latest), then follow the
-release verification procedure at
-`https://github.com/registrystack/registry-stack/blob/<tag>/release/VERIFY.md` before installing its
-Linux amd64 asset. Set `TAG` to that tag. After verification:
+Releases from v0.38.0 attach a Linux amd64 binary, `registry-render-<tag>-linux-amd64`. Choose
+`<tag>` from the [latest release](https://github.com/registrystack/registry-stack/releases/latest),
+verify the asset with that release's `release/VERIFY.md`, then install it. This replaces any
+existing `~/.local/bin/registry-render`, so keep a copy first when you need a rollback:
 
 ```sh
 tag="${TAG:?set TAG to a published tag that includes Registry Render}"
@@ -75,44 +60,31 @@ export PATH="$HOME/.local/bin:$PATH"
 registry-render --version
 ```
 
-This replaces any existing `~/.local/bin/registry-render`. Preserve that file first when you need a
-rollback path.
+```text
+registry-render <version> (typst 0.15.1)
+```
 
-The same release publishes `ghcr.io/registrystack/registry-render:<tag>`. The image runs
-`/usr/local/bin/registry-render` from Distroless `cc-debian13` as the `nonroot` user. It starts
-`serve` with `/etc/registry-render/runtime.yaml`, uses `/var/lib/registry-render` as its working
-directory, and leaves the template package outside the image. Mount the runtime file and package
-read-only. Keep the mounted API key owned by UID 65532 with mode `0400` or `0600`, and the writable
-audit directory owned by UID 65532 with mode `0700`. Deploy the image by the digest authenticated
-through `release/VERIFY.md`.
+Record that line: every audit entry carries the same version, and a stored PDF's provenance is
+this binary plus the package digest. On another platform, build from a checkout as the tutorial
+does; the workspace lockfile is part of Render's byte contract, so always build with `--locked`.
 
-The loopback listener below needs a TLS proxy in the same network namespace. For a proxy in
-another container, set `listener.bind` to Render's private container address. Render refuses a
-wildcard address such as `0.0.0.0`.
+The same release publishes the image `ghcr.io/registrystack/registry-render:<tag>`. It runs
+`registry-render serve` with `/etc/registry-render/runtime.yaml` from Distroless `cc-debian13` as
+the `nonroot` user (UID 65532), with `/var/lib/registry-render` as its working directory, and holds
+no package. Mount the runtime file and the package read-only. Keep the API key owned by UID 65532
+with mode `0400` or `0600`, and the audit directory owned by UID 65532 with mode `0700`. Deploy by
+the digest `release/VERIFY.md` authenticates. A proxy in another container reaches Render on its
+private container address, so set `listener.bind` to that address; `0.0.0.0` is refused.
 
 {/* Evidence: release/scripts/build-release-binaries.sh, registry-render asset staging;
     release/docker/Dockerfile.registry-render;
-    crates/registry-render/src/runtime.rs, validate_bind. */}
-
-From a Registry Stack checkout, build with the workspace lockfile, because the pinned compression
-stack is part of Render's byte contract:
-
-```sh
-cargo build --release --locked -p registry-render
-export PATH="$PWD/target/release:$PATH"
-registry-render --version
-```
-
-The version line names the release and the Typst pin, for example `registry-render <version> (typst
-0.15.1)`. Record it: every audit event carries the same string, and a stored PDF's provenance is
-this binary plus the package hash.
-
-{/* Evidence: crates/registry-render/src/lib.rs, display_version and TYPST_PIN. */}
+    crates/registry-render/src/lib.rs, display_version and TYPST_PIN. */}
 
 ## Write the runtime configuration
 
-Serve mode reads one YAML file, selected with `--runtime-config`. Every field is a contract, and
-unknown fields are refused:
+Serve reads one YAML file. Unknown keys are refused, and the
+[configuration reference](../../reference/render-configuration/) lists every key with its range
+and default:
 
 ```yaml
 apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1
@@ -121,192 +93,209 @@ listener:
   bind: 127.0.0.1:8080
   shutdownGraceMilliseconds: 30000
 package:
-  # The directory written by `registry-render package`.
   root: /var/lib/registry-render/package
-  # Optional: refuse to start on any other package digest.
-  # expectedDigest: sha256:<64 lowercase hex digits>
+  expectedDigest: sha256:<package-digest>
 secretProviders:
   file:
     root: /run/secrets/registry-render
-  # environment: {}
 auth:
   apiKeyRef: secret:file/render-api-key
 limits:
   renderTimeoutSeconds: 20
-  maximumOutputBytes: 8388608
-  maximumRequestBytes: 8388608
   maximumConcurrentRenders: 4
 audit:
   path: /var/lib/registry-render/audit/render.jsonl
-  rotateBytes: 67108864
-  retentionDays: 90
 ```
 
-The runtime file path, `package.root`, `audit.path`, and `secretProviders.file.root` are
-absolute, and the runtime file path must not pass through a symbolic link, so the same file behaves
-identically wherever the process is launched from. `listener.bind` is required and must be a
-loopback, private, or link-local address. A `secret:file/name`
-reference resolves under `secretProviders.file.root`, and a `secret:env/NAME` reference only when
-`secretProviders.environment: {}` is declared; a reference to an undeclared provider refuses
-startup. String values may take a deployment value from the environment with `${VAR}`,
-`${VAR:-default}`, or `${VAR:?message}`, except in a `*Ref` field, which must be written as a
-literal secret reference, and under `secretProviders`, which must be written as it is meant.
-`package.expectedDigest`, when set, is compared with the package digest. A mismatch uses the
-same expected/found message as every other Registry Stack runtime. `GET /health` reports the
-same digest without the `sha256:` label as `bundleHash` for compatibility with Render's response
-and audit fields.
-`audit.destination` is `file` by default; set it to `stdout`, without `path`, `rotateBytes`, or
-`retentionDays`, to hand the entries to your log collector instead.
-Every limit is bounded, so a configuration mistake cannot unbound the process:
-`renderTimeoutSeconds` is 1 to 3600 (20 by default), `maximumOutputBytes` 1 to 8388608 (8 MiB, the
-default), `maximumRequestBytes` 1 to 67108864 (8 MiB by default), and `maximumConcurrentRenders` 1
-to 64 (the CPU count, at most 8, by default). On shutdown the process drains in-flight renders for
-one grace period, gives open connections a second one, and then abandons the rest;
-`shutdownGraceMilliseconds` is therefore the number to align with your stop timeout, not a
-decorative field. It is 1000 to 3600000 (30000 by default): less than a second would drop the
-renders it exists to protect.
+These rules are not in the tables:
 
-When serve refuses the file, it prints every finding on standard error before it exits, each with
-its position and its fix, in the shape every Registry Stack product uses:
+- `package.root`, `audit.path`, and `secretProviders.file.root` are absolute paths.
+- `package.expectedDigest` is optional; when set, serve refuses any other package.
+- `secret:file/<name>` resolves under `secretProviders.file.root`. `secret:env/<NAME>` works only
+  when `secretProviders.environment: {}` is declared. A reference to an undeclared provider is
+  refused.
+- A string value may come from the environment as `${VAR}`, `${VAR:-default}`, or
+  `${VAR:?message}`, except in `apiKeyRef` and under `secretProviders`.
+- `audit.destination: stdout` hands entries to your collector and takes no `path`.
+- `shutdownGraceMilliseconds` is how long in-flight renders get to finish on SIGTERM; open
+  connections then get the same again. Align it with your supervisor's stop timeout.
+
+{/* Evidence: crates/registry-render/src/runtime.rs, LimitsRuntime, AuditRuntime, validate_bind and
+    default_shutdown_grace;
+    crates/registry-render/src/server.rs, serve. */}
+
+## Check the configuration
+
+Check the file before you deploy it. The check runs offline and reads no secret, so the package,
+key, and audit directory need not exist yet. Pass the absolute path serve will use, because serve
+refuses a relative one that check accepts:
+
+```sh
+registry-render check --runtime-config /etc/registry-render/runtime.yaml
+```
 
 ```text
-registry-render: runtime-invalid: the runtime configuration was refused
+0 errors, 0 warnings in 1 file
+```
+
+A refused file lists every finding with its position and fix, and exits 1:
+
+```text
+registry-render check refused the input.
 error[render.runtime.public-bind] /etc/registry-render/runtime.yaml:4:9 /listener/bind
   listener.bind is not a loopback, private, or link-local address; Render never listens publicly or on all interfaces
   next: Bind the private address your proxy forwards to; the proxy terminates TLS.
 1 error, 0 warnings in 1 file
 ```
 
-Check the file before you deploy it with `registry-render check --runtime-config <file>`. It runs
-offline and reads no secret, so it reports the same findings without the package, the secret
-files, or the audit directory present. A `${VAR}` expression is left for the deployment to supply
-unless you add `--environment`, which substitutes it from the current environment first. Check
-exits 0 when the file is accepted, 1 when it is refused, 2 on a usage error, and 3 when it cannot
-read the file.
+A `${VAR}` value is left for the deployment unless you add `--environment`, which substitutes it
+from the current environment first. In a container preflight, add `--require-audit-under
+<directory>` to prove the audit file lands on persistent storage:
 
-{/* Evidence: crates/registry-render/src/runtime.rs, LimitsRuntime, AuditRuntime, and validate_bind;
-    crates/registry-render/src/server.rs, serve;
-    crates/registry-render/src/check.rs, run and check_runtime_file. */}
+```text
+audit file resolves under /var/lib/registry-render/audit
+0 errors, 0 warnings in 1 file
+```
+
+It refuses a `stdout` destination, and a path outside the directory with
+`error[render.runtime.audit-outside-root]`.
+
+{/* Evidence: crates/registry-render/src/check.rs, run and check_runtime_file;
+    crates/registry-render/src/runtime.rs, prove_audit_under. */}
 
 ## Start and verify
 
-Start the process with the runtime file, and check both endpoints before sending traffic:
+```sh
+registry-render serve --runtime-config /etc/registry-render/runtime.yaml
+```
+
+Serve logs JSON lines to standard error, starting with `registry-render serve starting` and the
+package and configuration digests. If it refuses the file, it prints the same findings as check,
+prefixed `registry-render: runtime-invalid: the runtime configuration was refused`, and exits 20.
+
+Probe both endpoints before you route traffic:
 
 ```sh
-registry-render serve --runtime-config /etc/registry-render/runtime.yaml &
 curl -s http://127.0.0.1:8080/health
 curl -s http://127.0.0.1:8080/ready
 ```
 
-`GET /health` answers with the bundle version and package hash and the renderer version, so you can
-reconcile the running service against what you deployed. `GET /ready` includes the audit writer:
-if it has stopped, or its `stdout` destination has stalled, readiness fails. Both are value-free.
-`registry-render healthcheck --runtime-config <file>` performs the same probe for a supervisor script.
-A stalled destination recovers when its collector reads the stream again, and a stopped writer needs
-a restart; [audit retention](../retention-and-persistent-state/#audit-retention) describes both.
+```text
+{"bundleHash":"<package-digest>","bundleVersion":1,"rendererVersion":"<version> (typst 0.15.1)","status":"ok","typstPin":"0.15.1"}
+{"status":"ready"}
+```
 
-{/* Evidence: crates/registry-render/src/server.rs, health, ready(), and healthcheck;
-    crates/registry-platform-audit/src/writer.rs, AuditWriter::ready();
-    crates/registry-render/src/openapi.rs, OPENAPI_JSON. */}
+`bundleHash` is the package digest without `sha256:`; compare it with what you deployed.
+Readiness includes the audit writer, so it fails when the writer stopped or a `stdout` collector
+stalled. A stalled collector recovers when it reads again; a stopped writer needs a restart, as
+[audit retention](../retention-and-persistent-state/#audit-retention) describes. A supervisor can
+run the same probe:
 
-## The rendering call
+```sh
+registry-render healthcheck --runtime-config /etc/registry-render/runtime.yaml
+```
 
-Callers POST one JSON body to `/v1/render/{type}` with the API key and the issuance time:
+```text
+healthy at 127.0.0.1:8080
+```
+
+One process writes one audit file. A second process pointed at the same path does not start:
+
+```text
+registry-render: audit-failed: cannot open audit destination: audit sink single-writer lock is already held by another writer: /var/lib/registry-render/audit/render.jsonl.lock
+```
+
+Give each replica its own audit path.
+
+{/* Evidence: crates/registry-render/src/server.rs, serve, health, ready and healthcheck;
+    crates/registry-platform-audit/src/writer.rs, AuditWriter::ready. */}
+
+## Answer callers
+
+Callers POST one JSON body to `/v1/render/<document-type>` with the API key:
 
 ```sh
 curl -s -X POST http://127.0.0.1:8080/v1/render/<document-type> \
   -H "Authorization: Bearer <api-key>" \
   -H "Content-Type: application/json" \
-  -H "Accept: application/pdf" \
-  -o receipt.pdf \
-  -D headers.txt \
-  -d '{"issuedAt":"<issuance-time>","data":<document-data>}'
-grep -i x-registry headers.txt
+  -d '{"issuedAt":"<issuance-time>","data":<document-data>}' \
+  -o document.pdf -D headers.txt
 ```
 
-The body's `data` object must satisfy the document's JSON Schema; violations come back as
-problems with JSON pointers into the data, and `registry-render validate` dry-runs that check without
-rendering.
+The answer is the PDF with `x-registry-pdf-sha256`, `x-registry-data-sha256`, and
+`x-registry-document-version` headers. With `Accept: application/json` it is a JSON object with
+`pdfSha256`, `dataSha256`, `documentVersion`, `warnings`, and the PDF as `pdfBase64`.
 
-The default response is the PDF bytes with `X-Registry-Pdf-Sha256`,
-`X-Registry-Data-Sha256`, and `X-Registry-Document-Version` headers; `Accept: application/json`
-returns the same facts plus the PDF as base64 for callers that cannot take binaries. Requests
-must declare `Content-Length`: chunked transfer is refused, because a chunked body that exceeds
-the limit mid-stream cannot be answered at all. `Idempotency-Key` is echoed and audited as an
-opaque correlation id; rendering is deterministic, so no deduplication exists or is needed.
+Requests must carry `Content-Length`; a chunked body is refused with `invalid-argument`, because
+one that passes the limit mid-stream could not be answered. `Idempotency-Key` is echoed and
+recorded as an opaque correlation id; rendering is deterministic, so nothing is deduplicated.
+`registry-render validate --bundle <package> --type <document-type> --data <file>` checks data
+against the document's schema without rendering.
 
-Failures are RFC 9457 problem documents with a closed vocabulary, on HTTP and in the CLI's exit
-codes. A render writes a `request` audit entry before the worker starts and a `response` entry
-with the outcome before the document leaves; if either cannot be written, the call fails closed
-with `audit-failed` and no document is returned. A refusal decided before any render, such as
-invalid data or an unknown document type, is one `response` entry and fails closed the same way.
-A 401 or an oversized body is also one `response` entry, but best-effort: a failed write is logged
-at error level and the refusal still answers.
+Failures are RFC 9457 problem documents from a closed vocabulary, such as `data-invalid` (400),
+`unknown-document` (400), `unauthorized` (401), `body-too-large` (413), `render-timeout` (504),
+and `audit-failed` (503).
 
-{/* Evidence: crates/registry-render/src/server.rs, render_route and refuse_oversized_bodies;
-    crates/registry-render/src/problem.rs, ProblemKind;
-    crates/registry-render/src/audit.rs, append;
+{/* Evidence: crates/registry-render/src/server.rs, render_route, respond_rendered and
+    refuse_oversized_bodies;
+    crates/registry-render/src/problem.rs, ProblemKind, exit_code and status;
     crates/registry-render/src/openapi.rs, OPENAPI_JSON. */}
 
-## Read and ship the audit log
+## Keep the audit file
 
-Each line is one entry: `schema` (`render.registrystack.org/audit/v1`), `eventId`, `time`,
-`phase` (`request` or `response`), `correlation`, and the value-free `record`: hashes, versions,
-the caller's key fingerprint, the outcome, and the trace and correlation ids, never data values or
-image bytes. The `request` entry carries no outcome. Both entries of one render share their
-`correlation`, a random identifier the server draws for every call; the caller's `Idempotency-Key`
-is recorded only as the record's `correlationId`, because two calls may carry the same key. A call
-that ends before its outcome is written, such as one whose caller disconnected, has the outcome
-`unfinished`. For example, to list outcomes by correlation:
+Each line is one entry with `schema` (`render.registrystack.org/audit/v1`), `eventId`, `time`,
+`phase`, `correlation`, and a value-free `record`: hashes, versions, the caller's key fingerprint,
+and the outcome. To list outcomes:
 
 ```sh
-jq -c '{correlation, phase, outcome: .record.outcome}' /var/lib/registry-render/audit/render.jsonl
+jq -c '{correlation, phase, outcome: .record.outcome, problem: .record.problem}' \
+  /var/lib/registry-render/audit/render.jsonl
 ```
 
-When the active file would pass `rotateBytes` (100 MiB by default), it is renamed to
-`<path>.<sequence>` with an eight-digit sequence and a fresh file opens. At startup and at each
-rotation, sealed files last modified more than `retentionDays` ago (90 by default) are deleted.
-Never rename, edit, or truncate the active file while the process runs; the writer then stops and
-every render fails closed until a restart.
+A call that reaches the renderer writes a `request` entry before the render starts and a
+`response` entry before the answer leaves; both share `correlation`. Data the schema rejects is
+found inside the render, so it also writes both. A refusal before the render, such as an unknown
+document type or a chunked body, writes one `response` entry. If any of these writes fails, the
+call fails closed with `audit-failed`. A wrong key or an oversized body also writes one entry, but
+if that write fails the refusal is still answered and the failure is logged. A call whose caller
+disconnects is recorded as `unfinished`.
 
-The log carries no hash chain or signature, so it is not tamper-evident on the host. Ship sealed
-files, or the `stdout` stream, to append-only storage before retention deletes them. A directory
-that held the older chained ledger is not an audit path to reuse: archive its segments first and
-point `audit.path` at a fresh directory.
+When the active file would pass `rotateBytes`, it is renamed to `<path>.<sequence>` and a new file
+opens. At startup and at each rotation, sealed files older than `retentionDays` are deleted. The
+file is not chained or signed, so ship sealed files, or the `stdout` stream, to append-only storage
+before retention deletes them.
 
-`registry-render check --runtime-config <file> --require-audit-under <absolute directory>` proves
-the audit file resolves under a persistent root, as a container preflight, and refuses a `stdout`
-destination. An audit path written as `${VAR}` is proven only with `--environment`, once the
-container's environment supplies it.
+:::danger
+Never rename, edit, or truncate the active audit file while serve runs. The writer stops, and
+every render fails closed until you restart the process.
+:::
 
-{/* Evidence: crates/registry-render/src/audit.rs, AUDIT_SCHEMA, RenderAuditEvent, and correlation;
-    crates/registry-render/src/audit.rs, RenderAudit::request writes unfinished when dropped;
-    crates/registry-render/src/server.rs, the_request_entry_is_accepted_before_the_render_starts;
-    crates/registry-render/src/runtime.rs, prove_audit_under;
-    crates/registry-platform-audit/src/writer.rs, DEFAULT_AUDIT_ROTATE_BYTES and DEFAULT_AUDIT_RETAIN_DAYS. */}
+{/* Evidence: crates/registry-render/src/audit.rs, AUDIT_SCHEMA, RenderAuditEvent and correlation;
+    crates/registry-render/src/server.rs, render_route and refuse;
+    crates/registry-platform-audit/src/writer.rs, DEFAULT_AUDIT_ROTATE_BYTES and
+    DEFAULT_AUDIT_RETAIN_DAYS. */}
 
-## Upgrade discipline
+## Upgrade
 
-A Render binary is exact source plus the Typst pin plus the lockfile, and any change to the Typst
-pin, the compression stack, or a template changes output bytes by design. Treat every upgrade as
-a golden-hash review: the two-OS job in CI fails on any byte difference and the diff is the
-review. Build every intentional change into a new output directory and switch the deployment to
-that immutable package. The package writer refuses an existing output directory, so a published
-digest never gains different bytes.
+A Typst, compression-library, or template change can change output bytes. Build every template
+change into a new package directory and point `package.root` at it; `registry-render package`
+refuses an existing directory, so a published digest never gains different bytes. Before you
+switch to a new binary, render a stored request with it and compare `pdfSha256` with the stored
+value. A changed hash means documents rendered after the switch differ from earlier ones.
 
 {/* Evidence: .github/workflows/render-golden.yml;
     products/render/EVIDENCE.md. */}
 
 ## Check commands
 
-Every file Registry Render reads has a command that checks it offline, with no service running. Each prints
-the diagnostics, JSON output, and exit codes that
-[Check a file before you deploy it](../../reference/configuration-files/#check-a-file-before-you-deploy-it) describes.
+Every file Render reads has a command that checks it offline. Each prints the diagnostics, JSON
+output, and exit codes that
+[Check a file before you deploy it](../../reference/configuration-files/#check-a-file-before-you-deploy-it)
+describes.
 
 <ConfigurationFormatChecks product="render" />
 
 ## Next
 
-- [Render your first document](../../tutorials/first-render-document/)
-- [How Registry Render stays byte-stable](../../explanation/render-determinism/)
-- [Registry Render overview](../../start/registry-render/)
+- [Registry Render configuration reference](../../reference/render-configuration/)
+- [How Registry Render works](../../explanation/render-determinism/)

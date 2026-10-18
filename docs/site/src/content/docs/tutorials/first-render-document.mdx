@@ -1,6 +1,6 @@
 ---
 title: Render your first document
-description: Scaffold Registry Render source, render offline, package it, serve it on loopback, render over HTTP, and check that both renders are the same bytes.
+description: Scaffold a Registry Render bundle, render a letter offline, package it, serve it on loopback, and confirm the served PDF is the same bytes.
 status: draft
 owner: registry-docs
 source_repos:
@@ -13,56 +13,59 @@ locale: en
 standards_referenced: []
 ---
 
-If you are evaluating Registry Render as the renderer for your registry's printed documents, start
-with one bundle and one letter. You will scaffold working source, render it offline, package it,
-serve it on your machine, render the same document over HTTP, and check that the served PDF is
-byte-identical to the offline one. Along the way you will see the two hashes worth storing on a
-record and the audit trail the service keeps.
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Everything you keep goes into one directory, `render-work`. You need macOS or Linux, the Rust
-toolchain, a Registry Stack checkout, `curl`, and `jq`. Expect 20 minutes.
+You will render one letter with Registry Render twice, once at a terminal and once over HTTP, and
+prove the two PDFs are the same bytes.
 
-{/* Evidence: crates/registry-render/src/cli.rs, Command;
-    products/render/README.md. */}
+<QuickstartMeta
+  outcome="One letter rendered offline and by a local service, with identical PDF bytes."
+  time="About 15 minutes, plus the build"
+  level="Local evaluation only"
+  prerequisites={['A Registry Stack checkout and the Rust toolchain', 'curl, jq, and openssl', 'A free loopback port 64123']}
+/>
 
-## Build the binary
+## Build registry-render
 
-From the root of your checkout, build with the workspace lockfile, because the pinned compression
-stack is part of Render's byte contract:
+Releases publish a Linux amd64 binary, which
+[Deploy Registry Render](../../operate/registry-render/#install-the-binary) installs. This
+tutorial builds from the checkout so it also works on macOS. From the checkout's root:
+
+```sh test-skip="builds from source; the gate puts the binary under test on PATH"
+. scripts/cargo-runtime-library-path.sh
+registry_cargo_build "$PWD" --release --locked -p registry-render
+export PATH="$PWD/target/release:$PATH"
+```
+
+The helper also sets the library path the binary needs on macOS, so run every `registry-render`
+command in this terminal. Change to an empty directory in it, then:
 
 ```sh
-cargo build --release --locked -p registry-render
-target/release/registry-render --version
+registry-render --version
 ```
 
-You know this worked when the version line names your checkout's version, with the `-dev` suffix
-every local build carries, and the Typst pin:
-
-```text
-registry-render <version>-dev (typst 0.15.1)
+```text test-expect
+registry-render <version> (typst 0.15.1)
 ```
 
-The version string appears in every audit event this service writes, so the binary you build now
-is the provenance of everything you render in this tutorial.
-
-{/* Evidence: crates/registry-render/src/lib.rs, display_version and TYPST_PIN; crates/registry-platform-buildinfo/src/lib.rs, DISPLAY_VERSION. */}
-
-## Scaffold a bundle
-
-```sh
-target/release/registry-render init render-work/bundle
-```
-
-The command prints the scaffold's location and a suggested first render. You now have a bundle
-directory with a manifest, a letter template, a JSON Schema for its data, label files, starter
-fonts with their license, and a fixture payload. The template is plain Typst: open
-`render-work/bundle/templates/letter.typ` in any Typst-aware editor and the same file renders in
-both.
+{/* Evidence: scripts/cargo-runtime-library-path.sh, registry_cargo_build;
+    crates/registry-render/src/lib.rs, display_version and TYPST_PIN. */}
 
 ## Render offline
 
+Scaffold a bundle:
+
 ```sh
-target/release/registry-render compile \
+registry-render init render-work/bundle
+```
+
+The bundle holds `manifest.yaml`, which declares one document type, `letter`; its Typst template;
+a JSON Schema for its data; an English label table; fonts; and a fixture. `init` also prints a
+first-render command, but its `--data` path is wrong relative to this directory, so run this one
+instead:
+
+```sh
+registry-render compile \
   --bundle render-work/bundle \
   --type letter \
   --data render-work/bundle/fixtures/data.json \
@@ -70,231 +73,180 @@ target/release/registry-render compile \
   --out render-work/letter.pdf
 ```
 
-`--issued-at` is the document's issuance claim and the only clock a render uses, which is why the
-tutorial pins it instead of using the current time. You know this worked when the command prints
-the output line with both hashes:
-
-```text
+```text test-expect
 wrote render-work/letter.pdf (13292 bytes, pdf sha256 1e2dc9c981d19ef62549c3100395a106bc8fb30e01bef21c26844e45a0c29f9f, data sha256 ad8d63dc40da68da4b3bc96144969c6ec85000cb460d9cbfe37c82688a944523)
 ```
 
-Raw source is expected here: compile, validate, and check are authoring commands as well as package
-inspection commands. Serve is the boundary that always requires the shared package envelope. If
-compile fails, the problem names the file and the line, with exit code 12.
+`--issued-at` is the document's issuance time and the only clock the template sees, so your hashes
+match these. The `pdf sha256` identifies the file; the `data sha256` identifies the exact input it
+was rendered from.
 
-{/* Evidence: crates/registry-render/src/cli.rs, Compile and parse_issued_at;
-    crates/registry-render/src/problem.rs, exit_code. */}
+{/* Evidence: crates/registry-render/src/init.rs, scaffold;
+    crates/registry-render/src/cli.rs, Compile and parse_issued_at. */}
 
-## Build the package
+## Package the bundle
+
+The service serves only a package: a copy of the bundle with a checksum file. Build one and check
+it:
 
 ```sh
-target/release/registry-render check --bundle render-work/bundle
-target/release/registry-render package \
+registry-render package \
   --bundle render-work/bundle \
   --output render-work/package \
   --revision tutorial-1
-target/release/registry-render check --bundle render-work/package
+registry-render check --bundle render-work/package
 ```
 
-The first check verifies manifest structure, label script coverage, and label key sets before you
-package anything. `registry-render package` copies those exact validated source files into a new
-directory and writes sorted `SHA256SUMS`; `--revision` adds operator metadata that is hashed like
-every other package file. The package command prints its `sha256:` digest. The second check
-verifies that envelope before inspecting the same product content. You know it worked when check
-exits 0 and prints the document line, the bundle line, and a summary with no errors:
-
-```text
+```text test-expect
+packaged render-work/package as sha256:<package-digest>
 document letter           v1  entry templates/letter.typ  labels [en]  pdf plain
-bundle render-work/package v1 hash <digest prefix> (19 fonts, 1 documents, 9 governed files)
+bundle render-work/package v1 hash <digest-prefix> (19 fonts, 1 documents, 9 governed files)
 0 errors, 0 warnings in 3 files
 ```
 
-When check finds a problem, it exits 1 and prints every finding on standard error, each with the
-file, line, and column it is about and the change that fixes it. Add `--format json` for the same
-report as one JSON document.
-
-The shared envelope is what serve trusts, not the directory listing: a changed, missing, or extra
-file is refused by name. After an intentional template edit, build a new output directory. The
-package command refuses to replace an existing directory.
+The `sha256:` digest names this package. A later change to any file in it is refused by name.
 
 {/* Evidence: crates/registry-render/src/cli.rs, Package;
-    crates/registry-render/src/bundle.rs, load_package and bind_verified_snapshot;
     crates/registry-render/src/check.rs, run. */}
 
-## Serve on your machine
+## Serve the package
 
-Create one secret and one runtime file. The API key is what callers present. It must be an
-owner-only file of at least 32 bytes of ASCII:
+Create the API key callers present, and a runtime file that names the package, the key, and an
+audit file. Its paths are absolute:
 
 ```sh
 mkdir -p render-work/deploy
 openssl rand -hex 32 > render-work/deploy/api.key
 chmod 600 render-work/deploy/api.key
-```
-
-Then write `render-work/deploy/runtime.yaml`. Every path in it is absolute and free of symbolic
-links, so the file works from any working directory, and the `secret:file/…` references resolve
-under the declared `secretProviders.file.root`:
-
-```sh
-work="$(cd render-work && pwd -P)"
+here="$(pwd -P)/render-work"
 cat > render-work/deploy/runtime.yaml <<EOF
 apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1
 kind: RenderRuntimeConfig
 listener:
   bind: 127.0.0.1:64123
 package:
-  root: $work/package
+  root: $here/package
 secretProviders:
   file:
-    root: $work/deploy
+    root: $here/deploy
 auth:
   apiKeyRef: secret:file/api.key
-limits:
-  renderTimeoutSeconds: 20
-  maximumOutputBytes: 8388608
-  maximumRequestBytes: 8388608
-  maximumConcurrentRenders: 2
 audit:
-  path: $work/audit/render.jsonl
+  path: $here/audit/render.jsonl
 EOF
+registry-render check --runtime-config "$here/deploy/runtime.yaml"
 ```
 
-Port 64123 is this tutorial's choice; any free loopback port works, because serve refuses to bind
-anything that is not loopback or private. Start it:
+```text test-expect
+0 errors, 0 warnings in 1 file
+```
+
+Start the service and leave it running in this terminal:
+
+```sh test-background="http://127.0.0.1:64123/health"
+registry-render serve --runtime-config "$here/deploy/runtime.yaml"
+```
+
+It logs JSON lines to standard error. Open a second terminal in the same directory and run the
+rest of the tutorial there:
 
 ```sh
-target/release/registry-render serve --runtime-config "$work/deploy/runtime.yaml" &
 curl -s http://127.0.0.1:64123/health
 ```
 
-You know it is serving when health answers with the package hash and the renderer version:
-
-```text
-{"bundleHash":"<package digest without sha256:>","bundleVersion":1,"rendererVersion":"<version> (typst 0.15.1)","status":"ok","typstPin":"0.15.1"}
+```text test-expect
+{"bundleHash":"<package-digest>","bundleVersion":1,"rendererVersion":"<version> (typst 0.15.1)","status":"ok","typstPin":"0.15.1"}
 ```
 
-If startup fails instead, the refusal names the file, the line, and the field, with the fix on its
-`next:` line: check that `package.root` is the package directory and that the API key file sits
-under `secretProviders.file.root`.
+`bundleHash` is the package digest without `sha256:`, so you can tell which package is live.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, RenderRuntime and validate_bind;
-    crates/registry-render/src/audit.rs, RenderAudit. */}
+    crates/registry-render/src/server.rs, serve and health. */}
 
 ## Render over HTTP
 
-Write the request body next to your work and POST it with the API key:
+Send the fixture data with the same issuance time:
 
 ```sh
-cat > render-work/request.json <<'EOF'
-{"issuedAt":"2026-09-16T10:32:00Z","data":{"reference":"LTR-2026-000001","body":"Hello from the scaffold. Replace me.","footer-note":"demo document"}}
-EOF
-
+jq -c '{issuedAt: "2026-09-16T10:32:00Z", data: .}' render-work/bundle/fixtures/data.json \
+  > render-work/request.json
 curl -s -X POST http://127.0.0.1:64123/v1/render/letter \
   -H "Authorization: Bearer $(cat render-work/deploy/api.key)" \
   -H "Content-Type: application/json" \
-  -H "Accept: application/pdf" \
-  -o render-work/served.pdf \
-  -D render-work/headers.txt \
-  -d @render-work/request.json
-
-grep -i x-registry render-work/headers.txt
+  -d @render-work/request.json \
+  -o render-work/served.pdf -D render-work/headers.txt
+grep -i '^x-registry' render-work/headers.txt
 ```
 
-The headers carry the contract: `x-registry-pdf-sha256` is the artifact's hash, and
-`x-registry-data-sha256` is the hash of the exact request the artifact renders. Now the check this
-whole tutorial builds toward:
+```text test-expect
+x-registry-pdf-sha256: 1e2dc9c981d19ef62549c3100395a106bc8fb30e01bef21c26844e45a0c29f9f
+x-registry-data-sha256: ad8d63dc40da68da4b3bc96144969c6ec85000cb460d9cbfe37c82688a944523
+x-registry-document-version: letter v1
+```
+
+The headers carry the two hashes compile printed. Compare the files themselves:
 
 ```sh
-shasum -a 256 render-work/letter.pdf render-work/served.pdf
-cmp render-work/letter.pdf render-work/served.pdf && echo "cmp: identical"
+cmp render-work/letter.pdf render-work/served.pdf && echo identical
 ```
 
-Both hashes are the same line, and `cmp` prints nothing of its own:
-
-```text
-1e2dc9c981d19ef62549c3100395a106bc8fb30e01bef21c26844e45a0c29f9f  render-work/letter.pdf
-1e2dc9c981d19ef62549c3100395a106bc8fb30e01bef21c26844e45a0c29f9f  render-work/served.pdf
-cmp: identical
+```text test-expect
+identical
 ```
 
-The offline render and the served render never shared a process, and the bytes are identical:
-that is the product's promise in one command. On Linux, `sha256sum` replaces `shasum -a 256`.
+Two processes rendered the letter, and the bytes are the same.
 
-{/* Evidence: crates/registry-render/src/server.rs, render_route;
+{/* Evidence: crates/registry-render/src/server.rs, render_route and respond_rendered;
     crates/registry-render/tests/serve.rs, render_returns_pdf_with_hash_headers_matching_golden. */}
 
-## Two refusals worth seeing
+## See two refusals
 
-While the server is up, try the two failures every deployment sees first.
-
-A wrong API key:
+A wrong key, then a request without an issuance time:
 
 ```sh
-curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:64123/v1/render/letter \
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:64123/v1/render/letter \
   -H "Authorization: Bearer wrong-key-0000000000000000000000000000" \
   -H "Content-Type: application/json" \
   -d @render-work/request.json
-```
-
-Answers `401`, and the refusal is written to the audit log, so a probe storm is visible after
-the fact.
-
-A missing issuance time, which is the one field Render will not invent for you:
-
-```sh
 curl -s -X POST http://127.0.0.1:64123/v1/render/letter \
   -H "Authorization: Bearer $(cat render-work/deploy/api.key)" \
   -H "Content-Type: application/json" \
   -d '{"data":{}}'
 ```
 
-Answers `400` with a problem document whose `title` is `issued-at-missing`. Both refusals you just
-caused are in the audit log, which is the next thing you will read.
+```text test-expect
+401
+{"type":"https://render.registrystack.org/problems/issued-at-missing","title":"issued-at-missing","status":400,"detail":"issuedAt is required; it is the document's issuance claim and the render clock","locations":[],"pointers":[]}
+```
+
+Render never supplies the issuance time for you.
 
 {/* Evidence: crates/registry-render/src/problem.rs, ProblemKind;
     crates/registry-render/tests/serve.rs, unauthorized_requests_are_refused_and_audited. */}
 
-## Stop and read the audit log
-
-Stop the server with SIGTERM (`kill` on the job, or Ctrl+C in its terminal), then read the audit
-file the runtime wrote beside your deployment directory. Each line is one JSON entry:
+## Read the audit file
 
 ```sh
-jq -c '{correlation, phase, outcome: .record.outcome, problem: .record.problem}' \
-  render-work/audit/render.jsonl
+jq -c '{phase, outcome: .record.outcome, problem: .record.problem}' render-work/audit/render.jsonl
 ```
 
-You know it worked when it lists your session in four lines (your correlation values differ):
-
-```text
-{"correlation":"0a17ca28-624f-4ae8-b94b-29e8f78d0a4d","phase":"request","outcome":null,"problem":null}
-{"correlation":"0a17ca28-624f-4ae8-b94b-29e8f78d0a4d","phase":"response","outcome":"rendered","problem":null}
-{"correlation":"d99748ee-808b-47b2-8de1-01f27aea1c04","phase":"response","outcome":"refused","problem":"unauthorized"}
-{"correlation":"cd49b481-c92f-4c70-8882-d4aa2208d033","phase":"response","outcome":"refused","problem":"issued-at-missing"}
+```text test-expect
+{"phase":"request","outcome":null,"problem":null}
+{"phase":"response","outcome":"rendered","problem":null}
+{"phase":"response","outcome":"refused","problem":"unauthorized"}
+{"phase":"response","outcome":"refused","problem":"issued-at-missing"}
 ```
 
-The successful render wrote two entries that share one correlation: a request entry before the
-render started and a response entry, with the PDF and data hashes, before the document left the
-service. Each refusal wrote a single response entry. Every entry carries the bundle hash, the
-renderer version, and the caller's key fingerprint, and none carries document data. The file is
-not chained or signed; a production deployment ships it to append-only storage.
+The render wrote a `request` entry before it started and a `response` entry with both hashes
+before the PDF left. Each refusal wrote one entry. Entries carry hashes, versions, and a
+fingerprint of the caller's key, never the letter's data.
 
 {/* Evidence: crates/registry-render/src/audit.rs, RenderAuditEvent;
     crates/registry-render/tests/serve.rs, a_render_writes_a_request_entry_then_a_response_entry_sharing_correlation. */}
 
-## Clean up
-
-Stop the server if it is still running, then remove the working directory:
-
-```sh
-rm -rf render-work
-```
-
-Your checkout keeps nothing else: no database, no state outside `render-work`.
+When you are done, press Ctrl+C in the first terminal and delete `render-work`.
 
 ## Next
 
-- [Run Registry Render in serve mode](../../operate/registry-render/)
-- [How Registry Render stays byte-stable](../../explanation/render-determinism/)
-- [Registry Render overview](../../start/registry-render/)
+- [How Registry Render works](../../explanation/render-determinism/)
+- [Deploy Registry Render](../../operate/registry-render/)
