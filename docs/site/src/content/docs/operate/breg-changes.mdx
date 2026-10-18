@@ -354,6 +354,12 @@ against the active package, and test, package, and apply the result with the act
 is a field removal and needs a reviewed migration and a backup. Records written under the undone
 model stay, reshaped by the revert's migration.
 
+:::caution
+An incompatible activation withdraws in-flight Reviews and closes their application jobs.
+A successor that restores the earlier Action does not revive them. Check the affected submitted
+Proposals before activation and arrange [requester recovery](#recover-a-blocked-proposal).
+:::
+
 When the data itself must go back, because `migration reconcile` reported `unresolvable` or a
 migration changed rows no successor can restore, restore the backup you took before the `apply`.
 
@@ -367,12 +373,38 @@ including the instance-claim adoption a restored database needs before it serves
 successor over that package. A restore also brings back history that a later `history erase`
 removed, so repeat those erasures before the registry serves.
 
+Restoring Base Registry Engine alone also restores its earlier view of Review work, but cannot
+undo cancellations already settled by Casework. Compare affected retained rounds with Casework
+before resuming that work; recover ended rounds through requester Cancel or Rebase and Submit
+for fresh Review. A database restore does not restore cross-service Review authority.
+
 {/* Evidence: crates/registry-breg/src/migration.rs, MigrationError::PackageBinding;
     crates/registry-bregctl/src/lib.rs, apply_lifecycle_failure();
     crates/registry-breg/src/package.rs, CompiledRegistryChangeCode::FieldRemoved;
-    crates/registry-breg/src/instance_claim.rs, check() and adopt_in(). */}
+    crates/registry-breg/src/instance_claim.rs, check() and adopt_in();
+    crates/registry-breg/src/review_store.rs, run_one_cancellation();
+    crates/registry-breg/tests/support/review_go_live.rs,
+    late_approval_after_rollback_cannot_reopen_a_withdrawn_round_without_a_job;
+    crates/registry-casework/src/review.rs. */}
 
 ## Recover a blocked Proposal
+
+:::caution
+When activation reports `package-changed`, its withdrawn Review and closed application stay
+closed after rollback. The requester must Cancel, or Rebase and Submit for fresh Review.
+Operator Resubmit and Retry cannot reopen that round, and a late approval cannot authorize Apply.
+:::
+
+You can still read and list these submitted Proposals. An automatic application reports
+`blocked`, reason `contract-changed`, recovery `correct-input`, and `automaticRetry.scheduled: false`,
+including when a withdrawn Review received approval before any application job existed.
+The historical decision remains evidence; the current turn belongs to the requester.
+
+{/* Evidence: crates/registry-breg/src/mutation/proposal.rs, proposal_application_status()
+    and review_progress(); crates/registry-breg/src/review_recovery.rs;
+    crates/registry-breg/tests/support/review_go_live.rs,
+    already_terminal_approval_after_activation_remains_readable_without_a_job,
+    manual_late_approval_after_rollback_keeps_the_requester_turn. */}
 
 A Proposal reports its `applicationStatus` with a safe reason and a recovery hint. A missing review
 authority binding stops only the Proposals that depend on it; restore the exact endpoint, producer,

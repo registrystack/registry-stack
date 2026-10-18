@@ -4,8 +4,12 @@
 
 - Distinguish an explicit Review producer-ID mismatch from uncertain transport
   outcomes, with bounded diagnostics naming both configured IDs.
-- When activation blocks submitted work, atomically cancel its Review and close
-  application jobs. Late results and rollback cannot reopen the round. Recovery
+- BREAKING: when activation blocks submitted work, atomically withdraw its Review
+  and close its application jobs. Before activating an incompatible package, check
+  affected submitted Proposals and arrange requester recovery. A restoring package
+  cannot revive those rounds or jobs; the requester must Cancel, or Rebase and
+  Submit for fresh Review. Late results remain evidence, and authorized Get and
+  List stay available even when approval arrives before any job exists. Recovery
   names the package-change block, and private metrics count its closed jobs.
 
 - Automatically erase expired Action and Proposal Evidence uses under the runtime

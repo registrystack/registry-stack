@@ -40,7 +40,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     io::{self, Write},
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -98,6 +98,7 @@ struct AuthorityState {
     gates: [Gate; 2],
     gated: bool,
     first_succeeds: bool,
+    cancel_already_terminal: AtomicBool,
     result_replies: [ResultReply; 2],
     requests: AtomicUsize,
     creates: Mutex<Vec<(String, ReviewCreateRequest)>>,
@@ -128,6 +129,7 @@ impl Authority {
             gates: [Gate::default(), Gate::default()],
             gated,
             first_succeeds,
+            cancel_already_terminal: false.into(),
             result_replies,
             requests: 0.into(),
             creates: Mutex::new(Vec::new()),
@@ -249,12 +251,16 @@ async fn cancel_review(
     if call == 0 && !state.first_succeeds {
         return response(StatusCode::SERVICE_UNAVAILABLE, json!({}));
     }
-    response(
-        StatusCode::OK,
-        json!(ReviewCancelResponse::Cancelled {
-            result: result(&accepted, state.result_id, ReviewResultStatus::Cancelled)
-        }),
-    )
+    let cancellation = if state.cancel_already_terminal.load(Ordering::SeqCst) {
+        ReviewCancelResponse::AlreadyTerminal {
+            result: result(&accepted, state.result_id, ReviewResultStatus::Approved),
+        }
+    } else {
+        ReviewCancelResponse::Cancelled {
+            result: result(&accepted, state.result_id, ReviewResultStatus::Cancelled),
+        }
+    };
+    response(StatusCode::OK, json!(cancellation))
 }
 async fn lookup_result(
     State(state): State<Arc<AuthorityState>>,

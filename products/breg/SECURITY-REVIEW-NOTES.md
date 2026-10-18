@@ -4011,6 +4011,14 @@ Authorized Get preserves the blocked projection of a cancelled automatic job
 while the Proposal remains submitted, including after rollback. Native
 activation/Get/Cancel and automatic Rebase tests preserve exact application bindings, non-owner and
 current row-boundary refusal, and the closed job's lack of automatic retry.
+The no-job path also requires the exact retained binding before exposing a
+withdrawn round whose approval arrived late. Withdrawal takes precedence over
+result status for current turn and Apply availability. Real-router Get, List,
+turn filtering, Cancel and Rebase/Submit regressions cover automatic and manual
+rounds after activation and exact rollback, including an AlreadyTerminal cancel
+response. They retain wrong-owner, current-disclosure, malformed-binding and
+non-withdrawn approved/no-job refusals, and prove no old job is created. SEC-181
+keeps its shape-substitution proof; SEC-185 selects withdrawal and non-revival.
 
 Casework's existing producer cancellation settles concealed tasks and clocks
 without source reads. Its HTTP proof also refuses another producer and retains
