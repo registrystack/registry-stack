@@ -492,16 +492,14 @@ fn limiter(rate: RateLimitConfig) -> Result<TokenBucketLimiter, RuntimeError> {
 fn discovered_endpoint(
     document: &registry_platform_oidc::DiscoveryDocument,
     member: &str,
-    issuer: &Url,
     development: bool,
-    allow_insecure_http: bool,
 ) -> Result<Url, RuntimeError> {
     document
         .extra
         .get(member)
         .and_then(serde_json::Value::as_str)
         .and_then(|value| Url::parse(value).ok())
-        .filter(|url| allowed_discovered_endpoint(url, issuer, development, allow_insecure_http))
+        .filter(|url| allowed_discovered_endpoint(url, development))
         .ok_or_else(|| {
             RuntimeError::Discovery(format!(
                 "{member} is missing or is not an endpoint this runtime may call"
@@ -636,13 +634,10 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
     } = offline(&config)?;
     let development = config.development();
     let issuer = config.sign_in.issuer.as_str().to_owned();
-    if let Some(diagnostic) = config.sign_in.insecure_http_startup_diagnostic() {
-        tracing::warn!("{diagnostic}");
-    }
-    let network = IssuerNetworkPolicy::new(&issuer, config.sign_in.allow_insecure_http)
+    // Sign-in sends client credentials to the token endpoint, so the page
+    // never opts in to plain HTTP beyond loopback.
+    let network = IssuerNetworkPolicy::new(&issuer, false)
         .map_err(|error| RuntimeError::Discovery(error.to_string()))?;
-    let issuer_url =
-        Url::parse(&issuer).map_err(|error| RuntimeError::Discovery(error.to_string()))?;
     let (discovery, jwks_policy) = fetch_discovery_for_issuer(
         &OidcDiscoveryConfig {
             issuer: issuer.clone(),
@@ -650,24 +645,13 @@ async fn build(config: RuntimeConfig, writer: Option<AuditWriter>) -> Result<Rou
             discovery_timeout: DISCOVERY_TIMEOUT,
             max_doc_bytes: MAXIMUM_DISCOVERY_BYTES,
         },
-        config.sign_in.allow_insecure_http,
+        false,
     )
     .await
     .map_err(|error| RuntimeError::Discovery(error.to_string()))?;
-    let authorization_endpoint = discovered_endpoint(
-        &discovery,
-        "authorization_endpoint",
-        &issuer_url,
-        development,
-        config.sign_in.allow_insecure_http,
-    )?;
-    let token_endpoint = discovered_endpoint(
-        &discovery,
-        "token_endpoint",
-        &issuer_url,
-        development,
-        config.sign_in.allow_insecure_http,
-    )?;
+    let authorization_endpoint =
+        discovered_endpoint(&discovery, "authorization_endpoint", development)?;
+    let token_endpoint = discovered_endpoint(&discovery, "token_endpoint", development)?;
     let requires_iss = discovery
         .extra
         .get("authorization_response_iss_parameter_supported")
@@ -886,10 +870,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn production_build_path_carries_the_http_opt_in_into_discovered_endpoints() {
-        let issuer = Url::parse("http://id.example:8090").unwrap();
-        let mut document = registry_platform_oidc::DiscoveryDocument {
-            issuer: issuer.to_string(),
+    fn production_sign_in_refuses_plain_http_beyond_loopback() {
+        let document = registry_platform_oidc::DiscoveryDocument {
+            issuer: "http://id.example:8090".to_owned(),
             jwks_uri: "http://id.example:8090/jwks".to_owned(),
             userinfo_endpoint: None,
             extra: serde_json::Map::from_iter([
@@ -903,38 +886,21 @@ mod tests {
                 ),
             ]),
         };
-
         for member in ["authorization_endpoint", "token_endpoint"] {
-            assert!(discovered_endpoint(&document, member, &issuer, false, false).is_err());
-            discovered_endpoint(&document, member, &issuer, false, true)
-                .expect("the production opt-in carries into the same-origin endpoint");
+            assert!(discovered_endpoint(&document, member, false).is_err());
+            assert!(discovered_endpoint(&document, member, true).is_err());
         }
-
-        document.extra.insert(
-            "token_endpoint".to_owned(),
-            serde_json::json!("http://93.184.216.34/token"),
-        );
-        assert!(
-            discovered_endpoint(&document, "token_endpoint", &issuer, false, true).is_err(),
-            "the opt-in does not extend plain HTTP to another origin"
-        );
-        let cross_origin = Url::parse("http://93.184.216.34/token").unwrap();
-        let error = IssuerNetworkPolicy::new(issuer.as_str(), true)
-            .unwrap()
-            .discovered_endpoint_fetch_policy(cross_origin.as_str())
-            .unwrap()
-            .validate_dns_pinned_for_immediate_fetch(&cross_origin)
-            .expect_err("a cross-origin endpoint must use https");
         assert!(matches!(
-            error,
-            registry_platform_httputil::FetchUrlError::SchemeDenied { .. }
+            IssuerNetworkPolicy::new("http://id.example:8090", false),
+            Err(registry_platform_oidc::OidcError::InsecureHttpRequiresOptIn)
         ));
+
+        let network = IssuerNetworkPolicy::new("https://id.example", false).unwrap();
         for refused in [
             Url::parse("https://10.20.30.40/token").unwrap(),
             Url::parse("https://169.254.169.254/token").unwrap(),
         ] {
-            let error = IssuerNetworkPolicy::new(issuer.as_str(), true)
-                .unwrap()
+            let error = network
                 .discovered_endpoint_fetch_policy(refused.as_str())
                 .unwrap()
                 .validate_dns_pinned_for_immediate_fetch(&refused)
