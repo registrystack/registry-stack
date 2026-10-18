@@ -123,18 +123,15 @@ impl IssuerNetworkPolicy {
     /// A declared endpoint carries the same operator authority as the declared
     /// issuer, whatever its origin: it may resolve to a private or loopback
     /// address, never to cloud metadata or a link-local address. Plain HTTP is
-    /// open only when the declared issuer itself uses it or
-    /// `allow_insecure_http` is set, and beyond loopback it still requires
-    /// `allow_insecure_http`. Use [`Self::discovered_endpoint_fetch_policy`]
-    /// for any URL that came from a discovery document.
+    /// open on loopback, as the configuration checker accepts it for
+    /// supervised local development, and beyond loopback only when
+    /// `allow_insecure_http` is set. Use
+    /// [`Self::discovered_endpoint_fetch_policy`] for any URL that came from a
+    /// discovery document.
     #[must_use]
     pub fn declared_jwks_fetch_policy(&self) -> FetchUrlPolicy {
         FetchUrlPolicy {
-            allowed_schemes: if self.issuer.scheme() == "http" || self.allow_insecure_http {
-                vec!["http".to_owned(), "https".to_owned()]
-            } else {
-                vec!["https".to_owned()]
-            },
+            allowed_schemes: vec!["http".to_owned(), "https".to_owned()],
             allow_localhost: true,
             allow_http_private_network: false,
             allow_http_non_loopback: self.allow_insecure_http,
@@ -267,11 +264,6 @@ fn refusal(endpoint: OidcEndpoint, error: FetchUrlError) -> OidcError {
         }
         (FetchUrlError::PrivateRangeDenied { .. }, _) => {
             "link-local and unspecified addresses are never fetched"
-        }
-        (FetchUrlError::SchemeDenied { scheme }, OidcEndpoint::DeclaredJwks)
-            if scheme == "http" =>
-        {
-            "a plain http key endpoint needs allowInsecureHttp: true when the issuer uses https"
         }
         (FetchUrlError::SchemeDenied { .. }, OidcEndpoint::DiscoveredCrossOriginJwks) => {
             "a key endpoint discovered on another origin must use https; \
@@ -2025,6 +2017,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn declared_loopback_http_jwks_under_an_https_issuer_is_accepted_without_the_opt_in() {
+        // The configuration checker accepts a plain http loopback jwksSource.uri
+        // for supervised local development; the runtime must fetch it too.
+        let cfg = declared_override("https://issuer.example", "http://127.0.0.1:8082/jwks");
+        fetch_discovery_for_issuer(&cfg, false)
+            .await
+            .expect("a declared loopback key endpoint needs no opt-in under an https issuer");
+        let cfg = declared_override("https://issuer.example", "http://localhost:8082/jwks");
+        fetch_discovery_for_issuer(&cfg, false)
+            .await
+            .expect("localhost behaves the same");
+    }
+
+    #[tokio::test]
     async fn declared_plain_http_jwks_beyond_loopback_requires_the_opt_in() {
         // Under an http loopback issuer the http scheme is open, and the
         // non-loopback destination is what needs the opt-in.
@@ -2042,15 +2048,16 @@ mod tests {
             .await
             .expect("the opt-in admits the declared plain http key endpoint");
 
-        // Under an https issuer, plain http keys are closed without the opt-in.
+        // Under an https issuer, plain http keys beyond loopback are closed
+        // without the opt-in, with the same remedy.
         let cfg = declared_override("https://issuer.example", "http://10.20.30.40:8080/jwks");
         let error = fetch_discovery_for_issuer(&cfg, false)
             .await
-            .expect_err("an https issuer keeps https keys without the opt-in");
+            .expect_err("an https issuer keeps https keys beyond loopback without the opt-in");
         assert_refused(
             error,
             OidcEndpoint::DeclaredJwks,
-            "needs allowInsecureHttp: true when the issuer uses https",
+            "plain http beyond loopback needs allowInsecureHttp: true",
             "10.20.30.40",
         );
         fetch_discovery_for_issuer(&cfg, true)
