@@ -1700,10 +1700,9 @@ class CiChangesTest(unittest.TestCase):
         slugs = replayed_tutorial_pages("casework")
         self.assertIn("tutorials/first-casework", slugs)
         # Gated pages outside tutorials/ are replayed too.
-        self.assertIn("start/casework", slugs)
         self.assertIn("configure/casework", slugs)
-        self.assertIn("operate/casework", slugs)
-        self.assertIn("explanation/how-casework-works", slugs)
+        self.assertIn("configure/casework-directory", slugs)
+        self.assertIn("operate/change-a-casework-package", slugs)
         for slug in slugs:
             with self.subTest(slug=slug):
                 page = f"docs/site/src/content/docs/{slug}.mdx"
