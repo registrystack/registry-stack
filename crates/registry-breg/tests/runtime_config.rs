@@ -243,7 +243,7 @@ fn runtime_reads_the_explicit_http_issuer_opt_in() {
             .authentication()
             .oidc()
             .insecure_http_startup_diagnostic(),
-        Some("authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer")
+        Some("authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration")
     );
 }
 

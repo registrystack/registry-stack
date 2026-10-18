@@ -179,7 +179,7 @@
         },
         "allowInsecureHttp": {
           "default": false,
-          "description": "Permit plain HTTP to the offer-token issuer beyond loopback.",
+          "description": "Permit plain HTTP beyond loopback to the offer-token issuer and to\n`jwksUri`.",
           "type": "boolean"
         },
         "audiences": {

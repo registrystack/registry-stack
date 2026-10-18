@@ -477,7 +477,7 @@ pub const MAX_OIDC_AUDIENCE_CHARACTERS: usize = 512;
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 pub struct OidcIssuerConfig {
     /// Exact issuer accepted in access-token `iss` claims, an absolute
-    /// `https` URL.
+    /// `https` URL, or a plain `http` URL when `allowInsecureHttp` is set.
     pub issuer: Url,
     /// The audience every accepted access token must carry in `aud`.
     #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 512)))]
@@ -486,18 +486,21 @@ pub struct OidcIssuerConfig {
     /// OpenID Connect discovery document.
     #[serde(default)]
     pub jwks_source: JwksSource,
-    /// Permit plain HTTP for a declared issuer beyond loopback. TLS remains
-    /// required unless the operator explicitly accepts this transport risk.
+    /// Permit plain HTTP beyond loopback to the configured issuer and to a
+    /// JWKS URI declared in configuration. TLS remains required unless the
+    /// operator explicitly accepts this transport risk.
     #[serde(default)]
     pub allow_insecure_http: bool,
 }
 
 impl OidcIssuerConfig {
     /// The issuer is an absolute `https` URL without credentials, query, or
-    /// fragment, the audience is non-empty bounded text without control characters, and
-    /// the key source passes [`JwksSource::check`]. A loopback `http` issuer
-    /// or key URI is accepted only when `allow_loopback_http` is set, for
-    /// supervised local development. `field` is the dotted path of the block,
+    /// fragment, or a plain `http` one when `allow_insecure_http` is set, the
+    /// audience is non-empty bounded text without control characters, and
+    /// the key source passes [`JwksSource::check`]. Without
+    /// `allow_insecure_http`, a loopback `http` issuer or key URI is accepted
+    /// only when `allow_loopback_http` is set, for supervised local
+    /// development. `field` is the dotted path of the block,
     /// such as `authentication.oidc`.
     pub fn check(&self, field: &str, allow_loopback_http: bool) -> Result<(), ConfigBlockError> {
         let issuer = self.issuer.to_url();

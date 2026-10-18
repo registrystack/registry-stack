@@ -3056,7 +3056,7 @@ shared_block_host!(OidcAuthenticationConfig, block = "provider");
 impl OidcAuthenticationConfig {
     pub(crate) fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
         self.provider.allow_insecure_http.then_some(
-            "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer",
+            "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
         )
     }
 
@@ -8044,7 +8044,7 @@ mod tests {
                 .oidc
                 .insecure_http_startup_diagnostic(),
             Some(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer"
+                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
             )
         );
 

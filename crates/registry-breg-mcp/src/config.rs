@@ -142,7 +142,8 @@ pub struct ResourceServerConfig {
     /// through the issuer's OpenID Connect discovery document.
     #[serde(default)]
     pub jwks_source: JwksSource,
-    /// Permit plain HTTP to the declared issuer beyond loopback.
+    /// Permit plain HTTP beyond loopback to the declared issuer and to a JWKS
+    /// URI declared in `jwksSource`.
     #[serde(default)]
     pub allow_insecure_http: bool,
     /// The asymmetric signature algorithms an accepted token may use.
@@ -171,7 +172,7 @@ pub struct ResourceServerConfig {
 impl ResourceServerConfig {
     pub(crate) fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
         self.allow_insecure_http.then_some(
-            "resourceServer.allowInsecureHttp permits plain HTTP to the configured issuer",
+            "resourceServer.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
         )
     }
 }
@@ -1466,7 +1467,7 @@ rateLimits:
         assert!(config.resource_server.allow_insecure_http);
         assert_eq!(
             config.resource_server.insecure_http_startup_diagnostic(),
-            Some("resourceServer.allowInsecureHttp permits plain HTTP to the configured issuer")
+            Some("resourceServer.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration")
         );
     }
 
