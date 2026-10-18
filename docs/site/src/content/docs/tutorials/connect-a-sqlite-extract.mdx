@@ -19,17 +19,19 @@ tutorial_test:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 If your institution publishes a read-only SQLite extract rather than an API, Evidence Gateway can
-answer from that file. You will build an Evidence project over a synthetic extract, prove it
-with fixtures, and bind an extract file. Evidence never connects to your database.
+answer from that file without connecting to your database. You create a new project here, not the
+standalone one from your first assertion, prove it over synthetic extracts, and bind a file.
 
 <QuickstartMeta
   outcome="A SQLite-extract Evidence project passing 13 fixture cases."
   time="About 15 minutes"
   level="Offline authoring with synthetic data"
-  prerequisites={['evidencectl on PATH', 'A shell and an editor']}
+  prerequisites={['evidence and evidencectl on PATH, from the same release', 'A shell and an editor']}
 />
 
 ## Create the SQLite starter
+
+`init` writes a starter project whose one Source reads an extract:
 
 ```sh
 evidencectl init registry-status \
@@ -52,19 +54,20 @@ A normalized synthetic Source, AssertionDefinition, and local target were genera
 ```
 
 Keep the disposable keys in `.generated/` out of version control.
-The `Next` line mentions schemas, but this starter has none to edit.
 
 {/* Evidence: crates/registry-evidencectl/src/scaffold.rs, create, write_normalized_starter;
     crates/registry-evidencectl/templates/sqlite-extract/README.md. */}
 
 ## Read the extract binding
 
+Work from the project directory:
+
 ```sh
 cd registry-status
 ```
 
-The `record-status` Source has `type: sqlite-extract`. Its head names the Function that reads
-rows and the extract profile a target binds to a file:
+The `record-status` Source has `type: sqlite-extract`. It names the Function that reads rows and
+the extract profile a target binds to a file:
 
 ```yaml title="evidence.yaml" test-excerpt="evidence.yaml"
 sources:
@@ -113,7 +116,7 @@ semantics:
 ```
 
 Replace every `urn:example:` identifier, the `purpose`, and the `question` with your institution's
-reviewed ones. Keep the shape: one boolean output read from one Source. [How Evidence
+reviewed ones, keeping one boolean output from one Source. [How Evidence
 works](../../explanation/how-evidence-works/#what-do-i-define) explains each part.
 
 ## Prove the starter
@@ -134,9 +137,10 @@ PASS: fixtures/record-status.yaml (13 cases)
 Proof: offline synthetic fixture evaluation; no live dependency readiness was checked
 ```
 
-Each case writes a read-only synthetic extract and runs the fixed statement against it.
-`evidencectl dev start` refuses a SQLite Source, so fixtures are how you run one locally. A
-warning or error names the file and key to correct.
+Each case writes a read-only synthetic extract, and the `evidence` binary runs the fixed statement
+against it and evaluates the answer. Fixtures are how you run this project locally, because
+`evidencectl dev start` refuses a SQLite Source: local serving has no way to bind an extract file.
+A warning or error names the file and key to correct.
 
 {/* Evidence: crates/registry-evidencectl/src/fixtures.rs, run_fixtures;
     crates/registry-evidence/src/source_sqlite.rs, materialize_seed_extract;
@@ -159,13 +163,16 @@ Change these together, then rerun both commands:
 ## Bind an extract file
 
 The target, not the project, says which file an extract profile reads. Add a binding to
-`local-target.yaml`:
+`local-target.yaml`, with `<extract-file>` replaced by the name of the file your export tooling
+published:
 
 ```yaml title="local-target.yaml" test-append
 extracts:
   record-status:
-    path: /var/lib/registry-evidence/extracts/record-status-2026-10-14.sqlite
+    path: /var/lib/registry-evidence/extracts/<extract-file>.sqlite
 ```
+
+Check the target again:
 
 ```sh
 evidencectl check . --target local-target.yaml --deny-warnings
@@ -178,7 +185,11 @@ Target: local-target.yaml
 0 errors, 0 warnings
 ```
 
-The check does not open the file or match the key to an `extractProfile`, so match it yourself.
+This check neither opens the file nor matches the key `record-status` to a Source's
+`extractProfile`, so keep the two names equal. On the target host, `evidencectl doctor` does
+both: it reports a profile with no binding as `evidence.runtime.source-extract-unbound`, and a
+binding no Source names as `evidence.runtime.source-extract-unused`.
+
 Your export tooling writes the file with one `evidence_extract` row holding `published_at`,
 `publisher`, and `extract_id`. Evidence refuses an extract older than `maximumExtractAgeSeconds`.
 
@@ -193,8 +204,11 @@ proves the file reachable on the target host with `evidencectl doctor`.
 
 {/* Evidence: crates/registry-evidence-authoring/src/target.rs, extracts;
     crates/registry-evidencectl/src/normalized.rs, sourceExtracts;
+    crates/registry-evidencectl/src/check.rs, check (compiles the target, runs bundle-check only);
+    crates/registry-evidence/src/bundle.rs, runtime_binding_findings, source-extract-unbound and -unused;
+    crates/registry-evidence/src/check.rs, runtime_binding_findings; crates/registry-evidencectl/src/runtime.rs, invoke_check;
     crates/registry-evidence/src/source_sqlite.rs, EXTRACT_METADATA_TABLE, extract_age_within_bound, open. */}
 
 ## Next
 
-[Compose a Base Registry Engine lookup with Evidence](../evidence-from-breg/)
+[Serve a lookup from a registry](../evidence-from-breg/)
