@@ -439,7 +439,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Fetch the key set from this absolute `https` URI, skipping discovery.",
+          "description": "Fetch the key set from this absolute `https` URI, skipping discovery.\nA plain `http` URI is accepted on loopback for supervised local\ndevelopment, and beyond loopback only when the issuer block sets\n`allowInsecureHttp`.",
           "properties": {
             "type": {
               "const": "uri",
