@@ -55,7 +55,9 @@ impl From<tokio_postgres::Error> for RetentionError {
 /// The consumer selects candidates under its retention/replay policy and owns
 /// dependent cleanup in this same transaction. This final predicate preserves
 /// pending, leased and unknown jobs, and dead letters without completed expiry.
-/// It also rechecks the horizon if a candidate changed before deletion. A
+/// It also rechecks the horizon if a candidate changed before deletion.
+/// Dead letters age from `dead_lettered_at`; subsequent completed expiry may
+/// update `expired_at` and `updated_at` without restarting the horizon. A
 /// consumer with additional replay or receipt requirements must enforce them
 /// before calling this function; metadata deletion does not erase audit logs.
 ///
@@ -76,11 +78,12 @@ pub async fn prune_terminal(
     }
     let statement = transaction
         .prepare(&format!(
-            "DELETE FROM {table} WHERE {id}=$1 AND {part}=$2 AND updated_at <= $3
-         AND ((state='delivered' AND delivered_at <= $3)
-           OR (state='expired' AND expired_at <= $3)
-           OR (state='dead-lettered' AND dead_lettered_at <= $3 AND expired_at <= $3)
-           OR state='cancelled')",
+            "DELETE FROM {table} WHERE {id}=$1 AND {part}=$2
+         AND ((updated_at <= $3
+               AND ((state='delivered' AND delivered_at <= $3)
+                 OR (state='expired' AND expired_at <= $3)
+                 OR state='cancelled'))
+           OR (state='dead-lettered' AND dead_lettered_at <= $3 AND expired_at IS NOT NULL))",
             table = table.qualified(),
             id = table.id_column(),
             part = table.part_column(),

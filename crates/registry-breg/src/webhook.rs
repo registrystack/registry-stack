@@ -210,6 +210,8 @@ struct BregDeliverySeams {
     last_success: Arc<crate::metrics::LastSuccess>,
 }
 
+const MAX_RETENTION_BATCHES_PER_TICK: usize = 100;
+
 impl BregDeliverySeams {
     async fn run_retention(self, mut shutdown: watch::Receiver<bool>) {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -224,7 +226,7 @@ impl BregDeliverySeams {
                 }
                 _ = async {
                     interval.tick().await;
-                    if self.prune_terminal().await.is_err() {
+                    if self.prune_terminal(MAX_RETENTION_BATCHES_PER_TICK).await.is_err() {
                         tracing::error!("hook metadata retention failed");
                     }
                 } => {}
@@ -232,7 +234,25 @@ impl BregDeliverySeams {
         }
     }
 
-    async fn prune_terminal(&self) -> Result<(), DeliveryError> {
+    async fn prune_terminal(&self, max_batches: usize) -> Result<(u64, bool), DeliveryError> {
+        let mut removed = 0;
+        for _ in 0..max_batches {
+            let batch = self.prune_terminal_batch().await?;
+            removed += batch;
+            // Hooks returns deleted rows, without exposing its page bound.
+            // An empty batch terminates without copying that private limit.
+            if batch == 0 {
+                return Ok((removed, false));
+            }
+        }
+        tracing::warn!(
+            removed,
+            "hook metadata retention reached its per-tick batch bound"
+        );
+        Ok((removed, true))
+    }
+
+    async fn prune_terminal_batch(&self) -> Result<u64, DeliveryError> {
         // Keep metadata for at least the receipt horizon and the payload replay
         // window. The platform primitive also requires completed payload expiry
         // for dead letters and never removes active or uncertain delivery work.
@@ -266,7 +286,7 @@ impl BregDeliverySeams {
             .map_err(|_| DeliveryError::Unavailable)?
             .get(0);
         let before = now.checked_sub(horizon).ok_or(DeliveryError::Unavailable)?;
-        registry_platform_hooks::delivery::prune_terminal_deliveries(
+        let removed = registry_platform_hooks::delivery::prune_terminal_deliveries(
             transaction.transaction(),
             DELIVERY_SCHEMA,
             before,
@@ -278,7 +298,7 @@ impl BregDeliverySeams {
             .await
             .map_err(|_| DeliveryError::Unavailable)?;
         guard.disarm();
-        Ok(())
+        Ok(removed)
     }
 
     fn mutation_transaction(&self) -> MutationTransaction {
@@ -844,6 +864,15 @@ pub struct WebhookDeliveryService {
 }
 
 impl WebhookDeliveryService {
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    pub async fn prune_terminal_for_test(
+        &self,
+        max_batches: usize,
+    ) -> Result<(u64, bool), DeliveryError> {
+        self.retention.prune_terminal(max_batches).await
+    }
+
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn new(

@@ -2535,3 +2535,63 @@ fn plain_geojson_registry_source() -> &'static str {
       }]
     }"#
 }
+
+#[tokio::test]
+async fn gis_properties_are_unsupported_while_native_select_overreach_is_audited() {
+    let harness = SpatialHarness::create(compiled_spatial_registry()).await;
+    seed_spatial_rows(&harness).await;
+    let query_plan = Arc::new(Mutex::new(Vec::new()));
+    let app = harness.router_with_query_plan(None, cursor_codec(), Arc::clone(&query_plan));
+    // The GIS adapter rejects the parameter itself, including an otherwise
+    // readable field. This is not a native $select authorization refusal.
+    for field in ["code", "secret", "canary-unknown-property"] {
+        let before = harness.database.audit_records().len();
+        let response = send(
+            &app,
+            &format!("/v1/gis/collections/service-site.map-reader/items?properties={field}"),
+            Some(claims(["zone-a"])),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(response).await;
+        assert_eq!(body["code"], "query.invalid");
+        if field != "code" {
+            assert!(!body.to_string().contains(field));
+        }
+        let records = harness.database.audit_records();
+        assert_eq!(records.len(), before + 1);
+        assert!(records.last().unwrap().get("refusalReason").is_none());
+    }
+    for field in ["secret", "canary-unknown-property"] {
+        let response = send(
+            &app,
+            &format!("/v1/records/service-sites?accessProfile=map-reader&$select={field}"),
+            Some(claims(["zone-a"])),
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(body_json(response).await["code"], "query.invalid");
+        let records = harness.database.audit_records();
+        assert_eq!(records.last().unwrap()["refusalReason"], "select_overreach");
+    }
+    assert!(
+        query_plan.lock().unwrap().is_empty(),
+        "refusals do not execute a record query"
+    );
+    let response = send(
+        &app,
+        "/v1/gis/collections/service-site.map-reader/items?limit=1&f=json",
+        Some(claims(["zone-a"])),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let journal = serde_json::to_string(&harness.database.audit_records()).unwrap();
+    for canary in [PRINCIPAL_CANARY, SECRET_CANARY, "canary-unknown-property"] {
+        assert!(!journal.contains(canary));
+    }
+    drop(app);
+    harness.cleanup().await;
+}

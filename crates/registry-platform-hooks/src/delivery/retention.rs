@@ -13,8 +13,11 @@ use tokio_postgres::Transaction;
 ///
 /// Pending and leased work remains. Dead letters require completed payload
 /// expiry, including erasure of the shared payload, before their metadata can
-/// age out. The expiry worker supplies the per-delivery audit first; this
-/// cleanup never substitutes for expiry or deletes the audit journal.
+/// age out. Their metadata horizon starts at `dead_lettered_at`; later
+/// completed expiry does not restart it. Discarded payloads do not wait for
+/// their obsolete scheduled expiry deadline. The expiry worker supplies the
+/// per-delivery audit first; this cleanup never substitutes for expiry or
+/// deletes the audit journal.
 /// State, delivery, then unreferenced event are removed in that order. Locked
 /// rows are skipped, and retained siblings keep their shared event.
 ///
@@ -40,11 +43,12 @@ pub async fn prune_terminal_deliveries(
                 "SELECT state.event_id, state.compiled_delivery_id
          FROM {schema}.registry_webhook_delivery_state AS state
          JOIN {schema}.registry_outbox AS outbox ON outbox.event_id=state.event_id
-         WHERE state.updated_at <= $1
-           AND (state.state='delivered'
-             OR (state.state IN ('expired','dead-lettered')
-                 AND state.expired_at <= $1 AND outbox.payload IS NULL
-                 AND outbox.payload_expires_at <= $1))
+         WHERE (state.updated_at <= $1
+                  AND (state.state='delivered'
+                    OR (state.state='expired'
+                        AND state.expired_at <= $1 AND outbox.payload IS NULL)))
+            OR (state.state='dead-lettered' AND state.dead_lettered_at <= $1
+                AND state.expired_at IS NOT NULL AND outbox.payload IS NULL)
          ORDER BY state.updated_at, state.event_id, state.compiled_delivery_id
          LIMIT {MAX_PRUNE_BATCH} FOR UPDATE OF state, outbox SKIP LOCKED"
             ),
@@ -210,6 +214,53 @@ mod tests {
             .expect("prune terminal deliveries");
         transaction.commit().await.expect("commit retention");
         pruned
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
+    async fn dead_letter_horizon_requires_terminal_age_completed_expiry_and_erased_payload() {
+        let schema = "hooks_retention_dead_letter_test";
+        let mut client = connect(schema).await;
+        let cutoff = SystemTime::now() - Duration::from_secs(7 * 24 * 3600);
+        let old = cutoff - Duration::from_secs(1);
+        let recent = cutoff + Duration::from_secs(1);
+        let mut cases = Vec::new();
+        for (terminal, expired, erased, remove) in [
+            (old, true, true, true),
+            (cutoff, true, true, true),
+            (recent, true, true, false),
+            (old, false, true, false),
+            (old, true, false, false),
+        ] {
+            let event = capture(&mut client, schema, &["only"]).await;
+            client.execute(&format!(
+                "UPDATE {schema}.registry_webhook_delivery_state
+                 SET state='dead-lettered', attempt=1, next_attempt_at=NULL,
+                     dead_lettered_at=$2, expired_at=CASE WHEN $3 THEN $4::timestamptz ELSE NULL END,
+                     updated_at=$4 WHERE event_id=$1"
+            ), &[&event, &terminal, &expired, &recent]).await.unwrap();
+            client.execute(&format!(
+                "UPDATE {schema}.registry_outbox SET payload=CASE WHEN $2 THEN NULL ELSE '\\x63616e617279'::bytea END WHERE event_id=$1"
+            ), &[&event, &erased]).await.unwrap();
+            cases.push((event, remove));
+        }
+        assert_eq!(prune(&mut client, schema, cutoff).await, 2);
+        for (event, removed) in cases {
+            for table in [
+                "registry_webhook_delivery_state",
+                "registry_webhook_deliveries",
+                "registry_outbox",
+            ] {
+                assert_eq!(
+                    count(&client, schema, table, event).await,
+                    i64::from(!removed)
+                );
+            }
+        }
+        client
+            .batch_execute(&format!("DROP SCHEMA {schema} CASCADE;"))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
