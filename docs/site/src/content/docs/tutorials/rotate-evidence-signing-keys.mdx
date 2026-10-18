@@ -17,7 +17,7 @@ tutorial_test:
 ---
 
 You run a candidate that signs through a Transit signer, as in
-[Configure Transit signing for Evidence Gateway](../move-evidence-to-production-signing/). Move it
+[Configure Transit signing for Registry Evidence](../move-evidence-to-production-signing/). Move it
 to a successor key version without a gap in verification, then retire the predecessor.
 
 ## Publish the successor
@@ -86,6 +86,10 @@ ACTIVATED sha256:<authority-revision> sha256:<authority-digest> sequence=<n>
 Evidence package sha256:<package-digest> passed check (<count> requirements)
 ```
 
+The successor's public key is part of the package, so the activation records a new history entry.
+Running it again for the same candidate, for example after fixing a refused check, fails and
+reports that this authority revision is already active; continue with the check.
+
 Restart every replica, confirm readiness, and verify one synthetic response against the overlap
 trust set. Missing or mismatched signing material refuses startup.
 
@@ -122,4 +126,4 @@ For a compromised caller-token issuer key, add its `kid` to `authentication.oidc
 
 ## Next
 
-[Operate the Evidence Gateway audit log](../../operate/evidence-audit/)
+[Operate the Registry Evidence audit log](../../operate/evidence-audit/)
