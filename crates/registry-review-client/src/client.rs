@@ -161,6 +161,23 @@ impl ReviewClient {
         check_accepted(&value, &request.policy, &request.subject, &trace_id, status)?;
         if let (Some(expected), Some(actual)) = (expected_producer, producer) {
             if expected != actual {
+                // The provider binds its admitted producer to this exact request
+                // and subject namespace. A stale body is not identity evidence.
+                let actual_digest = registry_review_protocol::submission_digest(
+                    &actual,
+                    &request.subject.source,
+                    request,
+                )
+                .map_err(|_| {
+                    protocol(status, ReviewProtocolFailure::Body, Some(trace_id.clone()))
+                })?;
+                if value.submission_digest != actual_digest {
+                    return Err(protocol(
+                        status,
+                        ReviewProtocolFailure::Body,
+                        Some(trace_id),
+                    ));
+                }
                 return Err(ReviewClientError::ProducerIdentityMismatch {
                     status: status.as_u16(),
                     expected: expected.to_owned(),
