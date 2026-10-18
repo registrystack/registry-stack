@@ -3318,16 +3318,19 @@ async fn terminal_prune_rechecks_state_cutoff_batch_bound_and_caller_transaction
     let later = cutoff + Duration::from_secs(1);
     let mut keys = Vec::new();
     let mut expected = BTreeSet::new();
-    for (state, updated, expired, remove) in [
-        ("pending", cutoff, false, false),
-        ("leased", cutoff, false, false),
-        ("unknown", cutoff, false, false),
-        ("dead-lettered", cutoff, false, false),
-        ("dead-lettered", cutoff, true, true),
-        ("expired", cutoff, true, true),
-        ("cancelled", cutoff, false, true),
-        ("delivered", cutoff, false, true),
-        ("delivered", later, false, false),
+    for (state, terminal, updated, expired, remove) in [
+        ("pending", cutoff, cutoff, false, false),
+        ("leased", cutoff, cutoff, false, false),
+        ("unknown", cutoff, cutoff, false, false),
+        ("dead-lettered", cutoff, cutoff, false, false),
+        ("dead-lettered", cutoff, cutoff, true, true),
+        ("dead-lettered", cutoff, later, true, true),
+        ("dead-lettered", later, later, true, false),
+        ("dead-lettered", cutoff, later, false, false),
+        ("expired", cutoff, cutoff, true, true),
+        ("cancelled", cutoff, cutoff, false, true),
+        ("delivered", cutoff, cutoff, false, true),
+        ("delivered", later, later, false, false),
     ] {
         let key = enqueue_message(&harness, &Message::default()).await;
         harness.admin.execute(&format!(
@@ -3337,10 +3340,10 @@ async fn terminal_prune_rechecks_state_cutoff_batch_bound_and_caller_transaction
              lease_expires_at=CASE WHEN $2='leased' THEN $3::timestamptz + interval '1 minute' ELSE NULL END,
              lease_token=CASE WHEN $2='leased' THEN $4::uuid ELSE NULL END,
              delivered_at=CASE WHEN $2='delivered' THEN $3::timestamptz ELSE NULL END,
-             dead_lettered_at=CASE WHEN $2='dead-lettered' THEN $3::timestamptz ELSE NULL END,
+             dead_lettered_at=CASE WHEN $2='dead-lettered' THEN $6::timestamptz ELSE NULL END,
              expired_at=CASE WHEN $5 THEN $3::timestamptz ELSE NULL END
              WHERE message_id=$1", harness.schema),
-            &[&key.id(), &state, &updated, &Uuid::new_v4(), &expired],
+            &[&key.id(), &state, &updated, &Uuid::new_v4(), &expired, &terminal],
         ).await.unwrap();
         if remove {
             expected.insert(key.id());

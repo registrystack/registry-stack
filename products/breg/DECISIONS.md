@@ -124,7 +124,8 @@
   accepted assertion is retained for a fixed 24 hours after acceptance. A
   supervised runtime worker erases expired immediate Action and Proposal uses
   on startup and every minute, in batches of at most 1,000 rows per table.
-  Backlogs drain over subsequent ticks. With separate runtime and migration
+  Each tick drains at most 100 separately audited and committed batches, then
+  yields; larger backlogs continue on subsequent ticks. With separate runtime and migration
   roles, the runtime can invoke expiry but cannot read the retained assertions
   or delete unexpired material. Each sweep
   requires an accepted audit attempt and records its outcome without assertion

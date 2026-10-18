@@ -15,6 +15,11 @@ use crate::postgres::{
     RegistryLockKey, RuntimePool, RuntimeRevoke, SqlIdentifier,
 };
 
+const MAX_EXPIRY_BATCHES_PER_TICK: u32 = 100;
+// Each table is limited to 1,000 rows. The SQL result is their sum: only a
+// sum below 1,000 establishes that neither table filled its batch.
+const EXPIRY_BATCH_ROWS_PER_TABLE: i64 = 1_000;
+
 pub(crate) const EXPIRY_FUNCTION: &str = "registry_internal.expire_action_evidence_uses()";
 /// Schema shared by manual and runtime Evidence erasure.
 pub const EVIDENCE_RETENTION_AUDIT_SCHEMA: &str = "breg-evidence-retention-audit/v2";
@@ -108,7 +113,7 @@ impl EvidenceRetentionWorker {
                 }
                 _ = async {
                     interval.tick().await;
-                    if self.tick().await.is_err() {
+                    if self.drain_tick(MAX_EXPIRY_BATCHES_PER_TICK).await.is_err() {
                         tracing::error!("Evidence retention sweep failed");
                     }
                 } => {}
@@ -116,7 +121,31 @@ impl EvidenceRetentionWorker {
         }
     }
 
-    async fn tick(&self) -> Result<(), ()> {
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    pub async fn drain_tick_for_test(&self, max_batches: u32) -> (i64, bool) {
+        self.drain_tick(max_batches)
+            .await
+            .expect("test retention tick succeeds")
+    }
+
+    async fn drain_tick(&self, max_batches: u32) -> Result<(i64, bool), ()> {
+        let mut erased = 0;
+        for _ in 0..max_batches {
+            let removed = self.erase_audited_batch().await?;
+            erased += removed;
+            if removed < EXPIRY_BATCH_ROWS_PER_TABLE {
+                return Ok((erased, false));
+            }
+        }
+        tracing::warn!(
+            erased,
+            "Evidence retention reached its per-tick batch bound"
+        );
+        Ok((erased, true))
+    }
+
+    async fn erase_audited_batch(&self) -> Result<i64, ()> {
         let correlation = uuid::Uuid::new_v4().to_string();
         let record = |phase: &str, outcome: &str| {
             json!({
@@ -150,7 +179,7 @@ impl EvidenceRetentionWorker {
             response["erased"] = json!(erased);
         }
         attempt.respond(response).await.map_err(|_| ())?;
-        result.map(|_| ()).map_err(|_| ())
+        result.map_err(|_| ())
     }
 
     async fn erase_batch(&self) -> Result<i64, ExpiryError> {

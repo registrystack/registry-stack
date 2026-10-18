@@ -120,6 +120,9 @@ naming a disposable database, and fail when it is absent.
 `postgres::prune_terminal` accepts at most 256 product-selected job keys and
 a product-owned cutoff inside the caller's transaction. It rechecks state and
 timestamps, preserving pending, leased, unknown, and unexpired dead-letter jobs.
+Dead letters age from `dead_lettered_at` and require completed expiry; a later
+expiry timestamp does not restart their metadata horizon. The consumer must
+also establish payload erasure before selecting expired dead letters.
 It returns only deleted keys, leaving dependent cleanup, parent-record retention,
 replay policy, and audit retention with the consumer. The caller must roll back
 on any error. A failure is a `RetentionError` naming a value-free cause: the
