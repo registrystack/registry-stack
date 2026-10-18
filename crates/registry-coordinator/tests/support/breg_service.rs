@@ -170,7 +170,7 @@ impl Breg {
         );
         let mut registry = json!({
             "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1", "kind":"BRegProject",
-            "project":{"id":"coordinator-action-proof", "canonicalBaseIri":"https://synthetic.example.invalid/action-proof", "version":"1", "defaultLanguage":"en"},
+            "project":{"id":"coordinator-action-proof", "canonicalBaseIri":"https://synthetic.example.test/action-proof", "version":"1", "defaultLanguage":"en"},
             "package":{"sourceRevision":"coordinator-native-action-proof"},
             "recordTypes":[{"id":"item", "primaryDataset":"synthetic-items", "route":"items", "mutationMode":"mutable", "classification":"internal",
                 "fields":[{"id":"owner", "type":"string", "required":true, "maximumLength":80, "classification":"internal"},
