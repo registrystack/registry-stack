@@ -760,7 +760,7 @@ fn package_action(error: &PackageError) -> &'static str {
             "Point --package at a readable package directory that bregctl package wrote."
         }
         PackageError::DeploymentIdentity => {
-            "Replace canonicalBaseIri, schema-test, and rebuild the deployment package."
+            "Replace canonicalBaseIri, rerun schema-test, and rebuild the deployment package."
         }
         PackageError::RetiredApiVersion => {
             "Rebuild the package with this bregctl: bregctl package PROJECT --test-receipt RECEIPT --output BUILD, then apply the rebuilt package to a new database: bregctl apply --initial --package BUILD."
