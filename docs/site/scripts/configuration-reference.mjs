@@ -465,8 +465,21 @@ function walk(document, schema, prefix, kind, required, occurrences, state) {
     });
   }
 
+  // A map's values are declared by `additionalProperties`, by one or more
+  // `patternProperties`, or by both. Each declares the same `.*` entry, so the
+  // key path is shared and every value schema walks under it.
+  const mapValues = [];
   const additional = schema.additionalProperties;
   if (additional !== null && typeof additional === 'object' && !Array.isArray(additional)) {
+    mapValues.push([additional, `${state.scope}/additionalProperties`]);
+  }
+  const patterned = schema.patternProperties;
+  if (patterned !== null && typeof patterned === 'object' && !Array.isArray(patterned)) {
+    for (const [pattern, valueSchema] of Object.entries(patterned)) {
+      mapValues.push([valueSchema, `${state.scope}/patternProperties[${pattern}]`]);
+    }
+  }
+  if (mapValues.length > 0) {
     const valuePath = prefix ? `${prefix}.*` : '*';
     // `propertyNames` bounds the key a deployment writes for each entry. It
     // sits on the map, so without this it reaches no row a reader consults
@@ -493,11 +506,13 @@ function walk(document, schema, prefix, kind, required, occurrences, state) {
         });
       }
     }
-    walk(document, additional, valuePath, 'map_value', false, occurrences, {
-      ...state,
-      scope: `${state.scope}/additionalProperties`,
-      descriptionDepth: 0,
-    });
+    for (const [valueSchema, scope] of mapValues) {
+      walk(document, valueSchema, valuePath, 'map_value', false, occurrences, {
+        ...state,
+        scope,
+        descriptionDepth: 0,
+      });
+    }
   }
 }
 

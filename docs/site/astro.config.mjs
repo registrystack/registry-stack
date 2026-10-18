@@ -197,15 +197,11 @@ const schedulingOpenApiSchema = {
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
   },
 };
-const schedulingRoutes = [
-  '/start/scheduling/',
-  '/tutorials/first-scheduling/',
-  '/explanation/how-scheduling-works/',
-  '/configure/scheduling/',
-  '/operate/scheduling/',
-  '/reference/apis/registry-scheduling/',
-  '/reference/scheduling-configuration/',
-];
+// The Scheduling and Render pages are gated out of the docs collection of a
+// docset that does not publish the product (src/lib/docset-products.mjs), so
+// their routes and Markdown twins redirect to the current docset, which
+// publishes both.
+const schedulingRoutes = productRoutes('registry-scheduling');
 /**
  * @param {boolean} hasScheduling
  * @param {(path: string) => string} currentDocsetRedirect
@@ -214,6 +210,19 @@ export function schedulingRedirects(hasScheduling, currentDocsetRedirect) {
   if (hasScheduling) return {};
   return Object.fromEntries(schedulingRoutes.flatMap((route) => [
     [route, currentDocsetRedirect(route)],
+    [`${route.slice(0, -1)}.md`, currentDocsetRedirect(route)],
+  ]));
+}
+const renderRoutes = productRoutes('registry-render');
+/**
+ * @param {boolean} hasRender
+ * @param {(path: string) => string} currentDocsetRedirect
+ */
+export function renderRedirects(hasRender, currentDocsetRedirect) {
+  if (hasRender) return {};
+  return Object.fromEntries(renderRoutes.flatMap((route) => [
+    [route, currentDocsetRedirect(route)],
+    [`${route.slice(0, -1)}.md`, currentDocsetRedirect(route)],
   ]));
 }
 const messagingOpenApiSidebarGroup = createOpenAPISidebarGroup();
@@ -368,6 +377,7 @@ export default defineConfig({
     ...buildRelayRetirementRedirects(currentDocsetRedirect),
     ...caseworkRedirects(hasCasework, currentDocsetRedirect),
     ...schedulingRedirects(hasScheduling, currentDocsetRedirect),
+    ...renderRedirects(hasRender, currentDocsetRedirect),
     ...messagingRedirects(hasMessaging, currentHasMessaging, currentDocsetRedirect),
     ...coordinatorRedirects(hasCoordinator, currentHasCoordinator, currentDocsetRedirect),
     '/start/': internalRedirect('/'),

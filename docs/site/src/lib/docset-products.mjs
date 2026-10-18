@@ -17,6 +17,22 @@ export const PRODUCT_PAGES = Object.freeze({
   // The Base Registry Engine citizen services, breg-mcp and breg-review. The
   // Base Registry Engine itself is published by every docset.
   'registry-breg-services': Object.freeze(['configure/breg-mcp']),
+  'registry-scheduling': Object.freeze([
+    'start/scheduling',
+    'tutorials/first-scheduling',
+    'explanation/how-scheduling-works',
+    'configure/scheduling',
+    'operate/scheduling',
+    'reference/scheduling-configuration',
+    'reference/apis/registry-scheduling',
+  ]),
+  'registry-render': Object.freeze([
+    'start/registry-render',
+    'tutorials/first-render-document',
+    'explanation/render-determinism',
+    'operate/registry-render',
+    'reference/render-configuration',
+  ]),
   'registry-messaging': Object.freeze([
     'start/messaging',
     'tutorials/first-messaging',
@@ -43,6 +59,8 @@ export const PRODUCT_PAGES = Object.freeze({
  */
 export const PRODUCT_CLI_BINARIES = Object.freeze({
   'registry-breg-services': Object.freeze(['breg-mcp', 'breg-review']),
+  'registry-scheduling': Object.freeze(['scheduling', 'schedulingctl']),
+  'registry-render': Object.freeze(['registry-render']),
   'registry-messaging': Object.freeze(['messaging', 'messagingctl']),
   'registry-coordinator': Object.freeze(['coordinator', 'coordinatorctl']),
 });

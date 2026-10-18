@@ -28,6 +28,10 @@ const withBregServices = { products: { 'registry-breg-services': { ref: 'HEAD' }
 const withoutBregServices = withoutMessaging;
 const withCoordinator = { products: { 'registry-coordinator': { ref: 'HEAD' } } };
 const withoutCoordinator = withoutMessaging;
+const withSchedulingAndRender = {
+  products: { 'registry-scheduling': { ref: 'HEAD' }, 'registry-render': { ref: 'HEAD' } },
+};
+const withoutSchedulingAndRender = withoutMessaging;
 
 // Registry Messaging, breg-mcp, and breg-review first ship in v0.38.0
 // (release_roster.MESSAGING_FIRST_RELEASE and BREG_SERVICES_FIRST_RELEASE).
@@ -133,6 +137,20 @@ test('the release label check leaves docsets before applies_from as published', 
   assert.deepEqual(releaseLabelErrors({ docsets, manifests, releaseArtifacts }), []);
 });
 
+// Registry Scheduling and Registry Render first ship in v0.33.0.
+test('no docset archived before v0.33.0 publishes Registry Scheduling or Registry Render', () => {
+  const manifest = parse(readFileSync(resolve(siteRoot, 'src/data/docsets.yaml'), 'utf8'));
+  const earlier = manifest.docsets.filter((docset) => {
+    const match = /^v0\.(\d+)\.\d+$/.exec(docset.id);
+    return match !== null && Number(match[1]) < 33;
+  });
+  assert.ok(earlier.length > 0, 'docsets.yaml must keep archived docsets');
+  for (const docset of earlier) {
+    assert.equal(docset.products?.['registry-scheduling'], undefined, docset.id);
+    assert.equal(docset.products?.['registry-render'], undefined, docset.id);
+  }
+});
+
 test('no docset archived before v0.38.0 publishes Registry Messaging or the BReg citizen services', () => {
   const manifest = parse(readFileSync(resolve(siteRoot, 'src/data/docsets.yaml'), 'utf8'));
   const earlier = manifest.docsets.filter((docset) => {
@@ -171,6 +189,22 @@ test('every gated page exists and maps to its route', () => {
     '/reference/apis/registry-messaging/',
   ]);
   assert.deepEqual(productRoutes('registry-breg-services'), ['/configure/breg-mcp/']);
+  assert.deepEqual(productRoutes('registry-scheduling'), [
+    '/start/scheduling/',
+    '/tutorials/first-scheduling/',
+    '/explanation/how-scheduling-works/',
+    '/configure/scheduling/',
+    '/operate/scheduling/',
+    '/reference/scheduling-configuration/',
+    '/reference/apis/registry-scheduling/',
+  ]);
+  assert.deepEqual(productRoutes('registry-render'), [
+    '/start/registry-render/',
+    '/tutorials/first-render-document/',
+    '/explanation/render-determinism/',
+    '/operate/registry-render/',
+    '/reference/render-configuration/',
+  ]);
   assert.deepEqual(productRoutes('registry-coordinator'), [
     '/start/coordinator/',
     '/explanation/how-coordinator-works/',
@@ -204,9 +238,34 @@ test('drops a gated product\'s pages and CLI references from the docs collection
     assert.equal(isEntryGatedOut(id, withoutMessaging), false, id);
   }
   assert.deepEqual(omittedCliBinaries(withoutMessaging), [
+    'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render',
+    'messaging', 'messagingctl', 'coordinator', 'coordinatorctl',
+  ]);
+  assert.deepEqual(omittedCliBinaries(withMessaging), [
+    'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render', 'coordinator', 'coordinatorctl',
+  ]);
+});
+
+test('drops Registry Scheduling\'s and Registry Render\'s pages and CLI references from the docs collection', () => {
+  for (const id of [
+    ...PRODUCT_PAGES['registry-scheduling'],
+    ...PRODUCT_PAGES['registry-render'],
+    'reference/cli/scheduling',
+    'reference/cli/scheduling/serve',
+    'reference/cli/schedulingctl',
+    'reference/cli/schedulingctl/package',
+    'reference/cli/registry-render',
+    'reference/cli/registry-render/render',
+  ]) {
+    assert.equal(isEntryGatedOut(id, withoutSchedulingAndRender), true, id);
+    assert.equal(isEntryGatedOut(id, withSchedulingAndRender), false, id);
+  }
+  for (const id of ['index', 'reference/apis', 'reference/cli/schedulingx', 'start/casework']) {
+    assert.equal(isEntryGatedOut(id, withoutSchedulingAndRender), false, id);
+  }
+  assert.deepEqual(omittedCliBinaries(withSchedulingAndRender), [
     'breg-mcp', 'breg-review', 'messaging', 'messagingctl', 'coordinator', 'coordinatorctl',
   ]);
-  assert.deepEqual(omittedCliBinaries(withMessaging), ['breg-mcp', 'breg-review', 'coordinator', 'coordinatorctl']);
 });
 
 test('drops the citizen services\' pages and CLI references from the docs collection', () => {
@@ -229,7 +288,9 @@ test('drops the citizen services\' pages and CLI references from the docs collec
   ]) {
     assert.equal(isEntryGatedOut(id, withoutBregServices), false, id);
   }
-  assert.deepEqual(omittedCliBinaries(withBregServices), ['messaging', 'messagingctl', 'coordinator', 'coordinatorctl']);
+  assert.deepEqual(omittedCliBinaries(withBregServices), [
+    'scheduling', 'schedulingctl', 'registry-render', 'messaging', 'messagingctl', 'coordinator', 'coordinatorctl',
+  ]);
 });
 
 test('drops Registry Coordinator\'s pages and CLI references from the docs collection', () => {
@@ -245,7 +306,9 @@ test('drops Registry Coordinator\'s pages and CLI references from the docs colle
   for (const id of ['index', 'reference/apis', 'reference/configuration-files', 'reference/cli/coordinatorx']) {
     assert.equal(isEntryGatedOut(id, withoutCoordinator), false, id);
   }
-  assert.deepEqual(omittedCliBinaries(withCoordinator), ['breg-mcp', 'breg-review', 'messaging', 'messagingctl']);
+  assert.deepEqual(omittedCliBinaries(withCoordinator), [
+    'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render', 'messaging', 'messagingctl',
+  ]);
 });
 
 function region(type, children, { absent = false, product = 'registry-messaging' } = {}) {
