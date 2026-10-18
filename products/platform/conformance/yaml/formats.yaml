@@ -57,6 +57,7 @@ formats:
       - /authentication/oidc/jwksUri
       - /authentication/oidc/jwksSource/kind
       - /authentication/oidc/principalClaim
+      - /authentication/oidc/deniedKids
       - /audit/retainDays
       - /package/expectedPolicyDigest
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: runtime.example.yaml}
