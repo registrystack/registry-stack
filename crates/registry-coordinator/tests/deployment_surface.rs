@@ -64,6 +64,29 @@ fn runtime_reads_the_explicit_http_issuer_opt_in() {
         .unwrap()
         .contains("allowInsecureHttp: true"));
 }
+
+#[test]
+fn a_remote_http_issuer_is_refused_without_the_opt_in() {
+    let runtime_file = tempfile::NamedTempFile::new().unwrap();
+    let template = include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml")
+        .replace(
+            "issuer: https://issuer.example.org",
+            "issuer: http://issuer.example.org",
+        );
+    fs::write(runtime_file.path(), template).unwrap();
+    let error = RuntimeConfig::load(&runtime_file.path().canonicalize().unwrap())
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "coordinator.access.configuration");
+    assert_eq!(
+        error.field.as_deref(),
+        Some("/deployment/authentication/issuer")
+    );
+    assert!(error
+        .suggested_action
+        .as_deref()
+        .is_some_and(|action| action.contains("allowInsecureHttp: true")));
+}
 #[test]
 fn unrelated_connection_and_signing_rotation_preserve_workflow_binding() {
     let root = tempfile::tempdir().unwrap();
