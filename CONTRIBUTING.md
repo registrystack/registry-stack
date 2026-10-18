@@ -218,8 +218,8 @@ Every pull request should make the review path clear:
   in [`CONFIG-CONVENTIONS.md`](products/platform/CONFIG-CONVENTIONS.md) keeps
   each refusal until its format's next stable version.
   `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
-  earliest shared predecessor; `EVIDENCE_FORWARD_PATH_FLOOR` separately names
-  Evidence's normalized baseline, and
+  earliest shared predecessor, v0.42.0, where Evidence's normalized baseline
+  and Messaging's fresh schema baseline start, and
   [`api-stability.mdx`](docs/site/src/content/docs/reference/api-stability.mdx)
   states the promise for operators.
 

@@ -259,8 +259,7 @@ Evidence's normalized `v0.42.0` model starts a new baseline. Retired split
 question/source projects and targets with bundled authority have no in-place conversion.
 Retain the previous deployment and audit, author `evidence.yaml`, a target, and complete target
 authority with the current tooling, then package and verify a fresh synthetic assertion before
-cutover. The predecessor rehearsal omits Evidence when the starting release predates `v0.42.0`;
-a focused Evidence request from such a release refuses.
+cutover. The predecessor rehearsal refuses to start from a release before `v0.42.0`.
 
 Casework's review-only replacement requires a fresh database. It refuses the retired
 database containing WorkItem tables without converting or deleting its state. Drain or cancel old reviews,
@@ -289,7 +288,7 @@ Base Registry Engine's Beta pilot conditions are under
 
 {/* Evidence: CONTRIBUTING.md, predecessor readability and the v0.40.0 exception;
     release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR, check_forward_path(),
-    select_from_tag(), check_floor_is_current(), EVIDENCE_FORWARD_PATH_FLOOR, and select_products();
+    select_from_tag(), check_floor_is_current(), and select_products();
     products/evidence/CHANGELOG.md, Unreleased; crates/registry-discovery/Cargo.toml;
     crates/registry-casework/src/store.rs; crates/registry-casework/migrations/0100_reviews.sql. */}
 
@@ -309,14 +308,14 @@ The promise is machine-checked where a checker exists:
   Messaging, upgrades with the binaries built from the pull request, and fails when captured
   views differ, retained tables lose rows, or an audit file loses entries. It starts from the newest
   published release at or below the workspace version, so it rehearses the immediate predecessor,
-  and it refuses to start from a release before `v0.41.0`.
+  and it refuses to start from a release before `v0.42.0`, where Evidence's normalized baseline
+  and Messaging's fresh schema baseline start.
   While no release from that floor onward is published, the rehearsal uses the binaries under test
   on both sides and reports that it has no published predecessor. This exercises the scenarios with
   the same build; it does not demonstrate compatibility between releases. Once a release on the
   forward state path is published, the default run downloads eligible product binaries from it.
-  Evidence joins from its normalized `v0.42.0` baseline. Default omissions record the unsupported
-  transition; a focused unsupported product request refuses. BReg, Casework, and Scheduling state
-  are not rehearsed. BReg and Casework have separate current-schema operator checks.
+  Default omissions record the unsupported transition; a focused unsupported product request
+  refuses. BReg, Casework, and Scheduling state are not rehearsed. BReg and Casework have separate current-schema operator checks.
 
 {/* Evidence: .github/workflows/release-upgrade-rehearsal.yml; release/scripts/rehearse-upgrade.py, main(), fetch_release(), view_differences(), row_count_losses(), audit_stream_losses(), select_from_tag(), and check_forward_path(). */}
 

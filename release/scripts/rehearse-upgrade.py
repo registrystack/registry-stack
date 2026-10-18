@@ -11,8 +11,9 @@ runs the upgrade an operator runs, and fails unless the state is still served
 unchanged and no table lost a row.
 A product the previous release did not ship, or whose contract starts at a
 new baseline, has no supported state to carry forward. Its leg is omitted and
-the report says why. Evidence starts at the normalized 0.42.0 baseline; earlier
-split projects and bundled authority have no in-place conversion.
+the report says why. The forward state path starts at 0.42.0: Evidence's
+normalized baseline and Messaging's fresh schema baseline both start there, and
+no product reads state a release before it wrote.
 
 While no release on the forward state path is published, there is no
 predecessor to download: the rehearsal then runs every leg with this source's
@@ -79,18 +80,12 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # minor line, so a patch release does not move it, or to a later release up to
 # the workspace version: the forward state path then starts at that release,
 # and this source reads no state an earlier release wrote.
-FORWARD_PATH_FLOOR = (0, 41, 0)
-# Evidence replaced split question/source projects and bundled authority with
-# the normalized project, target, and separately activated complete authority.
-# The current compiler deliberately refuses that retired authoring grammar.
-EVIDENCE_FORWARD_PATH_FLOOR = (0, 42, 0)
-EVIDENCE_NO_IN_PLACE_UPGRADE = (
-    "Evidence's normalized 0.42.0 baseline requires a newly authored evidence.yaml "
-    "project, target.yaml, and complete target authority; retired split projects "
-    "and bundled authority have no in-place conversion. Retain the previous "
-    "deployment and audit, author and package the current model, then verify a "
-    "fresh synthetic assertion before cutover"
-)
+# The forward state path starts at 0.42.0. BReg and Casework start on a fresh
+# database (RETIRED_PRODUCTS). Evidence's normalized project, target, and
+# separately activated complete authority replace the split question/source
+# projects and bundled authority, which the current compiler refuses. Messaging
+# installs one schema baseline and refuses a pre-1.0 ledger by name.
+FORWARD_PATH_FLOOR = (0, 42, 0)
 
 STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
 STACK_RELEASED = re.compile(r"\Astack:\n(?:  .*\n)*?  status: released\n")
@@ -293,8 +288,6 @@ def select_products(requested: list[str] | None, from_tag: str, platform: str,
         platforms = PRODUCT_PLATFORMS.get(product, PLATFORMS)
         if product in RETIRED_PRODUCTS:
             reason = RETIRED_PRODUCTS[product]
-        elif product == "evidence" and start < EVIDENCE_FORWARD_PATH_FLOOR:
-            reason = EVIDENCE_NO_IN_PLACE_UPGRADE
         elif product == "messaging" and not release_roster.messaging_in_release(start):
             first = release_roster.MESSAGING_FIRST_RELEASE
             if first is None:
