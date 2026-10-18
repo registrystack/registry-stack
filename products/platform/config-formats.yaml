@@ -1272,7 +1272,7 @@ formats:
         whenOmitted: refused
       - pointer: /authentication/oidc/allowInsecureHttp
         whenOmitted: closed
-      - pointer: /authentication/oidc/deniedKids
+      - pointer: /authentication/oidc/revokedKeyIds
         whenOmitted: open
       - pointer: /authentication/oidc/maximumTokenLifetimeSeconds
         whenOmitted: open

@@ -10,7 +10,7 @@
   policy refusal at startup names its remedy. Plain HTTP beyond IPv4 or IPv6 loopback
   requires `allowInsecureHttp: true` and emits a startup warning; a discovered cross-origin
   endpoint must use HTTPS even with that setting. Casework
-  also gains `deniedKids` and `maximumTokenLifetimeSeconds` for immediate signing-key refusal
+  also gains `revokedKeyIds` and `maximumTokenLifetimeSeconds` for immediate signing-key refusal
   and an operator-bounded token lifetime.
 
 - `registry-platform-hooks` gains `receiver::verify_delivery`, behind the

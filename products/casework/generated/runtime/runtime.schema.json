@@ -378,16 +378,6 @@
           "minLength": 1,
           "type": "string"
         },
-        "deniedKids": {
-          "description": "Signing-key identifiers refused even while the issuer still publishes\nthem. Omitted, no key is denied; written, the list is non-empty.",
-          "items": {
-            "$ref": "#/$defs/ExternalId"
-          },
-          "maxItems": 128,
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        },
         "humanIdentity": {
           "$ref": "#/$defs/HumanIdentityConfig"
         },
@@ -408,6 +398,16 @@
           "maximum": 7200,
           "minimum": 1,
           "type": "integer"
+        },
+        "revokedKeyIds": {
+          "description": "Signing-key identifiers Casework refuses locally, even while the issuer\nstill publishes them; listing a key does not revoke it at the issuer.\nOmitted, no key is refused; written, the list is non-empty.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
         },
         "scopeClaim": {
           "default": "registry_scopes",

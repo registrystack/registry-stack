@@ -660,10 +660,11 @@ pub struct OidcConfig {
     pub scope_claim: String,
     #[serde(default)]
     pub human_identity: HumanIdentityConfig,
-    /// Signing-key identifiers refused even while the issuer still publishes
-    /// them. Omitted, no key is denied; written, the list is non-empty.
-    #[serde(default, deserialize_with = "present_denied_kids")]
-    pub denied_kids: Option<DeniedKeyIds>,
+    /// Signing-key identifiers Casework refuses locally, even while the issuer
+    /// still publishes them; listing a key does not revoke it at the issuer.
+    /// Omitted, no key is refused; written, the list is non-empty.
+    #[serde(default, deserialize_with = "present_revoked_key_ids")]
+    pub revoked_key_ids: Option<RevokedKeyIds>,
     /// Optional deployment bound on the lifetime declared by an incoming
     /// access token, independently of the issuer's own policy.
     #[serde(
@@ -674,20 +675,21 @@ pub struct OidcConfig {
     pub maximum_token_lifetime_seconds: Option<u64>,
 }
 
-/// An empty list is not how the file says "deny no key" (CFG-EMPTY-2):
+/// An empty list is not how the file says "refuse no key" (CFG-EMPTY-2):
 /// omitting the member says it.
-fn present_denied_kids<'de, D: Deserializer<'de>>(
+fn present_revoked_key_ids<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> std::result::Result<Option<DeniedKeyIds>, D::Error> {
-    DeniedKeyIds::deserialize(deserializer).map(Some)
+) -> std::result::Result<Option<RevokedKeyIds>, D::Error> {
+    RevokedKeyIds::deserialize(deserializer).map(Some)
 }
 
-/// A written denylist: distinct external key identifiers with a bounded
-/// deployment size. Absence, rather than an empty list, means deny no key.
+/// A written list of refused keys: distinct external key identifiers with a
+/// bounded deployment size. Absence, rather than an empty list, means refuse
+/// no key.
 #[derive(Clone, Debug)]
-pub struct DeniedKeyIds(registry_platform_yaml::UniqueList<registry_platform_yaml::ExternalId>);
+pub struct RevokedKeyIds(registry_platform_yaml::UniqueList<registry_platform_yaml::ExternalId>);
 
-impl<'de> Deserialize<'de> for DeniedKeyIds {
+impl<'de> Deserialize<'de> for RevokedKeyIds {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         let kids =
             registry_platform_yaml::UniqueList::<registry_platform_yaml::ExternalId>::deserialize(
@@ -696,14 +698,14 @@ impl<'de> Deserialize<'de> for DeniedKeyIds {
         if kids.is_empty() {
             return Err(registry_platform_yaml::Invalid::expected(
                 "at least one key identifier",
-                "List at least one key identifier to deny, or delete deniedKids to deny no key.",
+                "List at least one key identifier to refuse, or delete revokedKeyIds to refuse no key.",
             )
             .into_error());
         }
         if kids.len() > 128 {
             return Err(registry_platform_yaml::Invalid::expected(
                 "at most 128 key identifiers",
-                "Remove key identifiers from deniedKids until it lists at most 128.",
+                "Remove key identifiers from revokedKeyIds until it lists at most 128.",
             )
             .into_error());
         }
@@ -712,13 +714,13 @@ impl<'de> Deserialize<'de> for DeniedKeyIds {
 }
 
 #[cfg(feature = "schema")]
-impl schemars::JsonSchema for DeniedKeyIds {
+impl schemars::JsonSchema for RevokedKeyIds {
     fn inline_schema() -> bool {
         true
     }
 
     fn schema_name() -> std::borrow::Cow<'static, str> {
-        "DeniedKeyIds".into()
+        "RevokedKeyIds".into()
     }
 
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
@@ -1475,7 +1477,7 @@ impl RuntimeConfig {
         .with_denied_kids(
             self.authentication
                 .oidc
-                .denied_kids
+                .revoked_key_ids
                 .iter()
                 .flat_map(|kids| kids.0.iter())
                 .map(|kid| kid.as_str().to_owned())
@@ -1803,7 +1805,7 @@ mod tests {
     }
 
     /// Verify one HS256 token under the profile `value` configures, so a test
-    /// reads its key denylist and lifetime bound exactly as startup does.
+    /// reads its refused keys and lifetime bound exactly as startup does.
     async fn verify_under_operator_profile(
         value: &serde_json::Value,
         kid: &str,
@@ -1852,19 +1854,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn omitting_denied_kids_and_maximum_token_lifetime_keeps_current_acceptance() {
+    async fn omitting_revoked_key_ids_and_maximum_token_lifetime_keeps_current_acceptance() {
         let directory = tempfile::tempdir().unwrap();
         let value = operator_value(directory.path(), directory.path());
         verify_under_operator_profile(&value, "signing-1", 86_400)
             .await
-            .expect("no denylist and no lifetime bound accept a day-long token");
+            .expect("no refused keys and no lifetime bound accept a day-long token");
     }
 
     #[tokio::test]
-    async fn a_token_signed_by_a_denied_kid_is_refused_like_any_other_verification_failure() {
+    async fn a_token_signed_by_a_revoked_key_id_is_refused_like_any_other_verification_failure() {
         let directory = tempfile::tempdir().unwrap();
         let mut value = operator_value(directory.path(), directory.path());
-        value["authentication"]["oidc"]["deniedKids"] = json!(["signing-1"]);
+        value["authentication"]["oidc"]["revokedKeyIds"] = json!(["signing-1"]);
         let refused = verify_under_operator_profile(&value, "signing-1", 300).await;
         assert!(matches!(
             refused,
@@ -1872,7 +1874,7 @@ mod tests {
         ));
         verify_under_operator_profile(&value, "signing-2", 300)
             .await
-            .expect("a key not on the denylist still verifies");
+            .expect("a key not on the list still verifies");
     }
 
     #[tokio::test]
@@ -1891,10 +1893,10 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_denied_kids_list_or_an_out_of_range_lifetime_is_refused_with_its_fix() {
+    fn an_empty_revoked_key_ids_list_or_an_out_of_range_lifetime_is_refused_with_its_fix() {
         let directory = tempfile::tempdir().unwrap();
         let mut value = operator_value(directory.path(), directory.path());
-        value["authentication"]["oidc"]["deniedKids"] = json!([]);
+        value["authentication"]["oidc"]["revokedKeyIds"] = json!([]);
         let path = write_operator(&value, directory.path());
         let error = RuntimeConfig::loader()
             .load::<RuntimeConfig>(&path)
@@ -1902,12 +1904,12 @@ mod tests {
             .to_string();
         assert!(
             error.contains(
-                "List at least one key identifier to deny, or delete deniedKids to deny no key."
+                "List at least one key identifier to refuse, or delete revokedKeyIds to refuse no key."
             ),
             "{error}"
         );
         let mut value = operator_value(directory.path(), directory.path());
-        value["authentication"]["oidc"]["deniedKids"] =
+        value["authentication"]["oidc"]["revokedKeyIds"] =
             json!((0..129).map(|n| format!("signing-{n}")).collect::<Vec<_>>());
         let path = write_operator(&value, directory.path());
         let error = RuntimeConfig::loader()
@@ -1915,7 +1917,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("Remove key identifiers from deniedKids until it lists at most 128."),
+            error.contains("Remove key identifiers from revokedKeyIds until it lists at most 128."),
             "{error}"
         );
         let mut value = operator_value(directory.path(), directory.path());
