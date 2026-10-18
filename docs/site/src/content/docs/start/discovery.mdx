@@ -1,0 +1,66 @@
+---
+title: Registry Discovery overview
+description: What Registry Discovery gives an application looking for an Evidence provider, what an operator maintains, what it refuses to decide, and where to start.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - json-ld
+---
+
+If an application knows what it must establish about a person but not which institution can
+answer, [Registry Discovery](../../reference/glossary/#registry-discovery) tells it which Evidence
+types meet that requirement and which [Registry Evidence](../../reference/glossary/#evidence-gateway)
+services assert them.
+
+## What an application gets
+
+An application asks two questions over plain HTTP. It resolves a requirement, such as adult
+status in one jurisdiction, to the alternative sets of Evidence types that satisfy it. Then it
+searches for services that assert a type and reads each provider's public endpoint and the
+SHA-256 of the exact description the provider published. It saves the record
+and binding it chose, with the index revisions it chose under, as a selection: inert public
+metadata it can compare later. The Discovery namespace of the
+[Registry Stack client](../../reference/client-api/#registry-discovery) does this from Rust,
+Node.js, or Python.
+
+## What an operator maintains
+
+An operator keeps one project directory: the HTTPS origins it approved, one per provider; mapping
+files that say which Evidence types meet which requirement; and a runtime file. `discoveryctl`
+checks the project offline, then fetches each approved description once and writes an immutable,
+digest-sealed package. `discovery` serves that one package read-only, needs no database, and
+never contacts a provider while it runs. A new revision means a new package and a restart.
+
+## What Discovery refuses to decide
+
+Discovery is a curated index, not a trust broker. It holds no credentials, proxies no
+call, and vouches for no provider. Listing a service only means the operator
+approved its origin and the provider published that description. Whether to trust an endpoint
+stays with the application's own Evidence configuration, and the application calls the provider
+directly. [How the index works](../../explanation/discovery-as-an-index/) explains that boundary.
+
+## When it is not the right product
+
+An application that already knows its provider needs no index. Discovery describes only
+Registry Evidence services; [Registry Manifest](../../products/registry-manifest/) describes a registry's datasets and
+services for catalogues.
+
+## Where to start
+
+[Publish and consume a Registry Discovery index](../../tutorials/publish-and-consume-discovery-index/)
+packages and serves an index on your machine and finds one provider in about 15 minutes.
+[Package and run a Registry Discovery index](../../configure/discovery/) takes it to HTTPS origins
+and a pinned package.
+
+{/* Evidence: crates/registry-discovery/src/server.rs, the router serves health, ready, openapi,
+    /v1/services and /v1/evidence-types/resolve with no authentication;
+    crates/registry-discovery-profile/src/lib.rs accepts only the Evidence service kind;
+    crates/registry-discovery-client/src/selection.rs,
+    discovery_metadata_has_no_trust_or_native_io_capability;
+    crates/registry-discovery/src/startup.rs, load_runtime(); products/discovery/README.md. */}

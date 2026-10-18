@@ -1,6 +1,6 @@
 ---
 title: Publish and consume a Registry Discovery index
-description: Package a local Discovery index from an Evidence advertisement, resolve a requirement, and select an exact record to hand to native product trust.
+description: Package a local Discovery index from one Evidence provider description, resolve a requirement, and find the provider to select.
 status: draft
 owner: registry-docs
 source_repos:
@@ -8,8 +8,6 @@ source_repos:
 last_reviewed: "2026-09-27"
 doc_type: tutorial
 persona:
-  - assertion provider
-  - data publisher
   - operator
   - consumer or verifier
 locale: en
@@ -23,28 +21,25 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Registry Discovery helps an application find which Registry Evidence service can answer a question.
-In this tutorial you play every role: a provider publishes a short public description, an operator
-packages it into an index and serves it, and a consumer selects a matching service.
+You will package an index from one provider's public description, serve it, and then, as an
+application, ask it which Registry Evidence service can answer a question.
 
 <QuickstartMeta
-  outcome="One immutable local package, one resolved requirement, and one exact Evidence selection."
+  outcome="One local Discovery index, one resolved requirement, and one provider to select."
   time="About 15 minutes after the Rust dependencies are available"
   level="Local development with synthetic data"
-  prerequisites={['Git', 'Rust 1.95.0 through rustup', 'Python 3', 'curl', 'shasum', 'Local ports 38080 and 38090']}
+  prerequisites={['Git', 'Rust 1.95.0 through rustup', 'Python 3', 'curl', 'Local ports 38080 and 38090']}
 />
 
-## Before you start
+## Build discovery and discoveryctl
 
-Clone the repository and work from its root. Every service in this tutorial listens on loopback
-only.
+`discoveryctl` checks and packages an index offline, and `discovery` serves one package. Clone the
+repository and build both from its root:
 
 ```sh test-skip="the runner starts in a copy of this checkout"
 git clone --depth 1 --quiet https://github.com/registrystack/registry-stack.git
 cd registry-stack
 ```
-
-Build the two Discovery binaries from the locked workspace and put them on your `PATH`:
 
 ```sh test-skip="builds from source; the runner serves the binaries under test"
 . scripts/cargo-runtime-library-path.sh
@@ -52,44 +47,19 @@ registry_cargo_build "$PWD" --locked --release -p registry-discovery -p registry
 export PATH="$PWD/target/release:$PATH"
 ```
 
-`registry_cargo_build` runs `cargo build`. On macOS the binaries also load an AWS-LC FIPS library
-that stays in Cargo's build directory, so the helper points `DYLD_FALLBACK_LIBRARY_PATH` at it for
-this shell. Run every `discoveryctl` and `discovery` command below in this shell; the second shell
-this tutorial opens only runs Python and `curl`.
+The helper also sets the library path the binaries need on macOS, so run every `discoveryctl` and
+`discovery` command in this shell.
 
-`discoveryctl` is the operator's offline tool: it checks the authoring project and packages the
-index. `discovery` is the runtime that serves one verified package.
+## Check the project
 
-## Confirm the provider publications
-
-Each provider describes its service in one public JSON-LD file. The checkout carries an example
-description for a Registry Evidence deployment. Check that
-yours are the files this tutorial was written against:
-
-```sh
-shasum -a 256 \
-  products/discovery/fixtures/descriptions/evidence.jsonld
-```
-
-```text test-expect
-fc96f3a8cb0d82239425ea5712dceca975a5899e5528616648174da661fae905  products/discovery/fixtures/descriptions/evidence.jsonld
-```
-
-The fixture bytes are a deterministic example of the closed profile. A provider deploys the exact
-packaged file at its public description URL; the
-Discovery runtime does not reconstruct provider metadata.
-
-## Check the operator project
-
-Copy the tutorial's operator project out of the checkout, so the package you write stays separate
-from the source files:
+Copy the example project out of the checkout:
 
 ```sh
 cp -R products/discovery/tutorial/project discovery-project
 ```
 
-As the operator, you decide which providers the index includes. `discovery-project/origins.yaml`
-lists the URL of each approved description:
+As the operator, you approve each provider by the URL of its public description, in
+`discovery-project/origins.yaml`:
 
 ```yaml test-excerpt="discovery-project/origins.yaml"
 apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1
@@ -101,9 +71,8 @@ origins:
     enabled: true
 ```
 
-You also decide which kind of evidence satisfies a requirement an application may have.
-`discovery-project/mappings/adult-status.yaml` says that the adult-status requirement is met by
-one Evidence type:
+You also say which Evidence types meet a requirement an application may have.
+`discovery-project/mappings/adult-status.yaml` maps the adult-status requirement to one type:
 
 ```yaml test-excerpt="discovery-project/mappings/adult-status.yaml"
 apiVersion: id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1
@@ -118,10 +87,8 @@ alternatives:
       - urn:example:evidence-type:adult-status
 ```
 
-Check the project: both files, and the `runtime.yaml` beside them that you use later. Nothing serves
-the provider URL yet, and the check does not need it to.
-`--allow-loopback` accepts the `http://127.0.0.1` URLs; without it, `discoveryctl` accepts only
-HTTPS origins, which is what a real deployment uses.
+Check the project. `--allow-loopback` accepts the local `http://127.0.0.1` URL; without it, only
+HTTPS origins pass.
 
 ```sh
 discoveryctl check --project discovery-project --allow-loopback
@@ -132,19 +99,16 @@ valid origins=1 mappings=1
 0 errors, 0 warnings in 3 files
 ```
 
-`discoveryctl check` validates the files without contacting the provider URL. When it refuses a
-file, it prints each finding with the file, line, and column it is about, and the edit that fixes it. The package step in the
-next section is the only step that fetches the descriptions.
+The third file is `runtime.yaml`, which you use to serve the index. The check never contacts the
+provider URL; a refused file gets one finding per problem, with its line, column, and fix.
 
-{/* Evidence: `crates/registry-discoveryctl/src/project.rs`, test
-    `check_is_offline_and_accepts_an_unreachable_https_origin`, proves the offline check.
-    `crates/registry-discoveryctl/tests/build.rs`, test
-    `package_fetches_each_origin_once_and_preserves_semantic_revisions`, covers the one-shot fetch. */}
+{/* Evidence: crates/registry-discoveryctl/src/project.rs,
+    check_is_offline_and_accepts_an_unreachable_https_origin. */}
 
 ## Package the index
 
-Play the provider by serving its description at the URL `origins.yaml` approved. The
-server keeps running, so open a second shell at the root of the checkout and start it there:
+Play the provider: open a second shell at the checkout root and serve its description at the
+approved URL.
 
 ```sh test-background="http://127.0.0.1:38090/evidence.jsonld"
 python3 products/discovery/tutorial/publication_server.py \
@@ -164,36 +128,26 @@ discoveryctl package \
 packaged packageDigest=sha256:<package-digest> catalogRevision=sha256:7e0799f2c5fd24957e4d1372f757c40abef694110eb70fc260a0abdc312ca963 mappingRevision=sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac
 ```
 
-The two revisions are content addressed. The catalog revision is a digest of what the provider
-descriptions mean once normalized, and the mapping revision a digest of the operator's
-mappings, so the same inputs build the same revisions on any machine. A provider that
-reformats its file without changing its meaning keeps the same catalog revision. To detect any
-change to the exact bytes a provider published, compare each record's `originContentDigest`,
-which appears in the search results below.
+Packaging fetched the description once. The catalog revision digests what the descriptions mean
+and the mapping revision digests your mappings, so they match on any machine; the package digest
+also covers when this run fetched, so yours differs.
 
-The package digest is different: it covers the exact index file through the package's
-`SHA256SUMS` file, and the index records when this run fetched each description and when it was
-built. Your package digest therefore differs from anyone else's, and from your own next run.
+Stop the publication server with `Ctrl+C`. Discovery never contacts a provider while it serves.
 
-The package step fetched each description once and wrote the complete package to
-`discovery-project/package`. In the second shell, stop the publication server with `Ctrl+C`.
-Discovery never contacts a provider while it serves, so nothing below needs it.
+{/* Evidence: crates/registry-discoveryctl/tests/build.rs,
+    package_fetches_each_origin_once_and_preserves_semantic_revisions. */}
 
 ## Serve the index
 
-`discovery-project/runtime.yaml` names the listener, the package root, and the request and
-response limits. It reads the package root from `DISCOVERY_PACKAGE_ROOT`. Discovery accepts only
-absolute paths for both files, so the command below builds them from `$PWD`. It names no origin, mapping, or trust setting: the runtime checks the package
-against its `SHA256SUMS` at startup, then serves that index and nothing else.
-
-In the first shell, start Discovery:
+`discovery-project/runtime.yaml` names the listener, the limits, and a package root read from
+`DISCOVERY_PACKAGE_ROOT`. Both paths must be absolute. In the first shell, start Discovery:
 
 ```sh test-background="http://127.0.0.1:38080/ready"
 DISCOVERY_PACKAGE_ROOT="$PWD/discovery-project/package" \
   discovery --runtime-config "$PWD/discovery-project/runtime.yaml"
 ```
 
-In the second shell, confirm that it is ready:
+It checks the package against its `SHA256SUMS` file before it listens. In the second shell:
 
 ```sh
 curl -s http://127.0.0.1:38080/ready
@@ -205,9 +159,8 @@ curl -s http://127.0.0.1:38080/ready
 
 ## Resolve a requirement
 
-Now play the consumer. An application knows what it needs to establish, such as whether a
-person is an adult, but not which provider can tell it. Ask Discovery which Evidence types satisfy
-the adult-status requirement in the example jurisdiction:
+Now play the application. It knows it must establish that a person is an adult, but not which
+provider can say so. Ask Discovery which Evidence types satisfy that requirement:
 
 ```sh
 curl -s \
@@ -232,14 +185,12 @@ curl -s \
 }
 ```
 
-The answer carries the mapping revision the package step printed, so the application can record which
-version of your mapping it relied on. When a requirement has several alternatives, the
-application picks one, and then needs a provider for every Evidence type listed in it. Here there
-is one alternative with one type.
+Each alternative lists types that are required together; here there is one alternative with one
+type.
 
-## Search for the providers
+## Find the provider
 
-Search for Registry Evidence deployments that assert the resolved type:
+Search for Registry Evidence services that assert that type:
 
 ```sh
 curl -s --get \
@@ -248,115 +199,44 @@ curl -s --get \
   http://127.0.0.1:38080/v1/services
 ```
 
-```json test-expect
+The response carries the `catalogRevision` from the package step and one item. Its key fields:
+
+```json test-excerpt
 {
-  "catalogRevision": "sha256:7e0799f2c5fd24957e4d1372f757c40abef694110eb70fc260a0abdc312ca963",
-  "items": [
-    {
-      "recordId": "urn:registrystack:discovery:record:sha256:676659c10ce5cc9d353f4fd2816673c7947e612151efbbe1cc4d42372d9be9d5",
-      "bindingId": "urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c",
-      "serviceId": "urn:example:service:evidence",
-      "serviceKind": "evidence",
-      "title": "Example Evidence",
-      "description": "Public signed evidence assertions",
-      "endpointUrl": "https://evidence.example.org",
-      "publisherId": "urn:example:publisher",
-      "jurisdictions": ["https://publications.europa.eu/resource/authority/territory/DEU"],
-      "conformsTo": ["https://registrystack.org/evidence/profile/v1"],
-      "evidenceTypeIds": ["urn:example:evidence-type:adult-status"],
-      "semanticClassIds": [],
-      "operationFamilyIds": [],
-      "originId": "tutorial-evidence",
-      "originUrl": "http://127.0.0.1:38090/evidence.jsonld",
-      "originContentDigest": "sha256:fc96f3a8cb0d82239425ea5712dceca975a5899e5528616648174da661fae905",
-      "originFetchedAt": "<fetched-at>"
-    }
-  ]
+  "recordId": "urn:registrystack:discovery:record:sha256:676659c10ce5cc9d353f4fd2816673c7947e612151efbbe1cc4d42372d9be9d5",
+  "bindingId": "urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c",
+  "serviceKind": "evidence",
+  "endpointUrl": "https://evidence.example.org",
+  "originUrl": "http://127.0.0.1:38090/evidence.jsonld",
+  "originContentDigest": "sha256:fc96f3a8cb0d82239425ea5712dceca975a5899e5528616648174da661fae905"
 }
 ```
 
-The answer carries the `catalogRevision` the package step printed. The result names the description
-it came from, with the same digest you
-checked at the start, and `originFetchedAt`, the time your package step fetched it.
+`originContentDigest` is the SHA-256 of the exact bytes the provider published.
 
-## Select and hand off
+The application saves a selection: the `recordId` and `bindingId` it chose, and the two revisions
+it chose under. A selection is public metadata, not a credential. Whether to trust
+`endpointUrl` is decided by the application's own Evidence configuration, and the call to it never
+passes through Discovery. The Discovery namespace of the
+[Registry Stack client](../../reference/client-api/#registry-discovery) runs these searches and
+saves selections from Rust, Node.js, or Python.
 
-Each search found one service, so the choice is made. What the application saves is a
-selection: the `recordId` and `bindingId` of the result it chose, what it searched for, and the
-`catalogRevision` and `mappingRevision` it chose under. That is enough to explain the choice later
-and to notice when the index changes. A selection is public metadata only. It is not a credential,
-and it does not make the provider trusted.
-
-Calling the provider is a separate step that does not involve Discovery. The application's own
-Registry Evidence configuration decides whether it trusts the selected service.
-If it does, the application calls the service's `endpointUrl` directly with the Evidence client.
-No credential, request, or response
-passes through Discovery. In an application, the Discovery namespace of the
-[unified Registry Stack client](../../reference/client-api/#registry-discovery) runs these
-searches and saves selections, from Rust, Node.js, or Python.
-
-## Assign the maintenance work
-
-| Role | Maintained input | Change trigger | Handoff |
-| --- | --- | --- | --- |
-| Assertion provider | Packaged Evidence public description | Public Evidence endpoint, profile, evidence type, or issuer role changes | Publish the exact packaged bytes at the approved URL |
-| Operator | `origins.yaml`, mapping files, immutable package, and `runtime.yaml` | An approved origin or mapping changes | Run offline `check`, explicit `package`, deploy the complete package, pin its digest when required, then restart Discovery |
-| Consumer or verifier | Saved exact selection and native product trust | A catalog revision, mapping revision, origin digest, binding, or local trust decision changes | Re-evaluate local trust, then call the selected native endpoint directly |
-
-The operator does not run a synchronization scheduler or maintain a writable catalog. A failed
-package operation does not replace the deployed package. Deploy a complete new package and restart
-the process when the change is intentional.
-
-{/* Tier-C evidence: `products/discovery/README.md` defines check, explicit package, deployment, and restart
-    as the maintenance loop. `crates/registry-discoveryctl/tests/build.rs`, test
-    `failed_origin_fetch_leaves_the_previous_output_untouched`, proves that a failed collection
-    leaves the prior output unchanged.
-    `crates/registry-discovery/src/startup.rs`, test
-    `runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration`, defines the
-    runtime configuration boundary. */}
-
-## Clean up the local services
-
-Stop Discovery in the first shell with `Ctrl+C`, then remove the project copy and the package written
-into it:
-
-```sh
-rm -rf discovery-project
-```
-
-The compiled binaries stay under `target/release`, so a second run reuses them.
-
-## What you built
-
-- The provider supplied one deterministic public description.
-- The operator checked explicit origins and mappings offline, packaged one immutable index, and
-  served it with Discovery.
-- The consumer resolved one requirement and found one Registry Evidence deployment ready to save as
-  a selection.
-- Trusting and calling the chosen services stays with the application and the product clients,
-  outside Discovery.
+{/* Evidence: crates/registry-discovery-client/src/selection.rs,
+    discovery_metadata_has_no_trust_or_native_io_capability. */}
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| The publication server or Discovery stops at startup | Port `38090` or `38080` is already in use | Stop the process using the port, then start the service again |
-| `discoveryctl package` cannot fetch an origin | The publication server is not running in the other shell | Start the publication server, then run the package step again; a failed package step leaves no partial package |
-| `discoveryctl package` refuses the output directory | `discovery-project/package` is left from an earlier run, and a package is never replaced in place | Remove `discovery-project/package`, then run the package step again |
-| Cargo cannot resolve dependencies | The clean checkout has not acquired the locked Rust dependencies | Restore network access to the Cargo registry or provide a populated Cargo cache |
-| A publication digest differs | The provider bytes do not match the tutorial's reviewed fixture | Restore the clean checkout or review the changed publication before indexing it |
-| Native handoff is refused | The selected binding does not match the adopter-owned product trust record | Keep the selection inert, correct the local trust decision, and retry the native handoff |
-
-{/* Tier-C evidence: `crates/registry-discoveryctl/tests/build.rs`, test
-    `failed_origin_fetch_leaves_the_previous_output_untouched`, proves a failed package step
-    writes no package, and test `package_refuses_an_existing_output_without_changing_it` proves an
-    earlier package is never replaced. Maintainer reviewed and accepted this trust-boundary claim on 2026-08-14. */}
+| A service stops at startup | Port `38090` or `38080` is in use | Stop the process using the port, then start the service again |
+| `discoveryctl package` cannot fetch an origin | The publication server is not running | Start it, then package again; a failed run writes no package |
+| `discoveryctl package` refuses the output directory | `discovery-project/package` exists from an earlier run | Remove it, then package again |
 
 ## Next
 
-- [Package and run a Registry Discovery index](../../configure/discovery/) with your approved HTTPS
-  origins, deployment directory, and runtime limits.
-- [Registry Discovery is an index](../../explanation/discovery-as-an-index/) explains why trust and
-  invocation stay in the native products.
-- [Request Evidence from your application](../request-evidence-from-an-application/) shows the native
-  Evidence relying-party workflow.
+Discovery is still running. [Package and run a Discovery index](../../configure/discovery/)
+continues from here, with HTTPS origins and a pinned package. To stop instead, press `Ctrl+C` in
+the first shell and remove `discovery-project`.
+
+[How the index works](../../explanation/discovery-as-an-index/) explains why trust stays with the
+application.
