@@ -64,6 +64,10 @@ pub const CASEWORK_REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "declare accessProfiles.PROFILE_ID.principalClaim in casework.yaml",
     },
     RemovedKey {
+        path: "authentication.oidc.deniedKids",
+        replacement: "Rename deniedKids to revokedKeyIds",
+    },
+    RemovedKey {
         path: "audit.retainDays",
         replacement: "Rename audit.retainDays to audit.retentionDays",
     },
