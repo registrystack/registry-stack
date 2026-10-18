@@ -207,7 +207,7 @@ as `webhook.worker.iteration_failed`, `review.result_lookups.unavailable`, or
 or returns, the process logs a code naming it, such as `review.worker.panicked`, drains requests,
 and exits with status 1. The same code on every restart names the worker to investigate.
 
-{/* Evidence: crates/registry-breg/src/metrics.rs, ProgressWorker, PendingQueue, read_queue_ages();
+{/* Evidence: crates/registry-breg/src/metrics.rs, ProgressWorker, PendingQueue, read_queues();
     crates/registry-breg/src/startup.rs, OperationalEvent, background_task_stop_code(), SupervisedTask;
     crates/registry-breg/src/review_store.rs, ReviewWorker;
     crates/registry-breg/src/attachment_verification_worker.rs;
