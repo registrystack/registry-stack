@@ -44,6 +44,21 @@ test('nested properties become dotted key paths carrying their required flag', (
   );
 });
 
+test('map values declared through patternProperties share the star entry', () => {
+  const fields = collectFields({
+    type: 'object',
+    properties: {
+      keys: {
+        type: 'object',
+        propertyNames: { pattern: '^[1-9][0-9]*$' },
+        patternProperties: { '^[^ ]+$': { type: 'object', properties: { keyRef: { type: 'string' } } } },
+      },
+    },
+  });
+  assert.deepEqual(pathsOf(fields), ['keys', 'keys.*', 'keys.*.keyRef']);
+  assert.deepEqual(fields[1].constraints, [['propertyNames.pattern: ^[1-9][0-9]*$']]);
+});
+
 test('array items and map values use the bracket and star notation', () => {
   const fields = collectFields({
     type: 'object',

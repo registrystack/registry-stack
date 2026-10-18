@@ -35,7 +35,13 @@ test('Coordinator project and runtime references carry the keys authors and oper
     assert.ok(project.has(path), path);
   }
   const runtime = keys('runtime');
-  for (const path of ['connections', 'deployment.databaseId', 'deployment.packages[].expectedDigest']) {
+  for (const path of [
+    'connections',
+    'deployment.databaseId',
+    'deployment.packages[].expectedDigest',
+    // stateKeys is a map declared through patternProperties, not additionalProperties.
+    'deployment.stateKeys.*.keyRef',
+  ]) {
     assert.ok(runtime.has(path), path);
   }
 });

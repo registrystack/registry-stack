@@ -30,12 +30,21 @@ const caseworkRedirects = new Function(
   `${caseworkRoutesSource}; ${redirectsSource.replace(/^export /, '')}; return caseworkRedirects;`,
 )();
 const schedulingRedirectsSource = configSource.match(/export function schedulingRedirects[\s\S]*?^}\n/m)?.[0];
-const schedulingRoutesSource = configSource.match(/const schedulingRoutes = \[[\s\S]*?\];/)?.[0];
+const schedulingRoutesSource = configSource.match(/const schedulingRoutes = productRoutes\('registry-scheduling'\);/)?.[0];
 assert.ok(schedulingRedirectsSource && schedulingRoutesSource,
   'could not isolate Scheduling docset routing');
 const schedulingRedirects = new Function(
+  'productRoutes',
   `${schedulingRoutesSource}; ${schedulingRedirectsSource.replace(/^export /, '')}; return schedulingRedirects;`,
-)();
+)(productRoutes);
+const renderRedirectsSource = configSource.match(/export function renderRedirects[\s\S]*?^}\n/m)?.[0];
+const renderRoutesSource = configSource.match(/const renderRoutes = productRoutes\('registry-render'\);/)?.[0];
+assert.ok(renderRedirectsSource && renderRoutesSource,
+  'could not isolate Render docset routing');
+const renderRedirects = new Function(
+  'productRoutes',
+  `${renderRoutesSource}; ${renderRedirectsSource.replace(/^export /, '')}; return renderRedirects;`,
+)(productRoutes);
 const messagingRedirectsSource = configSource.match(/export function messagingRedirects[\s\S]*?^}\n/m)?.[0];
 const messagingRoutesSource = configSource.match(/const messagingRoutes = productRoutes\('registry-messaging'\);/)?.[0];
 assert.ok(messagingRedirectsSource && messagingRoutesSource,
@@ -450,6 +459,10 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     assert.equal(redirects['/tutorials/first-casework.md'] !== undefined, !hasCasework, id);
     const schedulingRedirectsResult = schedulingRedirects(context.hasScheduling, context.currentDocsetRedirect);
     assert.equal(schedulingRedirectsResult['/reference/apis/registry-scheduling/'] !== undefined, !hasScheduling, id);
+    assert.equal(schedulingRedirectsResult['/tutorials/first-scheduling.md'] !== undefined, !hasScheduling, id);
+    const renderRedirectsResult = renderRedirects(context.hasRender, context.currentDocsetRedirect);
+    assert.equal(renderRedirectsResult['/reference/render-configuration/'] !== undefined, !context.hasRender, id);
+    assert.equal(renderRedirectsResult['/tutorials/first-render-document.md'] !== undefined, !context.hasRender, id);
     const messagingRedirectsResult = messagingRedirects(
       context.hasMessaging,
       context.currentHasMessaging,
@@ -552,8 +565,8 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     assert.match(configSource, new RegExp(`'${route}'`));
   }
   assert.match(configSource, /\.\.\.caseworkRedirects\(hasCasework, currentDocsetRedirect\)/);
-  assert.match(configSource, /'\/reference\/apis\/registry-scheduling\/'/);
   assert.match(configSource, /\.\.\.schedulingRedirects\(hasScheduling, currentDocsetRedirect\)/);
+  assert.match(configSource, /\.\.\.renderRedirects\(hasRender, currentDocsetRedirect\)/);
   assert.match(configSource, /\.\.\.messagingRedirects\(hasMessaging, currentHasMessaging, currentDocsetRedirect\)/);
   assert.match(configSource, /\.\.\.coordinatorRedirects\(hasCoordinator, currentHasCoordinator, currentDocsetRedirect\)/);
 });
