@@ -1,6 +1,6 @@
 ---
 title: Registry Coordinator configuration reference
-description: Project, runtime, and offline scenario files for Registry Coordinator, with check commands and refusal recovery.
+description: Generated key-path reference for the Registry Coordinator project, runtime, and scenario files, and the host operations a workflow can call.
 status: draft
 owner: registry-docs
 source_repos:
@@ -10,271 +10,75 @@ doc_type: reference
 locale: en
 standards_referenced:
   - json-schema
+wide: true
 ---
 
 import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
 
-Registry Coordinator uses three pre-1.0 file contracts: `CoordinatorProject`,
-`CoordinatorRuntimeConfig`, and `CoordinatorScenarios`. The maintained generated JSON Schemas and
-owning runtime implementation define accepted fields. This manually maintained reference describes
-their execution and authority rules; use files and binaries from the same source version.
+import ConfigurationReference from '../../../components/ConfigurationReference.astro';
+import CoordinatorOperationsTable from '../../../components/CoordinatorOperationsTable.astro';
+import reference from '../../../data/generated/coordinator-configuration.json';
 
-{/* Evidence: crates/registry-coordinator/src/authoring.rs, CoordinatorProject;
+Registry Coordinator reads three files: the `workflow.yaml` project you author, the
+`scenarios.yaml` cases `coordinatorctl test` runs, and the `runtime.yaml` an operator deploys.
+
+## Contract status
+
+| File | Kind | Status | Source |
+| ---- | ---- | ------ | ------ |
+| `workflow.yaml` | `CoordinatorProject` | Pre-1.0, may change | [`project.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/generated/project/project.schema.json) |
+| `scenarios.yaml` | `CoordinatorScenarios` | Pre-1.0, may change | [`scenarios.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/generated/scenarios/scenarios.schema.json) |
+| `runtime.yaml` | `CoordinatorRuntimeConfig` | Pre-1.0, may change | [`runtime.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/generated/runtime/runtime.schema.json) |
+
+JSON Schema is not the acceptance path: a document these schemas accept still has to pass
+`coordinatorctl check`, which resolves operation aliases, mapping paths, step routes, and
+completion references no schema can express
+([Author a Coordinator workflow](../../configure/coordinator/)).
+
+{/* Evidence: docs/site/scripts/generate-coordinator-configuration.mjs, CONTRACTS;
+    crates/registry-coordinator/src/authoring.rs, CoordinatorProject;
     crates/registry-coordinator/src/runtime.rs, RuntimeConfig;
     crates/registry-coordinator/src/scenarios.rs, CoordinatorScenarios;
-    products/coordinator/generated/project/project.schema.json;
-    products/coordinator/generated/runtime/runtime.schema.json. */}
+    crates/registry-coordinator/src/project_check.rs. */}
 
-## Project assets
+## Key paths
 
-`workflow.yaml` has the project API version
-`id.registrystack.org/formats/coordinator/project/v1alpha1` and kind `CoordinatorProject`.
-`project.id` names the Workflow, while `project.version` is a human release label.
-The one `workflow` graph declares `input`, `deadlineSeconds`, `start`, `steps`, and `outcomes`.
-Optional reusable assets are:
+A key path writes a property as `name`, an array item as `name[]`, and a map entry whose name you
+choose as `name.*`, as in `workflow.steps.*.next` or `operations.*.uses`.
 
-- `contracts`: Generated local public product contracts, each with `type` and `source`.
-- `types`: Named JSON Schemas.
-- `functions`: Typed bounded pure computations with source assets and entrypoints.
-- `operations`: Local aliases for exact versioned host operations and logical connections.
+{/* Evidence: docs/site/scripts/configuration-reference.mjs, collectFields();
+    docs/site/src/components/ConfigurationReference.astro. */}
 
-Schema positions accept JSON Schema or compile-time references: `typeRef`, `operationInput`,
-`operationOutput`, `operationRefusal`, and `completionOutput`. A `completionOutput` names
-`operation` and `name`. Imports and references resolve locally. Titles and descriptions are
-presentation metadata and do not change the computed execution revision.
+{/* Generated from src/data/generated/coordinator-configuration.json, built from
+    products/coordinator/generated/{project,scenarios,runtime}/*.schema.json and
+    products/coordinator/generated/operations/catalog.json.
+    Run npm run generate from docs/site. */}
+<ConfigurationReference contracts={reference.contracts} prefix="coordinator" />
 
-JSON Schema fragments and scenario payloads retain foreign JSON value semantics, including nulls.
-Omit ordinary optional configuration members rather than writing null.
+## Host operations
 
-{/* Evidence: crates/registry-coordinator/src/authoring.rs;
-    crates/registry-coordinator/src/definition.rs, seal_revisions, semantic_revision;
-    crates/registry-coordinator/tests/canonical_model.rs. */}
+An entry under `operations` in `workflow.yaml` names one of these in `uses` and a connection from
+`runtime.yaml` in `connection`. There is no other call: no arbitrary HTTP method, SQL, or dynamic
+destination. Effect says what the call can change, Recovery what Coordinator does when a response
+is lost, and Key whether the call carries an idempotency key. Completion names what a later
+`wait-for` step can wait on. Every operation runs under the connection's current authority, with
+at most {reference.operations[0].maximum_call_attempts} attempts of
+{reference.operations[0].attempt_timeout_seconds} seconds each.
 
-## Functions and mappings
+<CoordinatorOperationsTable />
 
-A Function declares `runtime: rhai`, a project-relative `source`, `entrypoint`, named `inputs`, and
-`output`. Every entrypoint takes one object whose named members exactly match those inputs.
-The host validates inputs and output and enforces the bounded pure profile. Optional `limits`
-can narrow its ceilings: 100,000 operations, 32 call levels, 64 expression depth, 16,384 string
-bytes, 256 array entries, 256 map entries, and 65,536 source bytes.
-Functions have no clock, credentials, network, database, or filesystem capability.
-`add_seconds` and `seconds_between` compute only over supplied RFC 3339 instants.
-
-A mapping has a `type`. `input` reads workflow input, `step` reads an available prior output,
-and `literal` supplies a JSON value. Input and step references can select an RFC 6901 `path`.
-`fields` constructs up to 64 named members. A `function` mapping names its Function and supplies
-an `inputs` object of up to sixteen references:
-
-```yaml
-type: function
-function: notice-route
-inputs:
-  record:
-    type: step
-    step: read-application
-```
-
-A referenced output must exist on every incoming route. A `wait-for` result is available only
-on routes through its `next`. Success and declared-refusal outputs are available only on their
-respective routes. A join reachable from both has no unambiguous output shape.
-Check fits mappings to schemas; runtime validates computed commands before preparation or dispatch.
-Invalid commands report `failurePath`, never their values.
-
-{/* Evidence: crates/registry-coordinator/src/authoring.rs, AuthoredFunction;
-    crates/registry-coordinator/src/definition.rs, FunctionLimits, Mapping;
-    crates/registry-coordinator/src/functions.rs;
-    crates/registry-coordinator/src/mapping_check.rs;
-    crates/registry-coordinator/tests/instant_functions.rs. */}
-
-## Operations and governed contracts
-
-A call step names a local Operation alias. The alias declares exact `uses` and `connection`:
-
-```yaml
-operations:
-  read-application:
-    uses: breg.read-record/v1
-    connection: applications
-```
-
-The host catalog covers Base Registry Engine (BReg) record reads and exact immediate Actions;
-Casework review submit/cancel; Scheduling reads and appointment creation; Messaging submission;
-bounded external GET; and typed evaluation. The generated operation schemas own each input,
-output, effect classification, preparation, and recovery contract.
-There is no arbitrary HTTP method, SQL step, or dynamic call destination.
-
-For `breg.invoke-action/v1`, `action.contract` and `action.id` select an exact Action from an
-imported BReg-generated contract. Compilation pins its revision, mode, input, output, and
-declared refusals, and the call returns the Action's exact result. Compilation refuses a Proposal
-Action with `coordinator.operation.proposal-action`, and preparation refuses one with
-`action-unavailable`. The applicant drives a Proposal in BReg; a workflow follows it through a
-committed BReg product event or a later `breg.read-record/v1` read. Any later Messaging notice
-needs Messaging's own current authority. `onDeclaredRefusal` routes only
-a validated declared no-effect refusal as `{refusalCode}`. Operational failures and previous uncertain effects cannot
-enter that branch. Omit `onDeclaredRefusal` and a declared refusal fails the run with
-`product-refused`, like any other refusal.
-
-{/* Evidence: crates/registry-coordinator/src/operations.rs, CATALOG;
-    crates/registry-coordinator/src/breg_action.rs;
-    crates/registry-coordinator/src/contracts.rs, resolve_operation;
-    crates/registry-coordinator/tests/breg_action_adapter.rs;
-    crates/registry-coordinator/tests/catalog_scenarios.rs, declared_refusal_without_an_authored_edge_preserves_refused_behavior. */}
-
-## Durable waits and observation budgets
-
-`wait-until` persists a supplied or computed instant. An elapsed instant continues immediately;
-a wait that reaches the run deadline expires the run.
-`wait-for` names a completion of an earlier accepted call on every incoming route:
-
-```yaml
-await-review:
-  type: wait-for
-  completion:
-    step: submit-review
-    name: result
-  timeoutSeconds: 1209600
-  next: report
-  onTimeout: withdraw
-  onCancel: withdraw
-```
-
-Casework submission exposes `result`.
-`timeoutSeconds` is required, from one second to one year, and shorter than `deadlineSeconds`.
-A settled completion takes `next`; timeout takes `onTimeout`, or reports `wait-timed-out`.
-`onCancel` takes a durable authored cleanup route. A leased read records intent and routes when
-the read settles or its lease expires. Repeated cancellation preserves cleanup.
-Neither timeout nor cancellation reverses an accepted downstream effect.
-
-Every observation has a persistent minimum spacing of at least 30 seconds.
-Top-level `minimumObservationIntervalSeconds` defaults to 30 and accepts 30 to 86,400.
-Casework pending reads default to 900 seconds. Casework `resultCheckSeconds` accepts
-60 to 86,400; external polling declares `intervalSeconds`. These intervals and deployment
-minimums constrain the effective read floor. Restart, wake-up, timeout, and recovery retain
-that floor and the original deadline. Retry hints can delay observations within the host ceiling
-of 86,400 seconds; unusable hints hold the wait.
-
-Unavailable observations remain pending within the original budget. Invalid, refused, blocked,
-or mismatched evidence holds the wait for recovery and cannot become a business-failure outcome.
-Inspection reports the completion revision, next observation, persistent floor, count, and limit.
-Protected correlation values remain absent. A Coordinator timeout does not establish that the
-awaited work failed or stop source-owned work.
-
-{/* Evidence: crates/registry-coordinator/src/definition.rs, CompletionReference, Step;
-    crates/registry-coordinator/src/adapters.rs;
-    crates/registry-coordinator/src/worker.rs, wait_result;
-    crates/registry-coordinator/src/store.rs, WaitStatus;
-    crates/registry-coordinator/tests/external_wait_postgres.rs;
-    crates/registry-coordinator/tests/review_wait_postgres.rs. */}
-
-## Standalone Casework review
-
-A `casework-review-producer` connection names its endpoint, `profile`, `producer`, and ordinary
-service `authorization`. It accepts no task authority. Submission carries a `PolicySelection`,
-subject, reviewer context, and requester reference. Select a policy by ID, or require an exact
-version and digest together. Casework freezes the concrete `PolicyBinding` at acceptance;
-completion must agree with that accepted policy, subject, and submission digest.
-The [Casework API contract](../apis/registry-casework/#policy-pins-and-retries) defines selection
-and recovery. Casework owns review authority and outcomes.
-Standalone review needs no BReg connection and creates no registry effect.
-
-The optional `completion` block authenticates minimized Casework wake-ups by `recipientBinding`
-and `bearerTokenRef`. The sender presents the same token and binding to
-`POST /v1/review-completions`. An authentic event advances an eligible result read; it starts no
-run and supplies no decision authority. Omit the block to use polling alone.
-
-A cancellation returns `cancelled` or `already-terminal`. Only the former establishes withdrawal;
-the latter carries the decision that won the race. Both review mutations use same-command
-recovery without a read-only original-key receipt.
-
-{/* Evidence: crates/registry-coordinator/src/review.rs;
-    crates/registry-review-protocol/src/lib.rs, PolicySelection, ReviewRequestAccepted;
-    crates/registry-review-client/src/client.rs;
-    crates/registry-coordinator/src/completion.rs;
-    crates/registry-coordinator/src/runtime.rs, CaseworkConnectionConfig;
-    products/coordinator/examples/standalone-review/workflow.yaml;
-    crates/registry-coordinator/tests/standalone_review_postgres.rs. */}
-
-## External HTTP and evaluation
-
-An `external-http` connection supplies `baseUrl`, exact `paths`, optional `queryParameters`,
-optional ordinary service `authorization`, and required `responseSchema` for `{status, body}`.
-HTTPS is required except for numeric loopback HTTP. A call supplies a permitted relative path
-and optional string query values, never a URL, method, headers, or body. Redirects are refused.
-Attempt timeout defaults to 2000 milliseconds and response size to 65,536 bytes; both can narrow.
-Omitted authorization means a public read, with no forwarded caller token.
-
-An `external.get/v1` alias can specialize `responseSchema` and declare a named `bounded-poll`
-completion with `interpret` and `intervalSeconds`. The typed pure interpreter receives `command`
-and `response`, returning `pending`, `complete` with a typed `result`, or `refused` with a declared
-code. The host repeats the saved original read and enforces transport and observation budgets.
-This external completion path is independent of Casework review.
-
-An `evaluation` connection selects `system-one` or `openai-decisions`, `baseUrl`, `model`, and
-bearer authorization with a stable account `principal`, or explicit local authorization on
-numeric loopback. Attempt timeout defaults to 8000 milliseconds; request and response limits
-to 65,536 bytes. Typed questions cover predicates, choices, and rubric scores. Provider confidence
-is neither normalized across models nor proof of correctness. Review data disclosure and cost
-before activation. A saved request that may have dispatched remains held without automatic or
-operator replay; a completed result is reused. A later effect needs its own product authority.
-
-{/* Evidence: crates/registry-coordinator/src/external_http.rs;
-    crates/registry-coordinator/src/decision.rs;
-    crates/registry-coordinator/src/runtime.rs, ConnectionConfig;
-    products/coordinator/examples/external-job/workflow.yaml;
-    crates/registry-coordinator/tests/decision_protocol.rs. */}
-
-## Runtime, callers, and state
-
-`runtime.yaml` uses API version `id.registrystack.org/formats/coordinator/runtime/v1alpha1` and
-kind `CoordinatorRuntimeConfig`. One `connections` map contains one to sixteen entries, each with
-`type`: `breg`, `casework-review-producer`, `messaging`, `scheduling`, `external-http`, or
-`evaluation`. The variant selects the complete connection and authority contract.
-`secretProviders`, `database`, and `namespace` configure protected custody. Secret references
-remain outside the immutable authored package. The service requires an absolute runtime path.
-
-`deployment.packages` pins up to sixteen Workflow packages by `root` and `expectedDigest`.
-Caller `authentication.policies` is a map keyed by exact verified client identity. Run actions
-are scoped by `workflows`. Deployment-wide actions need `operator: true` and a policy listing only
-those actions omits `workflows`. Ownership follows verified issuer and subject, never input fields.
-
-A fresh start names `workflow`, expected `workflowRevision`, and `input`. Discover the permitted
-active contract or generate a revision-pinned TypeScript/Python wrapper. Recover an unknown start
-with its exact original identity, key, revision, and input even after activation changes.
-Generated wrappers offer typed `start`, `get`, and `cancel` over maintained public generic clients.
-
-Protected state schema version 3 replaces earlier pilot layouts without migration. Preserve and
-settle old work under its matching binary before provisioning fresh state. Use the
-[deployment procedure](../../operate/coordinator/) for custody, activation, rotation, and restore.
-
-{/* Evidence: crates/registry-coordinator/src/access.rs;
-    crates/registry-coordinator/src/deployment.rs;
-    crates/registry-coordinator/src/http.rs;
-    crates/registry-coordinator/src/sdk.rs;
-    crates/registry-coordinator/src/store.rs;
-    crates/registry-coordinator/src/service.rs. */}
+{/* Evidence: products/coordinator/generated/operations/catalog.json;
+    crates/registry-coordinator/src/operations.rs, CATALOG. */}
 
 ## Check commands
 
+Every file Coordinator reads has a command that checks it offline, with no service running. Each
+prints the diagnostics, JSON output, and exit codes that
+[Check a file before you deploy it](../configuration-files/#check-a-file-before-you-deploy-it)
+describes.
+
 <ConfigurationFormatChecks product="coordinator" />
-
-```sh
-coordinatorctl check --project ./follow-up --explain
-coordinatorctl test --project ./follow-up
-coordinatorctl check --runtime-config ./runtime.yaml --deny-warnings
-```
-
-Project checks load `workflow.yaml`, referenced assets, and optional runtime/scenario companions.
-They aggregate independent diagnostics without resolving secrets or making requests. Correct the
-reported path and rerun, because a structural refusal can mask dependent checks.
-`--environment` explicitly substitutes environment expressions; `--deny-warnings` refuses deferred
-checks. A successful offline check neither activates a package nor proves downstream acceptance.
-
-{/* Evidence: crates/registry-coordinator/src/cli.rs;
-    crates/registry-coordinator/src/project_check.rs;
-    crates/registry-coordinator/tests/cli_authoring.rs. */}
 
 ## Next
 
-- [Author a Coordinator workflow](../../configure/coordinator/).
-- [Deploy Registry Coordinator](../../operate/coordinator/).
-- [Registry Coordinator API](../apis/registry-coordinator/).
+[Registry Coordinator API](../apis/registry-coordinator/)
