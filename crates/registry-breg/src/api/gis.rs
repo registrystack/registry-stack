@@ -376,6 +376,7 @@ async fn items(
             &claims,
             None,
             &correlation,
+            crate::audit::ReadRefusalReason::SelectOverreach,
         )
         .await;
     }

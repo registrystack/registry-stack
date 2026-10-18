@@ -590,6 +590,7 @@ pub(crate) use crate::data::valid_text_search_term;
 
 #[derive(Clone)]
 pub struct RecordReadRefusal {
+    pub refusal_reason: Option<crate::audit::ReadRefusalReason>,
     pub method: HttpMethod,
     pub operation_id: String,
     pub target_record: Option<String>,
@@ -659,6 +660,7 @@ impl fmt::Debug for RevisionReadRequest {
 
 #[derive(Clone)]
 pub struct RevisionReadRefusal {
+    pub refusal_reason: Option<crate::audit::ReadRefusalReason>,
     pub method: HttpMethod,
     pub operation_id: String,
     pub target_record: Option<String>,

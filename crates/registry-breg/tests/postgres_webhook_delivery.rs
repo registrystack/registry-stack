@@ -3346,3 +3346,185 @@ fn pem(label: &str, der: &[u8]) -> String {
         .join("\n");
     format!("-----BEGIN {label}-----\n{body}\n-----END {label}-----\n")
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn runtime_prunes_old_terminal_hooks_and_keeps_recent_and_pending_work() {
+    let receiver = HttpsReceiver::start().await;
+    let database = TestDatabase::create(12).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = compiled_registry();
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs delivery state with the compiled schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        registry_state_test_identity(),
+    )
+    .await
+    .expect("migration initializes active package identity with empty history");
+    migration_task.abort();
+
+    let fixture = DestinationFixture::new(&receiver);
+    let destinations = Arc::new(fixture.activate(&compiled));
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
+        .expect("test owns a keyed audit profile");
+    let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
+        .expect("test lock identity is bounded");
+    let coordinator = MutationTransaction::new_with_event_destinations(
+        lock_key,
+        Duration::from_secs(2),
+        identity.clone(),
+        "webhook-delivery-instance",
+        database.audit(audit_profile.clone()),
+        Some(Arc::clone(&destinations)),
+    );
+    let service = WebhookDeliveryService::new(
+        pool.clone(),
+        Arc::clone(&destinations),
+        hook_handlers(&compiled, &identity.activation_id),
+        Arc::new(compiled.clone()),
+        identity.clone(),
+        "webhook-delivery-instance",
+        lock_key,
+        Duration::from_secs(2),
+        database.audit(audit_profile.clone()),
+    );
+    let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
+        .expect("create plan retains the exact compiler delivery");
+    let claims = mutation_claims(&compiled);
+    let mut mutation_client = pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+
+    let mut events = Vec::new();
+    for key in [
+        "canary-old-terminal",
+        "canary-recent-terminal",
+        "canary-pending",
+        "canary-leased",
+        "canary-replayable",
+    ] {
+        if matches!(key, "canary-old-terminal" | "canary-recent-terminal") {
+            receiver.enqueue(ResponsePlan::Status(204)).await;
+        }
+        let event = create_event(
+            &database,
+            &coordinator,
+            &mut mutation_client,
+            &plan,
+            &claims,
+            key,
+            key,
+        )
+        .await;
+        if matches!(key, "canary-old-terminal" | "canary-recent-terminal") {
+            service.deliver_once().await.unwrap();
+        }
+        events.push(event);
+    }
+    database.admin.execute("UPDATE registry_internal.registry_webhook_delivery_state SET updated_at=transaction_timestamp()-interval '400 days', delivered_at=transaction_timestamp()-interval '400 days' WHERE event_id=$1", &[&events[0].event_id]).await.unwrap();
+    database.admin.execute("UPDATE registry_internal.registry_webhook_delivery_state SET next_attempt_at=transaction_timestamp()+interval '1 day' WHERE event_id=$1", &[&events[2].event_id]).await.unwrap();
+    database.admin.execute("UPDATE registry_internal.registry_webhook_delivery_state SET state='leased', attempt=1, next_attempt_at=NULL, attempt_started_at=transaction_timestamp(), lease_expires_at=transaction_timestamp()+interval '1 day', lease_token=$2, updated_at=transaction_timestamp()-interval '400 days' WHERE event_id=$1", &[&events[3].event_id, &Uuid::new_v4()]).await.unwrap();
+    database.admin.execute("UPDATE registry_internal.registry_webhook_delivery_state SET state='dead-lettered', attempt=1, next_attempt_at=NULL, dead_lettered_at=transaction_timestamp()-interval '400 days', updated_at=transaction_timestamp()-interval '400 days', dead_letter_reason='http-non-success' WHERE event_id=$1", &[&events[4].event_id]).await.unwrap();
+    let receipts: i64 = database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_idempotency",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let audit_count = database.audit_entries().len();
+    drop(mutation_client);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let worker =
+        tokio::spawn(registry_breg::webhook::WebhookWorker::new(service.clone()).run(shutdown_rx));
+    let pruned = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let n: i64 = database
+                .admin
+                .query_one(
+                    "SELECT count(*) FROM registry_internal.registry_outbox WHERE event_id=$1",
+                    &[&events[0].event_id],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if n == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    shutdown_tx.send_replace(true);
+    worker.await.unwrap();
+    assert!(pruned.is_ok(), "runtime must prune old terminal metadata");
+    for event in &events[1..] {
+        let n: i64 = database
+            .admin
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_outbox WHERE event_id=$1",
+                &[&event.event_id],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(n, 1, "recent or pending metadata remains");
+    }
+    let retained_receipts: i64 = database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_idempotency",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(retained_receipts, receipts, "spent keys remain");
+    assert_eq!(
+        database.audit_entries().len(),
+        audit_count,
+        "pruning leaves the audit journal intact"
+    );
+    // Metadata retention must not shorten the delivery worker's graceful
+    // shutdown: an in-flight acknowledged delivery still finalizes.
+    receiver
+        .enqueue(ResponsePlan::Delay(Duration::from_millis(200), 204))
+        .await;
+    let mut mutation_client = pool.get_for_test().await.unwrap();
+    let finishing = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "canary-shutdown",
+        "canary-shutdown",
+    )
+    .await;
+    drop(mutation_client);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let worker = tokio::spawn(registry_breg::webhook::WebhookWorker::new(service).run(shutdown_rx));
+    receiver.wait_for_count(3).await;
+    shutdown_tx.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(3), worker)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        delivery_state(&database, &finishing).await.1,
+        "delivered",
+        "graceful shutdown finishes the current delivery"
+    );
+    drop(pool);
+    database.cleanup().await;
+}

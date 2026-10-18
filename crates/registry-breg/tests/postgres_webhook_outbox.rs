@@ -275,7 +275,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
     assert_delivery_is_transport_and_value_free(&database, first_capture.event_id, raw_record_id)
         .await;
     assert_initial_delivery_state(&database, &first_capture).await;
-    assert_capture_acl_is_insert_and_select_only(&database).await;
+    assert_capture_acl_allows_retention_without_identity_updates(&database).await;
 
     let after_first = durable_counts(&database, table).await;
     let replay = coordinator
@@ -1170,7 +1170,7 @@ async fn assert_delivery_is_transport_and_value_free(
     );
 }
 
-async fn assert_capture_acl_is_insert_and_select_only(database: &TestDatabase) {
+async fn assert_capture_acl_allows_retention_without_identity_updates(database: &TestDatabase) {
     let outbox_privileges = database
         .admin
         .query(
@@ -1187,7 +1187,7 @@ async fn assert_capture_acl_is_insert_and_select_only(database: &TestDatabase) {
         .into_iter()
         .map(|row| row.get::<_, String>(0))
         .collect::<Vec<_>>();
-    assert_eq!(outbox_privileges, ["INSERT", "SELECT"]);
+    assert_eq!(outbox_privileges, ["DELETE", "INSERT", "SELECT"]);
     let outbox_update_columns = database
         .admin
         .query(
@@ -1223,7 +1223,7 @@ async fn assert_capture_acl_is_insert_and_select_only(database: &TestDatabase) {
         .into_iter()
         .map(|row| row.get::<_, String>(0))
         .collect::<Vec<_>>();
-    assert_eq!(privileges, ["INSERT", "SELECT"]);
+    assert_eq!(privileges, ["DELETE", "INSERT", "SELECT"]);
 
     let state_privileges = database
         .admin
@@ -1241,7 +1241,7 @@ async fn assert_capture_acl_is_insert_and_select_only(database: &TestDatabase) {
         .into_iter()
         .map(|row| row.get::<_, String>(0))
         .collect::<Vec<_>>();
-    assert_eq!(state_privileges, ["INSERT", "SELECT", "UPDATE"]);
+    assert_eq!(state_privileges, ["DELETE", "INSERT", "SELECT", "UPDATE"]);
 }
 
 async fn assert_initial_delivery_state(database: &TestDatabase, capture: &CapturedDelivery) {

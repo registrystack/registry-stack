@@ -26,6 +26,8 @@ pub mod action_evidence_contracts;
 pub(crate) mod action_evidence_fixture;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub mod action_evidence_maintenance;
+#[cfg(feature = "runtime")]
+pub mod action_evidence_retention;
 pub mod action_evidence_validation;
 pub mod action_handler;
 pub(crate) mod action_outcome;
