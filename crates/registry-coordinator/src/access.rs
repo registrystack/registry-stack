@@ -266,7 +266,7 @@ impl AccessConfig {
     }
     fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
         self.issuer.allow_insecure_http.then_some(
-            "deployment.authentication.allowInsecureHttp permits plain HTTP to the configured issuer",
+            "deployment.authentication.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
         )
     }
     pub async fn authenticator(
@@ -558,7 +558,7 @@ mod tests {
         assert_eq!(
             access.insecure_http_startup_diagnostic(),
             Some(
-                "deployment.authentication.allowInsecureHttp permits plain HTTP to the configured issuer"
+                "deployment.authentication.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
             )
         );
     }

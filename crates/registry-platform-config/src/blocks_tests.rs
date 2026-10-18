@@ -597,6 +597,29 @@ fn the_oidc_issuer_is_an_https_url_and_the_audience_is_bounded_text() {
 }
 
 #[test]
+fn the_insecure_http_opt_in_also_admits_a_declared_http_jwks_uri() {
+    let field = "authentication.oidc";
+    let mut candidate = issuer(
+        "https://issuer.example.test",
+        "api",
+        JwksSource::Uri {
+            uri: Url::new("http://keys.internal/jwks").unwrap(),
+        },
+    );
+    let error = candidate
+        .check(field, false)
+        .expect_err("a plain HTTP key URI needs the opt-in");
+    assert_eq!(error.field(), "authentication.oidc.jwksSource.uri");
+    assert!(error.to_string().contains("allowInsecureHttp: true"));
+    assert!(!error.to_string().contains("keys.internal"), "{error}");
+
+    candidate.allow_insecure_http = true;
+    candidate
+        .check(field, false)
+        .expect("the opt-in admits a declared HTTP key URI under an HTTPS issuer");
+}
+
+#[test]
 fn an_oidc_issuer_with_a_query_is_refused_without_echoing_it() {
     let field = "authentication.oidc";
     issuer(

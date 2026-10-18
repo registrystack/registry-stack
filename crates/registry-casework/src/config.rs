@@ -1446,7 +1446,7 @@ impl RuntimeConfig {
             .provider
             .allow_insecure_http
             .then_some(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer",
+                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
             )
     }
 
@@ -1778,7 +1778,7 @@ mod tests {
         assert_eq!(
             config.insecure_http_startup_diagnostic(),
             Some(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer"
+                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
             )
         );
     }

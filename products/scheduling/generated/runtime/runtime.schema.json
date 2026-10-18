@@ -295,7 +295,7 @@
       "properties": {
         "allowInsecureHttp": {
           "default": false,
-          "description": "Permit plain HTTP for a declared issuer beyond loopback. TLS remains\nrequired unless the operator explicitly accepts this transport risk.",
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
           "type": "boolean"
         },
         "allowedClients": {
@@ -341,7 +341,7 @@
         },
         "issuer": {
           "$ref": "#/$defs/Url",
-          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL."
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set."
         },
         "jwksSource": {
           "$ref": "#/$defs/JwksSource",

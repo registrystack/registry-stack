@@ -1721,7 +1721,7 @@ impl OidcVerifierConfig {
     #[must_use]
     pub fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
         self.allow_insecure_http.then_some(
-            "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer",
+            "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
         )
     }
 

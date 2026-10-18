@@ -322,7 +322,7 @@ pub struct OfferAuthorizationConfig {
 impl OfferAuthorizationConfig {
     pub(crate) fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
         self.allow_insecure_http
-            .then_some("offers.allowInsecureHttp permits plain HTTP to the configured issuer")
+            .then_some("offers.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration")
     }
 }
 
@@ -751,7 +751,8 @@ pub struct OffersDocument {
     pub issuer: Url,
     /// The offer-token issuer's key set. https in strict mode.
     pub jwks_uri: Url,
-    /// Permit plain HTTP to the offer-token issuer beyond loopback.
+    /// Permit plain HTTP beyond loopback to the offer-token issuer and to
+    /// `jwksUri`.
     #[serde(default)]
     pub allow_insecure_http: bool,
     /// The audiences this service answers to, each at most 256 bytes. A token
@@ -1585,7 +1586,7 @@ store:
         assert!(config.offers.allow_insecure_http);
         assert_eq!(
             config.offers.insecure_http_startup_diagnostic(),
-            Some("offers.allowInsecureHttp permits plain HTTP to the configured issuer")
+            Some("offers.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration")
         );
 
         let with_query = text.replace(

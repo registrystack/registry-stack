@@ -883,7 +883,7 @@ mod tests {
         assert_eq!(
             opted_in.insecure_http_startup_diagnostic(),
             Some(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer"
+                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
             )
         );
         assert!(jwks_fetch_policy(&opted_in).allow_http_non_loopback);

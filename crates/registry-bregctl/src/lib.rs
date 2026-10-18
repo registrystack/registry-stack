@@ -14178,7 +14178,7 @@ mod tests {
     #[test]
     fn doctor_reports_the_plain_http_issuer_opt_in_as_a_value_free_advisory() {
         const WARNING: &str =
-            "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer";
+            "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration";
         for format in [OutputFormat::Human, OutputFormat::Json] {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
@@ -14195,7 +14195,9 @@ mod tests {
             );
             let output = plain(&stdout);
             assert!(output.contains("authentication.insecure-http"), "{output}");
-            assert!(output.contains(WARNING), "{output}");
+            // Human output wraps long messages, so compare whitespace-collapsed text.
+            let unwrapped = output.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(unwrapped.contains(WARNING), "{output}");
             assert!(!output.contains("identity.example"), "{output}");
             assert!(stderr.is_empty());
         }

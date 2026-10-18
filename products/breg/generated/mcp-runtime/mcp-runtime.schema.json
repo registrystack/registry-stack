@@ -396,7 +396,7 @@
         },
         "allowInsecureHttp": {
           "default": false,
-          "description": "Permit plain HTTP to the declared issuer beyond loopback.",
+          "description": "Permit plain HTTP beyond loopback to the declared issuer and to a JWKS\nURI declared in `jwksSource`.",
           "type": "boolean"
         },
         "allowedClients": {
