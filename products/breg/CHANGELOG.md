@@ -273,6 +273,15 @@
   marker, report `startup.database.catalog-drift` and name up to 64 affected
   identifiers instead of `startup.database.unready`. After each repair, rerun `doctor` to find any
   remaining drift. Automation that matches the earlier codes must match these.
+- BREAKING: `bregctl package` and `bregctl check --production` refuse a
+  `canonicalBaseIri` in the reserved `.invalid` namespace, such as the one
+  `bregctl init --from` writes, as `breg.registry.canonical-base-iri-reserved`
+  at `project.project.canonicalBaseIri`. `breg` and `bregctl apply` refuse a
+  package that carries one unless its database was initialized for the
+  `local` environment, as `bregctl dev` initializes it: `apply` reports
+  `apply.package.deployment-identity-refused` and `doctor` reports
+  `startup.package.refused`. Point `canonicalBaseIri` at a hostname you
+  control, rerun `schema-test`, and rebuild the package.
 
 ## 0.41.0 - 2026-10-13
 

@@ -5945,7 +5945,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
         ApplyLifecycleError::TargetPackage(PackageError::DeploymentIdentity) => (
             "apply.package.deployment-identity-refused",
             "package",
-            "the activation package carries a local-only identity; replace canonicalBaseIri, schema-test, and rebuild the deployment package. Nothing was changed",
+            "the activation package carries a local-only identity; replace canonicalBaseIri, rerun schema-test, and rebuild the deployment package. Nothing was changed",
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::CorrectPackageBuild,
         ),

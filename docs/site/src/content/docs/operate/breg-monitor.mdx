@@ -256,6 +256,7 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `apply.package.digest-mismatch` | The package is not the one `--expected-digest` names. | Pass the digest `plan` reports. |
 | `apply.package.already-active` | This package already serves. | Nothing to do. |
 | `apply.package.empty-plan` | The successor changes nothing. | Keep the active package. |
+| `apply.package.deployment-identity-refused` | The package's `canonicalBaseIri` is in the reserved `.invalid` namespace, which only a database initialized for `local` accepts. | Point `canonicalBaseIri` at a hostname you control, rerun `schema-test`, and rebuild the package. |
 | `apply.backup-evidence.refused` | The backup binding is missing, stale, or for another database. | Take a fresh backup; pass it with `--backup`. |
 | `apply.history.coverage-incomplete` | An erasure left history uncovered. | Run [`history rebaseline`](../breg-retention/#restore-snapshot-coverage-after-an-erasure). |
 | `apply.migration.statement-failed` | PostgreSQL refused a statement; the SQLSTATE is named. | Fix the cause and retry, or run `migration reconcile`. |
@@ -289,6 +290,8 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
     crates/registry-breg/src/package.rs, PackageFileRole::GeneratedDdl;
     crates/registry-breg/src/migration.rs, verify_successor_package_binding(), MigrationError::AlreadyActive;
     crates/registry-bregctl/src/lib.rs, apply.package.already-active;
+    crates/registry-breg/src/package.rs, validate_deployment_identity();
+    crates/registry-bregctl/src/lib.rs, apply.package.deployment-identity-refused;
     crates/registry-breg/src/postgres/config.rs, DatabaseConnectionCause;
     crates/registry-bregctl/src/lib.rs, data command failures, import_authority_failure(),
     instance_claim_failure(); crates/registry-breg/src/migration.rs;
