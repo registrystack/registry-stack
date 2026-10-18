@@ -340,7 +340,10 @@ impl ReviewRecoveryOperatorService {
         let request_retained: bool = row.get(4);
         let result_recorded: bool = row.get(5);
         let proposal_submitted = row.get::<_, Option<bool>>(6) == Some(true);
-        if operation == Operation::Resubmit && row.get::<_, Option<String>>(7).is_some() {
+        if operation == Operation::Resubmit
+            && proposal_submitted
+            && row.get::<_, Option<String>>(7).is_some()
+        {
             return Err(ReviewRecoveryError::Ineligible {
                 reason: ReviewRecoveryRefusal::PackageChanged,
                 state,
@@ -458,7 +461,7 @@ async fn retry_application_in_transaction(
         .ok_or(ReviewRecoveryError::NotFound)?;
     let state: String = row.get(0);
     let code: Option<String> = row.get(1);
-    let reason = if row.get::<_, Option<String>>(7).is_some() {
+    let reason = if row.get::<_, bool>(4) && row.get::<_, Option<String>>(7).is_some() {
         Some(ReviewRecoveryRefusal::PackageChanged)
     } else if row.get::<_, bool>(3) {
         Some(ReviewRecoveryRefusal::Withdrawn)

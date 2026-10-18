@@ -181,3 +181,8 @@ traceability:
   - {"id": "BREG-SEC-180", "state": "enforced", "negativeId": "BREG-NEG-180", "negativeTest": {"path": "crates/registry-breg/tests/postgres_mutation.rs", "name": "real_postgres_row_local_constraint_problems_name_only_readable_declarations"}}
   - {"id": "BREG-SEC-181", "state": "enforced", "negativeId": "BREG-NEG-181", "negativeTest": {"path": "crates/registry-breg/tests/support/review_go_live.rs", "name": "late_approval_after_rollback_cannot_reopen_a_withdrawn_round_without_a_job"}}
   # Additional exact producer proof: crates/registry-casework/tests/breg_review_journey.rs::native_pairing_reports_explicit_producer_identity_mismatch
+  # Canonical producer diagnosis: crates/registry-review-client/tests/http_boundary.rs::mismatched_producer_with_stale_request_digest_remains_protocol_uncertain
+  # Terminal recovery: crates/registry-breg/tests/support/review_go_live.rs::cancelled_blocked_resubmit_reports_withdrawal and cancelled_blocked_application_retry_reports_withdrawal
+  # Bounded atomic withdrawal: crates/registry-breg/tests/support/review_go_live.rs::activation_withdrawal_statement_count_does_not_grow_with_submitted_work
+  # Requester recovery after closure: crates/registry-breg/tests/support/review_go_live.rs::activation_closed_application_remains_readable_and_cancellable and rollback_closed_application_remains_readable_without_reviving_work
+  # Fresh automatic Review: crates/registry-breg/tests/support/review_go_live.rs::activation_closed_application_rebases_to_fresh_review_without_reviving_old_job

@@ -1187,16 +1187,34 @@ async fn create_refuses_each_changed_expected_policy_binding_component() {
 
 #[tokio::test]
 async fn explicit_producer_disagreement_is_distinct_and_never_a_safe_fresh_retry() {
+    let request = create_request();
+    let expected = registry_review_client::submission_digest(
+        "breg-producer",
+        &request.subject.source,
+        &request,
+    )
+    .unwrap();
+    let actual = registry_review_client::submission_digest(
+        "casework-producer",
+        &request.subject.source,
+        &request,
+    )
+    .unwrap();
     for status in [StatusCode::CREATED, StatusCode::OK] {
+        let mut body = accepted_json(Uuid::from_u128(7));
+        body["submissionDigest"] = json!(actual);
         let app = Router::new().route(
             "/v1/review-requests",
-            post(move || async move {
-                let mut response = json_response(status, accepted_json(Uuid::from_u128(7)));
-                response.headers_mut().insert(
-                    "registry-review-producer",
-                    HeaderValue::from_static("casework-producer"),
-                );
-                response
+            post(move || {
+                let body = body.clone();
+                async move {
+                    let mut response = json_response(status, body);
+                    response.headers_mut().insert(
+                        "registry-review-producer",
+                        HeaderValue::from_static("casework-producer"),
+                    );
+                    response
+                }
             }),
         );
         let (client, server) = serve(app).await;
@@ -1205,8 +1223,8 @@ async fn explicit_producer_disagreement_is_distinct_and_never_a_safe_fresh_retry
             .create_or_recover_request_for_producer(
                 ReviewAuth::new(&token, "producer"),
                 "identity-key",
-                &create_request(),
-                &ContentDigest::parse(OTHER_DIGEST).unwrap(),
+                &request,
+                &expected,
                 "breg-producer",
             )
             .await
@@ -1311,6 +1329,147 @@ async fn malformed_or_duplicate_producer_metadata_never_claims_an_identity_misma
         ));
         assert_eq!(error.mutation_class(), ReviewMutationErrorClass::Ambiguous);
         assert!(!format!("{error:?}").contains("peer identity canary"));
+        server.abort();
+    }
+}
+
+async fn mismatched_digest_is_protocol_failure(digest: &str) {
+    for status in [StatusCode::CREATED, StatusCode::OK] {
+        let mut body = accepted_json(Uuid::from_u128(7));
+        body["submissionDigest"] = json!(digest);
+        let app = Router::new().route(
+            "/v1/review-requests",
+            post(move || {
+                let body = body.clone();
+                async move {
+                    let mut response = json_response(status, body);
+                    response.headers_mut().insert(
+                        "registry-review-producer",
+                        HeaderValue::from_static("casework-producer"),
+                    );
+                    response
+                }
+            }),
+        );
+        let (client, server) = serve(app).await;
+        let request = create_request();
+        let expected = registry_review_client::submission_digest(
+            "breg-producer",
+            &request.subject.source,
+            &request,
+        )
+        .unwrap();
+        let token = BearerToken::new("identity-token-canary").unwrap();
+        let error = client
+            .create_or_recover_request_for_producer(
+                ReviewAuth::new(&token, "producer"),
+                "identity-key",
+                &request,
+                &expected,
+                "breg-producer",
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ReviewClientError::Protocol {
+                    failure: ReviewProtocolFailure::Body,
+                    ..
+                }
+            ),
+            "an unbound acceptance remains a protocol failure: {error:?}"
+        );
+        assert_eq!(error.mutation_class(), ReviewMutationErrorClass::Ambiguous);
+        assert!(!format!("{error:?}").contains("identity-token-canary"));
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn mismatched_producer_with_arbitrary_digest_remains_protocol_uncertain() {
+    mismatched_digest_is_protocol_failure(OTHER_DIGEST).await;
+}
+
+#[tokio::test]
+async fn mismatched_producer_with_stale_request_digest_remains_protocol_uncertain() {
+    let mut stale = create_request();
+    stale.requester_reference = "stale-requester-canary".to_owned();
+    let digest = registry_review_client::submission_digest(
+        "casework-producer",
+        &stale.subject.source,
+        &stale,
+    )
+    .unwrap();
+    mismatched_digest_is_protocol_failure(digest.as_str()).await;
+}
+
+#[tokio::test]
+async fn mismatched_producer_with_wrong_namespace_digest_remains_protocol_uncertain() {
+    let digest = registry_review_client::submission_digest(
+        "casework-producer",
+        "producer",
+        &create_request(),
+    )
+    .unwrap();
+    mismatched_digest_is_protocol_failure(digest.as_str()).await;
+}
+
+#[tokio::test]
+async fn mismatched_producer_with_malformed_digest_remains_protocol_uncertain() {
+    mismatched_digest_is_protocol_failure("invalid-digest-canary").await;
+}
+
+#[tokio::test]
+async fn same_producer_metadata_still_requires_the_exact_original_digest() {
+    let request = create_request();
+    let expected = registry_review_client::submission_digest(
+        "breg-producer",
+        &request.subject.source,
+        &request,
+    )
+    .unwrap();
+    for digest in [expected.as_str(), OTHER_DIGEST] {
+        let mut body = accepted_json(Uuid::from_u128(7));
+        body["submissionDigest"] = json!(digest);
+        let app = Router::new().route(
+            "/v1/review-requests",
+            post(move || {
+                let body = body.clone();
+                async move {
+                    let mut response = json_response(StatusCode::CREATED, body);
+                    response.headers_mut().insert(
+                        "registry-review-producer",
+                        HeaderValue::from_static("breg-producer"),
+                    );
+                    response
+                }
+            }),
+        );
+        let (client, server) = serve(app).await;
+        let token = BearerToken::new("identity-token-canary").unwrap();
+        let outcome = client
+            .create_or_recover_request_for_producer(
+                ReviewAuth::new(&token, "producer"),
+                "identity-key",
+                &request,
+                &expected,
+                "breg-producer",
+            )
+            .await;
+        if digest == expected.as_str() {
+            assert_eq!(outcome.unwrap().value.submission_digest, expected);
+        } else {
+            let error = outcome.unwrap_err();
+            assert!(matches!(
+                error,
+                ReviewClientError::Protocol {
+                    failure: ReviewProtocolFailure::Body,
+                    ..
+                }
+            ));
+            assert_eq!(error.mutation_class(), ReviewMutationErrorClass::Ambiguous);
+        }
         server.abort();
     }
 }

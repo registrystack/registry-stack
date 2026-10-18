@@ -3209,14 +3209,16 @@ async fn proposal_application_status(
     value["state"] = json!(match state.as_str() {
         "queued" if !exhausted => "pending",
         "applying" if !exhausted => "applying",
-        "queued" | "applying" | "blocked" => "blocked",
+        "queued" | "applying" | "blocked" | "cancelled" => "blocked",
         _ => return Err(MutationError::PreconditionFailed),
     });
     value["automaticRetry"] = json!({
         "scheduled":!exhausted && (state=="queued" || state=="applying" && lease_expired),
         "attempts":attempts,"maximumAttempts":maximum
     });
-    if document.blocked_reason.is_some() {
+    // Activation permanently closes this application even if a later rollback
+    // clears the package block. Its requester can still inspect, Rebase or Cancel.
+    if document.blocked_reason.is_some() || state == "cancelled" {
         value["state"] = json!("blocked");
         value["reason"] = json!("contract-changed");
         value["recovery"] = json!("correct-input");
