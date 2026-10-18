@@ -97,9 +97,9 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     assert!(fixture.candidate.join("runtime.yaml").is_file());
     assert!(fixture.candidate.join("compiled-authority.yaml").is_file());
     fixture.activate_candidate_bundle();
+    fixture.provision_target_secrets();
     fixture.activate_target_authority(evidence);
 
-    fixture.provision_target_secrets();
     let mut https = fixture.start_https();
     fixture.wait_for_https(&mut https);
     let audit_secret = fixture.secrets.join("audit-hmac-key");
@@ -510,8 +510,8 @@ fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
     let output = fixture.package(evidence);
     let revision = package_digest(&output);
     fixture.activate_candidate_bundle();
-    fixture.activate_target_authority(evidence);
     fixture.provision_target_secrets();
+    fixture.activate_target_authority(evidence);
     let checked_revision = check_package(
         evidence,
         &fixture.target_runtime,
