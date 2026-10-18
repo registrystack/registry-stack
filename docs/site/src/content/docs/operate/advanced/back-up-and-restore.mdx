@@ -90,7 +90,7 @@ retention guides describe, so the archive, not the host, is the audit record:
 [BReg](../../breg-retention/#keep-the-audit-journal),
 [Casework](../../casework-retention/#keep-the-audit-file),
 [Evidence](../../evidence-audit/#ship-audit-to-append-only-storage), and
-[Messaging](../../messaging/#read-the-audit-journal). For Messaging, preserve the active file and
+[Messaging](../../messaging/#watch-the-journal-and-metrics). For Messaging, preserve the active file and
 every sealed segment of both `audit.path` and its `messagingctl` sibling. A restore never replaces
 the live audit directory.
 

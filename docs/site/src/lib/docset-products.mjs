@@ -20,12 +20,15 @@ export const PRODUCT_PAGES = Object.freeze({
   'registry-messaging': Object.freeze([
     'start/messaging',
     'tutorials/first-messaging',
+    'explanation/how-messaging-works',
     'configure/messaging',
     'operate/messaging',
+    'reference/messaging-configuration',
     'reference/apis/registry-messaging',
   ]),
   'registry-coordinator': Object.freeze([
     'start/coordinator',
+    'explanation/how-coordinator-works',
     'configure/coordinator',
     'operate/coordinator',
     'reference/coordinator-configuration',

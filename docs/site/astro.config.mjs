@@ -198,6 +198,11 @@ const schedulingOpenApiSchema = {
   },
 };
 const schedulingRoutes = [
+  '/start/scheduling/',
+  '/tutorials/first-scheduling/',
+  '/explanation/how-scheduling-works/',
+  '/configure/scheduling/',
+  '/operate/scheduling/',
   '/reference/apis/registry-scheduling/',
   '/reference/scheduling-configuration/',
 ];
@@ -367,6 +372,7 @@ export default defineConfig({
     ...coordinatorRedirects(hasCoordinator, currentHasCoordinator, currentDocsetRedirect),
     '/start/': internalRedirect('/'),
     '/start/see-it-live/': internalRedirect('/'),
+    '/explanation/publishing-pipeline/': internalRedirect('/products/registry-manifest/'),
     // Retired product choosers. The homepage chooses between the products, so
     // both the second chooser and the one that outlived it land there.
     '/start/quickstart/': internalRedirect('/'),
@@ -742,9 +748,13 @@ export default defineConfig({
           label: 'Registry Scheduling',
           collapsed: true,
           items: [
+            { label: 'Overview', slug: 'start/scheduling' },
+            { label: 'Prove your first booking policy', slug: 'tutorials/first-scheduling' },
+            { label: 'How Scheduling works', slug: 'explanation/how-scheduling-works' },
+            { label: 'Author a policy', slug: 'configure/scheduling' },
+            { label: 'Deploy and operate Scheduling', slug: 'operate/scheduling' },
             { label: 'Configuration reference', slug: 'reference/scheduling-configuration' },
             { label: 'API contract', slug: 'reference/apis/registry-scheduling' },
-            { label: 'Audit upgrades and retention', slug: 'operate/retention-and-persistent-state' },
             schedulingOpenApiSidebarGroup,
           ],
         }] : []),
@@ -754,8 +764,9 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'start/registry-render' },
             { label: 'Render your first document', slug: 'tutorials/first-render-document' },
-            { label: 'How Render stays byte-stable', slug: 'explanation/render-determinism' },
-            { label: 'Run serve mode', slug: 'operate/registry-render' },
+            { label: 'How Render works', slug: 'explanation/render-determinism' },
+            { label: 'Deploy Render', slug: 'operate/registry-render' },
+            { label: 'Configuration reference', slug: 'reference/render-configuration' },
           ],
         }] : []),
         ...(hasMessaging ? [{
@@ -764,8 +775,10 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'start/messaging' },
             { label: 'Send your first message', slug: 'tutorials/first-messaging' },
+            { label: 'How Messaging works', slug: 'explanation/how-messaging-works' },
             { label: 'Author a package', slug: 'configure/messaging' },
             { label: 'Deploy Messaging', slug: 'operate/messaging' },
+            { label: 'Configuration reference', slug: 'reference/messaging-configuration' },
             { label: 'API contract', slug: 'reference/apis/registry-messaging' },
             messagingOpenApiSidebarGroup,
             { label: 'Client API reference', slug: 'reference/client-api' },
@@ -777,6 +790,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'start/coordinator' },
             { label: 'Review an application and send a notice', slug: 'tutorials/review-an-application-and-send-a-notice' },
+            { label: 'How Coordinator works', slug: 'explanation/how-coordinator-works' },
             { label: 'Author a flow', slug: 'configure/coordinator' },
             { label: 'Deploy Coordinator', slug: 'operate/coordinator' },
             { label: 'Configuration reference', slug: 'reference/coordinator-configuration' },
@@ -788,8 +802,9 @@ export default defineConfig({
           label: 'Registry Discovery',
           collapsed: true,
           items: [
-            { label: 'How the index works', slug: 'explanation/discovery-as-an-index' },
+            { label: 'Overview', slug: 'start/discovery' },
             { label: 'Publish and consume an index', slug: 'tutorials/publish-and-consume-discovery-index' },
+            { label: 'How Discovery works', slug: 'explanation/discovery-as-an-index' },
             { label: 'Package and run an index', slug: 'configure/discovery' },
           ],
         },
@@ -827,7 +842,6 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Architecture', slug: 'explanation/architecture' },
-            { label: 'Static metadata publication', slug: 'explanation/publishing-pipeline' },
             { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
             { label: 'Records stay home', slug: 'explanation/records-stay-home' },
             { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },

@@ -64,20 +64,22 @@ export const PRODUCTS = [
     id: 'render',
     title: 'Registry Render',
     docsetProduct: 'registry-render',
-    checkPage: 'operate/registry-render',
+    checkPage: 'reference/render-configuration',
     references: [
       { label: 'Render your first document', page: 'tutorials/first-render-document' },
-      { label: 'Run Registry Render in serve mode', page: 'operate/registry-render' },
+      { label: 'Deploy Registry Render', page: 'operate/registry-render' },
+      { label: 'Registry Render configuration reference', page: 'reference/render-configuration' },
     ],
   },
   {
     id: 'messaging',
     title: 'Registry Messaging',
     docsetProduct: 'registry-messaging',
-    checkPage: 'configure/messaging',
+    checkPage: 'reference/messaging-configuration',
     references: [
       { label: 'Author a Messaging package', page: 'configure/messaging' },
       { label: 'Deploy Registry Messaging', page: 'operate/messaging' },
+      { label: 'Registry Messaging configuration reference', page: 'reference/messaging-configuration' },
     ],
   },
   {

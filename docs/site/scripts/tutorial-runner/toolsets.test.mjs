@@ -42,7 +42,17 @@ const CASES = {
     runs: ['discoveryctl check --project discovery-project --allow-loopback', 'discovery --runtime runtime.yaml', 'discoveryctl build --project . && echo ok'],
     names: ['cp -R products/discovery/tutorial/project discovery-project', 'rm -rf discovery-project', 'cat discovery.yaml', 'ls discovery/'],
   },
+  scheduling: {
+    runs: ['schedulingctl init ./scheduling --template standalone-exact-time', 'scheduling --version', 'schedulingctl test ./scheduling | tail -1'],
+    names: ['cat ./scheduling/scheduling.yaml', 'cd tutorial-work/scheduling', 'ls scheduling/fixtures', 'cat scheduling.yaml'],
+  },
 };
+
+test('the scheduling toolset has no local development session to stop', async () => {
+  const readerDir = await mkdtemp(join(tmpdir(), 'toolset-scheduling-'));
+  await mkdir(join(readerDir, 'scheduling', 'fixtures'), { recursive: true });
+  assert.equal(await TOOLSETS.scheduling.teardown({ readerDir, binDir: join(readerDir, 'no-bin') }), true);
+});
 
 for (const [name, { runs, names }] of Object.entries(CASES)) {
   test(`the ${name} toolset matches the commands a fence runs, not paths that share their name`, () => {
