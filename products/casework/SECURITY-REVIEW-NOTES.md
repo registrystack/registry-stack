@@ -414,12 +414,21 @@ The configured issuer and explicit JWKS URI use the shared checked `Url`
 before authentication is constructed, refusing backslashes and host text the
 URL parser rewrites with value-free `config.invalid-value` at the member.
 ASCII DNS case differences, punycode and IPv6 literals remain accepted; issuer
-comparison stays textual. Existing HTTPS policy and supervised development
-loopback permission are unchanged. The shared
+comparison stays textual. The declared issuer may resolve to a private
+address, and so may an explicit JWKS URI, which is declared configuration and
+inherits the declared-issuer allowance on any origin. A discovered JWKS URI
+inherits that allowance only on the same origin; a discovered cross-origin
+private address is refused, and cloud metadata and link-local addresses remain
+refused for declared and discovered endpoints alike. Plain HTTP remains
+limited to loopback unless the runtime explicitly sets
+`allowInsecureHttp: true`, in which case startup emits a fixed warning; that
+setting never extends plain HTTP to a discovered cross-origin endpoint, which
+must use HTTPS. Redirects remain disabled. The shared
 `issuer_and_jwks_uri_are_checked_urls_when_read` test pins the new refusals and
 ordinary inputs. Casework's `the_oidc_issuer_and_clients_are_the_shared_blocks`
 in `crates/registry-casework/src/config.rs` pins the remote HTTP refusal at
-`/authentication/oidc/issuer`.
+`/authentication/oidc/issuer`, and `runtime_reads_the_explicit_http_issuer_opt_in`
+there covers the explicit HTTP exception and its startup diagnostic.
 
 ### PostgreSQL support floor
 
