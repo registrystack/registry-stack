@@ -294,15 +294,29 @@ authority for old and new tasks alike.
 
 The `inbox` policy in `casework.yaml` bounds each task-list, next-task, and holdings read. Defaults
 are `maximumCandidateScan: 100`, `maximumSourceReads: 25`, and `pageDeadlineMilliseconds: 2000`;
-counts go up to 10,000 and the deadline to 30,000. Concealed candidates still spend the scan budget.
-Filtering or sorting by live source reference scans the whole bounded queue; an exact subject or
-queue selector narrows it, a smaller page does not.
+counts go up to 10,000 and the deadline to 30,000. An ordinary due-date or subject-order query
+selects a bounded database page before it reads current source visibility, so it never scans the
+whole queue; concealed candidates still spend the scan budget. Filtering or sorting by live source
+reference scans the whole bounded queue, because its keys come from source reads; an exact subject
+or queue selector narrows it, a smaller page does not.
 
-A read that exhausts its candidate, source, or time budget is refused with
-`review.query-too-broad`. Measure representative source latency before raising budgets. A caseload
-preview refuses more than 100 claimed tasks; split it by queue or move tasks one at a time.
+Within one page, several task slots for one request share one source observation. Each new page
+repeats the source and Directory checks, and a continuation charges its anchor observation to the
+same source budget, so a budget of one observation cannot advance past a current-source anchor. A
+BReg human context reads each chunk in one bounded HTTP batch under the original caller and source
+profile; every subject in it still passes its own disclosure and audit checks.
+
+An ordinary read that exhausts its candidate, source, or time budget is refused whole with
+`review.query-too-broad`: narrow the query or reduce the page limit. A source call that reaches the
+deadline can instead report the source unavailable. Supervision and own-decision feeds return
+bounded partial pages with opaque continuations; follow the cursor with the same caller, profile,
+and query, and start the walk again after the cursor expires or its anchor leaves your scope.
+Measure representative source latency before raising budgets. A caseload preview refuses more than
+100 claimed tasks; split it by queue or move tasks one at a time.
 
 {/* Evidence: crates/registry-casework-core/src/config.rs, InboxPolicy and its defaults;
+    crates/registry-casework/src/review/inbox.rs;
+    crates/registry-casework/tests/support/inbox_pagination.rs;
     crates/registry-casework/src/review.rs, QueryTooBroad;
     crates/registry-casework/src/review/staffing.rs, caseload preview bound. */}
 
@@ -316,8 +330,9 @@ caseworkctl doctor --runtime-config /etc/registry-casework/runtime.yaml
 
 Doctor checks the configuration, the package, the database activation, open reviews against the
 configured package, and that the audit path is writable. It accepts the package already active.
-It opens no listener and proves no issuer or provider access; use `/ready` and an authenticated
-task read for those.
+It warns when the serving teams cannot supply the distinct reviewers a stage requires; add eligible
+members and rerun it to confirm the warning clears. It opens no listener and proves no issuer or
+provider access; use `/ready` and an authenticated task read for those.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, doctor();
     products/casework/RUNTIME-CONFIG.md, doctor repeats the pinned-work check. */}
@@ -345,7 +360,7 @@ session.
 | Startup names a different active package | Plan and apply the configured package, or point `package.root` at the active one. |
 | `review.policy-mismatch` on admission | Reconcile the producer's policy pin with the deployed policy. |
 | A current-source task is concealed or unavailable | Check the reviewer's source profile, the context binding, and the provider. Never use the status credential for human display. |
-| `review.query-too-broad` | Narrow the queue or subject, review the `inbox` budgets, or split a caseload move. |
+| `review.query-too-broad` | Narrow the queue or subject, reduce the page limit, review the `inbox` budgets, or split a caseload move. |
 | `precondition.failed` | Read the task or directory again and take a fresh preview where one is required. |
 | `service.unavailable` and `/ready` returns `503` | Repair the database or the audit path, space, or permissions and restart. Retry an interrupted write with its original key. |
 
