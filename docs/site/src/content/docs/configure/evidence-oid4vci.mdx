@@ -22,11 +22,11 @@ import ConfigurationReference from '../../../components/ConfigurationReference.a
 import reference from '../../../data/generated/evidence-configuration.json';
 
 If you run Registry Evidence and a wallet must receive its holder-bound
-[SD-JWT VC](/reference/glossary/#sd-jwt-vc) responses over
-[OID4VCI](/reference/glossary/#oid4vci), run `evidence-oid4vci` beside it. It speaks the wallet
+[SD-JWT VC](../../reference/glossary/#sd-jwt-vc) responses over
+[OID4VCI](../../reference/glossary/#oid4vci), run `evidence-oid4vci` beside it. It speaks the wallet
 protocol Registry Evidence does not, and turns each response into the credential the wallet stores.
 It never signs, never holds a holder private key, and adds no Evidence semantics, so
-[how Evidence works](/explanation/how-evidence-works/) still describes every decision.
+[how Evidence works](../../explanation/how-evidence-works/) still describes every decision.
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/lib.rs; AGENTS.md. */}
 
@@ -34,7 +34,7 @@ It never signs, never holds a holder private key, and adds no Evidence semantics
 
 - A definition with `subjectBinding: holder-bound` that permits `sd-jwt-vc`, as
   [Enable SD-JWT VC](../enable-sd-jwt-vc/) sets up. The front end offers only
-  [holder-bound](/reference/glossary/#holder-bound) definitions.
+  [holder-bound](../../reference/glossary/#holder-bound) definitions.
 - A running Registry Evidence, as
   [Build and deploy an Evidence project](../../tutorials/build-and-deploy-evidence-project/) leaves
   you.
@@ -121,7 +121,7 @@ evidence-oid4vci check --runtime-config runtime.yaml
 
 `check` reads that one file and nothing else, so it does not prove that the client key resolves
 or parses; `inspect` and `serve` prove that when they start. See
-[`evidence-oid4vci check`](/reference/cli/evidence-oid4vci/check/).
+[`evidence-oid4vci check`](../../reference/cli/evidence-oid4vci/check/).
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/main.rs, check. */}
 
@@ -249,4 +249,4 @@ credential it stores is the Registry Evidence's SD-JWT VC response, bound to the
 
 - [Registry Evidence security model](../../security/evidence/)
 - [Wallet delivery API reference](../../reference/apis/evidence-oid4vci/)
-- [`evidence-oid4vci` command reference](/reference/cli/evidence-oid4vci/)
+- [`evidence-oid4vci` command reference](../../reference/cli/evidence-oid4vci/)

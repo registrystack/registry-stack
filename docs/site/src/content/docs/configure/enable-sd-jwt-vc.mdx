@@ -125,7 +125,7 @@ A request for `adult-status` now carries `holderKeys`. Each key becomes the `cnf
 response and scopes the subject binding, and the response names no audience. A caller that still
 asks for signed JWS is refused before any source is contacted. The relying party checks the
 holder's key-binding JWT against the `cnf` key with
-[`evidence verify-presentation`](/reference/cli/evidence/verify-presentation/).
+[`evidence verify-presentation`](../../reference/cli/evidence/verify-presentation/).
 
 {/* Evidence: crates/registry-evidencectl/schemas/authoring/project.schema.json, BindingMode;
     crates/registry-evidence/src/contracts.rs, holderKeys, application/dc+sd-jwt;
@@ -139,7 +139,7 @@ keeps no issuance session, status list, or revocation for it. The frozen
 [SD-JWT VC profile](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/sd-jwt-vc-profile.yaml)
 pins RFC 9901 and SD-JWT VC draft 18. Relying parties verify against keys they pinned themselves;
 `/.well-known/jwt-vc-issuer` is discovery, not a trust anchor. A deployment target may cap formats
-with `responseFormats`; see the [configuration reference](/reference/evidence-configuration/).
+with `responseFormats`; see the [configuration reference](../../reference/evidence-configuration/).
 
 {/* Evidence: products/evidence/contracts/sd-jwt-vc-profile.yaml, standards_profile, key_discovery;
     crates/registry-evidence/src/server.rs, JWT_VC_ISSUER_ROUTE;
