@@ -3870,3 +3870,69 @@ in `crates/registry-bregctl/src/lib.rs` holds the same split at capture, and
 - Only the reserved `.invalid` namespace is refused. A hostname the adopter
   does not control but that is not reserved, such as `example.com`, passes.
 - No security invariant row changes.
+
+## OIDC issuer transport and private addresses
+
+`breg` and `breg-review` fetch the operator-declared issuer's discovery
+document and keys through the shared `IssuerNetworkPolicy` in
+`crates/registry-platform-oidc/src/lib.rs`, instead of the strict
+public-network policy. An issuer inside a container network or a private
+subnet now starts, and a plain HTTP issuer beyond loopback is accepted under
+an explicit opt-in.
+
+### Threat
+
+- A fetch policy that follows any address lets an issuer or JWKS URI reach an
+  internal service the operator never meant to trust, including cloud
+  metadata.
+- Keys fetched over plain HTTP can be replaced by anyone on the path, who can
+  then sign tokens `breg` accepts.
+
+### Enforcement and defaults
+
+- The declared issuer, and a JWKS URI declared in `jwksSource`, may resolve to
+  a private or loopback address on any origin: they are configuration the
+  operator wrote. A JWKS URI returned by discovery inherits that allowance only
+  on the issuer's own origin; a discovered cross-origin endpoint stays under
+  the strict policy and must use HTTPS. Cloud metadata and link-local
+  addresses are refused for declared and discovered endpoints alike, and
+  redirects stay disabled.
+- Plain HTTP stays limited to loopback unless the runtime sets
+  `authentication.oidc.allowInsecureHttp: true`, which defaults to `false`.
+  `OidcIssuerConfig::check` in `crates/registry-platform-config/src/blocks.rs`
+  refuses a non-loopback HTTP issuer or declared JWKS URI without it. At
+  startup `IssuerNetworkPolicy::new` refuses such an issuer again, and the
+  declared-key fetch policy refuses such a key URI. While the setting is on,
+  `OidcVerifierConfig::key_source` in `crates/registry-breg/src/runtime_config.rs`
+  logs a fixed startup warning, and `bregctl doctor` reports the
+  `authentication.insecure-http` advisory from the same loaded file it
+  checks.
+- `breg-review` takes the private-address allowance but never the HTTP
+  opt-in: it sends its client credentials to the token endpoint, so
+  `signIn.allowInsecureHttp` is refused as an unknown key and a non-loopback
+  HTTP issuer is refused with `breg.review-runtime.plain-http-endpoint`.
+
+### Tests
+
+`runtime_reads_the_explicit_http_issuer_opt_in` and
+`non_loopback_http_issuer_refusal_names_the_opt_in` in
+`crates/registry-breg/tests/runtime_config.rs` pin the opt-in, its startup
+diagnostic, and the value-free refusal without it. In
+`crates/registry-platform-oidc/src/lib.rs`,
+`non_loopback_http_requires_the_named_opt_in_while_loopback_does_not`,
+`a_cross_origin_jwks_must_use_https_even_under_the_http_opt_in`,
+`cloud_metadata_is_refused_for_declared_and_discovered_key_endpoints`, and
+`discovered_cross_origin_private_or_loopback_jwks_stays_refused` pin the
+network rules, and `issuer_and_jwks_uri_are_checked_urls_when_read` in
+`crates/registry-platform-config/src/blocks_tests.rs` pins the configuration
+check.
+
+### Accepted residuals
+
+- Under `allowInsecureHttp: true`, an on-path attacker can substitute keys.
+  The setting is the operator's explicit acceptance of that risk, and the
+  startup warning and doctor advisory keep it visible.
+- A declared issuer or JWKS URI can name any private address that is not
+  cloud metadata or link-local. The operator who writes the runtime file is
+  trusted to name the issuer.
+- No security invariant row changes.
