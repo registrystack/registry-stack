@@ -763,9 +763,8 @@ question/source projects and targets containing `governance.yaml` and
 `runtime.yaml`; current tooling requires `evidence.yaml`, `target.yaml`, and
 separate complete target authority. There is no in-place conversion. Retain the
 previous deployment and audit, author and package the current model, and verify
-a fresh synthetic assertion before cutover. The default rehearsal omits Evidence
-for earlier starting releases with this reason; a focused `--product evidence`
-request refuses. A current-source lifecycle run proves the normalized model,
+a fresh synthetic assertion before cutover. The rehearsal refuses to start
+from an earlier release, as the floor below describes. A current-source lifecycle run proves the normalized model,
 not compatibility with an earlier release.
 
 For retained Evidence and Messaging contracts before 1.0, a release reads only
@@ -798,10 +797,12 @@ gh workflow run release-upgrade-rehearsal.yml \
 ```
 
 `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
-earliest release this source reads state from, `v0.41.0`, and the script
+earliest release this source reads state from, `v0.42.0`, and the script
 refuses to start from any earlier release rather than skipping the check.
-`EVIDENCE_FORWARD_PATH_FLOOR` separately holds Evidence to its normalized
-`v0.42.0` baseline. The earlier `v0.40.0` fresh-install boundary still excludes
+The forward state path starts there because no product reads `v0.41.0` state:
+BReg and Casework start on a fresh database, Evidence starts at its normalized
+`v0.42.0` baseline, and Messaging installs a fresh schema baseline and refuses
+a pre-1.0 ledger. The earlier `v0.40.0` fresh-install boundary still excludes
 `v0.39.0` state. The script also refuses to run when the floor is older than
 the newest release manifest recorded as `status: released` below the first
 release of the
