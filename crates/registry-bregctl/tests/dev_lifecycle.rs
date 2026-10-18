@@ -1579,9 +1579,10 @@ fn dev_start_port_refusals_name_the_port_flag_and_role_in_both_formats() {
     );
     // The start probes BReg, then the database, then the owned issuer, so
     // each case names the port it occupies and leaves the earlier ports free.
-    let [breg, database, _] = free_ports();
+    // The occupant binds first, so the free ports can never reuse its port.
     let occupant = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("an occupiable port");
     let occupied = occupant.local_addr().expect("the occupied port").port();
+    let [breg, database, _] = free_ports();
     for (case, occupied_flag, role) in [
         (vec![], "--breg-port", "BReg registry"),
         (
