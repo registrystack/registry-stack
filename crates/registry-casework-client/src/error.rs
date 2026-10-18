@@ -509,7 +509,10 @@ impl CaseworkClientError {
             } => Self::Protocol {
                 status,
                 failure: match failure {
-                    ReviewProtocolFailure::HeaderBounds => CaseworkProtocolFailure::HeaderBounds,
+                    ReviewProtocolFailure::HeaderBounds
+                    | ReviewProtocolFailure::ProducerIdentity => {
+                        CaseworkProtocolFailure::HeaderBounds
+                    }
                     ReviewProtocolFailure::TraceContext => CaseworkProtocolFailure::TraceContext,
                     ReviewProtocolFailure::MediaType => CaseworkProtocolFailure::MediaType,
                     ReviewProtocolFailure::Body => CaseworkProtocolFailure::Body,

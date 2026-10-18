@@ -68,6 +68,7 @@ impl ReviewContextProvider for ReviewSource {
         match self.failure.load(Ordering::SeqCst) {
             1 => return Err(ReviewContextError::Unavailable),
             2 => return Err(ReviewContextError::Invalid),
+            3 => panic!("producer cancellation must not read source content"),
             _ => {}
         }
         if self.revoked.load(Ordering::SeqCst)
@@ -94,6 +95,11 @@ impl ReviewContextProvider for ReviewSource {
         &self,
         identity: &ReviewContextIdentity,
     ) -> Result<ServiceStatusObservation, ReviewContextError> {
+        assert_ne!(
+            self.failure.load(Ordering::SeqCst),
+            3,
+            "producer cancellation must not read source status"
+        );
         Ok(ServiceStatusObservation {
             identity: identity.clone(),
             reviewable: matches!(
@@ -4659,3 +4665,6 @@ mod distinct_approvers;
 
 #[path = "support/inbox_pagination_http.rs"]
 mod inbox_pagination_http;
+
+#[path = "support/producer_cancellation.rs"]
+mod producer_cancellation;

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Distinguish an explicit Review producer-ID mismatch from uncertain transport
+  outcomes, with bounded diagnostics naming both configured IDs.
+- When activation blocks submitted work, atomically cancel its Review and close
+  application jobs. Late results and rollback cannot reopen the round. Recovery
+  names the package-change block, and private metrics count its closed jobs.
+
 - Automatically erase expired Action and Proposal Evidence uses under the runtime
   role after their fixed 24-hour window, in bounded, audited batches. Manual
   `bregctl evidence-retention erase-expired` remains available to operators.

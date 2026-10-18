@@ -7,6 +7,7 @@ use thiserror::Error;
 #[non_exhaustive]
 pub enum ReviewProtocolFailure {
     HeaderBounds,
+    ProducerIdentity,
     TraceContext,
     MediaType,
     Body,
@@ -141,6 +142,16 @@ pub enum ReviewClientError {
         status: u16,
         problem: Box<ReviewProblem>,
     },
+    /// A validated acceptance named a different configured producer. The
+    /// provider may have committed that review, so this is not permission to
+    /// send fresh work or treat the remote mutation as rolled back.
+    #[error("review service accepted a different producer identity")]
+    ProducerIdentityMismatch {
+        status: u16,
+        expected: String,
+        actual: String,
+        trace_id: String,
+    },
     #[error("review service returned an invalid response")]
     Protocol {
         status: u16,
@@ -169,9 +180,10 @@ impl ReviewClientError {
             Self::Problem { status, .. } if *status < 500 => {
                 ReviewMutationErrorClass::Deterministic
             }
-            Self::Transport { .. } | Self::Problem { .. } | Self::Protocol { .. } => {
-                ReviewMutationErrorClass::Ambiguous
-            }
+            Self::Transport { .. }
+            | Self::Problem { .. }
+            | Self::Protocol { .. }
+            | Self::ProducerIdentityMismatch { .. } => ReviewMutationErrorClass::Ambiguous,
         }
     }
 }

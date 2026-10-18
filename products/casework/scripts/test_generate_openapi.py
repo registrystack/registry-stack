@@ -86,6 +86,19 @@ class GeneratedContractTests(unittest.TestCase):
         apply=self.operation("/v1/directory/caseload/apply","post")
         self.assertEqual(apply["requestBody"]["content"]["application/json"]["schema"],GEN.ref("ReviewCaseloadApplyRequest"))
 
+    def test_creation_and_recovery_document_bounded_explicit_producer_metadata(self):
+        source=copy.deepcopy(self.contract)
+        for operation in source["operations"]:
+            if operation["method"]=="POST" and operation["path"]=="/v1/review-requests":
+                operation["successStatuses"]=[200,201]
+        responses=GEN.document(source,self.wire)["paths"]["/v1/review-requests"]["post"]["responses"]
+        for status in ("200","201"):
+            schema=responses[status]["headers"]["Registry-Review-Producer"]["schema"]
+            self.assertEqual(schema["minLength"],1)
+            self.assertEqual(schema["maxLength"],128)
+            self.assertEqual(responses[status]["content"]["application/json"]["schema"],GEN.ref("ReviewRequestAccepted"))
+        self.assertNotIn("Registry-Review-Producer",responses["400"]["headers"])
+
     def test_paired_validation_headers_use_closed_rust_reason_enum(self):
         headers=self.operation("/v1/review-requests","post")["responses"]["400"]["headers"]
         self.assertIn("Registry-Review-Validation-Path",headers)

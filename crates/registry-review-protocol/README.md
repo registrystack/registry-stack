@@ -14,6 +14,12 @@ Problem type URIs may belong to the provider. Clients treat them as opaque
 identifiers, never dereference them, and conservatively classify unknown failures.
 Provider-specific human task and policy-evaluation APIs remain provider-owned.
 
+Successful creation and recovery responses may include `Registry-Review-Producer`.
+It names the authenticated producer selected by the provider, not an identity
+inferred from a digest. The header has one value of 1 to 128 ASCII letters,
+digits, hyphens, underscores, periods or colons. Registry Casework supplies it
+on both 201 creation and 200 recovery. The accepted JSON envelope is unchanged.
+
 The submission digest covers the authenticated producer, source namespace,
 and complete create request, including its original `PolicySelection`.
 The default selector is `{"id":"review-policy"}` and delegates version choice
