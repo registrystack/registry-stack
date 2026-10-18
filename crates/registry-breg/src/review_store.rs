@@ -1662,6 +1662,11 @@ pub(crate) async fn enqueue_submission(
     Ok(())
 }
 
+const CLOSE_APPLICATION_JOBS_SQL: &str =
+    "UPDATE registry_internal.registry_proposal_application_jobs j
+    SET state='cancelled',claim_token=NULL,updated_at=transaction_timestamp()
+    WHERE j.state IN ('queued','applying','blocked')";
+
 /// Close every unapplied application job of a Proposal being cancelled, or
 /// whose submitted version is being revised or rebased, in that lifecycle
 /// transaction. A closed job is never claimed or recovered again.
@@ -1672,9 +1677,7 @@ pub(crate) async fn close_application_jobs(
 ) -> Result<(), MutationError> {
     transaction
         .execute(
-            "UPDATE registry_internal.registry_proposal_application_jobs
-        SET state='cancelled',claim_token=NULL,updated_at=transaction_timestamp()
-        WHERE action_id=$1 AND proposal_id=$2 AND state IN ('queued','applying','blocked')",
+            &format!("{CLOSE_APPLICATION_JOBS_SQL} AND j.action_id=$1 AND j.proposal_id=$2"),
             &[&action_id, &proposal_id],
         )
         .await
@@ -1787,6 +1790,23 @@ pub(crate) async fn retry_submission_work(
 // Failed rounds still need withdrawal when the source ends them. A retained
 // acceptance can be cancelled; an exhausted delivery without one stays failed.
 // Do not reopen an already withdrawn failed cancellation on later activations.
+const SCHEDULE_CANCELLATION_SQL: &str =
+    "UPDATE registry_internal.registry_proposal_review_submissions s
+    SET withdrawn=true,
+        attempt_count=CASE
+            WHEN s.accepted_binding IS NOT NULL AND s.state<>'cancelling' THEN 0
+            ELSE s.attempt_count
+        END,
+        state=CASE
+            WHEN s.accepted_binding IS NOT NULL THEN 'cancelling'
+            WHEN s.state='pending' AND s.attempt_count=0 THEN 'cancelled'
+            WHEN s.state IN ('submitting','uncertain') THEN 'uncertain'
+            ELSE s.state
+        END,
+        lease_until=NULL,next_attempt_at=transaction_timestamp(),
+        updated_at=transaction_timestamp()
+    WHERE (s.state NOT IN ('cancelled','failed') OR (s.state='failed' AND NOT s.withdrawn))";
+
 pub(crate) async fn schedule_cancellation(
     transaction: &impl GenericClient,
     action_id: &str,
@@ -1795,23 +1815,47 @@ pub(crate) async fn schedule_cancellation(
 ) -> Result<(), MutationError> {
     transaction
         .execute(
-            "UPDATE registry_internal.registry_proposal_review_submissions
-                SET withdrawn=true,
-                    attempt_count=CASE
-                        WHEN accepted_binding IS NOT NULL AND state<>'cancelling' THEN 0
-                        ELSE attempt_count
-                    END,
-                    state=CASE
-                        WHEN accepted_binding IS NOT NULL THEN 'cancelling'
-                        WHEN state='pending' AND attempt_count=0 THEN 'cancelled'
-                        WHEN state IN ('submitting','uncertain') THEN 'uncertain'
-                        ELSE state
-                    END,
-                    lease_until=NULL,next_attempt_at=transaction_timestamp(),
-                    updated_at=transaction_timestamp()
-              WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
-                AND (state NOT IN ('cancelled','failed') OR (state='failed' AND NOT withdrawn))",
+            &format!(
+                "{SCHEDULE_CANCELLATION_SQL}
+                AND s.action_id=$1 AND s.proposal_id=$2 AND s.submission_version=$3"
+            ),
             &[&action_id, &proposal_id, &submission_version],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    Ok(())
+}
+
+/// Withdraw an Action's package-blocked work with two set-based statements in
+/// the activation transaction. Jobs close across versions; only the current
+/// submitted Review round is withdrawn. Ordinary lifecycle calls share the
+/// same update predicates and cancellation state transitions above.
+pub(crate) async fn withdraw_blocked_proposals(
+    transaction: &impl GenericClient,
+    action_id: &str,
+) -> Result<(), MutationError> {
+    transaction
+        .execute(
+            &format!(
+                "{CLOSE_APPLICATION_JOBS_SQL} AND EXISTS (
+            SELECT 1 FROM registry_internal.registry_proposal_state p
+             WHERE p.action_id=$1 AND p.action_id=j.action_id AND p.proposal_id=j.proposal_id
+               AND p.state='submitted' AND p.blocked_reason IS NOT NULL)"
+            ),
+            &[&action_id],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    transaction
+        .execute(
+            &format!(
+                "{SCHEDULE_CANCELLATION_SQL} AND EXISTS (
+            SELECT 1 FROM registry_internal.registry_proposal_state p
+             WHERE p.action_id=$1 AND p.action_id=s.action_id AND p.proposal_id=s.proposal_id
+               AND p.submission_version=s.submission_version
+               AND p.state='submitted' AND p.blocked_reason IS NOT NULL)"
+            ),
+            &[&action_id],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
