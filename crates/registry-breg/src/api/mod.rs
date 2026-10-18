@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! HTTP surface compiled from one immutable Registry inventory.
 
+use crate::audit::ReadRefusalReason;
+
 mod access_log;
 mod actions;
 mod attachments;
@@ -803,17 +805,21 @@ async fn read_dispatch(
             .await;
         }
     };
-    let Some(mut surface) = authorize_route(&service, &route, &claims, &options) else {
-        let response = audited_read_concealment(
-            &service,
-            &route,
-            &options,
-            &claims,
-            path.get("record_id"),
-            &correlation,
-        )
-        .await;
-        return response;
+    let mut surface = match authorize_route_with_reason(&service, &route, &claims, &options) {
+        Ok(surface) => surface,
+        Err(reason) => {
+            let response = audited_read_concealment(
+                &service,
+                &route,
+                &options,
+                &claims,
+                path.get("record_id"),
+                &correlation,
+                reason,
+            )
+            .await;
+            return response;
+        }
     };
     if surface
         .context
@@ -873,13 +879,14 @@ async fn read_dispatch(
                 Ok(Some(fields)) => fields,
                 Ok(None) => surface.readable_fields.clone(),
                 Err(()) => {
-                    return audited_read_refusal(
+                    return audited_read_refusal_with_reason(
                         &service,
                         &route,
                         &surface,
                         Some(record_id),
                         concealed(),
                         &correlation,
+                        Some(ReadRefusalReason::SelectOverreach),
                     )
                     .await;
                 }
@@ -955,13 +962,15 @@ async fn read_dispatch(
                 Ok(Some(query)) => query,
                 Ok(None) => return unavailable(),
                 Err(error @ (ReadQueryError::Invalid | ReadQueryError::InvalidAt(_))) => {
-                    return audited_read_refusal(
+                    return audited_read_refusal_with_reason(
                         &service,
                         &route,
                         &surface,
                         path.get("record_id"),
                         error.problem(),
                         &correlation,
+                        matches!(error, ReadQueryError::InvalidAt("$select"))
+                            .then_some(ReadRefusalReason::SelectOverreach),
                     )
                     .await;
                 }
@@ -1072,9 +1081,20 @@ async fn lookup_dispatch(
             .await;
         }
     };
-    let Some(mut surface) = authorize_route(&service, &route, &claims, &options) else {
-        return audited_read_concealment(&service, &route, &options, &claims, None, &correlation)
+    let mut surface = match authorize_route_with_reason(&service, &route, &claims, &options) {
+        Ok(surface) => surface,
+        Err(reason) => {
+            return audited_read_concealment(
+                &service,
+                &route,
+                &options,
+                &claims,
+                None,
+                &correlation,
+                reason,
+            )
             .await;
+        }
     };
     if surface
         .context
@@ -1108,13 +1128,14 @@ async fn lookup_dispatch(
         Ok(Some(fields)) => fields,
         Ok(None) => surface.readable_fields.clone(),
         Err(()) => {
-            return audited_read_refusal(
+            return audited_read_refusal_with_reason(
                 &service,
                 &route,
                 &surface,
                 None,
                 concealed(),
                 &correlation,
+                Some(ReadRefusalReason::SelectOverreach),
             )
             .await;
         }
@@ -1257,16 +1278,20 @@ async fn revision_dispatch(
             .await;
         }
     };
-    let Some(mut surface) = authorize_route(&service, &route, &claims, &options) else {
-        return audited_revision_concealment(
-            revisions.as_ref(),
-            &route,
-            &options,
-            &claims,
-            path.get("record_id"),
-            &correlation,
-        )
-        .await;
+    let mut surface = match authorize_route_with_reason(&service, &route, &claims, &options) {
+        Ok(surface) => surface,
+        Err(reason) => {
+            return audited_revision_concealment(
+                revisions.as_ref(),
+                &route,
+                &options,
+                &claims,
+                path.get("record_id"),
+                &correlation,
+                reason,
+            )
+            .await;
+        }
     };
     if surface
         .context
@@ -1411,9 +1436,20 @@ async fn snapshot_dispatch(
             .await;
         }
     };
-    let Some(mut surface) = authorize_route(&service, &route, &claims, &options) else {
-        return audited_read_concealment(&service, &route, &options, &claims, None, &correlation)
+    let mut surface = match authorize_route_with_reason(&service, &route, &claims, &options) {
+        Ok(surface) => surface,
+        Err(reason) => {
+            return audited_read_concealment(
+                &service,
+                &route,
+                &options,
+                &claims,
+                None,
+                &correlation,
+                reason,
+            )
             .await;
+        }
     };
     if surface
         .context
@@ -1441,8 +1477,17 @@ async fn snapshot_dispatch(
         Ok(_) => return unavailable(),
         Err(error) => {
             let response = error.problem();
-            return audited_read_refusal(&service, &route, &surface, None, response, &correlation)
-                .await;
+            return audited_read_refusal_with_reason(
+                &service,
+                &route,
+                &surface,
+                None,
+                response,
+                &correlation,
+                matches!(error, ReadQueryError::InvalidAt("$select"))
+                    .then_some(ReadRefusalReason::SelectOverreach),
+            )
+            .await;
         }
     };
     let request = SnapshotReadRequest {
@@ -1482,6 +1527,7 @@ async fn audited_known_revision_refusal(
 ) -> Response {
     match revisions
         .refusal(RevisionReadRefusal {
+            refusal_reason: None,
             method: route.method,
             operation_id: route.id.clone(),
             target_record: target_record.cloned(),
@@ -1507,6 +1553,7 @@ async fn audited_revision_refusal(
 ) -> Response {
     match revisions
         .refusal(RevisionReadRefusal {
+            refusal_reason: None,
             method: route.method,
             operation_id: route.id.clone(),
             target_record: target_record.cloned(),
@@ -1529,6 +1576,7 @@ async fn audited_revision_concealment(
     claims: &VerifiedRequestClaims,
     target_record: Option<&String>,
     correlation: &RequestCorrelation,
+    reason: ReadRefusalReason,
 ) -> Response {
     let selected_access_profile = options.access_profile().and_then(|profile| {
         route
@@ -1539,6 +1587,7 @@ async fn audited_revision_concealment(
     });
     match revisions
         .refusal(RevisionReadRefusal {
+            refusal_reason: Some(reason),
             method: route.method,
             operation_id: route.id.clone(),
             target_record: target_record.cloned(),
@@ -1566,6 +1615,7 @@ async fn audited_known_read_refusal(
         .read_refusal(
             route.operation,
             RecordReadRefusal {
+                refusal_reason: None,
                 method: route.method,
                 operation_id: route.id.clone(),
                 target_record: target_record.cloned(),
@@ -1590,10 +1640,32 @@ async fn audited_read_refusal(
     response: Response,
     correlation: &RequestCorrelation,
 ) -> Response {
+    audited_read_refusal_with_reason(
+        service,
+        route,
+        surface,
+        target_record,
+        response,
+        correlation,
+        None,
+    )
+    .await
+}
+
+async fn audited_read_refusal_with_reason(
+    service: &HttpService,
+    route: &CompiledRoute,
+    surface: &AuthorizedSurface<'_>,
+    target_record: Option<&String>,
+    response: Response,
+    correlation: &RequestCorrelation,
+    reason: Option<ReadRefusalReason>,
+) -> Response {
     match service
         .read_refusal(
             route.operation,
             RecordReadRefusal {
+                refusal_reason: reason,
                 method: route.method,
                 operation_id: route.id.clone(),
                 target_record: target_record.cloned(),
@@ -1617,6 +1689,7 @@ async fn audited_read_concealment(
     claims: &VerifiedRequestClaims,
     target_record: Option<&String>,
     correlation: &RequestCorrelation,
+    reason: ReadRefusalReason,
 ) -> Response {
     let selected_access_profile = options.access_profile().and_then(|profile| {
         route
@@ -1629,6 +1702,7 @@ async fn audited_read_concealment(
         .read_refusal(
             route.operation,
             RecordReadRefusal {
+                refusal_reason: Some(reason),
                 method: route.method,
                 operation_id: route.id.clone(),
                 target_record: target_record.cloned(),
@@ -2199,6 +2273,7 @@ async fn audited_mutation_refusal(
 ) -> Response {
     match mutations
         .record_refusal(crate::audit::HttpRefusalAudit {
+            refusal_reason: None,
             grant: context.grant_audit().cloned(),
             method: route.method.into(),
             operation_id: &route.id,
@@ -2236,6 +2311,7 @@ async fn audited_mutation_concealment(
     };
     match mutations
         .record_refusal(crate::audit::HttpRefusalAudit {
+            refusal_reason: None,
             grant: crate::audit::GrantAuditContext::from_claims(claims),
             method: route.method.into(),
             operation_id: &route.id,
@@ -2333,6 +2409,15 @@ fn authorize_route<'a>(
     claims: &VerifiedRequestClaims,
     options: &QueryOptions,
 ) -> Option<AuthorizedSurface<'a>> {
+    authorize_route_with_reason(service, route, claims, options).ok()
+}
+
+fn authorize_route_with_reason<'a>(
+    service: &'a HttpService,
+    route: &'a CompiledRoute,
+    claims: &VerifiedRequestClaims,
+    options: &QueryOptions,
+) -> Result<AuthorizedSurface<'a>, ReadRefusalReason> {
     if let Some((read_path, response_entity)) = read_path_for_route(service, route) {
         return authorize_read_path_route(
             service,
@@ -2390,7 +2475,7 @@ fn authorize_direct_route<'a>(
     route: &'a CompiledRoute,
     claims: &VerifiedRequestClaims,
     options: &QueryOptions,
-) -> Option<AuthorizedSurface<'a>> {
+) -> Result<AuthorizedSurface<'a>, ReadRefusalReason> {
     if claims.grant().is_none()
         && (claims.actor_subject().is_some()
             || claims.actor_kind() == Some(registry_platform_oidc::ActorKind::Agent))
@@ -2403,30 +2488,40 @@ fn authorize_direct_route<'a>(
                 | Operation::Import
         )
     {
-        return None;
+        return Err(ReadRefusalReason::SurfaceUnavailable);
     }
-    let access = access_entry_for_route(service, route)?;
+    let access =
+        access_entry_for_route(service, route).ok_or(ReadRefusalReason::SurfaceUnavailable)?;
     let selected_profile = options
         .access_profile()
         .map(String::as_str)
-        .or(access.default_profile_id.as_deref())?;
+        .or(access.default_profile_id.as_deref())
+        .ok_or(ReadRefusalReason::SurfaceUnavailable)?;
     if !access.profile_ids.contains(selected_profile)
         || !route
             .access_profiles
             .iter()
             .any(|id| id == selected_profile)
     {
-        return None;
+        return Err(ReadRefusalReason::SurfaceUnavailable);
     }
-    let entity = service.registry.entities().get(&route.entity_id)?;
-    let profile = entity.access_profiles.get(selected_profile)?;
+    let entity = service
+        .registry
+        .entities()
+        .get(&route.entity_id)
+        .ok_or(ReadRefusalReason::SurfaceUnavailable)?;
+    let profile = entity
+        .access_profiles
+        .get(selected_profile)
+        .ok_or(ReadRefusalReason::SurfaceUnavailable)?;
     if !profile.operations.contains(&route.operation) {
-        return None;
+        return Err(ReadRefusalReason::SurfaceUnavailable);
     }
     if route.operation == Operation::Revisions && !profile.revision_access {
-        return None;
+        return Err(ReadRefusalReason::SurfaceUnavailable);
     }
-    let row_boundaries = authorize_profile_claims(profile, claims).ok()?;
+    let row_boundaries = authorize_profile_claims(profile, claims)
+        .map_err(|_| ReadRefusalReason::ProfileAdmission)?;
     let readable_fields = profile
         .readable_fields
         .iter()
@@ -2445,10 +2540,12 @@ fn authorize_direct_route<'a>(
         selected_profile.to_owned(),
         row_boundaries,
     )
-    .with_task_grant(task_grant_binding(profile, claims).ok()?)
+    .with_task_grant(
+        task_grant_binding(profile, claims).map_err(|_| ReadRefusalReason::ProfileAdmission)?,
+    )
     .with_grant_audit(claims)
     .with_recipients(claims);
-    Some(AuthorizedSurface {
+    Ok(AuthorizedSurface {
         route,
         entity,
         response_entity: entity,
@@ -2465,32 +2562,43 @@ fn authorize_read_path_route<'a>(
     response_entity: &'a CompiledEntity,
     claims: &VerifiedRequestClaims,
     options: &QueryOptions,
-) -> Option<AuthorizedSurface<'a>> {
-    let access = access_entry_for_route(service, route)?;
+) -> Result<AuthorizedSurface<'a>, ReadRefusalReason> {
+    let access =
+        access_entry_for_route(service, route).ok_or(ReadRefusalReason::SurfaceUnavailable)?;
     let selected_profile = options
         .access_profile()
         .map(String::as_str)
-        .or(access.default_profile_id.as_deref())?;
+        .or(access.default_profile_id.as_deref())
+        .ok_or(ReadRefusalReason::SurfaceUnavailable)?;
     if !access.profile_ids.contains(selected_profile)
         || !route
             .access_profiles
             .iter()
             .any(|id| id == selected_profile)
     {
-        return None;
+        return Err(ReadRefusalReason::SurfaceUnavailable);
     }
-    let entity = service.registry.entities().get(&route.entity_id)?;
-    let profile = entity.access_profiles.get(selected_profile)?;
+    let entity = service
+        .registry
+        .entities()
+        .get(&route.entity_id)
+        .ok_or(ReadRefusalReason::SurfaceUnavailable)?;
+    let profile = entity
+        .access_profiles
+        .get(selected_profile)
+        .ok_or(ReadRefusalReason::SurfaceUnavailable)?;
     let grant = profile
         .read_paths
         .iter()
-        .find(|grant| grant.path == read_path.id)?;
+        .find(|grant| grant.path == read_path.id)
+        .ok_or(ReadRefusalReason::SurfaceUnavailable)?;
     if route.operation != Operation::List || route.query_kind != Some(CompiledQueryKind::List) {
-        return None;
+        return Err(ReadRefusalReason::SurfaceUnavailable);
     }
-    let row_boundaries = authorize_profile_claims(profile, claims).ok()?;
+    let row_boundaries = authorize_profile_claims(profile, claims)
+        .map_err(|_| ReadRefusalReason::ProfileAdmission)?;
     let readable_fields = grant.readable_fields.iter().cloned().collect();
-    Some(AuthorizedSurface {
+    Ok(AuthorizedSurface {
         route,
         entity,
         response_entity,
@@ -2500,7 +2608,9 @@ fn authorize_read_path_route<'a>(
             selected_profile.to_owned(),
             row_boundaries,
         )
-        .with_task_grant(task_grant_binding(profile, claims).ok()?)
+        .with_task_grant(
+            task_grant_binding(profile, claims).map_err(|_| ReadRefusalReason::ProfileAdmission)?,
+        )
         .with_grant_audit(claims)
         .with_recipients(claims),
         readable_fields,

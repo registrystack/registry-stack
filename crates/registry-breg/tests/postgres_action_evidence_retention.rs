@@ -534,3 +534,165 @@ async fn retention_serializes_activation_and_holds_identity_lock_through_deletio
     database.assert_every_audit_request_answered_once();
     database.cleanup().await;
 }
+
+#[tokio::test]
+async fn runtime_evidence_expiry_erases_only_due_material_without_read_or_delete_authority() {
+    let database = TestDatabase::create(1).await;
+    let registry = registry();
+    install(
+        &database,
+        None,
+        &registry,
+        &database.runtime_role,
+        "runtime-retention",
+    )
+    .await;
+    proposal_sentinel(&database).await;
+    sentinel(&database).await;
+    let pool = database.runtime_config.build_pool().unwrap();
+    let client = pool.get_for_test().await.unwrap();
+    for table in [
+        "registry_action_evidence_uses",
+        "registry_proposal_evidence_uses",
+    ] {
+        assert!(client
+            .query(
+                &format!("SELECT retained FROM registry_internal.{table}"),
+                &[]
+            )
+            .await
+            .is_err());
+        assert!(client
+            .execute(&format!("DELETE FROM registry_internal.{table}"), &[])
+            .await
+            .is_err());
+    }
+    let erased: i64 = client
+        .query_one(
+            "SELECT registry_internal.expire_action_evidence_uses()",
+            &[],
+        )
+        .await
+        .expect("runtime can invoke bounded expiry")
+        .get(0);
+    assert_eq!(erased, 2);
+    assert_eq!(count(&database).await, 0);
+    let row = database.admin.query_one("SELECT count(*), min(retained::text) FROM registry_internal.registry_proposal_evidence_uses", &[]).await.unwrap();
+    assert_eq!(row.get::<_, i64>(0), 1);
+    assert!(row.get::<_, String>(1).contains("live"));
+    drop(client);
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn supervised_runtime_evidence_expiry_is_audited_and_stops_with_server() {
+    let database = TestDatabase::create(1).await;
+    let registry = registry();
+    let expected = install(
+        &database,
+        None,
+        &registry,
+        &database.runtime_role,
+        "runtime-worker",
+    )
+    .await;
+    sentinel(&database).await;
+    let pool = database.runtime_config.build_pool().unwrap();
+    let worker = registry_breg::action_evidence_retention::EvidenceRetentionWorker::new_for_test(
+        pool.clone(),
+        expected,
+        RegistryLockKey::derive(PACKAGE).unwrap(),
+        database.audit(
+            registry_platform_audit::AuditProfile::production_from_secret_bytes(
+                vec![0x5e; 32].into(),
+            )
+            .unwrap(),
+        ),
+    );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let bind = listener.local_addr().unwrap();
+    drop(listener);
+    let prepared = registry_breg::startup::PreparedServer::from_parts_for_test(
+        bind,
+        axum::Router::new(),
+        Duration::from_secs(2),
+    )
+    .with_evidence_retention_for_test(worker);
+    registry_breg::startup::serve_until_shutdown(prepared, async {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if database
+                    .audit_entries()
+                    .iter()
+                    .any(|entry| entry["record"]["outcome"] == "erased")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("supervised startup runs an immediate sweep");
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(count(&database).await, 0);
+    let entries = database.audit_entries();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[1]["record"]["erased"], 1);
+    assert!(!serde_json::to_string(&entries)
+        .unwrap()
+        .contains("retained-sentinel"));
+    database.assert_every_audit_request_answered_once();
+    assert!(tokio::net::TcpStream::connect(bind).await.is_err());
+    drop(pool);
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn runtime_evidence_expiry_audit_refusal_preserves_material() {
+    let database = TestDatabase::create(1).await;
+    let registry = registry();
+    let expected = install(
+        &database,
+        None,
+        &registry,
+        &database.runtime_role,
+        "runtime-audit-refusal",
+    )
+    .await;
+    sentinel(&database).await;
+    database.audit_capture().fail_after(0);
+    let pool = database.runtime_config.build_pool().unwrap();
+    let audit = database.audit(
+        registry_platform_audit::AuditProfile::production_from_secret_bytes(vec![0x5e; 32].into())
+            .unwrap(),
+    );
+    let writer = audit.writer().clone();
+    let worker = registry_breg::action_evidence_retention::EvidenceRetentionWorker::new_for_test(
+        pool.clone(),
+        expected,
+        RegistryLockKey::derive(PACKAGE).unwrap(),
+        audit,
+    );
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(worker.run(rx));
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while writer.ready().await {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the sweep reaches the refusing audit destination");
+    tx.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(count(&database).await, 1);
+    assert!(database.audit_entries().is_empty());
+    drop(pool);
+    database.cleanup().await;
+}

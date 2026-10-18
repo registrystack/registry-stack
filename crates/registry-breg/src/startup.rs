@@ -238,17 +238,19 @@ pub enum BackgroundTask {
     AttachmentVerificationWorker,
     ReviewWorker,
     SubjectAccessLogRetention,
+    EvidenceRetention,
     MetricsListener,
 }
 
 impl BackgroundTask {
     /// Every supervised task, used by exhaustive operational-log contract
     /// tests.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::WebhookWorker,
         Self::AttachmentVerificationWorker,
         Self::ReviewWorker,
         Self::SubjectAccessLogRetention,
+        Self::EvidenceRetention,
         Self::MetricsListener,
     ];
 }
@@ -283,6 +285,12 @@ const fn background_task_stop_code(task: BackgroundTask, stop: BackgroundTaskSto
         }
         (BackgroundTask::SubjectAccessLogRetention, BackgroundTaskStop::Returned) => {
             "subject_access_log.retention.returned"
+        }
+        (BackgroundTask::EvidenceRetention, BackgroundTaskStop::Panicked) => {
+            "evidence.retention.panicked"
+        }
+        (BackgroundTask::EvidenceRetention, BackgroundTaskStop::Returned) => {
+            "evidence.retention.returned"
         }
         (BackgroundTask::MetricsListener, BackgroundTaskStop::Panicked) => {
             "metrics.listener.panicked"
@@ -690,6 +698,7 @@ pub struct PreparedServer {
     attachment_verification_worker: Option<AttachmentVerificationWorker>,
     review_worker: Option<crate::review_store::ReviewWorker>,
     access_log_retention: Option<(RuntimePool, Arc<LastSuccess>)>,
+    evidence_retention: Option<crate::action_evidence_retention::EvidenceRetentionWorker>,
     metrics: Option<PreparedMetricsListener>,
     #[cfg(feature = "wasm")]
     wasm_runtime: Option<crate::wasm_runtime::ConfiguredWasmRuntime>,
@@ -770,6 +779,7 @@ impl PreparedServer {
             attachment_verification_worker: None,
             review_worker: None,
             access_log_retention: None,
+            evidence_retention: None,
             metrics: None,
             postgres_advisories: Vec::new(),
             role_mode: RoleMode::Split,
@@ -778,6 +788,17 @@ impl PreparedServer {
             #[cfg(feature = "tooling")]
             fixture_pool: None,
         }
+    }
+
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_evidence_retention_for_test(
+        mut self,
+        worker: crate::action_evidence_retention::EvidenceRetentionWorker,
+    ) -> Self {
+        self.evidence_retention = Some(worker);
+        self
     }
 
     #[cfg(feature = "postgres-test")]
@@ -797,6 +818,7 @@ impl PreparedServer {
             attachment_verification_worker: None,
             review_worker: None,
             access_log_retention: None,
+            evidence_retention: None,
             metrics: None,
             postgres_advisories: Vec::new(),
             role_mode: RoleMode::Split,
@@ -1334,6 +1356,14 @@ async fn finish_prepared_server(
     );
     let expected = startup.expected_identity().clone();
     let expected_catalog = startup.expected_catalog().clone();
+    let evidence_retention = Some(
+        crate::action_evidence_retention::EvidenceRetentionWorker::new(
+            pool.clone(),
+            expected.clone(),
+            startup.lock_key(),
+            audit.clone(),
+        ),
+    );
     let lock_key = startup.lock_key();
     let readiness = Arc::new(DynamicRuntimeReadiness {
         pool: pool.clone(),
@@ -1634,6 +1664,7 @@ async fn finish_prepared_server(
         attachment_verification_worker,
         review_worker,
         access_log_retention,
+        evidence_retention,
         metrics,
         postgres_advisories,
         role_mode: RoleMode::from_roles(
@@ -1840,6 +1871,7 @@ pub async fn serve_until_shutdown(
         attachment_verification_worker,
         review_worker,
         access_log_retention,
+        evidence_retention,
         metrics,
         #[cfg(feature = "wasm")]
             wasm_runtime: _wasm_runtime,
@@ -1873,6 +1905,14 @@ pub async fn serve_until_shutdown(
     let mut review_worker = review_worker.map(|worker| {
         SupervisedTask::spawn(
             BackgroundTask::ReviewWorker,
+            worker.run(worker_shutdown_rx.clone()),
+            worker_shutdown_rx.clone(),
+            task_stopped_tx.clone(),
+        )
+    });
+    let mut evidence_worker = evidence_retention.map(|worker| {
+        SupervisedTask::spawn(
+            BackgroundTask::EvidenceRetention,
             worker.run(worker_shutdown_rx.clone()),
             worker_shutdown_rx.clone(),
             task_stopped_tx.clone(),
@@ -1957,6 +1997,9 @@ pub async fn serve_until_shutdown(
         if let Some(worker) = review_worker.as_mut() {
             worker.join().await;
         }
+        if let Some(worker) = evidence_worker.as_mut() {
+            worker.join().await;
+        }
         if let Some(worker) = access_log_worker.as_mut() {
             worker.join().await;
         }
@@ -1982,6 +2025,9 @@ pub async fn serve_until_shutdown(
                 worker.abort_and_join().await;
             }
             if let Some(worker) = review_worker.as_mut() {
+                worker.abort_and_join().await;
+            }
+            if let Some(worker) = evidence_worker.as_mut() {
                 worker.abort_and_join().await;
             }
             if let Some(worker) = access_log_worker.as_mut() {

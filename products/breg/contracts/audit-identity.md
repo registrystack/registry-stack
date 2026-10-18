@@ -40,3 +40,10 @@ across request and operator journeys. The Evidence-retention regression refuses
 an activation under `packageRevision`; the import-authority supersession journey
 pins both the current and original activation. Existing hash and audit-pairing
 assertions continue to apply.
+
+Read authorization refusals may carry `refusalReason` with one of three fixed
+values: `surface_unavailable`, `profile_admission`, or `select_overreach`.
+These distinguish unavailable authorized surfaces, profile admission refusals,
+and withheld or unknown projection fields. They contain no claim, purpose,
+field, credential, or Record value and do not change the caller's response.
+A refusal without one of these causes may omit the field.

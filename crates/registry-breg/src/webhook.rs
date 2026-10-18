@@ -211,6 +211,76 @@ struct BregDeliverySeams {
 }
 
 impl BregDeliverySeams {
+    async fn run_retention(self, mut shutdown: watch::Receiver<bool>) {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            if *shutdown.borrow() {
+                return;
+            }
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() { return; }
+                }
+                _ = async {
+                    interval.tick().await;
+                    if self.prune_terminal().await.is_err() {
+                        tracing::error!("hook metadata retention failed");
+                    }
+                } => {}
+            }
+        }
+    }
+
+    async fn prune_terminal(&self) -> Result<(), DeliveryError> {
+        // Keep metadata for at least the receipt horizon and the payload replay
+        // window. The platform primitive also requires completed payload expiry
+        // for dead letters and never removes active or uncertain delivery work.
+        let horizon = Duration::from_secs(
+            u64::from(self.idempotency.receipt_retention_days()) * 24 * 60 * 60,
+        )
+        .max(self.destinations.payload_retention());
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?;
+        let mut guard =
+            crate::postgres::cancellation::QueryCancellationGuard::new(self.pool.clone(), client);
+        let transaction = crate::postgres::begin_registry_transaction(
+            guard.client(),
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+        )
+        .await
+        .map_err(|_| DeliveryError::Unavailable)?;
+        transaction
+            .set_statement_budget(Duration::from_secs(10))
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?;
+        let now: std::time::SystemTime = transaction
+            .transaction()
+            .query_one("SELECT transaction_timestamp()", &[])
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?
+            .get(0);
+        let before = now.checked_sub(horizon).ok_or(DeliveryError::Unavailable)?;
+        registry_platform_hooks::delivery::prune_terminal_deliveries(
+            transaction.transaction(),
+            DELIVERY_SCHEMA,
+            before,
+        )
+        .await
+        .map_err(|_| DeliveryError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?;
+        guard.disarm();
+        Ok(())
+    }
+
     fn mutation_transaction(&self) -> MutationTransaction {
         let coordinator = MutationTransaction::new_with_event_destinations(
             self.lock_key,
@@ -769,6 +839,7 @@ fn transition_code(code: DeliveryTransitionCode) -> WebhookStateTransitionCode {
 #[derive(Clone)]
 pub struct WebhookDeliveryService {
     delivery: DeliveryService<BregDeliverySeams>,
+    retention: BregDeliverySeams,
     last_success: Arc<crate::metrics::LastSuccess>,
 }
 
@@ -870,6 +941,7 @@ impl WebhookDeliveryService {
             last_success: Arc::clone(&last_success),
         };
         Self {
+            retention: seams.clone(),
             delivery: DeliveryService::new(seams, config),
             last_success,
         }
@@ -960,7 +1032,12 @@ impl WebhookWorker {
                 return;
             }
         };
-        DeliveryWorker::new(service.delivery).run(shutdown).await;
+        // Both loops observe shutdown, but the delivery loop must finish its
+        // in-flight attempt during the server's existing grace period.
+        tokio::join!(
+            DeliveryWorker::new(service.delivery).run(shutdown.clone()),
+            service.retention.run_retention(shutdown),
+        );
     }
 }
 

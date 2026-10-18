@@ -41,14 +41,17 @@ const FUNCTION_OWNER_PRIVILEGES: &[&str] = &["EXECUTE"];
 // library's own, and the runtime privileges on each stay Base Registry
 // Engine's decision.
 const DELIVERY_TABLE_PRIVILEGES: &[(&str, &[&str])] = &[
-    ("registry_internal.registry_outbox", &["INSERT", "SELECT"]),
+    (
+        "registry_internal.registry_outbox",
+        &["DELETE", "INSERT", "SELECT"],
+    ),
     (
         "registry_internal.registry_webhook_deliveries",
-        &["INSERT", "SELECT"],
+        &["DELETE", "INSERT", "SELECT"],
     ),
     (
         "registry_internal.registry_webhook_delivery_state",
-        &["INSERT", "SELECT", "UPDATE"],
+        &["DELETE", "INSERT", "SELECT", "UPDATE"],
     ),
 ];
 const DELIVERY_SEQUENCE: &str = "registry_internal.registry_outbox_outbox_id_seq";
@@ -155,6 +158,11 @@ impl ExpectedManagedCatalog {
             Some((false, false)),
         );
         catalog.function(SUBJECT_ACCESS_LOG_EXPIRY, Some("EXECUTE"), None);
+        catalog.function(
+            crate::action_evidence_retention::EXPIRY_FUNCTION,
+            Some("EXECUTE"),
+            None,
+        );
         if registry.ddl().requires_postgis {
             catalog.grant_schema_spatial_bbox("registry_data");
             catalog.grant_schema_spatial_bbox("registry_context");
@@ -1098,7 +1106,7 @@ async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()
                                     AND NOT p.prosecdef
                                     AND p.provolatile = 's')))
                            OR (n.nspname = 'registry_internal'
-                               AND p.proname = 'expire_subject_access_log'
+                               AND p.proname IN ('expire_subject_access_log', 'expire_action_evidence_uses')
                                AND pg_catalog.pg_get_function_identity_arguments(p.oid) = ''
                                AND p.prorettype = 'bigint'::regtype
                                AND NOT p.proretset AND p.prosecdef

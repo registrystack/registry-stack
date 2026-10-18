@@ -298,6 +298,7 @@ async fn refusal_for_operation(
         backend.audit(),
         backend.expected(),
         HttpRefusalAudit {
+            refusal_reason: None,
             grant: crate::audit::GrantAuditContext::from_claims(claims),
             method,
             operation_id,

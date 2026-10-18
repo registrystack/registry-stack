@@ -19,7 +19,7 @@ use crate::runtime_config::load_runtime_config;
 
 /// Schema of the request and response entries of one expired-Evidence
 /// erasure.
-pub const EVIDENCE_RETENTION_AUDIT_SCHEMA: &str = "breg-evidence-retention-audit/v2";
+pub use crate::action_evidence_retention::EVIDENCE_RETENTION_AUDIT_SCHEMA;
 
 /// Package-bound authority for erasing expired protected Evidence material.
 /// The migration identity, actual target catalog and registry interlock are

@@ -28,8 +28,9 @@ const ENVIRONMENT: &str = "production";
 const INSTANCE: &str = "rehearsal-instance";
 const DATABASE: &str = "rehearsal-database";
 const SOURCE_REVISION: &str = "rehearsal-source-revision";
+// Includes the runtime Evidence expiry function and both expires_at indexes.
 const PORTABLE_SCHEMA_FINGERPRINT: &str =
-    "sha256:43af848b2d9ccdab8ee37d9410cce9e79202c839d097788b91917178579da77e";
+    "sha256:a1af7c639b023a4f67e3028be90d8cbf5fce028e25664f6561fc60d4ccf3e798";
 const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
 kind: BRegJourneys
 journeys: []

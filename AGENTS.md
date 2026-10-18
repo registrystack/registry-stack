@@ -52,8 +52,9 @@ as an ordinary relying party: the Rhai handler of an action that declares
 Evidence provider is declared by the operator in the registry project's
 configuration, and Base Registry Engine inherits no Evidence authorization.
 The accepted assertion it retains is a bounded relying-party record, held 24
-hours after acceptance and erased by `bregctl evidence-retention
-erase-expired`, never a credential lifecycle. The dependency is on the client
+hours after acceptance and erased by the supervised runtime sweeper, with
+`bregctl evidence-retention erase-expired` available for manual use, never a
+credential lifecycle. The dependency is on the client
 and verifier libraries only: no Evidence crate depends on `registry-breg`, and
 `registry-breg` never depends on the `registry-evidence` runtime crate.
 

@@ -383,6 +383,7 @@ async fn action_refusal(
         .record_action_refusal(
             &route.action_id,
             crate::audit::HttpRefusalAudit {
+                refusal_reason: None,
                 grant: crate::audit::GrantAuditContext::from_claims(claims),
                 method: route.method.into(),
                 operation_id: &route.id,

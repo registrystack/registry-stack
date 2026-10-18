@@ -810,6 +810,12 @@ fn expected_background_task_stop_code(
         (BackgroundTask::SubjectAccessLogRetention, BackgroundTaskStop::Returned) => {
             "subject_access_log.retention.returned"
         }
+        (BackgroundTask::EvidenceRetention, BackgroundTaskStop::Panicked) => {
+            "evidence.retention.panicked"
+        }
+        (BackgroundTask::EvidenceRetention, BackgroundTaskStop::Returned) => {
+            "evidence.retention.returned"
+        }
         (BackgroundTask::MetricsListener, BackgroundTaskStop::Panicked) => {
             "metrics.listener.panicked"
         }

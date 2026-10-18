@@ -410,6 +410,7 @@ pub(super) async fn known_action_refusal(
         .record_action_refusal(
             &action.id,
             crate::audit::HttpRefusalAudit {
+                refusal_reason: None,
                 grant: crate::audit::GrantAuditContext::from_claims(claims),
                 method: method.into(),
                 operation_id: &operation_id,

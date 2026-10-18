@@ -290,6 +290,9 @@ pub async fn install_mutation_schema(
                  registry_internal.registry_immediate_action_applications TO \"{role}\";
              {revoke_evidence_uses}
              GRANT INSERT ON registry_internal.registry_action_evidence_uses TO \"{role}\";
+             GRANT DELETE ON registry_internal.registry_outbox,
+                 registry_internal.registry_webhook_deliveries,
+                 registry_internal.registry_webhook_delivery_state TO \"{role}\";
              GRANT UPDATE (payload) ON registry_internal.registry_outbox TO \"{role}\";
              GRANT SELECT, INSERT, UPDATE
                  ON registry_internal.registry_webhook_delivery_state TO \"{role}\";
@@ -299,6 +302,9 @@ pub async fn install_mutation_schema(
         .await
         .map_err(|_| MutationError::Unavailable)?;
     crate::proposal_store::install(migration, runtime_role).await?;
+    crate::action_evidence_retention::install(migration, runtime_role)
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
     crate::subject_access_log::install(migration, runtime_role)
         .await
         .map_err(|_| MutationError::Unavailable)?;
