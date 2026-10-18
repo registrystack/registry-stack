@@ -824,7 +824,8 @@ mod tests {
 
         // The declared key endpoint inherits the declared issuer's allowance,
         // whatever its origin: the same loopback origin, another loopback
-        // port, or a private address the operator wrote down.
+        // port, a private address the operator wrote down, or plain http on
+        // loopback under an https issuer.
         for (issuer, jwks_uri) in [
             (
                 "http://127.0.0.1:8081",
@@ -836,6 +837,7 @@ mod tests {
                 "http://127.0.0.1:8082/.well-known/jwks.json",
             ),
             ("https://10.20.30.40:8443", "https://10.20.30.41:8443/jwks"),
+            ("https://10.20.30.40:8443", "http://127.0.0.1:8082/jwks"),
         ] {
             let mut candidate = authentication_config();
             set_issuer(&mut candidate, issuer, jwks_uri);
@@ -859,7 +861,7 @@ mod tests {
         );
         assert!(matches!(
             validate(&http_keys),
-            Err(registry_platform_httputil::FetchUrlError::SchemeDenied { .. })
+            Err(registry_platform_httputil::FetchUrlError::HttpRequiresLoopback)
         ));
 
         let mut metadata = authentication_config();

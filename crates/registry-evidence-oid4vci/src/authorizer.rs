@@ -160,9 +160,11 @@ pub fn verifier_profile(config: &OfferAuthorizationConfig) -> TokenVerifierConfi
     )))
 }
 
-/// Plain HTTP only for a supervised local development group whose offer issuer
-/// is itself on loopback. Every other deployment fetches its key set over
-/// https, exactly as Evidence does.
+/// The key set is declared configuration, so it follows the shared declared
+/// endpoint rule: plain HTTP is fetched on loopback, where only supervised
+/// local validation admits it, and beyond loopback only with
+/// `allowInsecureHttp`. A plain HTTP offer issuer outside a supervised local
+/// group, without that setting, gets the strict policy.
 fn fetch_url_policy(config: &OfferAuthorizationConfig, mode: ValidationMode) -> FetchUrlPolicy {
     let supervised_local_http = mode == ValidationMode::SupervisedLocalDevelopment
         && config.issuer.starts_with("http://127.0.0.1:")
@@ -294,14 +296,25 @@ mod tests {
     }
 
     #[test]
-    fn a_supervised_local_offer_issuer_is_the_only_plain_http_key_source() {
+    fn plain_http_key_sources_stay_on_loopback_without_the_opt_in() {
+        let validate = |offers: &OfferAuthorizationConfig| {
+            fetch_url_policy(offers, ValidationMode::SupervisedLocalDevelopment)
+                .validate_dns_pinned_for_immediate_fetch(
+                    &reqwest::Url::parse(&offers.jwks_uri).unwrap(),
+                )
+        };
         let mut config = valid_config();
-        assert_eq!(
-            fetch_url_policy(&config.offers, ValidationMode::SupervisedLocalDevelopment)
-                .allowed_schemes,
-            ["https"],
-            "an https issuer keeps its https key source in every mode"
-        );
+
+        // Under an https issuer, a plain http key set that supervised local
+        // validation admits on loopback is fetched, and one beyond loopback
+        // is refused.
+        config.offers.jwks_uri = "http://127.0.0.1:8082/.well-known/jwks.json".to_owned();
+        validate(&config.offers).expect("a declared loopback key set is accepted");
+        config.offers.jwks_uri = "http://10.20.30.40:8080/.well-known/jwks.json".to_owned();
+        assert!(matches!(
+            validate(&config.offers),
+            Err(registry_platform_httputil::FetchUrlError::HttpRequiresLoopback)
+        ));
 
         config.offers.issuer = "http://127.0.0.1:8081".to_owned();
         config.offers.jwks_uri = "http://127.0.0.1:8081/.well-known/jwks.json".to_owned();

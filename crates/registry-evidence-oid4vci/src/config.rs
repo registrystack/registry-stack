@@ -2027,6 +2027,12 @@ store:
                 "  jwksUri: https://mint.example.org/.well-known/jwks.json",
                 "  jwksUri: http://mint.example.org/.well-known/jwks.json",
             ),
+            // The key fetch policy opens plain http on loopback, so strict
+            // validation is what keeps a loopback key set on https.
+            (
+                "  jwksUri: https://mint.example.org/.well-known/jwks.json",
+                "  jwksUri: http://127.0.0.1:8082/.well-known/jwks.json",
+            ),
         ] {
             let text = VALID.replace(from, to);
             assert_eq!(
