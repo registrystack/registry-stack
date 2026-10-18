@@ -19,16 +19,18 @@ client-credentials grant, authenticating with a signed client assertion instead 
 
 ## Before you start
 
-Get these values from the issuer administrator:
+Get these values from the issuer administrator and the service's operator:
 
 - The HTTPS token endpoint
 - Your registered client identifier
-- Your client's private JWK
+- Your client's private JWK, with a `kid` and an `alg` the issuer accepts
 - The client-assertion audience, if not the token endpoint URL
 - The RFC 8707 resource identifier of the service you call
-- Your approved scopes
+- The scopes that service's deployment requires
 
-Keep the private key in a secret store, and never fall back to a client secret.
+Keep the private key in a secret store, and never fall back to a client secret. Scopes are the
+deployment's choice: one target may require a scope such as `evidence:request`, another may
+require none. Request exactly the scopes your deployment names.
 
 ## With the Evidence client
 
@@ -46,13 +48,14 @@ client = EvidenceClient(
 
 `private_key_jwt` holds `token_endpoint`, `client_id`, `client_key`, and optionally `audience`,
 `resource`, and `scopes`; the [client API reference](../../reference/client-api/#token-configurations)
-has the rest.
+has the rest. The client builds and signs each client assertion for you.
 
 {/* Evidence: crates/registry-evidence-client-py/src/convert.rs, private_key_jwt_provider_from_json; crates/registry-evidence-client-py/python/registry_evidence_client/__init__.pyi, EvidenceClient. */}
 
 ## Without the client
 
-Any other caller, BReg callers included, posts this form to the token endpoint:
+Any other caller, BReg callers included, signs a client assertion and posts this form to the token
+endpoint:
 
 ```text
 grant_type=client_credentials
@@ -63,27 +66,44 @@ resource=<resource-identifier>
 scope=<scopes>
 ```
 
-The client assertion is a JWT signed with your private key: `iss` and `sub` are your client
-identifier, and `aud` defaults to the token endpoint URL. For an Evidence client profile,
-`--client-assertion-audience` names another audience "when the issuer expects one other than the
-token endpoint URL". Give every assertion a fresh `jti`, because a replay-checking issuer refuses a
-repeated one. Keep `resource` and `scope` fixed for the client's lifetime, so a cached token never
-serves another service.
+Omit `scope` when the deployment requires none. Keep `resource` and `scope` fixed for the client's
+lifetime, so a cached token never serves another service. `resource` is a registered identifier,
+not a URL to fetch.
 
-`resource` is a registered identifier, not a URL to fetch. Every shipped Evidence target requires
-the scope `evidence:request`.
+The client assertion is a compact JWT signed with your private key. Its protected header carries:
 
-{/* Evidence: crates/registry-platform-httputil/src/client/private_key_jwt.rs, PrivateKeyJwtConfig,
-    with_audience, every_assertion_gets_its_own_jti, CLIENT_ASSERTION_TYPE;
+- `alg`: the algorithm your key signs with, one of `EdDSA`, `ES256`, `RS256`, `ES384`, or `RS384`
+- `kid`: your key's identifier, which the issuer uses to select your registered public key
+- `typ`: `JWT`
+
+Its claims carry:
+
+- `iss` and `sub`: your client identifier
+- `aud`: the token endpoint URL, or the audience the issuer names instead
+- `iat`: the current Unix time
+- `exp`: `iat` plus a short lifetime, at most 300 seconds and no longer than your issuer accepts
+  (the maintained clients default to 60)
+- `jti`: a fresh identifier for every assertion, because a replay-checking issuer refuses a
+  repeated one
+
+An issuer checks `iat` and `exp` against its own clock, so keep yours synchronized.
+
+{/* Evidence: crates/registry-platform-authcommon/src/client_assertion.rs, sign_client_assertion,
+    DEFAULT_ASSERTION_LIFETIME_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS, header_algorithm;
+    crates/registry-platform-httputil/src/client/private_key_jwt.rs, PrivateKeyJwtConfig,
+    with_audience, with_scopes, CLIENT_ASSERTION_TYPE;
     crates/registry-evidencectl/src/client.rs, client_assertion_audience;
-    products/evidence/examples/standalone/local-target.yaml, requiredScopes. */}
+    crates/registry-evidencectl/src/keygen.rs, ClientAssertionAlgorithm (ES384 default, RS384);
+    products/evidence/reference/deployment-targets/environments/*/evidence/target.yaml,
+    requiredScopes: unrestricted; products/evidence/examples/standalone/local-target.yaml,
+    requiredScopes. */}
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| The issuer returns `invalid_client` | Client identifier, key `kid`, assertion audience, clock, `jti` |
-| The service rejects the token | Token issuer, resource, required scopes |
+| The issuer returns `invalid_client` | Client identifier, header `kid` and `alg`, assertion audience, clock, `jti` |
+| The service rejects the token | Token issuer, resource, the scopes the deployment requires |
 
 ## Next
 

@@ -18,7 +18,7 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If your team must stand behind an Evidence decision later, replay it offline from what your
+If your team must stand behind an Evidence decision later, you replay it offline from what your
 application kept, then see a changed response refused. You continue the project from
 [Request Evidence from your application](../request-evidence-from-an-application/); nothing needs
 to be running.
@@ -27,19 +27,25 @@ to be running.
   outcome="An adult-status decision replayed at its recorded instant and a tampered copy refused."
   time="About 5 minutes"
   level="Local verification with synthetic data"
-  prerequisites={['The project and three files from Request Evidence from your application', 'Python 3 with the client package from that tutorial']}
+  prerequisites={['The project and three files from Request Evidence from your application', 'The Python environment from that tutorial, activated again in a new terminal']}
 />
 
 ## What the application kept
 
-```sh test-cwd="first-evidence-assertion"
-cd adult-status
+In the project directory, the application wrote three files, and a replay needs nothing else:
+
+```sh test-cwd="first-evidence-assertion/adult-status"
+ls adult-status.retained.json adult-status.response.jws adult-status.verified-at.txt
 ```
 
-The application wrote three files:
+```text test-expect
+adult-status.response.jws
+adult-status.retained.json
+adult-status.verified-at.txt
+```
 
-- `adult-status.retained.json`, the retained verification: the pinned keys and every expectation,
-  fixed before the response existed. It holds no disclosed values.
+- `adult-status.retained.json`, the retained verification: the provider keys the client trusted
+  and every expectation, fixed before the response existed. It holds no disclosed values.
 - `adult-status.response.jws`, the exact response bytes, still untrusted input.
 - `adult-status.verified-at.txt`, the decision instant in Unix seconds.
 
@@ -50,7 +56,7 @@ The application wrote three files:
 
 `verify_retained` judges a response against the current time. `verify_retained_as_of` asks whether
 the response was acceptable at the recorded instant, so a replay still holds after the assertion
-expires.
+expires. Save this program as `replay_adult_status.py`:
 
 ```python title="replay_adult_status.py" test-file
 import json
@@ -75,8 +81,8 @@ except VerificationError as error:
     print(f"REFUSED {error.code}")
 ```
 
-The second call changes one character of the signed payload and keeps the keys, expectations, and
-instant. Run it:
+The first call replays the decision. The second changes one character of the signed payload and
+keeps the keys, expectations, and instant. Run it:
 
 ```sh
 python3 replay_adult_status.py
@@ -87,16 +93,17 @@ REPLAYED adult=true
 REFUSED signature
 ```
 
-The replay opens no connection. `error.code` names the verifier's reason; branch on it, never on
-the message.
+The replay opens no connection and reads no current key set: the retained verification is its only
+trust input. `error.code` names the verifier's reason; branch on it, never on the message.
 
 {/* Evidence: crates/registry-evidence-client-py/python/registry_evidence_client/__init__.pyi,
     verify_retained, verify_retained_as_of, VerificationError;
     crates/registry-evidence-verifier/src/verifier.rs, verify_flattened_jws_report, kind. */}
 
-### Node
+### The same replay in Node
 
-`verifyRetainedAsOf` takes the instant in milliseconds, so the recorded seconds are scaled:
+In Node, `verifyRetainedAsOf` takes the instant in milliseconds, so the recorded seconds are
+scaled:
 
 ```js title="replay-adult-status.js"
 const { readFileSync } = require('node:fs')
@@ -115,13 +122,26 @@ console.log(`REPLAYED adult=${replayed.evidence.supportedValues[0].value}`)
 
 ## If the replay is refused
 
-A refusal of the unchanged files means the retained trust no longer matches the response, usually
-after a key rotation or a changed trusted key set. That is the verifier's own trust input; see
-[Manage verifier trust](../manage-evidence-verifier-trust/).
+The replay uses only the three files, so a provider's later key rotation or a change to your
+current trust configuration cannot make an unchanged replay fail. A refusal of a decision that once
+replayed means one of two things:
+
+- The retained files changed or are corrupt. A `VerificationError` names which check failed in
+  `error.code`; a context that no longer parses is refused as invalid configuration before any
+  check runs. Restore them from wherever your application keeps its records.
+- The client you replay with does not accept the retained format, for example after an upgrade.
+  Replay with a client version that reads it, and report the incompatibility; it is not a trust
+  decision.
+
+{/* Evidence: crates/registry-evidence-client/src/retained.rs, from_slice, verify_as_of
+    (no I/O, retained trusted_jwks and verification_policy only, schema identifier check);
+    crates/registry-evidence-verifier/src/verifier.rs, kind;
+    crates/registry-evidencectl/src/verify.rs, run (retained context only). */}
 
 ## Clean up
 
-Remove the stopped local Evidence state:
+Evidence Gateway is stopped. When you no longer need its local state, including the audit history
+`audit show` reads, remove it:
 
 ```sh
 evidencectl dev clean .
@@ -135,4 +155,5 @@ Removed stopped local Evidence state
 
 ## Next
 
-[Manage verifier trust](../manage-evidence-verifier-trust/)
+[Manage verifier trust](../manage-evidence-verifier-trust/), to choose which provider keys your
+client trusts for new requests.

@@ -13,18 +13,41 @@ locale: en
 standards_referenced: []
 tutorial_test:
   toolset: evidence
-  skip: how-to against the reader's own deployment; no fixed scenario to replay
+  skip: how-to against the reader's own provider and onboarding channel; no local scenario reproduces either
 ---
 
-If your application verifies Evidence responses, its verifier must trust keys your organization
-approved, never keys the service or the response supplies while it is being verified. This page
-pins the provider's public keys, keeps a revoked key out, and takes a signing-key rotation without
-a gap.
+If you operate an application that verifies Evidence responses, its verifier must trust provider
+keys your organization approved, never keys the service or the response supplies while it is being
+verified. You pin the provider's public keys, keep a revoked key out, and take the provider's
+signing-key rotation without a gap.
 
-## Pin the provider's keys in the client profile
+## Build the pinned key set
 
-`evidencectl client profile create` takes the trust mode. Pass `--pinned-jwks <PATH>`, which its
-help describes as a "Reviewed pinned JWKS file, relative to the profile file":
+Obtain each public JWK from the provider through your onboarding channel, not from its JWKS
+endpoint alone, then assemble the set your client will trust:
+
+```sh
+evidencectl jwks \
+  --output trusted-jwks.next.json \
+  provider-current.public.jwk.json \
+  provider-next.public.jwk.json
+```
+
+```text test-expect
+wrote trusted-jwks.next.json
+```
+
+The command refuses a private key and an existing output file; pass `--force` to overwrite. Write
+each set to a new file and activate it through your configuration change process, so the previous
+set stays available for rollback.
+
+{/* Evidence: crates/registry-evidencectl/src/jwks.rs, force. */}
+
+## Pin the set in the client profile
+
+Pass the set to `evidencectl client profile create` with `--pinned-jwks`, a path relative to the
+profile file. The other values are the ones your deployment's operator gave you; the private key is
+the one your client registered with the issuer:
 
 ```sh
 evidencectl client profile create \
@@ -39,36 +62,16 @@ evidencectl client profile create \
 Created client profile
 ```
 
-Without that flag the profile uses `https-discovery`, and `--local-loopback-discovery` is its
-loopback form: in both, the client fetches the service's key set itself. A profile client carries
-no revoked-key list in any trust mode, so with a profile you revoke a key by removing it from the
-pinned set.
+`evidencectl keygen client-assertion --output-dir app-key` writes a key of that name (ES384, its
+default); register its public half with your issuer. Without `--pinned-jwks` the profile fetches the
+service's key set itself, over HTTPS discovery or, with `--local-loopback-discovery`, over
+loopback. A profile carries no revoked-key list in any trust mode, so with a profile you revoke a
+key by removing it from the pinned set.
 
 {/* Evidence: crates/registry-evidencectl/src/client.rs, pinned_jwks, local_loopback_discovery;
+    crates/registry-evidencectl/src/keygen.rs, ClientAssertionArgs, CLIENT_ASSERTION_P384_PRIVATE_FILENAME;
     crates/registry-evidence-client/src/profile.rs, EvidenceClientProfile, TrustProfile;
     crates/registry-evidence-client/src/config.rs:307-313, VerificationStance::Progressive. */}
-
-## Build the pinned key set
-
-Obtain each public JWK from the provider through your onboarding channel, not from its JWKS
-endpoint alone, then assemble the pinned key set:
-
-```sh
-evidencectl jwks \
-  --output trusted-jwks.next.json \
-  provider-current.public.jwk.json \
-  provider-next.public.jwk.json
-```
-
-```text test-expect
-wrote trusted-jwks.next.json
-```
-
-The command refuses a private key and an existing output file; pass `--force` to overwrite. Write
-a new file and activate it through your configuration change process, so the previous set stays
-available for rollback.
-
-{/* Evidence: crates/registry-evidencectl/src/jwks.rs, force. */}
 
 ## Keep a denylist with an explicit client
 
@@ -83,18 +86,8 @@ client = EvidenceClient(
 )
 ```
 
-A revoked key id is refused even while the key is still in the pinned set.
-
-### Node
-
-```js
-const client = new evidence.EvidenceClient({
-  baseUrl: 'https://evidence.example.com',
-  trustedJwks: JSON.parse(readFileSync('trusted-jwks.json', 'utf8')),
-  revokedKeyIds: ['<revoked kid>'],
-  token: tokenConfig,
-})
-```
+In Node, the same configuration takes `trustedJwks` and `revokedKeyIds`. A revoked key id is
+refused even while the key is still in the pinned set.
 
 {/* Evidence: crates/registry-evidence-client-py/python/registry_evidence_client/__init__.pyi,
     EvidenceClient, revoked_key_ids;
@@ -106,18 +99,18 @@ const client = new evidence.EvidenceClient({
 1. When the provider announces a new key, add it to the pinned set and activate the set before the
    provider signs with it.
 2. Once the provider's maximum assertion lifetime plus clock skew has passed since the old key last
-   signed, remove the old key from the set; with an explicit client, also add its key id to
+   signed, remove the old key from the set. With an explicit client, also add its key id to
    `revoked_key_ids` if it was compromised.
-3. Keep each retired set with the decisions it governed, because a replay needs the keys trusted
-   at the time.
 
 A response signed by a key outside the set fails with code `key`. Treat that as a trust change to
-approve, never as a key to fetch. The provider's side is
-[Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/); the threat model is in
-[Evidence Gateway security model](../../security/evidence/).
+approve, never as a key to fetch. Rotation does not touch decisions you already kept: each
+retained verification carries the keys trusted when its request was sent, so
+[a replay](../verify-an-assertion-as-a-consumer/) reads no current key set. The provider's side is
+[Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/).
 
-{/* Evidence: crates/registry-evidence-verifier/src/verifier.rs, verify_flattened_jws_report, kind. */}
+{/* Evidence: crates/registry-evidence-verifier/src/verifier.rs, verify_flattened_jws_report, kind;
+    crates/registry-evidence-client/src/retained.rs, RetainedEvidenceVerification (trusted_jwks retained). */}
 
 ## Next
 
-[Connect an institution API](../connect-an-institution-source/)
+[Evidence Gateway security model](../../security/evidence/), for the threats pinning answers.
