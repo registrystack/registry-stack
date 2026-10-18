@@ -25,7 +25,7 @@ same scheme, host, and port as the issuer.
 
 | Deployment | Configuration |
 | --- | --- |
-| Local development on IPv4 or IPv6 loopback | No additional setting |
+| Local development on loopback | The product's local development mode (see below) |
 | Docker Compose with an HTTP issuer on the container network | `allowInsecureHttp: true` beside the issuer |
 | Kubernetes or a private network with an HTTPS issuer | No additional setting |
 | Hosted issuer on public addresses | No additional setting |
@@ -41,8 +41,19 @@ accepted origin cannot redirect a key fetch to a different destination.
 
 ## Permit plain HTTP only when required
 
-IPv4 and IPv6 loopback HTTP keep the local development behavior without another setting. For an
-HTTP issuer elsewhere, set the runtime's `allowInsecureHttp` field beside `issuer`:
+Without another setting, each product accepts a loopback HTTP issuer only in its own local
+development mode:
+
+- The Base Registry Engine (BReg) accepts an issuer or key URI on IPv4 or IPv6 loopback.
+- Casework, Scheduling, Messaging, the Coordinator, BReg Review, and the MCP gateway accept one on
+  loopback only when `listener.tlsTermination` is `development-loopback`.
+- Evidence accepts only the canonical origin `http://127.0.0.1:PORT`, with the JWKS URI on that
+  same origin, and only under the `local` assurance profile. `production` and `evidence-grade`
+  bundles refuse loopback HTTP too.
+- The OID4VCI front end accepts a `http://127.0.0.1:PORT` origin only under
+  `validationMode: supervised-local-development`.
+
+For an HTTP issuer elsewhere, set the runtime's `allowInsecureHttp` field beside `issuer`:
 
 ```yaml
 authentication:
@@ -57,6 +68,10 @@ plain HTTP. The setting covers the issuer's origin and a JWKS URI you configure.
 permit cloud metadata access, and a `jwks_uri` on another origin learned through discovery must
 still use HTTPS and may not resolve to a private address. Evidence accepts it only under the `local` assurance profile:
 `production` and `evidence-grade` bundles require HTTPS for the issuer and signing keys.
+
+BReg Review has no `allowInsecureHttp` setting. It signs people in only with an HTTPS issuer, or a
+loopback one under `development-loopback`, because it sends its client credentials to the
+issuer's token endpoint.
 
 ## Trust an internal certificate authority
 

@@ -195,6 +195,12 @@
   early; without one a caller could only restart and repeat the same partial
   page.
 
+- `authentication.oidc.deniedKids` lists up to 128 key identifiers Casework
+  refuses immediately, even while the key stays in the issuer's key set, and
+  `authentication.oidc.maximumTokenLifetimeSeconds` bounds a token's `iat` to
+  `exp` interval to 1 through 7200 seconds. Omitting either keeps the existing
+  acceptance rule.
+
 ## 0.41.0 - 2026-10-13
 
 - BREAKING: the published `registry-stack-client` Python package, which carries

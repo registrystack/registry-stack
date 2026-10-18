@@ -32,7 +32,7 @@ On an untuned server, the report ends with two advisories:
 10 dependency checks passed.
 ...
 
-PostgreSQL advisories:
+Advisories:
   information  postgres.connections.budget
     one replica's runtime pool takes at most half of the connections PostgreSQL leaves
     for ordinary roles
@@ -46,7 +46,9 @@ PostgreSQL advisories:
     unavailable when diagnosing load
 ```
 
-`breg` logs the same advisories at startup. Set the baseline once, before the registry takes
+`breg` logs the same advisories at startup. When the runtime file sets
+`authentication.oidc.allowInsecureHttp: true`, the list also carries an
+`authentication.insecure-http` warning; it stays until the issuer is served over HTTPS. Set the baseline once, before the registry takes
 traffic, then run `doctor` until only the connection budget remains. On a dedicated host, start
 from these values and adjust them against your own measurements:
 

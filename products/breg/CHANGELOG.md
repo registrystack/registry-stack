@@ -300,6 +300,22 @@
   `startup.package.refused`. Point `canonicalBaseIri` at a hostname you
   control, rerun `schema-test`, and rebuild the package.
 
+- `authentication.oidc.allowInsecureHttp: true` permits plain HTTP beyond
+  loopback to the configured issuer and to a JWKS URI declared in
+  `jwksSource`. Without it, an HTTP issuer or key URI outside loopback is
+  refused. While it is set, `breg` logs a startup warning and `bregctl doctor`
+  reports the `authentication.insecure-http` warning advisory, in its JSON
+  `advisories` too. The doctor report heads its advisories `Advisories:`
+  (was `PostgreSQL advisories:`), since they are no longer only PostgreSQL's.
+
+- Unlike the token-verifying runtimes, `breg-review` gains no
+  `allowInsecureHttp` setting: it sends its client credentials to the
+  issuer's token endpoint, so it signs people in only with an HTTPS issuer,
+  or a loopback one under `listener.tlsTermination: development-loopback`.
+  `signIn.allowInsecureHttp` is refused as an unknown key, and a plain HTTP
+  issuer beyond loopback is refused at `breg-review check` with
+  `breg.review-runtime.plain-http-endpoint`.
+
 ## 0.41.0 - 2026-10-13
 
 - BREAKING: the published `registry-stack-client` Python package, which carries
