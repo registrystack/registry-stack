@@ -67,13 +67,15 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: assurance_profile_is_explicit_and_strict_profiles_require_fixtures}
       - {file: crates/registry-evidence/src/config.rs, name: only_local_assurance_accepts_a_canonical_loopback_issuer_with_same_origin_jwks}
-      - {file: crates/registry-evidence/src/auth.rs, name: jwks_fetch_policy_uses_the_shared_declared_endpoint_rule}
-      - {file: crates/registry-evidence/src/config.rs, name: deployable_profiles_refuse_plain_http_and_the_insecure_http_opt_in}
       - {file: crates/registry-evidence/src/bundle.rs, name: local_bundle_may_omit_fixtures_but_strict_bundles_remain_complete}
       - {file: crates/registry-evidence/src/bundle.rs, name: fixture_coverage_follows_bundle_assurance_profile}
       - {file: crates/registry-evidence/src/fixture.rs, name: focused_coverage_is_local_only}
       - {file: crates/registry-evidence/src/fixture.rs, name: focused_local_coverage_preserves_structural_and_private_refusals}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: local_runtime_prepares_a_bearer_free_procedure_and_keeps_the_real_security_path}
+  - id: sec-issuer-key-transport
+    tests:
+      - {file: crates/registry-evidence/src/auth.rs, name: jwks_fetch_policy_uses_the_shared_declared_endpoint_rule}
+      - {file: crates/registry-evidence/src/config.rs, name: deployable_profiles_refuse_plain_http_and_the_insecure_http_opt_in}
   - id: sec-admission-clients-and-scopes
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: admission_gates_are_stated_and_a_list_is_nonempty_and_bounded}
