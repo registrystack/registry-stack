@@ -3763,3 +3763,73 @@ A consumer that parsed the old schemas by field name must branch on the
 schema version; there is no alias. Expiry of a dead-lettered delivery keeps
 its `dead-lettered` state, so an operator distinguishes an expired dead letter
 by `expired_at` and the audit entry, not by state.
+
+## Deployment identity of a production package
+
+`bregctl init --from` writes `canonicalBaseIri` as
+`https://{id}.example.invalid`, so local development and schema tests run
+before an adopter has chosen a hostname. The compiler forms every published
+resource IRI from that base (`compiled_resource_iri` in
+`crates/registry-breg/src/compiler.rs`), so a package that keeps it publishes
+identifiers in a namespace nobody controls, and every registry initialized with
+the same project id mints the same ones.
+
+### Threat
+
+An initialized package reaches a production database unchanged. Its records
+and published schema then carry identifiers that resolve nowhere and that
+another registry with the same project id also mints, and a relying party may
+store them before anyone notices. Replacing them afterwards is a successor
+that changes every published IRI. No read or write authority changes: the
+check governs which identity a production package may carry, not who may use
+it.
+
+### Enforcement and defaults
+
+- `deployment_diagnostics` in `crates/registry-breg/src/compiler.rs` refuses a
+  `canonicalBaseIri` whose host is `invalid` or ends in `.invalid` as
+  `breg.registry.canonical-base-iri-reserved`. It is not part of
+  `compile_project`, so `check`, `schema-test`, and `dev` accept the
+  initialized identity.
+- `bregctl package` applies it before it reads the test receipt
+  (`refuse_deployment_identity` in `crates/registry-bregctl/src/lib.rs`), and
+  `bregctl check --production` reports it. The local-development package
+  `bregctl dev` builds does not apply it.
+- `validate_deployment_identity` in `crates/registry-breg/src/package.rs`
+  applies it again inside `load_package_with_verified_envelope` whenever the
+  database initialization environment is not `local`, so `breg`, `bregctl
+  apply`, and `doctor` refuse a package that did not pass through `bregctl
+  package`, such as a local-development one, with
+  `PackageError::DeploymentIdentity`. `DeploymentIdentity::from_raw` in
+  `crates/registry-breg/src/runtime_config.rs` refuses a runtime configuration
+  whose environment differs from its database initialization environment, so
+  a production deployment cannot load under the `local` policy by naming it
+  for one key only.
+- A predecessor load does not apply it. Successor planning reads the active
+  package through `load_active_predecessor_package`, so a production database
+  whose active package carries a reserved identity can still move to a
+  successor that names a hostname the adopter controls.
+
+### Tests
+
+`a_local_placeholder_package_cannot_load_for_a_production_database` in
+`crates/registry-breg/tests/postgres_package.rs` loads one package carrying a
+reserved identity for a `local` database, refuses it for a `production` one
+with `PackageError::DeploymentIdentity`, reads it as a production predecessor,
+and loads the same package with a deployable identity for production.
+`dev_packages_the_placeholder_iri_in_process_and_retains_a_refusal` in
+`crates/registry-bregctl/src/dev/tests.rs` shows a deployment package refuses
+the reserved identity before reading the receipt while the local-development
+package accepts it. `only_a_deployment_capture_refuses_the_reserved_placeholder_iri`
+in `crates/registry-bregctl/src/lib.rs` holds the same split at capture, and
+`a_refused_active_package_names_package_root_apart_from_the_target` there pins
+`apply.package.deployment-identity-refused` and its remedy.
+
+### Accepted residuals
+
+- The check is a guard against an accident, not against an operator who means
+  to bypass it: a database initialized for `local` accepts the reserved
+  identity, as `bregctl dev` requires.
+- Only the reserved `.invalid` namespace is refused. A hostname the adopter
+  does not control but that is not reserved, such as `example.com`, passes.
+- No security invariant row changes.

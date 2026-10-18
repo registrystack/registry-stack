@@ -30,8 +30,10 @@ what authorizes an activation, and the database records every activation in its 
 Deployment commands take absolute paths with no `..` component and no symbolic link anywhere in
 them. That covers `--runtime-config`, `--credentials`, `--test-receipt`, `--package`, the test
 receipt's `--output`, and the directories the runtime file names. When an output path such as the
-test receipt's `--output` is refused for a symbolic link, the diagnostic names the linked component
-and the target it resolves to: use the resolved path.
+test receipt's `--output` is refused for a symbolic link, the diagnostic names the first linked
+component and the target it resolves to. If that component is a parent directory, put its target in
+its place and keep the rest of the path. If it is the output itself, choose a new name that is not a
+link: an output must not exist yet.
 
 {/* Evidence: crates/registry-platform-config/src/loader.rs, validate_absolute_lexical_path(),
     reject_symlink_components(); crates/registry-breg/src/runtime_config.rs, validate_loaded_paths();

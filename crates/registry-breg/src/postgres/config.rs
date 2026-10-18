@@ -461,7 +461,7 @@ impl DatabaseConnectionCause {
     pub const fn message(self) -> &'static str {
         match self {
             Self::Unreachable => {
-                "the database could not be reached; verify its address, network path, and availability"
+                "the database could not be reached or refused a new connection; verify its address, network path, availability, and connection limit"
             }
             Self::Tls => {
                 "the database TLS connection was refused; verify the server certificate, name, and configured trust roots"
@@ -669,6 +669,11 @@ mod tests {
             database_error_cause(&tokio_postgres::error::SqlState::TOO_MANY_CONNECTIONS),
             DatabaseConnectionCause::Unreachable
         );
+        // A server at its connection limit completed the handshake, so the
+        // recovery names the limit beside the network checks.
+        assert!(DatabaseConnectionCause::Unreachable
+            .message()
+            .contains("connection limit"));
     }
 
     #[cfg(feature = "postgres-test")]
