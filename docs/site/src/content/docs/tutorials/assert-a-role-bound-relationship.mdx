@@ -21,14 +21,14 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 If you write assertion definitions, this tutorial shows you one that binds two subjects in distinct
 roles and releases one Boolean: is the candidate in the child's complete legal-parent set? You
 continue in the project from [Control who can request evidence](../control-who-can-request-evidence/),
-with the source and Evidence Gateway still running.
+with the source and Registry Evidence still running.
 
 <QuickstartMeta
   outcome="A verified relationship assertion bound to a child and a candidate parent."
   time="About 10 minutes"
   level="Local development with synthetic data"
   prerequisites={[
-    'The project, source, and Evidence Gateway left running by Control who can request evidence',
+    'The project, source, and Registry Evidence left running by Control who can request evidence',
   ]}
 />
 
@@ -162,10 +162,10 @@ HTTP 422
 evidence.unavailable
 ```
 
-Evidence Gateway returns `evidence.unavailable` for any subject it cannot resolve, so the refusal
+Registry Evidence returns `evidence.unavailable` for any subject it cannot resolve, so the refusal
 does not say which record was missing.
 
-Leave the source and Evidence Gateway running; the next tutorial continues with them.
+Leave the source and Registry Evidence running; the next tutorial continues with them.
 
 {/* Evidence: crates/registry-evidencectl/src/request.rs, validate_closed_inputs;
     crates/registry-evidence/src/problem.rs, EvidenceNotAvailable. */}

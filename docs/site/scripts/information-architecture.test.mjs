@@ -420,7 +420,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     // Each product group seats the group of its own schema and no other,
     // whichever products come before it in this docset.
     const seatedGroups = (group) => group.items.filter((item) => openApiSidebarGroups.includes(item));
-    const docsetEvidence = docsetSidebar.find((item) => item.label === 'Evidence Gateway');
+    const docsetEvidence = docsetSidebar.find((item) => item.label === 'Registry Evidence');
     assert.deepEqual(
       seatedGroups(docsetEvidence),
       hasEvidenceOid4vciOpenApi
@@ -797,7 +797,7 @@ test('keeps operating requirements in each product Deploy group, not in Start', 
       "slug: 'tutorials/build-and-deploy-evidence-project'",
       "slug: 'operate/evidence-audit'",
     ],
-    'Evidence Gateway Prove and deploy group',
+    'Registry Evidence Prove and deploy group',
   );
   // Base Registry Engine states its requirements at the top of Deploy and
   // serve, so that page opens its Deploy and operate group; the separate
@@ -966,7 +966,7 @@ test('organizes Registry Evidence tasks without publishing the obsolete Relay co
       "slug: 'tutorials/assert-a-role-bound-relationship'",
       "slug: 'tutorials/request-evidence-as-sd-jwt-vc'",
     ],
-    'Evidence Gateway tutorial order',
+    'Registry Evidence tutorial order',
   );
   // The refusal tutorial was folded into the access-control tutorial.
   assert.equal(hasDocForSlug('tutorials/refuse-unsafe-evidence-requests'), false);

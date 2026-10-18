@@ -23,18 +23,18 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 If your relying parties expect a Selective Disclosure JWT Verifiable Credential (SD-JWT VC),
 permit that representation for `adult-status`, then request and verify one. You continue in the
 project from [Assert a role-bound relationship](../assert-a-role-bound-relationship/), with the
-source and Evidence Gateway still running, and finish by stopping both and reading the audit.
+source and Registry Evidence still running, and finish by stopping both and reading the audit.
 
 <QuickstartMeta
   outcome="A verified SD-JWT VC adult-status response, a refused tampered copy, and the audit of the request."
   time="About 10 minutes"
   level="Local development with synthetic data"
-  prerequisites={['The project, source, and Evidence Gateway left running by Assert a role-bound relationship']}
+  prerequisites={['The project, source, and Registry Evidence left running by Assert a role-bound relationship']}
 />
 
 ## Permit the representation
 
-Evidence Gateway reads the project only as it starts. In `first-evidence-assertion/adult-status`,
+Registry Evidence reads the project only as it starts. In `first-evidence-assertion/adult-status`,
 stop it while you change the project; the source keeps running:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
@@ -85,9 +85,9 @@ evidencectl check . --target local-target.yaml
 {/* Evidence: products/evidence/examples/standalone/evidence.yaml, representations;
     products/evidence/examples/standalone/dev-authority.yaml, standalone-service. */}
 
-## Start Evidence Gateway with the change
+## Start Registry Evidence with the change
 
-Start Evidence Gateway again with the same ports, so it loads the changed definition and grant:
+Start Registry Evidence again with the same ports, so it loads the changed definition and grant:
 
 ```sh
 evidencectl dev start . \
@@ -185,7 +185,7 @@ evidencectl: Evidence response verification failed
 
 ## Stop and read the audit
 
-Evidence Gateway wrote an audit event before it read the source and another before the response
+Registry Evidence wrote an audit event before it read the source and another before the response
 left. `evidencectl audit show` reads them only from a stopped session, so stop it and show the last
 operation, your SD-JWT VC request:
 

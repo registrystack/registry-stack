@@ -1,6 +1,6 @@
 ---
-title: Build and deploy an Evidence Gateway project
-description: Write a deployment target for a proved Evidence Gateway project, package it into a candidate with a repeatable digest, activate its authority on the target host, and start serving.
+title: Build and deploy a Registry Evidence project
+description: Write a deployment target for a proved Registry Evidence project, package it into a candidate with a repeatable digest, activate its authority on the target host, and start serving.
 status: current
 owner: registry-docs
 source_repos:
@@ -24,7 +24,7 @@ to a host, package it into a candidate whose digest you can repeat, activate it,
 dependencies before it opens a listener.
 
 <QuickstartMeta
-  outcome="An activated Evidence Gateway candidate with a recorded package digest and passing dependency preflight."
+  outcome="An activated Registry Evidence candidate with a recorded package digest and passing dependency preflight."
   time="About 30 minutes"
   level="Operator handoff with synthetic data and a local signer"
   prerequisites={['The proved adult-status project', 'evidence and evidencectl from one release', 'Free loopback port 18090']}
@@ -189,7 +189,7 @@ Target runtime paths and deployment secret material remain unverified until `evi
 package digest identifies its immutable `bundle/`: the same project and target produce the same
 digest, so record it. Editing the target, even its port, changes the digest but no definition's
 `configurationRevision`, which moves only with the definition's semantics
-([How Evidence Gateway works](../../explanation/how-evidence-works/)). `package` first checks the bundle and runs every fixture through the
+([How Registry Evidence works](../../explanation/how-evidence-works/)). `package` first checks the bundle and runs every fixture through the
 `evidence` binary on `PATH` (or `EVIDENCE_BIN`), contacting no source, issuer, or signer.
 
 List the candidate to see the three parts that travel to the host:
@@ -305,4 +305,4 @@ that the request's `access-attempt` and `disclosure-release` entries, which shar
 
 ## Next
 
-[Configure Transit signing for Evidence Gateway](../move-evidence-to-production-signing/)
+[Configure Transit signing for Registry Evidence](../move-evidence-to-production-signing/)

@@ -21,13 +21,13 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 In about fifteen minutes you will register two applications under access profiles of their own,
 send the same region request as each, and see one answered and the other refused. You continue in
 the project from [Return a governed value](../return-a-governed-value/), with the source and
-Evidence Gateway still running.
+Registry Evidence still running.
 
 <QuickstartMeta
   outcome="Two clients with distinct access profiles, one region request answered and one refused."
   time="About 15 minutes"
   level="Local development with synthetic data"
-  prerequisites={['The project, source, and Evidence Gateway left running by Return a governed value']}
+  prerequisites={['The project, source, and Registry Evidence left running by Return a governed value']}
 />
 
 ## See who may ask today
@@ -103,7 +103,7 @@ evidencectl check . --target local-target.yaml
 
 ## Register a client for each profile
 
-Evidence Gateway reads profiles and clients only as it starts, and `evidencectl` refuses a client
+Registry Evidence reads profiles and clients only as it starts, and `evidencectl` refuses a client
 change while it runs, so stop it first:
 
 ```sh
@@ -130,7 +130,7 @@ Added client age-checker with access profile age-checker-service.
 Added client region-router with access profile region-router-service.
 ```
 
-Start Evidence Gateway again with the same ports, so it loads the profiles and clients:
+Start Registry Evidence again with the same ports, so it loads the profiles and clients:
 
 ```sh
 evidencectl dev start . \
@@ -164,7 +164,7 @@ evidencectl request prepare adult-status \
 evidencectl: purpose does not match the active local tutorial definition
 ```
 
-Preparation refuses it, so nothing reaches Evidence Gateway.
+Preparation refuses it, so nothing reaches Registry Evidence.
 
 ## Send the region request as each client
 
@@ -183,7 +183,7 @@ evidencectl request prepare residence-region \
   --name region-by-checker
 ```
 
-Send both; Evidence Gateway applies the grants:
+Send both; Registry Evidence applies the grants:
 
 ```sh
 for name in region-by-router region-by-checker; do
@@ -224,7 +224,7 @@ jq . region-by-checker.response
 `evidence.denied` does not name the missing grant.
 [Evidence problems](../../reference/evidence-problems/) lists every code.
 
-Leave the source and Evidence Gateway running; the next tutorial continues with them.
+Leave the source and Registry Evidence running; the next tutorial continues with them.
 
 {/* Evidence: crates/registry-evidencectl/src/request.rs, validate_closed_inputs;
     crates/registry-evidence/src/problem.rs, NotAuthorized;

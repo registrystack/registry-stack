@@ -26,12 +26,12 @@ see why no other answer could have come back: the project lists every value the 
   outcome="A verified residence-region assertion carrying one declared value."
   time="About 10 minutes"
   level="Local development with synthetic data"
-  prerequisites={['The project, source, and Evidence Gateway left running by Your first assertion']}
+  prerequisites={['The project, source, and Registry Evidence left running by Your first assertion']}
 />
 
 ## Request the region
 
-Work in `first-evidence-assertion/adult-status`, where the source and Evidence Gateway from
+Work in `first-evidence-assertion/adult-status`, where the source and Registry Evidence from
 Your first assertion are still running. Prepare a request for the `residence-region` assertion
 definition:
 
@@ -103,7 +103,7 @@ outputs:
 ```
 
 A [Function](../../reference/glossary/#function) that computed any other value would not get it
-past Evidence Gateway. One fixture case proves that by returning a value outside the list; run the
+past Registry Evidence. One fixture case proves that by returning a value outside the list; run the
 region fixtures with their trace:
 
 ```sh
@@ -118,7 +118,7 @@ evidencectl test . --target local-target.yaml --fixture fixtures/residence-regio
 "reasonCode": "output-refused",
 ```
 
-Evidence Gateway refused the output, so the caller would have received a refusal, not the value.
+Registry Evidence refused the output, so the caller would have received a refusal, not the value.
 
 ## See who may ask
 
@@ -153,7 +153,7 @@ access profile that `tutorial-client` holds:
     valueOrigin: request
 ```
 
-Leave the source and Evidence Gateway running; the next tutorial continues with them.
+Leave the source and Registry Evidence running; the next tutorial continues with them.
 
 {/* Evidence: products/evidence/examples/standalone/evidence.yaml, assertionDefinitions.residence-region.grantCeiling;
     products/evidence/examples/standalone/dev-authority.yaml, accessProfiles.standalone-service;

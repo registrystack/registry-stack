@@ -1,6 +1,6 @@
 ---
-title: Operate the Evidence Gateway audit log
-description: Choose where Evidence Gateway writes its audit log, preflight the audit path, ship the log to append-only storage, read what each record phase establishes, and rotate the audit master.
+title: Operate the Registry Evidence audit log
+description: Choose where Registry Evidence writes its audit log, preflight the audit path, ship the log to append-only storage, read what each record phase establishes, and rotate the audit master.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,7 +13,7 @@ locale: en
 standards_referenced: []
 ---
 
-You run a deployed Evidence Gateway service and answer for what it disclosed. For every admitted
+You run a deployed Registry Evidence service and answer for what it disclosed. For every admitted
 operation, Evidence writes one entry before any source read and one with its outcome, and refuses
 the request when an entry cannot be written. Requests refused before admission write nothing:
 authentication failures, malformed requests, invalid selectors, and rate-limited requests. The log
@@ -191,7 +191,7 @@ unchanged `hashKeyVersion` silently change every pseudonym under the same prefix
 2. In the deployment target, set `audit.hashKeyRef` to `secret:file/evidence-audit-hmac-2` and
    raise `audit.hashKeyVersion` by one. Record both versions in your change record.
 3. Repackage the deployment target into a new candidate and install it with the target-host steps
-   in [Build and deploy an Evidence Gateway project](../../tutorials/build-and-deploy-evidence-project/).
+   in [Build and deploy a Registry Evidence project](../../tutorials/build-and-deploy-evidence-project/).
    Route traffic only after readiness succeeds.
 4. Keep the previous master under its secret controls for as long as pseudonyms from its version
    must stay recomputable for an investigation.
@@ -205,5 +205,5 @@ The audit master must differ from the subject-binding secret and the signing key
 
 ## Next
 
-- [Evidence Gateway configuration reference](../../reference/evidence-configuration/) for every `audit` key and
+- [Registry Evidence configuration reference](../../reference/evidence-configuration/) for every `audit` key and
   its bounds.

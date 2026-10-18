@@ -1,6 +1,6 @@
 ---
-title: Evidence Gateway API
-description: "Narrative context for the Evidence Gateway OpenAPI reference: what the API answers, authentication, the frozen Version 1 contract, and the response encodings."
+title: Registry Evidence API
+description: "Narrative context for the Registry Evidence OpenAPI reference: what the API answers, authentication, the frozen Version 1 contract, and the response encodings."
 status: current
 owner: registry-docs
 source_repos:
@@ -13,11 +13,11 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
-Evidence Gateway (Evidence) answers a relying party's fixed question with a signed assertion. The
+Registry Evidence (Evidence) answers a relying party's fixed question with a signed assertion. The
 caller sends a Requirement URI, a purpose, and selector values for the subject, authenticated with
 an access token, and chooses a response encoding with `Accept`. Every route,
 request body, response schema, and problem is in the
-[generated Evidence Gateway API operations](../evidence/), rendered from the OpenAPI document the
+[generated Registry Evidence API operations](../evidence/), rendered from the OpenAPI document the
 runtime serves.
 
 ## What the API is
@@ -75,7 +75,7 @@ a holder-bound requirement offers one more encoding, listed with the [operations
 `POST /v1/evidence/batch` accepts only
 `application/vnd.registrystack.evidence.request-batch+json` and returns one signed flattened JWS
 per available item. Either route refuses an `Accept` value it does not offer with
-`format.unsupported` ([Evidence Gateway errors and problems reference](../../evidence-problems/)).
+`format.unsupported` ([Registry Evidence errors and problems reference](../../evidence-problems/)).
 
 {/* Evidence: crates/registry-evidence-verifier/src/lib.rs, EVIDENCE_JWS_MEDIA_TYPE,
     EVIDENCE_SD_JWT_VC_MEDIA_TYPE, EVIDENCE_UNSIGNED_MEDIA_TYPE, and EVIDENCE_REQUEST_BATCH_MEDIA_TYPE;
@@ -84,4 +84,4 @@ per available item. Either route refuses an `Accept` value it does not offer wit
 
 ## Next
 
-[Evidence Gateway API operations](../evidence/)
+[Registry Evidence API operations](../evidence/)

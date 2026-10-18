@@ -273,7 +273,7 @@ test('OID4VCI OpenAPI is published by the current docset and by release docsets 
     const releasedRef = stdout.trim();
     await writeFile(join(source, oid4vciPath), '{"info":{"version":"checkout"}}\n');
     // The document follows the registry-evidence entry's ref and source, not
-    // its `openapi` path, which names the Evidence Gateway document.
+    // its `openapi` path, which names the Registry Evidence document.
     await writeFile(join(data, 'repo-docs.yaml'), YAML.stringify({ repos: {
       'registry-evidence': { ref: 'HEAD', local: '../..', remote: source, openapi: evidencePath,
         docs: [{ src: 'README.md' }] },
@@ -310,7 +310,7 @@ test('OID4VCI OpenAPI is published by the current docset and by release docsets 
     assert.equal(JSON.parse(await readFile(output, 'utf8')).info.version, 'released');
     assert.ok(await readFile(renderedOutput, 'utf8'));
 
-    // A docset older than the floor still publishes the Evidence Gateway
+    // A docset older than the floor still publishes the Registry Evidence
     // document and not the OID4VCI one.
     const log = await fetch('v0.19.0');
     assert.match(log, /Skipped registry-evidence-oid4vci OpenAPI spec absent from docset v0\.19\.0\./);

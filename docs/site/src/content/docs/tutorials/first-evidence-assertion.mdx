@@ -18,11 +18,11 @@ tutorial_test:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 If other services need a yes-or-no answer from records your institution holds, start by seeing
-what Evidence Gateway gives them. You run it over a synthetic source, ask whether one
+what Registry Evidence gives them. You run it over a synthetic source, ask whether one
 test person is an adult, and read `"value": true` from a verified response with no birth date.
 
 <QuickstartMeta
-  outcome="A verified adult-status assertion, with the source and Evidence Gateway left running."
+  outcome="A verified adult-status assertion, with the source and Registry Evidence left running."
   time="About 15 minutes, plus the first image download"
   level="Local development with synthetic data"
   prerequisites={[
@@ -34,7 +34,7 @@ test person is an adult, and read `"value": true` from a verified response with 
 
 ## Install evidence and evidencectl
 
-`evidence` is Evidence Gateway, the service that answers requests, and
+`evidence` is Registry Evidence, the service that answers requests, and
 [`evidencectl`](/reference/cli/evidencectl/) the tool you check and drive a project with. The
 installer checks every download against the release's `SHA256SUMS`, then puts `evidence`,
 `evidencectl`, and `evidence-oid4vci` in `~/.local/bin` together; keep that directory on your
@@ -174,7 +174,7 @@ If a port is in use, stop what holds it and start again.
 
 ## Prepare, send, and verify one request
 
-`request prepare` gets a token from the issuer and sends nothing to Evidence Gateway. It fixes
+`request prepare` gets a token from the issuer and sends nothing to Registry Evidence. It fixes
 what a valid answer must match before any response exists.
 
 ```sh
@@ -243,7 +243,7 @@ assertion carries only `true`.
 
 ## Leave it running
 
-The next tutorial continues with this project, with the source and Evidence Gateway still
+The next tutorial continues with this project, with the source and Registry Evidence still
 running, so leave both as they are. When you are finished with them, run `evidencectl dev stop .`
 and then `evidencectl dev clean .` in this directory, and press `Ctrl+C` in the source's terminal.
 

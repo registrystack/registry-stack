@@ -1,6 +1,6 @@
 ---
 title: How Evidence works
-description: What you define in an Evidence project, what an answer may carry, what exists once Evidence Gateway runs, who owns each answer, and how you inspect a project or change a published question.
+description: What you define in an Evidence project, what an answer may carry, what exists once Registry Evidence runs, who owns each answer, and how you inspect a project or change a published question.
 status: current
 owner: registry-docs
 source_repos:
@@ -40,7 +40,7 @@ Beside the project sit two files an operator owns. A [target](../../reference/gl
 the project to one deployment: the token issuer, the source endpoints and their credentials, the
 signer, and the audit path. A target authority, such as `dev-authority.yaml`, names the access
 profiles that may call and the grants each holds. A grant can only narrow a definition's
-[grant ceiling](../../reference/glossary/#grant-ceiling); Evidence Gateway refuses to activate one that widens it.
+[grant ceiling](../../reference/glossary/#grant-ceiling); Registry Evidence refuses to activate one that widens it.
 
 {/* Evidence: crates/registry-evidence-authoring/src/project.rs, EvidenceProject, SelectorProfile,
     FunctionInterface, AssertionDefinition, and SourceType; crates/registry-evidence/src/rhai_runtime.rs,
@@ -92,7 +92,7 @@ Each request passes five stages: the selectors are checked, the source is read, 
 run, only declared outputs are accepted, and the assertion is signed with its definition's
 [`configurationRevision`](../../reference/glossary/#configuration-revision).
 
-Evidence Gateway keeps no database and no copy of a source response. Two things it keeps are
+Registry Evidence keeps no database and no copy of a source response. Two things it keeps are
 durable. The audit trail records an access event before the source is read and a release event
 before the response leaves; if the release event cannot be written, the caller gets a `503` and no
 assertion. The authority state file, `authority-state.json`, holds the active target authority and
@@ -106,9 +106,9 @@ the history of every activation.
 ## Who owns the result?
 
 Your institution keeps the record. The relying service verifies the answer and owns the decision
-made from it; an assertion grants no approval and no right to write anywhere. Evidence Gateway inherits no
+made from it; an assertion grants no approval and no right to write anywhere. Registry Evidence inherits no
 authority from its sources: a Base Registry Engine route is one more HTTP endpoint, reached with
-Evidence Gateway's own credentials. Authors own the project and its fixtures. Operators own the
+Registry Evidence's own credentials. Authors own the project and its fixtures. Operators own the
 target, the target authority, the signing keys, and audit retention.
 
 {/* Evidence: products/evidence/examples/standalone/README.md;

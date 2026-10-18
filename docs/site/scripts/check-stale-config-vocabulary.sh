@@ -39,7 +39,7 @@ fi
 # shellcheck disable=SC2016 # the backticks are literal Markdown code marks
 CROSS_PRODUCT_RETIRED='permissions\.entities|entityIds?([^a-z]|$)|extendEntities|[Cc]hange[ -]?[Rr]equests?|/requests/[<{:]|[Cc]hange[ -][Cc]ontrol|[Ll]ifecycle[ -]?[Aa]ctions?|[Ll]ifecycle[ -]?[Aa]uthorit(y|ies)|executeLifecycleAction|BRegPreparedLifecycle|lifecycle-promotion|fieldEncryptionBackfill|requestHistoryAfterProposalVersion|planRefusal|[Rr]ecovery[^.]*[`"]terminal[`"]|[`"]terminal[`"][^.]*[Rr]ecovery'
 BREG_RETIRED='(^|[^A-Za-z])[Ee]ntit(y|ies)([^a-z]|$)|SSL_CERT_FILE'
-# Retired Evidence Gateway and Registry Casework vocabulary, refused on every
+# Retired Registry Evidence and Registry Casework vocabulary, refused on every
 # page like CROSS_PRODUCT_RETIRED. No tool prints these and no configuration
 # key spells them: an Evidence project is an editable project or a deployment
 # project, a definition answers a question, and Casework pins a ReviewRequest.

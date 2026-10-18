@@ -11,7 +11,7 @@ locale: en
 standards_referenced: []
 ---
 
-Evidence Gateway is built so that a caller cannot turn it into a fact-query engine, splice
+Registry Evidence is built so that a caller cannot turn it into a fact-query engine, splice
 permissions across grants, redirect source access, learn from an absence, or receive an
 unauthenticated response, and so that its configuration cannot change underneath a request. The
 operator keeps the duties no service-side control can hold.
@@ -55,7 +55,7 @@ learn it. Audience-scoped subject bindings derive from the audience and the
 purpose, so one subject is not linkable across relying parties. A holder-bound
 requirement binds to the holder key's thumbprint and the purpose instead: a
 holder who presents the same key to several verifiers is linkable across them
-for that purpose, and the wallet, not Evidence Gateway, decides whether to use
+for that purpose, and the wallet, not Registry Evidence, decides whether to use
 a fresh key.
 
 The response is authenticated. A signed flattened JWS is the default, unsigned
@@ -117,10 +117,10 @@ holds the duties no service-side control can hold for you:
   snapshots.
 - Sign production and evidence-grade deployments through a workload-local
   Transit key that stays non-exportable, and retire signing keys as
-  [Rotate Evidence Gateway signing keys](../../tutorials/rotate-evidence-signing-keys/)
+  [Rotate Registry Evidence signing keys](../../tutorials/rotate-evidence-signing-keys/)
   shows.
 - Ship the audit log to append-only storage and rotate its master as
-  [Operate the Evidence Gateway audit log](../../operate/evidence-audit/)
+  [Operate the Registry Evidence audit log](../../operate/evidence-audit/)
   shows.
 
 {/* Evidence: products/evidence/OPERATOR-CONTRACT.md, "Audit and operational data";
