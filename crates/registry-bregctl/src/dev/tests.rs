@@ -664,6 +664,124 @@ fn a_fresh_init_project_is_ready_for_the_native_dev_lifecycle() {
 }
 
 #[test]
+fn dev_capture_runs_the_placeholder_iri_and_names_a_compile_refusal_by_code() {
+    let temporary = tempfile::tempdir().expect("temporary");
+    let project = fs::canonicalize(temporary.path()).unwrap().join("project");
+    crate::init(&project).unwrap_or_else(|failure| {
+        panic!("init failed: {}", serde_json::to_string(&failure).unwrap())
+    });
+    let client_bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let registry_path = project.join("registry.yaml");
+    let registry = fs::read_to_string(&registry_path).unwrap();
+    let authored = "canonicalBaseIri: https://directory.example.gov";
+    assert_eq!(registry.matches(authored).count(), 1);
+
+    fs::write(
+        &registry_path,
+        registry.replace(
+            authored,
+            "canonicalBaseIri: https://directory.example.invalid",
+        ),
+    )
+    .unwrap();
+    capture(&project, &client_bytes).expect("local development runs the placeholder IRI");
+
+    fs::write(
+        &registry_path,
+        registry.replace(authored, "canonicalBaseIri: \"\""),
+    )
+    .unwrap();
+    let refusal = format!(
+        "{:#}",
+        capture(&project, &client_bytes)
+            .err()
+            .expect("an empty canonical IRI does not compile")
+    );
+    assert!(
+        refusal.contains("(breg.registry.canonical-base-iri-required)"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn dev_packages_the_placeholder_iri_in_process_and_retains_a_refusal() {
+    let temporary = tempfile::tempdir().expect("temporary");
+    let root = fs::canonicalize(temporary.path()).unwrap();
+    let project = root.join("project");
+    crate::init(&project).unwrap_or_else(|failure| {
+        panic!("init failed: {}", serde_json::to_string(&failure).unwrap())
+    });
+    let registry_path = project.join("registry.yaml");
+    let registry = fs::read_to_string(&registry_path).unwrap();
+    let authored = "canonicalBaseIri: https://directory.example.gov";
+    assert_eq!(registry.matches(authored).count(), 1);
+    fs::write(
+        &registry_path,
+        registry.replace(
+            authored,
+            "canonicalBaseIri: https://directory.example.invalid",
+        ),
+    )
+    .unwrap();
+    fs::create_dir(root.join("logs")).unwrap();
+    let args = crate::PackageArgs {
+        candidate: crate::PackageCandidateArgs {
+            project,
+            baseline_package: None,
+            reviewed_migrations: None,
+        },
+        schema_fingerprint: Some("0".repeat(64)),
+        test_receipt: root.join("schema-test-receipt.json"),
+        output: root.join("build"),
+        revision: None,
+    };
+    let codes = |refusal: &crate::Refusal| match refusal {
+        crate::Refusal::Tool(report) => report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.clone())
+            .collect::<Vec<_>>(),
+        crate::Refusal::Document(_) => Vec::new(),
+    };
+
+    // A deployment package refuses the placeholder before it reads the
+    // receipt, and the in-process refusal is retained and named.
+    let Err(deployment) = crate::package(&args, true) else {
+        panic!("a deployment package refuses the placeholder");
+    };
+    assert_eq!(
+        codes(&deployment),
+        ["breg.registry.canonical-base-iri-reserved"]
+    );
+    let rendered = format!("{:#}", in_process_refusal(&root, "package", &deployment));
+    assert!(
+        rendered.contains("native package refused: breg.registry.canonical-base-iri-reserved"),
+        "{rendered}"
+    );
+    let retained = fs::read_dir(root.join("logs"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(retained.len(), 1, "{retained:?}");
+    assert!(retained[0].starts_with("package-report-"), "{retained:?}");
+
+    // The local-development package accepts the placeholder and goes on to
+    // the receipt, which this synthetic session never produced.
+    let Err(local) = crate::package(&args, false) else {
+        panic!("a missing receipt is refused");
+    };
+    let local = codes(&local);
+    assert!(!local.is_empty());
+    assert!(
+        !local
+            .iter()
+            .any(|code| code == "breg.registry.canonical-base-iri-reserved"),
+        "{local:?}"
+    );
+    assert!(!root.join("build").exists());
+}
+
+#[test]
 fn every_initialized_template_has_complete_local_clients_and_journeys() {
     for template in crate::starters::ids() {
         let temporary = tempfile::tempdir().expect("temporary");
@@ -3494,6 +3612,60 @@ fn export_client_copies_a_stopped_retained_pair_and_retries_without_state_change
     );
     private::check(&export_args(&state).client_id_file, false).unwrap();
     private::check(&export_args(&state).assertion_key_file, false).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn export_client_names_a_symlinked_output_parent_and_target() {
+    let (_temp, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let real = state.project.join("real-export-parent");
+    let linked = state.project.join("linked-export-parent");
+    fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &linked).unwrap();
+    let mut args = export_args(&state);
+    args.client_id_file = linked.join("client-id");
+    args.assertion_key_file = linked.join("assertion-key.jwk");
+
+    let error = export_client::run(args).expect_err("a symlinked parent is refused");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains(&linked.display().to_string()),
+        "{rendered}"
+    );
+    assert!(rendered.contains(&real.display().to_string()), "{rendered}");
+}
+
+#[cfg(unix)]
+#[test]
+fn export_client_names_a_symlinked_output_and_target() {
+    let (_temp, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let live_target = state.project.join("operator-key.jwk");
+    fs::write(&live_target, b"operator-owned").unwrap();
+    let dangling_target = state.project.join("missing-key.jwk");
+    for target in [&live_target, &dangling_target] {
+        let args = export_args(&state);
+        if fs::symlink_metadata(&args.assertion_key_file).is_ok() {
+            fs::remove_file(&args.assertion_key_file).unwrap();
+        }
+        std::os::unix::fs::symlink(target, &args.assertion_key_file).unwrap();
+        let linked = args.assertion_key_file.clone();
+
+        let error = export_client::run(args).expect_err("a symlinked output is refused");
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains(&linked.display().to_string()),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(&target.display().to_string()),
+            "{rendered}"
+        );
+        assert!(!export_args(&state).client_id_file.exists());
+    }
+    assert_eq!(fs::read(&live_target).unwrap(), b"operator-owned");
+    assert!(!dangling_target.exists());
 }
 
 #[test]

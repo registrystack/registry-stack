@@ -2183,6 +2183,8 @@ pub enum MutationError {
     AuthorizationRefused,
     #[error("mutation precondition failed")]
     PreconditionFailed,
+    #[error("the current review result does not match the retained approval")]
+    ProposalReviewResultMismatch,
     #[error("mutation conflicts with current state")]
     Conflict,
     /// The review authority rejected the Proposal, and a rejection is terminal.

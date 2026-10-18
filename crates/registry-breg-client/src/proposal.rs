@@ -730,7 +730,7 @@ pub struct BRegProposalGetBinding {
     profile: String,
     path: String,
 }
-/// Purpose-specific authority to read one Proposal review document by UUID.
+/// Purpose-specific authority to read Proposal review documents by UUID.
 /// Constructed only from the caller-visible runtime metadata inventory.
 #[derive(Clone)]
 pub struct BRegProposalReviewBinding {
@@ -969,6 +969,75 @@ impl BaseRegistryClient {
         }
         Ok(BRegComplete {
             value: document,
+            metadata: response.metadata,
+        })
+    }
+
+    /// Read up to 100 distinct contexts in one exchange under the existing
+    /// advertised review-context grant. None is the closed concealment result.
+    pub async fn read_proposal_review_context_batch(
+        &self,
+        binding: &BRegProposalReviewBinding,
+        ids: &[&str],
+    ) -> Result<BRegComplete<Vec<Option<BRegProposalReviewDocument>>>, BaseRegistryClientError>
+    {
+        if binding.source != self.source_binding()
+            || binding.operation != "get-review-context"
+            || ids.is_empty()
+            || ids.len() > 100
+            || ids.iter().any(|id| !canonical_proposal_id(id))
+            || ids.iter().collect::<std::collections::BTreeSet<_>>().len() != ids.len()
+        {
+            return Err(refusal());
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Batch {
+            items: Vec<Item>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "status", rename_all = "kebab-case", deny_unknown_fields)]
+        enum Item {
+            Visible {
+                id: String,
+                context: Box<BRegProposalReviewDocument>,
+            },
+            Concealed {
+                id: String,
+            },
+        }
+        let response = self
+            .proposal_list_exchange(
+                "/v1/proposals/review-context",
+                &[
+                    ("accessProfile".to_owned(), binding.profile.clone()),
+                    ("ids".to_owned(), ids.join(",")),
+                ],
+            )
+            .await?;
+        let value: serde_json::Value =
+            crate::strict_json::from_slice(response.value.as_bytes()).map_err(|_| refusal())?;
+        let batch: Batch = serde_json::from_value(value).map_err(|_| refusal())?;
+        if batch.items.len() != ids.len() {
+            return Err(refusal());
+        }
+        let mut values = Vec::with_capacity(ids.len());
+        for (item, expected) in batch.items.into_iter().zip(ids) {
+            match item {
+                Item::Visible { id, context }
+                    if id == *expected
+                        && context.id == id
+                        && context.action_id == binding.action
+                        && valid_review_document(&context, true) =>
+                {
+                    values.push(Some(*context))
+                }
+                Item::Concealed { id } if id == *expected => values.push(None),
+                _ => return Err(refusal()),
+            }
+        }
+        Ok(BRegComplete {
+            value: values,
             metadata: response.metadata,
         })
     }

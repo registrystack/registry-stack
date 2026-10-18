@@ -220,10 +220,18 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 
 | Code | Meaning | Recovery |
 | --- | --- | --- |
-| `startup.database.connection-refused` | PostgreSQL did not accept the connection. | Check the URL secret, the role, and `database.trustedRootCertificateRef`. |
-| `apply.database.unavailable` | The same, before an apply changed anything. | As above, then retry. |
+| `startup.database.unreachable` | The database could not be reached. | Check its address, the network path, and that the server is up. |
+| `startup.database.capacity-exhausted` | PostgreSQL was reached but refused the connection because its connection capacity is exhausted. | Free unused connections or increase PostgreSQL connection capacity. |
+| `startup.database.tls-refused` | The TLS connection was refused. | Check the server certificate and name; for a private authority, set `database.trustedRootCertificateRef`. |
+| `startup.database.authentication-refused` | PostgreSQL refused the runtime role or its credential. | Check the role and the secret `database.runtimeUrlRef` names. |
+| `startup.database.missing` | The named database does not exist. | Create it, or correct the database name in the URL. |
+| `startup.database.timeout` | The connection timed out. | Check database availability and the pool timeout settings. |
+| `startup.database.configuration-refused` | The runtime file's `database` settings were refused. | Correct them. |
+| `startup.database.secret-refused` | A connection secret could not be resolved. | Check `database.runtimeUrlRef`, `database.migrationUrlRef`, and `database.trustedRootCertificateRef`, and enable the secret provider that owns them. |
+| `apply.database.unavailable` | The migration database could not be reached before an apply changed anything. | Check the migration URL secret, the role, and `database.trustedRootCertificateRef`, then retry. |
 | `startup.database.uninitialized` | No package was ever activated. | Run `plan`, then `apply --initial`. |
 | `startup.database.unrecognized` | The database holds state this release does not recognize. | Apply the package to a fresh database. |
+| `startup.database.catalog-drift` | Managed schemas, tables, views, sequences, functions, or indexes differ from the active package, or a unique constraint, a required column, or its `NOT NULL` marker was removed; the message names up to 64 affected identifiers. | Keep the registry stopped. Restore the database from a backup taken under the active package by following [Back up, restore, and drill recovery](../advanced/back-up-and-restore/#restore-base-registry-engine). The identifiers locate drift but do not establish that deleting or reconstructing an object preserves its data. Applying the active package again is refused with `apply.package.already-active` and does not repair the catalog. After the restore, rerun `doctor`. If `doctor` reports more catalog drift, recover from a suitable backup and rerun the command until clean. Other shape changes report `startup.database.unready`. |
 | `startup.database.identity-mismatch` | The database id differs from `identity.databaseId`. | Fix the database URLs or the id. |
 | `apply.database.identity-mismatch` | The same, from `plan` or `apply`. | As above. |
 | `startup.package.not-active` | Another package is active than the one at `package.root`. | Run `bregctl status`; point `package.root` at the active package. |
@@ -249,6 +257,7 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `apply.package.digest-mismatch` | The package is not the one `--expected-digest` names. | Pass the digest `plan` reports. |
 | `apply.package.already-active` | This package already serves. | Nothing to do. |
 | `apply.package.empty-plan` | The successor changes nothing. | Keep the active package. |
+| `apply.package.deployment-identity-refused` | The package's `canonicalBaseIri` is in the reserved `.invalid` namespace, which only a database initialized for `local` accepts. | Point `canonicalBaseIri` at a hostname you control, rerun `schema-test`, and rebuild the package. |
 | `apply.backup-evidence.refused` | The backup binding is missing, stale, or for another database. | Take a fresh backup; pass it with `--backup`. |
 | `apply.history.coverage-incomplete` | An erasure left history uncovered. | Run [`history rebaseline`](../breg-retention/#restore-snapshot-coverage-after-an-erasure). |
 | `apply.migration.statement-failed` | PostgreSQL refused a statement; the SQLSTATE is named. | Fix the cause and retry, or run `migration reconcile`. |
@@ -276,7 +285,15 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `data.*.breg-url.refused` | The URL is neither `https` nor loopback `http`. | Use one. |
 | `data.*.access-token.refused` | The token file was refused. | Hold one token in a regular file. |
 
-{/* Evidence: crates/registry-bregctl/src/doctor.rs, startup_diagnostic();
+{/* Evidence: crates/registry-bregctl/src/doctor.rs, startup_diagnostic() and the catalog-drift diagnostic;
+    crates/registry-breg/src/postgres/catalog.rs, catalog_drift_objects(), MAX_DIAGNOSTIC_CATALOG_OBJECTS,
+    ExpectedManagedCatalog, verify_managed_owners_for_catalog(), verify_exact_acl();
+    crates/registry-breg/src/package.rs, PackageFileRole::GeneratedDdl;
+    crates/registry-breg/src/migration.rs, verify_successor_package_binding(), MigrationError::AlreadyActive;
+    crates/registry-bregctl/src/lib.rs, apply.package.already-active;
+    crates/registry-breg/src/package.rs, validate_deployment_identity();
+    crates/registry-bregctl/src/lib.rs, apply.package.deployment-identity-refused;
+    crates/registry-breg/src/postgres/config.rs, DatabaseConnectionCause;
     crates/registry-bregctl/src/lib.rs, data command failures, import_authority_failure(),
     instance_claim_failure(); crates/registry-breg/src/migration.rs;
     crates/registry-breg/src/auth.rs, MAX_AUDIENCES;

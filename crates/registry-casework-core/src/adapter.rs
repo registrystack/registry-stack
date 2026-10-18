@@ -98,6 +98,10 @@ pub enum ReviewContextError {
     ContractChanged,
     #[error("the context provider does not support the required capability")]
     Unsupported,
+    #[error("the source version differs from Casework; deploy matching Registry Stack versions")]
+    VersionMismatch,
+    #[error("the source version is unavailable; deploy matching Registry Stack versions")]
+    VersionUnavailable,
     #[error("the context provider response is invalid")]
     Invalid,
 }
@@ -111,6 +115,32 @@ pub trait ReviewContextProvider: Send + Sync {
         &self,
         request: HumanDisplayRequest<'_>,
     ) -> Result<HumanDisplayObservation, ReviewContextError>;
+    /// A bounded page read with the original caller's borrowed credential.
+    /// Results have the same order and cardinality as identities. Providers may
+    /// combine transport work; the default preserves scalar-provider behavior.
+    async fn human_display_batch(
+        &self,
+        identities: &[ReviewContextIdentity],
+        source_profile_id: &str,
+        credential: EphemeralCredential<'_>,
+    ) -> Vec<Result<HumanDisplayObservation, ReviewContextError>> {
+        if identities.len() > 100 {
+            return vec![Err(ReviewContextError::Invalid); identities.len()];
+        }
+        let credential = credential.expose();
+        let mut results = Vec::with_capacity(identities.len());
+        for identity in identities {
+            results.push(
+                self.human_display(HumanDisplayRequest {
+                    identity,
+                    source_profile_id,
+                    credential: EphemeralCredential::new(credential),
+                })
+                .await,
+            );
+        }
+        results
+    }
     async fn service_status(
         &self,
         identity: &ReviewContextIdentity,

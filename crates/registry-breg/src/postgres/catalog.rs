@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::BTreeSet, fmt::Write};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write,
+};
 
 use sha2::{Digest, Sha256};
 use tokio_postgres::GenericClient;
 
 use registry_platform_crypto::field_encryption::FIELD_ENCRYPTION_ALGORITHM;
 
-use crate::generated_ddl::{DdlObjectOwner, DdlPolicyRole, PolicyCommand, TablePrivilege};
+use crate::generated_ddl::{
+    DdlObjectOwner, DdlPolicyRole, DdlStatementKind, PolicyCommand, TablePrivilege,
+};
 use crate::model::CompiledRegistry;
 
 #[cfg(feature = "postgres-test")]
@@ -118,6 +123,34 @@ enum ManagedPolicyRole {
 const SUBJECT_ACCESS_LOG_TABLE: &str = "registry_internal.registry_subject_access_log";
 const SUBJECT_ACCESS_LOG_EXPIRY: &str = "registry_internal.expire_subject_access_log()";
 
+/// Product-owned indexes installed outside compiler-generated entity DDL.
+///
+/// The pristine-catalog diagnostic test compares this inventory with the
+/// actual installed catalog, so a new installer-owned index cannot silently
+/// fall out of drift localization.
+const MANAGED_INTERNAL_INDEXES: &[&str] = &[
+    "registry_internal.registry_attachment_live_references",
+    "registry_internal.registry_attachment_verification_pending",
+    "registry_internal.registry_field_encryption_lifecycle_progress_idx",
+    "registry_internal.registry_idempotency_caller_key",
+    "registry_internal.registry_import_authorities_one_open",
+    "registry_internal.registry_ingestion_run_chunk_records_erased_record",
+    "registry_internal.registry_migrations_one_open_activation_per_digest",
+    "registry_internal.registry_proposal_idempotency_by_request",
+    "registry_internal.registry_proposal_pending_targets",
+    "registry_internal.registry_proposal_queue",
+    "registry_internal.registry_proposal_review_completion_reconcile",
+    "registry_internal.registry_proposal_review_submission_jobs",
+    "registry_internal.registry_revision_commit_members_lookup_idx",
+    "registry_internal.registry_revision_commit_members_position_idx",
+    "registry_internal.registry_subject_access_log_expiry",
+    "registry_internal.registry_subject_access_log_record",
+    "registry_internal.registry_webhook_delivery_state_due_idx",
+    "registry_internal.registry_webhook_delivery_state_expired_idx",
+];
+const IMMEDIATE_ACTION_RESULT_TARGET_INDEX: &str =
+    "registry_internal.registry_immediate_action_results_target_idx";
+
 /// Exact managed PostgreSQL inventory accepted by catalog verification.
 ///
 /// Construction is deliberately closed to one compiler-produced Registry plus
@@ -128,6 +161,186 @@ pub struct ExpectedManagedCatalog {
     objects: BTreeSet<ManagedObject>,
     column_privileges: BTreeSet<ManagedColumnPrivilege>,
     policies: BTreeSet<ManagedPolicy>,
+}
+
+const MAX_DIAGNOSTIC_CATALOG_OBJECTS: usize = 64;
+
+/// Names managed catalog objects whose shape differs from the compiled
+/// package. This inventory carries identifiers only and never reads table
+/// values, connection settings, role names, or credentials.
+pub async fn catalog_drift_objects(
+    client: &impl GenericClient,
+    registry: &CompiledRegistry,
+    expected_catalog: &ExpectedManagedCatalog,
+) -> Result<Vec<String>> {
+    let mut differences = BTreeSet::new();
+    let rows = client
+        .query(
+            "SELECT 'schema', n.nspname::text
+         FROM pg_catalog.pg_namespace n
+         WHERE n.nspname = ANY($1::text[])
+         UNION ALL
+         SELECT CASE c.relkind WHEN 'r' THEN 'table' WHEN 'v' THEN 'view' ELSE 'sequence' END,
+                n.nspname || '.' || c.relname
+         FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = ANY($1::text[]) AND c.relkind IN ('r', 'v', 'S')
+         UNION ALL
+         SELECT 'function', n.nspname || '.' || p.proname || '(' ||
+                pg_catalog.pg_get_function_identity_arguments(p.oid) || ')'
+         FROM pg_catalog.pg_proc p
+         JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = ANY($1::text[])",
+            &[&MANAGED_SCHEMAS],
+        )
+        .await?;
+    let actual_objects: BTreeSet<(String, String)> = rows
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    let expected_objects: BTreeSet<(String, String)> = expected_catalog
+        .objects
+        .iter()
+        .map(|object| (object.kind.as_str().to_owned(), object.name.clone()))
+        .collect();
+    for (_, name) in actual_objects.symmetric_difference(&expected_objects) {
+        differences.insert(name.clone());
+    }
+
+    let mut expected_indexes: BTreeSet<String> = registry
+        .ddl()
+        .statements
+        .iter()
+        .filter(|statement| statement.kind == DdlStatementKind::Index)
+        .filter_map(|statement| {
+            let name = sql_identifier_after(&statement.sql, " INDEX ")?;
+            let table = qualified_table_after(&statement.sql, " ON ")?;
+            let schema = table.split_once('.')?.0;
+            Some(format!("{schema}.{name}"))
+        })
+        .chain(
+            MANAGED_INTERNAL_INDEXES
+                .iter()
+                .map(|name| (*name).to_owned()),
+        )
+        .collect();
+    if !registry.actions().actions.is_empty() {
+        expected_indexes.insert(IMMEDIATE_ACTION_RESULT_TARGET_INDEX.to_owned());
+    }
+    let index_rows = client
+        .query(
+            "SELECT n.nspname || '.' || i.relname
+         FROM pg_catalog.pg_index x
+         JOIN pg_catalog.pg_class t ON t.oid = x.indrelid
+         JOIN pg_catalog.pg_class i ON i.oid = x.indexrelid
+         JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+         LEFT JOIN pg_catalog.pg_constraint c ON c.conindid = i.oid
+         WHERE n.nspname = ANY($1::text[]) AND c.oid IS NULL",
+            &[&MANAGED_SCHEMAS],
+        )
+        .await?;
+    let actual_indexes: BTreeSet<String> = index_rows.into_iter().map(|row| row.get(0)).collect();
+    for name in actual_indexes.symmetric_difference(&expected_indexes) {
+        differences.insert(name.clone());
+    }
+
+    let constraint_rows = client
+        .query(
+            "SELECT n.nspname || '.' || t.relname, c.conname
+         FROM pg_catalog.pg_constraint c
+         JOIN pg_catalog.pg_class t ON t.oid = c.conrelid
+         JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+         WHERE n.nspname = ANY($1::text[])",
+            &[&MANAGED_SCHEMAS],
+        )
+        .await?;
+    let actual_constraints: BTreeSet<(String, String)> = constraint_rows
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    for statement in registry.ddl().statements.iter().filter(|statement| {
+        statement.kind == DdlStatementKind::Constraint && statement.sql.contains(" UNIQUE ")
+    }) {
+        if let (Some(table), Some(name)) = (
+            qualified_table_after(&statement.sql, "ALTER TABLE "),
+            sql_identifier_after(&statement.sql, "ADD CONSTRAINT "),
+        ) {
+            if !actual_constraints.contains(&(table.clone(), name.clone())) {
+                differences.insert(format!("{table}.{name}"));
+            }
+        }
+    }
+
+    let column_rows = client
+        .query(
+            "SELECT n.nspname || '.' || c.relname, a.attname, a.attnotnull
+         FROM pg_catalog.pg_attribute a
+         JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'registry_data' AND c.relkind = 'r'
+           AND a.attnum > 0 AND NOT a.attisdropped",
+            &[],
+        )
+        .await?;
+    let actual_columns: BTreeMap<(String, String), bool> = column_rows
+        .into_iter()
+        .map(|row| ((row.get(0), row.get(1)), row.get(2)))
+        .collect();
+    for entity in registry.entities().values() {
+        let table = format!("registry_data.{}", entity.physical_table);
+        // A deleted table is already named above; its columns are not named
+        // again, so they do not crowd the bounded inventory.
+        if !actual_objects.contains(&("table".to_owned(), table.clone())) {
+            continue;
+        }
+        for field in entity.fields.values().filter(|field| field.required) {
+            // A deleted column is drift by the same name as a nullable one.
+            if !matches!(
+                actual_columns.get(&(table.clone(), field.physical_name.clone())),
+                Some(true)
+            ) {
+                differences.insert(format!("{table}.{}", field.physical_name));
+            }
+        }
+    }
+
+    // A deleted schema is named once; the objects it held are not named
+    // again, so they do not crowd the bounded inventory.
+    let deleted_schemas: Vec<String> = MANAGED_SCHEMAS
+        .iter()
+        .filter(|schema| !actual_objects.contains(&("schema".to_owned(), (**schema).to_owned())))
+        .map(|schema| format!("{schema}."))
+        .collect();
+    differences.retain(|name| {
+        !deleted_schemas
+            .iter()
+            .any(|prefix| name.starts_with(prefix.as_str()))
+    });
+
+    Ok(differences
+        .into_iter()
+        .take(MAX_DIAGNOSTIC_CATALOG_OBJECTS)
+        .collect())
+}
+
+fn sql_identifier_after(sql: &str, marker: &str) -> Option<String> {
+    let rest = sql.split_once(marker)?.1.trim_start();
+    if let Some(quoted) = rest.strip_prefix('"') {
+        return quoted
+            .split_once('"')
+            .map(|(identifier, _)| identifier.to_owned());
+    }
+    rest.split_whitespace().next().map(str::to_owned)
+}
+
+fn qualified_table_after(sql: &str, marker: &str) -> Option<String> {
+    Some(
+        sql.split_once(marker)?
+            .1
+            .split_whitespace()
+            .next()?
+            .replace('"', ""),
+    )
 }
 
 impl ExpectedManagedCatalog {

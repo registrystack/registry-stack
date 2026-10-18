@@ -10,8 +10,8 @@ use std::path::PathBuf;
 
 use registry_breg::artifacts::REGISTRY_METADATA_ARTIFACT_PATH;
 use registry_breg::compiler::{
-    compile_project, compile_project_with_assets, module_digest, module_digest_with_assets,
-    CompileProfile,
+    compile_project, compile_project_with_assets, deployment_diagnostics, module_digest,
+    module_digest_with_assets, CompileProfile,
 };
 use registry_breg::contract::{
     parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml, Classification,
@@ -475,6 +475,47 @@ fn plural_projection_refuses_duplicate_and_dangling_membership() {
         unknown_effective_profile,
         "breg.manifest-projection.dataset-access-profile-unknown",
     );
+}
+
+#[test]
+fn deployment_refuses_a_reserved_canonical_base_iri_that_compilation_accepts() {
+    for iri in [
+        "https://invalid",
+        "https://household-registry.example.invalid",
+        "https://HOUSEHOLD-REGISTRY.EXAMPLE.INVALID",
+        "https://household-registry.example.invalid./registry",
+        "https://household-registry.example.invalid.?source=placeholder",
+        "http://household-registry.example.invalid/",
+    ] {
+        let mut project = multi_dataset_project();
+        project.project.canonical_base_iri = iri.to_owned();
+        let diagnostics = deployment_diagnostics(&project);
+        assert_eq!(diagnostics.len(), 1, "{iri}");
+        assert_eq!(
+            diagnostics[0].code,
+            "breg.registry.canonical-base-iri-reserved"
+        );
+        assert_eq!(diagnostics[0].path, "project.project.canonicalBaseIri");
+        // Local development and schema tests compile the placeholder
+        // unchanged; only deployment tooling refuses it.
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("authoring accepts the placeholder IRI");
+        let production = compile_project(&project, &[], CompileProfile::Production)
+            .expect_err("the shared fixture omits production package identity");
+        assert!(production
+            .diagnostics()
+            .iter()
+            .all(|diagnostic| diagnostic.code != "breg.registry.canonical-base-iri-reserved"));
+    }
+
+    for iri in [
+        "https://household-registry.example.invalid.example.org",
+        "https://household-registry.exampleinvalid",
+    ] {
+        let mut project = multi_dataset_project();
+        project.project.canonical_base_iri = iri.to_owned();
+        assert!(deployment_diagnostics(&project).is_empty(), "{iri}");
+    }
 }
 
 #[test]
@@ -3392,6 +3433,196 @@ fn generic_scalar_option_and_schema_negatives_fail_before_ddl_generation() {
 }
 
 #[test]
+fn decimal_bound_diagnostic_names_the_record_field_and_scale_rule() {
+    let mut project = multi_dataset_project();
+    let field = project.entities[0]
+        .fields
+        .iter_mut()
+        .find(|field| field.id == "name")
+        .unwrap();
+    field.field_type = registry_breg::contract::FieldTypeSource::Decimal {
+        precision: 6,
+        scale: 2,
+        minimum: Some("1.0".to_owned()),
+        maximum: Some("99.99".to_owned()),
+    };
+    let failure = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.field.decimal-bounds-invalid")
+        .unwrap();
+    assert_eq!(diagnostic.path, "recordTypes[id=person].fields[id=name]");
+    assert!(diagnostic
+        .message
+        .contains("exactly scale fractional digits"));
+}
+
+#[test]
+fn decimal_bound_diagnostic_names_the_scale_and_ordering_rules() {
+    for (precision, scale, minimum, maximum, rule) in [
+        (2, 3, None, None, "scale must not exceed precision"),
+        (
+            6,
+            2,
+            Some("50.00"),
+            Some("10.00"),
+            "minimum must not exceed maximum",
+        ),
+    ] {
+        let mut project = multi_dataset_project();
+        let field = project.entities[0]
+            .fields
+            .iter_mut()
+            .find(|field| field.id == "name")
+            .unwrap();
+        field.field_type = registry_breg::contract::FieldTypeSource::Decimal {
+            precision,
+            scale,
+            minimum: minimum.map(str::to_owned),
+            maximum: maximum.map(str::to_owned),
+        };
+        let failure = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
+        let diagnostic = failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.field.decimal-bounds-invalid")
+            .unwrap();
+        assert!(diagnostic.message.contains(rule), "{}", diagnostic.message);
+    }
+}
+
+#[test]
+fn reusable_decimal_bound_diagnostic_names_capacity_and_preserves_valid_bounds() {
+    let mut project = multi_dataset_project();
+    project.value_types.insert(
+        "bounded-decimal".to_owned(),
+        registry_breg::contract::FieldTypeSource::Decimal {
+            precision: 2,
+            scale: 0,
+            minimum: Some("100".to_owned()),
+            maximum: None,
+        },
+    );
+    let failure = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.field.decimal-bounds-invalid")
+        .expect("the reusable decimal refusal is reported");
+    assert_eq!(diagnostic.path, "valueTypes.bounded-decimal");
+    assert!(
+        diagnostic
+            .message
+            .contains("integer digits that fit precision minus scale"),
+        "{diagnostic:?}"
+    );
+
+    project.value_types.insert(
+        "bounded-decimal".to_owned(),
+        registry_breg::contract::FieldTypeSource::Decimal {
+            precision: 2,
+            scale: 0,
+            minimum: Some("-99".to_owned()),
+            maximum: Some("99".to_owned()),
+        },
+    );
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("canonical reusable bounds that fit the declared precision compile");
+}
+
+#[test]
+fn action_decimal_bound_diagnostic_names_capacity_and_preserves_valid_bounds() {
+    let source = |minimum: &str, maximum: Option<&str>| {
+        let mut input = json!({
+            "id": "amount",
+            "type": "decimal",
+            "precision": 2,
+            "scale": 0,
+            "minimum": minimum,
+            "required": true,
+            "classification": "internal"
+        });
+        if let Some(maximum) = maximum {
+            input["maximum"] = json!(maximum);
+        }
+        json!({
+            "datasets": [{"id": "test-dataset"}],
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": {
+                "id": "decimal-action",
+                "version": "1",
+                "defaultLanguage": "en",
+                "canonicalBaseIri": "https://authoring.example.test"
+            },
+            "recordTypes": [{
+                "id": "entry",
+                "primaryDataset": "test-dataset",
+                "route": "entries",
+                "mutationMode": "create-only",
+                "fields": [{
+                    "id": "amount",
+                    "type": "decimal",
+                    "precision": 2,
+                    "scale": 0,
+                    "minimum": "-99",
+                    "maximum": "99",
+                    "classification": "internal"
+                }]
+            }],
+            "actions": [{
+                "execution": {"mode": "immediate"},
+                "id": "create-entry",
+                "inputs": [input],
+                "plan": {"type": "fixed", "effects": [{
+                    "id": "entry",
+                    "target": {"recordType": "entry"},
+                    "operation": "create",
+                    "set": {"amount": {"fromInput": "amount"}}
+                }]}
+            }],
+            "accessProfiles": [{
+                "id": "operator",
+                "default": true,
+                "principalClaim": "principal",
+                "requiredScopes": "unrestricted",
+                "permissions": {"actions": [{
+                    "action": "create-entry",
+                    "operations": ["invoke"],
+                    "targets": [{"recordType": "entry", "rowBoundaries": "unrestricted"}],
+                    "results": ["entry"]
+                }]}
+            }]
+        })
+    };
+
+    let project =
+        parse_project_json(&serde_json::to_vec(&source("100", None)).expect("source serializes"))
+            .expect("invalid decimal bounds remain compiler input");
+    let failure = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.action.input-decimal-bounds-invalid")
+        .expect("the action input decimal refusal is reported");
+    assert_eq!(diagnostic.path, "actions[create-entry].inputs[]");
+    assert!(
+        diagnostic
+            .message
+            .contains("integer digits that fit precision minus scale"),
+        "{diagnostic:?}"
+    );
+
+    let project = parse_project_json(
+        &serde_json::to_vec(&source("-99", Some("99"))).expect("source serializes"),
+    )
+    .expect("valid decimal bounds parse");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("canonical action input bounds that fit the declared precision compile");
+}
+
+#[test]
 fn crs84_point_and_structured_fields_cannot_be_row_boundaries_until_equality_is_defined() {
     for field in [
         r#"{"id":"location","type":"crs84-point","precision":4,"classification":"internal"}"#,
@@ -4527,6 +4758,7 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
             "precondition.failed",
             "precondition.required",
             "proposal.rejected",
+            "proposal.review_result_mismatch",
             "proposal.submission_expired",
             "query.cursor_invalid",
             "query.invalid",

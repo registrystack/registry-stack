@@ -16,9 +16,10 @@ use registry_breg::package::{
     CompiledRegistryChangeClass, CompiledRegistryChangeCode,
 };
 use registry_breg::postgres::{
-    begin_record_transaction, initialize_registry_state_for_catalog_test, install_compiled_schema,
-    managed_schema_fingerprint, verify_catalog_identity_for_catalog, ClaimContext,
-    ExpectedManagedCatalog, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
+    begin_record_transaction, catalog_drift_objects, initialize_registry_state_for_catalog_test,
+    install_compiled_schema, managed_schema_fingerprint, verify_catalog_identity_for_catalog,
+    ClaimContext, ExpectedManagedCatalog, RegistryLockKey, RegistryStateTestIdentity,
+    RowBoundaryContext,
 };
 
 const RECORD_ALPHA: &str = "00000000-0000-0000-0000-000000000201";
@@ -312,11 +313,60 @@ async fn compiled_postgres_schema_enforces_context_rls_and_exact_catalog() {
         .expect("malformed context transaction rolls back");
     drop(client);
 
-    assert_catalog_drift_is_rejected(&database, &catalog, &identity, &table).await;
+    assert_catalog_drift_is_rejected(&database, &registry, &catalog, &identity, &table).await;
     database.cleanup().await;
 
     install_derived_view_fixture().await;
     install_asset_fixture().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn immediate_action_catalog_localizes_its_conditional_internal_index() {
+    let registry = compiled_action_registry();
+    let database = TestDatabase::create(1).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("the Action-bearing Registry installs its exact catalog");
+    let catalog = ExpectedManagedCatalog::compiled(&registry);
+
+    assert_eq!(
+        catalog_drift_objects(&database.admin, &registry, &catalog)
+            .await
+            .unwrap(),
+        Vec::<String>::new(),
+        "an Action-bearing pristine catalog has no named drift"
+    );
+    database
+        .admin
+        .batch_execute(
+            "BEGIN;
+             DROP INDEX registry_internal.registry_immediate_action_results_target_idx",
+        )
+        .await
+        .expect("the test administrator removes the conditional Action index");
+    let named_drift = catalog_drift_objects(&database.admin, &registry, &catalog)
+        .await
+        .unwrap();
+    database
+        .admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("the test administrator restores the conditional Action index");
+    assert_eq!(
+        named_drift,
+        ["registry_internal.registry_immediate_action_results_target_idx".to_owned()]
+    );
+    assert_eq!(
+        catalog_drift_objects(&database.admin, &registry, &catalog)
+            .await
+            .unwrap(),
+        Vec::<String>::new(),
+        "the restored Action-bearing catalog has no named drift"
+    );
+
+    migration_task.abort();
+    database.cleanup().await;
 }
 
 /// The source view is not a barrier view, so the planner flattens it and may
@@ -1419,7 +1469,7 @@ async fn insert_row(
                 "INSERT INTO registry_data.{table} (record_id, {tenant}, {region}, {label})
                  VALUES ($1::text::uuid, $2, $3, $4)"
             ),
-            &[&record_id, &tenant_value, &"north", &"created"],
+            &[&record_id, &tenant_value, &"north", &record_id],
         )
         .await
         .expect("matching INSERT policy permits the row");
@@ -1428,11 +1478,19 @@ async fn insert_row(
 
 async fn assert_catalog_drift_is_rejected(
     database: &TestDatabase,
+    registry: &registry_breg::CompiledRegistry,
     catalog: &ExpectedManagedCatalog,
     identity: &registry_breg::postgres::ExpectedRegistryIdentity,
     table: &str,
 ) {
     let (migration, task) = database.connect_migration().await;
+    assert_eq!(
+        catalog_drift_objects(&database.admin, registry, catalog)
+            .await
+            .unwrap(),
+        Vec::<String>::new(),
+        "a pristine installed catalog has no named drift"
+    );
     database
         .admin
         .batch_execute(&format!("GRANT SELECT ON registry_data.{table} TO PUBLIC"))
@@ -1468,10 +1526,19 @@ async fn assert_catalog_drift_is_rejected(
         .admin
         .batch_execute(&format!(
             "DROP POLICY registry_unexpected_policy ON registry_data.{table};
-             CREATE TABLE registry_data.registry_unexpected_table (id integer)"
+             CREATE TABLE registry_data.registry_unexpected_table (id integer, credential text);
+             INSERT INTO registry_data.registry_unexpected_table VALUES (1, 'catalog-value-canary')"
         ))
         .await
         .expect("test administrator introduces table drift");
+    let named_drift = catalog_drift_objects(&database.admin, registry, catalog)
+        .await
+        .unwrap();
+    assert_eq!(
+        named_drift,
+        ["registry_data.registry_unexpected_table".to_owned()]
+    );
+    assert!(!format!("{named_drift:?}").contains("catalog-value-canary"));
     assert!(verify_catalog_identity_for_catalog(
         &migration,
         identity,
@@ -1519,6 +1586,12 @@ async fn assert_catalog_drift_is_rejected(
         ))
         .await
         .expect("test administrator introduces trigger and routine drift");
+    assert_eq!(
+        catalog_drift_objects(&database.admin, registry, catalog)
+            .await
+            .unwrap(),
+        ["registry_internal.registry_unexpected_trigger()".to_owned()]
+    );
     assert!(verify_catalog_identity_for_catalog(
         &migration,
         identity,
@@ -1648,6 +1721,221 @@ async fn assert_catalog_drift_is_rejected(
         ))
         .await
         .expect("test administrator removes hidden outbox column grant drift");
+
+    database
+        .admin
+        .batch_execute(&format!(
+            "CREATE INDEX registry_unexpected_index ON registry_data.{table} (record_id)"
+        ))
+        .await
+        .expect("test administrator adds an index");
+    assert_eq!(
+        catalog_drift_objects(&database.admin, registry, catalog)
+            .await
+            .unwrap(),
+        ["registry_data.registry_unexpected_index".to_owned()]
+    );
+    database
+        .admin
+        .batch_execute("DROP INDEX registry_data.registry_unexpected_index")
+        .await
+        .expect("test administrator removes the added index");
+
+    database
+        .admin
+        .batch_execute(
+            "BEGIN;
+             DROP INDEX registry_internal.registry_subject_access_log_expiry",
+        )
+        .await
+        .expect("test administrator removes a managed internal index");
+    let named_drift = catalog_drift_objects(&database.admin, registry, catalog)
+        .await
+        .unwrap();
+    database
+        .admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("test administrator restores the managed internal index");
+    assert_eq!(
+        named_drift,
+        ["registry_internal.registry_subject_access_log_expiry".to_owned()]
+    );
+
+    database
+        .admin
+        .batch_execute(
+            "CREATE INDEX registry_subject_access_log_unexpected
+                 ON registry_internal.registry_subject_access_log (event_id)",
+        )
+        .await
+        .expect("test administrator adds an internal index");
+    assert_eq!(
+        catalog_drift_objects(&database.admin, registry, catalog)
+            .await
+            .unwrap(),
+        ["registry_internal.registry_subject_access_log_unexpected".to_owned()]
+    );
+    database
+        .admin
+        .batch_execute("DROP INDEX registry_internal.registry_subject_access_log_unexpected")
+        .await
+        .expect("test administrator removes the added internal index");
+    assert_eq!(
+        catalog_drift_objects(&database.admin, registry, catalog)
+            .await
+            .unwrap(),
+        Vec::<String>::new(),
+        "the restored catalog has no named drift"
+    );
+
+    let required_column = &registry.entities()["entry"].fields["label"].physical_name;
+    database
+        .admin
+        .batch_execute(&format!(
+            "ALTER TABLE registry_data.{table} ALTER COLUMN {required_column} DROP NOT NULL"
+        ))
+        .await
+        .expect("test administrator removes requiredness");
+    assert_eq!(
+        catalog_drift_objects(&database.admin, registry, catalog)
+            .await
+            .unwrap(),
+        [format!(
+            "registry_data.{}.{required_column}",
+            registry.entities()["entry"].physical_table
+        )]
+    );
+    database
+        .admin
+        .batch_execute(&format!(
+            "ALTER TABLE registry_data.{table} ALTER COLUMN {required_column} SET NOT NULL"
+        ))
+        .await
+        .expect("test administrator restores requiredness");
+
+    // A deleted required column is drift by the same name as a nullable one.
+    // The source view depends on the column, so the drop cascades to it. The
+    // drop runs in a transaction rolled back afterwards, so the catalog
+    // returns exactly as installed.
+    database
+        .admin
+        .batch_execute(&format!(
+            "BEGIN;
+             ALTER TABLE registry_data.{table} DROP COLUMN {required_column} CASCADE"
+        ))
+        .await
+        .expect("test administrator deletes a required column");
+    let named_drift = catalog_drift_objects(&database.admin, registry, catalog)
+        .await
+        .unwrap();
+    database
+        .admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("test administrator restores the deleted column");
+    assert!(
+        named_drift.contains(&format!(
+            "registry_data.{}.{required_column}",
+            registry.entities()["entry"].physical_table
+        )),
+        "{named_drift:?}"
+    );
+
+    // A deleted table is named once, not once more for each required
+    // column it held, so its columns do not crowd the bounded inventory.
+    database
+        .admin
+        .batch_execute(&format!(
+            "BEGIN;
+             DROP TABLE registry_data.{table} CASCADE"
+        ))
+        .await
+        .expect("test administrator deletes a managed table");
+    let named_drift = catalog_drift_objects(&database.admin, registry, catalog)
+        .await
+        .unwrap();
+    database
+        .admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("test administrator restores the deleted table");
+    let entry = &registry.entities()["entry"];
+    let deleted_table = format!("registry_data.{}", entry.physical_table);
+    assert!(named_drift.contains(&deleted_table), "{named_drift:?}");
+    for field in entry.fields.values().filter(|field| field.required) {
+        assert!(
+            !named_drift.contains(&format!("{deleted_table}.{}", field.physical_name)),
+            "{named_drift:?}"
+        );
+    }
+
+    database
+        .admin
+        .batch_execute(
+            "BEGIN;
+             DROP SCHEMA registry_data CASCADE",
+        )
+        .await
+        .expect("test administrator deletes a managed schema");
+    let named_drift = catalog_drift_objects(&database.admin, registry, catalog)
+        .await
+        .unwrap();
+    database
+        .admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("test administrator restores the deleted schema");
+    assert!(
+        named_drift.contains(&"registry_data".to_owned()),
+        "{named_drift:?}"
+    );
+    assert!(
+        !named_drift
+            .iter()
+            .any(|name| name.starts_with("registry_data.")),
+        "{named_drift:?}"
+    );
+
+    let unique: tokio_postgres::Row = database
+        .admin
+        .query_one(
+            "SELECT c.conname, pg_catalog.pg_get_constraintdef(c.oid, false)
+         FROM pg_catalog.pg_constraint c
+         JOIN pg_catalog.pg_class t ON t.oid = c.conrelid
+         JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+         WHERE n.nspname = 'registry_data' AND t.relname = $1 AND c.contype = 'u'
+         ORDER BY c.conname LIMIT 1",
+            &[&table.trim_matches('"')],
+        )
+        .await
+        .expect("compiled fixture has a unique constraint");
+    let unique_name: String = unique.get(0);
+    let unique_definition: String = unique.get(1);
+    database
+        .admin
+        .batch_execute(&format!(
+            "ALTER TABLE registry_data.{table} DROP CONSTRAINT \"{unique_name}\""
+        ))
+        .await
+        .expect("test administrator removes uniqueness");
+    assert_eq!(
+        catalog_drift_objects(&database.admin, registry, catalog)
+            .await
+            .unwrap(),
+        [format!(
+            "registry_data.{}.{}",
+            table.trim_matches('"'),
+            unique_name
+        )]
+    );
+    database
+        .admin
+        .batch_execute(&format!(
+        "ALTER TABLE registry_data.{table} ADD CONSTRAINT \"{unique_name}\" {unique_definition}"
+    ))
+        .await
+        .expect("test administrator restores uniqueness");
 
     verify_catalog_identity_for_catalog(
         &migration,
@@ -2017,7 +2305,8 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 {"id":"tenant","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"region","type":"string","minimumLength":1,"maximumLength":64,"required":true,"classification":"internal"},
                 {"id":"label","type":"string","minimumLength":1,"maximumLength":128,"required":true,"classification":"internal"}
-              ]
+              ],
+              "constraints":[{"type":"unique","fields":["tenant","region","label"]}]
             },
             {
               "id":"event","primaryDataset":"test-dataset","route":"events","mutationMode":"create-only",
@@ -2067,6 +2356,80 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
     .expect("compiled PostgreSQL fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("compiled PostgreSQL fixture compiles")
+}
+
+fn compiled_action_registry() -> registry_breg::CompiledRegistry {
+    let project = serde_json::json!({
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {
+            "id": "compiled-action-postgres",
+            "version": "1",
+            "defaultLanguage": "en",
+            "canonicalBaseIri": "https://authoring.example.test"
+        },
+        "datasets": [{"id": "test-dataset"}],
+        "recordTypes": [{
+            "id": "entry",
+            "primaryDataset": "test-dataset",
+            "route": "entries",
+            "mutationMode": "mutable",
+            "fields": [{
+                "id": "label",
+                "type": "string",
+                "maximumLength": 128,
+                "required": true,
+                "classification": "internal"
+            }]
+        }],
+        "actions": [{
+            "id": "relabel-entry",
+            "execution": {"mode": "immediate"},
+            "inputs": [
+                {
+                    "id": "target",
+                    "type": "reference",
+                    "target": "entry",
+                    "required": true,
+                    "classification": "internal"
+                },
+                {
+                    "id": "label",
+                    "type": "string",
+                    "maximumLength": 128,
+                    "required": true,
+                    "classification": "internal"
+                }
+            ],
+            "plan": {
+                "type": "fixed",
+                "effects": [{
+                    "id": "entry",
+                    "target": {"fromInput": "target"},
+                    "operation": "patch",
+                    "set": {"label": {"fromInput": "label"}}
+                }]
+            }
+        }],
+        "accessProfiles": [{
+            "id": "operator",
+            "default": true,
+            "principalClaim": "registry_principal",
+            "requiredScopes": "unrestricted",
+            "permissions": {
+                "actions": [{
+                    "action": "relabel-entry",
+                    "operations": ["invoke"],
+                    "targets": [{"recordType": "entry", "rowBoundaries": "unrestricted"}],
+                    "results": ["entry"]
+                }]
+            }
+        }]
+    });
+    let project_bytes = serde_json::to_vec(&project).expect("Action catalog fixture serializes");
+    let project = parse_project_json(&project_bytes).expect("Action catalog fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("Action catalog fixture compiles")
 }
 
 fn derived_registry() -> registry_breg::CompiledRegistry {

@@ -7,6 +7,7 @@ source_repos:
   - registry-platform
   - registry-evidence
   - registry-breg
+  - registry-casework
 last_reviewed: "2026-10-03"
 doc_type: how-to
 locale: en
@@ -91,6 +92,47 @@ requests from their public problem and audit phases.
 {/* Evidence: crates/registry-evidence/src/runtime.rs, source_failure_problem;
     crates/registry-evidence/src/trace.rs;
     products/evidence/OPERATOR-CONTRACT.md, Source and selector controls. */}
+
+## Diagnose BReg and Casework
+
+Start with the operator checks against the runtime configuration you intend to serve:
+
+```sh
+bregctl doctor --runtime-config /etc/breg/runtime.yaml
+bregctl verify --runtime-config /etc/breg/runtime.yaml
+caseworkctl doctor --runtime-config /etc/registry-casework/runtime.yaml
+caseworkctl status --runtime-config /etc/registry-casework/runtime.yaml
+```
+
+BReg doctor checks deployment dependencies; verify compares the installed package and database.
+Casework doctor checks configuration, secrets, database, audit readiness, and review staffing.
+Casework status reports the active package and database activation state.
+A warning about insufficient distinct approvers calls for more eligible people on the serving team,
+not another claim by the person who already approved.
+
+Probe each service's `/health` and `/ready`, then match a failed request's stable code to the
+[BReg API reference](../../../reference/breg-api/) or
+[Casework API reference](../../../reference/apis/registry-casework/).
+Preserve its trace identifier and exact version without copying tokens or subject payloads.
+
+For a Casework source refusal, check the human's source profile and the pinned context contract.
+`source.version-mismatch` or `source.version-unavailable` requires a matching BReg/Casework
+deployment that reports its version.
+`review.distinct-approver-required` requires another eligible reviewer.
+For `review.query-too-broad`, narrow the queue or exact subject and check the configured budgets;
+live-reference filtering and sorting require a complete bounded scan.
+Do not substitute the service status credential for the human display credential.
+
+If a mutation response was lost or audit failed after commit, reconcile the original operation
+before issuing a new key. Readiness alone cannot tell you whether that mutation committed.
+Use `BREG_LOG` or `CASEWORK_LOG` at `info`, `warn`, or `error`; neither accepts a debug filter.
+
+{/* Evidence: crates/registry-bregctl/src/doctor.rs;
+    crates/registry-breg/src/runtime_config.rs;
+    crates/registry-caseworkctl/src/project.rs, doctor();
+    crates/registry-casework/src/problem.rs;
+    crates/registry-casework/src/runtime.rs;
+    crates/registry-casework/src/review/staffing.rs. */}
 
 ## Common boundaries
 

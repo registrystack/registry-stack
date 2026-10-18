@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use registry_breg::postgres::DatabaseConnectionCause;
 use registry_breg::startup::{check, CheckedStartup, StartupError};
 use registry_breg::{Diagnostic, DiagnosticSeverity};
 
@@ -152,6 +153,16 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             ),
         );
     }
+    if let StartupError::DatabaseCatalogDrift { objects } = error {
+        return diagnostic(
+            "startup.database.catalog-drift",
+            "database.catalog",
+            &format!(
+                "the managed database catalog differs from the runtime package at: {}; keep the registry stopped, restore the database from a backup taken under the active package by following the backup-and-restore runbook, then rerun doctor; the named identifiers locate drift but do not establish that deleting or reconstructing an object preserves its data",
+                objects.join(", ")
+            ),
+        );
+    }
     // The package refusal carries its own closed-vocabulary cause. Name it
     // inside the one package check instead of collapsing every package fault
     // into the same sentence; both vocabularies are value free.
@@ -187,17 +198,14 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         | StartupError::InstanceIdChangedWithPendingDeliveries { .. } => {
             unreachable!("handled above")
         }
-        StartupError::DatabaseConnection => (
-            "startup.database.connection-refused",
-            "database",
-            "the database connection was refused",
-        ),
+        StartupError::DatabaseConnection(cause) => database_connection_diagnostic(cause),
         StartupError::FieldPatternSyntax { .. } => unreachable!("handled before match"),
         StartupError::DatabaseUnready => (
             "startup.database.unready",
             "database",
             "the database is not ready for the runtime package",
         ),
+        StartupError::DatabaseCatalogDrift { .. } => unreachable!("handled above"),
         StartupError::DatabaseUninitialized => (
             "startup.database.uninitialized",
             "database",
@@ -317,6 +325,12 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
     diagnostic(code, path, message)
 }
 
+fn database_connection_diagnostic(
+    cause: DatabaseConnectionCause,
+) -> (&'static str, &'static str, &'static str) {
+    (cause.code(), cause.diagnostic_path(), cause.message())
+}
+
 fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
     Diagnostic {
         severity: DiagnosticSeverity::Error,
@@ -361,8 +375,11 @@ mod tests {
         //   it here would double-count that one stage under a second name.
         let distinctly_checked = [
             StartupError::PackageRefused(PackageError::Integrity),
-            StartupError::DatabaseConnection,
+            StartupError::DatabaseConnection(DatabaseConnectionCause::Unreachable),
             StartupError::DatabaseUnready,
+            StartupError::DatabaseCatalogDrift {
+                objects: vec!["registry_data.example_idx".to_owned()],
+            },
             StartupError::DatabaseUninitialized,
             StartupError::UnrecognizedDatabase,
             StartupError::InstanceClaimMismatch,
@@ -383,7 +400,14 @@ mod tests {
 
         let reported_paths: HashSet<String> = distinctly_checked
             .into_iter()
-            .map(|error| startup_diagnostic(error).path)
+            .map(|error| {
+                let path = startup_diagnostic(error).path;
+                if path.starts_with("database.") {
+                    "database".to_owned()
+                } else {
+                    path
+                }
+            })
             .chain(std::iter::once("runtimeConfig".to_owned()))
             .collect();
         let checked_dependencies: HashSet<String> = CHECKED_DEPENDENCIES
@@ -514,14 +538,56 @@ mod tests {
                 "package",
             ),
             (
-                StartupError::DatabaseConnection,
-                "startup.database.connection-refused",
+                StartupError::DatabaseConnection(DatabaseConnectionCause::Unreachable),
+                "startup.database.unreachable",
+                "database.runtimeUrlRef",
+            ),
+            (
+                StartupError::DatabaseConnection(DatabaseConnectionCause::Capacity),
+                "startup.database.capacity-exhausted",
+                "database",
+            ),
+            (
+                StartupError::DatabaseConnection(DatabaseConnectionCause::Tls),
+                "startup.database.tls-refused",
+                "database",
+            ),
+            (
+                StartupError::DatabaseConnection(DatabaseConnectionCause::Authentication),
+                "startup.database.authentication-refused",
+                "database.runtimeUrlRef",
+            ),
+            (
+                StartupError::DatabaseConnection(DatabaseConnectionCause::DatabaseMissing),
+                "startup.database.missing",
+                "database.runtimeUrlRef",
+            ),
+            (
+                StartupError::DatabaseConnection(DatabaseConnectionCause::Timeout),
+                "startup.database.timeout",
+                "database",
+            ),
+            (
+                StartupError::DatabaseConnection(DatabaseConnectionCause::Configuration),
+                "startup.database.configuration-refused",
+                "database",
+            ),
+            (
+                StartupError::DatabaseConnection(DatabaseConnectionCause::Secret),
+                "startup.database.secret-refused",
                 "database",
             ),
             (
                 StartupError::DatabaseUnready,
                 "startup.database.unready",
                 "database",
+            ),
+            (
+                StartupError::DatabaseCatalogDrift {
+                    objects: vec!["registry_data.example_idx".to_owned()],
+                },
+                "startup.database.catalog-drift",
+                "database.catalog",
             ),
             (
                 StartupError::DatabaseUninitialized,
@@ -615,6 +681,14 @@ mod tests {
             assert_eq!(diagnostic.path, expected_path);
             assert!(!diagnostic.message.contains(&rendered_dependency_error));
         }
+
+        let capacity = startup_diagnostic(StartupError::DatabaseConnection(
+            DatabaseConnectionCause::Capacity,
+        ));
+        assert_eq!(
+            capacity.message,
+            "the database connection capacity is exhausted; free connections or increase PostgreSQL connection capacity"
+        );
     }
 
     #[test]
@@ -666,6 +740,40 @@ mod tests {
         assert_eq!(package.path, "package");
         assert!(package.message.contains("bregctl plan --package DIR"));
         assert!(package.message.contains("bregctl apply --package DIR"));
+    }
+
+    #[test]
+    fn catalog_drift_recovery_is_safe_for_data_bearing_objects() {
+        for object in ["registry_data.entry", "registry_data.entry.required_label"] {
+            let diagnostic = startup_diagnostic(StartupError::DatabaseCatalogDrift {
+                objects: vec![object.to_owned()],
+            });
+            assert_eq!(diagnostic.code, "startup.database.catalog-drift");
+            assert!(diagnostic.message.contains(object));
+            assert!(diagnostic.message.contains("backup"));
+            assert!(diagnostic.message.contains("registry stopped"));
+            assert!(diagnostic.message.contains("preserves its data"));
+            for unsafe_instruction in ["database/ddl.sql", "drop one", "recreate one"] {
+                assert!(
+                    !diagnostic.message.contains(unsafe_instruction),
+                    "catalog recovery must not recommend `{unsafe_instruction}` for {object}: {}",
+                    diagnostic.message
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_drift_keeps_structural_identifiers_actionable() {
+        let diagnostic = startup_diagnostic(StartupError::DatabaseCatalogDrift {
+            objects: vec!["registry_data.example_idx".to_owned()],
+        });
+        assert_eq!(diagnostic.code, "startup.database.catalog-drift");
+        assert!(diagnostic.message.contains("registry_data.example_idx"));
+        assert!(diagnostic.message.contains("backup"));
+        assert!(!diagnostic.message.contains("reapply"));
+        assert!(!diagnostic.message.contains("apply the active package"));
+        assert!(!diagnostic.message.contains("migration plan"));
     }
 
     #[test]

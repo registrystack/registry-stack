@@ -2461,7 +2461,7 @@ where
             };
         }
         Command::Package(args) => {
-            return match package(&args) {
+            return match package(&args, true) {
                 Ok(report) => write_package_success(&report, format, stdout, stderr),
                 Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
@@ -4909,7 +4909,11 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
     })
 }
 
-fn package(args: &PackageArgs) -> Result<PackageSuccessReport, Refusal> {
+/// Build a package from a schema-tested candidate. A `deployment` package
+/// also applies the refusals for identity a deployable package must not
+/// carry; only `bregctl dev`, packaging for its own loopback session, passes
+/// `false`, and no command-line spelling reaches it.
+fn package(args: &PackageArgs, deployment: bool) -> Result<PackageSuccessReport, Refusal> {
     // The receipt names the fingerprint its rehearsal reached, so an operator who
     // does not restate it still packages against that exact managed catalogue.
     let schema_fingerprint = match &args.schema_fingerprint {
@@ -4917,7 +4921,7 @@ fn package(args: &PackageArgs) -> Result<PackageSuccessReport, Refusal> {
         None => package_lifecycle::receipt_schema_fingerprint(&args.test_receipt)
             .map_err(|error| package_lifecycle_refusal(error, &args.candidate.project))?,
     };
-    let prepared = prepare_candidate(&args.candidate, schema_fingerprint, "package")?;
+    let prepared = prepare_candidate(&args.candidate, schema_fingerprint, "package", deployment)?;
     let receipt = package_lifecycle::validate_test_receipt(
         &args.test_receipt,
         &prepared,
@@ -4960,7 +4964,7 @@ fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, Refusal> {
         unreachable!("clap requires --credentials and --output unless --fingerprint-only is set")
     };
     let output = test_lifecycle::preflight_output(output).map_err(test_lifecycle_failure)?;
-    let candidate = capture_candidate(&args.candidate, "test", true)?;
+    let candidate = capture_candidate(&args.candidate, "test", true, false)?;
     let outcome = match test_lifecycle::run(TestLifecycleRequest {
         candidate,
         runtime_config: &args.runtime_config,
@@ -5008,7 +5012,7 @@ fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, Refusal> {
 /// Measure the fresh-install schema fingerprint a reviewed migration declares
 /// as its target, without the fixture run or receipt of a full schema test.
 fn measure_schema_fingerprint(args: &TestArgs) -> Result<SchemaFingerprintReport, Refusal> {
-    let candidate = capture_candidate(&args.candidate, "test", false)?;
+    let candidate = capture_candidate(&args.candidate, "test", false, false)?;
     let measurement =
         test_lifecycle::measure(candidate, &args.runtime_config).map_err(test_lifecycle_failure)?;
     Ok(SchemaFingerprintReport {
@@ -5070,16 +5074,20 @@ fn prepare_candidate(
     args: &PackageCandidateArgs,
     schema_fingerprint: String,
     command: &'static str,
+    deployment: bool,
 ) -> Result<PreparedPackage, Refusal> {
-    capture_candidate(args, command, false)?
+    capture_candidate(args, command, false, deployment)?
         .prepare(schema_fingerprint)
         .map_err(|error| candidate_package_error(command, error).into())
 }
 
+/// Capture and compile the candidate project. A `deployment` capture also
+/// applies the refusals for identity a deployable package must not carry.
 fn capture_candidate(
     args: &PackageCandidateArgs,
     command: &'static str,
     rehearse_successor: bool,
+    deployment: bool,
 ) -> Result<CapturedPackageCandidate, Refusal> {
     let capture_failure = |diagnostic| {
         source_failure(
@@ -5092,6 +5100,9 @@ fn capture_candidate(
     let selected_project = canonicalize_project_path(&args.project).map_err(&capture_failure)?;
     let source = capture_resolved_project_source(&selected_project).map_err(capture_failure)?;
     let compiled = compile_captured_project(&source, ProfileArg::Production, command)?;
+    if deployment {
+        refuse_deployment_identity(&source, command)?;
+    }
     let identity = compiled.package().ok_or_else(|| {
         candidate_failure(
             command,
@@ -5743,10 +5754,10 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             DiagnosticArtifact::SchemaTestExecution,
             SuggestedAction::RecreateDisposableDatabase,
         ),
-        TestLifecycleError::OutputPreflight => (
+        TestLifecycleError::OutputPreflight { ref message } => (
             "test.output.refused",
             "output",
-            "the schema-test receipt output was refused",
+            message.as_str(),
             DiagnosticArtifact::SchemaTestOutput,
             SuggestedAction::ChooseSchemaTestOutput,
         ),
@@ -5930,6 +5941,13 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             "the target package path must be absolute",
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::VerifyPackagePath,
+        ),
+        ApplyLifecycleError::TargetPackage(PackageError::DeploymentIdentity) => (
+            "apply.package.deployment-identity-refused",
+            "package",
+            "the activation package carries a local-only identity; replace canonicalBaseIri, rerun schema-test, and rebuild the deployment package. Nothing was changed",
+            DiagnosticArtifact::VerifiedPackage,
+            SuggestedAction::CorrectPackageBuild,
         ),
         ApplyLifecycleError::TargetPackage(error) => (
             "apply.package.refused",
@@ -6624,6 +6642,10 @@ fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
             SuggestedAction::VerifyPackagePermissions,
         ),
         PackageError::Binding => ("binding-refused", SuggestedAction::VerifyPackageBinding),
+        PackageError::DeploymentIdentity => (
+            "deployment-identity-refused",
+            SuggestedAction::CorrectPackageBuild,
+        ),
         PackageError::Envelope
         | PackageError::ExpectedDigestMismatch(_)
         | PackageError::Closure
@@ -6648,6 +6670,7 @@ fn package_refusal_action(error: &PackageError) -> SuggestedAction {
         PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
         PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
         PackageError::Binding => SuggestedAction::VerifyPackageBinding,
+        PackageError::DeploymentIdentity => SuggestedAction::CorrectPackageBuild,
         _ => SuggestedAction::VerifyPackageIntegrity,
     }
 }
@@ -7733,6 +7756,32 @@ fn compile_captured_project(
                 .collect(),
         },
     )
+}
+
+/// Refuse project identity that a package for deployment must not carry,
+/// reported as the compiler's own refusals are.
+fn refuse_deployment_identity(
+    source: &CapturedProjectSource,
+    command: &'static str,
+) -> Result<(), FailureReport> {
+    let diagnostics = registry_breg::compiler::deployment_diagnostics(&source.project);
+    if diagnostics.is_empty() {
+        return Ok(());
+    }
+    Err(FailureReport {
+        ok: false,
+        command,
+        diagnostics: diagnostics
+            .into_iter()
+            .map(|diagnostic| {
+                tool_diagnostic(
+                    diagnostic,
+                    DiagnosticArtifact::RegistryProject,
+                    SuggestedAction::CorrectAuthoringSource,
+                )
+            })
+            .collect(),
+    })
 }
 
 fn compiler_findings(compiled: &CompiledRegistry) -> Vec<registry_platform_yaml::Diagnostic> {
@@ -9745,11 +9794,11 @@ fn write_files_with_before_publish(
             "the output destination could not be inspected",
         )
     })? {
-        return Err(diagnostic(
-            "output.destination.invalid",
-            "output",
-            "the output directory must be a new path with a directory name",
-        ));
+        let message = safe_path::symlink_detail(&selected_output).map_or_else(
+            || "the output directory must be a new path with a directory name".to_owned(),
+            |detail| format!("the output destination was refused; {detail}"),
+        );
+        return Err(diagnostic("output.destination.invalid", "output", &message));
     }
 
     let staged = create_staging_directory(parent)?;
@@ -12547,6 +12596,23 @@ mod tests {
                 .is_some_and(|message| message.contains("package.root")),
             "{active}"
         );
+
+        let local_identity = diagnostic(ApplyLifecycleError::TargetPackage(
+            PackageError::DeploymentIdentity,
+        ));
+        assert_eq!(
+            local_identity["code"],
+            "apply.package.deployment-identity-refused"
+        );
+        assert_eq!(local_identity["path"], "package");
+        assert_eq!(local_identity["suggestedAction"], "correct-package-build");
+        assert!(
+            local_identity["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("replace canonicalBaseIri")
+                    && message.contains("Nothing was changed")),
+            "{local_identity}"
+        );
     }
 
     #[test]
@@ -14419,6 +14485,7 @@ accessProfiles:
             },
             "package",
             false,
+            true,
         )
         .unwrap_or_else(|_| panic!("capture includes governed journeys through the selected root"));
         assert_eq!(
@@ -14432,6 +14499,46 @@ accessProfiles:
         candidate
             .prevalidate()
             .expect("the captured initial candidate is complete");
+    }
+
+    #[test]
+    fn only_a_deployment_capture_refuses_the_reserved_placeholder_iri() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().canonicalize().unwrap().join("project");
+        assert!(init(&project).is_ok());
+        let registry_path = project.join("registry.yaml");
+        let registry = fs::read_to_string(&registry_path).unwrap();
+        let authored = "canonicalBaseIri: https://directory.example.gov";
+        assert_eq!(registry.matches(authored).count(), 1);
+        fs::write(
+            &registry_path,
+            registry.replace(
+                authored,
+                "canonicalBaseIri: https://directory.example.invalid",
+            ),
+        )
+        .unwrap();
+        let args = PackageCandidateArgs {
+            project: project.clone(),
+            baseline_package: None,
+            reviewed_migrations: None,
+        };
+
+        // `bregctl dev` compiles and `bregctl test` captures the placeholder
+        // unchanged.
+        compile(&project, ProfileArg::Production, "dev")
+            .unwrap_or_else(|_| panic!("the dev compile accepts the placeholder"));
+        assert!(capture_candidate(&args, "test", false, false).is_ok());
+
+        let Err(Refusal::Tool(refused)) = capture_candidate(&args, "package", false, true) else {
+            panic!("a deployment capture refuses the placeholder");
+        };
+        let codes = refused
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(codes, ["breg.registry.canonical-base-iri-reserved"]);
     }
 
     #[test]

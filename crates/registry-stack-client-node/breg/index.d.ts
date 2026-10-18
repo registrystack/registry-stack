@@ -44,6 +44,7 @@ export declare class BaseRegistryClient {
   downloadProposalReviewDocument(binding: BRegProposalReviewBinding, context: any, field: string): Promise<RawOutcome>
   readProposalReviewStatus(proposal: BRegProposal): Promise<CompleteOutcome>
   readProposalReviewContext(proposal: BRegProposal): Promise<CompleteOutcome>
+  readProposalReviewContextBatch(binding: BRegProposalReviewBinding, ids: Array<string>): Promise<CompleteOutcome>
   uploadProposalAttachment(proposal: BRegProposal, slot: string, contentType: string, bytes: Buffer, key: string): Promise<BRegProposal>
   deleteProposalAttachment(proposal: BRegProposal, slot: string, key: string): Promise<BRegProposal>
   listProposals(collection: BRegProposalCollection, queryJson: string): Promise<ProposalPage>

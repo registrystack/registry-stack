@@ -586,6 +586,16 @@ async fn agent_registered_client_without_actor_kind_cannot_use_a_human_profile()
         "registry_purpose": "record-review"
     }));
 
+    let captured = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_target(false)
+        .with_current_span(false)
+        .with_span_list(false)
+        .with_writer(captured.clone())
+        .with_max_level(tracing::Level::WARN)
+        .finish();
+    let capture = tracing::subscriber::set_default(subscriber);
     let response = harness
         .send(
             &format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-human"),
@@ -593,10 +603,34 @@ async fn agent_registered_client_without_actor_kind_cannot_use_a_human_profile()
             None,
         )
         .await;
+    // A replayed credential is refused again without another warning.
+    let replayed = harness
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-human"),
+            &[bearer(&token)],
+            None,
+        )
+        .await;
+    drop(capture);
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(body_json(response).await["code"], "authentication.refused");
+    assert_eq!(replayed.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(harness.records.calls.load(Ordering::SeqCst), 0);
+    let logs =
+        String::from_utf8_lossy(&captured.0.lock().expect("captured log buffer")).into_owned();
+    assert_eq!(
+        logs.matches("verified credential is missing the configured actor-kind claim")
+            .count(),
+        1,
+        "the safe cause is logged once per interval: {logs}"
+    );
+    for value in [PRINCIPAL, "agent-client", "registry_actor_kind"] {
+        assert!(
+            !logs.contains(value),
+            "diagnostics remain value-free: {logs}"
+        );
+    }
 }
 
 #[tokio::test]

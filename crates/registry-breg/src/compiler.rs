@@ -19,11 +19,11 @@ use crate::contract::{
     ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
     ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
     SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile,
-    WebhookDeadLetterMode, MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
-    MAX_ACCESS_LOG_RETENTION_DAYS, MAX_ACCESS_LOG_SUBJECT_CHARACTERS,
-    MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
-    MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
-    MAX_STRUCTURED_VALUE_BYTES,
+    WebhookDeadLetterMode, DECIMAL_BOUNDS_REQUIREMENTS, MAX_ACCESS_LOG_EXEMPTIONS,
+    MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES, MAX_ACCESS_LOG_RETENTION_DAYS,
+    MAX_ACCESS_LOG_SUBJECT_CHARACTERS, MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES,
+    MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
+    MAX_FIELD_LOOKUP_NORMALIZATION_STEPS, MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::derived_sql::{derived_sql_dependencies, validate_derived_sql};
 use crate::diagnostics::{CompileFailure, Diagnostic};
@@ -659,6 +659,35 @@ fn validate_project_header(
             _ => {}
         }
     }
+}
+
+/// Refusals for project identity that a deployable package must not carry.
+///
+/// They are not part of [`compile_project`]: a freshly initialized project
+/// carries a placeholder identity that local development and schema tests
+/// run unchanged. Tooling applies them where it builds a package for
+/// deployment or asserts production readiness.
+pub fn deployment_diagnostics(project: &RegistryProject) -> Vec<Diagnostic> {
+    let mut errors = Vec::new();
+    if reserved_production_iri(&project.project.canonical_base_iri) {
+        errors.push(Diagnostic::error(
+            "breg.registry.canonical-base-iri-reserved",
+            "project.project.canonicalBaseIri",
+            "production canonicalBaseIri must not use the reserved .invalid namespace",
+        ));
+    }
+    errors
+}
+
+fn reserved_production_iri(value: &str) -> bool {
+    let Ok(iri) = url::Url::parse(value) else {
+        return false;
+    };
+    let Some(host) = iri.host_str() else {
+        return false;
+    };
+    let host = host.trim_end_matches('.');
+    host == "invalid" || host.ends_with(".invalid")
 }
 
 fn validate_manifest_projection(
@@ -2549,8 +2578,8 @@ fn validate_entity_fields(
             {
                 errors.push(Diagnostic::error(
                     "breg.field.decimal-bounds-invalid",
-                    "recordTypes[].fields[]",
-                    "decimal precision, scale, or canonical bounds are invalid",
+                    format!("recordTypes[id={}].fields[id={}]", entity.id, field.id),
+                    DECIMAL_BOUNDS_REQUIREMENTS,
                 ));
             }
             FieldTypeSource::Reference { target, .. } if !entities.contains_key(target) => {
@@ -2794,7 +2823,7 @@ fn validate_field_type_bounds(
             errors.push(Diagnostic::error(
                 "breg.field.decimal-bounds-invalid",
                 path,
-                "decimal precision, scale, or canonical bounds are invalid",
+                DECIMAL_BOUNDS_REQUIREMENTS,
             ));
         }
         FieldTypeSource::Crs84Point { precision, bbox }
@@ -3610,11 +3639,17 @@ fn validate_profiles(
         }
         // Query processing over ciphertext cannot filter or order: an
         // encrypted field leaves the filterable and sortable sets.
-        if access
+        if let Some((member, field)) = access
             .filterable_fields
             .iter()
-            .chain(&access.sortable_fields)
-            .any(|field| {
+            .map(|field| ("filterableFields", field))
+            .chain(
+                access
+                    .sortable_fields
+                    .iter()
+                    .map(|field| ("sortableFields", field)),
+            )
+            .find(|(_, field)| {
                 fields
                     .get(field.as_str())
                     .is_some_and(|field| field.encrypted)
@@ -3622,7 +3657,7 @@ fn validate_profiles(
         {
             errors.push(Diagnostic::error(
                 "breg.access-profile.processing-encrypted",
-                "recordTypes[].accessProfiles[]",
+                format!("{profile_path}.{member}[field={field}]"),
                 "an encrypted field cannot be a filterable or sortable field",
             ));
         }

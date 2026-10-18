@@ -198,6 +198,10 @@ fn route_set(service: Arc<HttpService>) -> Router {
         }
         app = app
             .route("/v1/proposals", get(proposals::list))
+            .route(
+                "/v1/proposals/review-context",
+                get(proposals::review_context_batch),
+            )
             .route("/v1/proposals/{proposal_id}", get(proposals::get))
             .route(
                 "/v1/proposals/{proposal_id}/submissions/{submission_version}",
@@ -5249,6 +5253,9 @@ fn mutation_problem(error: MutationError) -> Response {
         }
         MutationError::Conflict => fixed_problem(ProblemCode::MutationConflict),
         MutationError::ProposalRejected => fixed_problem(ProblemCode::ProposalRejected),
+        MutationError::ProposalReviewResultMismatch => {
+            fixed_problem(ProblemCode::ProposalReviewResultMismatch)
+        }
         MutationError::IdempotencyConflict => fixed_problem(ProblemCode::IdempotencyConflict),
         MutationError::IdempotencyExpired => fixed_problem(ProblemCode::IdempotencyExpired),
         MutationError::IngestionRefusal(refusal) => ingestion::batch_refusal_problem(refusal),

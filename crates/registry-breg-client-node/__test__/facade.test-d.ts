@@ -255,3 +255,10 @@ client.readProposalSubmission(proposal, 1).then(outcome => {
   void status
   publicReason?.toUpperCase()
 })
+
+client.readProposalReviewContextBatch(metadata.selectProposalReviewContext('reviewer', 'correct'), []).then(outcome => {
+  outcome.value.forEach(context => {
+    const id: string | undefined = context?.id
+    id?.toUpperCase()
+  })
+})

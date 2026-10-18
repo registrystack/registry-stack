@@ -968,6 +968,87 @@ pub(super) async fn transition(
     }
 }
 
+/// Batch transport only: every item retains the scalar context read's current
+/// authorization, Record disclosure, transaction, and paired audit admission.
+pub(super) async fn review_context_batch(
+    State(service): State<Arc<HttpService>>,
+    Extension(correlation): Extension<RequestCorrelation>,
+    Authenticated(claims): Authenticated,
+    RawQuery(raw): RawQuery,
+) -> Response {
+    let Some(raw) = raw.filter(|raw| raw.len() <= MAX_RAW_QUERY_BYTES) else {
+        return concealed();
+    };
+    let mut ids = None;
+    let mut profile = Vec::new();
+    for pair in raw.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            return concealed();
+        };
+        let Ok(key) = percent_decode(key) else {
+            return concealed();
+        };
+        if key == "ids" {
+            if ids.is_some() {
+                return concealed();
+            }
+            let Ok(value) = percent_decode(value) else {
+                return concealed();
+            };
+            ids = Some(value);
+        } else {
+            profile.push(pair);
+        }
+    }
+    let Some(ids) = ids else {
+        return concealed();
+    };
+    let ids = ids.split(',').collect::<Vec<_>>();
+    let mut distinct = BTreeSet::new();
+    if ids.is_empty()
+        || ids.len() > 100
+        || ids.iter().any(|id| {
+            !matches!(Uuid::parse_str(id), Ok(value) if !value.is_nil() && value.to_string() == *id)
+                || !distinct.insert(*id)
+        })
+    {
+        return concealed();
+    }
+    let profile = Some(profile.join("&"));
+    if selected_profile(profile.as_deref()).is_err() {
+        return concealed();
+    }
+    // Bound the aggregate independently of each Proposal's configured context.
+    let mut remaining = 8 * 1024 * 1024 - 64 * 1024;
+    let mut items = Vec::with_capacity(ids.len());
+    for id in ids {
+        let response = review_read(
+            service.clone(),
+            id.to_owned(),
+            claims.clone(),
+            profile.clone(),
+            ProposalOperation::GetReviewContext,
+            correlation.clone(),
+        )
+        .await;
+        match response.status() {
+            StatusCode::OK => {
+                let Ok(bytes) = bounded_body_to(response.into_body(), remaining).await else {
+                    return unavailable();
+                };
+                remaining -= bytes.len();
+                let Ok(context) = serde_json::from_slice::<Value>(&bytes) else {
+                    return unavailable();
+                };
+                items.push(json!({"id":id,"status":"visible","context":context}));
+            }
+            StatusCode::NOT_FOUND => items.push(json!({"id":id,"status":"concealed"})),
+            _ => return response,
+        }
+    }
+    json_response(json!({"items":items}), None)
+}
+
 pub(super) async fn review_context(
     State(service): State<Arc<HttpService>>,
     Path(id): Path<String>,

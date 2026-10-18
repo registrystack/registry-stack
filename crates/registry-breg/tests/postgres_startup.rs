@@ -1620,7 +1620,17 @@ async fn startup_refuses_a_database_without_subject_access_log_storage_and_write
     )
     .await
     .err();
-    assert_eq!(refusal, Some(StartupError::DatabaseUnready));
+    assert_eq!(
+        refusal,
+        Some(StartupError::DatabaseCatalogDrift {
+            objects: vec![
+                "registry_internal.expire_subject_access_log()".to_owned(),
+                "registry_internal.registry_subject_access_log".to_owned(),
+                "registry_internal.registry_subject_access_log_expiry".to_owned(),
+                "registry_internal.registry_subject_access_log_record".to_owned(),
+            ],
+        })
+    );
     assert_eq!(
         managed_database_snapshot(&database.admin).await,
         before,

@@ -224,6 +224,8 @@ pub enum FixtureError {
     CreateRowBoundaryNotWritable,
     AuthorityWideningRefused,
     RequestConstructionRefused,
+    AuthenticationActorKindMissing,
+    AuthenticationCredentialRefused,
     ResponseTooLarge,
     ResponseShapeRefused,
     ExpectationMismatch,
@@ -235,6 +237,11 @@ pub enum FixtureError {
     ResponseStatusMismatch {
         expected: u16,
         actual: u16,
+        /// A problem code the contract registers for `actual`.
+        problem_code: Option<String>,
+        /// That problem's fixed detail text, or for an action refusal its
+        /// refusal code; never an authored label (CFG-SEC-3).
+        problem_detail: Option<String>,
     },
     /// A journeys document the shared reader refused: its diagnostics, each
     /// with a code, a path, a position, and the fix, and never an authored
@@ -275,11 +282,23 @@ impl fmt::Display for FixtureError {
         if let Self::LogicalReference(refusal) = self {
             return write!(formatter, "{refusal}");
         }
-        if let Self::ResponseStatusMismatch { expected, actual } = self {
-            return write!(
+        if let Self::ResponseStatusMismatch {
+            expected,
+            actual,
+            problem_code,
+            problem_detail,
+        } = self
+        {
+            write!(
                 formatter,
                 "expected HTTP {expected}, received HTTP {actual}"
-            );
+            )?;
+            match (problem_code, problem_detail) {
+                (Some(code), Some(detail)) => write!(formatter, "; problem {code}: {detail}")?,
+                (Some(code), None) => write!(formatter, "; problem {code}")?,
+                (None, _) => {}
+            }
+            return Ok(());
         }
         if let Self::JourneyDocument(report) = self {
             return write!(
@@ -317,6 +336,12 @@ impl fmt::Display for FixtureError {
             }
             Self::AuthorityWideningRefused => "the fixture authority reference was refused",
             Self::RequestConstructionRefused => "the fixture request could not be constructed",
+            Self::AuthenticationActorKindMissing => {
+                "the fixture credential is missing the configured actor-kind claim"
+            }
+            Self::AuthenticationCredentialRefused => {
+                "the fixture credential failed token verification; check its signing key, signature, issuer, audience, validity period, and client"
+            }
             Self::ResponseTooLarge => "the fixture response exceeded a fixed bound",
             Self::ResponseShapeRefused => "the fixture response shape was refused",
             Self::ExpectationMismatch => "the fixture expectation did not match",
@@ -3111,10 +3136,13 @@ impl PostgresFixtureTestRunner {
             .ok_or(FixtureError::ExecutionRefused)?;
         let actual = response.status().as_u16();
         if actual != step.expect.status {
+            let (problem_code, problem_detail) = response_problem(response).await;
             return Err(
                 self.current_step_failure(FixtureError::ResponseStatusMismatch {
                     expected: step.expect.status,
                     actual,
+                    problem_code,
+                    problem_detail,
                 }),
             );
         }
@@ -3398,9 +3426,12 @@ async fn execute_schema_test_with_key_source(
             };
             let actual = response.status().as_u16();
             if actual != step.expect.status {
+                let (problem_code, problem_detail) = response_problem(response).await;
                 return Err(step_failure(FixtureError::ResponseStatusMismatch {
                     expected: step.expect.status,
                     actual,
+                    problem_code,
+                    problem_detail,
                 }));
             }
             accept_response(step, response, &mut observations, Some(&runtime.pool))
@@ -3424,6 +3455,41 @@ async fn execute_schema_test_with_key_source(
         candidate_binding_sha256: candidate_binding_sha256(&candidate),
     };
     build_schema_test_receipt(&candidate, suite, &successful)
+}
+
+/// The problem code and detail a status mismatch may name. A code is kept
+/// only when the contract registers it for the status, and a detail only when
+/// it is one of that problem's fixed texts. An action refusal's detail is the
+/// project-authored label, which is never repeated (CFG-SEC-3); its refusal
+/// code is named instead when it passes the local identifier grammar.
+async fn response_problem(response: Response<Body>) -> (Option<String>, Option<String>) {
+    let status = response.status().as_u16();
+    let Ok(bytes) = to_bytes(response.into_body(), MAX_RESPONSE_BYTES).await else {
+        return (None, None);
+    };
+    let Ok(problem) = serde_json::from_slice::<Value>(&bytes) else {
+        return (None, None);
+    };
+    let Some(code) = problem.get("code").and_then(Value::as_str) else {
+        return (None, None);
+    };
+    let Some((_, details)) = problem_contract(status, Some(code)) else {
+        return (None, None);
+    };
+    let detail = if (status, code) == (422, "action.refused") {
+        problem
+            .get("refusalCode")
+            .and_then(Value::as_str)
+            .filter(|refusal| registry_platform_yaml::LocalId::new(*refusal).is_ok())
+            .map(|refusal| format!("refusal code `{refusal}`"))
+    } else {
+        problem
+            .get("detail")
+            .and_then(Value::as_str)
+            .filter(|detail| details.contains(detail))
+            .map(str::to_owned)
+    };
+    (Some(code.to_owned()), detail)
 }
 
 struct SchemaTestRuntime {
@@ -3589,12 +3655,12 @@ impl SchemaTestRuntime {
             .verifier
             .verify(token)
             .await
-            .map_err(|_| FixtureError::RequestConstructionRefused)?;
+            .map_err(fixture_verification_error)?;
         let mapped = self
             .authenticator
             .authenticate(token)
             .await
-            .map_err(|_| FixtureError::RequestConstructionRefused)?;
+            .map_err(fixture_authentication_error)?;
         assert_exact_claims(
             &step.claims,
             &step.profile,
@@ -3744,6 +3810,42 @@ impl SchemaTestRuntime {
             last = Some(response);
         }
         last.ok_or(FixtureError::RequestConstructionRefused)
+    }
+}
+
+/// A refusal that describes the token itself is a refused credential, as the
+/// runtime authenticator treats it; a key source or configuration failure
+/// is not.
+fn fixture_verification_error(error: registry_platform_oidc::OidcError) -> FixtureError {
+    use registry_platform_oidc::OidcError;
+    match error {
+        OidcError::IssuerMismatch { .. }
+        | OidcError::MalformedToken
+        | OidcError::AlgorithmNotAllowed
+        | OidcError::TokenTypeNotAllowed
+        | OidcError::MissingKid
+        | OidcError::KidTooLong
+        | OidcError::UnknownKid
+        | OidcError::TokenExpired
+        | OidcError::TokenNotYetValid
+        | OidcError::AudienceMismatch
+        | OidcError::SignatureInvalid
+        | OidcError::InvalidToken
+        | OidcError::ClientNotAllowed
+        | OidcError::AssertionIssuerNotAllowed => FixtureError::AuthenticationCredentialRefused,
+        _ => FixtureError::RequestConstructionRefused,
+    }
+}
+
+fn fixture_authentication_error(error: crate::auth::AuthenticationError) -> FixtureError {
+    match error {
+        crate::auth::AuthenticationError::MissingActorKind => {
+            FixtureError::AuthenticationActorKindMissing
+        }
+        crate::auth::AuthenticationError::VerificationRefused => {
+            FixtureError::AuthenticationCredentialRefused
+        }
+        _ => FixtureError::RequestConstructionRefused,
     }
 }
 
@@ -5984,6 +6086,178 @@ mod tests {
         PackageLoadContext, PackageMigrationPlanInput, PackageModuleSource, PackageSourceFile,
     };
 
+    #[test]
+    fn fixture_authentication_diagnostics_distinguish_missing_claim_from_refused_credential() {
+        assert_eq!(
+            fixture_authentication_error(crate::auth::AuthenticationError::MissingActorKind),
+            FixtureError::AuthenticationActorKindMissing
+        );
+        // Every verification refusal that describes the token itself is a
+        // refused credential, as the runtime authenticator treats it.
+        for error in [
+            registry_platform_oidc::OidcError::IssuerMismatch {
+                expected: "issuer-canary-expected".to_owned(),
+                actual: "issuer-canary-actual".to_owned(),
+            },
+            registry_platform_oidc::OidcError::MalformedToken,
+            registry_platform_oidc::OidcError::AlgorithmNotAllowed,
+            registry_platform_oidc::OidcError::TokenTypeNotAllowed,
+            registry_platform_oidc::OidcError::MissingKid,
+            registry_platform_oidc::OidcError::KidTooLong,
+            registry_platform_oidc::OidcError::UnknownKid,
+            registry_platform_oidc::OidcError::TokenExpired,
+            registry_platform_oidc::OidcError::TokenNotYetValid,
+            registry_platform_oidc::OidcError::AudienceMismatch,
+            registry_platform_oidc::OidcError::SignatureInvalid,
+            registry_platform_oidc::OidcError::InvalidToken,
+            registry_platform_oidc::OidcError::ClientNotAllowed,
+            registry_platform_oidc::OidcError::AssertionIssuerNotAllowed,
+        ] {
+            assert_eq!(
+                fixture_verification_error(error),
+                FixtureError::AuthenticationCredentialRefused
+            );
+        }
+        // A key source or configuration failure is not the credential's fault.
+        for error in [
+            registry_platform_oidc::OidcError::HttpStatus(503),
+            registry_platform_oidc::OidcError::InvalidUrl,
+            registry_platform_oidc::OidcError::Parse,
+            registry_platform_oidc::OidcError::InvalidJwk,
+            registry_platform_oidc::OidcError::EmptyKeySet,
+            registry_platform_oidc::OidcError::MissingIssuer,
+        ] {
+            assert_eq!(
+                fixture_verification_error(error),
+                FixtureError::RequestConstructionRefused
+            );
+        }
+        // The runtime authenticator erases why verification refused a token:
+        // an unknown key, a bad signature, a wrong issuer, and an expired
+        // token are one refusal, so the message must be true of each.
+        assert_eq!(
+            fixture_authentication_error(crate::auth::AuthenticationError::VerificationRefused),
+            FixtureError::AuthenticationCredentialRefused
+        );
+        let message = FixtureError::AuthenticationCredentialRefused.to_string();
+        for cause in [
+            "signing key",
+            "signature",
+            "issuer",
+            "audience",
+            "validity period",
+            "client",
+        ] {
+            assert!(message.contains(cause), "{message}");
+        }
+        assert!(!message.contains("unknown"), "{message}");
+        for error in [
+            FixtureError::AuthenticationActorKindMissing,
+            FixtureError::AuthenticationCredentialRefused,
+        ] {
+            let rendered = format!("{error:?}: {error}");
+            assert!(!rendered.contains("claim-canary-value"));
+            assert!(!rendered.contains("key-canary-value"));
+        }
+    }
+
+    async fn rendered_status_mismatch(status: u16, body: Value) -> String {
+        let response = Response::builder()
+            .status(status)
+            .header(CONTENT_TYPE, "application/problem+json")
+            .body(Body::from(body.to_string()))
+            .expect("problem response");
+        let (problem_code, problem_detail) = response_problem(response).await;
+        FixtureError::ResponseStatusMismatch {
+            expected: 200,
+            actual: status,
+            problem_code,
+            problem_detail,
+        }
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn status_mismatch_names_a_recognized_problem_and_its_fixed_detail() {
+        assert_eq!(
+            rendered_status_mismatch(
+                412,
+                json!({
+                    "code": "precondition.failed",
+                    "detail": "The mutation precondition failed.",
+                }),
+            )
+            .await,
+            "expected HTTP 200, received HTTP 412; problem precondition.failed: The mutation precondition failed."
+        );
+        // A recognized code whose detail is not the contract's fixed text
+        // keeps the code and drops the detail.
+        assert_eq!(
+            rendered_status_mismatch(
+                412,
+                json!({"code": "precondition.failed", "detail": "detail-canary-value"}),
+            )
+            .await,
+            "expected HTTP 200, received HTTP 412; problem precondition.failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_mismatch_never_repeats_an_authored_refusal_label() {
+        // The `detail` of an action refusal is the project-authored label
+        // (CFG-SEC-3); only its refusal code, a local identifier, is named.
+        let rendered = rendered_status_mismatch(
+            422,
+            json!({
+                "code": "action.refused",
+                "detail": "authored-refusal-canary",
+                "refusalCode": "household-closed",
+            }),
+        )
+        .await;
+        assert_eq!(
+            rendered,
+            "expected HTTP 200, received HTTP 422; problem action.refused: refusal code `household-closed`"
+        );
+        // A refusal code outside the local identifier grammar is not named.
+        let rendered = rendered_status_mismatch(
+            422,
+            json!({
+                "code": "action.refused",
+                "detail": "authored-refusal-canary",
+                "refusalCode": "Refusal.Code-Canary",
+            }),
+        )
+        .await;
+        assert_eq!(
+            rendered,
+            "expected HTTP 200, received HTTP 422; problem action.refused"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_mismatch_names_nothing_from_an_unrecognized_body() {
+        for (status, body) in [
+            (
+                418,
+                json!({"code": "code-canary-value", "detail": "detail-canary-value"}),
+            ),
+            // A registered code under another status is not that problem.
+            (
+                500,
+                json!({
+                    "code": "precondition.failed",
+                    "detail": "The mutation precondition failed.",
+                }),
+            ),
+        ] {
+            assert_eq!(
+                rendered_status_mismatch(status, body).await,
+                format!("expected HTTP 200, received HTTP {status}")
+            );
+        }
+    }
+
     /// A request decoded the way the journeys reader decodes one: the shape
     /// first, then each HTTP body read from the authored value.
     #[test]
@@ -7569,10 +7843,8 @@ journeys:
         journey_source: &[u8],
     ) -> PackageFixture {
         let module = parse_module_yaml(MODULE_SOURCE).expect("module fixture parses");
-        let project = String::from_utf8(PROJECT_TEMPLATE.to_vec())
-            .expect("project fixture is UTF-8")
-            .replace("MODULE_DIGEST", &module_digest(&module))
-            .into_bytes();
+        let digest = module_digest(&module);
+        let project = production_project_source(&digest, COMPILER_SOURCE_REVISION);
         let prepared = prepare_package(PackageBuildRequest {
             from_package_digest: None,
             compiler_source_revision: COMPILER_SOURCE_REVISION.to_owned(),
@@ -7626,14 +7898,8 @@ journeys:
 
     fn production_prepared_package(source_revision: &str) -> PreparedPackage {
         let module = parse_module_yaml(MODULE_SOURCE).expect("module fixture parses");
-        let project = String::from_utf8(PROJECT_TEMPLATE.to_vec())
-            .expect("project fixture is UTF-8")
-            .replace("MODULE_DIGEST", &module_digest(&module))
-            .replace(
-                "sourceRevision: fixture-project-source",
-                &format!("sourceRevision: {source_revision}"),
-            )
-            .into_bytes();
+        let digest = module_digest(&module);
+        let project = production_project_source(&digest, source_revision);
         prepare_package(PackageBuildRequest {
             from_package_digest: None,
             compiler_source_revision: source_revision.to_owned(),
@@ -7655,6 +7921,21 @@ journeys:
             migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
         })
         .expect("Production candidate package prepares")
+    }
+
+    fn production_project_source(module_digest: &str, source_revision: &str) -> Vec<u8> {
+        String::from_utf8(PROJECT_TEMPLATE.to_vec())
+            .expect("project fixture is UTF-8")
+            .replace("MODULE_DIGEST", module_digest)
+            .replace(
+                "canonicalBaseIri: https://fixture.invalid",
+                "canonicalBaseIri: https://fixture.example.test",
+            )
+            .replace(
+                "sourceRevision: fixture-project-source",
+                &format!("sourceRevision: {source_revision}"),
+            )
+            .into_bytes()
     }
 
     fn execution_facts(

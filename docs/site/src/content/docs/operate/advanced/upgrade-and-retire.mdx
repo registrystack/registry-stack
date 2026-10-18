@@ -36,8 +36,9 @@ rolling upgrade that mixes releases is not supported:
   Plan the restart as part of the activation, not after it.
 
 Read the target release's state and package requirements before applying. Current BReg and
-Casework refuse their retired database models; keep the previous database and its binaries
-for accountability, and start the replacement on a fresh database. Evidence requires its
+Casework refuse their retired database models, and current Scheduling and Messaging refuse a
+database a pre-1.0 release wrote; keep the previous database and its binaries for accountability,
+and start the replacement on a fresh database. Evidence requires its
 normalized authored project and target. None of these replacements provides an in-place
 conversion of the retired contract. See [Upgrades and state](../../../reference/api-stability/#upgrades-and-state).
 
@@ -96,27 +97,35 @@ so a binary that cannot run leaves the installed toolset selected.
    adding `--without-audit-lock` while the previous instance still runs. Stop the previous
    runtime, start the matched `evidence`, and verify a fresh synthetic assertion before
    restarting its wallet-facing adapter.
-7. **Upgrade Scheduling**, when it runs. Add the required top-level `taskGrantStatus` before you
-   run the v0.41.0 tooling. List the task authorities whenever Scheduling must check current status
-   or revocation, and when it accepts deferred work. The
+7. **Upgrade Scheduling**, when it runs. The current release installs its complete schema as a
+   fresh baseline and refuses a database a pre-1.0 release wrote at `plan`, `apply`, and startup.
+   Holds and appointments recorded in the previous database are not carried forward: retain that
+   database, its package, runtime file, and audit journal for reconciliation. The runtime file
+   requires a top-level `taskGrantStatus`. List the task authorities whenever Scheduling must check
+   current status or revocation, and when it accepts deferred work. The
    `taskGrantStatus: unchecked-final-fifteen-minutes` path checks only remaining lifetime because a
    signed token does not identify its original grant mode. It admits any grant with at most 900
    seconds remaining without checking revocation, including the final 900 seconds of a deferred
    grant. Use it only when the deployment accepts that stale-authority window.
-   Run `schedulingctl check PROJECT --runtime-config FILE`, then stop the v0.40.0 runtime or keep its
-   destination bindings until hook deliveries drain. Run `schedulingctl plan --runtime-config
-   FILE` and `schedulingctl apply --runtime-config FILE` against the v0.40.0 database. Start
-   `scheduling`, then use `schedulingctl status --runtime-config FILE` to confirm the activation.
-   The removed `scheduling migrate` command and pre-v0.40.0 package and policy refusals provide no
-   compatibility path; a database activated by v0.40.0 needs no reset.
-8. **Upgrade Messaging**, when it runs. Stop new submissions, let in-flight senders finish retrying
-   submissions whose answers they lost, then stop every v0.40.0 `messaging` runtime. Give graceful
-   shutdown time to finish sends already in flight. Refresh the `pg_dump` after every earlier
-   runtime stops, so the rollback backup includes their final sends. Rebuild the package when the
-   release notes require it, update `package.root`, and repin `package.expectedDigest` when set.
-   Run `messagingctl plan --runtime-config FILE`, then `messagingctl apply --runtime-config FILE`
-   against the v0.40.0 database. Confirm the activation with `messagingctl status --runtime-config
-   FILE`, start v0.41.0, and require `GET /ready` to answer `200` before you resume submissions.
+   Run `schedulingctl check PROJECT --runtime-config FILE`, then stop the previous runtime or keep
+   its destination bindings until hook deliveries drain. Point the runtime file at a fresh database,
+   then run `schedulingctl plan --runtime-config FILE` and `schedulingctl apply --runtime-config
+   FILE`. Start `scheduling`, then use `schedulingctl status --runtime-config FILE` to confirm the
+   activation.
+8. **Upgrade Messaging**, when it runs. The current release installs its complete schema as a
+   fresh baseline and refuses a database a pre-1.0 release wrote at `plan`, `apply`, and startup.
+   Messages still queued in the previous database are not carried forward, so drain them first
+   when they must still be sent, as step 1 of [Retire Messaging](#retire-messaging) describes.
+   Stop new submissions, let in-flight senders finish retrying submissions whose answers they lost,
+   then stop every previous `messaging` runtime. Give graceful shutdown time to finish sends already
+   in flight. Refresh the `pg_dump` after every earlier runtime stops, and retain the previous
+   database and audit journal for reconciliation. Rebuild the package when the release notes
+   require it, update `package.root`, and repin `package.expectedDigest` when set. Point the
+   runtime file at a fresh database prepared as
+   [Provision PostgreSQL](../../messaging/#provision-postgresql) describes, then run `messagingctl
+   plan --runtime-config FILE` and `messagingctl apply --runtime-config FILE`. Confirm the
+   activation with `messagingctl status --runtime-config FILE`, start the current `messaging`, and
+   require `GET /ready` to answer `200` before you resume submissions.
 9. **Upgrade clients, then resume traffic.** Move Python applications to Python 3.11 or later and
    Node.js applications to Node.js 24.11.0 or later before installing the v0.41.0 client packages.
    Update exhaustive Rust matches on the Scheduling or Messaging `ProblemCode` enums for
@@ -138,9 +147,11 @@ so a binary that cannot run leaves the installed toolset selected.
     products/breg/CHANGELOG.md, v0.41.0 - 2026-10-13 entries;
     products/casework/CHANGELOG.md, v0.41.0 - 2026-10-13 entries and migration 0022;
     products/evidence/CHANGELOG.md, v0.41.0 - 2026-10-13 entries;
-    products/scheduling/CHANGELOG.md, v0.41.0 - 2026-10-13 entries;
+    products/scheduling/CHANGELOG.md, v0.41.0 - 2026-10-13 entries and Unreleased fresh baseline;
+    crates/registry-scheduling/src/store.rs, refuse_pre_1_0_schema();
     crates/registry-schedulingctl/src/lib.rs, CheckArgs, ActivationArgs, and ApplyArgs;
-    products/messaging/CHANGELOG.md, v0.41.0 - 2026-10-13 entries;
+    products/messaging/CHANGELOG.md, v0.41.0 - 2026-10-13 entries and Unreleased fresh baseline;
+    crates/registry-messaging/src/store.rs, StoreError::Pre1_0Schema;
     docs/site/src/content/docs/operate/messaging.mdx, "Plan, apply, inspect, and serve";
     crates/registry-messaging/src/runtime.rs, shutdown_signal() and Listeners::serve_until();
     release/notes/v0.36.0.md, "Upgrade Scheduling, Relay, and Discovery from v0.35.0"

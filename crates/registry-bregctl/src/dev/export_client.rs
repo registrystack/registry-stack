@@ -126,7 +126,13 @@ pub(super) fn validate_pair(id: &[u8], key: &[u8], label: &str) -> Result<()> {
 
 fn output_path(path: &Path) -> Result<PathBuf> {
     // Refuse unsafe components; preserve the path for descriptor-relative resolution.
-    SafeEntry::resolve(path).map_err(SafePathError::into_io)
+    SafeEntry::resolve(path).map_err(|error| {
+        anyhow::anyhow!(
+            "{}",
+            crate::safe_path::symlink_detail(path)
+                .unwrap_or_else(|| error.into_io().to_string())
+        )
+    })
         .context("credential output needs a prepared directory without symbolic links or parent-directory components")?;
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -152,6 +158,11 @@ impl Output {
         )?;
         let exists = entry.exists()?;
         if exists {
+            if let Some(detail) = crate::safe_path::symlink_detail(path) {
+                return Err(anyhow::anyhow!("{detail}")).context(
+                    "credential output needs a prepared directory without symbolic links or parent-directory components",
+                );
+            }
             let mut file = entry.open_read()?;
             let metadata = file.metadata()?;
             private::check_metadata(&metadata, false)?;

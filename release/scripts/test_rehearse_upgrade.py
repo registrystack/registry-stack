@@ -38,11 +38,6 @@ def write_tar(path: Path, members: dict[str, bytes]) -> None:
 
 
 class ReleaseSelectionTest(unittest.TestCase):
-    def setUp(self) -> None:
-        baseline = unittest.mock.patch.object(MODULE, "EVIDENCE_FORWARD_PATH_FLOOR", (0, 40, 0))
-        baseline.start()
-        self.addCleanup(baseline.stop)
-
     def test_selects_the_release_this_source_succeeds_before_and_after_the_bump(self) -> None:
         published = ["v0.31.0", "v0.32.0", "v0.33.0", "v0.34.0-rc.1", "nightly"]
         self.assertEqual(MODULE.select_from_tag(published, "0.33.0"), "v0.33.0")
@@ -57,11 +52,11 @@ class ReleaseSelectionTest(unittest.TestCase):
             MODULE.select_from_tag(["v0.34.0"], "0.33.0")
 
     def test_refuses_a_start_before_the_immediate_predecessor(self) -> None:
-        for tag in ("v0.40.0", "v0.39.0", "v0.33.0", "v0.1.0"):
+        for tag in ("v0.41.0", "v0.40.0", "v0.39.0", "v0.33.0", "v0.1.0"):
             with self.subTest(tag=tag), self.assertRaisesRegex(Error, "immediate predecessor"):
                 MODULE.check_forward_path(tag, "0.42.0")
-        MODULE.check_forward_path("v0.41.0", "0.41.0")
-        MODULE.check_forward_path("v0.41.0", "0.42.0")
+        MODULE.check_forward_path("v0.42.0", "0.42.0")
+        MODULE.check_forward_path("v0.42.0", "0.43.0")
 
     def test_refuses_a_floor_behind_the_release_before_the_workspace_version(self) -> None:
         released = ["0.9.0", "0.37.0", "0.38.0", "0.39.0"]
@@ -243,7 +238,6 @@ class UnpublishedFloorTest(unittest.TestCase):
         stdout, stderr = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \
                 unittest.mock.patch.object(MODULE, "FORWARD_PATH_FLOOR", (0, 40, 0)), \
-                unittest.mock.patch.object(MODULE, "EVIDENCE_FORWARD_PATH_FLOOR", (0, 40, 0)), \
                 unittest.mock.patch.object(MODULE, "workspace_version", return_value=version), \
                 unittest.mock.patch.object(MODULE, "released_versions",
                                            return_value=["0.38.0", "0.39.0"]), \
@@ -336,9 +330,6 @@ class ProductSelectionTest(unittest.TestCase):
     HYPOTHETICAL_MESSAGING_FIRST_RELEASE = (0, 36, 0)
 
     def setUp(self) -> None:
-        baseline = unittest.mock.patch.object(MODULE, "EVIDENCE_FORWARD_PATH_FLOOR", (0, 1, 0))
-        baseline.start()
-        self.addCleanup(baseline.stop)
         roster_patch = unittest.mock.patch.object(
             MODULE.release_roster,
             "MESSAGING_FIRST_RELEASE",
@@ -440,69 +431,113 @@ class ProductSelectionTest(unittest.TestCase):
                       stderr.getvalue())
 
 
-class EvidenceBaselineTest(unittest.TestCase):
-    def test_default_predecessor_run_downloads_and_executes_only_messaging(self) -> None:
+class ForwardPathFloorTest(unittest.TestCase):
+    """No product reads v0.41.0 state: BReg and Casework start on a fresh
+    database, Evidence at its normalized v0.42.0 baseline, and Messaging
+    refuses a pre-1.0 ledger. The forward state path starts at v0.42.0."""
+
+    def run_main(self, arguments: list[str]) -> tuple[int, str, str, dict[str, Any]]:
+        seen: dict[str, Any] = {"sides": [], "legs": []}
+
+        def binaries(side, expected_version, names):
+            seen["sides"].append((side.label, side.bin_dir, expected_version))
+            return {name: f"{name} 0.42.0-dev" for name in names}
+
+        def leg(product):
+            def run(work, keys, *rest):
+                seen["legs"].append((product, rest[-3].bin_dir, rest[-2].bin_dir))
+            return run
+
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \
+                unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.42.0"), \
+                unittest.mock.patch.object(MODULE, "released_versions",
+                                           return_value=["0.40.0", "0.41.0"]), \
+                unittest.mock.patch.object(MODULE, "published_tags",
+                                           return_value=["v0.40.0", "v0.41.0"]), \
+                unittest.mock.patch.object(MODULE, "fetch_release",
+                                           side_effect=AssertionError("download")), \
+                unittest.mock.patch.object(MODULE, "check_binaries", side_effect=binaries), \
+                unittest.mock.patch.object(MODULE, "Keys"), \
+                unittest.mock.patch.object(MODULE, "Postgres"), \
+                unittest.mock.patch.object(MODULE, "rehearse_evidence",
+                                           side_effect=leg("evidence")), \
+                unittest.mock.patch.object(MODULE, "rehearse_messaging",
+                                           side_effect=leg("messaging")):
+            status = MODULE.main(arguments)
+        return status, stdout.getvalue(), stderr.getvalue(), seen
+
+    def test_the_forward_state_path_starts_at_v0_42_0(self) -> None:
+        self.assertEqual(MODULE.FORWARD_PATH_FLOOR, (0, 42, 0))
+
+    def test_a_default_run_from_v0_41_0_rehearses_every_leg_from_this_build(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
+            built = Path(temporary).resolve() / "bin"
+            built.mkdir()
             report = Path(temporary) / "report.json"
-            with contextlib.redirect_stdout(io.StringIO()), \
-                    unittest.mock.patch.object(MODULE, "fetch_release") as fetched, \
-                    unittest.mock.patch.object(MODULE, "check_binaries", return_value={}), \
-                    unittest.mock.patch.object(MODULE, "Keys"), \
-                    unittest.mock.patch.object(MODULE, "Postgres"), \
-                    unittest.mock.patch.object(MODULE, "rehearse_evidence", side_effect=AssertionError("retired Evidence leg")), \
-                    unittest.mock.patch.object(MODULE, "rehearse_messaging") as messaging:
-                status = MODULE.main([
-                    "--from-tag", "v0.41.0", "--platform", "linux-amd64",
-                    "--to-bin-dir", temporary, "--work-dir", str(Path(temporary) / "work"),
-                    "--report", str(report),
-                ])
-            document = json.loads(report.read_text())
+            status, stdout, stderr, seen = self.run_main(
+                ["--platform", "linux-amd64", "--to-bin-dir", str(built),
+                 "--work-dir", str(Path(temporary) / "work"), "--report", str(report)])
+            document = json.loads(report.read_text(encoding="utf-8"))
+        self.assertEqual(status, 0, stderr)
+        self.assertIn("no release from v0.42.0 onward is published", stdout)
+        self.assertEqual(document["from"], "v0.42.0")
+        self.assertEqual(document["fromProvenance"],
+                         "this source's build, no published predecessor")
+        self.assertEqual(document["omitted"], dict(MODULE.RETIRED_PRODUCTS))
+        self.assertEqual(seen["legs"], [("evidence", built, built), ("messaging", built, built)])
+
+    def test_fetch_only_from_v0_41_0_has_nothing_to_fetch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary) / "work"
+            report = Path(temporary) / "report.json"
+            status, stdout, _stderr, seen = self.run_main(
+                ["--fetch-only", "--platform", "linux-amd64", "--work-dir", str(work),
+                 "--report", str(report)])
+            self.assertFalse(work.exists())
+            document = json.loads(report.read_text(encoding="utf-8"))
         self.assertEqual(status, 0)
-        self.assertEqual(fetched.call_args.args[-1], ("messaging", "messagingctl"))
-        messaging.assert_called_once()
-        self.assertEqual(document["omitted"]["evidence"], MODULE.EVIDENCE_NO_IN_PLACE_UPGRADE)
-        self.assertNotIn("evidence", document)
+        self.assertEqual(seen["sides"], [])
+        self.assertIn("no release from v0.42.0 onward is published", stdout)
+        self.assertIsNone(document["from"])
+        self.assertEqual(document["platform"], "linux-amd64")
+        self.assertEqual(document["fromProvenance"], "no published predecessor to fetch")
 
-    def test_previous_split_contract_is_omitted_but_messaging_still_runs(self) -> None:
-        products, omitted = MODULE.select_products(None, "v0.41.0", "linux-amd64", True)
-        self.assertEqual(products, ["messaging"])
-        self.assertEqual(omitted["evidence"], MODULE.EVIDENCE_NO_IN_PLACE_UPGRADE)
-        self.assertEqual(MODULE.product_binaries(products), ("messaging", "messagingctl"))
-
-    def test_normalized_predecessor_joins_the_rehearsal(self) -> None:
-        for tag in ("v0.42.0", "v0.42.1", "v0.43.0"):
-            with self.subTest(tag=tag):
-                products, omitted = MODULE.select_products(None, tag, "linux-amd64", True)
-                self.assertIn("evidence", products)
-                self.assertNotIn("evidence", omitted)
-
-    def test_focused_old_evidence_refuses_before_download_or_state_creation(self) -> None:
-        for override in ([], ["--from-bin-dir", "/previous"]):
-            with self.subTest(override=override), tempfile.TemporaryDirectory() as temporary:
+    def test_a_named_or_local_v0_41_0_start_is_refused_before_any_state(self) -> None:
+        for chosen in (["--from-tag", "v0.41.0"], ["--from-bin-dir", "/previous"],
+                       ["--from-tag", "v0.41.0", "--from-bin-dir", "/previous"],
+                       ["--from-tag", "v0.41.0", "--product", "evidence"],
+                       ["--from-tag", "v0.41.0", "--product", "messaging"]):
+            with self.subTest(chosen=chosen), tempfile.TemporaryDirectory() as temporary:
                 work = Path(temporary) / "work"
-                stderr = io.StringIO()
-                with contextlib.redirect_stderr(stderr), \
-                        unittest.mock.patch.object(MODULE, "published_tags", side_effect=AssertionError("network")), \
-                        unittest.mock.patch.object(MODULE, "fetch_release", side_effect=AssertionError("download")), \
-                        unittest.mock.patch.object(MODULE, "Postgres", side_effect=AssertionError("container")):
-                    status = MODULE.main([
-                        "--from-tag", "v0.41.0", "--platform", "linux-amd64",
-                        "--product", "evidence", "--to-bin-dir", temporary,
-                        "--work-dir", str(work), *override,
-                    ])
+                status, _stdout, stderr, seen = self.run_main(
+                    [*chosen, "--platform", "linux-amd64", "--to-bin-dir", temporary,
+                     "--work-dir", str(work)])
                 self.assertEqual(status, 1)
                 self.assertFalse(work.exists())
-                self.assertIn(MODULE.EVIDENCE_NO_IN_PLACE_UPGRADE, stderr.getvalue())
+                self.assertIn("refusing v0.41.0", stderr)
+                self.assertIn("reads no state written before v0.42.0", stderr)
+                self.assertIn("installs on fresh state", stderr)
+                self.assertNotIn("one release at a time", stderr)
+                self.assertEqual(seen["sides"], [])
+                self.assertEqual(seen["legs"], [])
 
     def test_no_eligible_default_legs_reports_omissions_without_download(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             report = Path(temporary) / "report.json"
+            # No product is omitted for its starting release from the floor
+            # onward, so a platform omission stands in for every leg.
             with contextlib.redirect_stdout(io.StringIO()), \
+                    unittest.mock.patch.object(MODULE, "workspace_version", return_value="0.42.0"), \
+                    unittest.mock.patch.object(MODULE, "released_versions",
+                                               return_value=["0.40.0", "0.41.0"]), \
+                    unittest.mock.patch.dict(MODULE.PRODUCT_PLATFORMS,
+                                             {"evidence": ("linux-amd64",)}), \
                     unittest.mock.patch.object(MODULE, "fetch_release", side_effect=AssertionError("download")), \
                     unittest.mock.patch.object(MODULE, "Keys", side_effect=AssertionError("keys")), \
                     unittest.mock.patch.object(MODULE, "Postgres", side_effect=AssertionError("container")):
                 status = MODULE.main([
-                    "--from-tag", "v0.41.0", "--platform", "macos-arm64",
+                    "--from-tag", "v0.42.0", "--platform", "macos-arm64",
                     "--to-bin-dir", temporary, "--work-dir", str(Path(temporary) / "work"),
                     "--report", str(report),
                 ])

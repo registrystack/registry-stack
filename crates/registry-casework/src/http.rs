@@ -1483,6 +1483,9 @@ pub enum HttpError {
     SourceProfileNotApplicable,
     SourceProfileRequired,
     SourceBadGateway,
+    SourceVersionMismatch,
+    SourceVersionUnavailable,
+    ReviewDistinctApproverRequired,
     ReviewInitiatorExcluded,
     ReviewInitiatorRequired,
     ReviewResultExpired,
@@ -1527,6 +1530,12 @@ impl From<ServiceError> for HttpError {
             ServiceError::Forbidden => Self::Forbidden,
             ServiceError::ReviewValidation(e) => Self::Validation(e),
             ServiceError::Configuration => Self::Internal,
+            ServiceError::Context(ReviewContextError::VersionMismatch) => {
+                Self::SourceVersionMismatch
+            }
+            ServiceError::Context(ReviewContextError::VersionUnavailable) => {
+                Self::SourceVersionUnavailable
+            }
             ServiceError::Context(ReviewContextError::Unavailable) => Self::ServiceUnavailable,
             ServiceError::Context(
                 ReviewContextError::Invalid | ReviewContextError::Unsupported,
@@ -1543,6 +1552,7 @@ impl From<ReviewRuntimeError> for HttpError {
             ReviewRuntimeError::SubmissionConflict => Self::ReviewSubmissionConflict,
             ReviewRuntimeError::ResultExpired => Self::ReviewResultExpired,
             ReviewRuntimeError::TaskNotHeld => Self::ReviewTaskNotHeld,
+            ReviewRuntimeError::DistinctApproverRequired => Self::ReviewDistinctApproverRequired,
             ReviewRuntimeError::InitiatorExcluded => Self::ReviewInitiatorExcluded,
             ReviewRuntimeError::InitiatorRequired => Self::ReviewInitiatorRequired,
             ReviewRuntimeError::SourceProfileRequired => Self::SourceProfileRequired,
@@ -1552,6 +1562,8 @@ impl From<ReviewRuntimeError> for HttpError {
                 Self::ServiceUnavailable
             }
             ReviewRuntimeError::SourceInvalid => Self::SourceBadGateway,
+            ReviewRuntimeError::SourceVersionMismatch => Self::SourceVersionMismatch,
+            ReviewRuntimeError::SourceVersionUnavailable => Self::SourceVersionUnavailable,
             ReviewRuntimeError::RevisionConflict => Self::PreconditionFailed,
             ReviewRuntimeError::IdempotencyConflict => Self::IdempotencyKeyReused,
             ReviewRuntimeError::IdempotencyExpired => Self::IdempotencyExpired,
@@ -1582,6 +1594,9 @@ impl HttpError {
             Self::SourceProfileNotApplicable => ProblemCode::SourceProfileNotApplicable,
             Self::SourceProfileRequired => ProblemCode::SourceProfileRequired,
             Self::SourceBadGateway => ProblemCode::SourceBadGateway,
+            Self::SourceVersionMismatch => ProblemCode::SourceVersionMismatch,
+            Self::SourceVersionUnavailable => ProblemCode::SourceVersionUnavailable,
+            Self::ReviewDistinctApproverRequired => ProblemCode::ReviewDistinctApproverRequired,
             Self::ReviewInitiatorExcluded => ProblemCode::ReviewInitiatorExcluded,
             Self::ReviewInitiatorRequired => ProblemCode::ReviewInitiatorRequired,
             Self::ReviewResultExpired => ProblemCode::ReviewResultExpired,

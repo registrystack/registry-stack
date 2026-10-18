@@ -83,6 +83,27 @@ class CapabilityInventoryTests(unittest.TestCase):
         self.assertNotIn("requestHistoryAfterProposalVersion", inventory["queryOptions"])
         self.assertNotIn("proposalVersion", inventory["queryOptions"])
 
+    def test_batch_context_ids_require_real_public_parameters(self):
+        inventory, rust, node, python = self.query_binding_inputs()
+        self.assertIn("ids", inventory["queryOptions"])
+        cases = [
+            ("rust", "BaseRegistryClient.read_proposal_review_context_batch.ids", rust.replace(
+                "ids: &[&str]", "unbound: &[&str]"), node, python),
+            ("node", "BaseRegistryClient.readProposalReviewContextBatch.ids", rust, node.replace(
+                "readProposalReviewContextBatch(binding: BRegProposalReviewBinding, ids:",
+                "readProposalReviewContextBatch(binding: BRegProposalReviewBinding, unbound:"), python),
+            ("python", "BaseRegistryClient.read_proposal_review_context_batch.ids", rust, node, python.replace(
+                "read_proposal_review_context_batch(self, binding: BRegProposalReviewBinding, ids:",
+                "read_proposal_review_context_batch(self, binding: BRegProposalReviewBinding, unbound:")),
+        ]
+        for language, target, rust_source, node_types, python_types in cases:
+            with self.subTest(language=language):
+                self.assertIn(target, inventory["queryOptionBindings"]["ids"][language])
+                self.assertIn(
+                    f"ids: missing {language} query-option declaration {target}",
+                    CHECK.check_query_option_bindings(inventory, rust_source, node_types, python_types),
+                )
+
     def test_attachment_version_uses_the_promoted_proposal_not_a_caller_version(self):
         inventory, rust, node, python = self.query_binding_inputs()
         binding = inventory["queryOptionBindings"]["submissionVersion"]

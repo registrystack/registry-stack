@@ -106,7 +106,7 @@ class ProductContractTests(unittest.TestCase):
 
     def test_staffing_diagnostic_is_optional_on_both_task_projections(self):
         schemas = json.loads((PRODUCT / "generated/registry-casework.openapi.json").read_text())["components"]["schemas"]
-        self.assertEqual(schemas["StaffingDiagnostic"]["enum"], ["no-cover-available"])
+        self.assertEqual(schemas["StaffingDiagnostic"]["enum"], ["no-cover-available", "insufficient-distinct-approvers"])
         for name in ("ReviewTask", "SupervisoryReviewTask"):
             self.assertEqual(schemas[name]["properties"]["staffingDiagnostic"]["$ref"], "#/components/schemas/StaffingDiagnostic")
             self.assertNotIn("anyOf", schemas[name]["properties"]["staffingDiagnostic"])

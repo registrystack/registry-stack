@@ -496,15 +496,35 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 28] {
+fn startup_errors() -> [StartupError; 36] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
         // exercises the same static text, so one representative is enough here.
         StartupError::RuntimeConfig(RuntimeConfigError::InvalidBinding),
         StartupError::PackageRefused(PackageError::Integrity),
-        StartupError::DatabaseConnection,
+        StartupError::DatabaseConnection(
+            registry_breg::postgres::DatabaseConnectionCause::Unreachable,
+        ),
+        StartupError::DatabaseConnection(
+            registry_breg::postgres::DatabaseConnectionCause::Capacity,
+        ),
+        StartupError::DatabaseConnection(registry_breg::postgres::DatabaseConnectionCause::Tls),
+        StartupError::DatabaseConnection(
+            registry_breg::postgres::DatabaseConnectionCause::Authentication,
+        ),
+        StartupError::DatabaseConnection(
+            registry_breg::postgres::DatabaseConnectionCause::DatabaseMissing,
+        ),
+        StartupError::DatabaseConnection(registry_breg::postgres::DatabaseConnectionCause::Timeout),
+        StartupError::DatabaseConnection(
+            registry_breg::postgres::DatabaseConnectionCause::Configuration,
+        ),
+        StartupError::DatabaseConnection(registry_breg::postgres::DatabaseConnectionCause::Secret),
         StartupError::DatabaseUnready,
+        StartupError::DatabaseCatalogDrift {
+            objects: vec!["registry_data.example_idx".to_owned()],
+        },
         StartupError::DatabaseUninitialized,
         StartupError::UnrecognizedDatabase,
         StartupError::InstanceClaimMismatch,
@@ -575,13 +595,19 @@ fn expected_operational_event(
             None,
             None,
         ),
-        OperationalEvent::StoppedWithError(error) => (
-            OperationalLogLevel::Error,
-            "registry_breg::startup",
-            "Base Registry Engine stopped",
-            Some(expected_startup_error(error)),
-            None,
-        ),
+        OperationalEvent::StoppedWithError(error) => {
+            let code = match &error {
+                StartupError::DatabaseConnection(cause) => Some(cause.code()),
+                _ => None,
+            };
+            (
+                OperationalLogLevel::Error,
+                "registry_breg::startup",
+                "Base Registry Engine stopped",
+                Some(expected_startup_error(error)),
+                code,
+            )
+        }
         OperationalEvent::WebhookWorkerIterationFailed => (
             OperationalLogLevel::Warn,
             "registry_breg::webhook",
@@ -714,8 +740,9 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::RuntimeConfig(_) => "the Registry runtime configuration was refused",
         StartupError::PackageRefused(_) => "the Registry package was refused",
         StartupError::PackageEnvelopeRefused(_) => "the Registry package was refused",
-        StartupError::DatabaseConnection => "the Registry database connection was refused",
+        StartupError::DatabaseConnection(cause) => cause.message(),
         StartupError::DatabaseUnready => "the Registry database is not ready for this package",
+        StartupError::DatabaseCatalogDrift { .. } => "the Registry database catalog differs from the runtime package; run `bregctl doctor` to name the objects",
         StartupError::DatabaseUninitialized => {
             "the Registry database records no activated package; run `bregctl apply --package DIR --initial` to activate the first package"
         }

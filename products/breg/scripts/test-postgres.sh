@@ -44,6 +44,7 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test fixture_tooling
   cargo test --locked -p registry-breg --features postgres-test,tooling,schema \
     --test postgres_kernel \
+    --test postgres_connection_diagnostics \
     --test postgres_compiled_schema \
     --test postgres_partial_unique \
     --test postgres_constraint_races \

@@ -197,7 +197,13 @@ Every pull request should make the review path clear:
   project, target, and complete separate authority. Retired split projects
   and bundled authority have no in-place conversion; retain the previous
   deployment and audit, package the current model, and verify a fresh synthetic
-  assertion before cutover.
+  assertion before cutover. Messaging's and Scheduling's v0.42.0 schemas are
+  fresh baselines as well: each installs its complete schema as one baseline
+  and refuses by name a database whose ledger holds a pre-1.0 version.
+  Operators retain the previous database and audit journal for reconciliation
+  and apply the current package to a fresh database; messages still queued and
+  holds and appointments recorded in the previous database are not carried
+  forward.
 - Before 1.0, a release reads only the state its immediate predecessor wrote,
   and an operator upgrades one release at a time, except at the explicit fresh
   baselines. v0.40.0 starts fresh: it
@@ -207,8 +213,8 @@ Every pull request should make the review path clear:
   Messaging package the earlier release built and a Scheduling database it
   wrote, and is applied to new databases; the BREAKING sections of its release
   notes give each step. v0.40.0 does not upgrade v0.39.0 state in place;
-  apply to a new database. Except for the BReg, Casework, and Evidence fresh
-  baselines described above, from v0.40.0 onward keep everything
+  apply to a new database. Except for the BReg, Casework, Evidence, Messaging,
+  and Scheduling fresh baselines described above, from v0.40.0 onward keep everything
   the previous release could have written to a database, package,
   configuration file, or local state readable. Do not add code that reads,
   upgrades, or refuses by name the state of an older release, and remove such
@@ -218,8 +224,8 @@ Every pull request should make the review path clear:
   in [`CONFIG-CONVENTIONS.md`](products/platform/CONFIG-CONVENTIONS.md) keeps
   each refusal until its format's next stable version.
   `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
-  earliest shared predecessor; `EVIDENCE_FORWARD_PATH_FLOOR` separately names
-  Evidence's normalized baseline, and
+  earliest shared predecessor, v0.42.0, where Evidence's normalized baseline
+  and Messaging's fresh schema baseline start, and
   [`api-stability.mdx`](docs/site/src/content/docs/reference/api-stability.mdx)
   states the promise for operators.
 

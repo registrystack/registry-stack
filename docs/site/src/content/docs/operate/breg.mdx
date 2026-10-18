@@ -29,10 +29,15 @@ what authorizes an activation, and the database records every activation in its 
 
 Deployment commands take absolute paths with no `..` component and no symbolic link anywhere in
 them. That covers `--runtime-config`, `--credentials`, `--test-receipt`, `--package`, the test
-receipt's `--output`, and the directories the runtime file names.
+receipt's `--output`, and the directories the runtime file names. When an output path such as the
+test receipt's `--output` is refused for a symbolic link, the diagnostic names the linked component
+and the target it resolves to. If the linked component is an ancestor, choose an unused final name
+under its real directory. If the final component is itself a symbolic link, that final name is
+occupied by the link; choose another unused, non-symbolic-link name under the real parent.
 
 {/* Evidence: crates/registry-platform-config/src/loader.rs, validate_absolute_lexical_path(),
     reject_symlink_components(); crates/registry-breg/src/runtime_config.rs, validate_loaded_paths();
+    crates/registry-bregctl/src/safe_path.rs, symlink_detail();
     crates/registry-bregctl/src/test_lifecycle.rs, preflight_output(), read_credentials();
     crates/registry-bregctl/src/package_lifecycle.rs, read_test_receipt(). */}
 

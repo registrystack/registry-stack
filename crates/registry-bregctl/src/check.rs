@@ -303,6 +303,16 @@ fn compile_project(
             return None;
         }
     };
+    // A production check asserts the project is ready to package for
+    // deployment, so it also reports the identity a deployable package must
+    // not carry.
+    if profile == ProfileArg::Production {
+        for refusal in registry_breg::compiler::deployment_diagnostics(&source.project) {
+            outcome
+                .report
+                .push(place(project, &documents, refusal, Severity::Error));
+        }
+    }
     match compile_captured_project(&source, profile, "check") {
         Ok(compiled) => {
             for finding in compiled
@@ -352,9 +362,14 @@ pub(super) fn compile_for_inspection(
         )
     })?;
     let mut outcome = Outcome::default();
+    // A production compile can succeed while `check --production` still
+    // refuses the project, as for a deployment identity a package must not
+    // carry, so an error in the report refuses inspection too.
     match compile_project(&selected, profile, &mut outcome) {
-        Some(compiled) => Ok((compiled, outcome.report.into_diagnostics())),
-        None => Err(super::Refusal::Document(super::DocumentRefusal {
+        Some(compiled) if !outcome.report.has_errors() => {
+            Ok((compiled, outcome.report.into_diagnostics()))
+        }
+        _ => Err(super::Refusal::Document(super::DocumentRefusal {
             command: "explain",
             subject: "the project",
             report: outcome.report,
@@ -728,6 +743,7 @@ fn package_code(error: &PackageError) -> &'static str {
         | PackageError::MigrationPlan
         | PackageError::ReviewedMigration(_) => "breg.package.integrity-refused",
         PackageError::Bounds | PackageError::Read => "breg.package.refused",
+        PackageError::DeploymentIdentity => "breg.package.deployment-identity-refused",
         PackageError::RetiredApiVersion => "config.retired-api-version",
     }
 }
@@ -742,6 +758,9 @@ fn package_action(error: &PackageError) -> &'static str {
         }
         PackageError::Read => {
             "Point --package at a readable package directory that bregctl package wrote."
+        }
+        PackageError::DeploymentIdentity => {
+            "Replace canonicalBaseIri, rerun schema-test, and rebuild the deployment package."
         }
         PackageError::RetiredApiVersion => {
             "Rebuild the package with this bregctl: bregctl package PROJECT --test-receipt RECEIPT --output BUILD, then apply the rebuilt package to a new database: bregctl apply --initial --package BUILD."

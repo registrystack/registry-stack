@@ -7,6 +7,8 @@ const { BaseRegistryClient, BRegProposalReviewBinding } = require('..');
 
 test('review-only binding reads context and exact document without Proposal Get', async () => {
   const id = '00000000-0000-4000-8000-000000000001';
+  const concealedId = '00000000-0000-4000-8000-000000000002';
+  let malformedBatch = false;
   const revision = `sha256:${'a'.repeat(64)}`;
   const body = Buffer.from('%PDF-1.7 synthetic review document');
   const requests = [];
@@ -37,7 +39,11 @@ test('review-only binding reads context and exact document without Proposal Get'
       return response.end(body);
     }
     response.setHeader('content-type', 'application/json');
-    response.end(JSON.stringify(request.url.includes('/registry?') ? metadata : context));
+    const batch = { items: malformedBatch ? [] : [
+      { id, status: 'visible', context }, { id: concealedId, status: 'concealed' },
+    ] };
+    response.end(JSON.stringify(request.url.includes('/registry?') ? metadata
+      : request.url.includes('/proposals/review-context?') ? batch : context));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
@@ -47,6 +53,22 @@ test('review-only binding reads context and exact document without Proposal Get'
     const binding = contract.selectProposalReviewContext('reviewer', 'correct');
     assert.ok(binding instanceof BRegProposalReviewBinding);
     const observed = (await client.readProposalReviewById(binding, id)).value;
+    const batch = await client.readProposalReviewContextBatch(binding, [id, concealedId]);
+    assert.deepEqual(batch.value, [observed, null]);
+    const batchUrl = new URL(requests.at(-1), 'http://local');
+    assert.equal(batchUrl.pathname, '/tenant/v1/proposals/review-context');
+    assert.equal(batchUrl.searchParams.get('ids'), `${id},${concealedId}`);
+    assert.equal(batchUrl.searchParams.get('accessProfile'), 'reviewer');
+    const beforeBatchRefusals = requests.length;
+    for (const ids of [[], [id, id]]) {
+      await assert.rejects(client.readProposalReviewContextBatch(binding, ids), error => error.kind === 'invalid-request');
+    }
+    await assert.rejects(client.readProposalReviewContextBatch(
+      contract.selectProposalReviewStatus('status', 'correct'), [id]), error => error.kind === 'invalid-request');
+    assert.equal(requests.length, beforeBatchRefusals);
+    malformedBatch = true;
+    await assert.rejects(client.readProposalReviewContextBatch(binding, [id, concealedId]), error => error.kind === 'invalid-request');
+    malformedBatch = false;
     const downloaded = await client.downloadProposalReviewDocument(binding, observed, 'support');
     assert.deepEqual(downloaded.body, body);
     assert.equal(downloaded.mediaType, 'application/pdf');

@@ -43,7 +43,10 @@ use serde_json::{json, Map, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    sync::{Arc, OnceLock},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, OnceLock,
+    },
 };
 use tokio::net::TcpListener;
 use uuid::Uuid;
@@ -482,10 +485,28 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
         AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".into())),
     )
     .unwrap();
-    let (breg_url, breg_server) = serve(authenticated_router(
-        fixture.service(),
-        Arc::new(authenticator),
-    ))
+    let batch_reads = Arc::new(AtomicUsize::new(0));
+    let scalar_reads = Arc::new(AtomicUsize::new(0));
+    let batch_counter = batch_reads.clone();
+    let scalar_counter = scalar_reads.clone();
+    let (breg_url, breg_server) = serve(
+        authenticated_router(fixture.service(), Arc::new(authenticator)).layer(
+            axum::middleware::from_fn(
+                move |request: axum::extract::Request, next: axum::middleware::Next| {
+                    let batch = batch_counter.clone();
+                    let scalar = scalar_counter.clone();
+                    async move {
+                        if request.uri().path() == "/v1/proposals/review-context" {
+                            batch.fetch_add(1, Ordering::SeqCst);
+                        } else if request.uri().path().ends_with("/review-context") {
+                            scalar.fetch_add(1, Ordering::SeqCst);
+                        }
+                        next.run(request).await
+                    }
+                },
+            ),
+        ),
+    )
     .await;
     let (facility, proposal) = start_proposal(&fixture, &breg_url, &idp, 1).await;
     let status_token = minted(
@@ -633,6 +654,23 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
         "human",
         Some("facility-review"),
     );
+    let (_, batch_proposal) = start_proposal(&fixture, &breg_url, &idp, 99).await;
+    assert!(
+        registry_breg::review_store::run_review_authority_once_for_test(
+            &fixture.pool,
+            &authorities,
+            &fixture.mutations
+        )
+        .await
+        .unwrap()
+    );
+    let extra_id = Uuid::parse_str(batch_proposal.id()).unwrap();
+    let extra_row = fixture.database.admin.query_one(
+        "SELECT accepted_binding FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&extra_id]).await.unwrap();
+    let extra_accepted: registry_review_client::ReviewRequestAccepted =
+        serde_json::from_value(extra_row.get(0)).unwrap();
+    batch_reads.store(0, Ordering::SeqCst);
+    scalar_reads.store(0, Ordering::SeqCst);
     let page = reqwest::Client::new()
         .get(
             casework_url
@@ -647,7 +685,44 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
         .unwrap();
     assert_eq!(page.status(), StatusCode::OK);
     let page: Value = page.json().await.unwrap();
-    let task = page["items"].as_array().unwrap().first().unwrap();
+    assert_eq!(page["items"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        batch_reads.load(Ordering::SeqCst),
+        1,
+        "two unique BReg subjects use one bounded exchange"
+    );
+    assert_eq!(
+        scalar_reads.load(Ordering::SeqCst),
+        0,
+        "the inbox sends no scalar context exchange"
+    );
+    let cancellation = reqwest::Client::new()
+        .post(
+            casework_url
+                .join(&format!(
+                    "v1/review-requests/{}/cancel",
+                    extra_accepted.request_id
+                ))
+                .unwrap(),
+        )
+        .bearer_auth(&producer)
+        .header("registry-review-profile", "requester")
+        .header("idempotency-key", "batch-canary-cancel")
+        .json(&json!({"subject":extra_accepted.subject,"reason":"batch proof complete"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        cancellation.status().is_success(),
+        "synthetic batch cancellation returned {}",
+        cancellation.status()
+    );
+    let task = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["subject"]["id"] == proposal.id())
+        .unwrap();
     let id = task["taskId"].as_str().unwrap();
     let response = reqwest::Client::new()
         .get(casework_url.join(&format!("v1/review-tasks/{id}")).unwrap())
@@ -1022,10 +1097,12 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
             .any(|row| row["taskId"] == id),
         "the supervisor still sees the decided task after BReg applied: {supervised}"
     );
+    // Backdate the whole 30-day retention window so expiry remains after
+    // completion even when the preceding HTTP checks take less than a second.
     admin
         .execute(
-            "UPDATE casework_review_requests SET result_available_until=now()-interval '1 second' \
-             WHERE request_id=$1",
+            "UPDATE casework_review_requests SET terminal_at=now()-interval '31 days', \
+             result_available_until=now()-interval '1 day' WHERE request_id=$1",
             &[&accepted.request_id],
         )
         .await

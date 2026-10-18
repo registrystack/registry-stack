@@ -1,8 +1,8 @@
 name: RegistryStack Release Upgrade Rehearsal
 
 # Retained product contracts promise a forward path from their predecessor.
-# Evidence starts at the normalized v0.42.0 baseline; older split contracts
-# are explicitly omitted. Messaging keeps its predecessor upgrade rehearsal.
+# The forward state path starts at v0.42.0: Evidence's normalized baseline and
+# Messaging's fresh schema baseline start there, and neither reads earlier state.
 # This rehearsal downloads the previous release's authenticated binaries,
 # writes real state with them, upgrades that state with the binaries built
 # from this source, and fails when state is no longer served or a row is lost.
