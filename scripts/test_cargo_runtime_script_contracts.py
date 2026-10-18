@@ -128,12 +128,18 @@ Path(os.environ["TEST_ENVIRONMENT_LOG"]).write_text(json.dumps({
         self.assertEqual(completed.returncode, 0, completed.stderr)
         invocation = json.loads(environment_log.read_text())
         self.assertEqual(invocation["runtime"], str(artifacts.resolve()))
-        expected_fallback = str(artifacts.resolve())
-        # macOS's protected /usr/bin/env launcher strips the caller's DYLD_*
-        # variables; other platforms preserve the existing fallback path.
-        if sys.platform != "darwin":
-            expected_fallback += os.pathsep + environment["DYLD_FALLBACK_LIBRARY_PATH"]
-        self.assertEqual(invocation["fallback"], expected_fallback)
+        stripped_fallback = str(artifacts.resolve())
+        preserved_fallback = (
+            stripped_fallback + os.pathsep + environment["DYLD_FALLBACK_LIBRARY_PATH"]
+        )
+        # On a developer Mac the protected /usr/bin/env launcher strips the
+        # caller's DYLD_* variables, while the hosted macOS runner has been
+        # seen to preserve them; other platforms preserve the existing
+        # fallback path behind the artifacts directory.
+        if sys.platform == "darwin":
+            self.assertIn(invocation["fallback"], (stripped_fallback, preserved_fallback))
+        else:
+            self.assertEqual(invocation["fallback"], preserved_fallback)
 
 
 class CaseworkCheckpointRuntimeTests(unittest.TestCase):
