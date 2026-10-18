@@ -3801,21 +3801,22 @@ by `expired_at` and the audit entry, not by state.
 
 `bregctl init --from` writes `canonicalBaseIri` as
 `https://{id}.example.invalid`, so local development and schema tests run
-before an adopter has chosen a hostname. The compiler forms every published
-resource IRI from that base (`compiled_resource_iri` in
-`crates/registry-breg/src/compiler.rs`), so a package that keeps it publishes
-identifiers in a namespace nobody controls, and every registry initialized with
-the same project id mints the same ones.
+before an adopter has chosen a hostname. `compiled_resource_iri` in
+`crates/registry-breg/src/compiler.rs` derives default catalogue and Registry
+Manifest resource IRIs from that base. A package that keeps the placeholder can
+therefore publish derived catalogue identifiers in a namespace nobody controls,
+and every registry initialized with the same project id derives the same ones.
+Explicit resource IRIs remain unchanged.
 
 ### Threat
 
-An initialized package reaches a production database unchanged. Its records
-and published schema then carry identifiers that resolve nowhere and that
-another registry with the same project id also mints, and a relying party may
-store them before anyone notices. Replacing them afterwards is a successor
-that changes every published IRI. No read or write authority changes: the
-check governs which identity a production package may carry, not who may use
-it.
+An initialized package reaches a production database unchanged. Its Registry
+Manifest and catalogue projection can then carry default-derived identifiers
+that resolve nowhere and that another registry with the same project id also
+derives, and a relying party may store them before anyone notices. Replacing
+the base afterwards changes those derived identifiers; explicit resource IRIs
+stay unchanged. No read or write authority changes: the check governs which
+identity a production package may carry, not who may use it.
 
 ### Enforcement and defaults
 
@@ -3840,16 +3841,19 @@ it.
   for one key only.
 - A predecessor load does not apply it. Successor planning reads the active
   package through `load_active_predecessor_package`, so a production database
-  whose active package carries a reserved identity can still move to a
-  successor that names a hostname the adopter controls.
+  whose active package carries a reserved identity remains inspectable while
+  an operator prepares a successor that names a hostname the adopter controls.
+  The focused tests below prove predecessor readability and separate valid
+  candidate admission; they do not execute a complete successor plan and apply
+  journey.
 
 ### Tests
 
 `a_local_placeholder_package_cannot_load_for_a_production_database` in
 `crates/registry-breg/tests/postgres_package.rs` loads one package carrying a
 reserved identity for a `local` database, refuses it for a `production` one
-with `PackageError::DeploymentIdentity`, reads it as a production predecessor,
-and loads the same package with a deployable identity for production.
+with `PackageError::DeploymentIdentity`, and reads it as a production
+predecessor. The test separately builds and loads a valid production candidate.
 `dev_packages_the_placeholder_iri_in_process_and_retains_a_refusal` in
 `crates/registry-bregctl/src/dev/tests.rs` shows a deployment package refuses
 the reserved identity before reading the receipt while the local-development

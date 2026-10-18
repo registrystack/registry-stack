@@ -496,7 +496,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 35] {
+fn startup_errors() -> [StartupError; 36] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -505,6 +505,9 @@ fn startup_errors() -> [StartupError; 35] {
         StartupError::PackageRefused(PackageError::Integrity),
         StartupError::DatabaseConnection(
             registry_breg::postgres::DatabaseConnectionCause::Unreachable,
+        ),
+        StartupError::DatabaseConnection(
+            registry_breg::postgres::DatabaseConnectionCause::Capacity,
         ),
         StartupError::DatabaseConnection(registry_breg::postgres::DatabaseConnectionCause::Tls),
         StartupError::DatabaseConnection(
