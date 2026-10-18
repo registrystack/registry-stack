@@ -220,7 +220,7 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 
 | Code | Meaning | Recovery |
 | --- | --- | --- |
-| `startup.database.unreachable` | The database could not be reached. | Check its address, the network path, and that the server is up. |
+| `startup.database.unreachable` | The database could not be reached, or it refused a new connection. | Check its address, the network path, and that the server is up with connections to spare under `max_connections`. |
 | `startup.database.tls-refused` | The TLS connection was refused. | Check the server certificate and name; for a private authority, set `database.trustedRootCertificateRef`. |
 | `startup.database.authentication-refused` | PostgreSQL refused the runtime role or its credential. | Check the role and the secret `database.runtimeUrlRef` names. |
 | `startup.database.missing` | The named database does not exist. | Create it, or correct the database name in the URL. |
