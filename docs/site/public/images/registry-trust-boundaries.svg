@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry Stack trust boundaries</title>
-  <desc>One request path runs downward from the deployment's configured OAuth issuer to the caller, to Evidence Gateway, and to Evidence Gateway's configured authoritative source, which it reaches over a fixed HTTP request or a read-only SQLite extract. Registry Relay has a separate protected-read path to its own registry sources. The dashed rule above Evidence Gateway marks the authenticated service edge; the dashed rule below it marks the source edge, which is authenticated only when the source is HTTP, since a statement source has no origin, no credential, and no network hop. Caller to Evidence Gateway carries a bearer token, a declared purpose, a named requirement revision, and selector values, and returns the answer rather than the record. Evidence Gateway source access is one fixed source request per acquisition stage, fixed by trusted configuration and executed only by the core: an HTTP source fixes origin, method, path, headers, authentication, TLS, projection, and redirect and proxy denial, and a statement source fixes one reviewed SQL statement over a local read-only extract with no origin, no credential, and no network hop. Lookup collapses to match, no match, or ambiguous, and raw responses are never logged. Evidence Gateway verifies tokens against its configured issuer and public key set. A separate lane runs operator to signing key material to Evidence Gateway to the published key set to the verifier, which pins that key set out of band. The footnote lists the unauthenticated operational and discovery routes at the Evidence Gateway edge.</desc>
+  <desc>One request path runs downward from the deployment's configured OAuth issuer to the caller, to Registry Evidence, and to Registry Evidence's configured authoritative source, which it reaches over a fixed HTTP request or a read-only SQLite extract. Registry Relay has a separate protected-read path to its own registry sources. The dashed rule above Registry Evidence marks the authenticated service edge; the dashed rule below it marks the source edge, which is authenticated only when the source is HTTP, since a statement source has no origin, no credential, and no network hop. Caller to Registry Evidence carries a bearer token, a declared purpose, a named requirement revision, and selector values, and returns the answer rather than the record. Registry Evidence source access is one fixed source request per acquisition stage, fixed by trusted configuration and executed only by the core: an HTTP source fixes origin, method, path, headers, authentication, TLS, projection, and redirect and proxy denial, and a statement source fixes one reviewed SQL statement over a local read-only extract with no origin, no credential, and no network hop. Lookup collapses to match, no match, or ambiguous, and raw responses are never logged. Registry Evidence verifies tokens against its configured issuer and public key set. A separate lane runs operator to signing key material to Registry Evidence to the published key set to the verifier, which pins that key set out of band. The footnote lists the unauthenticated operational and discovery routes at the Registry Evidence edge.</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">TRUST BOUNDARIES</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -18,7 +18,7 @@
   <g fill="#161616" font-size="12.5" font-weight="700">
     <text x="28" y="71">OAuth issuer</text>
     <text x="28" y="145">Caller</text>
-    <text x="28" y="252">Evidence Gateway</text>
+    <text x="28" y="252">Registry Evidence</text>
     <text x="28" y="370">Authoritative source</text>
     <text x="28" y="459">Registry Relay</text>
   </g>
@@ -67,8 +67,8 @@
   </g>
 
   <g fill="#000091" font-size="10" font-weight="700" letter-spacing="0.04em">
-    <text x="270" y="66">OAUTH ISSUER TO EVIDENCE GATEWAY</text>
-    <text x="270" y="128">CALLER TO EVIDENCE GATEWAY</text>
+    <text x="270" y="66">OAUTH ISSUER TO REGISTRY EVIDENCE</text>
+    <text x="270" y="128">CALLER TO REGISTRY EVIDENCE</text>
     <text x="270" y="209">THE SERVICE EDGE (AUTHENTICATION)</text>
     <text x="270" y="277">EVIDENCE TO ITS FIXED SOURCES</text>
     <text x="270" y="358">PRODUCT BOUNDARIES STAY SEPARATE</text>
@@ -76,7 +76,7 @@
   </g>
 
   <g fill="#3a3a3a" font-size="11">
-    <text x="270" y="80">The configured issuer supplies the token; Evidence Gateway verifies it as</text>
+    <text x="270" y="80">The configured issuer supplies the token; Registry Evidence verifies it as</text>
     <text x="270" y="93">an ordinary resource server, knowing it as an issuer URL and a key</text>
     <text x="270" y="106">set under the immutable authentication profile.</text>
 
@@ -86,7 +86,7 @@
     <text x="270" y="181">binds the whole tuple, and possession is never authority.</text>
 
     <text x="270" y="223">Every record- or assertion-bearing route is authenticated before</text>
-    <text x="270" y="236">responding. Evidence Gateway runs one OIDC bearer profile, one trusted</text>
+    <text x="270" y="236">responding. Registry Evidence runs one OIDC bearer profile, one trusted</text>
     <text x="270" y="249">issuer, one principal claim, and no trust in proxy identity headers.</text>
 
     <text x="270" y="291">Trusted configuration fixes each source and only the core executes it. An HTTP</text>
@@ -95,10 +95,10 @@
     <text x="270" y="330">over a local read-only extract: no origin, no credential, no network hop. Lookup</text>
     <text x="270" y="343">collapses to match, no match, or ambiguous; raw responses are never logged.</text>
 
-    <text x="270" y="372">Evidence Gateway and Relay use independently configured sources.</text>
+    <text x="270" y="372">Registry Evidence and Relay use independently configured sources.</text>
     <text x="270" y="385">Neither product calls or authorizes the other. Each keeps its own</text>
     <text x="270" y="398">authorization decisions, audit trail, and readiness checks; only</text>
-    <text x="270" y="411">Evidence Gateway ever holds a source credential.</text>
+    <text x="270" y="411">Registry Evidence ever holds a source credential.</text>
 
     <text x="270" y="453">Relay owns its own source boundary: one local SQLite file opened</text>
     <text x="270" y="466">read-only, with no origin, no credential, and no outbound request.</text>
@@ -116,7 +116,7 @@
 
   <g fill="#161616" font-size="12" font-weight="700">
     <text x="28" y="549">Operator</text>
-    <text x="170" y="549" font-size="10.5">Evidence Gateway</text>
+    <text x="170" y="549" font-size="10.5">Registry Evidence</text>
     <text x="356" y="549">Verifier</text>
   </g>
 
@@ -144,7 +144,7 @@
 
   <g fill="#6a6a6a" font-size="9.5"
      font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
-    <text x="16" y="609">Unauthenticated at the Evidence Gateway edge: /health, /ready, /openapi.json, /.well-known/evidence/jwks.json,</text>
+    <text x="16" y="609">Unauthenticated at the Registry Evidence edge: /health, /ready, /openapi.json, /.well-known/evidence/jwks.json,</text>
     <text x="16" y="622">/.well-known/jwt-vc-issuer. None reveals which evidence definitions are enabled or which requesters may invoke them.</text>
   </g>
 </svg>

@@ -17,7 +17,7 @@ tutorial_test:
 ---
 
 Use a SQLite extract when an authority can publish an immutable snapshot but cannot offer a
-bounded live API. Evidence Gateway runs one reviewed statement against the file an operator binds.
+bounded live API. Registry Evidence runs one reviewed statement against the file an operator binds.
 Evidence does not connect to the authority's database, hold an export credential, or create the
 extract.
 
@@ -136,7 +136,7 @@ extracts:
 The target owns the host path. Packaging compiles this binding to `sourceExtracts` in the emitted
 `runtime.yaml`; neither the project nor its governed bundle contains a filesystem location.
 
-Create the production or evidence-grade target by following [Build and deploy an Evidence Gateway
+Create the production or evidence-grade target by following [Build and deploy a Registry Evidence
 project](../build-and-deploy-evidence-project/). Then check the edited model and build a new candidate
 outside the authoring project:
 
@@ -180,6 +180,6 @@ or unavailable dependency refuses the deployment.
 
 ## Next
 
-- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
-- [Prove an Evidence Gateway project](../prove-an-evidence-project/)
-- [Evidence Gateway configuration reference](../../reference/evidence-configuration/)
+- [Build and deploy a Registry Evidence project](../build-and-deploy-evidence-project/)
+- [Prove a Registry Evidence project](../prove-an-evidence-project/)
+- [Registry Evidence configuration reference](../../reference/evidence-configuration/)

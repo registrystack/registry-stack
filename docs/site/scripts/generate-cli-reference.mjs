@@ -66,7 +66,7 @@ const groups = [
   { title: 'Registry Casework', binaries: ['casework', 'caseworkctl'] },
   { title: 'Registry Scheduling', binaries: ['scheduling', 'schedulingctl'] },
   { title: 'Registry Messaging', binaries: ['messaging', 'messagingctl'], product: 'registry-messaging' },
-  { title: 'Evidence Gateway', binaries: ['evidence', 'evidencectl'] },
+  { title: 'Registry Evidence', binaries: ['evidence', 'evidencectl'] },
   { title: 'Evidence credential delivery', binaries: ['evidence-oid4vci'] },
   { title: 'Registry Render', binaries: ['registry-render'] },
 ];

@@ -2,7 +2,7 @@
 title: Request a birth certificate SD-JWT VC from OpenCRVS
 description: >-
   Map a synthetic OpenCRVS birth into a governed structured value, request it as SD-JWT VC, and
-  verify the credential across the Evidence Gateway HTTP boundary.
+  verify the credential across the Registry Evidence HTTP boundary.
 status: draft
 draft: true
 owner: registry-docs
@@ -34,7 +34,7 @@ Credential (SD-JWT VC). The credential exposes `givenName`, `familyName`, `dateO
   prerequisites={[
     'The completed OpenCRVS registered-parent tutorial project',
     'A Record Search client for the public OpenCRVS demo',
-    'The Evidence Gateway toolset',
+    'The Registry Evidence toolset',
     'curl, python3, awk, and an editor',
   ]}
 />
@@ -48,7 +48,7 @@ accounts, and integrations.
 The example is informed by the European Union Once-Only Technical System
 [birth-evidence sample](https://code.europa.eu/oots/tdd/tdd_chapters/-/raw/master/OOTS-EDM/xml/Request-Response%20Samples/4.5.4%20-%20OOTS-EDM%20XML%20Examples%20of%20the%20Evidence%20Exchange/2%20Example%20for%20requesting%20a%20Birth%20Certificate%20-%20natural%20person/Evidence%20Samples/BirthEvidence.xml?ref_type=heads),
 but this tutorial does not implement that exchange protocol.
-Evidence Gateway produces a governed extract from a registered birth:
+Registry Evidence produces a governed extract from a registered birth:
 
 ```json
 {
@@ -64,7 +64,7 @@ Evidence Gateway produces a governed extract from a registered birth:
 ```
 
 The deployment's law and governance determine whether that extract is accepted as a birth
-certificate. Evidence Gateway proves which provider signed the configured assertion. It does not grant
+certificate. Registry Evidence proves which provider signed the configured assertion. It does not grant
 legal status to the document.
 
 Each direct child of `birthCertificate` has its own SD-JWT disclosure. `placeOfBirth` is one atomic
@@ -370,7 +370,7 @@ disclosure:
   allow: [birth_certificate]
 ```
 
-`birthCertificate` is a configured JSON claim name. Evidence Gateway has no built-in birth-certificate
+`birthCertificate` is a configured JSON claim name. Registry Evidence has no built-in birth-certificate
 type. The same mechanism can project any reviewed structured value under another non-reserved
 claim name. `responseFormats` explicitly permits the local bundle and this question's local grant
 to return that projection as SD-JWT VC while retaining signed JWS.
@@ -398,7 +398,7 @@ fn answer(facts, selectors, context) {
 }
 ```
 
-Evidence Gateway validates the complete value against the schema before mapping any field to an SD-JWT
+Registry Evidence validates the complete value against the schema before mapping any field to an SD-JWT
 disclosure. A derivation cannot add undeclared certificate fields.
 
 ## Start and prepare the SD-JWT request
@@ -426,7 +426,7 @@ OpenCRVS.
 
 ## Request the credential over HTTP
 
-Send the retained request across the real Evidence Gateway boundary:
+Send the retained request across the real Registry Evidence boundary:
 
 ```sh
 curl -fsS \
@@ -439,7 +439,7 @@ curl -fsS \
   --output opencrvs-birth-certificate.sd-jwt
 ```
 
-Evidence Gateway authenticates the caller, authorizes the exact question and purpose, obtains an OpenCRVS
+Registry Evidence authenticates the caller, authorizes the exact question and purpose, obtains an OpenCRVS
 token, performs the fixed birth search, validates and derives the value, signs the SD-JWT VC, and
 durably records the disclosure release before returning the bytes.
 
@@ -457,7 +457,7 @@ evidencectl verify opencrvs-birth-certificate.sd-jwt \
 VERIFIED
 ```
 
-Inspect the verified Evidence Gateway payload:
+Inspect the verified Registry Evidence payload:
 
 ```sh
 python3 -m json.tool opencrvs-birth-certificate.verified.json
@@ -502,7 +502,7 @@ disclosures: 4
 An SD-JWT VC serializes as the issuer JWT, one segment per disclosure, and a trailing tilde, which
 is why the count is the number of tilde-separated fields minus two.
 
-Evidence Gateway's V1 verifier checks the complete stored SD-JWT VC response. Wallet presentation, omission of
+Registry Evidence's V1 verifier checks the complete stored SD-JWT VC response. Wallet presentation, omission of
 selected disclosures, and key-binding JWT validation remain outside this profile.
 
 ## Inspect the audit and clean up
@@ -549,14 +549,14 @@ you no longer need the project.
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
 | The request returns no assertion for a subject that worked earlier | The demo was reset and the synthetic registration no longer exists under that national ID, so the fixed search matched nothing. | Sign in to the demo as the prerequisite tutorial describes and confirm the record is still there. Leave the extractor's `no_match` path alone; a missing registration is an answer. |
-| Evidence Gateway reports an ambiguous source result | More than one registered birth now carries that national ID in the demo data. | Keep `resultLimit: 2` and the `ambiguous` outcome. An ambiguous civil-registration match is a fact about the record set. |
+| Registry Evidence reports an ambiguous source result | More than one registered birth now carries that national ID in the demo data. | Keep `resultLimit: 2` and the `ambiguous` outcome. An ambiguous civil-registration match is a fact about the record set. |
 | The OpenCRVS token request fails with 401 | The Record Search client was deleted, its secret was rotated, or the demo reset its integrations. | Create a new Record Search client and rewrite `secrets/opencrvs-client-id` and `secrets/opencrvs-client-secret`. Keep both values out of shell history and tracked files. |
 | Requests start failing after several runs | OpenCRVS audits its searches and applies a daily request limit on the integration demo. | Wait for the limit to reset before running the tutorial again. Do not add retries around the source. |
-| Evidence Gateway reports a source dependency failure | The demo host was unreachable or slow, or the response exceeded `attemptTimeoutMilliseconds` or `maximumResponseBytes`. | Retry later. Treat the bounds as reviewed source policy, and raise one only after deciding it is right for the deployment. |
+| Registry Evidence reports a source dependency failure | The demo host was unreachable or slow, or the response exceeded `attemptTimeoutMilliseconds` or `maximumResponseBytes`. | Retry later. Treat the bounds as reviewed source policy, and raise one only after deciding it is right for the deployment. |
 | The token request or the search fails with a certificate error | An intercepting proxy or an out-of-date trust store on your machine. | Repair the trust store, or exempt the demo hosts from interception. Do not reach for `--insecure`: the source denies redirects and reaches OpenCRVS over HTTPS only. |
 
 ## Next
 
-- [Request another Evidence Gateway assertion as SD-JWT VC](../request-evidence-as-sd-jwt-vc/)
-- [Prove an Evidence Gateway project](../prove-an-evidence-project/)
+- [Request another Registry Evidence assertion as SD-JWT VC](../request-evidence-as-sd-jwt-vc/)
+- [Prove a Registry Evidence project](../prove-an-evidence-project/)
 - [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/)

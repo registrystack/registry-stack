@@ -110,7 +110,7 @@ test('removes authored Notary pages but publishes the retirement decision', () =
   assert.doesNotMatch(retirement, /^draft: true$/m);
 });
 
-test('redirects every removed current Notary route to Evidence Gateway or the retirement decision', () => {
+test('redirects every removed current Notary route to Registry Evidence or the retirement decision', () => {
   const allowedTarget = /^(?:\/decisions\/notary-retirement-2026-08-03\/|\/(?:start\/evidence-quickstart|configure\/evidence|reference\/apis\/(?:evidence|registry-evidence)|tutorials\/move-evidence-to-production-signing)\/)$/;
 
   for (const route of [...authoredNotaryRoutes, ...mirroredNotaryRoutes]) {
@@ -131,7 +131,7 @@ test('redirects every removed current Notary route to Evidence Gateway or the re
 });
 
 test('presents the maintained services in site descriptions without restoring Notary navigation', () => {
-  assert.match(configSource, /description: 'Documentation for Registry Stack: [^']*Evidence Gateway[^']*Base Registry Engine[^']*portable registry metadata/);
+  assert.match(configSource, /description: 'Documentation for Registry Stack: [^']*Registry Evidence[^']*Base Registry Engine[^']*portable registry metadata/);
   assert.doesNotMatch(configSource, /description: '[^']*Registry Notary/);
   assert.doesNotMatch(configSource, /label: 'Notary \(narrative\)'/);
   assert.doesNotMatch(configSource, /label: 'Registry Notary'/);

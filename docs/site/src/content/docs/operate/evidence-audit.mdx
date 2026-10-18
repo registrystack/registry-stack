@@ -1,6 +1,6 @@
 ---
-title: Read and ship the Evidence Gateway audit log
-description: Configure where Evidence Gateway writes its audit entries, ship them to append-only storage, understand what each phase establishes, and keep the subject-correlation boundary explicit.
+title: Read and ship the Registry Evidence audit log
+description: Configure where Registry Evidence writes its audit entries, ship them to append-only storage, understand what each phase establishes, and keep the subject-correlation boundary explicit.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,7 +13,7 @@ locale: en
 standards_referenced: []
 ---
 
-Evidence Gateway writes one audit entry before every source read and one with every outcome, and
+Registry Evidence writes one audit entry before every source read and one with every outcome, and
 refuses the request when an entry cannot be written. The log is useful for showing which governed
 operation was admitted and what concept was released. It does not repeat source values,
 automatically provide a citizen-facing access history, or prove on its own host that nobody edited
@@ -57,7 +57,7 @@ For an admitted request, the record's own `phase` uses closed values:
 | `denial` with `not-authorized` | An authenticated authorization refusal was durably recorded before its generic `403` response. | The rejected requirement, purpose, subjects, unmatched authority, selector information, or response format. |
 | `denial` or `transient-failure` after authorization | An admitted operation later failed in one closed, value-free class. | The protected selector, source value, or credential that triggered it. |
 
-Authentication, malformed-request, and invalid-selector failures happen before Evidence Gateway has
+Authentication, malformed-request, and invalid-selector failures happen before Registry Evidence has
 enough privacy-safe context and do not fabricate an audit entry. Do not expect every HTTP request
 to produce two entries.
 
@@ -114,14 +114,14 @@ The first record is logged at `error` and the second at `warn`, both under the
 `registry_platform_audit` target, so an `EVIDENCE_LOG` filter that leaves out that target or those
 levels hides them.
 Keep standard error read as well.
-Evidence Gateway writes both records to standard error from the request, readiness check, or
+Registry Evidence writes both records to standard error from the request, readiness check, or
 writer that noticed the change, and that write waits when standard error is full.
 A collector that stops reading both streams can therefore leave a request or a readiness check
 waiting rather than refused, until standard error is read again, so give callers and probes their
 own deadlines.
 The stream still receives the entry the collector was holding, so it can carry an entry for a
 request that was refused.
-Restore the collector rather than restarting Evidence Gateway: a process that exits during a stall
+Restore the collector rather than restarting Registry Evidence: a process that exits during a stall
 can lose the entries queued behind the held one.
 A write the stream refuses is a different fault and stops the writer until the process restarts.
 
@@ -137,7 +137,7 @@ A write the stream refuses is a different fault and stops the writer until the p
 
 ## Ship audit to append-only storage
 
-Ship sealed files, or the `stdout` stream, to storage the Evidence Gateway host cannot rewrite:
+Ship sealed files, or the `stdout` stream, to storage the Registry Evidence host cannot rewrite:
 object storage with an object lock, a write-once archive, or a log pipeline whose retention the
 Evidence operator account cannot change. Ship each sealed file before `retentionDays` deletes it.
 The writer records the next sequence in `<path>.seq` at every start and before every rotation, so
@@ -189,7 +189,7 @@ release line: `DISCLOSURE DENIED reason=no-match` (or `ambiguous`, `unresolved`,
 for a denial the evaluation decided, and `TRANSIENT FAILURE reason=dependency-failure` (or
 `evaluation-failure`, `signing-failure`) for a failure a retry may clear.
 
-The command takes the writer's lock, so it refuses while Evidence Gateway still runs. It reads the
+The command takes the writer's lock, so it refuses while Registry Evidence still runs. It reads the
 retained local audit files in order, checks that every entry is well formed and that each
 operation's access attempts, one per source call, share one context and pair with a coherent
 terminal record, then renders the operation of the physically last entry. A multi-stage acquisition,
@@ -243,13 +243,13 @@ governed operator process.
 
 ## Protect the log
 
-- Allow one Evidence Gateway writer per audit path.
+- Allow one Registry Evidence writer per audit path.
 - Put the path on durable storage and monitor capacity before a fail-closed write stops release.
 - Ship sealed files, or the `stdout` stream, to append-only storage before retention deletes them.
 - Retain each audit hash key for as long as pseudonyms from its version must stay recomputable.
 - Restrict event access separately from ordinary service operations.
 - Record retention, deletion, recovery, and requester-identity mapping responsibilities outside the
-  Evidence Gateway bundle.
+  Registry Evidence bundle.
 
 ## Rotate the audit master
 

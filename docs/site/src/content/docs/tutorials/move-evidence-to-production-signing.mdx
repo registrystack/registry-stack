@@ -1,5 +1,5 @@
 ---
-title: Configure Transit signing for Evidence Gateway
+title: Configure Transit signing for Registry Evidence
 description: Configure non-exportable P-256 signing through a workload-local Vault or OpenBao Transit proxy without giving provider credentials to the service.
 status: current
 owner: registry-docs
@@ -16,7 +16,7 @@ tutorial_test:
   skip: drift-checked by evidence-production-build-docs.test.mjs; needs a Transit signer
 ---
 
-Use this procedure to move Evidence Gateway from disposable local signing to a strict deployment.
+Use this procedure to move Registry Evidence from disposable local signing to a strict deployment.
 The service signs through its own workload-local Unix-socket proxy. The service
 process receives no Vault or OpenBao token, and the provider retains the private key.
 
@@ -29,10 +29,10 @@ You need:
 - An auto-auth method appropriate for the deployment platform.
 - A reviewed deployment target based on the ready-to-copy templates under
   `products/evidence/reference/deployment-targets/`.
-- `evidencectl` from the same release as the Evidence Gateway runtime, and
+- `evidencectl` from the same release as the Registry Evidence runtime, and
   [`jq`](https://jqlang.org/), to convert each service's public key from PEM to JWK.
   [Publish the exact public projections](#publish-the-exact-public-projections) gives the exact
-  command for Evidence Gateway.
+  command for Registry Evidence.
 
 The commands use a Transit mount named `transit`. Change the mount consistently when your provider
 uses another name.
@@ -40,7 +40,7 @@ uses another name.
 ## Create one key per service
 
 Run the provider administration commands through an authenticated operator session, not from the
-Evidence Gateway container.
+Registry Evidence container.
 
 Settle three things before you create the key. Decide which provider instance and mount hold this
 signing identity for as long as the key is in service. Confirm that the provider's own backup and
@@ -52,7 +52,7 @@ identity authorized to rotate it, in the deployment record rather than in applic
 A key created with `exportable=false` and `allow_plaintext_backup=false` never releases its private
 material, and the pair is one-way in the permissive direction only: a provider administrator can set
 either field to `true` on this key later, and Vault and OpenBao then refuse to set it back to
-`false`. Evidence Gateway accepts a Transit key only while both fields read `false`, so exporting the key
+`false`. Registry Evidence accepts a Transit key only while both fields read `false`, so exporting the key
 retires that key name permanently, for every version under it.
 There is no supported way to move this private key to another key manager or to sign with it outside
 the provider. The recovery path is a new key and
@@ -119,7 +119,7 @@ environments/<environment>/
   evidence/public-keys/<evidence-thumbprint>.jwk.json
 ```
 
-Keep Evidence Gateway signing, audit, subject-binding, and client keys distinct. Run the target's `check-public-key-separation.sh` before review when you
+Keep Registry Evidence signing, audit, subject-binding, and client keys distinct. Run the target's `check-public-key-separation.sh` before review when you
 start from the maintained deployment-target templates.
 
 ## Configure the governed key and runtime signer
@@ -172,7 +172,7 @@ temporarily allow the old and new numeric versions, for example `"key_version" =
 remove the retired version after the overlap window. The provider's `min_encryption_version`
 provides a second retirement control.
 
-The Evidence Gateway proxy's core boundary is:
+The Registry Evidence proxy's core boundary is:
 
 ```hcl
 vault {
@@ -222,7 +222,7 @@ defines the retry and request-header controls. OpenBao deployments use the corre
 
 ## Verify before routing traffic
 
-Start the proxy before checking Evidence Gateway. Run the checks from the final execution context so
+Start the proxy before checking Registry Evidence. Run the checks from the final execution context so
 the commands see the same socket, public keys, paths, ownership, and secret roots as the service:
 
 ```sh
@@ -250,5 +250,5 @@ unavailable. Readiness recovers after a successful provider self-test.
 
 ## Next
 
-- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
-- [Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/)
+- [Build and deploy a Registry Evidence project](../build-and-deploy-evidence-project/)
+- [Rotate Registry Evidence signing keys](../rotate-evidence-signing-keys/)

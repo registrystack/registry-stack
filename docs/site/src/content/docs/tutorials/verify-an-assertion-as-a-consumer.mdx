@@ -1,5 +1,5 @@
 ---
-title: Verify Evidence Gateway as a consumer
+title: Verify Registry Evidence as a consumer
 description: Separate a stored response from independently retained trust and request expectations, then re-verify the decision offline.
 status: current
 owner: registry-docs
@@ -18,17 +18,17 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Complete [Get your first Evidence Gateway assertion](../first-evidence-assertion/) before starting
+Complete [Get your first Registry Evidence assertion](../first-evidence-assertion/) before starting
 this tutorial. You will preserve its response, the trust decisions fixed before that response
 existed, and the recorded start of its successful verification, then replay the decision without a
 service.
 
 <QuickstartMeta
-  outcome="An Evidence Gateway response accepted and later re-verified at the recorded decision time."
+  outcome="A Registry Evidence response accepted and later re-verified at the recorded decision time."
   time="About 10 minutes"
   level="Local verification with synthetic data"
   prerequisites={[
-    'The completed first Evidence Gateway assertion tutorial',
+    'The completed first Registry Evidence assertion tutorial',
     'Its retained adult-status response, verified payload, and request artifacts',
     'Python 3 and the matching evidence binary',
   ]}
@@ -36,7 +36,7 @@ service.
 
 ## Preserve four independent inputs
 
-Enter the project left by the first tutorial. Evidence Gateway, its issuer, and the source can all
+Enter the project left by the first tutorial. Registry Evidence, its issuer, and the source can all
 remain stopped.
 
 ```sh test-cwd="first-evidence-assertion"
@@ -185,7 +185,7 @@ the assertion does not disclose that local identifier.
 ## If a retained input is missing
 
 Missing input is a failed verification record, not a reason to fetch replacement trust. Rerun the
-request and verification steps in [Get your first Evidence Gateway assertion](../first-evidence-assertion/)
+request and verification steps in [Get your first Registry Evidence assertion](../first-evidence-assertion/)
 when `adult-status.jws.json`, `adult-status.verified.json`,
 `.evidence/requests/adult-status/verification.json`, or
 `.evidence/requests/adult-status/verified-at.txt` is absent. A production retention policy must
@@ -196,4 +196,4 @@ request.
 
 - [Manage verifier trust and key rotation](../manage-evidence-verifier-trust/)
 - [Request SD-JWT VC serialization](../request-evidence-as-sd-jwt-vc/)
-- [Review the Evidence Gateway API](../../reference/apis/registry-evidence/)
+- [Review the Registry Evidence API](../../reference/apis/registry-evidence/)

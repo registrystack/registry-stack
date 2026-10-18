@@ -31,7 +31,7 @@ Registry Stack does not promise backports to an earlier minor.
 The rest of the lifecycle policy is designed to make rolling forward cheap:
 
 - Within a major line, a minor release removes a covered surface only after deprecating it in an
-  earlier minor, per the [compatibility promise](../../reference/api-stability/). Evidence Gateway
+  earlier minor, per the [compatibility promise](../../reference/api-stability/). Registry Evidence
   and Registry Manifest have no migrated state, so moving to the fixed release needs no migration
   step for them. Base
   Registry Engine, Casework, Scheduling, and Messaging each own migrated PostgreSQL state;

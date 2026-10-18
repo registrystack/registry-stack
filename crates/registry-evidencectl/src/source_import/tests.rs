@@ -1584,6 +1584,14 @@ fn import_refuses_a_bare_hex_digest_and_an_unknown_member() {
         export_refusal(&fixture, "unknown-member", &hook),
         [("config.unknown-key".to_owned(), "/install".to_owned())]
     );
+
+    // The manifest carries no dependency inventory, so one is refused too.
+    let mut inventory = current_manifest();
+    inventory["dependencies"] = json!({"fields": {}, "relatedEntities": {}});
+    assert_eq!(
+        export_refusal(&fixture, "dependency-inventory", &inventory),
+        [("config.unknown-key".to_owned(), "/dependencies".to_owned())]
+    );
 }
 
 /// The format's registered example, the manifest `bregctl generate

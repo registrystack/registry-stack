@@ -115,10 +115,10 @@ What these levels mean for integrators:
   rather than an access grant. No maintained runtime enforces an ODRL constraint. The governed
   evaluation path belonged to Relay V1. Its `registry-platform-pdp` crate was
   removed; Registry Manifest retains the descriptive vocabulary it validates.
-- The CCCEV row's `emits` claim applies to Registry Manifest. Evidence Gateway separately
+- The CCCEV row's `emits` claim applies to Registry Manifest. Registry Evidence separately
   [`maps_to` CCCEV fields](https://github.com/registrystack/registry-stack/blob/v0.21.0/products/evidence/contracts/cccev-field-mapping.yaml)
   under its frozen assertion profile and does not emit a CCCEV document.
-- Evidence Gateway emits an IETF SD-JWT VC under its frozen draft-18 profile, and the separate
+- Registry Evidence emits an IETF SD-JWT VC under its frozen draft-18 profile, and the separate
   OID4VCI supporting service transports it. This is not a W3C Verifiable Credentials Data Model 2.0
   envelope. No maintained component emits a W3C VCDM 2.0 document.
 - PROV-O is listed as `inspired_by` (`referenced`).

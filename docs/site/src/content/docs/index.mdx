@@ -14,10 +14,10 @@ standards_referenced: []
 Registry Stack provides focused components for institutions that manage authoritative data and the
 services around it.
 
-## Answer a bounded question with Evidence Gateway
+## Answer a bounded question with Registry Evidence
 
-Use Evidence Gateway when a caller needs a signed, minimum-disclosure answer rather than a record.
-Start with the [Evidence Gateway overview](start/evidence-quickstart/) and
+Use Registry Evidence when a caller needs a signed, minimum-disclosure answer rather than a record.
+Start with the [Registry Evidence overview](start/evidence-quickstart/) and
 [your first assertion](tutorials/first-evidence-assertion/).
 
 ## Build a writable registry with Base Registry Engine
@@ -67,7 +67,7 @@ alternatives.
 
 ## Keep the product boundaries clear
 
-BReg owns its PostgreSQL records and API. Evidence Gateway owns bounded question answering, signing,
+BReg owns its PostgreSQL records and API. Registry Evidence owns bounded question answering, signing,
 and minimum disclosure against its configured sources. Manifest publishes static metadata. These
 components do not configure or deploy one another.
 
@@ -76,7 +76,7 @@ approval. The responsible institutions still make those decisions.
 
 ## Who does what
 
-- The assertion provider is the institution that answers requests with signed facts through Evidence Gateway.
+- The assertion provider is the institution that answers requests with signed facts through Registry Evidence.
 - The data publisher is the institution that maintains records through BReg or publishes static metadata through Manifest.
 - The consumer or verifier is the relying service that calls a product API and verifies the answers it receives.
 - The operator is whoever runs the deployment.

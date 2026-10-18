@@ -98,12 +98,12 @@ test('a manifest label overrides the derived product group label', () => {
   const [group] = buildProductSidebar({
     repos: {
       'registry-evidence': {
-        label: 'Evidence Gateway',
-        docs: [doc('products/registry-evidence/index', 'explanation', 0, 'Evidence Gateway')],
+        label: 'Registry Evidence',
+        docs: [doc('products/registry-evidence/index', 'explanation', 0, 'Registry Evidence')],
       },
     },
   });
-  assert.equal(group.label, 'Evidence Gateway');
+  assert.equal(group.label, 'Registry Evidence');
 });
 
 test('equal nav orders use host-independent English collation', () => {
@@ -168,7 +168,7 @@ test('product group labels drop the shared "Registry" prefix', () => {
     `no group label should start with "Registry": ${labels.join(', ')}`,
   );
   assert.ok(
-    labels.includes('Manifest') && labels.includes('Evidence Gateway') && !labels.includes('Notary'),
+    labels.includes('Manifest') && labels.includes('Evidence') && !labels.includes('Notary'),
     labels.join(', '),
   );
 });

@@ -1,6 +1,6 @@
 ---
-title: Configure Evidence Gateway
-description: Validate an Evidence Gateway project, its target bindings and complete grants, then create a deployment candidate.
+title: Configure Registry Evidence
+description: Validate a Registry Evidence project, its target bindings and complete grants, then create a deployment candidate.
 status: current
 owner: registry-docs
 source_repos:
@@ -12,7 +12,7 @@ standards_referenced: []
 ---
 import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
 
-If you are preparing an Evidence Gateway deployment, validate the authored project, its environment
+If you are preparing a Registry Evidence deployment, validate the authored project, its environment
 bindings and complete grants together before you create a candidate.
 Use matching `evidence` and `evidencectl` binaries and start from the project you completed in
 [your first assertion](../../tutorials/first-evidence-assertion/).
@@ -96,7 +96,7 @@ One captured project snapshot supplies all candidate artifacts, and the runtime 
 authority even when no fixtures exist.
 Install the bundle at the emitted runtime's package path, provision its referenced secrets, activate
 the compiled authority and run `evidencectl doctor --runtime-config <absolute-file>` before serving.
-The [Evidence Gateway product page](../../products/registry-evidence/) links to the runnable standalone
+The [Registry Evidence product page](../../products/registry-evidence/) links to the runnable standalone
 project with synthetic data and cleanup.
 
 Authority activation has its own revision, digest and durable history.

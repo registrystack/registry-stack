@@ -564,12 +564,17 @@ def run(
         timeout=COMMAND_TIMEOUT_SECONDS,
     )
     if check and result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip().splitlines()[-15:]
-        raise RehearsalError(
-            f"{Path(command[0]).name} {' '.join(command[1:3])} exited "
-            f"{result.returncode}:\n" + "\n".join(detail)
-        )
+        raise command_failure(command, result)
     return result
+
+
+def command_failure(command: list[str],
+                    result: subprocess.CompletedProcess[str]) -> RehearsalError:
+    detail = (result.stderr or result.stdout).strip().splitlines()[-15:]
+    return RehearsalError(
+        f"{Path(command[0]).name} {' '.join(command[1:3])} exited "
+        f"{result.returncode}:\n" + "\n".join(detail)
+    )
 
 
 def run_json(command: list[str], **kwargs: Any) -> Any:
@@ -1243,6 +1248,22 @@ def evidence_arguments(runtime: Path, subcommand: str) -> list[str]:
     return [subcommand, "--runtime-config", str(runtime)]
 
 
+# `evidence authority activate` exits 1, prints nothing on stdout, and ends
+# stderr with this line, with no structured code, when the same package and
+# authority revision are already active (AuthorityError::AlreadyActive in
+# crates/registry-evidence). Only the last line is matched: a `stdout` audit
+# destination writes the activation's audit entries to stderr before it.
+EVIDENCE_AUTHORITY_ALREADY_ACTIVE = re.compile(
+    r"evidence: target authority revision sha256:[0-9a-f]{64} is already active "
+    r"for this package as sequence [0-9]+; nothing needs activating")
+
+
+def evidence_authority_already_active(result: subprocess.CompletedProcess[str]) -> bool:
+    lines = result.stderr.strip().splitlines()
+    return (result.returncode == 1 and not result.stdout.strip() and bool(lines)
+            and EVIDENCE_AUTHORITY_ALREADY_ACTIVE.fullmatch(lines[-1]) is not None)
+
+
 class Evidence:
     def __init__(self, work: Path, keys: Keys, tls: Path) -> None:
         self.work = private_directory(work)
@@ -1290,9 +1311,12 @@ class Evidence:
         target["extracts"] = {"record-status": {"path": str(extract)}}
         return target
 
-    def package(self, side: Side, candidate: Path) -> None:
-        """Package the target, install the package, and write the operative
-        runtime beside it."""
+    def package(self, side: Side, candidate: Path, *, repeat_is_active: bool = False) -> None:
+        """Package the target, install the package, write the operative
+        runtime beside it, and activate the package's authority. With
+        `repeat_is_active`, the one refusal of an exact repeat (the same
+        package and authority revision already active) means nothing needed
+        activating; every other activation failure still fails."""
 
         side.run("evidencectl", "package", "--target", str(self.target), "--output",
                  str(candidate), str(self.project))
@@ -1308,8 +1332,14 @@ class Evidence:
         dump_yaml(self.runtime, runtime)
         # Evidence refuses a deployment input it could rewrite.
         self.runtime.chmod(0o444)
-        side.run("evidence", "authority", "activate", "--runtime-config", str(self.runtime),
-                 "--document", str(self.installed / "compiled-authority.yaml"))
+        activate = ("authority", "activate", "--runtime-config", str(self.runtime),
+                    "--document", str(self.installed / "compiled-authority.yaml"))
+        if not repeat_is_active:
+            side.run("evidence", *activate)
+            return
+        result = side.run("evidence", *activate, check=False)
+        if result.returncode != 0 and not evidence_authority_already_active(result):
+            raise command_failure([side.path("evidence"), *activate], result)
 
     def author(self, side: Side) -> None:
         side.run("evidencectl", "init", "--transport", "sqlite-extract", "--profile", "local",
@@ -1333,9 +1363,11 @@ class Evidence:
         """Package the unchanged target with this side's evidencectl, install
         the package, and point the operative runtime at it, the documented
         upgrade step. The audit stream, secrets, and keys stay where they are.
+        Package digests cover content only, so the new release may produce the
+        package and authority already active, which needs no activation.
         """
 
-        self.package(side, self.work / "candidate-upgraded")
+        self.package(side, self.work / "candidate-upgraded", repeat_is_active=True)
 
     def extract(self) -> Path:
         """Publish the starter's synthetic extract as a fresh read-only SQLite file."""

@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry family map</title>
-  <desc>The formal Registry Stack products, arranged by structural role, followed by the external Solmara Lab adopter demo. Registry Platform provides shared primitives; Registry Manifest defines portable metadata contracts; Registry Relay and Evidence Gateway are independent runtime services, Relay serving protected read-only APIs over sensitive registry sources and Evidence Gateway answering one bounded question about one subject with a signed assertion. Solmara Lab provides synthetic registry data and demo configuration.</desc>
+  <desc>The formal Registry Stack products, arranged by structural role, followed by the external Solmara Lab adopter demo. Registry Platform provides shared primitives; Registry Manifest defines portable metadata contracts; Registry Relay and Registry Evidence are independent runtime services, Relay serving protected read-only APIs over sensitive registry sources and Registry Evidence answering one bounded question about one subject with a signed assertion. Solmara Lab provides synthetic registry data and demo configuration.</desc>
 
   <g stroke="#e5e5e5" stroke-width="1">
     <line x1="180" y1="16" x2="180" y2="232"/>
@@ -35,7 +35,7 @@
     <text x="16" y="100">Registry Platform</text>
     <text x="196" y="100">Registry Manifest</text>
     <text x="376" y="100">Registry Relay</text>
-    <text x="556" y="100">Evidence Gateway</text>
+    <text x="556" y="100">Registry Evidence</text>
   </g>
 
   <g fill="#6a6a6a" font-size="11.5"

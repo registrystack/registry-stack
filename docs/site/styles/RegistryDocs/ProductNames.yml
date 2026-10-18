@@ -9,7 +9,6 @@ swap:
   B-Reg: BReg
   Relay2: Relay V2
   RelayV2: Relay V2
-  EG: Evidence Gateway
-  'Evidence gateway': Evidence Gateway
+  EG: Registry Evidence
   'Registry discovery': Registry Discovery
   'Registry Server': Base Registry Engine

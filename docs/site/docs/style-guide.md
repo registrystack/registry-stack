@@ -33,7 +33,7 @@ The principles above pull against each other on real pages. These are the tie-br
 ## Voice and tone
 
 - Use second person (`you`) for actions the reader takes, and keep using it to the end. A procedure that addresses the reader in the prerequisites and then goes impersonal for nine steps has stopped talking to anyone.
-- Use the project name (`Evidence Gateway`, not `we`) for system behavior.
+- Use the project name (`Registry Evidence`, not `we`) for system behavior.
 - Use active voice. Exception: when the actor is unimportant or obvious from context.
 - Institutional, calm, technical. More operating manual than marketing copy, and an operating manual is written to the operator.
 - Do not manage the reader's emotions. No "don't worry", "easy", "no problem". Calm is not distance: that a step is destructive, that a mistake here cannot be undone, or that a command runs for ten minutes is information the reader needs, and withholding it is not restraint.
@@ -124,8 +124,8 @@ Preferred terms.
 | Domain                | Preferred                                            |
 | --------------------- | ---------------------------------------------------- |
 | Product family        | `registry stack` (lowercase) for the concept; `Registry Docs` for the site and repo |
-| Formal product names  | `Base Registry Engine`, `Evidence Gateway`, `Registry Discovery`, `Registry Manifest`, `Registry Platform`, and `Registry Render` (Title Case) |
-| Short forms           | Write the formal name on the page's first use, then the short form for the rest of that page: `BReg`, introduced as `Base Registry Engine (BReg)`; `Evidence` for Evidence Gateway; `Discovery` for Registry Discovery; `Render` for Registry Render. A page may keep the formal name throughout. |
+| Formal product names  | `Base Registry Engine`, `Registry Evidence`, `Registry Discovery`, `Registry Manifest`, `Registry Platform`, and `Registry Render` (Title Case) |
+| Short forms           | Write the formal name on the page's first use, then the short form for the rest of that page: `BReg`, introduced as `Base Registry Engine (BReg)`; `Evidence` for Registry Evidence; `Discovery` for Registry Discovery; `Render` for Registry Render. A page may keep the formal name throughout. |
 | Names that never appear | `BREG`, `Breg`, `bReg`, `B-Reg`, and `EG`. `Registry Server` was renamed to Base Registry Engine and survives only in an explicit rename note. Binaries stay lowercase and monospace, and none of them is the product name. |
 | Retired products      | `Registry Relay` and `Registry Notary` keep their Title Case names, but only where the same block says the product is retired |
 | External adopter demo | `Solmara Lab` (Title Case); not a formal Registry Stack product |
@@ -149,7 +149,7 @@ do not relabel an existing integration as a different domain.
 - Parallel structure for a list of like things: options, fields, products, sources. All items are noun phrases, or all are imperative verbs. Do not mix.
 - Steps in a procedure are not a list of like things. Write them as sentences and let them differ in shape. Forcing every step into one frame is how a page ends up repeating an opener nobody chose.
 - No period if every item is a fragment. Period on every item if any item is a complete sentence. The fragment preference does not apply to procedure steps.
-- Use the Oxford comma in prose: `Manifest, BReg, and Evidence Gateway`.
+- Use the Oxford comma in prose: `Manifest, BReg, and Registry Evidence`.
 - Do not use bold inside list items for keywords. Reserve bold for UI labels.
 
 ## Code, commands, paths

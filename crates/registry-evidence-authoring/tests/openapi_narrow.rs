@@ -269,51 +269,18 @@ fn a_string_with_the_date_format_is_kept_and_needs_no_bound() {
 }
 
 #[test]
-fn a_string_with_the_uuid_format_is_suggested_fixed_length_and_loses_the_format() {
+fn a_string_with_the_uuid_format_preserves_its_exact_format_without_a_length_decision() {
     let input = root(
-        json!({"trackingId": {"type": "string", "format": "uuid"}}),
+        json!({"trackingId": {"type":"string", "format":"uuid"}}),
         json!(["trackingId"]),
     );
-
     let plan = plan_advisories(&input, &["/trackingId"], &Observations::default());
-
-    assert_eq!(plan.needs.len(), 1);
-    assert_eq!(plan.needs[0].kind, BoundKind::StringLength);
-    assert_eq!(
-        plan.needs[0].suggestion.clone().expect("suggestion"),
-        SuggestedBound {
-            values: BoundValues::StringLength {
-                min_length: 36,
-                max_length: 36
-            },
-            provenance: Provenance::Format,
-        }
-    );
-    assert!(
-        plan.advisories
-            .iter()
-            .any(|advisory| advisory.pointer == "/trackingId"
-                && advisory.kind == AdvisoryKind::DroppedFormat("uuid".to_owned())),
-        "the dropped format is reported: {:?}",
-        plan.advisories
-    );
-
-    let outcome = apply(
-        &input,
-        &["/trackingId"],
-        &resolved(
-            "/trackingId",
-            BoundKind::StringLength,
-            BoundValues::StringLength {
-                min_length: 36,
-                max_length: 36,
-            },
-        ),
-    );
+    assert!(plan.needs.is_empty());
+    assert!(plan.advisories.is_empty());
+    let outcome = apply(&input, &["/trackingId"], &[]);
     assert_eq!(
         outcome.schema["properties"]["trackingId"],
-        json!({"type": "string", "minLength": 36, "maxLength": 36}),
-        "the closed subset admits only the date formats, so `uuid` is dropped"
+        json!({"type":"string", "format":"uuid"})
     );
 }
 

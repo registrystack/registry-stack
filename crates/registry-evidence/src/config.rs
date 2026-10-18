@@ -3498,6 +3498,7 @@ pub enum SelectorField {
         maximum_bytes: BoundedU64<1, 8_192>,
     },
     Date {},
+    Uuid {},
     Integer {
         minimum: i64,
         maximum: i64,
@@ -3544,6 +3545,11 @@ impl SelectorField {
                 }
             }
             Self::Date {} | Self::Boolean {} => {}
+            Self::Uuid {} => {
+                if aggregate_maximum < 36 {
+                    return invalid("selector UUID exceeds aggregate byte bound");
+                }
+            }
         }
         Ok(())
     }
@@ -5387,6 +5393,23 @@ const MAXIMUM_FETCH_SET_FACT_INPUTS: usize = 16;
 /// source request already carries.
 const MAXIMUM_ACQUISITION_MILLISECONDS: u64 = 30_000;
 
+/// What a `search-then-fetch` acquisition answers when the fetch finds no
+/// record for the one the search resolved: a dependency failure by default, or
+/// `unavailable` when the fetched record is optional.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FetchNoMatchPolicy {
+    #[default]
+    DependencyFailure,
+    Unavailable,
+}
+
+impl FetchNoMatchPolicy {
+    fn is_default(&self) -> bool {
+        *self == Self::DependencyFailure
+    }
+}
+
 /// The complete bounded evidence-data acquisition profile for one requirement.
 ///
 /// Each named source remains one immutable HTTP request. `search-then-fetch`
@@ -5403,6 +5426,12 @@ pub enum AcquisitionConfig {
     SearchThenFetch {
         search: String,
         fetch: String,
+        #[serde(
+            default,
+            rename = "onFetchNoMatch",
+            skip_serializing_if = "FetchNoMatchPolicy::is_default"
+        )]
+        on_fetch_no_match: FetchNoMatchPolicy,
     },
     SearchThenFetchSet {
         search: String,
@@ -5423,7 +5452,7 @@ impl AcquisitionConfig {
                     return invalid("requirement acquisition source identifier is invalid");
                 }
             }
-            Self::SearchThenFetch { search, fetch } => {
+            Self::SearchThenFetch { search, fetch, .. } => {
                 if !valid_local_id(search) || !valid_local_id(fetch) || search == fetch {
                     return invalid("search-then-fetch source identifiers are invalid");
                 }
@@ -5460,7 +5489,7 @@ impl AcquisitionConfig {
     pub fn source_ids(&self) -> Vec<&str> {
         match self {
             Self::Single { source } => vec![source.as_str()],
-            Self::SearchThenFetch { search, fetch } => {
+            Self::SearchThenFetch { search, fetch, .. } => {
                 vec![search.as_str(), fetch.as_str()]
             }
             Self::SearchThenFetchSet { search, fetch, .. } => std::iter::once(search.as_str())
@@ -5510,7 +5539,7 @@ impl AcquisitionConfig {
                 stages: vec![stage(source, StageRole::Search, StageInputs::None)],
                 budget_milliseconds: None,
             },
-            Self::SearchThenFetch { search, fetch } => AcquisitionPlan {
+            Self::SearchThenFetch { search, fetch, .. } => AcquisitionPlan {
                 stages: vec![
                     stage(search, StageRole::Search, StageInputs::None),
                     stage(fetch, StageRole::Member, StageInputs::EveryPriorFact),
@@ -11539,6 +11568,7 @@ outboundTls:
         config = EvidenceConfig::parse_yaml(source_batch_document().as_bytes())
             .expect("batch source validates");
         config.requirements[0].acquisition = AcquisitionConfig::SearchThenFetch {
+            on_fetch_no_match: Default::default(),
             search: "source-a".to_owned(),
             fetch: "source-a".to_owned(),
         };
@@ -14025,6 +14055,7 @@ outboundTls:
         );
 
         let chained = AcquisitionConfig::SearchThenFetch {
+            on_fetch_no_match: Default::default(),
             search: "source-a".to_owned(),
             fetch: "source-b".to_owned(),
         };
