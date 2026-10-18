@@ -94,7 +94,7 @@ async fn startup_classifies_server_capacity_without_disclosing_connection_values
         .connect(NoTls)
         .await
         .expect("diagnostic administrator connects");
-    let admin_task = tokio::spawn(async move { admin_connection.await });
+    let admin_task = tokio::spawn(admin_connection);
     let role = format!("diagnostic_capacity_canary_{}", std::process::id());
     admin
         .batch_execute(&format!(
@@ -110,7 +110,7 @@ async fn startup_classifies_server_capacity_without_disclosing_connection_values
         .connect(NoTls)
         .await
         .expect("the role's one connection opens");
-    let held_task = tokio::spawn(async move { held_connection.await });
+    let held_task = tokio::spawn(held_connection);
 
     let pool = plaintext_pool(limited, 1);
     let cause = pool
