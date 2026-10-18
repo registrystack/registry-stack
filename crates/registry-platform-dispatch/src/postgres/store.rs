@@ -337,8 +337,12 @@ pub trait DispatchStore: Send + Sync + 'static {
     /// Defaults to the ordinary transaction identity check. A consumer may
     /// distinguish recording an already settled outcome from admitting new
     /// work, but must still verify its database and preserve the lease fence.
-    /// Claim, material reads, recovery, and operator transitions continue to
-    /// use [`Self::verify_transaction`].
+    /// Only raw [`crate::SendOutcome::Accepted`] and
+    /// [`crate::SendOutcome::Permanent`] outcomes use this callback.
+    /// [`crate::SendOutcome::MaybeSent`] and [`crate::SendOutcome::Transient`]
+    /// retain [`Self::verify_transaction`], even when policy would make the
+    /// next state terminal. Claim, material reads, recovery, and operator
+    /// transitions also retain that ordinary check.
     async fn verify_finish_transaction(
         &self,
         transaction: &Transaction<'_>,

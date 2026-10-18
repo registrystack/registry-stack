@@ -152,8 +152,11 @@ The receiver should:
 
 ## Settle local hooks before go-live
 
-A retained local Rhai or Wasm delivery needs the package that captured it.
-This applies to Record and Proposal hooks, even when the successor leaves the program unchanged.
+Activation checks local Rhai and Wasm deliveries across captured revisions.
+Pending or leased work and operator-replayable dead letters block activation while their payload
+is retained and unexpired. This applies to Record and Proposal hooks, even when the successor
+leaves the program unchanged. Other terminal metadata, including non-replayable dead letters,
+can remain, as can metadata whose payload expired or was erased.
 `bregctl plan` and `apply` report `apply.hooks.local-retained` before maintenance starts.
 Both name the retained count and compiled delivery identifiers, bounded to 100 deliveries.
 A truncated count means at least that many remain.
@@ -172,7 +175,9 @@ Drain runs reviewed Rhai or Wasm handlers in the `bregctl` process using the run
 connection. Use the active package's runtime file, handler assets and Wasm execution configuration,
 with its configured destination secrets and audit destination and secrets available to that process.
 For encrypted fields, provide the existing field-encryption provider and keys.
-Keep the same secret ownership and field-key custody restrictions as the serving process.
+You can run the CLI on a different authorized operator host with access to those assets, secrets,
+and the runtime database. Keep the same secret ownership and field-key custody restrictions as
+the serving process, including restrictions on the local-only file key provider.
 Drain does not need a migration credential. Listing, replay and discard do not enable the
 execution-only Wasm runtime or field-encryption service.
 
@@ -228,7 +233,16 @@ applying the change twice.
 A proposal classified before go-live keeps its applied, refused, or dead-lettered result
 when delivery completion succeeds afterward. The predecessor worker cannot claim new work.
 
+If the worker is interrupted before recording the proposal result and there is no committed
+receipt to recover, final-lease recovery records `worker-interrupted` without a proposal code.
+Explicit replay can remain eligible when the captured operator permission, product proposal
+policy, active binding, and retained, unexpired payload allow it. A replay can deliver the event
+to the receiver again. Only a returned proposal classified under the successor receives
+`hook.proposal.package_unavailable`; interruption alone does not establish that result.
+Inspect the recovered delivery before deciding whether to replay or discard it.
+
 {/* Evidence: crates/registry-breg/src/mutation/action.rs;
+    crates/registry-platform-hooks/src/delivery/store.rs, lapsed_columns();
     crates/registry-breg/src/webhook.rs;
     crates/registry-breg/tests/support/hook_activation.rs;
     crates/registry-breg/tests/postgres_hook_changes.rs,

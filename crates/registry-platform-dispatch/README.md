@@ -43,8 +43,11 @@ The opt-in `postgres` feature adds the lease machine in `postgres`:
   adds its own columns to terminal writes. `DispatchTransport` is the send:
   `send(&LeasedJob) -> Sent`. The default `verify_finish_transaction` uses the
   ordinary identity check. A consumer may override it to record a settled result
-  after its deployment changes; claim, material reads, recovery, and operator
-  transitions still use `verify_transaction`. Completion retains the same lease
+  after its deployment changes. Only raw `Accepted` and `Permanent` outcomes
+  use that override. `MaybeSent` and `Transient` retain `verify_transaction`,
+  even when policy would make the next state terminal. Claim, material reads,
+  recovery, and operator transitions also retain the ordinary check.
+  Completion retains the same lease
   CAS, relational writes, audit ordering, and commit-fate recovery.
 - `Dispatcher` runs every transition. A claim recovers one lapsed lease,
   expires one job past its expiry, then leases the next due job with

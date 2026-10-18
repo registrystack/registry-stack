@@ -114,9 +114,13 @@ destination, and delivery policy. A later package activation must not
 reinterpret it. Activation refuses a destination change that would strand a
 retained non-terminal delivery.
 
-Retained local Rhai or Wasm deliveries stay with their capturing activation,
-including Record and Proposal hooks whose program is unchanged in the successor.
-Before maintenance, `plan` and `apply` refuse them with
+The activation guard inventories local Rhai and Wasm deliveries across captured
+revisions: pending or leased work and operator-replayable dead letters with a
+retained, unexpired payload. They stay with their capturing activation, including
+Record and Proposal hooks whose program is unchanged in the successor. Other
+terminal metadata, including non-replayable dead letters, can remain, as can
+metadata whose payload expired or was erased.
+Before maintenance, `plan` and `apply` refuse blocking local work with
 `apply.hooks.local-retained`: the same count, capped at 100 with a truncation
 indicator, and the distinct compiled delivery identifiers from that bounded set.
 Plan writes no state or audit; apply audits the outcome as `refused`. The active
@@ -141,6 +145,15 @@ refused, or dead-lettered proposal classified before go-live keeps that result
 when its delivery metadata finishes afterward. This completion still requires
 the same registry and database, ready maintenance state, and the exact lease;
 it gives the predecessor worker no authority to claim or apply new work.
+
+If the worker is interrupted before recording a proposal result and no committed
+receipt can be recovered, final-lease recovery records `worker-interrupted`
+without a proposal code. Explicit replay can remain eligible under the captured
+operator permission, product proposal policy, active binding, and retained,
+unexpired payload checks. Such a replay can send the event to the receiver again.
+Only a returned proposal classified under the successor receives
+`hook.proposal.package_unavailable`; interruption alone does not establish that
+result or disable replay.
 
 The stored outbox payload is that envelope, byte for byte, and the delivery
 worker sends it unchanged. The worker refuses a stored row that is not an
