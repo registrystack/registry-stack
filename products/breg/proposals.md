@@ -269,6 +269,54 @@ Cancel, and Revise or Rebase of a submitted Proposal, close the Proposal's
 queued, applying or blocked automatic application job in the same transaction.
 The job reads `cancelled`; it never applies a superseded version.
 
+### When activation blocks submitted work
+
+A successful package activation that marks a submitted Proposal
+`package-changed` closes its queued, applying or blocked application jobs and
+withdraws its Review in the same transaction. A never-sent Review is cancelled
+locally. An accepted Review uses the existing producer cancellation operation.
+An already-sent request with an uncertain outcome recovers the same request and
+idempotency key only to obtain its acceptance and cancel it. Cancellation may
+remain pending while the authority is unavailable. Failed rounds are withdrawn
+too: a retained acceptance can be cancelled, while an exhausted delivery without
+an acceptance stays closed.
+
+A late exact result is retained under the existing retention rules, but cannot
+queue an application or advance the withdrawn round. Rebase and Submit create a
+fresh version and Review. Rolling back to the frozen Action revision can clear
+`blockedReason`; it never revives a cancelled round or a closed job, including
+when no application job existed before withdrawal.
+
+`bregctl review-recovery resubmit` and `retry-application` refuse a currently
+blocked submission with reason `package-changed` and direct its requester to
+Rebase for fresh Review or Cancel. The existing recovery operations keep their
+authority and cannot reopen a withdrawn round after rollback.
+
+The private metrics listener exposes `breg_proposal_application_blocked_jobs`:
+the count of application jobs closed or held by a package change on the current
+submitted Proposal. These jobs do not age the runnable application queue. The
+count drops when that version is no longer current, its Proposal is cancelled,
+or rollback clears the block. A failed database sample omits the series.
+Database operators can list the same retained jobs without reading source values:
+
+```sql
+SELECT q.action_id, q.proposal_id, q.submission_version, q.state
+FROM registry_internal.registry_proposal_application_jobs q
+JOIN registry_internal.registry_proposal_state p USING (action_id, proposal_id)
+WHERE p.state = 'submitted' AND p.submission_version = q.submission_version
+  AND p.blocked_reason = 'package-changed'
+  AND q.state IN ('queued', 'applying', 'blocked', 'cancelled');
+```
+
+A distinct handoff failure, `producer-identity-mismatch`, means a valid provider
+acceptance explicitly named a different producer ID. The bounded warning names
+BReg's configured `reviewAuthorities` `producerId` and the provider's admitted
+producer ID. Align them with the provider's `trustedProducers` configuration
+before submitting new work. The provider may retain the mismatched Review;
+this diagnosis does not mean its mutation rolled back. Transport failures,
+missing metadata with a wrong digest, and malformed acceptances retain uncertain
+effect handling. Submission bodies and credentials are excluded from the warning.
+
 ### Read one submission
 
 `GET /v1/proposals/{id}/submissions/{version}` reads one submitted version

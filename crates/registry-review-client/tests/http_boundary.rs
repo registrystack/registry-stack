@@ -1184,3 +1184,133 @@ async fn create_refuses_each_changed_expected_policy_binding_component() {
         server.abort();
     }
 }
+
+#[tokio::test]
+async fn explicit_producer_disagreement_is_distinct_and_never_a_safe_fresh_retry() {
+    for status in [StatusCode::CREATED, StatusCode::OK] {
+        let app = Router::new().route(
+            "/v1/review-requests",
+            post(move || async move {
+                let mut response = json_response(status, accepted_json(Uuid::from_u128(7)));
+                response.headers_mut().insert(
+                    "registry-review-producer",
+                    HeaderValue::from_static("casework-producer"),
+                );
+                response
+            }),
+        );
+        let (client, server) = serve(app).await;
+        let token = BearerToken::new("identity-token-canary").unwrap();
+        let error = client
+            .create_or_recover_request_for_producer(
+                ReviewAuth::new(&token, "producer"),
+                "identity-key",
+                &create_request(),
+                &ContentDigest::parse(OTHER_DIGEST).unwrap(),
+                "breg-producer",
+            )
+            .await
+            .expect_err("explicit identity disagreement");
+        assert_eq!(
+            error.mutation_class(),
+            ReviewMutationErrorClass::Ambiguous,
+            "a successful status may have committed a review under the peer identity"
+        );
+        assert!(
+            matches!(&error, ReviewClientError::ProducerIdentityMismatch { expected, actual, status: found, .. }
+            if expected == "breg-producer" && actual == "casework-producer" && *found == status.as_u16())
+        );
+        assert!(!format!("{error:?}").contains("identity-token-canary"));
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn missing_producer_metadata_keeps_exact_digest_compatibility_and_uncertainty() {
+    for digest in [DIGEST, OTHER_DIGEST] {
+        let app = Router::new().route(
+            "/v1/review-requests",
+            post(|| async {
+                json_response(StatusCode::CREATED, accepted_json(Uuid::from_u128(7)))
+            }),
+        );
+        let (client, server) = serve(app).await;
+        let token = BearerToken::new("identity-token-canary").unwrap();
+        let outcome = client
+            .create_or_recover_request_for_producer(
+                ReviewAuth::new(&token, "producer"),
+                "identity-key",
+                &create_request(),
+                &ContentDigest::parse(digest).unwrap(),
+                "breg-producer",
+            )
+            .await;
+        if digest == DIGEST {
+            assert!(
+                outcome.is_ok(),
+                "older providers still require the exact original binding"
+            );
+        } else {
+            let error = outcome.unwrap_err();
+            assert!(matches!(
+                error,
+                ReviewClientError::Protocol {
+                    failure: ReviewProtocolFailure::Body,
+                    ..
+                }
+            ));
+            assert_eq!(error.mutation_class(), ReviewMutationErrorClass::Ambiguous);
+        }
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn malformed_or_duplicate_producer_metadata_never_claims_an_identity_mismatch() {
+    for values in [
+        vec!["".to_owned()],
+        vec!["peer identity canary".to_owned()],
+        vec!["x".repeat(129)],
+        vec!["peer".to_owned(), "peer".to_owned()],
+    ] {
+        let app = Router::new().route(
+            "/v1/review-requests",
+            post(move || {
+                let values = values.clone();
+                async move {
+                    let mut response =
+                        json_response(StatusCode::CREATED, accepted_json(Uuid::from_u128(7)));
+                    for value in values {
+                        response.headers_mut().append(
+                            "registry-review-producer",
+                            HeaderValue::from_str(&value).unwrap(),
+                        );
+                    }
+                    response
+                }
+            }),
+        );
+        let (client, server) = serve(app).await;
+        let token = BearerToken::new("identity-token-canary").unwrap();
+        let error = client
+            .create_or_recover_request_for_producer(
+                ReviewAuth::new(&token, "producer"),
+                "identity-key",
+                &create_request(),
+                &expected_submission_digest(),
+                "breg-producer",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ReviewClientError::Protocol {
+                failure: ReviewProtocolFailure::ProducerIdentity,
+                ..
+            }
+        ));
+        assert_eq!(error.mutation_class(), ReviewMutationErrorClass::Ambiguous);
+        assert!(!format!("{error:?}").contains("peer identity canary"));
+        server.abort();
+    }
+}

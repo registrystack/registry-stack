@@ -81,7 +81,16 @@ the concrete accepted policy; never fill that binding into the original selector
 or change its submission digest. New review work requires a new submission.
 Current producer authority and context compatibility remain required. The admitted producer
 identity, namespace, policy, subject binding, and submission digest govern
-later cancellation and result access.
+later cancellation and result access. Creation and recovery responses include
+`Registry-Review-Producer`, naming the admitted producer explicitly so a source
+can diagnose a producer-ID configuration mismatch without guessing from a digest.
+
+The same admitted producer can cancel an open Review even when its current source
+conceals the item. Cancellation uses the retained exact subject binding, settles
+its tasks and clocks, and retains the terminal evidence without reading source
+content. This does not expand reviewer or supervisor visibility or cancellation
+authority. A source package activation can use this operation to close a round
+that requires Rebase and fresh Review.
 
 Human reviewers read `GET /v1/review-tasks`, then claim, assign, delegate,
 release, draft privately, or decide a task under its current revision. Send
@@ -178,6 +187,12 @@ caseworkctl provider pair products/casework/examples/canonical-review \
 caseworkctl check products/casework/examples/canonical-review \
   --against-breg-package /absolute/path/to/breg-package
 ```
+
+Pairing refusals retain `casework.provider-pair.contract-mismatch`,
+`casework.provider-pair.unserved-capability`, or
+`casework.provider-pair.version-mismatch`. The diagnostic names the review
+policy's contract path, the provider's capabilities path, or `--bregctl`, with a
+specific corrective action. Peer command output and secret values are excluded.
 
 The offline check compares the export's exact source, action, context contract,
 and schema bytes with the Casework package. The registry revision is diagnostic

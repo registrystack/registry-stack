@@ -459,7 +459,12 @@ async fn create_review_request(
     } else {
         StatusCode::CREATED
     };
-    Ok((status, Json(outcome.accepted)).into_response())
+    Ok((
+        status,
+        [(REVIEW_PRODUCER_HEADER, outcome.producer_id)],
+        Json(outcome.accepted),
+    )
+        .into_response())
 }
 
 async fn review_policy_descriptions(

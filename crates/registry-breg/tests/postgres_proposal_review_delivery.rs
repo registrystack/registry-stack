@@ -222,7 +222,9 @@ async fn create_review(
     };
     let call = state.requests.fetch_add(1, Ordering::SeqCst);
     if state.gated {
-        state.gates[call].pause().await;
+        if let Some(gate) = state.gates.get(call) {
+            gate.pause().await;
+        }
     }
     if call == 0 && !state.first_succeeds {
         return response(StatusCode::SERVICE_UNAVAILABLE, json!({}));
@@ -240,7 +242,9 @@ async fn cancel_review(
     assert_eq!(request.subject, accepted.subject);
     let call = state.requests.fetch_add(1, Ordering::SeqCst);
     if state.gated {
-        state.gates[call].pause().await;
+        if let Some(gate) = state.gates.get(call) {
+            gate.pause().await;
+        }
     }
     if call == 0 && !state.first_succeeds {
         return response(StatusCode::SERVICE_UNAVAILABLE, json!({}));
@@ -266,7 +270,9 @@ async fn lookup_result(
     assert_eq!(id, accepted.request_id);
     let call = state.requests.fetch_add(1, Ordering::SeqCst);
     if state.gated {
-        state.gates[call].pause().await;
+        if let Some(gate) = state.gates.get(call) {
+            gate.pause().await;
+        }
     }
     match state.result_replies[call] {
         ResultReply::Pending => (StatusCode::ACCEPTED, [("traceparent", TRACE)]).into_response(),
@@ -323,7 +329,12 @@ fn registry() -> registry_breg::CompiledRegistry {
     registry_with_policy(json!(policy()))
 }
 fn registry_with_policy(selection: Value) -> registry_breg::CompiledRegistry {
-    let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+    let source = registry_source(selection);
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    compile_project(&project, &[], CompileProfile::Authoring).unwrap()
+}
+fn registry_source(selection: Value) -> Value {
+    json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"proposal-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://proposal.example.test"},
         "datasets":[{"id":"directory"}],
         "reviewAuthorities":[{"id":AUTHORITY,"protocol":"id.registrystack.org/protocols/review/v1"}],
@@ -339,9 +350,7 @@ fn registry_with_policy(selection: Value) -> registry_breg::CompiledRegistry {
         "accessProfiles":[{"id":"clerk","default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],"requiredPurposes":["registry-administration"],"permissions":{
             "records":[{"recordType":"target","operations":["create","get","list"],"readableFields":["name","jurisdiction"],"writableFields":["name","jurisdiction"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}],
             "actions":[{"action":"correct-name","operations":["start"],"targets":[{"recordType":"target","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}],
-            "proposals":[{"action":"correct-name","operations":["get","list","submit","cancel"],"ownership":"caller","targets":[{"recordType":"target","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}]});
-    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
-    compile_project(&project, &[], CompileProfile::Authoring).unwrap()
+            "proposals":[{"action":"correct-name","operations":["get","list","submit","cancel"],"ownership":"caller","targets":[{"recordType":"target","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}]})
 }
 async fn fixture(authority: &Authority) -> client_http::ClientFixture {
     let bindings = authority.registry.clone();
@@ -1354,3 +1363,11 @@ async fn native_submission_remote_refusal_warns_the_operator_without_values() {
 
 #[path = "support/review_uncertain_log.rs"]
 mod review_uncertain_log;
+
+#[cfg(feature = "tooling")]
+#[path = "support/proposal_activation.rs"]
+#[allow(dead_code)]
+mod proposal_activation;
+#[cfg(feature = "tooling")]
+#[path = "support/review_go_live.rs"]
+mod review_go_live;

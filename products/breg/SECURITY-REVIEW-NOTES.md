@@ -3870,3 +3870,29 @@ in `crates/registry-bregctl/src/lib.rs` holds the same split at capture, and
 - Only the reserved `.invalid` namespace is refused. A hostname the adopter
   does not control but that is not reserved, such as `example.com`, passes.
 - No security invariant row changes.
+
+## Review identity and activation cancellation
+
+Successful Review handoff metadata names the admitted producer explicitly. The
+client bounds and validates it, preserves exact subject, policy and digest
+checks, and never treats an identity mismatch as proof of rollback. BReg records
+a distinct configuration failure and logs only the two bounded IDs. The real
+BReg/Casework pairing regression and shared-client HTTP tests cover mismatch,
+legacy absence, malformed metadata and uncertain effects.
+
+Activation withdraws blocked submitted rounds and closes application jobs in its
+existing transaction. Submission leases fence an in-flight response; recovery
+uses the original idempotency key solely to obtain and cancel the accepted
+review. Result reconciliation retains exact historical evidence while refusing
+to advance withdrawn or blocked work. Recovery keeps its existing audited
+migration authority and reports the package-change reason. Exact rollback can
+clear the package block but cannot reopen a withdrawn round or closed job.
+The go-live tests cover rollback with and without a prior job, late results,
+producer cancellation, already failed rounds, lease fencing and the private
+aggregate metric.
+
+Casework's existing producer cancellation settles concealed tasks and clocks
+without source reads. Its HTTP proof also refuses another producer and retains
+reviewer and supervisor concealment. Remote cancellation is asynchronous, so
+in-flight work and dependency outages are settled through retained exact
+recovery; the change does not claim a cross-service atomic transaction.

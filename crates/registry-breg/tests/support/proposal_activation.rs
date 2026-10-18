@@ -63,8 +63,10 @@ fn prepare(
             ReviewedMigrationFile, ReviewedMigrationRecovery, ReviewedMigrationSource,
         };
         assert!(
-            changes.changes.iter().all(|change| change.target.kind
-                == registry_breg::package::CompiledRegistryChangeTargetKind::Action),
+            changes.changes.iter().all(|change| change.class
+                == registry_breg::package::CompiledRegistryChangeClass::CompatibleAdditive
+                || change.target.kind
+                    == registry_breg::package::CompiledRegistryChangeTargetKind::Action),
             "this native fixture reviews only Action metadata: {:?}",
             changes.changes
         );
@@ -76,6 +78,10 @@ fn prepare(
             covers: changes
                 .changes
                 .iter()
+                .filter(|change| {
+                    change.class
+                        != registry_breg::package::CompiledRegistryChangeClass::CompatibleAdditive
+                })
                 .map(ReviewedChangeCover::from)
                 .collect(),
             recovery: ReviewedMigrationRecovery::ExactTargetResume,
@@ -209,10 +215,31 @@ pub async fn verified_successor(
     let candidate = prepare(prior, current, source, &current.schema_fingerprint);
     let (mut migration, task) = fixture.database.connect_migration().await;
     let tx = migration.transaction().await.unwrap();
+    // The activation executor rebuilds compiler-owned views around successor
+    // SQL. Rehearse that same ordering when additive fields change a view.
+    for view in &prior.ddl().views {
+        tx.batch_execute(&format!(
+            "DROP VIEW \"{}\".\"{}\" RESTRICT",
+            view.schema, view.name
+        ))
+        .await
+        .unwrap();
+    }
     for statement in &candidate.manifest().migration_plan.statements {
-        tx.batch_execute(&statement.sql)
-            .await
-            .expect("compiler successor DDL rehearses");
+        if statement.kind != registry_breg::generated_ddl::DdlStatementKind::View {
+            tx.batch_execute(&statement.sql)
+                .await
+                .expect("compiler successor DDL rehearses");
+        }
+    }
+    for statement in candidate
+        .registry()
+        .ddl()
+        .statements
+        .iter()
+        .filter(|statement| statement.kind == registry_breg::generated_ddl::DdlStatementKind::View)
+    {
+        tx.batch_execute(&statement.sql).await.unwrap();
     }
     reconcile_compiled_runtime_acl_for_test(
         &tx,

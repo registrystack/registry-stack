@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Distinguish an explicit Review producer-ID mismatch from uncertain transport
+  outcomes, with bounded diagnostics naming both configured IDs.
+- When activation blocks submitted work, atomically cancel its Review and close
+  application jobs. Late results and rollback cannot reopen the round. Recovery
+  names the package-change block, and private metrics count its closed jobs.
+
 - BREAKING: request, operator, access-log and webhook audit records now name activation UUIDs
   `activationId`, reserving `packageRevision` for package digests. The affected
   audit schemas advance as documented in [audit identity](contracts/audit-identity.md).

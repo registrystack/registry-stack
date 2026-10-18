@@ -305,6 +305,16 @@ fn command_kind(command: &Command) -> CommandKind {
 fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
     if let Some(failure) = error
         .chain()
+        .find_map(|cause| cause.downcast_ref::<provider_pair::PairingFailure>())
+    {
+        let (code, path, message, action) = failure.diagnostic();
+        return (
+            DOMAIN_REFUSAL_EXIT,
+            json!({"severity":"error","code":code,"artifact":"provider-pair","path":path,"message":message,"suggestedAction":action}),
+        );
+    }
+    if let Some(failure) = error
+        .chain()
         .find_map(|cause| cause.downcast_ref::<dev::DevFailure>())
     {
         let (code, path, message, action) = failure.diagnostic();

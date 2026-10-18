@@ -12,7 +12,7 @@ entries:
   - {id: CASEWORK-SEC-08, tests: [{file: crates/registry-review-protocol/src/lib.rs, name: completion_envelope_contains_no_result_or_destination}]}
   - {id: CASEWORK-SEC-09, tests: [{file: crates/registry-casework/tests/review_acceptance_postgres.rs, name: provider_failure_refuses_affected_work_while_submitted_review_remains_usable}]}
   - {id: CASEWORK-SEC-10, tests: [{file: products/casework/scripts/test_dependency_direction.py, name: test_transitive_breg_dependency_from_generic_client_is_rejected}]}
-  - {id: CASEWORK-SEC-11, tests: [{file: crates/registry-casework/tests/review_postgres.rs, name: cancellation_and_final_decision_commit_exactly_one_terminal_result}]}
+  - {id: CASEWORK-SEC-11, tests: [{file: crates/registry-casework/tests/review_postgres.rs, name: cancellation_and_final_decision_commit_exactly_one_terminal_result}, {file: crates/registry-casework/tests/support/producer_cancellation.rs, name: producer_cancellation_settles_concealed_tasks_and_clocks_without_source_reads}]}
   - {id: CASEWORK-SEC-12, tests: [{file: crates/registry-casework/tests/review_http.rs, name: decision_receipts_disclose_only_the_callers_retained_pinned_outcome_over_http}]}
   - {id: CASEWORK-SEC-13, tests: [{file: crates/registry-casework/src/http.rs, name: http_edge_returns_closed_problems_with_request_trace_and_security_headers}]}
   - {id: CASEWORK-SEC-14, tests: [{file: crates/registry-casework/tests/review_acceptance_postgres.rs, name: source_visibility_and_directory_authority_are_both_live_at_caseload_apply}]}

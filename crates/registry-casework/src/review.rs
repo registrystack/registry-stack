@@ -70,6 +70,7 @@ struct ReviewTaskScanContext<'a> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewCreateOutcome {
+    pub producer_id: String,
     pub accepted: ReviewRequestAccepted,
     pub recovered: bool,
 }
@@ -2533,6 +2534,7 @@ impl PostgresStore {
             audit.record_outcome(crate::audit::AuditOutcome::Replayed);
             audit.commit(transaction).await?;
             return Ok(ReviewRecovery::Recovered(Box::new(ReviewCreateOutcome {
+                producer_id: producer.id.clone(),
                 accepted,
                 recovered: true,
             })));
@@ -2582,6 +2584,7 @@ impl PostgresStore {
         audit.record_outcome(crate::audit::AuditOutcome::Replayed);
         audit.commit(transaction).await?;
         Ok(ReviewRecovery::Recovered(Box::new(ReviewCreateOutcome {
+            producer_id: producer.id.clone(),
             accepted,
             recovered: true,
         })))
@@ -2633,6 +2636,7 @@ impl PostgresStore {
             audit.record_outcome(crate::audit::AuditOutcome::Replayed);
             audit.commit(transaction).await?;
             return Ok(ReviewCreateOutcome {
+                producer_id: producer.id.clone(),
                 accepted,
                 recovered: true,
             });
@@ -2677,6 +2681,7 @@ impl PostgresStore {
                 audit.record_outcome(crate::audit::AuditOutcome::Replayed);
                 audit.commit(transaction).await?;
                 return Ok(ReviewCreateOutcome {
+                    producer_id: producer.id.clone(),
                     accepted,
                     recovered: true,
                 });
@@ -2987,6 +2992,7 @@ impl PostgresStore {
         }
         audit.commit(transaction).await?;
         Ok(ReviewCreateOutcome {
+            producer_id: producer.id.clone(),
             accepted,
             recovered: false,
         })

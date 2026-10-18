@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Return the admitted producer ID as bounded Review acceptance metadata on
+  creation and recovery, preserving the accepted JSON envelope.
+- Preserve the specific provider-pair refusal and configuration path for contract,
+  capability and release mismatches, with actionable diagnostics.
+
 - Apply this release to a fresh database. Casework installs its complete
   schema as one baseline numbered version 100, above every version a pre-1.0
   release applied, and later migrations take 101, 102, and onward. A database

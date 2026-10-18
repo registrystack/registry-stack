@@ -945,7 +945,7 @@ pub(crate) async fn mark_incompatible_proposals(
         if !action.execution.is_proposal() {
             continue;
         }
-        client.execute("UPDATE registry_internal.registry_proposal_state
+        let rows = client.query("UPDATE registry_internal.registry_proposal_state
             SET blocked_reason=CASE WHEN action_revision=$2 OR (state='submitted' AND EXISTS (
                 SELECT 1 FROM registry_internal.registry_proposal_activation_compatibility c
                 JOIN registry_internal.registry_proposal_submissions p USING(action_id,proposal_id,submission_version)
@@ -956,8 +956,22 @@ pub(crate) async fn mark_incompatible_proposals(
                   AND c.effect_digest=p.snapshot->>'effectDigest' AND p.erased_at IS NULL))
                 THEN NULL ELSE 'package-changed' END,
                 updated_at=transaction_timestamp()
-            WHERE action_id=$1 AND state IN ('draft','submitted')",
+            WHERE action_id=$1 AND state IN ('draft','submitted')
+            RETURNING proposal_id,submission_version,state,blocked_reason",
             &[&action.id,&action.definition_revision,&candidate_digest,&activation]).await.map_err(map_retention_error)?;
+        for row in rows {
+            if row.get::<_, String>(2) != "submitted" || row.get::<_, Option<String>>(3).is_none() {
+                continue;
+            }
+            let proposal_id: Uuid = row.get(0);
+            let version: i64 = row.get(1);
+            crate::review_store::close_application_jobs(client, &action.id, proposal_id)
+                .await
+                .map_err(|_| ProposalRetentionError::Unavailable)?;
+            crate::review_store::schedule_cancellation(client, &action.id, proposal_id, version)
+                .await
+                .map_err(|_| ProposalRetentionError::Unavailable)?;
+        }
     }
     Ok(())
 }
