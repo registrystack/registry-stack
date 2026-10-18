@@ -195,9 +195,11 @@ Review instead:
 | Review submission failed for good | `review-ended`, recovery `revise` |
 | `answered`, or cancelled or superseded by the provider | `review-ended`, recovery `revise` |
 
-A cancel or supersession BReg caused by withdrawing is not an outcome and
-reads as pending until the withdrawal settles. When Revise is the recovery, the
-Retry link reports the same reason instead of `invalid-input`.
+Withdrawal ends the current round immediately, including while remote cancellation
+is pending or a late approval remains as historical evidence. Apply reads
+`review-ended` and the turn returns to `party`; a package block still takes
+precedence. When Revise is the recovery, the Retry link reports the same reason
+instead of `invalid-input`.
 
 ### Whose turn it is
 
@@ -235,7 +237,7 @@ cancelled; a changes-requested result records a `review-returned` event.
 | `rejected` | The Proposal is `rejected`, a terminal state. Every command link reads `review-rejected` with recovery `receipt-only`: Submit, Edit, Revise, Rebase, Apply, Retry and Cancel answer 409 `proposal.rejected`, also after a package activation changes the Action revision; an attachment upload or removal is an Edit and answers the same. Start a new Proposal to propose the work again. |
 | `changes-requested` | The Proposal stays `submitted`. Apply reads `review-changes-requested` with recovery `revise`. Revise submits the corrected version. |
 | `answered` | Apply reads `review-ended` with recovery `revise`. An answer is not a decision on a change. |
-| `cancelled` or `superseded` by the provider | Apply reads `review-ended` with recovery `revise`. A cancel or supersession BReg caused by withdrawing is not an outcome and reads as pending. |
+| `cancelled` or `superseded` by the provider | Apply reads `review-ended` with recovery `revise`. A round BReg withdrew also reads as ended; a late approval cannot restore Apply authority. |
 
 ### The decision
 
@@ -289,7 +291,11 @@ when no application job existed before withdrawal. A closed automatic applicatio
 remains observable as `blocked` with `contract-changed`, `correct-input`, and
 `automaticRetry.scheduled: false`, including after rollback clears the package
 block. The Proposal stays submitted and its authorized requester can still
-Rebase or Cancel; observing it never requeues the old application.
+Rebase or Cancel; observing it never requeues the old application. This includes
+an approved result received after withdrawal when no application job exists:
+Get, List and turn filtering keep the Proposal recoverable, while its retained
+decision remains historical evidence. Manual rounds also return the turn to the
+requester and refuse Apply after a restoring package clears the block.
 
 `bregctl review-recovery resubmit` and `retry-application` refuse a currently
 blocked, still-submitted Proposal with reason `package-changed` and direct its

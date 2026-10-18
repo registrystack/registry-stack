@@ -11,12 +11,26 @@ use registry_breg::{
 };
 
 async fn automatic_fixture(authority: &Authority) -> (client_http::ClientFixture, Value) {
+    reviewed_fixture(authority, true).await
+}
+
+async fn reviewed_fixture(
+    authority: &Authority,
+    automatic: bool,
+) -> (client_http::ClientFixture, Value) {
     let mut source = registry_source(json!(policy()));
-    source["actions"][0]["execution"]["proposal"]["application"] = json!({"mode":"automatic"});
+    source["actions"][0]["execution"]["proposal"]["application"] =
+        json!({"mode":if automatic { "automatic" } else { "manual" }});
     source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"] =
         json!(["get", "list", "submit", "cancel", "rebase"]);
     source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] =
         json!(["target", "value"]);
+    if !automatic {
+        source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("apply"));
+    }
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
     let bindings = authority.registry.clone();
@@ -221,13 +235,46 @@ async fn activation_blocked_retry_names_package_change() {
 
 #[tokio::test]
 async fn late_approval_after_activation_retains_evidence_without_application() {
+    late_approval_after_activation(true, false).await;
+}
+
+#[tokio::test]
+async fn manual_late_approval_after_activation_remains_readable_without_apply_authority() {
+    late_approval_after_activation(false, false).await;
+}
+
+#[tokio::test]
+async fn already_terminal_approval_after_activation_remains_readable_without_a_job() {
+    late_approval_after_activation(true, true).await;
+}
+
+async fn late_approval_after_activation(automatic: bool, already_terminal: bool) {
     let authority = Authority::start(false, true).await;
-    let (fixture, source) = automatic_fixture(&authority).await;
+    let (fixture, source) = reviewed_fixture(&authority, automatic).await;
     let id = submitted(&fixture, "activation-late-result-canary").await;
     send(&fixture, &authority).await;
     let accepted = authority.state.accepted.lock().unwrap().clone().unwrap();
-    let _ = activate(&fixture, &source, &authority).await;
-    reconcile(&fixture, &accepted).await;
+    let (package, active) = activate(&fixture, &source, &authority).await;
+    if already_terminal {
+        authority
+            .state
+            .cancel_already_terminal
+            .store(true, Ordering::SeqCst);
+        let mut client = fixture.pool.get_for_test().await.unwrap();
+        assert!(run_one_cancellation(
+            &mut client,
+            AUTHORITY,
+            &authority.client,
+            "producer",
+            &BearerToken::new(OUTGOING_TOKEN).unwrap(),
+            30,
+            &fixture.mutations,
+        )
+        .await
+        .unwrap());
+    } else {
+        reconcile(&fixture, &accepted).await;
+    }
     assert!(
         application_jobs(&fixture, id).await.is_empty(),
         "late approval cannot enqueue a blocked submission"
@@ -237,7 +284,24 @@ async fn late_approval_after_activation_retains_evidence_without_application() {
         1,
         "historical review evidence is retained"
     );
-    assert_eq!(job(&fixture, id).await["state"], "cancelling");
+    assert_eq!(
+        job(&fixture, id).await["state"],
+        if already_terminal {
+            "cancelled"
+        } else {
+            "cancelling"
+        }
+    );
+    assert_withdrawn_proposal_readable(
+        &fixture,
+        package.registry(),
+        &active,
+        &authority,
+        id,
+        automatic,
+        true,
+    )
+    .await;
     fixture.finish().await;
 }
 
@@ -331,17 +395,22 @@ async fn activation_delivers_existing_producer_cancellation() {
 
 #[tokio::test]
 async fn late_approval_after_rollback_cannot_reopen_a_withdrawn_round_without_a_job() {
-    late_approval_after_rollback(false).await;
+    late_approval_after_rollback(false, true).await;
 }
 
 #[tokio::test]
 async fn late_approval_after_rollback_cannot_replace_a_completed_cancellation() {
-    late_approval_after_rollback(true).await;
+    late_approval_after_rollback(true, true).await;
 }
 
-async fn late_approval_after_rollback(finish_cancellation: bool) {
+#[tokio::test]
+async fn manual_late_approval_after_rollback_keeps_the_requester_turn() {
+    late_approval_after_rollback(false, false).await;
+}
+
+async fn late_approval_after_rollback(finish_cancellation: bool, automatic: bool) {
     let authority = Authority::start(false, true).await;
-    let (fixture, source) = automatic_fixture(&authority).await;
+    let (fixture, source) = reviewed_fixture(&authority, automatic).await;
     let id = submitted(&fixture, "rollback-late-approval-canary").await;
     send(&fixture, &authority).await;
     let accepted = authority.state.accepted.lock().unwrap().clone().unwrap();
@@ -428,7 +497,266 @@ async fn late_approval_after_rollback(finish_cancellation: bool) {
         "the historical terminal evidence remains retained"
     );
     drop(client);
+    assert_withdrawn_proposal_readable(
+        &fixture,
+        rollback.registry(),
+        &rolled_back,
+        &authority,
+        id,
+        automatic,
+        false,
+    )
+    .await;
     fixture.finish().await;
+}
+
+async fn assert_withdrawn_proposal_readable(
+    fixture: &client_http::ClientFixture,
+    registry: &registry_breg::CompiledRegistry,
+    identity: &ExpectedRegistryIdentity,
+    authority: &Authority,
+    id: Uuid,
+    automatic: bool,
+    blocked: bool,
+) {
+    use registry_breg_client::{BRegProposalQuery, BRegProposalState, BRegProposalTurn};
+    let (http, mutations) =
+        active_package_client(fixture, registry, identity, authority, claims()).await;
+    let metadata = http.client.registry_contract(Some("clerk")).await.unwrap();
+    let get = metadata.value.select_proposal_get("clerk").unwrap();
+    let collection = metadata.value.select_proposals("clerk").unwrap();
+    // Execute both reads before asserting so a failed Get cannot hide a broken List.
+    let observed = http.client.get_proposal(&get, &id.to_string()).await;
+    let listed = http
+        .client
+        .list_proposals(&collection, &BRegProposalQuery::default())
+        .await;
+    assert!(
+        observed.is_ok() && listed.is_ok(),
+        "withdrawn review must remain readable: Get={:?}, List={:?}",
+        observed.as_ref().err(),
+        listed.as_ref().err()
+    );
+    let observed = observed.unwrap().value;
+    let listed = listed
+        .unwrap()
+        .value
+        .items
+        .into_iter()
+        .find(|item| item.id() == id.to_string())
+        .expect("the authorized List must retain the withdrawn Proposal");
+    for proposal in [&observed, &listed] {
+        assert_eq!(proposal.state(), BRegProposalState::Submitted);
+        assert_eq!(
+            proposal.blocked_reason(),
+            blocked.then_some("package-changed")
+        );
+        assert_eq!(
+            proposal.turn(),
+            Some(BRegProposalTurn::Party),
+            "withdrawal ends this review even if its retained result is approved"
+        );
+        for operation in ["rebase", "cancel"] {
+            assert!(
+                proposal
+                    .link(operation)
+                    .unwrap()
+                    .availability()
+                    .unwrap()
+                    .available
+            );
+        }
+        if automatic {
+            let status = serde_json::to_value(proposal.application_status().unwrap()).unwrap();
+            assert_eq!(status["state"], "blocked");
+            assert_eq!(status["reason"], "contract-changed");
+            assert_eq!(status["recovery"], "correct-input");
+            assert_eq!(status["automaticRetry"]["scheduled"], false);
+        } else {
+            let apply =
+                serde_json::to_value(proposal.link("apply").unwrap().availability().unwrap())
+                    .unwrap();
+            assert_eq!(
+                apply["available"], false,
+                "withdrawn approval grants no Apply authority"
+            );
+            if !blocked {
+                assert_eq!(apply["reason"], "review-ended");
+            }
+        }
+    }
+    let party_page = http
+        .client
+        .list_proposals(
+            &collection,
+            &BRegProposalQuery {
+                turn: Some(BRegProposalTurn::Party),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(party_page
+        .items
+        .iter()
+        .any(|item| item.id() == id.to_string()));
+    let retained = activation_work_snapshot(&fixture.database.admin).await;
+    assert!(!mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .unwrap());
+    assert_eq!(
+        activation_work_snapshot(&fixture.database.admin).await,
+        retained
+    );
+    assert!(application_jobs(fixture, id).await.is_empty());
+    for (subject, jurisdiction) in [
+        ("other-author-canary", "zone-a"),
+        ("author-canary", "zone-b"),
+    ] {
+        let caller = VerifiedRequestClaims::authenticated(
+            "sub",
+            subject,
+            BTreeSet::from(["proposal:manage".into()]),
+            Some("registry-administration".into()),
+            BTreeMap::from([(
+                "jurisdiction".into(),
+                VerifiedClaimValue::direct_string(jurisdiction).unwrap(),
+            )]),
+        )
+        .unwrap();
+        let (other, _) =
+            active_package_client(fixture, registry, identity, authority, caller).await;
+        let metadata = other.client.registry_contract(Some("clerk")).await.unwrap();
+        let get = metadata.value.select_proposal_get("clerk").unwrap();
+        assert!(matches!(
+            other.client.get_proposal(&get, &id.to_string()).await,
+            Err(registry_breg_client::BaseRegistryClientError::Problem { status: 404, .. })
+        ));
+        let collection = metadata.value.select_proposals("clerk").unwrap();
+        assert!(other
+            .client
+            .list_proposals(&collection, &BRegProposalQuery::default())
+            .await
+            .unwrap()
+            .value
+            .items
+            .is_empty());
+    }
+    if automatic {
+        assert!(observed.link("apply").is_none());
+        let original: String = fixture.database.admin.query_one(
+            "SELECT proposal_digest FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&id],
+        ).await.unwrap().get(0);
+        fixture.database.admin.execute(
+            "UPDATE registry_internal.registry_proposal_review_submissions SET proposal_digest=$2 WHERE proposal_id=$1",
+            &[&id, &format!("sha256:{}", "a".repeat(64))],
+        ).await.unwrap();
+        assert!(
+            matches!(
+                http.client.get_proposal(&get, &id.to_string()).await,
+                Err(registry_breg_client::BaseRegistryClientError::Problem { status: 404, .. })
+            ),
+            "withdrawal cannot excuse a mismatched retained binding"
+        );
+        fixture.database.admin.execute(
+            "UPDATE registry_internal.registry_proposal_review_submissions SET proposal_digest=$2,withdrawn=false WHERE proposal_id=$1",
+            &[&id, &original],
+        ).await.unwrap();
+        // An approved current automatic round must have a job. Only actual withdrawal
+        // explains the legitimate no-job case under test.
+        let status: String = fixture.database.admin.query_one(
+            "SELECT status FROM registry_internal.registry_proposal_review_results WHERE proposal_id=$1", &[&id],
+        ).await.unwrap().get(0);
+        if status == "approved" {
+            assert!(matches!(
+                http.client.get_proposal(&get, &id.to_string()).await,
+                Err(registry_breg_client::BaseRegistryClientError::Problem { status: 404, .. })
+            ));
+        }
+        fixture.database.admin.execute(
+            "UPDATE registry_internal.registry_proposal_review_submissions SET withdrawn=true WHERE proposal_id=$1", &[&id],
+        ).await.unwrap();
+    } else {
+        // Bypass the SDK's unavailable-link refusal to prove the actual runtime
+        // still refuses an attempt to use the retained approval.
+        let link = serde_json::to_value(observed.link("apply").unwrap()).unwrap();
+        let refused = reqwest::Client::new()
+            .post(format!(
+                "{}{}?accessProfile=clerk",
+                http.base_url,
+                link["path"].as_str().unwrap()
+            ))
+            .header("if-match", link["ifMatch"].as_str().unwrap())
+            .header("idempotency-key", "withdrawn-apply-canary")
+            .json(&json!({"submissionVersion":1,"effectDigest":observed.effect_digest().unwrap()}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), reqwest::StatusCode::PRECONDITION_FAILED);
+        assert_eq!(
+            activation_work_snapshot(&fixture.database.admin).await,
+            retained
+        );
+    }
+    // Activation recovery rebases and submits for fresh Review; exact rollback
+    // recovery cancels. Neither can reuse the retained approval or create an old job.
+    if blocked {
+        let rebase = http
+            .client
+            .prepare_proposal(
+                &observed,
+                "rebase",
+                json!({"input":observed.input().unwrap()}),
+                &BRegIdempotencyKey::parse("rebase-late-approval-canary").unwrap(),
+            )
+            .unwrap();
+        let draft = http.client.execute_proposal(&rebase).await.unwrap().value;
+        assert_eq!(draft.state(), BRegProposalState::Draft);
+        let submit = http
+            .client
+            .prepare_proposal(
+                &draft,
+                "submit",
+                json!({}),
+                &BRegIdempotencyKey::parse("submit-late-approval-canary").unwrap(),
+            )
+            .unwrap();
+        let fresh = http.client.execute_proposal(&submit).await.unwrap().value;
+        assert_eq!(fresh.submission_version(), 2);
+        assert_eq!(fresh.state(), BRegProposalState::Submitted);
+        let rounds = fixture.database.admin.query(
+            "SELECT submission_version,state,withdrawn,accepted_binding IS NULL
+             FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1 ORDER BY submission_version", &[&id],
+        ).await.unwrap();
+        assert_eq!(rounds.len(), 2);
+        assert!(rounds[0].get::<_, bool>(2));
+        assert_eq!(rounds[1].get::<_, i64>(0), 2);
+        assert_eq!(rounds[1].get::<_, String>(1), "pending");
+        assert!(!rounds[1].get::<_, bool>(2));
+        assert!(rounds[1].get::<_, bool>(3));
+        assert!(application_jobs(fixture, id).await.is_empty());
+        assert_eq!(result_count(fixture).await, 1);
+        return;
+    }
+    let cancel = http
+        .client
+        .prepare_proposal(
+            &observed,
+            "cancel",
+            json!({}),
+            &BRegIdempotencyKey::parse("cancel-late-approval-canary").unwrap(),
+        )
+        .unwrap();
+    let cancelled = http.client.execute_proposal(&cancel).await.unwrap().value;
+    assert_eq!(cancelled.state(), BRegProposalState::Cancelled);
+    assert!(application_jobs(fixture, id).await.is_empty());
+    assert_eq!(
+        result_count(fixture).await,
+        1,
+        "Cancel preserves the historical result"
+    );
 }
 
 #[tokio::test]
