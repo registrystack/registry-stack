@@ -206,8 +206,10 @@ def check_forward_path(from_tag: str, version: str) -> None:
         floor = "v{}.{}.{}".format(*FORWARD_PATH_FLOOR)
         raise RehearsalError(
             f"refusing {from_tag}: before 1.0 a release reads only the state its "
-            f"immediate predecessor wrote, and this source reads state from {floor} "
-            "onward; upgrade one release at a time"
+            "immediate predecessor wrote, and this source reads no state written "
+            f"before {floor}. Bring the state to {floor} first; a product that starts "
+            "a fresh baseline there installs on fresh state instead, as the upgrade "
+            "section of release/OPERATIONS.md describes"
         )
 
 

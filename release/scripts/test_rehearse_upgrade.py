@@ -510,7 +510,9 @@ class ForwardPathFloorTest(unittest.TestCase):
                 self.assertEqual(status, 1)
                 self.assertFalse(work.exists())
                 self.assertIn("refusing v0.41.0", stderr)
-                self.assertIn("reads state from v0.42.0", stderr)
+                self.assertIn("reads no state written before v0.42.0", stderr)
+                self.assertIn("installs on fresh state", stderr)
+                self.assertNotIn("one release at a time", stderr)
                 self.assertEqual(seen["sides"], [])
                 self.assertEqual(seen["legs"], [])
 
