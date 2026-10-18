@@ -1,6 +1,6 @@
 ---
 title: Deliver to a wallet
-description: Run the evidence-oid4vci delivery front end beside an Evidence Gateway so a wallet can receive holder-bound SD-JWT VC responses over OID4VCI, and check it against a pinned wallet.
+description: Run the evidence-oid4vci delivery front end beside an Evidence Gateway so a wallet can receive holder-bound SD-JWT VC responses over OID4VCI, and confirm it with a wallet.
 status: current
 owner: registry-docs
 source_repos:
@@ -16,7 +16,6 @@ standards_referenced:
   - sd-jwt-vc
 tutorial_test:
   toolset: evidence
-  checkout: true
 ---
 
 import ConfigurationReference from '../../../components/ConfigurationReference.astro';
@@ -41,8 +40,8 @@ It never signs, never holds a holder private key, and adds no Evidence semantics
   you.
 - A TLS proxy that publishes the front end's public HTTPS origin.
 - The `evidence-oid4vci` binary, which the
-  [same installer](../../tutorials/build-and-deploy-evidence-project/#what-you-need) installs beside
-  `evidence` and `evidencectl`, or the image `ghcr.io/registrystack/evidence-oid4vci:<tag>` from the
+  [same installer](../../tutorials/first-evidence-assertion/#install-evidence-and-evidencectl)
+  installs beside `evidence` and `evidencectl`, or the image `ghcr.io/registrystack/evidence-oid4vci:<tag>` from the
   [latest release](https://github.com/registrystack/registry-stack/releases/latest). The image runs
   as the distroless `nonroot` user (uid 65532), exposes port 8090, and runs
   `serve --runtime-config /etc/registry-evidence-oid4vci/runtime.yaml`. Mount the runtime file and
@@ -91,7 +90,8 @@ on a non-zero port such as `8090`, not the public origin's `443`. The listener s
 
 `privateKeyRef` follows the [secret reference grammar](../../reference/environment-variables/#secret-references).
 The key file must be a regular file owned by the service user, mode `0400` or `0600`, with a single
-link. The runtime configuration table below gives every key, its bounds, and its default. `check` adds the rules a schema cannot hold:
+link. Every key has the bounds and default its schema gives it, and `check` also enforces the rules
+a schema cannot hold:
 
 - `store.nonceLifetimeSeconds` must not exceed `store.accessTokenLifetimeSeconds`.
 - The listener port must be non-zero.
@@ -193,64 +193,33 @@ Set `metricsListener.bind` to serve Prometheus text at `/metrics` on a private a
 
 ## Check wallet interoperability
 
-Before you put a new `evidence-oid4vci` binary behind your proxy, check it against the wallet it
-was tested with. The checks replay a sanitized profile of Inji Wallet, its expected metadata and
-wire shapes, through a real process of your binary, with synthetic keys and data discarded on
-exit. They run from a source checkout of the release you deploy, with its Rust toolchain, Bash,
-and Python 3, and need loopback ports 18440 to 18442 free:
-
-```sh test-skip="the runner starts in a copy of this checkout"
-git clone --depth 1 --branch v<version> https://github.com/registrystack/registry-stack.git
-cd registry-stack
-```
-
-Point `EVIDENCE_OID4VCI_BIN` at the binary you deploy, so the checks drive it and compare the
-contract it renders with the release's. The first run builds the test, which takes several minutes:
-
-```sh
-EVIDENCE_OID4VCI_BIN="$(command -v evidence-oid4vci)" \
-  products/evidence/scripts/compat/inji-oid4vci.sh
-```
-
-Each stage prints a milestone as it passes, from checking a delivery file to a wallet flow that
-returns a credential verified as holder-bound Evidence:
-
-```text test-excerpt
-CONFIG CHECKED: complete delivery configuration is valid
-METADATA INSPECTED: derived holder-bound batch ceiling is 4
-SERVICE READY: health and readiness are available on the delivery listener
-METRICS PRIVATE: metrics exist only on the separate loopback listener
-TASK GRANT REFUSED: deferred wallet state was not created
-PRESENTATION VERIFIED: public wallet flow returned holder-bound Evidence
-CLEANUP COMPLETE: generated private material was removed
-```
-
-```text test-excerpt
-PASS: sanitized Inji OID4VCI profile and Registry-side interoperability tests
-```
-
-A run that stops before `PASS:` failed at the stage after the last milestone it printed. A `cmp`
-difference before any milestone means your binary renders a different contract from the release
-you checked out. A message that names a listener or readiness usually means one of the ports is
-taken. A pass is bounded evidence for the Inji revisions the
+Each release is checked against one wallet: Inji Wallet, at the exact revisions of the wallet and
+its Kotlin and Swift OID4VCI clients that the
 [pinned profile](https://github.com/registrystack/registry-stack/blob/main/products/evidence/fixtures/interoperability/inji-oid4vci/profile.json)
-names, tested on 2026-08-09, not certification.
+names. The check drives the release's `evidence-oid4vci` binary through the pre-authorized code
+flow of OID4VCI 1.0 Final with a `did:jwk` holder key and an ES256 proof, and verifies that the
+`dc+sd-jwt` credential it returns is holder-bound Evidence. It also replays twelve refusals, among
+them a wrong proof audience, a reused or expired nonce, and a replayed access token. The profile
+records those wire shapes and cases, plus what the check excludes: device or UI testing,
+authorization code with PAR and DPoP, deferred or encrypted issuance, and more than one replica.
+The
+[receipt](https://github.com/registrystack/registry-stack/blob/main/products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json)
+records the run against those upstream revisions on 2026-08-09: the environment, the client tests
+that passed, and the claim boundary. A pass is bounded evidence for those revisions, not
+certification or general Inji compatibility. The
+[check scripts](https://github.com/registrystack/registry-stack/tree/main/products/evidence/scripts/compat)
+live in the repository for contributors.
 
-To rebuild those Inji revisions and rerun their own client tests, run the opt-in upstream check
-on macOS with Git, npm, Java 17, Android SDK platform 34 with Build Tools 33.0.1, full Xcode, and
-an iPhone 15 simulator. It ends with the line the pinned receipt records:
+To confirm your own deployment, have your front end create a credential offer at `/offers` for a
+holder-bound definition and open it in the wallet your holders use. The wallet reads the metadata,
+redeems the pre-authorized code at `/token`, fetches a nonce, and calls `/credential`; the
+credential it stores is the Evidence Gateway's SD-JWT VC response, bound to the wallet's key.
 
-```sh test-skip="the upstream check needs macOS with Xcode and the iOS Simulator, Java, the Android SDK, and network access"
-EVIDENCE_INJI_OID4VCI=1 products/evidence/scripts/compat/inji-oid4vci-upstream.sh
-```
-
-{/* Evidence: products/evidence/scripts/compat/inji-oid4vci.sh, EVIDENCE_OID4VCI_BIN, cmp;
-    crates/registry-evidence-oid4vci/tests/inji_interoperability.rs, adapter_binary, adopter_config,
-    copied_config_checks_starts_and_completes_the_real_binary_journey, wait_until_ready;
-    products/evidence/fixtures/interoperability/inji-oid4vci/profile.json, testedOn;
-    products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json, receipt;
-    products/evidence/contracts/oid4vci-profile.yaml, claim_rule;
-    products/evidence/scripts/compat/inji-oid4vci-upstream.sh, EVIDENCE_INJI_OID4VCI. */}
+{/* Evidence: products/evidence/fixtures/interoperability/inji-oid4vci/profile.json, upstream,
+    metadata, wire, negativeCases, exclusions, testedOn;
+    products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json, results, claimBoundary;
+    crates/registry-evidence-oid4vci/tests/inji_interoperability.rs;
+    products/evidence/contracts/oid4vci-profile.yaml, claim_rule. */}
 
 ## Troubleshooting
 

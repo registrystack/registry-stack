@@ -19,48 +19,49 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-You are the operator who received the proved `adult-status` project from
-[Prove an Evidence Gateway project](../prove-an-evidence-project/). Here you bind it to your
-environment, package it into a candidate whose digest you can repeat, activate it on the target
-host, and serve it with the listener and audit path you chose.
+You are the operator who puts the proved `adult-status` project in front of real callers: bind it
+to a host, package it into a candidate whose digest you can repeat, activate it, and prove its
+dependencies before it opens a listener.
 
 <QuickstartMeta
-  outcome="An activated Evidence Gateway candidate with a recorded package digest."
+  outcome="An activated Evidence Gateway candidate with a recorded package digest and passing dependency preflight."
   time="About 30 minutes"
   level="Operator handoff with synthetic data and a local signer"
-  prerequisites={['The proved adult-status project', 'evidence and evidencectl from one release', 'A shell and an editor']}
+  prerequisites={['The proved adult-status project', 'evidence and evidencectl from one release', 'Free loopback port 18090']}
 />
 
-## What you need
+## Before you begin
 
-You need the proved project and matching `evidence` and `evidencectl` binaries. Download the
-installer with the release `SHA256SUMS`, check it, then run it:
+You continue the `adult-status` project from
+[Your first assertion](../first-evidence-assertion/). The deployment reaches the same synthetic
+source on port 8081 and trusts the same local token issuer on port 8082. If you stopped the
+source, start it again in another terminal:
 
-```sh test-skip="the gate supplies the binaries"
-tag="<released-tag>"
-base="https://github.com/registrystack/registry-stack/releases/download/$tag"
-curl -fsSLO "$base/evidencectl-$tag-install.sh"
-curl -fsSLO "$base/SHA256SUMS"
-sha256sum --check --strict --ignore-missing SHA256SUMS
-bash "evidencectl-$tag-install.sh"
-evidence --version
-evidencectl --version
+```sh test-cwd="first-evidence-assertion/adult-status" test-background="http://127.0.0.1:8081/healthz"
+python3 serve-source.py \
+  --port 8081 \
+  --token-file .generated/secrets/synthetic-source-token
 ```
 
-The installer checks every binary against the same `SHA256SUMS` before installing. Neither check
-proves who published the release; the
-[release verification procedure](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
-authenticates `SHA256SUMS` itself.
+If you stopped the development session, start it again from the project directory, so the token
+issuer answers on `8082`:
 
-{/* Evidence: crates/registry-evidencectl/install.sh; release/VERIFY.md. */}
+```sh test-skip="the session from Your first assertion is still running"
+evidencectl dev start . \
+  --target local-target.yaml \
+  --evidence-port 18080 \
+  --issuer-port 8082
+```
 
 ## Write the deployment target
 
 The assertion provider owns the Evidence project: `assertionDefinitions`, `sources`, `functions`,
-`selectorProfiles`, `outputs`, and each `grantCeiling`. You own the environment. From the
-directory that holds `adult-status`, create your target from the project's local settings:
+`selectorProfiles`, `outputs`, and each `grantCeiling`. You own the environment, in a
+[deployment target](../../reference/glossary/#target) kept beside the project. Step out of `adult-status` and create one from the project's local
+settings:
 
-```sh test-cwd="first-evidence-assertion"
+```sh test-cwd="first-evidence-assertion/adult-status"
+cd ..
 evidencectl target new ./deploy-target --settings adult-status/local-target.yaml
 ```
 
@@ -68,8 +69,8 @@ evidencectl target new ./deploy-target --settings adult-status/local-target.yaml
 Created Evidence target ./deploy-target
 ```
 
-`deploy-target/target.yaml` is the deployment target, the operator's file: it names the
-project, the authority file that grants callers access, and every host binding.
+`deploy-target/target.yaml` names the project, the authority file that grants callers access, and
+every host binding. `target new` refuses an existing destination.
 
 ```yaml title="deploy-target/target.yaml" test-excerpt="deploy-target/target.yaml"
 id: local
@@ -79,9 +80,10 @@ package:
 authority: dev-authority.yaml
 ```
 
-`target new` refuses an existing destination. Generate a signing key for this replay:
+Give the deployment its own signing key:
 
 ```sh
+umask 077
 evidencectl keygen signing --output-dir deploy-target/secrets \
   --public-output deploy-target/public-keys/signing.jwk.json
 ```
@@ -92,10 +94,10 @@ wrote deploy-target/public-keys/signing.jwk.json
 ```
 
 `keygen` writes private material only to owner-only files, never to standard output. Production
-signs through Vault or OpenBao Transit instead; the next page moves the `signer` there.
+signs through Vault or OpenBao Transit instead; the next tutorial moves the `signer` there.
 
-Point the package root, the secret root, the public key, and the audit path at directories you
-chose. Relative paths resolve against the target directory:
+Point the package root, secret root, public key, and audit path at this host's directories,
+relative to the target directory:
 
 ```diff lang="yaml" title="deploy-target/target.yaml" test-edit
  package:
@@ -122,8 +124,20 @@ chose. Relative paths resolve against the target directory:
 +  path: audit/evidence.jsonl
 ```
 
-The listener binds a loopback or private address unless `listener.networkExposure` says
-`container-private`. Read back what the target binds:
+The development session holds `18080`, so listen on `18090`, changing the bind and the public
+origin together:
+
+```diff lang="yaml" title="deploy-target/target.yaml" test-edit
+-  publicOrigin: http://127.0.0.1:8080
++  publicOrigin: http://127.0.0.1:18090
+   trustDomain: urn:example:trust:standalone-evidence
+ listener:
+-  bind: 127.0.0.1:8080
++  bind: 127.0.0.1:18090
+```
+
+The bind must be a loopback or private address unless `listener.networkExposure` says
+`container-private`. Read back what the target selects, offline:
 
 ```sh
 evidencectl target explain deploy-target/target.yaml adult-status
@@ -135,8 +149,6 @@ Project: standalone-evidence
 Authority: dev-authority.yaml
 Access profiles: 1
 ```
-
-`target explain` runs offline and resolves no secret.
 
 {/* Evidence: crates/registry-evidencectl/src/target.rs, reject_existing, secretResolution;
     crates/registry-evidencectl/src/keygen.rs, generate_p256_keypair;
@@ -155,8 +167,8 @@ error[evidence.target.production-assurance-required] deployment-target deploy-ta
   next: Correct the selected project or target artifact and rerun check.
 ```
 
-This target declares no production `assuranceProfile`, which a local key file cannot meet, so it
-stays a replay target. Package it into a new directory outside the project:
+A local key file cannot meet a production `assuranceProfile`, so this target declares none and
+stays a rehearsal. Package it into a new directory outside the project:
 
 ```sh
 evidencectl package adult-status --target deploy-target/target.yaml --output candidate
@@ -173,64 +185,58 @@ Provision secret:file/synthetic-source-token
 Target runtime paths and deployment secret material remain unverified until `evidencectl doctor --runtime-config candidate/runtime.yaml`.
 ```
 
-`candidate` is the [deployment candidate](../../reference/glossary/#deployment-candidate). The package digest identifies its immutable `bundle/`:
-the same project and target produce the same digest, so record it. Before writing, `package`
-checks the bundle and runs every fixture through the `evidence` binary it finds through
-`EVIDENCE_BIN` or on `PATH`, so you need no separate `evidencectl test`. It runs offline,
-contacts no source, token issuer, or signer, and leaves the project unchanged.
+`candidate` is the [deployment candidate](../../reference/glossary/#deployment-candidate). The
+package digest identifies its immutable `bundle/`: the same project and target produce the same
+digest, so record it. Editing the target, even its port, changes the digest but no definition's
+`configurationRevision`, which moves only with the definition's semantics
+([How Evidence Gateway works](../../explanation/how-evidence-works/)). `package` first checks the bundle and runs every fixture through the
+`evidence` binary on `PATH` (or `EVIDENCE_BIN`), contacting no source, issuer, or signer.
+
+List the candidate to see the three parts that travel to the host:
 
 ```sh
-find candidate -maxdepth 2 | LC_ALL=C sort
+ls candidate
 ```
 
 ```text test-expect
-candidate
-candidate/bundle
-candidate/bundle/SHA256SUMS
-candidate/bundle/adapters
-candidate/bundle/codelists
-candidate/bundle/derivations
-candidate/bundle/evidence.yaml
-candidate/bundle/fixtures
-candidate/bundle/public-keys
-candidate/bundle/schemas
-candidate/compiled-authority.yaml
-candidate/runtime.yaml
+bundle
+compiled-authority.yaml
+runtime.yaml
 ```
 
-`bundle/` holds no secret. `runtime.yaml` records the target's paths as absolute paths, including
-`authority.root` and `authority.target`, so write a target for another host with that host's paths.
+`bundle/` is the package the digest names, and it holds no secret. `compiled-authority.yaml` is
+the access authority you activate next. `runtime.yaml` records the target's paths as absolute paths, so write
+a target for another host with that host's paths.
 
 {/* Evidence: crates/registry-evidencectl/src/check.rs, production-assurance-required;
     crates/registry-evidence/src/bundle.rs, signer_matches_assurance;
     crates/registry-evidencectl/src/build.rs, prepare_candidate, run_bundle_fixture,
     secret_references, proofBoundary; crates/registry-evidencectl/src/evidence_binary.rs, resolve;
-    crates/registry-evidencectl/src/normalized.rs:337. */}
+    crates/registry-evidencectl/src/normalized.rs:337;
+    crates/registry-evidence/src/bundle.rs, canonical_projection. */}
 
 ## Activate on the target host
 
-Only the candidate travels to the target host; the editable project stays where you built it.
-Here both hosts are this directory. Provision each secret the summary named beneath
-`secretProviders.file.root`, and install `bundle/` at the package root:
+Only the candidate travels to the target host, here this same directory. Provision each secret the summary named beneath
+`secretProviders.file.root`. The source token is the source owner's to issue, and the running
+source accepts only the one it was started with, so copy that one:
 
 ```sh
 evidencectl keygen secret --output deploy-target/secrets/audit-hmac-key
 evidencectl keygen secret --output deploy-target/secrets/subject-binding-hmac-key
-evidencectl keygen token --output deploy-target/secrets/synthetic-source-token
+cp adult-status/.generated/secrets/synthetic-source-token deploy-target/secrets/
 cp -R candidate/bundle deploy-target/package
 ```
 
 ```text test-expect
 wrote deploy-target/secrets/audit-hmac-key
 wrote deploy-target/secrets/subject-binding-hmac-key
-wrote deploy-target/secrets/synthetic-source-token
 ```
 
-Activate the authority against the installed package. The runtime file must be named by
-an absolute path:
+Activate the authority against the installed package:
 
 ```sh
-evidence authority activate --runtime-config "$PWD/candidate/runtime.yaml" \
+evidence authority activate --runtime-config candidate/runtime.yaml \
   --document candidate/compiled-authority.yaml
 ```
 
@@ -238,11 +244,11 @@ evidence authority activate --runtime-config "$PWD/candidate/runtime.yaml" \
 ACTIVATED sha256:<revision> sha256:<snapshot> sequence=1
 ```
 
-Activation records the authority revision and snapshot for the next start; a running process
-keeps its snapshot until restart. Check the installed package:
+Activation records the authority snapshot for the next start; a running process keeps its own
+until restart. Check the installed package, which reads no secret and contacts no network service:
 
 ```sh
-evidence check --runtime-config "$PWD/candidate/runtime.yaml"
+evidence check --runtime-config candidate/runtime.yaml
 ```
 
 ```text test-expect
@@ -250,16 +256,21 @@ Evidence package sha256:<digest> passed check (4 requirements)
 0 errors, 0 warnings in 28 files
 ```
 
-The digest matches the one `package` printed. This check reads no secret and contacts no network
-service. Then prove the startup dependencies:
+The digest matches the one `package` printed. Then prove the startup dependencies: `doctor`
+resolves every secret, proves the signer, opens the audit log, and fetches the token issuer's
+keys, as startup does. Name the runtime file by absolute path:
 
-```sh test-skip="needs the token issuer and source running and reachable from this host"
+```sh
 evidencectl doctor --runtime-config "$PWD/candidate/runtime.yaml"
 ```
 
-`doctor` checks the signer, every source, and the token issuer as startup does, and refuses with
-`evidence.deployment.dependency-unavailable` while one is unreachable. It opens no listener, sends
-no evidence request, and appends no application audit event.
+```text test-excerpt
+Dependency preflight passed for <runtime-file>
+```
+
+An unreachable dependency refuses with `evidence.deployment.dependency-unavailable`. `doctor`
+opens no listener, sends no evidence request, appends no application audit event, and does not call the
+source.
 
 {/* Evidence: crates/registry-evidence/src/main.rs:265; crates/registry-evidence/src/main.rs:791;
     crates/registry-evidence/src/cli.rs, AuthorityCommand, Check;
@@ -267,12 +278,16 @@ no evidence request, and appends no application audit event.
 
 ## Start serving
 
-```sh test-skip="the gate starts no production listener"
+Start the service in a terminal of its own; it logs `evidence service listening` with the
+package digest:
+
+```sh test-skip="runs in the foreground until stopped"
 evidence serve --runtime-config "$PWD/candidate/runtime.yaml"
 ```
 
-Route traffic through your TLS front only after `GET /ready` succeeds. To send one synthetic
-request, keep the access token in an owner-only curl configuration, never on a command line:
+Route traffic through your TLS front only after `GET http://127.0.0.1:18090/ready` succeeds. To
+send one synthetic request, keep the access token in an owner-only curl configuration, never on a
+command line:
 
 ```sh test-skip="needs the running service and an access token"
 umask 077
@@ -280,20 +295,13 @@ install -m 600 /dev/null "<owner-only-curl-config>"
 ```
 
 Put `header = "Authorization: Bearer <access-token>"` in it through your secret-management path,
-then send the request with `curl --config "<owner-only-curl-config>"` and delete the file. Confirm
+then send the request with `curl --config "<owner-only-curl-config>"` and delete the file. In
+production only, where the deployment ships `audit.path` to an append-only audit store, confirm
 that the request's `access-attempt` and `disclosure-release` entries, which share one
-`correlation`, reached the deployment's append-only audit store, not only `audit.path`.
+`correlation`, reached that store.
 
 {/* Evidence: crates/registry-evidence/src/server.rs, READY_ROUTE;
     crates/registry-evidence/src/audit.rs, correlation; products/evidence/OPERATOR-CONTRACT.md. */}
-
-## Revision and digest
-
-Editing the deployment target, for example to move a source endpoint, changes the package digest
-but no definition's `configurationRevision`, which moves only with the definition's semantics.
-[How Evidence Gateway works](../../explanation/how-evidence-works/) explains both.
-
-{/* Evidence: crates/registry-evidence/src/bundle.rs, canonical_projection. */}
 
 ## Next
 

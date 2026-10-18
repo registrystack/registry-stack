@@ -16,18 +16,23 @@ tutorial_test:
   skip: drift-checked by evidence-production-build-docs.test.mjs; needs a Transit signer
 ---
 
-You have a candidate that serves with a local JWK signer. This page moves the same Evidence
-project to a Transit signer: Vault or OpenBao holds the private key and never exports it, and
-Evidence Gateway signs through a workload-local proxy socket.
-The service process receives no Vault or OpenBao token.
+You have a candidate that serves with a local JWK signer. Move the same Evidence project to a
+Transit signer before it serves real callers: Vault or OpenBao holds the private key and never
+exports it, and Evidence Gateway signs through a workload-local proxy socket. The service
+process receives no Vault or OpenBao token.
 
 ## What you need
 
 - A Vault or OpenBao Transit mount administered outside the application workload, and an
   authenticated operator session for it. The commands use a mount named `transit`.
-- A deployment target copied from
-  `products/evidence/reference/deployment-targets/environments/production/`, which carries the
-  Transit policy and proxy configuration this page excerpts.
+- A copy of the release's production example. Download the source archive of your release,
+  `https://github.com/registrystack/registry-stack/archive/refs/tags/v<version>.tar.gz`, where
+  `<version>` is the version `evidencectl --version` prints. It unpacks to
+  `registry-stack-<version>/`; copy its
+  `products/evidence/reference/deployment-targets/environments/production/` directory to
+  `production/` beside your project. The copy holds the Transit policy, the proxy configuration,
+  and the deployment target `production/evidence/target.yaml`; `<target>` in the commands is
+  `production/evidence`.
 - `evidencectl` and `evidence` from the same release, and [`jq`](https://jqlang.org/).
 
 ## Create the Transit key and its policy
@@ -58,7 +63,7 @@ vault read -format=json transit/keys/evidence-signing > "<operator-review-path>/
 
 The proxy identity needs read on the key's metadata and update on its sign endpoint, constrained to
 the pinned key version and the exact JWS request shape. This is
-`transit/policies/evidence-signing.hcl` from the production environment, which pins key version 12:
+`production/transit/policies/evidence-signing.hcl`, which pins key version 12:
 
 ```hcl
 path "transit/keys/evidence-signing" {
@@ -88,8 +93,8 @@ use the equivalent `bao` commands for OpenBao.
 ## Run the proxy with a forced token
 
 The proxy holds the provider credential and Evidence Gateway holds only the socket. This is
-`transit/proxy-configs/evidence.hcl` from the production environment, without its `pid_file` and
-`auto_auth` method, which you replace with your platform's:
+`production/transit/proxy-configs/evidence.hcl`, without its `pid_file` and `auto_auth` method,
+which you replace with your platform's:
 
 ```hcl
 vault {
@@ -147,8 +152,7 @@ responses. See [`evidencectl jwk from-pem`](../../reference/cli/evidencectl/jwk/
 
 ## Point the signer at the key version
 
-Replace the target's `signer` block. This is the one in `evidence/target.yaml` from the production
-environment:
+Replace the target's `signer` block. This is the one in `production/evidence/target.yaml`:
 
 ```yaml
 signer:
@@ -162,7 +166,7 @@ signer:
   publicJwkFile: public-keys/PSmhXYjoKCBO6gCOMNHqMvnnsAC3m0aaLfXZDWJLmd4.jwk.json
 ```
 
-`keyVersion` must be the version the policy allows, and `publicJwkFile` the file you wrote above.
+`keyVersion` must be the version the policy allows, and `publicJwkFile` the file `jwk from-pem` wrote.
 Put no provider token or private key in the target.
 
 {/* Evidence: crates/registry-evidence-authoring/src/target_binding.rs, TargetSigner; products/evidence/reference/deployment-targets/environments/production/evidence/target.yaml */}

@@ -19,43 +19,72 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-You wrote the assertion definitions in `adult-status`, the project from
-[Get your first Evidence Gateway assertion](../first-evidence-assertion/). Here you prove every
-definition against synthetic cases offline, read the trace of one case, and leave the project
-ready to package.
+You are in `adult-status`, the project from
+[Your first assertion](../first-evidence-assertion/). Before anyone packages it for a real host,
+prove that every assertion definition gives the answer it should, including at the edges where a
+wrong answer would hurt. Fixtures run offline, so the source and Evidence Gateway can keep running
+in the background; nothing here uses them.
 
 <QuickstartMeta
   outcome="Four assertion definitions proved offline, with the trace of one case read."
   time="About 10 minutes"
   level="Offline proof with synthetic data"
-  prerequisites={['The adult-status project', 'evidence and evidencectl on PATH']}
+  prerequisites={['The adult-status project from Your first assertion']}
 />
 
 ## Find each definition's fixture
 
-Enter the project:
+Each assertion definition in `evidence.yaml` names its fixture, the file of synthetic cases that
+proves it. The project holds one fixture for each of its four definitions:
 
-```sh test-cwd="first-evidence-assertion"
-cd adult-status
+```sh test-cwd="first-evidence-assertion/adult-status"
+ls fixtures
 ```
 
-Each assertion definition in `evidence.yaml` names its fixture, the file of synthetic cases that
-proves it. The `adult-status` definition ends with:
+```text test-expect
+adult-status.yaml
+legal-parent-relationship.yaml
+professional-licence-status.yaml
+residence-region.yaml
+```
+
+The `adult-status` definition ends by naming its fixture:
 
 ```yaml title="evidence.yaml" test-excerpt="evidence.yaml"
 observationTimezone: Asia/Bangkok
 fixtures: fixtures/adult-status.yaml
 ```
 
-The project holds four assertion definitions and four fixtures under `fixtures/`. A fixture
-states inputs and expected outcomes only; the definition keeps its source, function, outputs, and
-grant ceiling.
+A case supplies one synthetic source response and the result it must produce. These two cases
+hold the same birth date and sit one second apart, on either side of midnight in Bangkok on the
+eighteenth birthday:
+
+```yaml title="fixtures/adult-status.yaml" test-excerpt="fixtures/adult-status.yaml"
+  expectedValue: false
+  expectedLookup: match
+  derivationRuns: true
+  signedSuccess: true
+  observedAt: '2026-10-13T16:59:59Z'
+- id: boundary-at-bangkok-midnight
+  source:
+    total: 1
+    record:
+      record_id: adult
+      birth_date: '2008-10-14'
+```
+
+The first expects `false`, the second `true`. A definition that compared dates in UTC would fail
+one of them. A fixture states inputs and expected outcomes only; the definition keeps its source,
+function, outputs, and [grant ceiling](../../reference/glossary/#grant-ceiling).
 
 {/* Evidence: crates/registry-evidence-authoring/src/project.rs;
     products/evidence/reference/request-adapter/deployment-projects/FIXTURES.md;
-    products/evidence/examples/standalone/fixtures/adult-status.yaml. */}
+    products/evidence/examples/standalone/fixtures/adult-status.yaml,
+    boundary-before-bangkok-midnight and boundary-at-bangkok-midnight. */}
 
 ## Run every fixture
+
+Run all four fixtures, and treat a warning as a failure, the way a build should:
 
 ```sh
 evidencectl test . --target local-target.yaml --deny-warnings
@@ -71,18 +100,17 @@ PASS: fixtures/residence-region.yaml (9 cases)
 Proof: offline synthetic fixture evaluation; no live dependency readiness was checked
 ```
 
-Each fixture holds cases: a case supplies one synthetic source response and the result it must
-produce. The fixture grammar is closed, so an unknown key, unsupported expectation, or real-data
+Each case runs through the matching `evidence` binary, from source extraction to an
+offline-verified signature. The `Proof:` line states what passing means: every case supplies its
+own source response, so no live source, credential, or token issuer took part. Whether the real
+source and issuer answer is a separate check, made on the host that serves.
+
+The fixture grammar is closed, so an unknown key, an unsupported expectation, or a real-data
 marker refuses evaluation; the
 [fixture contract](https://github.com/registrystack/registry-stack/blob/main/products/evidence/reference/request-adapter/deployment-projects/FIXTURES.md)
-lists the case forms.
-
-Each case runs through the matching `evidence` binary, from source extraction to an offline-verified
-signature. The `Proof:` line states the boundary: every case supplies its own source response, so
-no live source, credential, or token issuer takes part.
-
-Treat a failed case, warning, or unknown field as a failed build input, and never turn a real
-failure into an ignored case. For CI, `--format json` prints the same report as one JSON document.
+lists the case forms. Treat a failed case, warning, or unknown field as a failed build input, and
+never turn a real failure into an ignored case. For CI, `--format json` prints the same report as
+one JSON document.
 
 {/* Evidence: crates/registry-evidencectl/src/fixtures.rs:322;
     crates/registry-evidencectl/src/fixtures.rs:816;
@@ -90,7 +118,7 @@ failure into an ignored case. For CI, `--format json` prints the same report as 
 
 ## Explain one case
 
-Select one fixture and one case, and ask for the trace:
+When a case fails, the trace shows where. Ask for the trace of the midnight case:
 
 ```sh
 evidencectl test . --target local-target.yaml \

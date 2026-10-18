@@ -13,13 +13,12 @@ locale: en
 standards_referenced: []
 tutorial_test:
   toolset: evidence
-  checkout: true
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If other services need a yes-or-no answer from records your institution holds, this tutorial
-shows you what Evidence Gateway gives them. You run it over a synthetic source, ask whether one
+If other services need a yes-or-no answer from records your institution holds, start by seeing
+what Evidence Gateway gives them. You run it over a synthetic source, ask whether one
 test person is an adult, and read `"value": true` from a verified response with no birth date.
 
 <QuickstartMeta
@@ -62,21 +61,14 @@ evidencectl <version>
 
 ## Get the example project
 
-The example project ships in the source archive of the same release. Download and extract it,
-then work from the archive's root:
-
-```sh test-skip="downloads the release source; the gate starts at the root of this checkout"
-version="$(evidencectl --version | cut -d ' ' -f 2)"
-curl -fsSL "https://github.com/registrystack/registry-stack/archive/refs/tags/v${version}.tar.gz" | tar -xz
-cd "registry-stack-${version}"
-```
-
-Copy the standalone example out of the tree, because the next commands write keys and responses
-into it:
+Download the [Evidence example projects](../../examples/evidence-examples.tar.gz) into a fresh
+working directory as `evidence-examples.tar.gz`, then unpack the standalone project into a
+directory of its own, because the next commands write keys and responses into it:
 
 ```sh
 mkdir first-evidence-assertion
-cp -R products/evidence/examples/standalone first-evidence-assertion/adult-status
+tar -xzf evidence-examples.tar.gz -C first-evidence-assertion standalone
+mv first-evidence-assertion/standalone first-evidence-assertion/adult-status
 cd first-evidence-assertion/adult-status
 ```
 

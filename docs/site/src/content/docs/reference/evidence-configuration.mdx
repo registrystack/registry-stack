@@ -26,8 +26,8 @@ schema's own sentence on what the key decides.
 
 | Schema | Status | Source |
 | ------ | ------ | ------ |
-| `bundle/evidence.yaml`, `runtime.yaml` | Frozen Version 1 contract | `products/evidence/contracts/bundle.schema.yaml` and `products/evidence/contracts/runtime.schema.yaml` |
-| `evidence.yaml`, target, target authority and local tooling documents | Adopter tooling, not frozen | `crates/registry-evidencectl/schemas/authoring/*.schema.json` |
+| `bundle/evidence.yaml`, `runtime.yaml` | Frozen Version 1 contract | [`bundle.schema.yaml`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/bundle.schema.yaml) and [`runtime.schema.yaml`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/runtime.schema.yaml) |
+| `evidence.yaml`, target, target authority and local tooling documents | Adopter tooling, not frozen | [Authoring schemas](https://github.com/registrystack/registry-stack/tree/main/crates/registry-evidencectl/schemas/authoring) |
 
 JSON Schema is not the acceptance path: a document these schemas accept still has to pass
 `evidencectl check`, which applies the cross-field, file, and grant rules no schema can express
