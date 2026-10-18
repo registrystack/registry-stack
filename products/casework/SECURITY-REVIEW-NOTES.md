@@ -430,17 +430,17 @@ in `crates/registry-casework/src/config.rs` pins the remote HTTP refusal at
 `/authentication/oidc/issuer`, and `runtime_reads_the_explicit_http_issuer_opt_in`
 there covers the explicit HTTP exception and its startup diagnostic.
 
-### Denied signing keys and a token lifetime bound
+### Refused signing keys and a token lifetime bound
 
 Threat: a signing key the operator knows is compromised, or is retiring, keeps
 authorizing tokens for as long as the issuer still publishes it; and an issuer
 that mints long-lived access tokens extends what a stolen token can do beyond
 what the deployment tolerates.
 
-Enforcement: `authentication.oidc.deniedKids` is read by `DeniedKeyIds` in
+Enforcement: `authentication.oidc.revokedKeyIds` is read by `RevokedKeyIds` in
 `crates/registry-casework/src/config.rs` as at least 1 and at most 128 distinct
 external key identifiers; an empty list and a 129th entry are refused at load
-with the fix, and omitting the member denies no key. `verifier_profile` passes
+with the fix, and omitting the member refuses no key. `verifier_profile` passes
 the list to the shared verifier, whose `enforce_kid_allowed` refuses a listed
 `kid` before the key set is consulted, with the same failure as an unavailable
 key, so a caller cannot tell incident response from ordinary rotation; Casework
@@ -451,21 +451,23 @@ refused at the member outside that range. When set, the shared verifier's
 and a token missing either claim; omitting it keeps the issuer's own lifetime.
 
 Tests: in `crates/registry-casework/src/config.rs`,
-`omitting_denied_kids_and_maximum_token_lifetime_keeps_current_acceptance`,
-`a_token_signed_by_a_denied_kid_is_refused_like_any_other_verification_failure`,
+`omitting_revoked_key_ids_and_maximum_token_lifetime_keeps_current_acceptance`,
+`a_token_signed_by_a_revoked_key_id_is_refused_like_any_other_verification_failure`,
 `a_token_outliving_the_maximum_token_lifetime_is_refused`, and
-`an_empty_denied_kids_list_or_an_out_of_range_lifetime_is_refused_with_its_fix`;
-`denied_key_ids_have_one_typed_contract_in_the_schema_and_reader` in
+`an_empty_revoked_key_ids_list_or_an_out_of_range_lifetime_is_refused_with_its_fix`;
+`revoked_key_ids_have_one_typed_contract_in_the_schema_and_reader` in
 `crates/registry-casework/src/schema.rs` holds the schema to the reader; and
 `oidc_rejects_denied_kid_before_jwks_lookup` and
 `oidc_max_token_lifetime_rejects_missing_or_invalid_time_bounds` in
 `crates/registry-platform-oidc/src/lib.rs` cover the shared enforcement.
 
-Accepted residuals: denial is by key identifier, which the issuer assigns, so a
+Accepted residuals: refusal is by key identifier, which the issuer assigns, so a
 compromised key republished under another `kid` is accepted until that `kid` is
-listed too. The denylist is runtime configuration, read when Casework starts,
-so a listed key keeps authorizing on a running process until it restarts with
-the change. The lifetime bound reads the token's own `iat` and `exp`, so it limits the
+listed too. The list refuses keys in Casework only and revokes nothing at the
+issuer, so every other relying party must be changed separately. The list is
+runtime configuration, read when Casework starts, so a listed key keeps
+authorizing on a running process until it restarts with the change. The
+lifetime bound reads the token's own `iat` and `exp`, so it limits the
 lifetime an issuer declared, not how long ago the token was actually minted.
 
 ### PostgreSQL support floor

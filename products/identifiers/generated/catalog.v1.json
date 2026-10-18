@@ -4118,11 +4118,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "d77768b4a84d061a9e7a9d7f4f1005d026e6a4b03f7ed1fd2fb8608ace699d3d"
+        "sha256": "bccc84b7d08eb68cf9b953845f93ab3c545a647d2324a761248853cc2d89123a"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "ffdd613e35a02033631beda3f1ff20ef5a95ca40fc87428da2009b5d8433b75f",
+        "sha256": "d2d840eaca8141caae26af9b6dca3afd9c396622e7d9365024cd3b03dd9c2036",
         "mediaType": "application/schema+json"
       }
     },

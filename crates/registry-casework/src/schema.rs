@@ -414,12 +414,12 @@ mod tests {
     }
 
     #[test]
-    fn denied_key_ids_have_one_typed_contract_in_the_schema_and_reader() {
+    fn revoked_key_ids_have_one_typed_contract_in_the_schema_and_reader() {
         let schema = runtime_schema();
         let with = |kids: Option<Value>| {
             let mut instance = runtime_instance("secret:file/jwks.json", "file");
             if let Some(kids) = kids {
-                instance["authentication"]["oidc"]["deniedKids"] = kids;
+                instance["authentication"]["oidc"]["revokedKeyIds"] = kids;
             }
             instance
         };
@@ -453,12 +453,12 @@ mod tests {
         let document: Value =
             serde_json::from_str(&runtime_documents().unwrap()[RUNTIME_CONFIG_SCHEMA_FILE])
                 .unwrap();
-        let denied = &document["$defs"]["OidcConfig"]["properties"]["deniedKids"];
-        assert!(denied.get("default").is_none());
-        assert_eq!(denied["uniqueItems"], true);
-        assert_eq!(denied["minItems"], 1);
-        assert_eq!(denied["maxItems"], 128);
-        assert_eq!(denied["items"]["$ref"], "#/$defs/ExternalId");
+        let revoked = &document["$defs"]["OidcConfig"]["properties"]["revokedKeyIds"];
+        assert!(revoked.get("default").is_none());
+        assert_eq!(revoked["uniqueItems"], true);
+        assert_eq!(revoked["minItems"], 1);
+        assert_eq!(revoked["maxItems"], 128);
+        assert_eq!(revoked["items"]["$ref"], "#/$defs/ExternalId");
     }
 
     #[test]

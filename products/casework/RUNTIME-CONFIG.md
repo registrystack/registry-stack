@@ -149,17 +149,18 @@ Principal selection belongs exclusively to each authored
 `accessProfiles.PROFILE_ID.principalClaim` in `casework.yaml`. The removed runtime field
 `authentication.oidc.principalClaim` is refused with that replacement.
 
-`deniedKids` is an optional list of at most 128 distinct nonempty key identifiers.
+`revokedKeyIds` is an optional list of at most 128 distinct nonempty key identifiers.
 Casework refuses a token whose protected `kid` appears in the list even while the key
-remains in the issuer's key set. `maximumTokenLifetimeSeconds` optionally limits the
+remains in the issuer's key set. The list refuses those keys in Casework only; it does not
+revoke them at the issuer. `maximumTokenLifetimeSeconds` optionally limits the
 interval from `iat` to `exp` to 1 through 7200 seconds. Omitting either setting preserves
 the existing acceptance rule.
 
 During key rotation, publish the replacement key first and confirm that Casework accepts a
-test token signed by it. Add the retiring key identifier to `deniedKids` when it must stop
+test token signed by it. Add the retiring key identifier to `revokedKeyIds` when it must stop
 authorizing immediately, apply the runtime configuration, and confirm that a token signed by
 the retired key is refused. Remove the old public key from the issuer after all services have
-applied the denylist. A static `jwksSource` also requires atomically replacing its referenced
+applied the change. A static `jwksSource` also requires atomically replacing its referenced
 document and restarting Casework.
 
 `audit` selects where Casework writes its audit entries and the key that
