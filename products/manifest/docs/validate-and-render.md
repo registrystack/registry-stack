@@ -13,7 +13,9 @@ For profile fixture validation, see [Validate against profile fixtures](./profil
 ## Prerequisites
 
 - Rust toolchain installed (the workspace uses stable Rust).
-- The `registry-manifest` repository cloned locally.
+- A Registry Stack checkout
+  (`git clone https://github.com/registrystack/registry-stack.git`). Run every command in this
+  page from its root.
 
 Build the CLI before running commands:
 
@@ -26,7 +28,7 @@ If you have installed the binary directly, replace that prefix with `registry-ma
 
 The five example profile fixtures in the repository serve as ready-made manifest inputs.
 The commands in this how-to use
-[`profiles/example-civil-registration/fixtures/metadata.yaml`](../profiles/example-civil-registration/fixtures/metadata.yaml)
+[`products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml`](../profiles/example-civil-registration/fixtures/metadata.yaml)
 as the example path.
 Substitute your own manifest path as needed.
 
@@ -36,23 +38,27 @@ Substitute your own manifest path as needed.
 
 ```sh
 cargo run --bin registry-manifest -- validate \
-  profiles/example-civil-registration/fixtures/metadata.yaml
+  products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml
 ```
 
 On success, the CLI prints:
 
 ```text
-metadata manifest valid: profiles/example-civil-registration/fixtures/metadata.yaml
-source_manifest_digest: sha256:...
+metadata manifest valid: products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml
+source_manifest_digest: sha256:3867f310494f2817077e8fc44f5c64d424a60ed9caa047d8284ff650f85a4abc
+0 errors, 0 warnings in 1 file
 ```
 
 On a refusal, the CLI prints one sentence and then every finding to standard error, and
 exits 1. Each finding names its code, the file, line, and column, the member's JSON
-Pointer, and the fix, and never repeats the refused value:
+Pointer, and the fix, and never repeats the refused value. For a `base_url` with no scheme:
 
 ```text
-error[manifest.metadata.invalid-url] metadata.yaml:5:13 /catalog/base_url
-  ...
+registry-manifest validate refused the manifest.
+error[manifest.metadata.invalid-url] metadata.yaml:4:13 /catalog/base_url
+  URL must start with http:// or https://
+  next: Write an absolute URL with the scheme the message names and a host.
+1 error, 0 warnings in 1 file
 ```
 
 Add `--format json` for a machine-readable report. The exit codes are listed in the
@@ -83,7 +89,7 @@ Render the catalog JSON:
 
 ```sh
 cargo run --bin registry-manifest -- render \
-  profiles/example-civil-registration/fixtures/metadata.yaml \
+  products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
   --format catalog
 ```
 
@@ -91,7 +97,7 @@ Render base DCAT JSON-LD:
 
 ```sh
 cargo run --bin registry-manifest -- render \
-  profiles/example-civil-registration/fixtures/metadata.yaml \
+  products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
   --format dcat
 ```
 
@@ -99,7 +105,7 @@ Render a Core Public Service Vocabulary Application Profile (CPSV-AP) service ca
 
 ```sh
 cargo run --bin registry-manifest -- render \
-  fixtures/cpsv-ap/health-linked-child-support.metadata.yaml \
+  products/manifest/fixtures/cpsv-ap/health-linked-child-support.metadata.yaml \
   --format cpsv-ap
 ```
 
@@ -110,7 +116,7 @@ Render BRegDCAT-AP JSON-LD:
 
 ```sh
 cargo run --bin registry-manifest -- render \
-  profiles/example-civil-registration/fixtures/metadata.yaml \
+  products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
   --format bregdcat-ap
 ```
 
@@ -122,7 +128,7 @@ Render SHACL (Shapes Constraint Language) node shapes:
 
 ```sh
 cargo run --bin registry-manifest -- render \
-  profiles/example-civil-registration/fixtures/metadata.yaml \
+  products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
   --format shacl
 ```
 
@@ -132,7 +138,7 @@ The civil-registration fixture has dataset `vital-events` with entities `person`
 
 ```sh
 cargo run --bin registry-manifest -- render \
-  profiles/example-civil-registration/fixtures/metadata.yaml \
+  products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
   --format json-schema \
   --dataset vital-events \
   --entity person
@@ -142,7 +148,7 @@ Render a form JSON Schema Draft 2020-12 document:
 
 ```sh
 cargo run --bin registry-manifest -- render \
-  fixtures/cpsv-ap/health-linked-child-support.metadata.yaml \
+  products/manifest/fixtures/cpsv-ap/health-linked-child-support.metadata.yaml \
   --format form-json-schema \
   --form child-support-review-form
 ```
@@ -151,7 +157,7 @@ Render OGC API Records item bodies:
 
 ```sh
 cargo run --bin registry-manifest -- render \
-  profiles/example-civil-registration/fixtures/metadata.yaml \
+  products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
   --format ogc-records
 ```
 
@@ -159,7 +165,7 @@ Render the ODRL (Open Digital Rights Language) policy collection:
 
 ```sh
 cargo run --bin registry-manifest -- render \
-  profiles/example-civil-registration/fixtures/metadata.yaml \
+  products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
   --format policies
 ```
 
@@ -167,16 +173,17 @@ Render a per-dataset ODRL policy document (substitute your dataset ID for `vital
 
 ```sh
 cargo run --bin registry-manifest -- render \
-  profiles/example-civil-registration/fixtures/metadata.yaml \
+  products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
   --format policy \
   --dataset vital-events
 ```
 
-Render evidence offerings:
+Render evidence offerings (the civil-registration fixture declares none, so this uses the
+CPSV-AP fixture):
 
 ```sh
 cargo run --bin registry-manifest -- render \
-  profiles/example-civil-registration/fixtures/metadata.yaml \
+  products/manifest/fixtures/cpsv-ap/health-linked-child-support.metadata.yaml \
   --format evidence-offerings
 ```
 
@@ -184,11 +191,10 @@ Render a single evidence offering by ID (substitute the offering ID defined in y
 `evidence_offerings` list):
 
 ```sh
-: "${OFFERING_ID:?set OFFERING_ID to one ID from evidence_offerings}"
 cargo run --bin registry-manifest -- render \
-  profiles/example-civil-registration/fixtures/metadata.yaml \
+  products/manifest/fixtures/cpsv-ap/health-linked-child-support.metadata.yaml \
   --format evidence-offering \
-  --offering "$OFFERING_ID"
+  --offering health-coverage-evidence-offering
 ```
 
 All `render` output goes to stdout.
@@ -196,7 +202,7 @@ Redirect to a file when you want to inspect or diff it:
 
 ```sh
 cargo run --bin registry-manifest -- render \
-  profiles/example-civil-registration/fixtures/metadata.yaml \
+  products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
   --format bregdcat-ap > /tmp/breg.jsonld
 ```
 
@@ -208,7 +214,7 @@ digest.
 
 ```sh
 cargo run --bin registry-manifest -- publish \
-  profiles/example-civil-registration/fixtures/metadata.yaml \
+  products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
   --out target/metadata/public
 ```
 
@@ -228,7 +234,7 @@ useful when the metadata bundle is published as a sibling of a larger site root:
 
 ```sh
 cargo run --bin registry-manifest -- publish \
-  profiles/example-civil-registration/fixtures/metadata.yaml \
+  products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
   --out target/metadata/public \
   --site-root target/site
 ```
@@ -256,7 +262,7 @@ After `validate`, confirm the exit code is zero (1 means the manifest was refuse
 
 ```sh
 cargo run --bin registry-manifest -- validate \
-  profiles/example-civil-registration/fixtures/metadata.yaml
+  products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml
 echo "exit code: $?"
 ```
 

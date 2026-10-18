@@ -1,227 +1,53 @@
 # Registry Manifest overview
 
-Registry Manifest is a portable Rust workspace that takes one `metadata.yaml` file and
-derives every standards-facing artifact other systems need to find, understand, and connect
-to a registry. It can also publish public evidence-offering metadata that helps partners find
-the service that answers an evidence request.
-It does not serve HTTP, does not talk to databases, and does not handle credentials.
-You can run it on a laptop, in a CI pipeline, or in a static hosting workflow with no
-server required.
+A registry manifest is one `metadata.yaml` file that describes a registry for the systems that
+need to find and understand it: its catalogue and publisher, its datasets, entities, and fields,
+the public services and forms around it, the codelists it uses, and the Evidence it can offer.
+Registry Manifest is the Rust library and the `registry-manifest` command that check that file
+and render it into standards-shaped metadata. It serves no HTTP, reads no database, and handles
+no credentials, so it runs anywhere, including CI.
 
-## What Registry Manifest emits
+## What a manifest holds, and what it refuses
 
-Registry Manifest ships pure renderer functions.
-Each renderer takes a compiled manifest and returns a serialized document.
-No renderer makes network calls or reads files beyond the manifest input.
+A manifest declares `schema_version: registry-manifest/v1` and a `catalog`, then lists what the
+registry offers under `datasets`, `public_services`, `forms`, `requirements`, `evidence_types`,
+and the other top-level collections. Its format is closed: it refuses unknown keys, dangling
+references, and runtime bindings such as a source path, a table name, a database scope, a
+caller allowlist, a credential, or a signing key. Those belong to the runtime that serves the
+registry, so the same manifest stays portable across deployments.
 
-| Output format | `--format` value |
-| --- | --- |
-| Catalog JSON | `catalog` |
-| DCAT JSON-LD | `dcat` |
-| CPSV-AP service catalogue JSON-LD | `cpsv-ap` |
-| BRegDCAT-AP JSON-LD | `bregdcat-ap` |
-| SHACL node shapes JSON-LD | `shacl` |
-| JSON Schema Draft 2020-12 | `json-schema` |
-| Form JSON Schema Draft 2020-12 | `form-json-schema` |
-| OGC API Records FeatureCollection JSON | `ogc-records` |
-| ODRL policy collection JSON-LD | `policies` |
-| Per-dataset ODRL policy document JSON-LD | `policy` |
-| Evidence offerings collection JSON | `evidence-offerings` |
-| Single evidence offering JSON | `evidence-offering` |
+[RS-DM-MANIFEST](https://docs.registrystack.org/spec/rs-dm-manifest/) is the normative data
+model, and the [Registry Manifest reference](./reference.md) documents every field.
 
-Codelists are emitted as embedded SKOS-shaped nodes inside the SHACL
-and DCAT/BRegDCAT-shaped linked-data outputs; there is not yet a standalone SKOS artifact.
+## Who writes one
 
-Not yet implemented: GovStack Digital Registries Building Block (DR BB), Social
-Protection Digital Convergence Initiative (SP DCI) formats, standalone SKOS,
-and standalone PROV-O.
+A registry publisher or integrator writes `metadata.yaml` by hand to publish catalogue metadata
+for a registry, whatever runs it. A Base Registry Engine (BReg) project does not write one by
+hand: `bregctl generate manifest` projects one from the project's `manifestProjection` through
+the Registry Manifest library, with a DCAT catalogue. The projection carries only the datasets
+classified for publication, so a public file cannot name a protected dataset by reference.
 
-The `dcat` format dispatches based on an optional `--profile` flag: `--profile dcat` or
-`--profile dcat-ap` renders base Data Catalog Vocabulary (DCAT); `--profile bregdcat-ap`
-renders the Business Registers Extended DCAT Application Profile (BRegDCAT-AP) variant.
-Omitting `--profile` with `--format dcat` defaults to base DCAT.
-For external validator smoke checks and claim boundaries, see
-[ITB/SEMIC validation smoke checks](itb-semic-validation.md).
+## The `registry-manifest` commands
 
-## When to use Registry Manifest
+- `validate` checks one manifest offline and reports every finding at once, with its code, line,
+  column, and fix.
+- `render` writes one format to standard output: catalog JSON, DCAT or BRegDCAT-AP, CPSV-AP,
+  SHACL, JSON Schema, form JSON Schema, OGC API Records, ODRL policies, or Evidence offerings.
+- `publish` renders every format into a directory, with an `index.json` that records the
+  digest of the source manifest and of each file, so an operator can compare or pin a bundle.
+  It does not empty the directory first, so publish into a clean one.
+- `validate-profiles` checks profile descriptors and their fixture manifests.
 
-You have a registry or public-service workflow and need to publish machine-readable metadata:
-a Core Public Service Vocabulary Application Profile (CPSV-AP) service catalogue, a DCAT
-catalog, OGC Records item collection, Shapes Constraint Language (SHACL) shapes, JSON Schema
-for API contract documentation, a local form profile, codelist metadata, or Open Digital
-Rights Language (ODRL) policies
-declaring access terms.
-Write one `metadata.yaml`, run `registry-manifest publish`, and get a static directory
-of all those artifacts ready to host anywhere.
-The published `index.json` includes a canonical digest of the source manifest, a package
-digest, and per-artifact digests so operators can compare or pin bundles without running
-a service.
+[Validate and render a manifest](./validate-and-render.md) walks through the first three, and
+[Validate against profile fixtures](./profile-fixtures.md) covers the last.
+[ITB/SEMIC validation smoke checks](./itb-semic-validation.md) records the external validator
+runs.
 
-If you need runtime metadata served over HTTP with per-caller scoping and authorization,
-publish the static output behind a service that provides those controls.
-Metadata manifests and pure renderers live in this workspace; HTTP publication, runtime
-source binding, authentication, authorization, and audit behavior live in the runtime that
-serves them.
+## What metadata does not do
 
-## A minimal manifest
+Published metadata is descriptive. It grants no access, and naming a service in a manifest does
+not make it trusted. BReg and Registry Evidence each keep their own access decisions. Host the published directory as
+static files, and replace the whole directory to publish a new revision.
 
-A manifest must declare `schema_version: registry-manifest/v1` at its root.
-The following skeleton shows the required top-level keys, `schema_version` and `catalog`,
-plus the most common collection, `datasets`:
-
-```yaml
-schema_version: registry-manifest/v1
-catalog:
-  id: my-registry
-  base_url: https://registry.example.gov
-  title:
-    en: My Registry
-  publisher:
-    name: Example Authority
-    iri: https://registry.example.gov/authority
-    authority_type: eli:PublicAuthority
-  participant_id: https://registry.example.gov/authority
-datasets:
-  - id: my-dataset
-    title:
-      en: My Dataset
-    entities:
-      - name: my_entity
-        title:
-          en: My Entity
-        identifiers:
-          - name: entity_id
-            kind: local
-        fields:
-          - name: entity_id
-            type: string
-            required: true
-requirements: []
-evidence_types: []
-public_services: []
-forms: []
-```
-
-A manifest must not contain runtime bindings such as source file paths, table names,
-database scopes, backend credentials, caller allowlists, signing keys, replay stores,
-or pairwise subject hash secrets.
-Those live in runtime configuration; the manifest is portable and
-runtime-independent.
-
-A full working example is at
-`profiles/example-civil-registration/fixtures/metadata.yaml`.
-
-## The metadata model
-
-The top-level struct is `MetadataManifest`, which groups catalog, dataset,
-distribution, entity, service, form, evidence offering, dataset policy,
-requirement, evidence type, codelist, evaluation profile, and ecosystem binding
-metadata. Datasets may carry a canonical IRI and a deliberate release version.
-Each distribution belongs to exactly one dataset and may link to a data service
-that serves that dataset.
-Full field-by-field documentation is in [Registry Manifest reference](./reference.md).
-
-Grouped evidence is explicit.
-An `evidence_type_lists` entry under a requirement is one option group; all evidence types
-in that list are required together.
-Multiple lists on the same requirement are alternatives.
-
-Evaluation metadata is explicit too.
-The top-level `evaluation_profiles` list binds public profile ids and ruleset ids to public
-claim ids and subject id types.
-An evidence offering references one of those ruleset ids through `access.ruleset`.
-Registry Manifest validates that link, but the service that answers the offering still
-decides who may call it.
-
-## Validation
-
-When you run `validate` or `publish`, Registry Manifest performs multi-pass validation
-before any rendering occurs:
-
-1. Confirms `schema_version == "registry-manifest/v1"`.
-2. Validates catalog fields: HTTP base URL, title, publisher, and supported application
-   profiles list.
-3. Validates requirement and evidence-type reference integrity.
-4. Validates grouped evidence type lists, including duplicate list IDs, empty lists,
-   unknown evidence types, and evidence types that do not prove the owning requirement.
-5. Validates public service, channel, authority, form, data-service, and
-   distribution references, including dataset membership and access-service
-   coverage. Every data service must serve at least one declared dataset.
-6. Validates per-dataset entities, fields, relationships, identifiers, codelists,
-   cardinality strings, and ODRL policy terms.
-7. Validates evidence-offering references.
-8. Validates evaluation profile metadata: unique evaluation profile ids, unique rulesets, and
-   `access.ruleset` references. When an offering declares `registry-evidence` access, also
-   validates that it names a response profile in `conforms_to` and HTTPS endpoint and
-   discovery URLs.
-9. Rejects runtime-only keys such as source paths, table names, scopes, backend bindings,
-   visibility rules, and capability declarations.
-
-All errors are collected and returned together so a single run surfaces every problem in
-the file.
-
-Validation also expands vocabulary prefixes (for example, `person:Person.identifier`
-becomes a full IRI) and resolves codelist concept references before any renderer runs.
-
-## The CLI surface
-
-The `registry-manifest` binary exposes four subcommands:
-
-- `validate`: check one manifest file offline. Reports every finding with its code, file,
-  line, column, and fix, and exits 1 on a refusal, 2 on a usage error, and 3 when the file
-  cannot be read. `--format json` writes a machine-readable report.
-- `render`: compile a manifest and write one renderer's output to stdout. Accepts
-  `--format`, `--profile`, `--dataset`, `--entity`, `--form`, and `--offering` selectors.
-- `publish`: compile a manifest, run all renderers, write every artifact to an output
-  directory, and generate an `index.json` manifest of the bundle.
-- `validate-profiles`: scan a `profiles/` directory for profile descriptors, check each
-  descriptor, and check every fixture manifest it lists against its expectations, with the
-  same findings, exit codes, and `--format json` report as `validate`.
-
-See [Validate and render a manifest](./validate-and-render.md) for the `validate`, `render`,
-and `publish` subcommands in steps.
-See [Validate against profile fixtures](./profile-fixtures.md) for `validate-profiles`.
-
-## Profile fixtures
-
-The `profiles/` directory contains non-normative profile descriptors and fixture manifests.
-A profile descriptor (schema version `registry-manifest-profile/v1`) declares:
-
-- The input artifacts the profile reads.
-- Required and optional concept IRIs a conforming manifest must reference.
-- Required identifiers and codelists with expected code values.
-- Cardinality expectations per entity field.
-- The conformance checks the profile names, and the fixtures that demonstrate it.
-
-Five example profiles ship in the repository: `example-civil-registration`,
-`example-social-benefits`, `example-person-schema`, `example-benefits-sync`,
-and `example-multi-dataset`.
-These are examples until reviewed against official OpenCRVS, OpenSPP, OpenIMIS, SP DCI,
-or maintainer-provided artifacts.
-
-Four additional subdirectories exist in `profiles/` for
-[`opencrvs`](../profiles/opencrvs/),
-[`openimis`](../profiles/openimis/),
-[`openspp`](../profiles/openspp/),
-and
-[`spdci`](../profiles/spdci/).
-Each contains only a `README.md` that marks it as a placeholder pending official review.
-
-## v0 caveats
-
-Registry Manifest ships as part of Registry Stack and remains pre-1.0.
-The root workspace version and stack release notes define the current release.
-The [CHANGELOG](../CHANGELOG.md) records the earlier standalone product release history.
-The manifest schema version `registry-manifest/v1` is enforced in code.
-Manifest-owned formats freeze at beta, including the root manifest schema,
-profile descriptor schema, generated artifact formats, codelists, and the static
-publication bundle format.
-Profile fixtures in `profiles/` are non-normative examples.
-The static publication bundle format includes `index.json` schema version
-`registry-manifest-index/v1`.
-
-## See also
-
-- [Validate and render a manifest](./validate-and-render.md)
-- [Validate against profile fixtures](./profile-fixtures.md)
-- [Registry Manifest reference](./reference.md)
+Registry Manifest is pre-1.0. The `registry-manifest/v1` schema version is enforced in code, and
+the five example profiles under `products/manifest/profiles/` are non-normative.
