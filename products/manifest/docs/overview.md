@@ -25,12 +25,14 @@ A registry publisher or integrator writes `metadata.yaml` by hand to publish cat
 for a registry, whatever runs it. A Base Registry Engine (BReg) project does not write one by
 hand: `bregctl generate manifest` projects one from the project's `manifestProjection` through
 the Registry Manifest library, with a DCAT catalogue. The projection carries only the datasets
-classified for publication, so a public file cannot name a protected dataset by reference.
+within its access profile and classification ceiling, and keeps the labels and identifiers of
+every other dataset out of both the manifest and the catalogue, relationship edges included.
 
 ## The `registry-manifest` commands
 
-- `validate` checks one manifest offline and reports every finding at once, with its code, line,
-  column, and fix.
+- `validate` checks one manifest offline and reports every finding at each stage together:
+  first the document's shape, then the manifest rules. Each finding has its code, line, column,
+  and fix.
 - `render` writes one format to standard output: catalog JSON, DCAT or BRegDCAT-AP, CPSV-AP,
   SHACL, JSON Schema, form JSON Schema, OGC API Records, ODRL policies, or Evidence offerings.
 - `publish` renders every format into a directory, with an `index.json` that records the
@@ -40,8 +42,8 @@ classified for publication, so a public file cannot name a protected dataset by 
 
 [Validate and render a manifest](./validate-and-render.md) walks through the first three, and
 [Validate against profile fixtures](./profile-fixtures.md) covers the last.
-[ITB/SEMIC validation smoke checks](./itb-semic-validation.md) records the external validator
-runs.
+[ITB/SEMIC validation smoke checks](./itb-semic-validation.md) runs rendered DCAT and
+BRegDCAT-AP through the public EU Interoperability Test Bed validators.
 
 ## What metadata does not do
 
@@ -50,4 +52,4 @@ not make it trusted. BReg and Registry Evidence each keep their own access decis
 static files, and replace the whole directory to publish a new revision.
 
 Registry Manifest is pre-1.0. The `registry-manifest/v1` schema version is enforced in code, and
-the five example profiles under `products/manifest/profiles/` are non-normative.
+the five `example-*` profiles under `products/manifest/profiles/` are non-normative.

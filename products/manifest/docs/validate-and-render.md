@@ -12,10 +12,10 @@ For profile fixture validation, see [Validate against profile fixtures](./profil
 
 ## Prerequisites
 
-- Rust toolchain installed (the workspace uses stable Rust).
+- Rust 1.95.0 through rustup, the version the checkout's `rust-toolchain.toml` pins.
 - A Registry Stack checkout
-  (`git clone https://github.com/registrystack/registry-stack.git`). Run every command in this
-  page from its root.
+  (`git clone https://github.com/registrystack/registry-stack.git`). Run every command below
+  from its root.
 
 Build the CLI before running commands:
 
@@ -23,11 +23,13 @@ Build the CLI before running commands:
 cargo build --bin registry-manifest
 ```
 
-The commands in this page use `cargo run --bin registry-manifest --` as a prefix.
-If you have installed the binary directly, replace that prefix with `registry-manifest`.
+Each command below uses `cargo run --bin registry-manifest --` as a prefix. Each release also
+publishes the Linux amd64 binary `registry-manifest-<tag>-linux-amd64`, with `<tag>` from the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest); installed as
+`registry-manifest`, it replaces that prefix.
 
-The five example profile fixtures in the repository serve as ready-made manifest inputs.
-The commands in this how-to use
+The fixtures of the five `example-*` profiles serve as ready-made manifest inputs.
+Each command below uses
 [`products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml`](../profiles/example-civil-registration/fixtures/metadata.yaml)
 as the example path.
 Substitute your own manifest path as needed.
@@ -221,15 +223,15 @@ cargo run --bin registry-manifest -- publish \
 The output directory will contain `catalog.json`, `dcat.jsonld`, `cpsv-ap.jsonld` when the
 manifest declares the profile, `shacl.jsonld`, per-entity JSON Schema files, form JSON Schema
 files, `ogc-records/items.json`, evidence-offering files, and per-dataset policy documents.
-`publish` always writes two discovery documents under `.well-known/` too:
-`api-catalog` (a linkset of the published artifact URLs) and `registry-manifest.json` (a
-legacy discovery document retained for compatibility with early Registry Manifest clients).
+`publish` always writes two well-known documents under `.well-known/` too:
+`api-catalog` (a linkset of the published artifact URLs) and `registry-manifest.json` (schema
+`registry-manifest-discovery/v1`, which points to `/metadata/index.json` and the main artifacts).
 Linked-data outputs include embedded SKOS-shaped codelist nodes when the manifest declares
 codelists.
 See [Registry Manifest reference](./reference.md) for the full artifact list.
 
 By default, `.well-known/*` writes under `--out` alongside every other artifact. Pass
-`--site-root <dir>` to write the two discovery documents under a separate directory instead,
+`--site-root <dir>` to write the two well-known documents under a separate directory instead,
 useful when the metadata bundle is published as a sibling of a larger site root:
 
 ```sh
@@ -246,7 +248,7 @@ The `index.json` at the root of the output directory carries schema version
 - `package_digest`: a digest over the source manifest digest and the published artifact inventory.
 - `artifacts`: per-artifact `path`, `media_type`, and `sha256` entries.
 
-`artifacts` excludes `index.json` itself and the `.well-known/*` discovery documents. The index
+`artifacts` excludes `index.json` itself and the `.well-known/*` documents. The index
 is excluded because it contains the package digest, and `.well-known/*` may be written under
 `--site-root` while still discovering the same metadata bundle.
 
