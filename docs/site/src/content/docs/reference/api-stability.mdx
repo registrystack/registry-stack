@@ -268,6 +268,12 @@ a fresh database as [the Casework upgrade step](../../operate/advanced/upgrade-a
 describes. The forward-state rehearsal does not claim that this replacement preserves old
 Casework work in place.
 
+Messaging's `v0.42.0` schema starts a new baseline. It installs its complete schema as one
+baseline, and `messagingctl plan`, `messagingctl apply`, and startup refuse a database whose
+ledger holds a pre-1.0 version, naming the fresh-install recovery. Retain the previous database
+and audit journal for reconciliation, and apply the current package to a fresh database. Messages
+still queued in the previous database are not carried forward.
+
 Upgrades are forward-only: no release reads state a later release wrote. To roll back, restore the
 backup taken before the upgrade and run the previous release, as
 [Roll back](../../operate/advanced/upgrade-and-retire/#roll-back) describes.
@@ -289,7 +295,8 @@ Base Registry Engine's Beta pilot conditions are under
 {/* Evidence: CONTRIBUTING.md, predecessor readability and the v0.40.0 exception;
     release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR, check_forward_path(),
     select_from_tag(), check_floor_is_current(), and select_products();
-    products/evidence/CHANGELOG.md, Unreleased; crates/registry-discovery/Cargo.toml;
+    products/evidence/CHANGELOG.md, Unreleased; products/messaging/CHANGELOG.md, Unreleased;
+    crates/registry-messaging/src/store.rs; crates/registry-discovery/Cargo.toml;
     crates/registry-casework/src/store.rs; crates/registry-casework/migrations/0100_reviews.sql. */}
 
 ## Enforcement

@@ -197,7 +197,12 @@ Every pull request should make the review path clear:
   project, target, and complete separate authority. Retired split projects
   and bundled authority have no in-place conversion; retain the previous
   deployment and audit, package the current model, and verify a fresh synthetic
-  assertion before cutover.
+  assertion before cutover. Messaging's v0.42.0 schema is a fresh baseline as
+  well: it installs its complete schema as one baseline and refuses by name a
+  database whose ledger holds a pre-1.0 version. Operators retain the previous
+  database and audit journal for reconciliation and apply the current package
+  to a fresh database; messages still queued in the previous database are not
+  carried forward.
 - Before 1.0, a release reads only the state its immediate predecessor wrote,
   and an operator upgrades one release at a time, except at the explicit fresh
   baselines. v0.40.0 starts fresh: it
@@ -207,8 +212,8 @@ Every pull request should make the review path clear:
   Messaging package the earlier release built and a Scheduling database it
   wrote, and is applied to new databases; the BREAKING sections of its release
   notes give each step. v0.40.0 does not upgrade v0.39.0 state in place;
-  apply to a new database. Except for the BReg, Casework, and Evidence fresh
-  baselines described above, from v0.40.0 onward keep everything
+  apply to a new database. Except for the BReg, Casework, Evidence, and Messaging
+  fresh baselines described above, from v0.40.0 onward keep everything
   the previous release could have written to a database, package,
   configuration file, or local state readable. Do not add code that reads,
   upgrades, or refuses by name the state of an older release, and remove such
