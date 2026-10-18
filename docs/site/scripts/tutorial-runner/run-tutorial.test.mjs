@@ -702,7 +702,7 @@ test('a test-file block whose directory does not exist stops the journey', async
   });
 });
 
-test('a background fence runs until the next one starts or the page ends, and test-cwd says where a fence runs', async () => {
+test('a background fence runs until the next one starts or the journey ends, and test-cwd says where a fence runs', async () => {
   const port = await freePort();
   const url = `http://127.0.0.1:${port}/`;
   const serve = `python3 -m http.server ${port} --bind 127.0.0.1`;
@@ -719,9 +719,27 @@ test('a background fence runs until the next one starts or the page ends, and te
     const { code, output } = await run([page]);
     assert.equal(code, 0, output);
     assert.match(output, /tutorial PASS/u);
-    await assert.rejects(fetch(url), 'the page end must stop the background fence');
+    await assert.rejects(fetch(url), 'the journey end must stop the background fence');
     const plan = await run(['--dry-run', page]);
     assert.match(plan.output, new RegExp(`run   line 14 \\(Serve\\): ${serve} \\(in site/one, in the background until ${url} answers\\)`, 'u'));
+  });
+});
+
+test('a background fence a page leaves running is still there for the next page', async () => {
+  const port = await freePort();
+  const url = `http://127.0.0.1:${port}/`;
+  const body =
+    '## Serve\n\n' +
+    fence('sh', 'mkdir site\necho first >site/index.html') +
+    fence(`sh test-background="${url}" test-cwd="site"`, `python3 -m http.server ${port} --bind 127.0.0.1`);
+  await withPage(body, async ({ dir, page }) => {
+    const second = join(dir, 'second.mdx');
+    await writeFile(second, '---\ntitle: s\n---\n\n## Read\n\n' + fence('sh', `curl -fsS ${url}`) + fence('text test-expect', 'first'));
+    const { code, output } = await run([page, second]);
+    assert.equal(code, 0, output);
+    assert.match(output, /tutorial PASS/u);
+    assert.match(output, /expect second\.mdx line 11: ok/u);
+    await assert.rejects(fetch(url), 'the journey end must stop the background fence');
   });
 });
 
