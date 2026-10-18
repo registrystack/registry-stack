@@ -870,6 +870,13 @@ pub async fn prepare_loaded(config: RuntimeConfig) -> Result<PreparedServer> {
 /// can append.
 pub async fn check(config_path: &Path) -> Result<CheckedStartup> {
     let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
+    check_loaded(config).await
+}
+
+/// The startup check over a runtime configuration the caller has already
+/// loaded, so what the caller reports from that file describes the same
+/// configuration the check verified. Everything after the load is [`check`].
+pub async fn check_loaded(config: RuntimeConfig) -> Result<CheckedStartup> {
     let shared = config
         .verify_package_envelope()
         .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
