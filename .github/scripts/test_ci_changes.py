@@ -3575,8 +3575,8 @@ class RunCargoPackagesTest(unittest.TestCase):
             package_args('["registry-relay-v2; id"]')
 
 
-class DocsInstallRetryTest(unittest.TestCase):
-    """Run the docs install steps that need the Vale download against a stub npm."""
+class DocsInstallTest(unittest.TestCase):
+    """Hold the docs installs off the rate-limited Vale postinstall download."""
 
     STEPS = (
         ("ci.yml", "docs"),
@@ -3584,47 +3584,44 @@ class DocsInstallRetryTest(unittest.TestCase):
         ("docs-pages.yml", "build"),
     )
 
-    def install_calls(self, command: str, refusals: int) -> tuple[int, list[str]]:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            calls = root / "calls"
-            calls.touch()
-            (root / "npm").write_text(
-                "#!/usr/bin/env bash\n"
-                f'echo "npm $*" >> "{calls}"\n'
-                f'[[ "$(grep -c "^npm" "{calls}")" -gt {refusals} ]]\n'
-            )
-            (root / "sleep").write_text(
-                f'#!/usr/bin/env bash\necho "sleep $*" >> "{calls}"\n'
-            )
-            for stub in ("npm", "sleep"):
-                (root / stub).chmod(0o755)
-            completed = subprocess.run(
-                ["bash", "-e", "-c", command],
-                env={**os.environ, "PATH": f"{root}{os.pathsep}{os.environ['PATH']}"},
-                check=False,
-            )
-            return completed.returncode, calls.read_text().splitlines()
+    @staticmethod
+    def steps(name: str, job: str) -> list[dict[str, Any]]:
+        workflow = yaml.safe_load(Path(".github/workflows", name).read_text())
+        return workflow["jobs"][job]["steps"]
 
-    def test_a_refused_docs_install_is_retried_once_after_a_pause(self) -> None:
+    def test_docs_installs_skip_install_scripts_without_retrying(self) -> None:
         for name, job in self.STEPS:
-            workflow = yaml.safe_load(Path(".github/workflows", name).read_text())
             (step,) = (
                 step
-                for step in workflow["jobs"][job]["steps"]
+                for step in self.steps(name, job)
                 if step.get("name") == "Install docs dependencies"
             )
             with self.subTest(workflow=name, job=job):
-                self.assertEqual(
-                    self.install_calls(step["run"], refusals=0), (0, ["npm ci"])
-                )
-                self.assertEqual(
-                    self.install_calls(step["run"], refusals=1),
-                    (0, ["npm ci", "sleep 30", "npm ci"]),
-                )
-                status, calls = self.install_calls(step["run"], refusals=2)
-                self.assertNotEqual(status, 0)
-                self.assertEqual(calls, ["npm ci", "sleep 30", "npm ci"])
+                self.assertEqual(step["run"].strip(), "npm ci --ignore-scripts")
+
+    def test_the_docs_job_runs_vale_from_a_pinned_verified_release(self) -> None:
+        steps = self.steps("ci.yml", "docs")
+        names = [step.get("name") for step in steps]
+        (vale,) = (step for step in steps if step.get("name") == "Install pinned Vale")
+        checks = next(
+            index
+            for index, step in enumerate(steps)
+            if "npm run check" in step.get("run", "")
+        )
+        self.assertLess(names.index("Install pinned Vale"), checks)
+        run = vale["run"]
+        self.assertIn("/releases/download/v${VALE_VERSION}/", run)
+        self.assertNotIn("api.github.com", run)
+        self.assertIn('echo "${VALE_LINUX_X64_SHA256}  ', run)
+        self.assertIn("sha256sum --check --strict", run)
+        self.assertIn('echo "VALE_BIN=${RUNNER_TEMP}/bin/vale" >> "${GITHUB_ENV}"', run)
+
+    def test_the_vale_pin_matches_the_locked_docs_package(self) -> None:
+        env = yaml.safe_load(Path(".github/workflows/ci.yml").read_text())["env"]
+        lock = json.loads(Path("docs/site/package-lock.json").read_text())
+        locked = lock["packages"]["node_modules/@vvago/vale"]["version"]
+        self.assertEqual(env["VALE_VERSION"], locked.split("-")[0])
+        self.assertRegex(env["VALE_LINUX_X64_SHA256"], r"^[0-9a-f]{64}$")
 
 
 class PinnedYamlTestStepTest(unittest.TestCase):

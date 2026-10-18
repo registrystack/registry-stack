@@ -1,21 +1,8 @@
-import { access } from 'node:fs/promises';
-import { join } from 'node:path';
-import { execFile, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 
-const run = promisify(execFile);
-const valePackageDir = join('node_modules', '@vvago', 'vale');
-const valeBin = join(valePackageDir, 'native', process.platform === 'win32' ? 'vale.exe' : 'vale');
+import { resolveVale } from './vale-binary.mjs';
 
-async function ensureVale() {
-  try {
-    await access(valeBin);
-  } catch {
-    await run(process.execPath, [join(valePackageDir, 'dist', 'index.cjs')], { stdio: 'inherit' });
-  }
-}
-
-await ensureVale();
+const valeBin = await resolveVale();
 
 const child = spawn(valeBin, process.argv.slice(2), { stdio: 'inherit' });
 child.on('exit', (code) => {

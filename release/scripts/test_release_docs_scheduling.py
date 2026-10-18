@@ -50,7 +50,7 @@ class ReleaseDocsSchedulingTest(unittest.TestCase):
             package["run"].splitlines(),
             [
                 "set -euo pipefail",
-                "npm ci",
+                "npm ci --ignore-scripts",
                 "npm run build:archive",
                 "npm run archive:snapshot -- \\",
                 '  "${DOCS_DOCSET}" \\',

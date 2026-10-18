@@ -42,6 +42,10 @@ env:
   ACTIONLINT_LINUX_X64_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
   OASDIFF_VERSION: "1.23.0"
   OASDIFF_LINUX_X64_SHA256: "972b10535c3db4366b9dc3ebc11ca021279af3095267c3cffdca854a3a3c4f89"
+  # Matches the Vale version docs/site's @vvago/vale package pins; the docs
+  # style checks refuse a VALE_BIN that reports any other version.
+  VALE_VERSION: "3.24.0"
+  VALE_LINUX_X64_SHA256: "867534ddb678abca7f214bc4706ead0922bd5252ffe8035fc227013f66c8b214"
 
 jobs:
   changes:
@@ -2435,11 +2439,24 @@ jobs:
 
       - name: Install docs dependencies
         working-directory: docs/site
-        # This job needs the install scripts. The Vale postinstall downloads
-        # its binary from GitHub without a token, and shared runner addresses
-        # are sometimes refused. The refusal is per request, so a failed
-        # install is retried once after a pause.
-        run: npm ci || { sleep 30; npm ci; }
+        # The only install script that matters here is the Vale postinstall,
+        # which fetches its binary through the unauthenticated GitHub API and
+        # is refused once a shared runner address exhausts its hourly limit.
+        # The next step installs a pinned Vale instead.
+        run: npm ci --ignore-scripts
+
+      - name: Install pinned Vale
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/vale.tar.gz" \
+            "https://github.com/vale-cli/vale/releases/download/v${VALE_VERSION}/vale_${VALE_VERSION}_Linux_64-bit.tar.gz"
+          echo "${VALE_LINUX_X64_SHA256}  ${RUNNER_TEMP}/vale.tar.gz" | \
+            sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/vale.tar.gz" -C "${RUNNER_TEMP}/bin" vale
+          echo "VALE_BIN=${RUNNER_TEMP}/bin/vale" >> "${GITHUB_ENV}"
 
       - name: Fetch pinned OpenAPI inputs
         working-directory: docs/site
@@ -2516,11 +2533,11 @@ jobs:
 
       - name: Install docs dependencies
         working-directory: docs/site
-        # This job needs the install scripts. The Vale postinstall downloads
-        # its binary from GitHub without a token, and shared runner addresses
-        # are sometimes refused. The refusal is per request, so a failed
-        # install is retried once after a pause.
-        run: npm ci || { sleep 30; npm ci; }
+        # No step here runs Vale, the only package with an install script
+        # this job would use. Its postinstall fetches through the
+        # unauthenticated GitHub API, which refuses shared runner addresses
+        # once their hourly limit is spent, so install scripts are skipped.
+        run: npm ci --ignore-scripts
 
       - name: Validate archive lock and compare event baseline
         working-directory: docs/site

@@ -548,9 +548,13 @@ jobs:
         env:
           DOCS_ARCHIVE_OUTPUT: ${{ runner.temp }}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz
           DOCS_DOCSET: ${{ needs.validate.outputs.tag }}
+        # Nothing here runs Vale, the only package with an install script this
+        # step would use. Its postinstall fetches through the unauthenticated
+        # GitHub API, which refuses shared runner addresses once their hourly
+        # limit is spent, so install scripts are skipped.
         run: |
           set -euo pipefail
-          npm ci
+          npm ci --ignore-scripts
           npm run build:archive
           npm run archive:snapshot -- \
             "${DOCS_DOCSET}" \
