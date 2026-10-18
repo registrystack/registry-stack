@@ -575,6 +575,7 @@ $defs:
           profile only. Deployable bundles require HTTPS for both even when it is set, and a
           production or evidence-grade bundle that sets it to true is refused. Omission is false.
         type: boolean
+        default: false
       audience:
         description: >-
           The one exact audience value an inbound access token must carry to be accepted; it is
