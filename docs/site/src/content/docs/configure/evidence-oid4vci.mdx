@@ -1,12 +1,14 @@
 ---
 title: Deliver to a wallet
-description: Run the evidence-oid4vci delivery front end beside an Evidence Gateway so a wallet can receive holder-bound SD-JWT VC responses over OID4VCI.
+description: Run the evidence-oid4vci delivery front end beside an Evidence Gateway so a wallet can receive holder-bound SD-JWT VC responses over OID4VCI, and check it against a pinned wallet.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
 last_reviewed: "2026-08-09"
 doc_type: how-to
+persona:
+  - operator
 locale: en
 standards_referenced:
   - oid4vci
@@ -14,20 +16,18 @@ standards_referenced:
   - sd-jwt-vc
 tutorial_test:
   toolset: evidence
+  checkout: true
 ---
 
 import ConfigurationReference from '../../../components/ConfigurationReference.astro';
 import reference from '../../../data/generated/evidence-configuration.json';
 
-You run an Evidence Gateway and need a wallet to receive its holder-bound
+If you run an Evidence Gateway and a wallet must receive its holder-bound
 [SD-JWT VC](/reference/glossary/#sd-jwt-vc) responses over
-[OID4VCI](/reference/glossary/#oid4vci). This page gets you a running `evidence-oid4vci` delivery
-front end beside your Evidence Gateway, checked offline before it serves.
-
-Evidence Gateway does not speak the wallet protocol; `evidence-oid4vci` does, and turns each
-response into the credential the wallet stores. It never signs, never holds a holder private key,
-and adds no Evidence semantics, so [how Evidence works](/explanation/how-evidence-works/) still
-describes every decision.
+[OID4VCI](/reference/glossary/#oid4vci), run `evidence-oid4vci` beside it. It speaks the wallet
+protocol Evidence Gateway does not, and turns each response into the credential the wallet stores.
+It never signs, never holds a holder private key, and adds no Evidence semantics, so
+[how Evidence works](/explanation/how-evidence-works/) still describes every decision.
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/lib.rs; AGENTS.md. */}
 
@@ -36,17 +36,17 @@ describes every decision.
 - A definition with `subjectBinding: holder-bound` that permits `sd-jwt-vc`, as
   [Enable SD-JWT VC](../enable-sd-jwt-vc/) sets up. The front end offers only
   [holder-bound](/reference/glossary/#holder-bound) definitions.
-- A running Evidence Gateway candidate, as
+- A running Evidence Gateway, as
   [Build and deploy an Evidence project](../../tutorials/build-and-deploy-evidence-project/) leaves
   you.
+- A TLS proxy that publishes the front end's public HTTPS origin.
 - The `evidence-oid4vci` binary, which the
   [same installer](../../tutorials/build-and-deploy-evidence-project/#what-you-need) installs beside
-  `evidence` and `evidencectl`. Or the image `ghcr.io/registrystack/evidence-oid4vci:<tag>` from the
-  [latest release](https://github.com/registrystack/registry-stack/releases/latest): it runs
-  as the distroless `nonroot` user (uid 65532) from `/var/lib/registry-evidence-oid4vci`, exposes
-  port 8090, and runs `serve --runtime-config /etc/registry-evidence-oid4vci/runtime.yaml`. Mount
-  the runtime file and the token client key read-only; the image has no shell, so your platform
-  owns the probes.
+  `evidence` and `evidencectl`, or the image `ghcr.io/registrystack/evidence-oid4vci:<tag>` from the
+  [latest release](https://github.com/registrystack/registry-stack/releases/latest). The image runs
+  as the distroless `nonroot` user (uid 65532), exposes port 8090, and runs
+  `serve --runtime-config /etc/registry-evidence-oid4vci/runtime.yaml`. Mount the runtime file and
+  the token client key read-only; the image has no shell, so your platform owns the probes.
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/metadata.rs, HolderBound;
     crates/registry-evidencectl/install.sh, evidence-oid4vci;
@@ -54,18 +54,12 @@ describes every decision.
 
 ## Write the runtime file
 
-The runtime file tells `evidence-oid4vci` its public origin, the Evidence Gateway it fronts, the
-token client it uses to call that gateway, and who may create a credential offer. This one is
-copied from `products/evidence/examples/oid4vci-runtime/runtime.yaml`; replace every origin with
-your own:
+The runtime file names the front end's public origin, the Evidence Gateway it fronts, the token
+client it calls that gateway with, and who may create a credential offer. Start from this one and
+replace every origin with your own:
 
 ```yaml title="runtime.yaml" test-file
 # yaml-language-server: $schema=https://id.registrystack.org/schemas/evidence/oid4vci-runtime/oid4vci-runtime.v1alpha1.schema.json
-# A minimal Evidence OID4VCI delivery runtime configuration: the file
-# `evidence-oid4vci serve --runtime-config` and `inspect --runtime-config` read, and
-# `evidence-oid4vci check --runtime-config` checks offline. Replace every origin with
-# this deployment's own, and place the delivery client's private JWK at
-# secretProviders.file.root, named as tokenClient.privateKeyRef names it.
 apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1
 kind: EvidenceOid4vciRuntimeConfig
 credentialIssuer: https://wallet.example.org
@@ -91,13 +85,16 @@ store:
   maximumOffers: 4096
 ```
 
+`credentialIssuer` is the public origin your TLS proxy publishes, which wallets see.
+`listener.bind` is the private address the proxy forwards to: keep a loopback or private address
+on a non-zero port such as `8090`, not the public origin's `443`. The listener speaks plain HTTP.
+
 `privateKeyRef` follows the [secret reference grammar](../../reference/environment-variables/#secret-references).
 The key file must be a regular file owned by the service user, mode `0400` or `0600`, with a single
-link. The table below gives every key, its bounds, and its default. `check` adds the rules a schema
-cannot hold:
+link. The runtime configuration table below gives every key, its bounds, and its default. `check` adds the rules a schema cannot hold:
 
 - `store.nonceLifetimeSeconds` must not exceed `store.accessTokenLifetimeSeconds`.
-- The listener port must be non-zero, because the published origin names it.
+- The listener port must be non-zero.
 - `metricsListener.bind` must be a loopback or private address on a non-zero port the delivery
   listener does not use.
 - A reference must name a provider the file enables, and `secretProviders.file.root` must be
@@ -107,11 +104,12 @@ cannot hold:
     crates/registry-evidence-oid4vci/src/config.rs, evidence.oid4vci.nonce-lifetime,
     evidence.oid4vci.listener-port, evidence.oid4vci.metrics-address,
     evidence.oid4vci.metrics-shared-binding, evidence.oid4vci.secret-provider-disabled,
-    evidence.oid4vci.secret-file-root. */}
-
-<ConfigurationReference contracts={reference.contracts.filter((contract) => contract.id === 'oid4vci-runtime')} prefix="evidence-oid4vci" />
+    evidence.oid4vci.secret-file-root;
+    products/evidence/examples/oid4vci-runtime/runtime.yaml. */}
 
 ## Check offline
+
+Check the file before the service reads it:
 
 ```sh
 evidence-oid4vci check --runtime-config runtime.yaml
@@ -123,11 +121,11 @@ evidence-oid4vci check --runtime-config runtime.yaml
 
 `check` reads that one file and nothing else, so it does not prove that the client key resolves
 or parses; `inspect` and `serve` prove that when they start. See
-[`evidence-oid4vci check`](/reference/cli/evidence-oid4vci/check/) for its flags and exit codes.
+[`evidence-oid4vci check`](/reference/cli/evidence-oid4vci/check/).
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/main.rs, check. */}
 
-## Inspect
+## Inspect what wallets will read
 
 With the key in place, `inspect` loads the service, reads the Evidence Gateway's definitions, and
 prints the metadata it would publish:
@@ -136,61 +134,46 @@ prints the metadata it would publish:
 evidence-oid4vci inspect --runtime-config runtime.yaml
 ```
 
-Against the example origins, which nothing answers, it exits 1 and logs that the credential
-source cannot be reached. Against a reachable gateway it prints one JSON document: the profile
-marker `registry.evidence.oid4vci-profile/v1`, the credential issuer and authorization server
-metadata the wallet will read, and a `deployment` block that states one replica, that a restart
-invalidates outstanding exchanges, and whether metrics are enabled.
-
-The wire behavior follows the
+It prints one JSON document: the profile marker `registry.evidence.oid4vci-profile/v1`, the
+credential issuer and authorization server metadata, and a `deployment` block stating one replica,
+that a restart invalidates outstanding exchanges, and whether metrics are enabled. If the gateway
+cannot be reached, it exits 1 and logs that the credential source is unavailable. The wire behavior
+follows the
 [frozen OID4VCI profile](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/oid4vci-profile.yaml),
-which also lists what the front end does not support. See
-[`evidence-oid4vci inspect`](/reference/cli/evidence-oid4vci/inspect/).
+which also lists what the front end does not support.
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/service.rs, inspect;
     crates/registry-evidence-oid4vci/src/issuer.rs, IssuanceError, Unavailable;
     crates/registry-evidence-oid4vci/src/main.rs, the service metadata is unavailable. */}
 
-## Render the contract
+## Serve
+
+Render the HTTP contract your own front end and the wallet will call, then start the service:
 
 ```sh
 evidence-oid4vci openapi --output evidence-oid4vci.openapi.json
 ```
 
-The command prints nothing and writes a document byte-identical to the tracked
-[`registry-evidence-oid4vci.openapi.json`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/generated/registry-evidence-oid4vci.openapi.json).
-Your own front end creates a credential offer at `/offers` with an access token the `offers` block
-admits; the wallet calls the two `/.well-known` metadata routes, `/token`, `/nonce`, and `/credential`. The
-[wallet delivery API reference](../../reference/apis/evidence-oid4vci/) renders the same document. See
-[`evidence-oid4vci openapi`](/reference/cli/evidence-oid4vci/openapi/).
-
-{/* Evidence: crates/registry-evidence-oid4vci/src/main.rs, openapi;
-    crates/registry-evidence-oid4vci/src/authorizer.rs;
-    products/evidence/generated/registry-evidence-oid4vci.openapi.json. */}
-
-## Serve
-
 ```sh test-skip="starts a long-running service against a reachable Evidence Gateway"
 evidence-oid4vci serve --runtime-config runtime.yaml
 ```
 
-`/health` answers `{"status":"ok"}` while the process runs. `/ready` answers `{"status":"ready"}`
-from what the process holds, never from the state of the gateway or token issuer. See
-[`evidence-oid4vci serve`](/reference/cli/evidence-oid4vci/serve/).
+Your front end creates a credential offer at `/offers` with an access token the `offers` block
+admits; the wallet calls the two `/.well-known` metadata routes, `/token`, `/nonce`, and
+`/credential`. The [wallet delivery API reference](../../reference/apis/evidence-oid4vci/) renders
+the same document. `/health` answers `{"status":"ok"}` while the process runs, and `/ready`
+answers `{"status":"ready"}` from what the process holds, never from the state of the gateway or
+token issuer.
 
-{/* Evidence: crates/registry-evidence-oid4vci/src/service.rs, HEALTH_PATH, READY_PATH, health, ready. */}
+Run exactly one replica: offers, codes, and tokens live in process memory, and a restart
+invalidates every outstanding exchange. A change to the gateway's bundle or batch ceiling needs a
+coordinated restart: stop `evidence-oid4vci`, change or restart the gateway, then start
+`evidence-oid4vci` again so its first catalog comes from the new gateway.
 
-## Operational limits
-
-The listener speaks plain HTTP, and `credentialIssuer` must be `https`, so front it with a TLS
-proxy that publishes that origin. Run exactly one replica: offers, codes, and tokens live in
-process memory, single use holds per process, and a restart invalidates every outstanding
-exchange. A change to the Evidence Gateway's bundle or batch ceiling needs a coordinated restart:
-stop `evidence-oid4vci`, change or restart the gateway, then start `evidence-oid4vci` again so its
-first catalog comes from the new gateway.
-
-{/* Evidence: crates/registry-evidence-oid4vci/src/service.rs, TcpListener, restartInvalidatesOutstandingExchanges;
-    crates/registry-evidence-oid4vci/src/lib.rs;
+{/* Evidence: crates/registry-evidence-oid4vci/src/main.rs, openapi;
+    crates/registry-evidence-oid4vci/src/authorizer.rs;
+    crates/registry-evidence-oid4vci/src/service.rs, HEALTH_PATH, READY_PATH, health, ready,
+    TcpListener, restartInvalidatesOutstandingExchanges;
     products/evidence/contracts/oid4vci-profile.yaml, honest_limits. */}
 
 ## Metrics
@@ -206,9 +189,68 @@ Set `metricsListener.bind` to serve Prometheus text at `/metrics` on a private a
 | `evidence_oid4vci_store_capacity` | Refusal threshold for each bounded keyspace |
 | `evidence_oid4vci_cleanup_expired_total` | Expired in-memory entries released by cleanup |
 
-The outcome vocabulary is closed: every label value is one variant of `Outcome::ALL`.
-
 {/* Evidence: crates/registry-evidence-oid4vci/src/observability.rs, Outcome, ALL, render_metrics. */}
+
+## Check wallet interoperability
+
+Before you put a new `evidence-oid4vci` binary behind your proxy, check it against the wallet it
+was tested with. The checks replay a sanitized profile of Inji Wallet, its expected metadata and
+wire shapes, through a real process of your binary, with synthetic keys and data discarded on
+exit. They run from a source checkout of the release you deploy, with its Rust toolchain, Bash,
+and Python 3, and need loopback ports 18440 to 18442 free:
+
+```sh test-skip="the runner starts in a copy of this checkout"
+git clone --depth 1 --branch v<version> https://github.com/registrystack/registry-stack.git
+cd registry-stack
+```
+
+Point `EVIDENCE_OID4VCI_BIN` at the binary you deploy, so the checks drive it and compare the
+contract it renders with the release's. The first run builds the test, which takes several minutes:
+
+```sh
+EVIDENCE_OID4VCI_BIN="$(command -v evidence-oid4vci)" \
+  products/evidence/scripts/compat/inji-oid4vci.sh
+```
+
+Each stage prints a milestone as it passes, from checking a delivery file to a wallet flow that
+returns a credential verified as holder-bound Evidence:
+
+```text test-excerpt
+CONFIG CHECKED: complete delivery configuration is valid
+METADATA INSPECTED: derived holder-bound batch ceiling is 4
+SERVICE READY: health and readiness are available on the delivery listener
+METRICS PRIVATE: metrics exist only on the separate loopback listener
+TASK GRANT REFUSED: deferred wallet state was not created
+PRESENTATION VERIFIED: public wallet flow returned holder-bound Evidence
+CLEANUP COMPLETE: generated private material was removed
+```
+
+```text test-excerpt
+PASS: sanitized Inji OID4VCI profile and Registry-side interoperability tests
+```
+
+A run that stops before `PASS:` failed at the stage after the last milestone it printed. A `cmp`
+difference before any milestone means your binary renders a different contract from the release
+you checked out. A message that names a listener or readiness usually means one of the ports is
+taken. A pass is bounded evidence for the Inji revisions the
+[pinned profile](https://github.com/registrystack/registry-stack/blob/main/products/evidence/fixtures/interoperability/inji-oid4vci/profile.json)
+names, tested on 2026-08-09, not certification.
+
+To rebuild those Inji revisions and rerun their own client tests, run the opt-in upstream check
+on macOS with Git, npm, Java 17, Android SDK platform 34 with Build Tools 33.0.1, full Xcode, and
+an iPhone 15 simulator. It ends with the line the pinned receipt records:
+
+```sh test-skip="the upstream check needs macOS with Xcode and the iOS Simulator, Java, the Android SDK, and network access"
+EVIDENCE_INJI_OID4VCI=1 products/evidence/scripts/compat/inji-oid4vci-upstream.sh
+```
+
+{/* Evidence: products/evidence/scripts/compat/inji-oid4vci.sh, EVIDENCE_OID4VCI_BIN, cmp;
+    crates/registry-evidence-oid4vci/tests/inji_interoperability.rs, adapter_binary, adopter_config,
+    copied_config_checks_starts_and_completes_the_real_binary_journey, wait_until_ready;
+    products/evidence/fixtures/interoperability/inji-oid4vci/profile.json, testedOn;
+    products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json, receipt;
+    products/evidence/contracts/oid4vci-profile.yaml, claim_rule;
+    products/evidence/scripts/compat/inji-oid4vci-upstream.sh, EVIDENCE_INJI_OID4VCI. */}
 
 ## Troubleshooting
 
@@ -216,7 +258,7 @@ The outcome vocabulary is closed: every label value is one variant of `Outcome::
 | --- | --- | --- |
 | `platform.runtime-config.unavailable` | The runtime file could not be read. | Check that the file exists and that the runtime user can read it. |
 | `evidence.oid4vci.https-required` | An origin is not `https` in strict mode. | Write an `https` URL, or set `validationMode: supervised-local-development` for a loopback process group. |
-| `evidence.oid4vci.listener-port` | The listener port is zero. | Bind the listener to the port the credential issuer origin names. |
+| `evidence.oid4vci.listener-port` | The listener port is zero. | Bind the listener to a non-zero private port your TLS proxy forwards to. |
 | `evidence.oid4vci.nonce-lifetime` | The nonce outlives the access token. | Lower `store.nonceLifetimeSeconds` to at most `store.accessTokenLifetimeSeconds`. |
 | `evidence.oid4vci.secret-file-root` | The file provider root is relative. | Write `secretProviders.file.root` as an absolute directory path. |
 | `evidence.oid4vci.secret-provider-disabled` | The key reference names a provider the file does not enable. | Declare that provider under `secretProviders`, or reference the key through an enabled one. |
@@ -229,6 +271,13 @@ The outcome vocabulary is closed: every label value is one variant of `Outcome::
     evidence.oid4vci.secret-provider-disabled, evidence.oid4vci.metrics-shared-binding,
     evidence.oid4vci.wildcard-spelled-item. */}
 
+{/* The runtime grammar is generated into evidence-configuration.json from
+    products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json by
+    docs/site/scripts/generate-evidence-configuration.mjs. Run npm run generate from docs/site. */}
+<ConfigurationReference contracts={reference.contracts.filter((contract) => contract.id === 'oid4vci-runtime')} prefix="evidence-oid4vci" />
+
 ## Next
 
-- [Check wallet interoperability](../../tutorials/run-oid4vci-interoperability-checks/)
+- [Evidence Gateway security model](../../security/evidence/)
+- [Wallet delivery API reference](../../reference/apis/evidence-oid4vci/)
+- [`evidence-oid4vci` command reference](/reference/cli/evidence-oid4vci/)
