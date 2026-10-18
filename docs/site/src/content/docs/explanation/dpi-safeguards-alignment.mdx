@@ -42,10 +42,10 @@ against the cited product contracts.
 | Safeguards question | Stack evidence | Boundary |
 | --- | --- | --- |
 | What does the registry expose? | Registry Manifest renders portable catalog, schema, service, policy, and evidence-offering metadata. | Metadata describes a surface. It does not authorize access. |
-| Who can request evidence? | Evidence Gateway authenticates the assertion caller against its configured OpenID Connect issuer and matches one complete entitlement before contacting a source. | Deployment policy decides who receives scopes and workload authority. |
-| Is data minimized? | Evidence Gateway evaluates predefined requirements and returns only the declared concepts, each in a closed [value form](../how-evidence-works/). | The operator still chooses the requirements and how coarse each value form is. |
-| Can the exchange be reviewed later? | Evidence Gateway writes keyed audit records at durable gates. Signed assertions carry the configuration revision used to produce them. | Audit records support accountability but do not provide lawful basis or oversight. |
-| Can other systems interoperate? | Manifest emits standards-shaped metadata. Evidence Gateway publishes OpenAPI and can serialize an assertion as a Selective Disclosure JWT Verifiable Credential. | These are scoped adoption claims, not blanket conformance to every named standard. |
+| Who can request evidence? | Registry Evidence authenticates the assertion caller against its configured OpenID Connect issuer and matches one complete entitlement before contacting a source. | Deployment policy decides who receives scopes and workload authority. |
+| Is data minimized? | Registry Evidence evaluates predefined requirements and returns only the declared concepts, each in a closed [value form](../how-evidence-works/). | The operator still chooses the requirements and how coarse each value form is. |
+| Can the exchange be reviewed later? | Registry Evidence writes keyed audit records at durable gates. Signed assertions carry the configuration revision used to produce them. | Audit records support accountability but do not provide lawful basis or oversight. |
+| Can other systems interoperate? | Manifest emits standards-shaped metadata. Registry Evidence publishes OpenAPI and can serialize an assertion as a Selective Disclosure JWT Verifiable Credential. | These are scoped adoption claims, not blanket conformance to every named standard. |
 
 ## Project roles
 

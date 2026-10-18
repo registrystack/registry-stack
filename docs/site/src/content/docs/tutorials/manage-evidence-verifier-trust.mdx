@@ -106,11 +106,11 @@ A response signed by a key outside the set fails with code `key`. Treat that as 
 approve, never as a key to fetch. Rotation does not touch decisions you already kept: each
 retained verification carries the keys trusted when its request was sent, so
 [a replay](../verify-an-assertion-as-a-consumer/) reads no current key set. The provider's side is
-[Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/).
+[Rotate Registry Evidence signing keys](../rotate-evidence-signing-keys/).
 
 {/* Evidence: crates/registry-evidence-verifier/src/verifier.rs, verify_flattened_jws_report, kind;
     crates/registry-evidence-client/src/retained.rs, RetainedEvidenceVerification (trusted_jwks retained). */}
 
 ## Next
 
-[Evidence Gateway security model](../../security/evidence/), for the threats pinning answers.
+[Registry Evidence security model](../../security/evidence/), for the threats pinning answers.

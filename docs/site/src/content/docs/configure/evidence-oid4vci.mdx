@@ -1,6 +1,6 @@
 ---
 title: Deliver to a wallet
-description: Run the evidence-oid4vci delivery front end beside an Evidence Gateway so a wallet can receive holder-bound SD-JWT VC responses over OID4VCI, and confirm it with a wallet.
+description: Run the evidence-oid4vci delivery front end beside a Registry Evidence so a wallet can receive holder-bound SD-JWT VC responses over OID4VCI, and confirm it with a wallet.
 status: current
 owner: registry-docs
 source_repos:
@@ -21,10 +21,10 @@ tutorial_test:
 import ConfigurationReference from '../../../components/ConfigurationReference.astro';
 import reference from '../../../data/generated/evidence-configuration.json';
 
-If you run an Evidence Gateway and a wallet must receive its holder-bound
+If you run Registry Evidence and a wallet must receive its holder-bound
 [SD-JWT VC](/reference/glossary/#sd-jwt-vc) responses over
 [OID4VCI](/reference/glossary/#oid4vci), run `evidence-oid4vci` beside it. It speaks the wallet
-protocol Evidence Gateway does not, and turns each response into the credential the wallet stores.
+protocol Registry Evidence does not, and turns each response into the credential the wallet stores.
 It never signs, never holds a holder private key, and adds no Evidence semantics, so
 [how Evidence works](/explanation/how-evidence-works/) still describes every decision.
 
@@ -35,7 +35,7 @@ It never signs, never holds a holder private key, and adds no Evidence semantics
 - A definition with `subjectBinding: holder-bound` that permits `sd-jwt-vc`, as
   [Enable SD-JWT VC](../enable-sd-jwt-vc/) sets up. The front end offers only
   [holder-bound](/reference/glossary/#holder-bound) definitions.
-- A running Evidence Gateway, as
+- A running Registry Evidence, as
   [Build and deploy an Evidence project](../../tutorials/build-and-deploy-evidence-project/) leaves
   you.
 - A TLS proxy that publishes the front end's public HTTPS origin.
@@ -53,7 +53,7 @@ It never signs, never holds a holder private key, and adds no Evidence semantics
 
 ## Write the runtime file
 
-The runtime file names the front end's public origin, the Evidence Gateway it fronts, the token
+The runtime file names the front end's public origin, the Registry Evidence it fronts, the token
 client it calls that gateway with, and who may create a credential offer. Start from this one and
 replace every origin with your own:
 
@@ -127,10 +127,10 @@ or parses; `inspect` and `serve` prove that when they start. See
 
 ## Inspect what wallets will read
 
-With the key in place, `inspect` loads the service, reads the Evidence Gateway's definitions, and
+With the key in place, `inspect` loads the service, reads the Registry Evidence's definitions, and
 prints the metadata it would publish:
 
-```sh test-skip="needs a reachable Evidence Gateway and token issuer"
+```sh test-skip="needs a reachable Registry Evidence and token issuer"
 evidence-oid4vci inspect --runtime-config runtime.yaml
 ```
 
@@ -154,7 +154,7 @@ Render the HTTP contract your own front end and the wallet will call, then start
 evidence-oid4vci openapi --output evidence-oid4vci.openapi.json
 ```
 
-```sh test-skip="starts a long-running service against a reachable Evidence Gateway"
+```sh test-skip="starts a long-running service against a reachable Registry Evidence"
 evidence-oid4vci serve --runtime-config runtime.yaml
 ```
 
@@ -213,7 +213,7 @@ live in the repository for contributors.
 To confirm your own deployment, have your front end create a credential offer at `/offers` for a
 holder-bound definition and open it in the wallet your holders use. The wallet reads the metadata,
 redeems the pre-authorized code at `/token`, fetches a nonce, and calls `/credential`; the
-credential it stores is the Evidence Gateway's SD-JWT VC response, bound to the wallet's key.
+credential it stores is the Registry Evidence's SD-JWT VC response, bound to the wallet's key.
 
 {/* Evidence: products/evidence/fixtures/interoperability/inji-oid4vci/profile.json, upstream,
     metadata, wire, negativeCases, exclusions, testedOn;
@@ -247,6 +247,6 @@ credential it stores is the Evidence Gateway's SD-JWT VC response, bound to the 
 
 ## Next
 
-- [Evidence Gateway security model](../../security/evidence/)
+- [Registry Evidence security model](../../security/evidence/)
 - [Wallet delivery API reference](../../reference/apis/evidence-oid4vci/)
 - [`evidence-oid4vci` command reference](/reference/cli/evidence-oid4vci/)

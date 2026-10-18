@@ -17,7 +17,7 @@ import ConfigurationFormatChecks from '../../../components/ConfigurationFormatCh
 import ConfigurationReference from '../../../components/ConfigurationReference.astro';
 import reference from '../../../data/generated/evidence-configuration.json';
 
-Look up any key of a file Evidence Gateway (Evidence) reads: the deployment bundle and
+Look up any key of a file Registry Evidence (Evidence) reads: the deployment bundle and
 `runtime.yaml`, and the `evidence.yaml`, target, and target authority documents you write. Each
 entry gives the key's type, whether it is required, its accepted values and bounds, and the
 schema's own sentence on what the key decides.
@@ -31,7 +31,7 @@ schema's own sentence on what the key decides.
 
 JSON Schema is not the acceptance path: a document these schemas accept still has to pass
 `evidencectl check`, which applies the cross-field, file, and grant rules no schema can express
-([Build and deploy an Evidence Gateway project](../../tutorials/build-and-deploy-evidence-project/)).
+([Build and deploy a Registry Evidence project](../../tutorials/build-and-deploy-evidence-project/)).
 
 {/* Evidence: docs/site/scripts/generate-evidence-configuration.mjs, CONTRACTS and CONTRACT_STATUSES;
     crates/registry-evidence-authoring/examples/authoring-schema.rs;
@@ -83,4 +83,4 @@ the diagnostics, JSON output, and exit codes that
 
 ## Next
 
-[Evidence Gateway errors and problems reference](../evidence-problems/)
+[Registry Evidence errors and problems reference](../evidence-problems/)

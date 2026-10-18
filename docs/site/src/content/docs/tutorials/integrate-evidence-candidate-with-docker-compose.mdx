@@ -24,9 +24,9 @@ deployment.
 ## What you need
 
 - The candidate directory, holding `bundle/`, `runtime.yaml`, and `compiled-authority.yaml`.
-- A reviewed Evidence Gateway image, pinned by digest.
+- A reviewed Registry Evidence image, pinned by digest.
 - A running Transit proxy whose socket directory you can mount, set up as in
-  [Configure Transit signing for Evidence Gateway](../move-evidence-to-production-signing/).
+  [Configure Transit signing for Registry Evidence](../move-evidence-to-production-signing/).
 - An owner-only secret directory and storage that UID and GID `65532` can write.
 - The Compose adapter from your release's source archive,
   `https://github.com/registrystack/registry-stack/archive/refs/tags/v<version>.tar.gz`, where
@@ -57,7 +57,7 @@ file at `/etc/registry-evidence/runtime.yaml` and the secret root at
 its only writable mount.
 
 The service runs as `65532:65532` with `read_only`, `cap_drop: [ALL]`, `no-new-privileges`, and a
-read-only `/dev/shm` tmpfs. Evidence Gateway receives the proxy socket, never a provider token.
+read-only `/dev/shm` tmpfs. Registry Evidence receives the proxy socket, never a provider token.
 
 {/* Evidence: docker/compose/docker-compose.yaml; docker/compose/README.md; release/docker/Dockerfile.evidence; crates/registry-evidence/src/bundle.rs, load_pinned */}
 
@@ -167,7 +167,7 @@ python3 runtime-preflight.py \
 ```
 
 Changing only the container runtime file leaves the package digest unchanged, so fixtures need not
-run again; [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
+run again; [Build and deploy a Registry Evidence project](../build-and-deploy-evidence-project/)
 explains the digests.
 
 {/* Evidence: crates/registry-evidence/src/main.rs, require_audit_under; crates/registry-evidence/src/runtime.rs; docker/runtime-preflight.py */}
@@ -183,7 +183,7 @@ The image's default command is `serve --runtime-config /etc/registry-evidence/ru
 `up` needs no arguments. The log carries an `evidence service listening` record once every listener
 is bound; if it is missing, the log names the startup failure. The adapter publishes no port, so
 reach the listener from another service on the Compose network and put TLS termination ahead of it.
-To read the audit log, see [Operate the Evidence Gateway audit log](../../operate/evidence-audit/).
+To read the audit log, see [Operate the Registry Evidence audit log](../../operate/evidence-audit/).
 
 {/* Evidence: release/docker/Dockerfile.evidence; crates/registry-evidence/src/server.rs */}
 
@@ -199,4 +199,4 @@ append-only storage first, the history is gone and cannot be reconstructed.
 
 ## Next
 
-[Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/)
+[Rotate Registry Evidence signing keys](../rotate-evidence-signing-keys/)

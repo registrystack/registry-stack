@@ -34,7 +34,7 @@ Product names are always in English, including on future translated pages.
   <dd>The response to a successful immediate <a href="#action">Action</a>: its `applicationId` and, under `results`, the Record type, `recordId`, and new revision of each effect the caller may see. A refused invocation leaves no partial change.</dd>
 
   <dt id="assertion">assertion</dt>
-  <dd>Evidence Gateway's answer: a signed payload that carries the answer to one <a href="#requirement">requirement</a> and none of the record behind it. Signed flattened JSON Web Signature (JWS) is the default serialization; <a href="#sd-jwt-vc">SD-JWT VC</a> carries the same assertion.</dd>
+  <dd>Registry Evidence's answer: a signed payload that carries the answer to one <a href="#requirement">requirement</a> and none of the record behind it. Signed flattened JSON Web Signature (JWS) is the default serialization; <a href="#sd-jwt-vc">SD-JWT VC</a> carries the same assertion.</dd>
 
   <dt id="assertion-definition">assertion definition</dt>
   <dd>One fixed question in an <a href="#evidence-project">Evidence project</a>, declared under `assertionDefinitions` with its Requirement URI, purpose, subject roles, source, permitted outputs, and the grant ceiling no caller can exceed.</dd>
@@ -55,7 +55,7 @@ Product names are always in English, including on future translated pages.
   <dd>A pinned Casework policy rule that measures a subject or a <a href="#stage">stage</a> against a deadline, in elapsed time or working days on a <a href="#calendar">calendar</a>. It can send a reminder or move a due task to another queue, and never decides an outcome.</dd>
 
   <dt id="configuration-revision">`configurationRevision`</dt>
-  <dd>The `sha256:` digest an Evidence Gateway <a href="#assertion">assertion</a> carries for what its <a href="#assertion-definition">assertion definition</a> does, which relying services pin. It moves with the source request or response shape, selector profiles, Functions, codelists, schemas, outputs, or validity, and stays put for question text, fixtures, endpoints, credentials, grants, and signing keys.</dd>
+  <dd>The `sha256:` digest a Registry Evidence <a href="#assertion">assertion</a> carries for what its <a href="#assertion-definition">assertion definition</a> does, which relying services pin. It moves with the source request or response shape, selector profiles, Functions, codelists, schemas, outputs, or validity, and stays put for question text, fixtures, endpoints, credentials, grants, and signing keys.</dd>
 
   <dt id="context-provider">context provider</dt>
   <dd>The source's read-only review interface a Casework policy names under `context.mode: current-source`. Casework asks it again under each reviewer's own credential when a task opens and keeps none of the source's data.</dd>
@@ -75,7 +75,7 @@ Product names are always in English, including on future translated pages.
   <dt id="erasure">erasure</dt>
   <dd>The irreversible removal of retained detail under an approved retention request. In Base Registry Engine, `bregctl history erase` and `bregctl proposal-retention erase` remove retained revisions or Proposal detail, never the current record or the <a href="#audit-journal">audit journal</a>; Registry Casework erases expired review data through runtime maintenance.</dd>
 
-  <dt id="evidence-gateway">Evidence Gateway</dt>
+  <dt id="evidence-gateway">Registry Evidence</dt>
   <dd>The minimum-disclosure assertion product: it answers one predefined question from a fixed read of your system with a signed <a href="#assertion">assertion</a>, never the source record. Binaries `evidence` and `evidencectl`.</dd>
 
   <dt id="evidence-project">Evidence project</dt>
@@ -85,10 +85,10 @@ Product names are always in English, including on future translated pages.
   <dd>A project-local typed implementation asset. In BReg, an Action's <a href="#planner">Plan</a> uses one to compute effects within the Action's declared write ceiling; it cannot grant authority or invent a review decision. In an <a href="#evidence-project">Evidence project</a>, a <a href="#rhai">Rhai</a> script with a declared interface that turns a <a href="#source">source</a> response into facts or facts into declared outputs, under fixed operation and size limits.</dd>
 
   <dt id="grant-ceiling">grant ceiling</dt>
-  <dd>The widest authority an Evidence Gateway <a href="#assertion-definition">assertion definition</a> lets any grant give for it: the authorities, actor kinds, value origins, and audiences a grant may name. A <a href="#target">target</a> authority's grant may only narrow it; Evidence Gateway refuses to activate one that widens it.</dd>
+  <dd>The widest authority a Registry Evidence <a href="#assertion-definition">assertion definition</a> lets any grant give for it: the authorities, actor kinds, value origins, and audiences a grant may name. A <a href="#target">target</a> authority's grant may only narrow it; Registry Evidence refuses to activate one that widens it.</dd>
 
   <dt id="holder-bound">holder-bound</dt>
-  <dd>The Evidence Gateway subject binding mode in which the binding derives from the holder key's RFC 7638 thumbprint instead of the audience. Its requirement returns only <a href="#sd-jwt-vc">SD-JWT VC</a>, and the relying party checks the audience at presentation by verifying a key-binding JWT.</dd>
+  <dd>The Registry Evidence subject binding mode in which the binding derives from the holder key's RFC 7638 thumbprint instead of the audience. Its requirement returns only <a href="#sd-jwt-vc">SD-JWT VC</a>, and the relying party checks the audience at presentation by verifying a key-binding JWT.</dd>
 
   <dt id="journey">journey</dt>
   <dd>One scenario in `tests/journeys.yaml` that `bregctl test` replays over HTTP against a throwaway database. A fully successful run writes a <a href="#receipt">receipt</a>. See <a href="../../configure/breg-journeys/">Test with journeys</a>.</dd>
@@ -97,7 +97,7 @@ Product names are always in English, including on future translated pages.
   <dd>A reusable `modules/<id>/module.yaml` file that contributes Record types, value types, Functions, Actions, and additive extensions to a Base Registry Engine <a href="#registry-project">registry project</a>.</dd>
 
   <dt id="oid4vci">OID4VCI</dt>
-  <dd>OpenID for Verifiable Credential Issuance. The `registry-evidence-oid4vci` supporting service implements a frozen OID4VCI 1.0 Final profile to deliver holder-bound `dc+sd-jwt` credentials to a wallet; Evidence Gateway signs them.</dd>
+  <dd>OpenID for Verifiable Credential Issuance. The `registry-evidence-oid4vci` supporting service implements a frozen OID4VCI 1.0 Final profile to deliver holder-bound `dc+sd-jwt` credentials to a wallet; Registry Evidence signs them.</dd>
 
   <dt id="outbox">outbox</dt>
   <dd>A table in a Base Registry Engine registry's own database that takes one row per configured event, written in the same transaction as the record change, which the webhook worker inside `breg` delivers.</dd>
@@ -121,7 +121,7 @@ Product names are always in English, including on future translated pages.
   <dd>BReg durable work created by a proposal-mode Action. Submission freezes its inputs, effects, target revisions, and the review it requests; BReg applies that exact plan automatically by default, or manually when configured.</dd>
 
   <dt id="purpose">purpose</dt>
-  <dd>The authorized reason a caller gives for an Evidence Gateway request: a configured code from the definition's declared purposes and the caller's grant, echoed into the assertion. In Base Registry Engine, an <a href="#access-profile">access profile</a>'s `requiredPurposes` lists the purposes it accepts.</dd>
+  <dd>The authorized reason a caller gives for a Registry Evidence request: a configured code from the definition's declared purposes and the caller's grant, echoed into the assertion. In Base Registry Engine, an <a href="#access-profile">access profile</a>'s `requiredPurposes` lists the purposes it accepts.</dd>
 
   <dt id="queue">queue</dt>
   <dd>A named Casework inbox that <a href="#stage">stages</a>, routing, and clock steps send tasks to. A person reaches its tasks only as a member of a <a href="#team">team</a> serving it.</dd>
@@ -151,7 +151,7 @@ Product names are always in English, including on future translated pages.
   <dd>The header a Casework reviewer sends to select the source's access profile for work whose context comes from a <a href="#context-provider">context provider</a>, which reads under that profile and the reviewer's own credential. Producer, policy, and accountability routes refuse it.</dd>
 
   <dt id="requirement">requirement</dt>
-  <dd>The question an Evidence Gateway <a href="#assertion-definition">assertion definition</a> answers, named by a stable Requirement URI such as `urn:example:requirement:adult-status:v1` that a caller sends. A change in meaning gets a new URI.</dd>
+  <dd>The question a Registry Evidence <a href="#assertion-definition">assertion definition</a> answers, named by a stable Requirement URI such as `urn:example:requirement:adult-status:v1` that a caller sends. A change in meaning gets a new URI.</dd>
 
   <dt id="review-policy">`ReviewPolicy`</dt>
   <dd>The Casework declaration under `reviewPolicies` that fixes a review's context, <a href="#stage">stages</a>, schemas, outcomes, routing, clocks, and retention; its ID, version, and digest are pinned at acceptance. See <a href="../../configure/casework/">Author a Casework policy</a>.</dd>
@@ -166,25 +166,25 @@ Product names are always in English, including on future translated pages.
   <dd>One human contribution to a <a href="#review-request">ReviewRequest</a>, created when a <a href="#stage">stage</a> becomes active, with its queue, revision, holder, and <a href="#decision">Decision</a>.</dd>
 
   <dt id="rhai">Rhai</dt>
-  <dd>The bounded scripting language for adopter-authored Functions, run under fixed operation and size limits. Evidence Gateway Functions extract facts and derive outputs; Base Registry Engine Functions compute an Action's effects.</dd>
+  <dd>The bounded scripting language for adopter-authored Functions, run under fixed operation and size limits. Registry Evidence Functions extract facts and derive outputs; Base Registry Engine Functions compute an Action's effects.</dd>
 
   <dt id="row-boundary">row boundary</dt>
   <dd>A rule in a Base Registry Engine <a href="#access-profile">access profile</a> that binds one record field to a verified token claim with `equals` or `in`, so a request reaches only matching rows.</dd>
 
   <dt id="sd-jwt-vc">SD-JWT VC</dt>
-  <dd>Selective Disclosure JWT Verifiable Credential (IETF draft), the second serialization Evidence Gateway offers for the same stateless <a href="#assertion">assertion</a> under its frozen profile. It adds no credential lifecycle. Media type: `application/dc+sd-jwt`.</dd>
+  <dd>Selective Disclosure JWT Verifiable Credential (IETF draft), the second serialization Registry Evidence offers for the same stateless <a href="#assertion">assertion</a> under its frozen profile. It adds no credential lifecycle. Media type: `application/dc+sd-jwt`.</dd>
 
   <dt id="selector-profile">selector profile</dt>
-  <dd>The bound on what a caller may send to identify a subject in an Evidence Gateway request, declared in the <a href="#evidence-project">Evidence project</a>: the fields, their sizes, and the aggregate limit. A <a href="#source">source</a> takes its request values only from those fields.</dd>
+  <dd>The bound on what a caller may send to identify a subject in a Registry Evidence request, declared in the <a href="#evidence-project">Evidence project</a>: the fields, their sizes, and the aggregate limit. A <a href="#source">source</a> takes its request values only from those fields.</dd>
 
   <dt id="source">source</dt>
-  <dd>One fixed read an <a href="#evidence-project">Evidence project</a> declares: an HTTP request with one method and path template, or one SQL statement over a read-only SQLite extract, with the response shape it accepts and the fields it may read. Evidence Gateway reaches a source with the credential its <a href="#target">target</a> binds, never the caller's.</dd>
+  <dd>One fixed read an <a href="#evidence-project">Evidence project</a> declares: an HTTP request with one method and path template, or one SQL statement over a read-only SQLite extract, with the response shape it accepts and the fields it may read. Registry Evidence reaches a source with the credential its <a href="#target">target</a> binds, never the caller's.</dd>
 
   <dt id="stage">stage</dt>
   <dd>One step of a <a href="#review-policy">ReviewPolicy</a>, run in order, naming its <a href="#queue">queue</a>, the profiles that may decide, and how many independent reviewers must approve.</dd>
 
   <dt id="subject-binding">subject binding</dt>
-  <dd>The opaque value that stands for a subject in an Evidence Gateway <a href="#assertion">assertion</a> in place of its identifier. An audience-scoped binding differs for each relying audience, so two cannot join their answers; a <a href="#holder-bound">holder-bound</a> binding derives from the holder's key instead.</dd>
+  <dd>The opaque value that stands for a subject in a Registry Evidence <a href="#assertion">assertion</a> in place of its identifier. An audience-scoped binding differs for each relying audience, so two cannot join their answers; a <a href="#holder-bound">holder-bound</a> binding derives from the holder's key instead.</dd>
 
   <dt id="target">target</dt>
   <dd>The operator-owned file, such as `local-target.yaml`, that binds an <a href="#evidence-project">Evidence project</a> to one deployment: the token issuer, each <a href="#source">source</a>'s endpoint and credential, the signer, and the audit path. Its target authority names the <a href="#access-profile">access profiles</a> that may call and the grants each holds.</dd>

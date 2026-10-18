@@ -18,7 +18,7 @@ tutorial_test:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you build an application that asks Evidence Gateway for an assertion, you give it its own
+If you build an application that asks Registry Evidence for an assertion, you give it its own
 client identity, request one assertion through the maintained Python client, decide from the
 verified value, and keep what you need to stand behind that decision later.
 
@@ -48,7 +48,7 @@ python3 serve-source.py \
 
 The deployment's operator registers your application as a client under an
 [access profile](../../reference/glossary/#access-profile). Here you play the operator, from the
-project directory. Evidence Gateway reads its clients only as it starts, and `evidencectl` refuses
+project directory. Registry Evidence reads its clients only as it starts, and `evidencectl` refuses
 a client change while it runs, so stop it first:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
@@ -72,7 +72,7 @@ Added client age-check-app with access profile standalone-service.
 ```
 
 The client's private key stays owner-only at `.evidence/clients/age-check-app/private.jwk`.
-Start Evidence Gateway again with the same ports, so it loads the client:
+Start Registry Evidence again with the same ports, so it loads the client:
 
 ```sh
 evidencectl dev start . \
@@ -214,7 +214,7 @@ node request_adult_status.js
 
 ## Stop and inspect the audit
 
-The audit view reads a stopped session, so stop Evidence Gateway first:
+The audit view reads a stopped session, so stop Registry Evidence first:
 
 ```sh
 evidencectl dev stop .

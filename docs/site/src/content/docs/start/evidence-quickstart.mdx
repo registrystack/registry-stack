@@ -1,6 +1,6 @@
 ---
-title: Evidence Gateway overview
-description: What a caller gets from Evidence Gateway, what you define and run to answer it, what it refuses, and when another product fits better.
+title: Registry Evidence overview
+description: What a caller gets from Registry Evidence, what you define and run to answer it, what it refuses, and when another product fits better.
 status: current
 owner: registry-docs
 source_repos:
@@ -12,7 +12,7 @@ standards_referenced: []
 ---
 
 If another service needs to check something your institution's records settle, such as whether a
-person is an adult, [Evidence Gateway](../../reference/glossary/#evidence-gateway) lets you answer
+person is an adult, [Registry Evidence](../../reference/glossary/#evidence-gateway) lets you answer
 that one question without sharing the record.
 
 ## What a caller gets
@@ -20,7 +20,7 @@ that one question without sharing the record.
 The caller names a fixed question by its [Requirement URI](../../reference/glossary/#requirement),
 such as `urn:example:requirement:adult-status:v1`, and the subject it is about. It gets back an
 [assertion](../../reference/glossary/#assertion): a signed answer it can verify offline, carrying
-only the values the question declares. Asked whether a person is an adult, Evidence Gateway reads
+only the values the question declares. Asked whether a person is an adult, Registry Evidence reads
 a birth date from your system and returns `true`; the date stays with you.
 
 ## What you define and run
@@ -42,7 +42,7 @@ part and each refusal.
 If the other service needs the record itself, or needs to change it, hold the record in
 [Base Registry Engine](../breg-quickstart/) and give that service an access profile there. If you
 need credentials with a lifecycle, such as revocation, look elsewhere: an SD-JWT VC answer from
-Evidence Gateway is one more encoding of the same signed answer, with no lifecycle behind it.
+Registry Evidence is one more encoding of the same signed answer, with no lifecycle behind it.
 
 {/* Evidence: products/evidence/CONCEPT.md; products/evidence/contracts/sd-jwt-vc-profile.yaml. */}
 

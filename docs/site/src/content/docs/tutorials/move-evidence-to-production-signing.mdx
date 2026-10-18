@@ -18,7 +18,7 @@ tutorial_test:
 
 You have a candidate that serves with a local JWK signer. Move the same Evidence project to a
 Transit signer before it serves real callers: Vault or OpenBao holds the private key and never
-exports it, and Evidence Gateway signs through a workload-local proxy socket. The service
+exports it, and Registry Evidence signs through a workload-local proxy socket. The service
 process receives no Vault or OpenBao token.
 
 ## What you need
@@ -40,7 +40,7 @@ process receives no Vault or OpenBao token.
 :::caution
 `exportable=false` and `allow_plaintext_backup=false` are one-way in the permissive direction: a
 provider administrator can later set either to `true`, and Vault and OpenBao then refuse to set it
-back. Evidence Gateway refuses a Transit key unless both read `false`, so exporting the key retires
+back. Registry Evidence refuses a Transit key unless both read `false`, so exporting the key retires
 that key name for every version under it. The recovery path is a new key, never an export.
 Confirm the provider's own backup covers this mount before you create it.
 :::
@@ -83,7 +83,7 @@ path "transit/sign/evidence-signing/sha2-256" {
 ```
 
 The runtime also refuses a pinned key version below the key's `min_encryption_version`;
-[Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/) uses that control. The
+[Rotate Registry Evidence signing keys](../rotate-evidence-signing-keys/) uses that control. The
 [Vault Transit API](https://developer.hashicorp.com/vault/api-docs/secret/transit) and the
 [OpenBao Transit API](https://openbao.org/api-docs/secret/transit/) document every other field;
 use the equivalent `bao` commands for OpenBao.
@@ -92,7 +92,7 @@ use the equivalent `bao` commands for OpenBao.
 
 ## Run the proxy with a forced token
 
-The proxy holds the provider credential and Evidence Gateway holds only the socket. This is
+The proxy holds the provider credential and Registry Evidence holds only the socket. This is
 `production/transit/proxy-configs/evidence.hcl`, without its `pid_file` and `auto_auth` method,
 which you replace with your platform's:
 
@@ -201,7 +201,7 @@ Authority: <candidate>/compiled-authority.yaml
 
 The public JWK file goes into the bundle, and the socket, mount, key name, and key version go into
 the candidate's `runtime.yaml`. Install the bundle and activate the target authority as in
-[Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/).
+[Build and deploy a Registry Evidence project](../build-and-deploy-evidence-project/).
 
 {/* Evidence: crates/registry-evidencectl/src/build.rs, prepare_candidate, run_bundle_check, run_bundle_fixture */}
 
@@ -232,4 +232,4 @@ signer unavailable until a self-test succeeds. See
 
 ## Next
 
-[Integrate an Evidence Gateway candidate with Docker Compose](../integrate-evidence-candidate-with-docker-compose/)
+[Integrate a Registry Evidence candidate with Docker Compose](../integrate-evidence-candidate-with-docker-compose/)

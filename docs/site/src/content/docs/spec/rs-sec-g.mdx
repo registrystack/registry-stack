@@ -59,8 +59,8 @@ This specification covers the security model that holds across the runtime servi
 
 This specification does not define:
 
-- **Exact configuration schemas, algorithms, and parameters.** Concrete signing algorithms and key sizes, configurable token and cache windows, entropy floors, the precise security-header set, and the precise outbound allow and deny rules are configuration and operational detail, not contract data. For the configurable Evidence surface, see the [Evidence Gateway configuration reference](../../reference/evidence-configuration/).
-- **Surface-specific protocol behavior.** How Evidence Gateway applies this model to its routes, request shapes, and error codes belongs to [RS-PR-EVIDENCE](../rs-pr-evidence/).
+- **Exact configuration schemas, algorithms, and parameters.** Concrete signing algorithms and key sizes, configurable token and cache windows, entropy floors, the precise security-header set, and the precise outbound allow and deny rules are configuration and operational detail, not contract data. For the configurable Evidence surface, see the [Registry Evidence configuration reference](../../reference/evidence-configuration/).
+- **Surface-specific protocol behavior.** How Registry Evidence applies this model to its routes, request shapes, and error codes belongs to [RS-PR-EVIDENCE](../rs-pr-evidence/).
 - **Key custody and secret provisioning.** How private keys and credentials are stored, injected, and rotated in a deployment (environment, file, hardware module) is an operator responsibility, addressed in Section 9.
 - **Deeper service-internal security mechanisms.** The internal structure of the audit envelope, and of any product replay state beyond the authority, binding, retention, and failure behavior Section 7 states, is reserved for product specifications and operator guidance.
 
@@ -182,8 +182,8 @@ Conformance to this specification does not imply conformance to any external sta
 This specification is `verified`: every requirement describes shipped behavior a reader can inspect, per RS-DOC REQ-DOC-014.
 
 - The [boundary map](../../map/boundaries-and-map/) records that the security primitives (authentication, OIDC, audit envelopes, HTTP security, outbound HTTP policy, cryptography, SD-JWT VC helpers) are owned by Registry Platform and that secret provisioning, audit retention, tenant isolation, deployment configuration, and incident response are operator responsibilities, which Sections 2 and 9 make precise.
-- The [Evidence Gateway API reference](../../reference/apis/registry-evidence/) and the [Evidence Gateway configuration reference](../../reference/evidence-configuration/) describe the OIDC trust inputs, per-grant scopes, and unauthenticated probes that Sections 3 and 4 state normatively.
-- The [Evidence Gateway security model](../../security/evidence/) and the [Evidence Gateway configuration reference](../../reference/evidence-configuration/) describe JWKS publication, the public/private key boundary, and rotation, which Section 5 states normatively.
+- The [Registry Evidence API reference](../../reference/apis/registry-evidence/) and the [Registry Evidence configuration reference](../../reference/evidence-configuration/) describe the OIDC trust inputs, per-grant scopes, and unauthenticated probes that Sections 3 and 4 state normatively.
+- The [Registry Evidence security model](../../security/evidence/) and the [Registry Evidence configuration reference](../../reference/evidence-configuration/) describe JWKS publication, the public/private key boundary, and rotation, which Section 5 states normatively.
 - [RS-PR-EVIDENCE](../rs-pr-evidence/) carries the Evidence surface-level form of the authentication, authorization, key-publication, audit, and error requirements this document generalizes.
 - [RS-ARC-G](../rs-arc-g/) Section 5 holds the architectural invariants (REQ-ARC-G-004, REQ-ARC-G-005) that Sections 2 and 6 refine.
 - The [retention and persistent-state reference](../../operate/retention-and-persistent-state/) records the complete product retention inventory that Section 7 states normatively.
