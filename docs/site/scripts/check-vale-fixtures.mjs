@@ -1,35 +1,13 @@
 import { spawn } from 'node:child_process';
-import { access, readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
+
+import { resolveVale } from './vale-binary.mjs';
 
 const rootDir = resolve(import.meta.dirname, '..');
 const fixturesDir = join(rootDir, 'fixtures', 'vale');
-const valePackageDir = join(rootDir, 'node_modules', '@vvago', 'vale');
-const valeBin = join(valePackageDir, 'native', process.platform === 'win32' ? 'vale.exe' : 'vale');
 const fixturePattern = /\.mdx?$/;
 const directivePattern = /<!--\s*ValeFixture\s+expect:\s*([\s\S]*?)-->/i;
-
-async function ensureVale() {
-  try {
-    await access(valeBin);
-  } catch {
-    await new Promise((resolveRun, rejectRun) => {
-      const child = spawn(process.execPath, [join(valePackageDir, 'dist', 'index.cjs')], {
-        cwd: rootDir,
-        stdio: 'inherit',
-      });
-
-      child.on('error', rejectRun);
-      child.on('close', (code) => {
-        if (code === 0) {
-          resolveRun();
-        } else {
-          rejectRun(new Error(`Unable to install Vale binary, installer exited with ${code ?? 1}`));
-        }
-      });
-    });
-  }
-}
 
 async function collectFixtures(dir) {
   let entries;
@@ -78,7 +56,7 @@ function parseExpectedChecks(source, filePath) {
   return [...new Set(checks)].sort();
 }
 
-function runVale(files) {
+function runVale(valeBin, files) {
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(
       valeBin,
@@ -167,9 +145,8 @@ for (const file of fixtureFiles) {
   expectations.set(file, parseExpectedChecks(await readFile(file, 'utf8'), file));
 }
 
-await ensureVale();
-
-const result = await runVale(fixtureFiles);
+const valeBin = await resolveVale();
+const result = await runVale(valeBin, fixtureFiles);
 const alertsByPath = parseValeOutput(result.stdout);
 const failures = [];
 
