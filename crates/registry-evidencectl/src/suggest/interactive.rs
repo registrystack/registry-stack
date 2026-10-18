@@ -185,7 +185,6 @@ fn truncate(text: &str) -> String {
 fn provenance_phrase(provenance: &Provenance) -> &'static str {
     match provenance {
         Provenance::Spec => "the OpenAPI schema",
-        Provenance::Format => "the declared format",
         Provenance::Sample => "the sample response, widened",
         Provenance::PageSize => "a page-size parameter in the spec",
         Provenance::SubsetCeiling => "the subset ceiling; the document states a larger bound",

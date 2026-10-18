@@ -57,6 +57,7 @@ struct ProtectedHeader<'a> {
 pub struct EvidenceSigner {
     provider: Arc<dyn SigningProvider>,
     recovery_probe: Mutex<()>,
+    metrics: Option<Arc<crate::observability::DependencyMetrics>>,
 }
 
 impl std::fmt::Debug for EvidenceSigner {
@@ -87,6 +88,7 @@ impl EvidenceSigner {
         Ok(Self {
             provider,
             recovery_probe: Mutex::new(()),
+            metrics: None,
         })
     }
 
@@ -105,6 +107,10 @@ impl EvidenceSigner {
             return Err(EvidenceSigningError::ActiveKeyId);
         }
         Self::initialize(provider, expected_key_id).await
+    }
+
+    pub(crate) fn observe(&mut self, metrics: Arc<crate::observability::DependencyMetrics>) {
+        self.metrics = Some(metrics);
     }
 
     pub fn key_id(&self) -> &str {
@@ -159,24 +165,40 @@ impl EvidenceSigner {
         &self,
         evidence_json: &[u8],
     ) -> Result<FlattenedJws, EvidenceSigningError> {
-        let protected = serde_json::to_vec(&ProtectedHeader {
-            alg: "ES256",
-            kid: self.provider.key_id(),
-            typ: EVIDENCE_JWS_TYP,
-            cty: EVIDENCE_JWS_CTY,
-        })
-        .map_err(EvidenceSigningError::HeaderSerialization)?;
+        let observation = self.metrics.as_ref().map(|metrics| metrics.start());
+        let result = async {
+            let protected = serde_json::to_vec(&ProtectedHeader {
+                alg: "ES256",
+                kid: self.provider.key_id(),
+                typ: EVIDENCE_JWS_TYP,
+                cty: EVIDENCE_JWS_CTY,
+            })
+            .map_err(EvidenceSigningError::HeaderSerialization)?;
 
-        let protected = URL_SAFE_NO_PAD.encode(protected);
-        let payload = URL_SAFE_NO_PAD.encode(evidence_json);
-        let signing_input = [protected.as_bytes(), b".", payload.as_bytes()].concat();
-        let signature = self.provider.sign(&signing_input).await?;
+            let protected = URL_SAFE_NO_PAD.encode(protected);
+            let payload = URL_SAFE_NO_PAD.encode(evidence_json);
+            let signing_input = [protected.as_bytes(), b".", payload.as_bytes()].concat();
+            let signature = self.provider.sign(&signing_input).await?;
 
-        Ok(FlattenedJws {
-            protected,
-            payload,
-            signature: URL_SAFE_NO_PAD.encode(signature),
-        })
+            Ok(FlattenedJws {
+                protected,
+                payload,
+                signature: URL_SAFE_NO_PAD.encode(signature),
+            })
+        }
+        .await;
+        if let Some(observation) = observation {
+            use crate::observability::DependencyOutcome as O;
+            observation.complete(match &result {
+                Ok(_) => O::Success,
+                Err(
+                    EvidenceSigningError::Provider(_)
+                    | EvidenceSigningError::SdJwtVc(SdJwtError::Signing(_) | SdJwtError::Crypto(_)),
+                ) => O::Signing,
+                Err(_) => O::Serialization,
+            });
+        }
+        result
     }
 
     /// Serialize the same assertion as a compact SD-JWT VC. The signer is the
@@ -186,11 +208,27 @@ impl EvidenceSigner {
         &self,
         input: SdJwtIssuanceInput,
     ) -> Result<String, EvidenceSigningError> {
-        SdJwtIssuer::from_signing_provider(Arc::clone(&self.provider))
-            .issue(input)
-            .await
-            .map(|signed| signed.jwt)
-            .map_err(EvidenceSigningError::SdJwtVc)
+        let observation = self.metrics.as_ref().map(|metrics| metrics.start());
+        let result = async {
+            SdJwtIssuer::from_signing_provider(Arc::clone(&self.provider))
+                .issue(input)
+                .await
+                .map(|signed| signed.jwt)
+                .map_err(EvidenceSigningError::SdJwtVc)
+        }
+        .await;
+        if let Some(observation) = observation {
+            use crate::observability::DependencyOutcome as O;
+            observation.complete(match &result {
+                Ok(_) => O::Success,
+                Err(
+                    EvidenceSigningError::Provider(_)
+                    | EvidenceSigningError::SdJwtVc(SdJwtError::Signing(_) | SdJwtError::Crypto(_)),
+                ) => O::Signing,
+                Err(_) => O::Serialization,
+            });
+        }
+        result
     }
 }
 

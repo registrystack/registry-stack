@@ -414,7 +414,7 @@ export default defineConfig({
     }),
     starlight({
       title: 'Registry stack docs',
-      description: 'Documentation for Registry Stack: answer bounded questions with Evidence Gateway, build a writable registry with Base Registry Engine, and publish portable registry metadata.',
+      description: 'Documentation for Registry Stack: answer bounded questions with Registry Evidence, build a writable registry with Base Registry Engine, and publish portable registry metadata.',
       // Historical archives keep their sealed search posture. A new released
       // archive is built once on the release runner and carries its exact
       // Pagefind output into production.
@@ -501,7 +501,7 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Evidence Gateway',
+          label: 'Registry Evidence',
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'start/evidence-quickstart' },
@@ -816,7 +816,7 @@ export default defineConfig({
                 { label: 'Documentation framework', slug: 'spec/rs-doc' },
                 { label: 'Terms', slug: 'spec/rs-terms' },
                 { label: 'Architecture', slug: 'spec/rs-arc-g' },
-                { label: 'Evidence Gateway protocol', slug: 'spec/rs-pr-evidence' },
+                { label: 'Registry Evidence protocol', slug: 'spec/rs-pr-evidence' },
                 { label: 'Security model', slug: 'spec/rs-sec-g' },
                 { label: 'Portable metadata model', slug: 'spec/rs-dm-manifest' },
               ],
@@ -829,12 +829,12 @@ export default defineConfig({
               items: flattenSidebarGroups(generatedProduct('Manifest').items),
             },
             // Older docsets can predate the generated Evidence product pages.
-            ...(optionalGeneratedProduct('Evidence Gateway')
+            ...(optionalGeneratedProduct('Registry Evidence')
               ? [
                   {
-                    label: 'Evidence Gateway',
+                    label: 'Registry Evidence',
                     collapsed: true,
-                    items: flattenSidebarGroups(generatedProduct('Evidence Gateway').items),
+                    items: flattenSidebarGroups(generatedProduct('Registry Evidence').items),
                   },
                 ]
               : []),

@@ -1561,7 +1561,7 @@ mod tests {
         let facts: Value = serde_json::from_slice(&facts.bytes).unwrap();
         assert_eq!(
             facts["properties"]["organization"],
-            json!({"type":"string","minLength":36,"maxLength":36})
+            json!({"type":"string","format":"uuid","minLength":36,"maxLength":36})
         );
     }
 

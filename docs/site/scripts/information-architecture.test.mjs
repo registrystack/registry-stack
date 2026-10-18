@@ -67,7 +67,7 @@ assert.ok(sidebarSource, 'could not isolate the Starlight sidebar configuration'
 // Evaluate the trusted local sidebar expression without loading Astro or
 // requiring generated artifacts. Nested product fixtures exercise the actual
 // config's flattening; the OpenAPI plugin owns its generated tag hierarchy.
-const generatedProducts = new Map(['Manifest', 'Evidence Gateway'].map((label) => [
+const generatedProducts = new Map(['Manifest', 'Registry Evidence'].map((label) => [
   label,
   {
     label,
@@ -312,7 +312,7 @@ function assertOrdered(source, expectations, label) {
 test('uses the product navigation in its published order', () => {
   assert.deepEqual(topLevelLabels(sidebarSource), [
     'Start',
-    'Evidence Gateway',
+    'Registry Evidence',
     'Base Registry Engine',
     'Registry Casework',
     'Registry Scheduling',
@@ -582,7 +582,7 @@ test('requires at most two groups to reach a hand-authored page', () => {
 });
 
 test('keeps consumer and wallet-provider guidance in separate Evidence groups', () => {
-  const evidence = section('Evidence Gateway');
+  const evidence = section('Registry Evidence');
   const consumer = evidence.items.find((item) => item.label === 'Use from applications');
   const wallet = evidence.items.find((item) => item.label === 'Wallet delivery');
   assert.ok(consumer, 'Evidence must provide an application-consumer entry point');
@@ -606,7 +606,7 @@ test('seats generated product references directly below Reference without losing
   const reference = section('Reference');
   for (const [label, product] of [
     ['Registry Manifest', 'Manifest'],
-    ['Evidence Gateway', 'Evidence Gateway'],
+    ['Registry Evidence', 'Registry Evidence'],
   ]) {
     const group = reference.items.find((item) => item.label === label);
     assert.ok(group, `missing generated reference group: ${label}`);
@@ -617,7 +617,7 @@ test('seats generated product references directly below Reference without losing
 
 test('uses the formal product names for top-level sections', () => {
   for (const product of [
-    'Evidence Gateway',
+    'Registry Evidence',
     'Base Registry Engine',
     'Registry Casework',
     'Registry Scheduling',
@@ -638,7 +638,7 @@ test('uses the formal product names for top-level sections', () => {
       ['Discovery', 'Registry Discovery'],
       ['Render', 'Registry Render'],
       ['BReg', 'Base Registry Engine'],
-      ['Evidence', 'Evidence Gateway'],
+      ['Evidence', 'Registry Evidence'],
     ]) {
       if (!label.includes(shortForm)) continue;
       assert.ok(
@@ -652,7 +652,7 @@ test('uses the formal product names for top-level sections', () => {
 test('publishes one overview route for every section that has one', () => {
   for (const [label, route] of [
     ['Start', "link: '/'"],
-    ['Evidence Gateway', "slug: 'start/evidence-quickstart'"],
+    ['Registry Evidence', "slug: 'start/evidence-quickstart'"],
     ['Base Registry Engine', "slug: 'start/breg-quickstart'"],
     ['Registry Casework', "slug: 'start/casework'"],
     ['Registry Render', "slug: 'start/registry-render'"],
@@ -673,11 +673,11 @@ test('publishes one overview route for every section that has one', () => {
 // reader is on call for a running deployment, not choosing a product, so pages
 // that name a runtime sit beside the ones that do not.
 test('files adoption-time pages under their product', () => {
-  // Evidence Gateway's security model is product-scoped, so it stays with the
+  // Registry Evidence's security model is product-scoped, so it stays with the
   // product rather than in the cross-product security group.
   const security = topLevelSection(sidebarSource, 'Operations');
   assert.doesNotMatch(security, /slug: 'security\/evidence'/);
-  const evidence = topLevelSection(sidebarSource, 'Evidence Gateway');
+  const evidence = topLevelSection(sidebarSource, 'Registry Evidence');
   assert.match(evidence, /slug: 'security\/evidence'/);
 });
 
@@ -689,13 +689,13 @@ test('publishes the Relay retirement decision without a current product lane', (
   assert.doesNotMatch(homepageSource, /publish-governed-sqlite-registry|query-relay-client/);
 });
 
-test('gives Evidence Gateway a lane on both front doors without a retired Notary path', () => {
+test('gives Registry Evidence a lane on both front doors without a retired Notary path', () => {
   assert.match(homepageSource, /\]\(start\/evidence-quickstart\/\)/);
   assert.match(homepageSource, /tutorials\/first-evidence-assertion/);
   assert.doesNotMatch(homepageSource, /Expose Notary|verify-claim-registry-api/);
 });
 
-// The BReg section follows the shape the Evidence Gateway section proved: an
+// The BReg section follows the shape the Registry Evidence section proved: an
 // overview, one first tutorial in the open, then each later phase behind the
 // group it belongs to. A reader who has finished one phase finds the next one
 // beside it, and a reader who has not is not shown its vocabulary yet.
@@ -774,7 +774,7 @@ test('keeps the BReg guide and references in one adoption path', () => {
 // Both runtime products ask an adopter for infrastructure before they serve
 // anything: PostgreSQL, a token issuer, and a signing process for Base Registry
 // Engine; a Transit proxy, an identity provider, and durable audit storage for
-// Evidence Gateway. That is deployment planning, so it opens each product's
+// Registry Evidence. That is deployment planning, so it opens each product's
 // Deploy group. It is not a first encounter, so Start carries none of it: a
 // first visit meets the overview, the product chooser, and the glossary, and
 // reaches every product through its own overview. The two retired Start seats
@@ -787,7 +787,7 @@ test('keeps operating requirements in each product Deploy group, not in Start', 
     ['reference/glossary'],
   );
 
-  const evidence = topLevelSection(sidebarSource, 'Evidence Gateway');
+  const evidence = topLevelSection(sidebarSource, 'Registry Evidence');
   assertOrdered(
     evidence,
     [
@@ -795,7 +795,7 @@ test('keeps operating requirements in each product Deploy group, not in Start', 
       "slug: 'operate/evidence-requirements'",
       "slug: 'tutorials/prove-an-evidence-project'",
     ],
-    'Evidence Gateway Deploy group',
+    'Registry Evidence Deploy group',
   );
   // Base Registry Engine states its requirements at the top of Deploy and
   // serve, so that page opens its Deploy and operate group; the separate
@@ -881,8 +881,8 @@ test('redirects the retired deprecation policy page and its Markdown twin to the
   assert.ok(hasDocForSlug('reference/api-stability'), 'reference/api-stability must be a published page');
 });
 
-test('organizes Evidence Gateway tasks without publishing the obsolete Relay composition', () => {
-  const evidence = topLevelSection(sidebarSource, 'Evidence Gateway');
+test('organizes Registry Evidence tasks without publishing the obsolete Relay composition', () => {
+  const evidence = topLevelSection(sidebarSource, 'Registry Evidence');
   assertOrdered(
     evidence,
     [
@@ -902,7 +902,7 @@ test('organizes Evidence Gateway tasks without publishing the obsolete Relay com
       "slug: 'reference/apis/registry-evidence'",
       '...openAPISidebarGroups.slice(0, 1)',
     ],
-    'Evidence Gateway task group',
+    'Registry Evidence task group',
   );
   assert.doesNotMatch(evidence, /label: 'Verify and trust'/);
   // Token issuance stays with the deployment's identity provider. The Evidence

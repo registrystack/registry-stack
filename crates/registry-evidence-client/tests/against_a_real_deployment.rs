@@ -1296,6 +1296,7 @@ fn selector_value(field: &SelectorField, subject_label: &str) -> SelectorValue {
             SelectorValue::from(value)
         }
         SelectorField::Date { .. } => SelectorValue::from("2000-01-01"),
+        SelectorField::Uuid { .. } => SelectorValue::from("12345678-1234-1234-1234-123456789abc"),
         SelectorField::Integer { minimum, .. } => SelectorValue::from(*minimum),
         SelectorField::Boolean { .. } => SelectorValue::from(true),
         SelectorField::ControlledCode { name, .. } => {

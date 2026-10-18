@@ -1,5 +1,5 @@
 ---
-title: Rotate Evidence Gateway signing keys
+title: Rotate Registry Evidence signing keys
 description: Distribute successor verification trust, deploy a new pinned Transit signer, and retire the predecessor after its validity window.
 status: current
 owner: registry-docs
@@ -17,7 +17,7 @@ tutorial_test:
 ---
 
 Use this procedure after [configuring Transit signing](../move-evidence-to-production-signing/).
-Evidence Gateway signs with one active ES256 P-256 key whose `kid` is its RFC 7638 thumbprint.
+Registry Evidence signs with one active ES256 P-256 key whose `kid` is its RFC 7638 thumbprint.
 The normalized target binds that key through `signer.publicJwkFile` and `signer.keyVersion`.
 Coordinate new verification trust with consumers before replacing the signer.
 
@@ -80,6 +80,11 @@ evidence authority activate --runtime-config "<candidate>/runtime.yaml" \
 evidence check --require-runtime-dependencies --runtime-config "<candidate>/runtime.yaml"
 ```
 
+The successor's public key is part of the package, so this activation records a new history entry.
+If you rerun it for the same candidate, for example after fixing a refused check, it exits with
+failure and reports that the authority revision is already active for this package and nothing
+needs activating. Continue with the check.
+
 Restart every replica to adopt the checked successor. Confirm readiness, send an authorized synthetic
 request, and verify the response with the consumer's approved overlap trust set. Missing or
 mismatched signing material refuses startup; signing never falls back to an unsigned success.
@@ -105,11 +110,11 @@ or keep the service unavailable. The current normalized target does not author a
 denylist; do not invent a target field or edit immutable bundle bytes to add one.
 
 For a compromised caller-token issuer key, use `authentication.oidc.revokedKeyIds` in `target.yaml`,
-build a new candidate and restart Evidence Gateway. This changes token acceptance, not an Evidence
+build a new candidate and restart Registry Evidence. This changes token acceptance, not an Evidence
 credential-status or lifecycle feature.
 
 ## Next
 
-- [Manage Evidence Gateway verifier trust](../manage-evidence-verifier-trust/)
-- [Evidence Gateway security model](../../security/evidence/)
-- [Configure Evidence Gateway](../../configure/evidence/)
+- [Manage Registry Evidence verifier trust](../manage-evidence-verifier-trust/)
+- [Registry Evidence security model](../../security/evidence/)
+- [Configure Registry Evidence](../../configure/evidence/)

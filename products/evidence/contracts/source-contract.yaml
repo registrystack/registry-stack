@@ -76,7 +76,9 @@ evidence_data_request:
       A singular acquisition or search stage maps the explicit outcome to public
       evidence.unavailable and the neutral audit denial decision unresolved. A fetch or
       member reached after a unique search maps it to dependency failure under
-      fetch-result. Sequential request-batch evaluation may map the singular or search
+      fetch-result. Only search-then-fetch with onFetchNoMatch: unavailable maps
+      declared unresolved or extracted no-match to unresolved and evidence.unavailable;
+      ambiguity and transport errors retain dependency failure. Sequential request-batch evaluation may map the singular or search
       outcome to that logical item's unavailable result; an optimized physical source
       batch cannot declare or map it.
     fail_closed_cases: >-

@@ -13,17 +13,17 @@ standards_referenced: []
 ---
 
 Registry Stack keeps record ownership explicit. Base Registry Engine (BReg) stores records only
-when it is the institution's governed system of record. Evidence Gateway reads a fixed authoritative source to
+when it is the institution's governed system of record. Registry Evidence reads a fixed authoritative source to
 derive a bounded answer and does not become another record store.
 
-## Evidence Gateway boundary
+## Registry Evidence boundary
 
-A caller supplies a request matching a predefined requirement. Evidence Gateway authenticates and
+A caller supplies a request matching a predefined requirement. Registry Evidence authenticates and
 authorizes the caller before source access, executes only the reviewed source request, derives the
 declared concepts, signs the assertion, and writes keyed audit records. It does not persist the
 selector, source response, or assertion as an application database.
 
-The source remains responsible for correctness and currentness. Evidence Gateway proves which
+The source remains responsible for correctness and currentness. Registry Evidence proves which
 configured requirement and source response produced an assertion, not that the underlying fact was
 legally or substantively correct.
 

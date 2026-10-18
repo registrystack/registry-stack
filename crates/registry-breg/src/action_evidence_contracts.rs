@@ -344,6 +344,9 @@ pub(crate) fn selector_field_matches_field_type(
             registry_evidence_client::SelectorField::Date { .. },
             FieldTypeSource::Date
         ) | (
+            registry_evidence_client::SelectorField::Uuid { .. },
+            FieldTypeSource::Uuid | FieldTypeSource::Reference { .. }
+        ) | (
             registry_evidence_client::SelectorField::String { .. },
             FieldTypeSource::String { .. }
                 | FieldTypeSource::Text { .. }

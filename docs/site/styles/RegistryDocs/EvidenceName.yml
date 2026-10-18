@@ -1,0 +1,6 @@
+extends: substitution
+message: "Use '%s' instead of '%s'. See the preferred-terms table in docs/style-guide.md."
+level: error
+ignorecase: false
+swap:
+  'Evidence [Gg]ateway': Registry Evidence

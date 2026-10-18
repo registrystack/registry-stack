@@ -29,9 +29,9 @@ const docsets = {
   ],
 };
 
-test('uses the Evidence Gateway display name in generated product prose', () => {
+test('uses the Registry Evidence display name in generated product prose', () => {
   const md = [
-    'Evidence is the product. Evidence Gateway is already current.',
+    'Evidence is the product. Registry Evidence is already current. An Evidence project.',
     'Evidence Type and Core Criterion and Core Evidence Vocabulary keep their formal names.',
     'OOTS uses an Evidence Broker and an Evidence Provider.',
     'Inline `Evidence` and `registry-evidence` are technical identifiers.',
@@ -46,18 +46,19 @@ test('uses the Evidence Gateway display name in generated product prose', () => 
   ].join('\n');
 
   const transformed = applyRepoDisplayName(md, 'registry-evidence');
-  assert.match(transformed, /Evidence Gateway is the product/);
-  assert.doesNotMatch(transformed, /Evidence Gateway Gateway/);
+  assert.match(transformed, /Registry Evidence is the product/);
+  assert.doesNotMatch(transformed, /Registry Registry Evidence/);
+  assert.match(transformed, /A Registry Evidence project/);
   assert.match(transformed, /Evidence Type and Core Criterion and Core Evidence Vocabulary/);
   assert.match(transformed, /Evidence Broker and an Evidence Provider/);
   assert.match(transformed, /Inline `Evidence` and `registry-evidence`/);
   assert.match(
     transformed,
-    /\[Evidence Gateway guidance\]\(https:\/\/example\.com\/Evidence\+Exchange\)/,
+    /\[Registry Evidence guidance\]\(https:\/\/example\.com\/Evidence\+Exchange\)/,
   );
   assert.match(transformed, /\{ "type": "Evidence" \}/);
   assert.match(transformed, /### Assertion evidence/);
-  assert.match(transformed, /## Request an assertion from Evidence Gateway/);
+  assert.match(transformed, /## Request an assertion from Registry Evidence/);
 });
 
 test('leaves other product documentation unchanged', () => {

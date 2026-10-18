@@ -162,9 +162,6 @@ pub enum BoundKind {
 pub enum Provenance {
     /// Stated in the OpenAPI document itself.
     Spec,
-    /// Derived mechanically from a `format` the subset does not admit,
-    /// e.g. `uuid` becoming fixed length bounds.
-    Format,
     /// Observed in the sample response and widened.
     Sample,
     /// Derived from a page-size parameter in the spec.

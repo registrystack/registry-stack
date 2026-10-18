@@ -1,6 +1,6 @@
 ---
-title: What you need to run Evidence Gateway
-description: The infrastructure, keys, and people a production Evidence Gateway deployment needs, what it does not depend on, and what stays your job once it runs.
+title: What you need to run Registry Evidence
+description: The infrastructure, keys, and people a production Registry Evidence deployment needs, what it does not depend on, and what stays your job once it runs.
 status: current
 owner: registry-docs
 source_repos:
@@ -11,17 +11,17 @@ locale: en
 standards_referenced: []
 ---
 
-If you are planning a production Evidence Gateway deployment, this is what you provide, what the
+If you are planning a production Registry Evidence deployment, this is what you provide, what the
 product does not depend on, and what stays your job once it runs. None of it is needed for the
 local tutorials, which start disposable versions of everything on your machine.
 
 ## What you provide
 
-- **A host for one process.** Evidence Gateway is a single binary that serves one trust domain.
+- **A host for one process.** Registry Evidence is a single binary that serves one trust domain.
   It runs on the platforms in [platform support](../../explanation/known-limitations/#platform-support).
 - **HTTPS in front of it.** The process listens on a private address; your reverse proxy or
   ingress terminates TLS and routes traffic to it.
-- **A token issuer.** Evidence Gateway verifies bearer tokens from one OpenID Connect issuer and
+- **A token issuer.** Registry Evidence verifies bearer tokens from one OpenID Connect issuer and
   issues none. Configure a compatible OAuth issuer for this role.
 - **A signing key you control.** Production signing uses a Vault or OpenBao Transit key that never
   leaves the vault, reached through a proxy on the same host. A local development profile may use
@@ -41,13 +41,13 @@ local tutorials, which start disposable versions of everything on your machine.
 
 ## What it does not need
 
-There is no database. Evidence Gateway stores no records, no requests, and no answers; the only
+There is no database. Registry Evidence stores no records, no requests, and no answers; the only
 durable state it writes is the audit trail. There is no message broker, worker pool, cache, or
 service mesh, and nothing requires Kubernetes. One process, one bundle, and one audit path make
 one deployment. A second issuer, or a second customer who must not trust the first, means a second
 deployment.
 
-Base Registry Engine (BReg) is a separate product, not a dependency. Evidence Gateway can use
+Base Registry Engine (BReg) is a separate product, not a dependency. Registry Evidence can use
 BReg as a source through the same fixed HTTP request it makes to any other compatible system.
 
 {/* Evidence: products/evidence/OPERATOR-CONTRACT.md, "Supported deployment"; products/evidence/CONCEPT.md;
@@ -166,7 +166,7 @@ its own audit path, N processes give close to N times the throughput.
 
 Registry Stack is pre-1.0, so a minor release may change APIs and deployment contracts, and
 security fixes land only in the latest release; see the
-[support window](../../security/support-window/). Within that, the Evidence Gateway Version 1
+[support window](../../security/support-window/). Within that, the Registry Evidence Version 1
 assertion contract, runtime, and operator contract are implemented, not exploratory. Document
 evidence, credential lifecycles beyond the SD-JWT VC serialization, multi-source answers, and a
 public catalog are named non-goals, and a future profile would need its own approved concept.
@@ -180,4 +180,4 @@ public catalog are named non-goals, and a future profile would need its own appr
 - [Configure a deployment](../../configure/evidence/)
 - [Build a production candidate](../../tutorials/build-and-deploy-evidence-project/)
 - [Configure Transit signing](../../tutorials/move-evidence-to-production-signing/)
-- [Evidence Gateway security model](../../security/evidence/)
+- [Registry Evidence security model](../../security/evidence/)

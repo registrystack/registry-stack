@@ -188,6 +188,38 @@ pub enum SourceError {
 }
 
 impl SourceError {
+    fn metric_outcome(&self) -> crate::observability::DependencyOutcome {
+        use crate::observability::DependencyOutcome as O;
+        match self {
+            Self::Credential => O::Credential,
+            Self::Concurrency => O::Concurrency,
+            Self::Timeout => O::Timeout,
+            Self::Transport => O::Transport,
+            Self::Status(SourceStatus::Unauthorized) => O::Unauthorized,
+            Self::Status(SourceStatus::Forbidden) => O::Forbidden,
+            Self::Status(SourceStatus::RateLimited) => O::RateLimited,
+            Self::Status(SourceStatus::ServerError) => O::ServerError,
+            Self::Verification => O::Verification,
+            Self::ExtractUnavailable(_)
+            | Self::ExtractTooOld(_)
+            | Self::StatementRefused(_)
+            | Self::StatementParameter(_)
+            | Self::StatementBudget(_)
+            | Self::StatementResult(_)
+            | Self::StatementUnavailable => O::Statement,
+            Self::InvalidPlan
+            | Self::InvalidSelectors
+            | Self::Redirect
+            | Self::Status(SourceStatus::Other)
+            | Self::WrongMediaType
+            | Self::ResponseTooLarge
+            | Self::InvalidJson
+            | Self::ProblemMismatch
+            | Self::ErrorEnvelope
+            | Self::ProjectionViolation => O::Protocol,
+        }
+    }
+
     /// The artifact an adopter can open, where the failure named one.
     ///
     /// The fault never reaches a request-time rendering, which stays value-free
@@ -980,12 +1012,23 @@ impl SourceExecutor {
         request: &PreparedSourceBatchRequest,
         attribution: Option<&SourceAccessAttribution>,
     ) -> Result<SourceResponse, SourceError> {
-        let SourceTransport::Http(http) = &self.transport else {
-            return Err(SourceError::InvalidPlan);
-        };
-        let materialized = http.materialize_batch_request(request.parts())?;
-        http.execute_batch(&materialized, attribution, self.observer.as_ref())
-            .await
+        let observation = self.observer.as_ref().map(SourceObserver::start);
+        let result = async {
+            let SourceTransport::Http(http) = &self.transport else {
+                return Err(SourceError::InvalidPlan);
+            };
+            let materialized = http.materialize_batch_request(request.parts())?;
+            http.execute_batch(&materialized, attribution, self.observer.as_ref())
+                .await
+        }
+        .await;
+        if let Some(observation) = observation {
+            observation.complete(result.as_ref().map_or_else(
+                |error: &SourceError| error.metric_outcome(),
+                |_| crate::observability::DependencyOutcome::Success,
+            ));
+        }
+        result
     }
 
     pub async fn execute_with_prior_facts(
@@ -1031,18 +1074,29 @@ impl SourceExecutor {
         evaluation_instant: DateTime<Utc>,
         attribution: Option<&SourceAccessAttribution>,
     ) -> Result<SourceResponse, SourceError> {
-        let materialized =
-            self.materialize_request_with_prior_facts(selectors, prior_facts, request)?;
-        match &self.transport {
-            SourceTransport::Http(http) => {
-                http.execute(&materialized, attribution, self.observer.as_ref())
+        let observation = self.observer.as_ref().map(SourceObserver::start);
+        let result = async {
+            let materialized =
+                self.materialize_request_with_prior_facts(selectors, prior_facts, request)?;
+            match &self.transport {
+                SourceTransport::Http(http) => {
+                    http.execute(&materialized, attribution, self.observer.as_ref())
+                        .await
+                }
+                SourceTransport::Statement(statement) => statement
+                    .execute(&materialized, evaluation_instant)
                     .await
+                    .map(SourceResponse::Data),
             }
-            SourceTransport::Statement(statement) => statement
-                .execute(&materialized, evaluation_instant)
-                .await
-                .map(SourceResponse::Data),
         }
+        .await;
+        if let Some(observation) = observation {
+            observation.complete(result.as_ref().map_or_else(
+                |error: &SourceError| error.metric_outcome(),
+                |_| crate::observability::DependencyOutcome::Success,
+            ));
+        }
+        result
     }
 
     /// Validate and materialize only the transport material: path, encoded

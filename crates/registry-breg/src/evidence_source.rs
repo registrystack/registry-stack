@@ -194,7 +194,7 @@ fn scalar_schema(kind: &FieldTypeSource) -> Result<Value, Diagnostic> {
         }
         FieldTypeSource::Timestamp => json!({"type":"string","format":"date-time","maxLength":64}),
         FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => {
-            json!({"type":"string","minLength":36,"maxLength":36})
+            json!({"type":"string","format":"uuid","minLength":36,"maxLength":36})
         }
         FieldTypeSource::VocabularyCode { values, .. } if !values.is_empty() => {
             json!({"type":"string","enum":values,"maxLength":values.iter().map(|value|value.chars().count()).max().unwrap_or(1)})
@@ -229,14 +229,11 @@ fn selector_schema(kind: &FieldTypeSource) -> Result<(Value, u64), Diagnostic> {
         FieldTypeSource::String { max_length, .. } => string(u64::from(*max_length) * 4),
         FieldTypeSource::Date => Ok((json!({"type":"date"}), 10)),
         FieldTypeSource::Boolean => Ok((json!({"type":"boolean"}), 5)),
-        FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => string(36),
-        FieldTypeSource::VocabularyCode { values, .. } if !values.is_empty() => string(
-            values
-                .iter()
-                .map(|value| value.len() as u64)
-                .max()
-                .unwrap_or(1),
-        ),
+        FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => Ok((json!({"type":"uuid"}), 36)),
+        FieldTypeSource::VocabularyCode { .. } => Err(refusal(
+            "selectors",
+            "a vocabulary selector requires a reviewed Evidence codelist artifact; use a custom adapter with a controlled-code selector",
+        )),
         FieldTypeSource::Int64 => Err(refusal(
             "selectors",
             "BReg int64 spans values outside Evidence's exact safe-integer selector range; use a bounded string selector or a reviewed custom adapter",

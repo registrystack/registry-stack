@@ -1,6 +1,6 @@
 ---
-title: Integrate an Evidence Gateway candidate with Docker Compose
-description: Mount an approved Evidence Gateway candidate unchanged in an operator-owned Docker Compose application with separate runtime, secrets, and audit storage.
+title: Integrate a Registry Evidence candidate with Docker Compose
+description: Mount an approved Registry Evidence candidate unchanged in an operator-owned Docker Compose application with separate runtime, secrets, and audit storage.
 status: current
 owner: registry-docs
 source_repos:
@@ -19,16 +19,16 @@ tutorial_test:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Start with the approved candidate created in
-[Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/). This guide runs that
+[Build and deploy a Registry Evidence project](../build-and-deploy-evidence-project/). This guide runs that
 candidate in an existing Docker Compose application. Compose is an operator-owned deployment
 adapter, not output from `evidencectl package`. The package stays unchanged across host and
 container deployments.
 
 <QuickstartMeta
-  outcome="An approved Evidence Gateway candidate mounted unchanged with a separate runtime, secret root, Transit socket, and persistent audit volume."
+  outcome="An approved Registry Evidence candidate mounted unchanged with a separate runtime, secret root, Transit socket, and persistent audit volume."
   time="About 20 minutes after the image and candidate are approved"
   level="Operator-owned Docker Compose deployment"
-  prerequisites={['Docker Compose', 'An approved Evidence Gateway candidate', 'A reviewed Evidence Gateway image', 'A workload-local Transit proxy', 'Persistent storage prepared for UID and GID 65532']}
+  prerequisites={['Docker Compose', 'An approved Registry Evidence candidate', 'A reviewed Registry Evidence image', 'A workload-local Transit proxy', 'Persistent storage prepared for UID and GID 65532']}
 />
 
 ## Before you start
@@ -43,26 +43,26 @@ a private Compose-network listener, secret root, audit path, and any required pr
 ## Add the Transit proxy boundary
 
 Production and evidence-grade candidates require a workload-local Vault or OpenBao Transit proxy.
-Run one proxy for Evidence Gateway on the host or in an operator-owned sidecar. Give the proxy a
+Run one proxy for Registry Evidence on the host or in an operator-owned sidecar. Give the proxy a
 dedicated host directory in which to create `transit-proxy.sock`, then bind-mount that directory at
-`/run/registry-evidence` in the Evidence Gateway container. Make the directory searchable but not
-writable by the Evidence Gateway identity. The proxy owns the directory and creates a mode `0660`
+`/run/registry-evidence` in the Registry Evidence container. Make the directory searchable but not
+writable by the Registry Evidence identity. The proxy owns the directory and creates a mode `0660`
 socket whose group admits only that identity.
 
 The proxy owns its provider auto-auth credential, provider trust file, and reviewed HCL
-configuration. Do not mount those inputs into Evidence Gateway. The proxy configuration must force
+configuration. Do not mount those inputs into Registry Evidence. The proxy configuration must force
 its auto-auth token, require the `X-Vault-Request` header, disable request retries, and set socket
-ownership for the Evidence Gateway process. Use
-[Configure Transit signing for Evidence Gateway](../move-evidence-to-production-signing/)
+ownership for the Registry Evidence process. Use
+[Configure Transit signing for Registry Evidence](../move-evidence-to-production-signing/)
 and the maintained deployment-target templates for the exact boundary.
 
 The Git-managed proxy HCL is nonsecret. Provider credentials and generated tokens remain outside
-Git and outside the Evidence Gateway container. If Compose also owns the sidecar, replace the host
-bind with a dedicated named volume shared only by the proxy and Evidence Gateway.
+Git and outside the Registry Evidence container. If Compose also owns the sidecar, replace the host
+bind with a dedicated named volume shared only by the proxy and Registry Evidence.
 
 ## Mount the deployment inputs
 
-The Evidence Gateway service mounts five independently owned paths:
+The Registry Evidence service mounts five independently owned paths:
 
 ```text
 candidate                 -> /etc/registry-evidence/package      read-only
@@ -73,11 +73,11 @@ Transit socket directory  -> /run/registry-evidence              socket access
 ```
 
 Keep the package and runtime read-only. A read-only mount establishes their immutability, but does
-not waive secret ownership or mode validation. The maintained Evidence Gateway image runs as UID and GID
+not waive secret ownership or mode validation. The maintained Registry Evidence image runs as UID and GID
 `65532`; pin that identity in the Compose file and make every secret file acceptable to it with the
 required owner-only permissions. A different reviewed image requires an explicitly reviewed UID
 and matching ownership.
-Prepare the persistent audit volume for that same identity before startup. Do not run Evidence Gateway as
+Prepare the persistent audit volume for that same identity before startup. Do not run Registry Evidence as
 root to compensate for an audit volume with the wrong owner.
 
 ```yaml
@@ -102,7 +102,7 @@ service posture, including dropped capabilities, `no-new-privileges`, and a read
 that replaces the writable one Docker adds by default. Start from that file rather than from the
 mounts alone.
 
-Bind Evidence Gateway to a private Compose-network address. Put TLS termination and public routing in an
+Bind Registry Evidence to a private Compose-network address. Put TLS termination and public routing in an
 operator-controlled service ahead of that listener.
 
 ## Validate in the container context
@@ -163,7 +163,7 @@ The maintained image's default command is `serve --runtime-config
 /etc/registry-evidence/runtime.yaml`, the path the runtime file is mounted at. No further
 arguments are needed.
 
-Evidence Gateway writes line-delimited JSON to stdout. It announces the listener only after every
+Registry Evidence writes line-delimited JSON to stdout. It announces the listener only after every
 listener is bound, so the announcement means the port is this deployment's and not something else's:
 
 ```sh
@@ -208,6 +208,6 @@ retention beyond the volume remain operator responsibilities.
 
 ## Next
 
-- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
-- [Configure Transit signing for Evidence Gateway](../move-evidence-to-production-signing/)
-- [Configure Evidence Gateway](../../configure/evidence/)
+- [Build and deploy a Registry Evidence project](../build-and-deploy-evidence-project/)
+- [Configure Transit signing for Registry Evidence](../move-evidence-to-production-signing/)
+- [Configure Registry Evidence](../../configure/evidence/)

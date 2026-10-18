@@ -2,14 +2,14 @@
   name: Registry Platform
   repo_path: ../registry-platform
   target_repo_path: ../registry-platform
-  role: Shared Rust workspace for security and operational primitives consumed by Evidence Gateway and related registry services, including auth helpers, OIDC verification, JWKS fetching, audit envelopes, HTTP security, outbound HTTP policy, the bounded read-only SQLite boundary, crypto, SD-JWT VC support, and test fixtures.
+  role: Shared Rust workspace for security and operational primitives consumed by Registry Evidence and related registry services, including auth helpers, OIDC verification, JWKS fetching, audit envelopes, HTTP security, outbound HTTP policy, the bounded read-only SQLite boundary, crypto, SD-JWT VC support, and test fixtures.
   owns:
     - Shared auth, OIDC, JWKS fetching, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives.
-    - The bounded read-only SQLite access boundary Evidence Gateway opens its sources through.
-    - Cross-service crate APIs that must behave consistently in Evidence Gateway and other registry services.
+    - The bounded read-only SQLite access boundary Registry Evidence opens its sources through.
+    - Cross-service crate APIs that must behave consistently in Registry Evidence and other registry services.
     - Shared Rust hygiene templates and supported integration-test fixtures.
   does_not_own:
-    - Evidence Gateway requirement definitions, authorization grants, disclosure decisions, service routes, assertion construction, or signing policy.
+    - Registry Evidence requirement definitions, authorization grants, disclosure decisions, service routes, assertion construction, or signing policy.
     - Product-level authorization policy, tenant isolation, audit retention, secret provisioning, or deployment configuration.
   source_docs:
     - label: README
@@ -30,7 +30,7 @@
     - Runtime data access.
     - Auth, audit, observability, DataFusion, Postgres, Axum, or secret handling.
     - Production source configuration.
-    - Evidence Gateway deployment configuration. An Evidence Gateway process loads one immutable governed bundle and one closed runtime file mounted read-only at startup, and reads no portable manifest.
+    - Registry Evidence deployment configuration. A Registry Evidence process loads one immutable governed bundle and one closed runtime file mounted read-only at startup, and reads no portable manifest.
   source_docs:
     - label: README
       url: https://github.com/registrystack/registry-stack/blob/v0.16.3/products/manifest/README.md
@@ -38,10 +38,10 @@
       url: https://github.com/registrystack/registry-stack/blob/v0.16.3/products/manifest/examples/README.md
   rename_status: Already using the target repo name locally.
 - id: registry-evidence
-  name: Evidence Gateway
+  name: Registry Evidence
   repo_path: ../registry-stack
   target_repo_path: ../registry-stack
-  role: Minimum-disclosure assertion service. Given authenticated authority, an authorized purpose, a predefined requirement, and the selector data an authoritative provider needs, each evaluation answers one bounded question about one complete subject-role set and returns the smallest sufficient signed assertion. Its request-batch route groups up to sixteen independent audience-scoped evaluations under one common requirement and purpose. Evidence Gateway composes shared audit, crypto, HTTP security, OIDC, and SD-JWT primitives from Registry Platform.
+  role: Minimum-disclosure assertion service. Given authenticated authority, an authorized purpose, a predefined requirement, and the selector data an authoritative provider needs, each evaluation answers one bounded question about one complete subject-role set and returns the smallest sufficient signed assertion. Its request-batch route groups up to sixteen independent audience-scoped evaluations under one common requirement and purpose. Registry Evidence composes shared audit, crypto, HTTP security, OIDC, and SD-JWT primitives from Registry Platform.
   owns:
     - Requirement definitions, bounded evaluation, and the acquisition posture recorded with every answer.
     - Authorization grants, purpose and audience checks, and the disclosure decision that releases an assertion.
@@ -54,7 +54,7 @@
     - Portable metadata renderers owned by Registry Manifest.
     - Shared security and operational primitives owned by Registry Platform.
     - Token issuance, end-user authentication, or identity proofing.
-    - A credential lifecycle or delivery protocol. Evidence Gateway supports the declared holder-bound subject-binding mode and its bounded issuance envelope, but no OID4VCI, interactive holder-binding ceremony, issuance session, status list, revocation, delegated evaluation, or federation. SD-JWT VC remains a response format under a frozen profile, never a lifecycle.
+    - A credential lifecycle or delivery protocol. Registry Evidence supports the declared holder-bound subject-binding mode and its bounded issuance envelope, but no OID4VCI, interactive holder-binding ceremony, issuance session, status list, revocation, delegated evaluation, or federation. SD-JWT VC remains a response format under a frozen profile, never a lifecycle.
     - How a consumer acts on a returned assertion.
   source_docs:
     - label: README

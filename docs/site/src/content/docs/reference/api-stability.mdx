@@ -36,7 +36,7 @@ CHANGELOG where one exists. A patch release is backward compatible with the late
 
 ## Promised products
 
-The promise covers five products: Base Registry Engine, Evidence Gateway, Registry Casework,
+The promise covers five products: Base Registry Engine, Registry Evidence, Registry Casework,
 Registry Discovery, and Registry Manifest. For each, it covers the configuration files, identified
 by their `apiVersion` or schema version, and the HTTP API with its OpenAPI document and its problem
 `code` values. The linked references define each surface; if this page and a reference disagree,
@@ -45,12 +45,12 @@ the reference wins.
 | Product | Configuration | HTTP API |
 | --- | --- | --- |
 | Base Registry Engine | [`registry.yaml`, `module.yaml`, and `runtime.yaml`](../breg-configuration/), including the Rhai action handler ABI `registry.action-plan/v1` | [Base Registry Engine API](../breg-api/) |
-| Evidence Gateway | [Bundle and runtime files](../evidence-configuration/) | [Evidence Gateway API](../apis/registry-evidence/) and [problem types](../evidence-problems/), including the signed JWS, unsigned JSON envelope, SD-JWT VC, and holder-bound issuance envelope response formats |
+| Registry Evidence | [Bundle and runtime files](../evidence-configuration/) | [Registry Evidence API](../apis/registry-evidence/) and [problem types](../evidence-problems/), including the signed JWS, unsigned JSON envelope, SD-JWT VC, and holder-bound issuance envelope response formats |
 | Registry Casework | [Casework policy](../../configure/casework/) and [runtime file](../../operate/casework/#write-the-runtime-file) | [Casework API](../apis/registry-casework/) |
 | Registry Discovery | [Origins, evidence-type mappings, and runtime file](../../configure/discovery/) | [`GET /v1/services` and `POST /v1/evidence-types/resolve`](../../configure/discovery/#verify-resolution-and-exact-search) |
 | Registry Manifest | [`registry-manifest/v1` metadata documents](../../spec/rs-dm-manifest/) | None |
 
-Evidence Gateway's versioned routes are `POST /v1/evidence`, `POST /v1/evidence/batch`, and
+Registry Evidence's versioned routes are `POST /v1/evidence`, `POST /v1/evidence/batch`, and
 `GET /v1/evidence-definitions`. Its operational routes are `/health`, `/ready`, `/openapi.json`,
 `/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`.
 
@@ -79,7 +79,7 @@ string keep it, and each may change or be removed in any minor release without d
 - Registry Messaging, and the `messaging` namespace the client packages carry from `v0.38.0`
 - Registry Render
 - `breg-mcp` and `breg-review`, the citizen services beside Base Registry Engine
-- `evidence-oid4vci`, the wallet-facing delivery service beside Evidence Gateway, including its
+- `evidence-oid4vci`, the wallet-facing delivery service beside Registry Evidence, including its
   configuration, routes, and command-line flags
 - the Base Registry Engine statistics routes under `/v1/statistics/`, and the
   `statisticalDatasets` declarations behind them
@@ -204,11 +204,11 @@ load on an earlier binary, so pin configuration to the release you deploy.
 {/* Evidence: crates/registry-evidence/src/config.rs, deny_unknown_fields;
     crates/registry-casework-core/src/task_grant.rs, deny_unknown_fields. */}
 
-## Evidence Gateway Version 1 contracts
+## Registry Evidence Version 1 contracts
 
-Evidence Gateway's frozen Version 1 contracts under `products/evidence/contracts/` are the
+Registry Evidence's frozen Version 1 contracts under `products/evidence/contracts/` are the
 artifacts that define its configuration and HTTP surfaces. Frozen means they change only under the
-rules on this page: Evidence Gateway has the same promise and the same deprecation rule as the
+rules on this page: Registry Evidence has the same promise and the same deprecation rule as the
 other promised products.
 
 ## Base Registry Engine WASM action handlers
@@ -280,7 +280,7 @@ Upgrades are forward-only: no release reads state a later release wrote. To roll
 backup taken before the upgrade and run the previous release, as
 [Roll back](../../operate/advanced/upgrade-and-retire/#roll-back) describes.
 
-Evidence Gateway, Registry Discovery, and Registry Manifest have no migrated state. Base Registry
+Registry Evidence, Registry Discovery, and Registry Manifest have no migrated state. Base Registry
 Engine, Casework, Scheduling, and Messaging each own migrated PostgreSQL state:
 [`bregctl apply`](../../operate/breg-changes/#activate-the-successor) activates a package and runs
 its migration, [`caseworkctl apply`](../../operate/casework/#plan-apply-and-serve) activates a
@@ -306,7 +306,7 @@ Base Registry Engine's Beta pilot conditions are under
 
 The promise is machine-checked where a checker exists:
 
-- Evidence Gateway: root CI's `evidence-contracts` job runs
+- Registry Evidence: root CI's `evidence-contracts` job runs
   `products/evidence/scripts/check-contracts.sh`, which regenerates every contract artifact and
   fails on any byte difference from the committed copies. `products/evidence/scripts/check-config-key-paths.sh`
   holds the configuration reference in exact parity with the frozen schemas.

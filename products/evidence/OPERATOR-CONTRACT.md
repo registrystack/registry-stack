@@ -140,11 +140,51 @@ bytes, runtime bindings, trust files, or secrets change:
 
 ```sh
 evidence authority activate --runtime-config '<candidate>/runtime.yaml' \
-  --document '<candidate>/compiled-authority.yaml'
+  --document '<candidate>/compiled-authority.yaml' --operator-reference '<change-reference>'
 evidencectl doctor --runtime-config '<candidate>/runtime.yaml'
 evidencectl test '<editable-project>' --target '<deployment-target>'
 evidence serve --runtime-config '<candidate>/runtime.yaml'
 ```
+
+Activation writes `evidence-activation-audit/v1` entries to the `activation`
+companion of the runtime's configured audit destination: beside a file
+destination `audit.jsonl` it writes `audit.activation.jsonl` under its own
+single-writer lock, so it runs while `evidence serve` holds the service file, and a
+`stdout` destination becomes stderr. Ship the companion file with the service
+audit. It resolves only the audit key and sink, without initializing sources or
+the signer.
+
+Each activation writes a `request` entry before it takes the authority lock,
+then a `response` entry under the same correlation. The request carries an
+activation ID, the package digest, the authority revision and digest, and the
+optional operator reference as a keyed hash scoped to that activation. The
+reference must be 1 through 256 bytes without control characters; use a
+non-secret change reference. An invalid reference produces a correlated request
+and `refused` response with no reference hash, without changing authority state.
+The response carries the outcome: `applied` with the
+history sequence, `refused` for a validation refusal, `failed` for a commit
+failure before state replacement, or `unfinished` when commit durability cannot
+be established. An `unfinished` response carries no sequence: the active revision
+may have changed. Inspect authority history and retry the same document to complete
+the durability check before continuing the handoff. If the destination refuses
+the request entry, activation fails and changes nothing. Ceiling, target, and binding refusals never touch the authority
+store, so they cannot consume the history bound. A package and authority revision
+that are already active are refused as already active. This repeat guidance
+requires unchanged `authority.root`, `authority.target`, package digest, and
+authority revision, even when secrets or other runtime settings change. When
+activation reaches this refusal, it exits with failure, prints `target authority
+revision <revision> is already active for this package as sequence <sequence>;
+nothing needs activating` on stderr, and records a `refused` response. Nothing
+needs activating, so continue with the remaining steps of the handoff.
+
+If the destination refuses the response entry after the commit, activation exits
+with failure and names the active revision, digest, and sequence. The activation
+took effect; restore the audit destination and confirm it with
+`evidence authority history --runtime-config '<candidate>/runtime.yaml'`. A crash
+between the commit and the response leaves a request with no response; inspect
+authority history before proceeding. Failed state durability barriers never
+acknowledge success. The audit trail lives only in the audit destination; the
+authority store holds the history alone.
 
 `doctor` delegates the runtime-owned startup dependency preflight without
 opening the public listener, sending an Evidence request, or appending an
@@ -993,11 +1033,25 @@ a same-pod or same-host collector is the shape that keeps the operator
 boundary the operator intended; any wider binding must be closed by a network
 policy, and the operator owns that control.
 `evidence_http_requests_total` and `evidence_http_request_duration_seconds`
-describe the HTTP boundary only. Apart from the source shape-drift counter
-below, Version 1 publishes no source-call, signing, or credential-acquisition
-series. A slow or failing upstream source is visible as evidence-request
-duration and as the problem code the boundary returned; signing, audit-writer,
-and source-credential health are reported by `/ready` rather than by telemetry.
+describe the HTTP boundary only. Fixed source execution and assertion signing
+also publish bounded attempt counts and latency histograms:
+
+| Series | Labels | Meaning |
+|---|---|---|
+| `evidence_source_requests_total` | `source`, `outcome` | Fixed HTTP or statement attempts, including failures and cancellations |
+| `evidence_source_request_duration_seconds` | `source`, `outcome` | Attempt latency, with histogram bucket, sum and count series |
+| `evidence_signer_requests_total` | `signer="active"`, `outcome` | JWS or SD-JWT issuance attempts, excluding readiness probes |
+| `evidence_signer_request_duration_seconds` | `signer="active"`, `outcome` | Issuance latency, with histogram bucket, sum and count series |
+| `evidence_build_info` | `version`, `bundle`, `authority` | Gauge fixed at 1 for the captured package and authority revision. `authority="package"` means no separate authority document is active, so the package's own ceilings govern. |
+
+Source IDs come only from the governed bundle. Outcomes are closed categories:
+`success`, `cancelled`, `credential`, `concurrency`, `timeout`, `transport`,
+`unauthorized`, `forbidden`, `rate-limited`, `server-error`, `protocol`,
+`verification`, `statement`, `signing`, and `serialization`. Only observed
+categories emit series. No selector, subject, request ID, raw error, URL,
+credential, or signing key becomes a label. Source observations cover transport,
+projection, and response verification; assertion derivation remains visible at
+the request boundary. Upstream reachability does not decide `/ready`.
 
 One unlabeled gauge is published on the same listener. It carries none of the
 four request-boundary labels, since it reports a process-wide fact rather than
@@ -1311,7 +1365,9 @@ tuple. Only the closed exact response becomes public evidence unavailable at a
 singular or search stage; its neutral audit decision is `unresolved`, not
 `no-match`, because the upstream result may be hidden or ambiguous. The problem
 body, type, code, detail, and trace are never recorded. A mismatch and an
-unresolved fetch after unique search are dependency failures.
+unresolved fetch after unique search are dependency failures by default. A
+`search-then-fetch` acquisition may explicitly set `onFetchNoMatch: unavailable`
+for an absent optional record; ambiguity and transport failures remain 503.
 Source, signing, and dependency failures use stable safe problem codes and do
 not reflect protected inputs. Signing failure returns a safe transient failure.
 
