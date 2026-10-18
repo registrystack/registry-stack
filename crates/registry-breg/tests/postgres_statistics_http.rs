@@ -4517,3 +4517,195 @@ impl ReadinessProbe for AlwaysReady {
         Box::pin(async { true })
     }
 }
+
+#[tokio::test]
+async fn statistical_live_profile_admission_is_audited() {
+    exercise_statistical_profile_admission(false).await;
+}
+
+#[tokio::test]
+async fn statistical_release_profile_admission_is_audited() {
+    exercise_statistical_profile_admission(true).await;
+}
+
+async fn exercise_statistical_profile_admission(releases: bool) {
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let mut source = statistics_registry_source();
+    for profile in source["accessProfiles"].as_array_mut().unwrap() {
+        if profile["id"] == "analyst" || profile["id"] == "reader" {
+            profile["requiredScopes"] = json!(["statistics.read"]);
+            profile["requiredPurposes"] = json!(["statistics"]);
+        }
+    }
+    let compiled = Arc::new(compile_statistics_registry(source));
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("compiled schema installs");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            database_id: DATABASE_ID,
+            label: "package-statistics-http-1",
+        },
+    )
+    .await
+    .expect("runtime identity and empty history baseline initialize");
+    migration_task.abort();
+
+    let pool = database.runtime_config.build_pool().expect("pool builds");
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
+    let today = Utc::now().date_naive();
+    let prior_date = today
+        .with_day(1)
+        .expect("current month has a first day")
+        .checked_sub_days(Days::new(1))
+        .expect("previous month exists");
+    let prior_period = month_code(prior_date);
+    seed_records(&pool, lock_key, &identity, &compiled, today, prior_date).await;
+
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x72; 32].into())
+            .expect("audit profile is keyed"),
+    );
+    let trace = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let app = statistics_router(
+        pool.clone(),
+        compiled.clone(),
+        identity.clone(),
+        lock_key,
+        audit,
+        trace.clone(),
+        None,
+    );
+
+    let published = publish(
+        &app,
+        &prior_period,
+        "canary-admission-release",
+        "final",
+        claims("publisher", false),
+    )
+    .await;
+    assert_eq!(published.status(), StatusCode::CREATED);
+    trace.lock().unwrap().clear();
+    let caller = |scope: &str, purpose: &str| {
+        VerifiedRequestClaims::authenticated(
+            "principal",
+            PRINCIPAL_CANARY,
+            BTreeSet::from([scope.to_owned()]),
+            Some(purpose.to_owned()),
+            BTreeMap::from([(
+                "jurisdictions".to_owned(),
+                VerifiedClaimValue::direct_string_set(["north"]).unwrap(),
+            )]),
+        )
+        .unwrap()
+    };
+    let paths = if releases {
+        vec![
+            "/v1/statistics/records-by-category/releases?accessProfile=reader".to_owned(),
+            format!("/v1/statistics/records-by-category/releases:series?accessProfile=reader&from={prior_period}&to={prior_period}"),
+            format!("/v1/statistics/records-by-category/releases/{prior_period}?accessProfile=reader"),
+            format!("/v1/statistics/records-by-category/releases/{prior_period}/versions/1?accessProfile=reader"),
+        ]
+    } else {
+        vec![format!("/v1/statistics/records-by-category:live?accessProfile=analyst&from={prior_period}&to={prior_period}")]
+    };
+    for path in &paths {
+        for refused in [
+            caller("canary-refused-scope", "statistics"),
+            caller("statistics.read", "canary-refused-purpose"),
+        ] {
+            let before = database.audit_records().len();
+            let response = send(&app, Method::GET, path, Some(refused), &[], Vec::new()).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(body_json(response).await["code"], "resource.not_found");
+            let records = database.audit_records();
+            assert_eq!(records.len(), before + 1);
+            let refusal = &records[before];
+            assert_eq!(refusal["phase"], "refusal");
+            assert_eq!(refusal["refusalReason"], "profile_admission");
+            assert_eq!(
+                refusal["selectedAccessProfile"],
+                if releases { "reader" } else { "analyst" }
+            );
+        }
+    }
+    for path in [
+        "/v1/statistics/records-by-category:live?accessProfile=canary-unknown-profile",
+        "/v1/statistics/records-by-category:live?accessProfile=reader",
+        "/v1/statistics/canary-unknown-dataset:live?accessProfile=canary-unknown-profile",
+    ] {
+        let before = database.audit_records().len();
+        let response = send(
+            &app,
+            Method::GET,
+            path,
+            Some(caller("statistics.read", "statistics")),
+            &[],
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(body_json(response).await["code"], "resource.not_found");
+        let records = database.audit_records();
+        assert_eq!(records.len(), before + 1);
+        assert_ne!(
+            records[before]["refusalReason"], "profile_admission",
+            "unknown or ineligible selectors are not claim refusals"
+        );
+    }
+    assert!(
+        trace.lock().unwrap().is_empty(),
+        "admission refusals perform no statistical work"
+    );
+    for path in &paths {
+        let response = send(
+            &app,
+            Method::GET,
+            path,
+            Some(caller("statistics.read", "statistics")),
+            &[],
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "valid claims retain the configured read"
+        );
+    }
+    trace.lock().unwrap().clear();
+    // A refused append closes this writer, so fault injection follows valid reads.
+    database
+        .audit_capture()
+        .fail_on(registry_breg::audit::AUDIT_SCHEMA, "refusal");
+    let response = send(
+        &app,
+        Method::GET,
+        &paths[0],
+        Some(caller("canary-refused-scope", "statistics")),
+        &[],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(trace.lock().unwrap().is_empty());
+    let journal = serde_json::to_string(&database.audit_records()).unwrap();
+    for canary in [
+        PRINCIPAL_CANARY,
+        "canary-refused-scope",
+        "canary-refused-purpose",
+        "canary-unknown-profile",
+        "canary-unknown-dataset",
+    ] {
+        assert!(!journal.contains(canary));
+    }
+    drop(app);
+    drop(pool);
+    database.cleanup().await;
+}

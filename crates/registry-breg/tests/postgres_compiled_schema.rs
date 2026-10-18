@@ -1741,26 +1741,33 @@ async fn assert_catalog_drift_is_rejected(
         .await
         .expect("test administrator removes the added index");
 
-    database
-        .admin
-        .batch_execute(
-            "BEGIN;
-             DROP INDEX registry_internal.registry_subject_access_log_expiry",
-        )
-        .await
-        .expect("test administrator removes a managed internal index");
-    let named_drift = catalog_drift_objects(&database.admin, registry, catalog)
-        .await
-        .unwrap();
-    database
-        .admin
-        .batch_execute("ROLLBACK")
-        .await
-        .expect("test administrator restores the managed internal index");
-    assert_eq!(
-        named_drift,
-        ["registry_internal.registry_subject_access_log_expiry".to_owned()]
-    );
+    for index in [
+        "registry_internal.registry_subject_access_log_expiry",
+        "registry_internal.registry_action_evidence_uses_expiry",
+        "registry_internal.registry_proposal_evidence_uses_expiry",
+    ] {
+        database
+            .admin
+            .batch_execute(&format!("BEGIN; DROP INDEX {index}"))
+            .await
+            .expect("test administrator removes a managed internal index");
+        let named_drift = catalog_drift_objects(&database.admin, registry, catalog)
+            .await
+            .unwrap();
+        database
+            .admin
+            .batch_execute("ROLLBACK")
+            .await
+            .expect("test administrator restores the managed internal index");
+        assert_eq!(named_drift, [index.to_owned()]);
+        assert_eq!(
+            catalog_drift_objects(&database.admin, registry, catalog)
+                .await
+                .unwrap(),
+            Vec::<String>::new(),
+            "the restored catalog has no named drift"
+        );
+    }
 
     database
         .admin
