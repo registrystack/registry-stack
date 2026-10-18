@@ -3149,7 +3149,7 @@ async fn proposal_application_status(
         let review = tx
             .query_opt(
                 "SELECT s.proposal_digest,s.authority,s.expected_policy,
-            s.on_approved_mode,s.executor,r.status
+            s.on_approved_mode,s.executor,r.status,s.withdrawn
             FROM registry_internal.registry_proposal_review_submissions s
             LEFT JOIN registry_internal.registry_proposal_review_results r
               USING(action_id,proposal_id,submission_version)
@@ -3173,13 +3173,16 @@ async fn proposal_application_status(
             return Err(MutationError::PreconditionFailed);
         }
         let result: Option<String> = review.get(5);
-        if result.as_deref() == Some("approved") {
+        let withdrawn: bool = review.get(6);
+        if result.as_deref() == Some("approved") && !withdrawn {
             return Err(MutationError::PreconditionFailed);
         }
         // Without a job no executor has run, so nothing here is an
         // application refusal. A review outcome, a failed review submission
         // or a withdrawal is reported by the Apply, Retry and Revise links.
-        let blocked = document.blocked_reason.is_some();
+        // A withdrawn round cannot create its application even when a late
+        // approval is retained or a restoring package clears the block.
+        let blocked = document.blocked_reason.is_some() || withdrawn;
         value["state"] = json!(if blocked {
             "blocked"
         } else {
@@ -3331,7 +3334,7 @@ pub(crate) enum ReviewProgress {
     ChangesRequested,
     /// An `answered` result, which has no meaning for a Proposal.
     Answered,
-    /// A Casework `cancelled` or `superseded` the producer did not cause.
+    /// A withdrawn round, or a Casework `cancelled` or `superseded` result.
     Ended,
 }
 
@@ -3353,9 +3356,9 @@ impl ReviewProgress {
     }
 }
 
-/// Read the current submission's review progress. A Casework `cancelled` or
-/// `superseded` the producer caused by withdrawing is not an outcome of
-/// review, so it reads as pending until the withdrawal settles.
+/// Read the current submission's review progress. Withdrawal ends its
+/// authority immediately; a late result remains historical evidence even
+/// while remote cancellation is still pending.
 async fn review_progress(
     tx: &Transaction<'_>,
     document: &ProposalDocument,
@@ -3391,13 +3394,16 @@ async fn review_progress(
     let erroring: bool = row.get(2);
     let status: Option<String> = row.get(3);
     let expired: Option<bool> = row.get(4);
+    if withdrawn {
+        return Ok(ReviewProgress::Ended);
+    }
     Ok(match status.as_deref() {
         Some("approved") if expired == Some(true) => ReviewProgress::ApprovalExpired,
         Some("approved") => ReviewProgress::Approved,
         Some("rejected") => ReviewProgress::Rejected,
         Some("changes-requested") => ReviewProgress::ChangesRequested,
         Some("answered") => ReviewProgress::Answered,
-        Some("cancelled" | "superseded") if !withdrawn => ReviewProgress::Ended,
+        Some("cancelled" | "superseded") => ReviewProgress::Ended,
         Some(_) => ReviewProgress::Pending,
         None if state == "failed" => ReviewProgress::Failed,
         None if erroring && matches!(state.as_str(), "pending" | "uncertain" | "accepted") => {
