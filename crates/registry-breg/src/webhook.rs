@@ -212,6 +212,47 @@ struct BregDeliverySeams {
 
 const MAX_RETENTION_BATCHES_PER_TICK: usize = 100;
 
+#[derive(Clone, Copy)]
+enum RetentionFailureReason {
+    RegistryNotReady,
+    LockTimeout,
+    QueryCancelled,
+    Database,
+}
+
+impl RetentionFailureReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RegistryNotReady => "registry-not-ready",
+            Self::LockTimeout => "lock-timeout",
+            Self::QueryCancelled => "query-cancelled",
+            Self::Database => "database",
+        }
+    }
+
+    fn sqlstate(code: Option<&str>) -> Self {
+        match code {
+            Some("55P03") => Self::LockTimeout,
+            Some("57014") => Self::QueryCancelled,
+            _ => Self::Database,
+        }
+    }
+
+    fn admission(error: crate::postgres::RegistryTransactionError) -> Self {
+        use crate::postgres::{PostgresKernelError, RegistryLockFailure, RegistryTransactionError};
+        match error {
+            RegistryTransactionError::Kernel(PostgresKernelError::RegistryUnavailable) => {
+                Self::RegistryNotReady
+            }
+            RegistryTransactionError::Lock(RegistryLockFailure::Timeout) => Self::LockTimeout,
+            RegistryTransactionError::Lock(RegistryLockFailure::QueryCancelled) => {
+                Self::QueryCancelled
+            }
+            _ => Self::Database,
+        }
+    }
+}
+
 impl BregDeliverySeams {
     async fn run_retention(self, mut shutdown: watch::Receiver<bool>) {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -226,9 +267,7 @@ impl BregDeliverySeams {
                 }
                 _ = async {
                     interval.tick().await;
-                    if self.prune_terminal(MAX_RETENTION_BATCHES_PER_TICK).await.is_err() {
-                        tracing::error!("hook metadata retention failed");
-                    }
+                    let _ = self.prune_terminal(MAX_RETENTION_BATCHES_PER_TICK).await;
                 } => {}
             }
         }
@@ -237,11 +276,24 @@ impl BregDeliverySeams {
     async fn prune_terminal(&self, max_batches: usize) -> Result<(u64, bool), DeliveryError> {
         let mut removed = 0;
         for _ in 0..max_batches {
-            let batch = self.prune_terminal_batch().await?;
+            let batch = match self.prune_terminal_batch().await {
+                Ok(batch) => batch,
+                Err(reason) => {
+                    tracing::error!(
+                        removed,
+                        reason = reason.as_str(),
+                        "hook metadata retention failed"
+                    );
+                    return Err(DeliveryError::Unavailable);
+                }
+            };
             removed += batch;
             // Hooks returns deleted rows, without exposing its page bound.
             // An empty batch terminates without copying that private limit.
             if batch == 0 {
+                if removed != 0 {
+                    tracing::info!(removed, "hook metadata retention completed");
+                }
                 return Ok((removed, false));
             }
         }
@@ -252,7 +304,7 @@ impl BregDeliverySeams {
         Ok((removed, true))
     }
 
-    async fn prune_terminal_batch(&self) -> Result<u64, DeliveryError> {
+    async fn prune_terminal_batch(&self) -> Result<u64, RetentionFailureReason> {
         // Keep metadata for at least the receipt horizon and the payload replay
         // window. The platform primitive also requires completed payload expiry
         // for dead letters and never removes active or uncertain delivery work.
@@ -264,39 +316,43 @@ impl BregDeliverySeams {
             .pool
             .get()
             .await
-            .map_err(|_| DeliveryError::Unavailable)?;
+            .map_err(|_| RetentionFailureReason::Database)?;
         let mut guard =
             crate::postgres::cancellation::QueryCancellationGuard::new(self.pool.clone(), client);
-        let transaction = crate::postgres::begin_registry_transaction(
+        let transaction = crate::postgres::begin_registry_transaction_with_reason(
             guard.client(),
             self.lock_key,
             self.lock_timeout,
             &self.expected,
         )
         .await
-        .map_err(|_| DeliveryError::Unavailable)?;
+        .map_err(RetentionFailureReason::admission)?;
         transaction
             .set_statement_budget(Duration::from_secs(10))
             .await
-            .map_err(|_| DeliveryError::Unavailable)?;
+            .map_err(|_| RetentionFailureReason::Database)?;
         let now: std::time::SystemTime = transaction
             .transaction()
             .query_one("SELECT transaction_timestamp()", &[])
             .await
-            .map_err(|_| DeliveryError::Unavailable)?
+            .map_err(|error| {
+                RetentionFailureReason::sqlstate(error.code().map(|code| code.code()))
+            })?
             .get(0);
-        let before = now.checked_sub(horizon).ok_or(DeliveryError::Unavailable)?;
+        let before = now
+            .checked_sub(horizon)
+            .ok_or(RetentionFailureReason::Database)?;
         let removed = registry_platform_hooks::delivery::prune_terminal_deliveries(
             transaction.transaction(),
             DELIVERY_SCHEMA,
             before,
         )
         .await
-        .map_err(|_| DeliveryError::Unavailable)?;
+        .map_err(|error| RetentionFailureReason::sqlstate(error.sqlstate()))?;
         transaction
             .commit()
             .await
-            .map_err(|_| DeliveryError::Unavailable)?;
+            .map_err(|_| RetentionFailureReason::Database)?;
         guard.disarm();
         Ok(removed)
     }

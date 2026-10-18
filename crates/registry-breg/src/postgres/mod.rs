@@ -39,7 +39,6 @@ pub use config::{
     set_application_name, ConnectionConfig, DatabaseConnectionCause, PoolBounds, RuntimePool,
     TlsPolicy,
 };
-pub(crate) use context::begin_registry_transaction;
 pub(crate) use context::{
     begin_action_transaction, ActionClaimContext, ImmediateActionLinkBinding,
     ImmediateActionLinkContext, ImmediateActionTargetBinding, ImmediateActionTargetContext,
@@ -50,6 +49,10 @@ pub(crate) use context::{
 pub use context::{
     begin_record_transaction, ClaimContext, GuardedTransaction, RowBoundaryContext,
     RowBoundaryOperator,
+};
+pub(crate) use context::{
+    begin_registry_transaction, begin_registry_transaction_with_reason, RegistryLockFailure,
+    RegistryTransactionError,
 };
 pub(crate) use context::{install_spatial_bbox_context, validate_field_value, SpatialBboxContext};
 pub use failure::PostgresFailure;
