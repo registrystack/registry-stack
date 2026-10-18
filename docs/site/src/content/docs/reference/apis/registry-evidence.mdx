@@ -13,8 +13,9 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
-Read this page before you call Evidence Gateway (Evidence) from a relying party: it says what the
-API answers, how you authenticate, and which response encodings you can ask for. Every route,
+Evidence Gateway (Evidence) answers a relying party's fixed question with a signed assertion. The
+caller sends a Requirement URI, a purpose, and selector values for the subject, authenticated with
+an access token, and chooses a response encoding with `Accept`. Every route,
 request body, response schema, and problem is in the
 [generated Evidence Gateway API operations](../evidence/), rendered from the OpenAPI document the
 runtime serves.
@@ -25,15 +26,21 @@ You send `POST /v1/evidence` with the requirement's Requirement URI, a purpose, 
 values that identify the subject. Evidence returns the smallest assertion that answers the
 requirement, signed, and never the source records behind it. `POST /v1/evidence/batch` asks the
 same requirement and purpose for one to sixteen ordered subject sets in one request.
-`GET /v1/evidence-definitions` lists only the requirements, purposes, and selector profiles your
-token is authorized for; it is not a public catalog. [How Evidence
-works](../../../explanation/how-evidence-works/) explains the model.
+`GET /v1/evidence-definitions` describes the complete request shapes your token may send today,
+and no others; it is not a public catalog. Each definition carries its handle, Requirement URI,
+configuration revision, evidence type and kind, purpose, response formats, reference frameworks,
+subject roles with their selector profiles, and the output concepts and forms it may return. The
+document also names the deployment's assurance profile, the audience your token was accepted for,
+the issuer and provider identities, and the largest holder-bound batch it accepts. Listing reads
+no source and writes no evidence audit entry.
+[How Evidence works](../../../explanation/how-evidence-works/) explains the model.
 
 The Version 1 contract is frozen: those three versioned operations and their envelopes are the
 complete Evidence request surface.
 
 {/* Evidence: products/evidence/generated/registry-evidence.openapi.json, createEvidence,
-    createEvidenceRequestBatch, listEvidenceDefinitions, and EvidenceRequest;
+    createEvidenceRequestBatch, listEvidenceDefinitions, EvidenceDefinitions, EvidenceDefinition,
+    and EvidenceRequest; crates/registry-evidence/src/runtime.rs, discover;
     products/evidence/contracts/README.md; products/evidence/CONCEPT.md. */}
 
 ## Authentication
@@ -64,7 +71,7 @@ exchange. The other routes take no credential and reveal no definition or entitl
 
 A grant may also permit the visibly unsigned envelope
 `application/vnd.registrystack.evidence-unsigned+json`, which is not later-verifiable evidence, and
-a holder-bound requirement offers one more encoding the operations page lists.
+a holder-bound requirement offers one more encoding, listed with the [operations](../evidence/).
 `POST /v1/evidence/batch` accepts only
 `application/vnd.registrystack.evidence.request-batch+json` and returns one signed flattened JWS
 per available item. Either route refuses an `Accept` value it does not offer with

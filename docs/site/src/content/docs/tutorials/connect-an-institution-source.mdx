@@ -14,14 +14,13 @@ standards_referenced:
   - fhir-r4
 tutorial_test:
   toolset: evidence
-  checkout: true
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-If you integrate an institution's existing HTTP API with Evidence Gateway, this tutorial connects
-one of its operations and returns a verified answer from it. It starts a project of its own, so
-you are no longer in the standalone project from your first assertion; if that one is still
+If you integrate an institution's existing HTTP API with Evidence Gateway, you connect one of its
+operations here and return a verified answer from it. You start a new project, so you are no
+longer in the standalone project from your first assertion; if that one is still
 running, run `evidencectl dev stop .` in its directory first, because both use the same ports.
 
 <QuickstartMeta
@@ -30,9 +29,8 @@ running, run `evidencectl dev stop .` in its directory first, because both use t
   level="Local development with a synthetic public server"
   prerequisites={[
     'evidence and evidencectl on PATH',
-    'The source archive of the same release',
     'Running Docker',
-    'Python 3, curl, and jq',
+    'Python 3, curl, tar, and jq',
     'Internet access',
   ]}
 />
@@ -51,13 +49,16 @@ Settle three things about the operation you connect:
 Without a real API at hand, you connect a FHIR R4 `Coverage` read on a synthetic public server.
 Each step applies to your own API.
 
-## Copy the project and prove it offline
+## Get the project and prove it offline
 
-From the archive root, copy the FHIR example out of the tree, because the commands write into it:
+Download the [Evidence example projects](../../examples/evidence-examples.tar.gz) into a fresh
+working directory as `evidence-examples.tar.gz`, then unpack the FHIR project into a directory of
+its own, because the next commands write keys and responses into it:
 
 ```sh
 mkdir connect-an-institution-api
-cp -R products/evidence/examples/fhir connect-an-institution-api/fhir-record-evidence
+tar -xzf evidence-examples.tar.gz -C connect-an-institution-api fhir
+mv connect-an-institution-api/fhir connect-an-institution-api/fhir-record-evidence
 cd connect-an-institution-api/fhir-record-evidence
 ```
 

@@ -16,9 +16,10 @@ tutorial_test:
   skip: drift-checked by evidence-production-build-docs.test.mjs; needs Docker Compose
 ---
 
-You have a candidate from `evidencectl package` that signs through a Transit proxy. This page runs
-that candidate unchanged in Docker Compose, with the runtime, secrets, Transit socket, and audit
-storage each mounted separately. The package digest stays the same as on a host deployment.
+You have a candidate from `evidencectl package` that signs through a Transit proxy, and you run
+containers with Docker Compose. Run that candidate unchanged, with the runtime, secrets, Transit
+socket, and audit storage each mounted separately; the package digest stays the same as on a host
+deployment.
 
 ## What you need
 
@@ -27,12 +28,16 @@ storage each mounted separately. The package digest stays the same as on a host 
 - A running Transit proxy whose socket directory you can mount, set up as in
   [Configure Transit signing for Evidence Gateway](../move-evidence-to-production-signing/).
 - An owner-only secret directory and storage that UID and GID `65532` can write.
-- A Registry Stack checkout for the Compose adapter under `docker/compose/`.
+- The Compose adapter from your release's source archive,
+  `https://github.com/registrystack/registry-stack/archive/refs/tags/v<version>.tar.gz`, where
+  `<version>` is the version `evidencectl --version` prints. The archive unpacks to
+  `registry-stack-<version>/`, and the adapter is its `docker/` directory. Copy that directory to
+  `evidence-compose/`, your operator-owned copy, and run every command from inside it.
 
 ## Set the Compose adapter inputs
 
-The Compose adapter is `docker/compose/docker-compose.yaml`. It is operator-owned and is not
-written by `evidencectl package`. It reads five variables:
+The Compose file is `compose/docker-compose.yaml` in `evidence-compose/`. You own it;
+`evidencectl package` does not write it. It reads five variables:
 
 ```sh test-skip="needs the reader's candidate, secrets, Transit proxy, and reviewed image"
 export EVIDENCE_CANDIDATE_DIR='<candidate>/bundle'
@@ -40,7 +45,7 @@ export EVIDENCE_RUNTIME_FILE='<container-runtime.yaml>'
 export EVIDENCE_SECRET_ROOT='<secret-root>'
 export EVIDENCE_TRANSIT_SOCKET_DIR='<transit-socket-directory>'
 export EVIDENCE_IMAGE='<reviewed-evidence-image-by-digest>'
-docker compose -f docker/compose/docker-compose.yaml config
+docker compose -f compose/docker-compose.yaml config
 ```
 
 `EVIDENCE_CANDIDATE_DIR` is the candidate's `bundle/` directory, the one holding `SHA256SUMS`,
@@ -58,9 +63,9 @@ read-only `/dev/shm` tmpfs. Evidence Gateway receives the proxy socket, never a 
 
 ## Write the container runtime file
 
-Start the container runtime file from `docker/compose/runtime.docker.yaml`. It already names the
-container paths above, binds `0.0.0.0:8080` under `networkExposure: container-private`, and
-selects a Transit signer. Set `signer.keyName` and `signer.keyVersion` to the values in your
+Start the container runtime file from `compose/runtime.docker.yaml`. It already names the
+container paths the adapter mounts, binds `0.0.0.0:8080` under
+`networkExposure: container-private`, and selects a Transit signer. Set `signer.keyName` and `signer.keyVersion` to the values in your
 candidate's `runtime.yaml`; the adapter's copy pins key version 1.
 
 A packaged candidate is refused until its target authority is activated, and the adapter's runtime
@@ -76,13 +81,46 @@ authority:
 
 {/* Evidence: crates/registry-evidence/src/bundle.rs, bind_target_authority; products/evidence/contracts/runtime.schema.yaml; docker/runtime-preflight.py, validate_named_audit_volume */}
 
+## Bind SQLite extracts
+
+Skip this step unless a source in your bundle has `type: sqlite-extract`. Each such source names
+an `extractProfile`, and the candidate's `runtime.yaml` carries a `sourceExtracts` binding for
+each one, with host paths. Carry every binding into the container runtime file under the same
+names, pointing at container paths:
+
+```yaml
+sourceExtracts:
+  <extract-profile>:
+    path: /etc/registry-evidence/extracts/<extract-file>.sqlite
+```
+
+The names must match the bundle's `extractProfile` names exactly: the container check and startup refuse a missing one as
+`evidence.runtime.source-extract-unbound` and an extra one as
+`evidence.runtime.source-extract-unused`. Then mount each extract file read-only at its path, in
+the `evidence` service's `volumes` in your copy of the adapter:
+
+```yaml
+      - <host-extract-file>:/etc/registry-evidence/extracts/<extract-file>.sqlite:ro
+```
+
+The file must be readable by UID `65532`. Evidence opens an extract as immutable and refuses a
+symbolic link or a writable file; the read-only mount satisfies the second, and the preflight
+refuses a writable mount under `/etc`. Keep extracts out of `/var/lib/registry-evidence`:
+that is the audit volume, the one writable mount. Publish a replacement extract as a new file and
+restart, never by changing the mounted one.
+
+{/* Evidence: products/evidence/contracts/runtime.schema.yaml, sourceExtracts;
+    crates/registry-evidence/src/bundle.rs, runtime_binding_findings, source-extract-unbound and -unused;
+    crates/registry-evidence/src/source_sqlite.rs, open;
+    docker/runtime-preflight.py, validate_mounts. */}
+
 ## Activate the target authority
 
 Run the activation inside the container, so the authority store is created and owned by the service
 identity. Mount the candidate's `compiled-authority.yaml` for this run only:
 
 ```sh
-docker compose -f docker/compose/docker-compose.yaml run --rm \
+docker compose -f compose/docker-compose.yaml run --rm \
   -v "<candidate>/compiled-authority.yaml:/etc/registry-evidence/compiled-authority.yaml:ro" \
   evidence authority activate \
   --runtime-config /etc/registry-evidence/runtime.yaml \
@@ -103,7 +141,7 @@ The activation persists in the volume, so later runs and `up` read the same auth
 Start the Transit proxy first, then run the check in the container:
 
 ```sh
-docker compose -f docker/compose/docker-compose.yaml run --rm evidence \
+docker compose -f compose/docker-compose.yaml run --rm evidence \
   check --runtime-config /etc/registry-evidence/runtime.yaml \
   --require-runtime-dependencies \
   --require-audit-under /var/lib/registry-evidence
@@ -111,6 +149,7 @@ docker compose -f docker/compose/docker-compose.yaml run --rm evidence \
 
 ```text test-expect
 Evidence package <package-digest> passed check (<count> requirements)
+0 errors, 0 warnings in <count> files
 ```
 
 `--require-runtime-dependencies` validates the mounted secrets and signs a self-test message
@@ -122,8 +161,8 @@ The adapter's preflight also checks the image pin, the mounts, and the service p
 the same native check:
 
 ```sh test-skip="needs Docker Compose and the reader's adapter inputs"
-python3 docker/runtime-preflight.py \
-  --compose-file docker/compose/docker-compose.yaml \
+python3 runtime-preflight.py \
+  --compose-file compose/docker-compose.yaml \
   --service evidence=evidence
 ```
 
@@ -136,8 +175,8 @@ explains the digests.
 ## Start the service
 
 ```sh test-skip="needs Docker Compose and the reader's adapter inputs"
-docker compose -f docker/compose/docker-compose.yaml up -d
-docker compose -f docker/compose/docker-compose.yaml logs evidence
+docker compose -f compose/docker-compose.yaml up -d
+docker compose -f compose/docker-compose.yaml logs evidence
 ```
 
 The image's default command is `serve --runtime-config /etc/registry-evidence/runtime.yaml`, so

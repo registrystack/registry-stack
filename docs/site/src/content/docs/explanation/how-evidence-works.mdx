@@ -57,7 +57,7 @@ birth date the caller never sees. A `controlled-category` or `controlled-code` s
 a reviewed list applies, a `date-bucket` which reviewed period, and a bounded number stays inside
 declared bounds. `reviewed-structured-value`, a small structure under a closed schema, is the
 widest type and the one to justify hardest. An output whose value falls outside its declaration is
-refused, as the residence-region fixture shows.
+refused.
 
 How much a definition reveals is fixed when it is written and reviewed, and it is the same for
 every caller and purpose allowed to ask. A request carries a nonce, the Requirement URI, the
@@ -116,11 +116,9 @@ target, the target authority, the signing keys, and audit retention.
 
 ## How do I inspect or change it?
 
-Before anything serves, `evidencectl check` reports every diagnostic, `evidencectl test` runs the
-synthetic fixtures offline, and `evidencectl explain` prints what each definition answers. After a
-request, `evidencectl verify` checks a retained response offline, and `evidencectl audit show`
-reads a stopped local session's audit. On a host, `evidencectl doctor` checks a runtime file and
-its dependencies, and `evidence authority history` lists activations.
+`evidencectl` checks a project and runs its synthetic fixtures before anything serves, and verifies
+a retained response or reads a stopped session's audit afterwards; the
+[`evidencectl` reference](../../reference/cli/evidencectl/) lists each command.
 
 Relying services pin the `configurationRevision`. It moves when you edit what a definition does,
 such as its source, selector profiles, Functions, codelists, or outputs, and stays put for

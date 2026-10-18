@@ -21,7 +21,7 @@ tutorial_test:
 If you operate an Evidence project and one assertion definition must answer as an
 [SD-JWT VC](../../reference/glossary/#sd-jwt-vc), you decide two things once the representation is
 permitted: which values a holder may keep or drop, and whether the response is bound to the
-holder's key. You continue in `first-evidence-assertion/adult-status` from
+holder's key. You continue in `first-evidence-assertion/adult-status`, the project from
 [Request evidence as an SD-JWT VC](../../tutorials/request-evidence-as-sd-jwt-vc/), with Evidence
 Gateway stopped and its state cleaned.
 
@@ -30,7 +30,7 @@ Gateway stopped and its state cleaned.
 A definition answers as SD-JWT VC only when `sd-jwt-vc` is in its `representations` and in the
 grant a caller acts under. That caller then sends `Accept: application/dc+sd-jwt` and receives the
 same assertion, serialized as an SD-JWT VC; a caller whose grant lacks it still receives signed
-JWS. The two choices below change what that caller can do with the response:
+JWS. Two choices change what that caller can do with the response:
 
 - The disclosure shape decides which values the holder can present separately.
 - The subject binding decides who the response means something to: the relying party that
@@ -40,7 +40,23 @@ JWS. The two choices below change what that caller can do with the response:
 
 ## Choose what a holder can disclose
 
-From the project directory, confirm the project checks clean before you change it:
+Each output travels as a disclosure, a salted claim the holder may keep or drop. An output without
+`sdJwtVc` is one disclosure named by its concept URI, which is what `adult`, a boolean, needs.
+
+To present the fields of a structured value separately, give that output an `sdJwtVc` block. The
+output then appears under `claim`, a unique name of at most 64 characters, and each direct field becomes
+its own disclosure; a nested object stays one. `top-level` is the only `disclosure` value.
+Only a `reviewed-structured-value` output may declare `sdJwtVc`; on any other type `evidencectl
+check` refuses with `output-projection-type`, because a scalar has no fields to split.
+
+{/* Evidence: crates/registry-evidence-authoring/src/project.rs, output-projection-type;
+    crates/registry-evidence-authoring/src/validate.rs, validate_sd_jwt_claim_name;
+    crates/registry-evidencectl/schemas/authoring/project.schema.json, ProjectionDisclosure;
+    products/evidence/contracts/sd-jwt-vc-profile.yaml, selectively_disclosed. */}
+
+## Bind adult-status to the holder
+
+`adult-status` declares `subjectBinding: audience-scoped`, and the project checks clean:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
 evidencectl check . --target local-target.yaml
@@ -50,48 +66,8 @@ evidencectl check . --target local-target.yaml
 0 errors, 0 warnings
 ```
 
-Each output travels as a disclosure, a salted claim the holder may keep or drop. An output without
-`sdJwtVc` is one disclosure named by its concept URI. Try projecting `adult`, a boolean output, as
-a named claim:
-
-```diff lang="yaml" title="evidence.yaml" test-edit
-      adult:
-        concept: urn:example:concept:adult-status:v1
-        type: boolean
-+       sdJwtVc:
-+         claim: adult
-+         disclosure: top-level
-```
-
-```sh test-exit="1"
-evidencectl check . --target local-target.yaml
-```
-
-```text test-excerpt
-SD-JWT VC field projection requires a reviewed structured value
-```
-
-Only a `reviewed-structured-value` output may declare `sdJwtVc`. It then appears under `claim`, a
-unique name of at most 64 characters, and each direct field becomes its own disclosure; a nested
-object stays one. `top-level` is the only `disclosure` value. A boolean has nothing to split, so
-remove the block:
-
-```diff lang="yaml" title="evidence.yaml" test-edit
-        type: boolean
--       sdJwtVc:
--         claim: adult
--         disclosure: top-level
-```
-
-{/* Evidence: crates/registry-evidence-authoring/src/project.rs, output-projection-type;
-    crates/registry-evidence-authoring/src/validate.rs, validate_sd_jwt_claim_name;
-    crates/registry-evidencectl/schemas/authoring/project.schema.json, ProjectionDisclosure;
-    products/evidence/contracts/sd-jwt-vc-profile.yaml, selectively_disclosed. */}
-
-## Bind adult-status to the holder
-
-`adult-status` declares `subjectBinding: audience-scoped`. Declare
-[`holder-bound`](../../reference/glossary/#holder-bound) instead, and keep only `sd-jwt-vc`:
+Declare [`holder-bound`](../../reference/glossary/#holder-bound) instead, and keep only
+`sd-jwt-vc`:
 
 ```diff lang="yaml" title="evidence.yaml" test-edit
 -   subjectBinding: audience-scoped

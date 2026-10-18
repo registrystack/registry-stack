@@ -25,30 +25,17 @@ a birth date from your system and returns `true`; the date stays with you.
 
 ## What you define and run
 
-You write an [Evidence project](../../reference/glossary/#evidence-project), YAML files and small
-scripts kept in version control. Its
-[assertion definitions](../../reference/glossary/#assertion-definition) are the questions; its
-sources are the fixed reads of your own systems that answer them; its fixtures are synthetic cases
-that prove each answer offline. A target binds the project to one deployment: your token issuer,
-source credentials, and signing keys.
-
-`evidencectl` checks, tests, and packages the project. `evidence` serves the package, signs each
-answer, and records who asked and what was released in an audit trail.
+You write an [Evidence project](../../reference/glossary/#evidence-project), kept in version
+control: the questions, the fixed reads of your own systems that answer them, and synthetic cases
+that prove each answer offline. `evidencectl` checks and packages it. `evidence` serves it, signs
+each answer, records who asked in an audit trail, and refuses any caller, purpose, or value the
+project does not declare. [How Evidence works](../../explanation/how-evidence-works/) explains each
+part and each refusal.
 
 {/* Evidence: products/evidence/examples/standalone/evidence.yaml, assertionDefinitions;
-    products/evidence/examples/standalone/local-target.yaml; crates/registry-evidencectl/src/check.rs;
-    crates/registry-evidence/src/runtime.rs, AuditPhase::AccessAttempt and AuditPhase::DisclosureRelease. */}
-
-## What it refuses
-
-Evidence Gateway refuses a caller whose grant does not cover the question, a purpose the question
-does not declare, and a value its scripts compute outside the declared outputs. A subject it
-cannot resolve gets the same refusal as any other unavailable answer, so a refusal does not reveal
-whether a record exists.
-
-{/* Evidence: crates/registry-evidence/src/problem.rs, NotAuthorized and EvidenceNotAvailable;
-    crates/registry-evidencectl/src/request.rs, validate_closed_inputs;
-    products/evidence/examples/standalone/fixtures/residence-region.yaml, negative-outside-controlled-values. */}
+    crates/registry-evidencectl/src/check.rs;
+    crates/registry-evidence/src/runtime.rs, AuditPhase::AccessAttempt and AuditPhase::DisclosureRelease;
+    crates/registry-evidence/src/problem.rs, NotAuthorized and EvidenceNotAvailable. */}
 
 ## When it is not the right product
 

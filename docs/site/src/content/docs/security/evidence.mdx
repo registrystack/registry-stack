@@ -11,21 +11,12 @@ locale: en
 standards_referenced: []
 ---
 
-Registry Evidence's security model is contract-driven. The invariant matrix in
-`products/evidence/contracts/security-invariant-matrix.yaml` is the source of
-truth for what the runtime guarantees, `products/evidence/contracts/security-test-traceability.yaml`
-binds every invariant to the named tests that prove it, and continuous
-integration regenerates and byte-diffs both contracts through the
-`evidence-contracts` job, which runs
-`products/evidence/scripts/check-contracts.sh`. A change that narrows a
-guarantee or drops its test fails that job rather than merging unnoticed.
-
-{/* Evidence: products/evidence/scripts/check-contracts.sh;
-    products/evidence/contracts/security-invariant-matrix.yaml, review_rule. */}
+Evidence Gateway is built so that a caller cannot turn it into a fact-query engine, splice
+permissions across grants, redirect source access, learn from an absence, or receive an
+unauthenticated response, and so that its configuration cannot change underneath a request. The
+operator keeps the duties no service-side control can hold.
 
 ## What the runtime guarantees
-
-The threats Evidence Gateway is built against, and the answer to each, are these.
 
 A caller cannot turn the service into a fact-query engine. It evaluates only
 requirements, each pinned by a requirement revision, and the request schema is
@@ -40,8 +31,11 @@ than falling back to another claim. One authorization decision binds the
 requester, client, requirement revision, purpose, every subject role and
 selector profile, authority, and audience, so partial matches across grants
 never add up to access. Selector values are lookup inputs, never proof of
-authority. Every refusal after authentication is durably audited before the
-generic `403`; if that audit fails, the caller receives the generic `503`.
+authority. Every authorization refusal is durably audited before the generic
+`403`; if that audit fails, the caller receives the generic `503`. Refusals
+decided before authorization, for a failed authentication, a malformed
+request, an invalid selector, or a rate limit, write no native audit entry, so
+watch for them in operational logs and metrics instead.
 
 Source access cannot be redirected. Source calls are fixed by trusted
 configuration and executed by the core alone, which closes off SSRF, credential
@@ -53,9 +47,16 @@ Absence does not leak. Missing facts, script failures, audit failures, and
 evaluation failures fail closed. Raw source responses are never persisted or
 logged, and selector, source, and disclosed values never reach logs or audit.
 No-match, ambiguous, and missing-fact outcomes collapse to one public problem
-shape, so status, message, or timing is not an existence oracle. Subject
-bindings are scoped to audience and purpose, so one subject is not linkable
-across relying parties.
+status and body, and the runtime removes the timing differences it can avoid.
+It does not pad responses to a constant time, so a source that answers a
+no-match faster than a match can still leak membership through latency; measure
+that at your source before you expose a definition to callers who should not
+learn it. Audience-scoped subject bindings derive from the audience and the
+purpose, so one subject is not linkable across relying parties. A holder-bound
+requirement binds to the holder key's thumbprint and the purpose instead: a
+holder who presents the same key to several verifiers is linkable across them
+for that purpose, and the wallet, not Evidence Gateway, decides whether to use
+a fresh key.
 
 The response is authenticated. A signed flattened JWS is the default, unsigned
 output exists only where the package and the matched grant both permit it, and
@@ -73,47 +74,33 @@ separate private listener with closed labels. Public responses carry a W3C
 trace identifier but never the internal audit operation identifier, and
 `tracestate` is not echoed.
 
-The [matrix](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/security-invariant-matrix.yaml)
-holds the complete, normative text: numbered invariants and named
-cross-cutting controls, each with its rule, threat, enforcement, and negative
-test, including those for holder-bound responses, request batches, and the
-OID4VCI front end. The
-[traceability contract](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/security-test-traceability.yaml)
-names the tests. Both live in
-[`products/evidence/contracts/`](https://github.com/registrystack/registry-stack/tree/main/products/evidence/contracts).
-An invariant the matrix adds is binding from the change that adds it.
-
-{/* Evidence: products/evidence/contracts/security-invariant-matrix.yaml, invariants,
-    negative_test, and trace_context; crates/registry-evidence/src/runtime_tests.rs,
+{/* Evidence: products/evidence/contracts/security-invariant-matrix.yaml, invariants and
+    trace_context; V1-I16 (avoidable timing) and V1-I17;
+    crates/registry-evidence/src/runtime.rs, map_request_limit and append_authorization_refusal;
+    crates/registry-evidence/src/selector.rs, ResolvedSubjectScope::HolderKeyThumbprint;
+    crates/registry-evidence/src/runtime_tests.rs,
     missing_principal_never_falls_back_to_client_id_or_azp and
     disclosure_audit_failure_prevents_signed_response_release. */}
 
-## How test traceability works
+## How the guarantees are held
 
-Each invariant's `negative_test` id is a key into
-`products/evidence/contracts/security-test-traceability.yaml`, which lists the
-file and function of every test that proves it. A test may be split across
-functions, never weakened or deleted.
+The [invariant matrix](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/security-invariant-matrix.yaml)
+holds the complete, normative text: numbered invariants and named cross-cutting controls, each
+with its rule, threat, enforcement, and negative test, including those for holder-bound responses,
+request batches, and the OID4VCI front end. An invariant the matrix adds is binding from the change
+that adds it. Every invariant is held by a named test; the
+[traceability contract](https://github.com/registrystack/registry-stack/blob/main/products/evidence/contracts/security-test-traceability.yaml)
+links them, and the build fails when an invariant drops its test.
 
-`crates/registry-evidence/tests/security_contract_traceability.rs` reads both
-contracts and checks that every matrix id has a traceability entry and the
-reverse, that each referenced file contains a matching `fn <name>(`, and that
-the function carries `#[test]` or `#[tokio::test]`. An entry naming a deleted
-or renamed test fails before anything else does. For example, the invariant
-that private signing material stays core-owned traces to
-`jwks_contains_public_material_only` in `crates/registry-evidence/src/signing.rs`.
-
-```bash test-skip="contributor check run from a repository checkout"
-products/evidence/scripts/check-contracts.sh
-```
-
-{/* Evidence: crates/registry-evidence/tests/security_contract_traceability.rs;
-    crates/registry-evidence/src/signing.rs, jwks_contains_public_material_only. */}
+{/* Evidence: products/evidence/contracts/security-invariant-matrix.yaml, invariants,
+    negative_test, and review_rule;
+    products/evidence/scripts/check-contracts.sh;
+    crates/registry-evidence/tests/security_contract_traceability.rs. */}
 
 ## What the operator must uphold
 
 The matrix describes what the `evidence` binary enforces.
-[`products/evidence/OPERATOR-CONTRACT.md`](https://github.com/registrystack/registry-stack/blob/main/products/evidence/OPERATOR-CONTRACT.md)
+The [operator contract](https://github.com/registrystack/registry-stack/blob/main/products/evidence/OPERATOR-CONTRACT.md)
 holds the duties no service-side control can hold for you:
 
 - Keep every secret file below `secretProviders.file.root` a regular,

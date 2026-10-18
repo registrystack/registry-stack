@@ -1,6 +1,6 @@
 ---
-title: Serve a lookup from a registry
-description: Export one Base Registry Engine lookup as a fixed Evidence source, author assertions over it, package a candidate offline, and check what the source credential can reach.
+title: Package a lookup over a registry
+description: Export one Base Registry Engine lookup as a fixed Evidence source, author assertions over it, package a candidate offline, and know how to check what the source credential reaches once the registry is deployed.
 status: current
 owner: registry-docs
 source_repos:
@@ -189,11 +189,10 @@ The package report lists the secrets to provision, the two registry client secre
     crates/registry-evidencectl/src/build.rs, run_inner;
     products/breg/evidence/tests/verify-composition.py, verify. */}
 
-## Check what the source credential reaches
-
-Fixtures cannot show what a live credential reaches. Once your [deployed
-registry](../../operate/breg/) serves this project, and before Evidence takes traffic, call it
-as Evidence will, with the source client's token. Ask your identity operator for an owner-only
+:::note[Once the registry is deployed, check what the source credential reaches]
+Fixtures cannot show what a live credential reaches. Run this check against your [deployed
+registry](../../operate/breg/) once it serves this project, and before Evidence takes traffic,
+calling it as Evidence will, with the source client's token. Ask your identity operator for an owner-only
 `source-authorization.curl` file holding a short-lived authorization header for the source
 client, kept outside the candidate. Put the synthetic selector in `source-lookup.json`:
 
@@ -230,6 +229,7 @@ registry answers a missing record, so ask the registry operator to confirm with 
 credential, in their own workspace, that the record exists under `operator`. [Read
 refusals](../../reference/breg-api/#read-refusals) lists these answers. If the request succeeds,
 keep traffic off and correct the source client or the profile before you retry.
+:::
 
 {/* Evidence: crates/registry-breg/src/compiler.rs, route_shape;
     crates/registry-breg/src/api/mod.rs, parse_lookup_body, lookup_dispatch, lookup_unresolved,

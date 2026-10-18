@@ -48,9 +48,20 @@ python3 serve-source.py \
 
 The deployment's operator registers your application as a client under an
 [access profile](../../reference/glossary/#access-profile). Here you play the operator, from the
-project directory:
+project directory. Evidence Gateway reads its clients only as it starts, and `evidencectl` refuses
+a client change while it runs, so stop it first:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
+evidencectl dev stop .
+```
+
+```text test-expect
+Local Evidence stopped
+```
+
+Register the application:
+
+```sh
 evidencectl access client add age-check-app \
   --access-profile standalone-service \
   --generate-local-key
@@ -61,9 +72,7 @@ Added client age-check-app with access profile standalone-service.
 ```
 
 The client's private key stays owner-only at `.evidence/clients/age-check-app/private.jwk`.
-
-Evidence Gateway admits only the clients registered when its session starts, so start it again.
-On a session that is already running, `dev start` restarts it:
+Start Evidence Gateway again with the same ports, so it loads the client:
 
 ```sh
 evidencectl dev start . \
