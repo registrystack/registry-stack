@@ -903,7 +903,7 @@ test('the evidence toolset serves its binaries, the client package, and the FHIR
       'evidence --version\nevidencectl dev\n"$EVIDENCE_OID4VCI_BIN" --version\n' +
         'python3 -c "import tutorial_fake_client; print(tutorial_fake_client.NAME)"\n' +
         'python3 -c "import os, urllib.request; print(urllib.request.urlopen(os.environ[\'FHIR_TUTORIAL_TEST_BASE_URL\'] + \'/healthz\').status)"\n' +
-        'tar -tzf evidence-examples.tar.gz | head -n 1\n' +
+        'tar -tzf evidence-examples.tar.gz | grep -x fhir/.gitignore\n' +
         'mkdir -p work/project/.evidence/dev\ntouch work/project/.evidence/dev/control.sock',
     ) +
     fence('text test-expect', 'unpacked\n200\nfhir/.gitignore') +
