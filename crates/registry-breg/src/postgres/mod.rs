@@ -59,9 +59,9 @@ pub use failure::PostgresFailure;
 pub use history_read::PostgresSnapshotReadService;
 #[cfg(feature = "postgres-test")]
 pub use history_read::SnapshotReadFaultPoint;
+pub(crate) use interlock::retained_local_hook_deliveries;
 #[cfg(feature = "postgres-test")]
 pub use interlock::DedicatedApplyConnection;
-pub use interlock::RegistryLockKey;
 pub(crate) use interlock::{
     covered_field_encryption_fields, field_plaintext_string, lock_wait_ended,
     prepare_unique_blind_index_preflight, prior_plaintext_projection, read_activation_status,
@@ -71,6 +71,7 @@ pub(crate) use interlock::{
     ReviewedExecutionOutcome, ReviewedFieldEncryptionContext, ReviewedMigrationProgress,
     ReviewedPackageExecutionRequest,
 };
+pub use interlock::{RegistryLockKey, RetainedLocalHookDeliveries};
 pub(crate) use migration_ledger::{
     statement_checksum, BackupReference, MigrationArtifactBinding, MigrationKind,
     MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind,
@@ -295,6 +296,9 @@ pub enum PostgresKernelError {
     /// Retained history coverage does not admit a successor package.
     #[error("retained history coverage does not admit a successor package")]
     HistoryCoverageIncomplete,
+    /// Local work must finish under its capturing activation before go-live.
+    #[error("retained local hook deliveries prevent activation")]
+    RetainedLocalHooks(RetainedLocalHookDeliveries),
     /// PostgreSQL refused a migration statement. Only the SQLSTATE and the
     /// object names the server reported are retained.
     #[error("PostgreSQL refused a migration statement: {0}")]

@@ -3072,3 +3072,7 @@ fn outcome_guest(document: &str) -> Vec<u8> {
     );
     wat::parse_str(&wat).expect("guest wat compiles to a binary module")
 }
+
+#[cfg(feature = "tooling")]
+#[path = "support/hook_activation.rs"]
+mod activation;

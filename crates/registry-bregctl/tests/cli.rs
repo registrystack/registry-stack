@@ -6871,11 +6871,13 @@ fn assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
 
 #[test]
 fn webhook_operations_name_both_digests_when_the_active_package_misses_its_pin() {
-    assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
-        &["webhook", "list"],
-        &[],
-        "webhook.package.refused",
-    );
+    for command in ["list", "drain"] {
+        assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
+            &["webhook", command],
+            &[],
+            "webhook.package.refused",
+        );
+    }
 }
 
 #[test]

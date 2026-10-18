@@ -90,7 +90,13 @@ lease-expiry recovery, retry, dead letter, payload expiry, and replay) is
 `registry-platform-dispatch`, run over the delivery state table: the worker keeps
 the frozen retry delays the delivery was captured with, retries every failed or
 interrupted attempt until its attempts are spent, and accepts attempt timeouts
-from 100 milliseconds to 10 seconds. Dead letters retain a closed, value-free
+from 100 milliseconds to 10 seconds. A product may override the default identity
+check only for recording a settled URL proposal: an accepted send with an applied
+or refused proposal, or a permanent failure with a dead-lettered proposal.
+`DeliverySeams::verify_proposal_completion` defaults to the ordinary preflight.
+Local, transient, uncertain, and non-proposal outcomes keep that preflight, as do
+claims, material reads, recovery, and operator transitions. Dispatch still fences
+the completion by its exact lease. Dead letters retain a closed, value-free
 failure reason. The operator surface can
 list work captured under a superseded binding and explicitly discard pending
 work, a dead letter, or an expired lease under its exact generation. Discard

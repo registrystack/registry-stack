@@ -76,6 +76,10 @@ pub enum MigrationError {
     /// restores it.
     #[error("retained history coverage does not admit a successor package")]
     HistoryCoverage,
+    /// Refused before maintenance: local deliveries still need the active
+    /// package. The bounded inventory contains compiled identifiers only.
+    #[error("retained local hook deliveries prevent activation")]
+    RetainedLocalHooks(crate::postgres::RetainedLocalHookDeliveries),
     /// Refused before maintenance began: the migration database could not be
     /// reached. Nothing was changed, so the same apply may simply be retried.
     #[error("the migration database was unavailable before maintenance began")]
@@ -112,6 +116,10 @@ pub enum MigrationError {
     /// the activation stands and its audit trail is incomplete.
     #[error("the activation committed but the audit refused a record it owed")]
     ActivationAuditIncomplete,
+    /// The request entry was accepted, but its pre-maintenance refusal
+    /// response was not recorded. The registry remains ready with no target.
+    #[error("the activation was refused but its audit response was not recorded")]
+    ActivationRefusalAuditIncomplete,
     /// Refused before the activation changed any state: the audit refused
     /// the activation's request entry.
     #[error("the audit refused the activation's request entry")]
@@ -1333,8 +1341,19 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
             crate::postgres::PostgresKernelError::HistoryCoverageIncomplete => {
                 MigrationError::HistoryCoverage
             }
+            crate::postgres::PostgresKernelError::RetainedLocalHooks(retained) => {
+                MigrationError::RetainedLocalHooks(retained)
+            }
             _ => MigrationError::ApplyFailed,
         };
+        if matches!(&refused, MigrationError::RetainedLocalHooks(_)) {
+            // This guard read only and rolled its transaction back. No
+            // maintenance target or ledger entry was written.
+            let answered = attempt.respond("refused").await;
+            let _ = connection.release().await;
+            answered.map_err(|_| MigrationError::ActivationRefusalAuditIncomplete)?;
+            return Err(refused);
+        }
         return refuse_and_release(connection, attempt, &target, refused).await;
     }
 
@@ -1619,6 +1638,9 @@ async fn rehearse_begin(
             crate::postgres::PostgresKernelError::HistoryCoverageIncomplete => {
                 MigrationError::HistoryCoverage
             }
+            crate::postgres::PostgresKernelError::RetainedLocalHooks(retained) => {
+                MigrationError::RetainedLocalHooks(retained)
+            }
             _ => MigrationError::ApplyFailed,
         })
 }
@@ -1692,8 +1714,9 @@ async fn finish_activation(
 /// journal is a file, so no entry can share the activation's transaction.
 /// Enforcement: the request entry is accepted before the first activation
 /// write, and a refused request refuses the activation; the response follows
-/// the commit (`applied`) or durable state that shows the target did not
-/// become active or that maintenance failed (`failed`). An attempt whose end
+/// the commit (`applied`), a verified refusal before maintenance (`refused`),
+/// or durable state that shows the target did not become active or that
+/// maintenance failed (`failed`). An attempt whose end
 /// the durable state cannot show is answered `unfinished` when its handle is
 /// dropped.
 struct ActivationAttempt {

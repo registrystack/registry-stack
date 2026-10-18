@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -77,6 +77,7 @@ struct Harness {
 #[derive(Default)]
 struct TestControls {
     connections: AtomicUsize,
+    refuse_identity: AtomicBool,
     refused_connections: Mutex<BTreeSet<usize>>,
     interleave: Mutex<BTreeMap<usize, String>>,
     attempt_hold: Mutex<Option<Arc<AuditHold>>>,
@@ -259,7 +260,11 @@ impl DispatchStore for TestStore {
         &self,
         _transaction: &Transaction<'_>,
     ) -> Result<(), DispatchError> {
-        Ok(())
+        if self.controls.refuse_identity.load(Ordering::SeqCst) {
+            Err(DispatchError::Unavailable)
+        } else {
+            Ok(())
+        }
     }
 
     fn claim_record(&self, _job: &TestJob) {}
@@ -1018,6 +1023,51 @@ async fn the_attempt_is_committed_and_audited_before_egress() {
             "attempt_started:leased:g1:a1",
             "attempt_finished:delivered:g1:a1"
         ]
+    );
+}
+
+#[tokio::test]
+async fn default_finish_verification_preserves_the_consumer_identity_fence() {
+    let harness = harness().await;
+    let key = enqueue_message(&harness, &Message::default()).await;
+    let dispatcher = dispatcher(&harness);
+    let job = dispatcher.claim().await.unwrap().leased().unwrap();
+    harness
+        .controls
+        .refuse_identity
+        .store(true, Ordering::SeqCst);
+    assert_eq!(
+        dispatcher
+            .finish(
+                &job,
+                Sent {
+                    outcome: accepted(),
+                    detail: ()
+                }
+            )
+            .await,
+        Err(DispatchError::Unavailable),
+    );
+    assert_eq!(state_row(&harness, &key).await.state, "leased");
+    assert_eq!(
+        audit_trail(&harness, &key).await,
+        vec!["attempt_started:leased:g1:a1"]
+    );
+    harness
+        .controls
+        .refuse_identity
+        .store(false, Ordering::SeqCst);
+    assert_eq!(
+        dispatcher
+            .finish(
+                &job,
+                Sent {
+                    outcome: accepted(),
+                    detail: ()
+                }
+            )
+            .await,
+        Ok(DispatchOutcome::Delivered),
     );
 }
 

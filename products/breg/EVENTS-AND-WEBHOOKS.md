@@ -114,6 +114,34 @@ destination, and delivery policy. A later package activation must not
 reinterpret it. Activation refuses a destination change that would strand a
 retained non-terminal delivery.
 
+Retained local Rhai or Wasm deliveries stay with their capturing activation,
+including Record and Proposal hooks whose program is unchanged in the successor.
+Before maintenance, `plan` and `apply` refuse them with
+`apply.hooks.local-retained`: the same count, capped at 100 with a truncation
+indicator, and the distinct compiled delivery identifiers from that bounded set.
+Plan writes no state or audit; apply audits the outcome as `refused`. The active
+package remains ready with no target pinned. Use `bregctl webhook drain` under
+the active package to attempt due local work before go-live. It has explicit
+attempt and time budgets, respects live leases and scheduled retries, and never
+replays a dead letter or discards work. Retained blockers keep the existing
+explicit replay and discard recovery. Replay uses the captured handler under the
+active package; a failure that requires changing governed handler code needs an
+explicit decision to discard retained work before the successor can activate.
+
+A URL delivery may finish after a compatible successor goes live. Its captured
+activation does not authorize a proposed change under the successor. An answer
+first classified after go-live, without a previously committed proposal receipt,
+is dead-lettered as
+`hook.proposal.package_unavailable`; its detail names the captured and active
+activation IDs, and operator replay is unavailable. A receiver's `2xx`
+acknowledges the event, not acceptance of the change it proposes. Derive a new
+change from a fresh event. Recovery of an already committed identical answer
+still returns its original receipt without applying it again. An applied,
+refused, or dead-lettered proposal classified before go-live keeps that result
+when its delivery metadata finishes afterward. This completion still requires
+the same registry and database, ready maintenance state, and the exact lease;
+it gives the predecessor worker no authority to claim or apply new work.
+
 The stored outbox payload is that envelope, byte for byte, and the delivery
 worker sends it unchanged. The worker refuses a stored row that is not an
 envelope rather than reshaping it. That refusal is a failed attempt, not a
@@ -255,6 +283,11 @@ The first complete journey must be possible without reading Rust code:
 - `bregctl webhook list` shows value-free pending and dead-letter
   status, including whether the captured binding is still active, whether an
   explicit discard is eligible, and a closed dead-letter reason.
+- `bregctl webhook drain` attempts only due local handlers under the active
+  package, bounded by `--max-attempts` (1 to 1000, default 100) and
+  `--timeout-seconds` (1 to 300, default 30). It reports completed attempts,
+  its stopping reason, and the bounded retained local inventory. URL work,
+  live leases, future retries, and dead letters are not replayed or discarded.
 - `bregctl webhook replay` replays one eligible dead letter using
   its event id, delivery id, and expected generation.
 - `bregctl webhook discard` closes one retained pending delivery, dead letter,

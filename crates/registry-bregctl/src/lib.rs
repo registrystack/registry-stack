@@ -757,6 +757,8 @@ enum WebhookCommand {
     Sample(WebhookSampleArgs),
     /// List bounded value-free delivery metadata, including superseded bindings.
     List(WebhookListArgs),
+    /// Attempt due local hooks under the active package with bounded time and attempts.
+    Drain(WebhookDrainArgs),
     /// Replay one eligible retained dead-letter using optimistic generation binding.
     Replay(WebhookReplayArgs),
     /// Permanently discard one retained delivery using optimistic generation binding.
@@ -1001,6 +1003,21 @@ struct WebhookListArgs {
     /// Maximum number of value-free delivery rows to return.
     #[arg(long, value_name = "COUNT", default_value_t = 50)]
     limit: u16,
+}
+
+#[derive(Debug, Args)]
+struct WebhookDrainArgs {
+    /// Runtime configuration file.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Maximum local attempts to start, from 1 to 1000.
+    #[arg(long, value_name = "COUNT", default_value_t = 100, value_parser = clap::value_parser!(u16).range(1..=1000))]
+    max_attempts: u16,
+
+    /// Time budget in seconds, from 1 to 300. Unfinished leases remain for recovery.
+    #[arg(long, value_name = "SECONDS", default_value_t = 30, value_parser = clap::value_parser!(u16).range(1..=300))]
+    timeout_seconds: u16,
 }
 
 #[derive(Debug, Args)]
@@ -1718,6 +1735,7 @@ enum SuggestedAction {
     ReconcileFailedMigration,
     RestorePreActivationBackup,
     RestoreActiveProposalRecovery,
+    DrainLocalHooks,
     VerifyStartupDependencies,
     CorrectDataBinding,
     CorrectDataInput,
@@ -2040,6 +2058,15 @@ struct WebhookListSuccessReport {
     command: &'static str,
     #[serde(flatten)]
     outcome: WebhookListOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebhookDrainSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: registry_breg::webhook::WebhookDrainReport,
 }
 
 #[derive(Serialize)]
@@ -2613,6 +2640,10 @@ where
                 },
                 WebhookCommand::List(args) => match webhook_list(&args) {
                     Ok(report) => write_webhook_list_success(&report, format, stdout, stderr),
+                    Err(failure) => write_failure(&failure, format, stdout, stderr),
+                },
+                WebhookCommand::Drain(args) => match webhook_drain(&args) {
+                    Ok(report) => write_webhook_drain_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
                 WebhookCommand::Replay(args) => match webhook_replay(&args) {
@@ -4253,6 +4284,20 @@ fn webhook_list(args: &WebhookListArgs) -> Result<WebhookListSuccessReport, Fail
     Ok(WebhookListSuccessReport {
         ok: true,
         command: "webhook list",
+        outcome,
+    })
+}
+
+fn webhook_drain(args: &WebhookDrainArgs) -> Result<WebhookDrainSuccessReport, FailureReport> {
+    let outcome = webhook_lifecycle::drain(
+        &args.runtime_config,
+        args.max_attempts,
+        args.timeout_seconds,
+    )
+    .map_err(|error| webhook_lifecycle_failure("webhook drain", error))?;
+    Ok(WebhookDrainSuccessReport {
+        ok: true,
+        command: "webhook drain",
         outcome,
     })
 }
@@ -6105,6 +6150,13 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 DiagnosticArtifact::RuntimeConfiguration,
                 SuggestedAction::CorrectRuntimeConfiguration,
             ),
+            registry_breg::migration::MigrationError::ActivationRefusalAuditIncomplete => (
+                "apply.audit.refusal-incomplete",
+                "audit",
+                "the activation's request entry was accepted, but its refusal response could not be recorded; no package was activated, and the registry remains ready with no pinned target. Check the audit path and its directory permissions, inspect the incomplete audit trail, then resolve retained local hook work and run `bregctl plan` before retrying apply",
+                DiagnosticArtifact::RuntimeConfiguration,
+                SuggestedAction::CorrectRuntimeConfiguration,
+            ),
             registry_breg::migration::MigrationError::ActivationAuditUnavailable => (
                 "apply.audit.unavailable",
                 "audit",
@@ -6212,6 +6264,23 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::ReconcileFailedMigration,
             ),
+            registry_breg::migration::MigrationError::RetainedLocalHooks(retained) => {
+                let qualifier = if retained.truncated { "at least " } else { "" };
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.hooks.local-retained",
+                        "hooks",
+                        &format!(
+                            "{qualifier}{} retained local hook deliveries prevent activation; compiled delivery ids: {}. Nothing was changed: the registry remains ready with no pinned target. Run `bregctl webhook drain` with the active package's runtime configuration, then inspect retained blockers with `webhook list` and explicitly replay or discard eligible work",
+                            retained.retained_deliveries,
+                            retained.compiled_delivery_ids.join(", "),
+                        ),
+                    ),
+                    DiagnosticArtifact::PackageActivation,
+                    SuggestedAction::DrainLocalHooks,
+                );
+            }
             registry_breg::migration::MigrationError::ActiveProposalRecoveryUnavailable => (
                 "apply.proposals.recovery-required",
                 "proposal",
@@ -11975,6 +12044,47 @@ fn write_webhook_list_success(
     write_result(result, stderr)
 }
 
+fn write_webhook_drain_success(
+    report: &WebhookDrainSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        write_ctl_report(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        let outcome = &report.outcome;
+        let stopped = match outcome.stop_reason {
+            registry_breg::webhook::WebhookDrainStopReason::Idle => "no local attempt due",
+            registry_breg::webhook::WebhookDrainStopReason::AttemptBudget => "attempt budget",
+            registry_breg::webhook::WebhookDrainStopReason::TimeBudget => {
+                "time budget; an unfinished lease may remain"
+            }
+        };
+        let qualifier = if outcome.remaining.truncated {
+            "at least "
+        } else {
+            ""
+        };
+        render_report(
+            "Finished the bounded local hook drain. Inspect retained work with webhook list before go-live.",
+            &[
+                ("activation id", outcome.activation_id.clone()),
+                ("completed attempts", outcome.completed_attempts.to_string()),
+                ("delivered", outcome.delivered.to_string()),
+                ("retry scheduled", outcome.retry_scheduled.to_string()),
+                ("dead-lettered", outcome.dead_lettered.to_string()),
+                ("stopped", stopped.to_owned()),
+                ("retained local deliveries", format!("{qualifier}{}", outcome.remaining.retained_deliveries)),
+                ("compiled delivery ids", outcome.remaining.compiled_delivery_ids.join(", ")),
+            ], stdout,
+        )
+    };
+    write_result(result, stderr)
+}
+
 fn write_webhook_replay_success(
     report: &WebhookReplaySuccessReport,
     format: OutputFormat,
@@ -16018,4 +16128,102 @@ mod field_encryption_lifecycle_cli_tests {
         assert!(!rendered.to_lowercase().contains("operator"));
         assert!(!rendered.to_lowercase().contains("reason"));
     }
+}
+
+#[cfg(test)]
+#[test]
+fn webhook_drain_requires_bounded_attempts_and_time_before_io() {
+    for (flag, value) in [
+        ("--max-attempts", "0"),
+        ("--max-attempts", "1001"),
+        ("--timeout-seconds", "0"),
+        ("--timeout-seconds", "301"),
+    ] {
+        assert!(Cli::try_parse_from([
+            "bregctl",
+            "webhook",
+            "drain",
+            "--runtime-config",
+            "/runtime.yaml",
+            flag,
+            value
+        ])
+        .is_err());
+    }
+    let parsed = Cli::try_parse_from([
+        "bregctl",
+        "webhook",
+        "drain",
+        "--runtime-config",
+        "/runtime.yaml",
+        "--max-attempts",
+        "2",
+        "--timeout-seconds",
+        "1",
+    ])
+    .unwrap();
+    let Command::Webhook(WebhookArgs {
+        command: WebhookCommand::Drain(args),
+    }) = parsed.command
+    else {
+        panic!("drain command")
+    };
+    assert_eq!(args.max_attempts, 2);
+    assert_eq!(args.timeout_seconds, 1);
+}
+
+#[cfg(test)]
+#[test]
+fn plan_and_apply_report_retained_local_hooks_without_reconciliation() {
+    let retained = registry_breg::postgres::RetainedLocalHookDeliveries {
+        retained_deliveries: 100,
+        compiled_delivery_ids: vec!["record.case.created".to_owned()],
+        truncated: true,
+    };
+    for command in ["plan", "apply"] {
+        let report = lifecycle_failure(
+            command,
+            ApplyLifecycleError::Apply(
+                registry_breg::migration::MigrationError::RetainedLocalHooks(retained.clone()),
+            ),
+        );
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.code, "apply.hooks.local-retained");
+        assert_eq!(
+            diagnostic.suggested_action,
+            SuggestedAction::DrainLocalHooks
+        );
+        assert!(diagnostic.message.contains("at least 100"));
+        assert!(diagnostic.message.contains("record.case.created"));
+        assert!(diagnostic.message.contains("no pinned target"));
+        assert!(!diagnostic.message.contains("reconcil"));
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn retained_hook_refusal_reports_incomplete_terminal_audit_without_activation() {
+    let report = lifecycle_failure(
+        "apply",
+        ApplyLifecycleError::Apply(
+            registry_breg::migration::MigrationError::ActivationRefusalAuditIncomplete,
+        ),
+    );
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "apply.audit.refusal-incomplete");
+    assert_eq!(
+        diagnostic.suggested_action,
+        SuggestedAction::CorrectRuntimeConfiguration
+    );
+    assert!(diagnostic.message.contains("request entry was accepted"));
+    assert!(diagnostic
+        .message
+        .contains("refusal response could not be recorded"));
+    assert!(diagnostic
+        .message
+        .contains("registry remains ready with no pinned target"));
+    assert!(!diagnostic.message.contains("the package was activated"));
+    assert!(!diagnostic
+        .message
+        .contains("request entry, so the activation did not start"));
 }

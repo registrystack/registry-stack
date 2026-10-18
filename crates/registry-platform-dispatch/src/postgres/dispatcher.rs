@@ -798,7 +798,9 @@ impl<S: DispatchStore> Dispatcher<S> {
         let store = &self.inner.store;
         let mut client = store.connection().await?;
         let transaction = client.transaction().await?;
-        store.verify_transaction(&transaction).await?;
+        store
+            .verify_finish_transaction(&transaction, &job, &sent)
+            .await?;
         let next = match &sent.outcome {
             SendOutcome::Accepted { .. } => Next::Delivered,
             SendOutcome::Permanent { .. } => Next::DeadLettered,

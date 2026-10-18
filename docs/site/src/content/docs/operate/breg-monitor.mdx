@@ -262,6 +262,10 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `apply.package.deployment-identity-refused` | The package's `canonicalBaseIri` is in the reserved `.invalid` namespace, which only a database initialized for `local` accepts. | Point `canonicalBaseIri` at a hostname you control, rerun `schema-test`, and rebuild the package. |
 | `apply.backup-evidence.refused` | The backup binding is missing, stale, or for another database. | Take a fresh backup; pass it with `--backup`. |
 | `apply.history.coverage-incomplete` | An erasure left history uncovered. | Run [`history rebaseline`](../breg-retention/#restore-snapshot-coverage-after-an-erasure). |
+| `apply.hooks.local-retained` | Local hook work needs the active package. It stays ready; no target is pinned. | [Settle local hooks](../breg-webhooks/#settle-local-hooks-before-go-live), then run `plan` again. No migration reconciliation is needed. |
+| `apply.audit.unavailable` | The audit destination refused the activation request entry. Activation never started and nothing changed. | Repair the audit path and directory permissions, then retry the same `apply`. |
+| `apply.audit.refusal-incomplete` | The request entry was accepted, but the retained-hook refusal response was not recorded. No package was activated; the registry stays ready with no pinned target. | Repair the audit destination and inspect the incomplete trail. [Settle local hooks](../breg-webhooks/#settle-local-hooks-before-go-live), then run `plan` before retrying apply. |
+| `apply.audit.incomplete` | Activation committed, but the audit trail is incomplete. | Repair the audit path and directory permissions; run `bregctl status` to see the active package. Do not apply again. |
 | `apply.migration.statement-failed` | PostgreSQL refused a statement; the SQLSTATE is named. | Fix the cause and retry, or run `migration reconcile`. |
 | `apply.migration.failed` | The apply failed mid-maintenance. | Retry the same target, or run `migration reconcile`. |
 | `apply.event-destinations.refused` | Destinations and bindings do not match. | Compare `eventDestinations` with `bregctl explain events`. |
@@ -297,7 +301,7 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
     crates/registry-bregctl/src/lib.rs, apply.package.deployment-identity-refused;
     crates/registry-breg/src/postgres/config.rs, DatabaseConnectionCause;
     crates/registry-bregctl/src/lib.rs, data command failures, import_authority_failure(),
-    instance_claim_failure(); crates/registry-breg/src/migration.rs;
+    instance_claim_failure(), apply_lifecycle_failure(); crates/registry-breg/src/migration.rs;
     crates/registry-breg/src/auth.rs, MAX_AUDIENCES;
     crates/registry-platform-config/src/secrets.rs, validate_file_metadata();
     crates/registry-breg/src/startup.rs, DynamicRuntimeReadiness;

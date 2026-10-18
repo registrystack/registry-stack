@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-10-18"
 doc_type: how-to
 persona:
   - operator
@@ -150,6 +150,90 @@ The receiver should:
     crates/registry-bregctl/src/webhook_lifecycle.rs, sample() and synthetic_field_value();
     crates/registry-breg/src/webhook.rs. */}
 
+## Settle local hooks before go-live
+
+A retained local Rhai or Wasm delivery needs the package that captured it.
+This applies to Record and Proposal hooks, even when the successor leaves the program unchanged.
+`bregctl plan` and `apply` report `apply.hooks.local-retained` before maintenance starts.
+Both name the retained count and compiled delivery identifiers, bounded to 100 deliveries.
+A truncated count means at least that many remain.
+Plan changes nothing; apply records a refused activation.
+The current package stays ready and no target is pinned, so this refusal needs no reconciliation.
+
+If ongoing activity keeps replenishing the queue, you can choose a quiet window.
+Use your existing service or container supervisor to stop every `breg` process serving this
+registry database, keep all replicas stopped, and wait for process termination.
+This stops both HTTP serving and background producers; routing HTTP traffic away alone leaves
+background producers running. The registry is unavailable while these processes are stopped.
+The quiet window is optional: concurrent work remains retained, and apply rechecks the guard and
+refuses activation when local work remains.
+
+Drain runs reviewed Rhai or Wasm handlers in the `bregctl` process using the runtime database
+connection. Use the active package's runtime file, handler assets and Wasm execution configuration,
+with its configured destination secrets and audit destination and secrets available to that process.
+For encrypted fields, provide the existing field-encryption provider and keys.
+Keep the same secret ownership and field-key custody restrictions as the serving process.
+Drain does not need a migration credential. Listing, replay and discard do not enable the
+execution-only Wasm runtime or field-encryption service.
+
+Run the bounded drain:
+
+```sh test-skip="needs the active package runtime file and database"
+bregctl --format json webhook drain \
+  --runtime-config /etc/breg/runtime.yaml \
+  --max-attempts 100 --timeout-seconds 30
+```
+
+The command attempts only due local work under the active package's existing authority.
+It stops when no local attempt is due, after the attempt budget, or at the time budget.
+`completedAttempts` counts settled attempts and `stopReason` explains the stop.
+`remaining` contains the bounded retained count, compiled delivery identifiers, and `truncated` flag.
+A time-budget stop can leave an unfinished lease for normal recovery.
+URL deliveries, live leases, retries that are not due, and dead letters remain for their existing
+worker or operator recovery; drain never replays or discards them.
+The attempt budget accepts 1 to 1000 and defaults to 100; the time budget accepts 1 to 300 seconds
+and defaults to 30. A drain can itself produce further governed hook work, so one bounded call
+does not guarantee an empty queue.
+
+If work remains, inspect it with `webhook list`.
+Wait for a live lease or scheduled retry, or correct a runtime failure and explicitly replay
+eligible work. Replay uses the captured handler under the active package.
+If recovery requires changing governed handler code, assess and explicitly discard that retained
+work before activating the successor, as described in the recovery section.
+Run `plan` again before [applying the successor](../breg-changes/#activate-the-successor).
+Apply checks the retained work again, because new work can arrive after a plan.
+If you chose a quiet window, keep the serving processes stopped through drain and apply.
+After successful activation, restart them on the successor as the activation procedure describes.
+If you defer cutover, restore service on the still-active package.
+
+{/* Evidence: crates/registry-breg/src/postgres/interlock.rs, retained_local_hook_deliveries;
+    crates/registry-breg/src/migration.rs;
+    crates/registry-breg/src/webhook.rs, from_runtime_config_with_execution();
+    crates/registry-breg/src/startup.rs, serve_until_shutdown() and shutdown_signal();
+    crates/registry-bregctl/src/webhook_lifecycle.rs;
+    crates/registry-breg/tests/support/hook_activation.rs. */}
+
+## Answers that arrive after go-live
+
+A URL receiver can acknowledge an event with `2xx` after a compatible successor goes live.
+That acknowledgement does not mean the registry accepted the proposed change in its answer.
+An uncommitted proposal captured under the previous activation and first classified after go-live
+is dead-lettered with
+`proposalCode: hook.proposal.package_unavailable`.
+For this superseded-activation refusal, `proposalSummary` names the captured and active activation
+IDs, and `replayEligible` is false.
+Derive the change again from a fresh event; replay cannot give an old answer successor authority.
+An identical answer whose change already committed can still recover its original receipt without
+applying the change twice.
+A proposal classified before go-live keeps its applied, refused, or dead-lettered result
+when delivery completion succeeds afterward. The predecessor worker cannot claim new work.
+
+{/* Evidence: crates/registry-breg/src/mutation/action.rs;
+    crates/registry-breg/src/webhook.rs;
+    crates/registry-breg/tests/support/hook_activation.rs;
+    crates/registry-breg/tests/postgres_hook_changes.rs,
+    real_postgres_same_answer_replays_after_a_compatible_package_upgrade. */}
+
 ## Inspect and recover deliveries
 
 `webhook list` shows deliveries that are pending, leased, dead-lettered, or expired:
@@ -187,8 +271,9 @@ events are left out, so an empty list does not prove a delivery arrived: confirm
 receiver's own records.
 
 A delivery that runs out of attempts becomes a dead letter with a `deadLetterReason`, and its
-payload is retained. `replayEligible` stays true while the binding it was captured under is still
-deployed (`bindingActive`) and the payload is retained. Payloads are kept for
+payload is retained. `replayEligible` is true only when the captured policy permits replay, its
+exact binding is still deployed (`bindingActive`), the payload is retained, and the proposal outcome
+permits replay. Payloads are kept for
 `retention.hookPayloadRetentionDays`, 7 days by default and at most 30, and erased earlier once
 every delivery that needs them has arrived.
 

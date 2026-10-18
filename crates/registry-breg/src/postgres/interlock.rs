@@ -2519,6 +2519,55 @@ async fn history_coverage_admits_successor(
     Ok(Some(recorded))
 }
 
+/// At most one hundred retained deliveries are reported to the operator.
+/// A truncated count is a lower bound, and identifiers are deduplicated.
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedLocalHookDeliveries {
+    pub retained_deliveries: u16,
+    pub compiled_delivery_ids: Vec<String>,
+    pub truncated: bool,
+}
+
+pub(crate) async fn retained_local_hook_deliveries(
+    transaction: &impl GenericClient,
+) -> Result<RetainedLocalHookDeliveries> {
+    const LIMIT: usize = 100;
+    let rows = transaction
+        .query(
+            "SELECT delivery.compiled_delivery_id
+         FROM registry_internal.registry_webhook_delivery_state AS state
+         JOIN registry_internal.registry_webhook_deliveries AS delivery
+           ON delivery.event_id = state.event_id
+          AND delivery.compiled_delivery_id = state.compiled_delivery_id
+         JOIN registry_internal.registry_outbox AS outbox
+           ON outbox.event_id = delivery.event_id
+         WHERE delivery.handler_kind IN ('rhai', 'wasm')
+           AND (state.state IN ('pending', 'leased')
+                OR (state.state = 'dead-lettered' AND delivery.operator_replay))
+           AND outbox.payload IS NOT NULL
+           AND outbox.payload_expires_at > transaction_timestamp()
+         ORDER BY delivery.compiled_delivery_id, delivery.event_id
+         LIMIT $1",
+            &[&101_i64],
+        )
+        .await?;
+    let mut identifiers = BTreeSet::new();
+    for row in rows.iter().take(LIMIT) {
+        let identifier: String = row.try_get(0)?;
+        if identifier.is_empty() || identifier.len() > 256 {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        identifiers.insert(identifier);
+    }
+    Ok(RetainedLocalHookDeliveries {
+        retained_deliveries: u16::try_from(rows.len().min(LIMIT))
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
+        compiled_delivery_ids: identifiers.into_iter().collect(),
+        truncated: rows.len() > LIMIT,
+    })
+}
+
 /// Refuse a successor before changing maintenance state when its activated
 /// non-secret destination bindings cannot finish every retained non-terminal
 /// delivery. The package session's exclusive advisory lock prevents Registry
@@ -2544,6 +2593,14 @@ async fn verify_retained_webhook_delivery_bindings(
         return Err(PostgresKernelError::RegistryUnavailable);
     }
 
+    // A local program remains bound to its capturing activation, even when
+    // the successor contains identical bytes. Settle it with the active
+    // package before maintenance instead of carrying it into new authority.
+    let retained = retained_local_hook_deliveries(transaction).await?;
+    if retained.retained_deliveries != 0 {
+        return Err(PostgresKernelError::RetainedLocalHooks(retained));
+    }
+
     let (logical_destination_ids, binding_digests): (Vec<String>, Vec<String>) = inventory
         .into_iter()
         .flat_map(EventDestinationCompatibilityInventory::binding_digests)
@@ -2558,7 +2615,8 @@ async fn verify_retained_webhook_delivery_bindings(
               AND delivery.compiled_delivery_id = state.compiled_delivery_id
              JOIN registry_internal.registry_outbox AS outbox
                ON outbox.event_id = delivery.event_id
-             WHERE (
+             WHERE delivery.handler_kind = 'url'
+               AND (
                        state.state IN ('pending', 'leased')
                        OR (
                            state.state = 'dead-lettered'

@@ -158,6 +158,7 @@ pub struct DeliveryService<S: DeliverySeams> {
     schema: String,
     idempotency_domain: Vec<u8>,
     delivery_source: String,
+    execution_deadline: Option<Instant>,
 }
 
 impl<S: DeliverySeams> Clone for DeliveryService<S> {
@@ -167,6 +168,7 @@ impl<S: DeliverySeams> Clone for DeliveryService<S> {
             schema: self.schema.clone(),
             idempotency_domain: self.idempotency_domain.clone(),
             delivery_source: self.delivery_source.clone(),
+            execution_deadline: self.execution_deadline,
         }
     }
 }
@@ -180,12 +182,35 @@ impl<S: DeliverySeams> DeliveryService<S> {
     /// at most 63 bytes, because the schema name is interpolated into SQL.
     #[must_use]
     pub fn new(seams: S, config: DeliveryConfig) -> Self {
+        Self::new_scoped(seams, config, None)
+    }
+
+    fn new_scoped(
+        seams: S,
+        config: DeliveryConfig,
+        local_package_revision: Option<String>,
+    ) -> Self {
+        let mut sql = DISPATCH_SQL;
+        if local_package_revision.is_some() {
+            sql.claim.predicate = "state.attempt < delivery.deployed_maximum_attempts
+                AND outbox.payload IS NOT NULL
+                AND outbox.payload_expires_at > transaction_timestamp()
+                AND delivery.handler_kind IN ('rhai', 'wasm')
+                AND delivery.package_revision = current_setting('registry_hooks.local_package_revision', true)";
+            sql.lapsed.predicate = "delivery.handler_kind IN ('rhai', 'wasm')
+                AND delivery.package_revision = current_setting('registry_hooks.local_package_revision', true)";
+            // A local drain attempts due work and recovers expired leases.
+            // Payload expiry and dead-letter recovery remain explicit duties
+            // of the ordinary worker and operator surfaces.
+            sql.expiry = None;
+        }
         let schema = delivery_schema::require_plain_identifier(&config.schema).to_owned();
         let table = JobTable::new(&schema, STATE_TABLE, ID_COLUMN, PART_COLUMN)
             .expect("the delivery state table is a plain identifier in a plain schema");
         let dispatcher = Dispatcher::new(
             HookStore {
                 seams,
+                local_package_revision,
                 schema: schema.clone(),
                 dead_letter_reason_column: std::sync::atomic::AtomicU8::new(
                     DEAD_LETTER_REASON_UNKNOWN,
@@ -193,7 +218,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
             },
             DispatchConfig {
                 table,
-                sql: DISPATCH_SQL,
+                sql,
                 attempt_timeout: attempt_timeout_bound(),
                 replayable: REPLAYABLE,
             },
@@ -204,7 +229,36 @@ impl<S: DeliverySeams> DeliveryService<S> {
             schema,
             idempotency_domain: config.idempotency_domain,
             delivery_source: config.delivery_source,
+            execution_deadline: None,
         }
+    }
+
+    /// Create a worker that can claim only local work from the named package.
+    /// Product identity and handler checks still decide authority on every
+    /// transaction and execution. The deadline also caps the local executor
+    /// budget. URL work and other packages are untouched.
+    pub fn local_only_for_package(
+        &self,
+        revision: &str,
+        deadline: Instant,
+    ) -> Result<Self, DeliveryError>
+    where
+        S: Clone,
+    {
+        if revision.is_empty() || revision.len() > 256 {
+            return Err(DeliveryError::Unavailable);
+        }
+        let mut local = Self::new_scoped(
+            self.seams().clone(),
+            DeliveryConfig {
+                schema: self.schema.clone(),
+                idempotency_domain: self.idempotency_domain.clone(),
+                delivery_source: self.delivery_source.clone(),
+            },
+            Some(revision.to_owned()),
+        );
+        local.execution_deadline = Some(deadline);
+        Ok(local)
     }
 
     fn seams(&self) -> &S {
@@ -382,7 +436,8 @@ impl<S: DeliverySeams> DeliveryService<S> {
                         delivery.handler_kind,
                         delivery.logical_destination_id,
                         delivery.package_revision,
-                        delivery.destination_binding_digest
+                        delivery.destination_binding_digest,
+                        delivery.operator_replay, state.proposal_code, state.proposal_summary
                    FROM {{schema}}.registry_webhook_delivery_state AS state
                    JOIN {{schema}}.registry_webhook_deliveries AS delivery
                      ON delivery.event_id = state.event_id
@@ -446,6 +501,24 @@ impl<S: DeliverySeams> DeliveryService<S> {
                 &package_revision,
                 &destination_binding_digest,
             );
+            let proposal_code = row.try_get::<_, Option<String>>(14)?;
+            let proposal_summary = row.try_get::<_, Option<String>>(15)?;
+            if proposal_code
+                .as_ref()
+                .is_some_and(|code| code.len() > crate::MAX_REFUSAL_CODE_BYTES)
+                || proposal_summary
+                    .as_ref()
+                    .is_some_and(|summary| summary.len() > crate::MAX_REFUSAL_SUMMARY_BYTES)
+            {
+                return Err(DeliveryError::Unavailable);
+            }
+            let replay_eligible = stored_state == "dead-lettered"
+                && payload_available
+                && binding_active
+                && row.try_get::<_, bool>(13)?
+                && self
+                    .seams()
+                    .proposal_replay_allowed(proposal_code.as_deref());
             let state = delivery_status_kind(&stored_state, payload_available)?;
             statuses.push(DeliveryStatus {
                 event_id,
@@ -460,6 +533,9 @@ impl<S: DeliverySeams> DeliveryService<S> {
                 dead_letter_reason,
                 binding_active,
                 discard_eligible,
+                replay_eligible,
+                proposal_code,
+                proposal_summary,
             });
         }
         transaction.commit().await?;
@@ -922,6 +998,12 @@ impl<S: DeliverySeams> DeliveryService<S> {
         else {
             return Ok(DeliveryAuditOutcome::handler_failure(ErrorCategory::Deadline).into());
         };
+        // Executors may run on blocking threads after their awaiting future
+        // is cancelled. Pass the drain deadline into their own execution
+        // budget, while never widening the captured attempt timeout.
+        let remaining = self.execution_deadline.map_or(remaining, |deadline| {
+            remaining.min(deadline.saturating_duration_since(Instant::now()))
+        });
         if remaining.is_zero() {
             return Ok(DeliveryAuditOutcome::handler_failure(ErrorCategory::Deadline).into());
         }
@@ -1501,6 +1583,11 @@ pub struct DeliveryStatus {
     pub dead_letter_reason: Option<DeliveryFailureReason>,
     pub binding_active: bool,
     pub discard_eligible: bool,
+    /// The same captured permission, product policy, payload and binding
+    /// checks the replay mutation uses, before its optimistic generation check.
+    pub replay_eligible: bool,
+    pub proposal_code: Option<String>,
+    pub proposal_summary: Option<String>,
 }
 
 /// Closed, bounded cause retained with a dead letter. Every spelling is a
@@ -2400,6 +2487,20 @@ mod tests {
         );
     }
     #[test]
+    fn default_proposal_replay_policy_preserves_existing_product_behavior() {
+        let seams = RefusingSeams {
+            events: Arc::new(Mutex::new(Vec::new())),
+        };
+        for code in [
+            None,
+            Some("product.proposal.unavailable"),
+            Some("product.proposal.refused"),
+        ] {
+            assert!(seams.proposal_replay_allowed(code));
+        }
+    }
+
+    #[test]
     fn an_empty_answer_body_reads_as_the_none_answer() {
         let accepted = accept_handler_answer(b"").expect("an empty body is the none answer");
         assert_eq!(
@@ -2841,7 +2942,7 @@ mod tests {
         DeliveryAuditDisposition,
     );
 
-    struct RealHandler(String);
+    struct RealHandler(String, Arc<Mutex<Vec<Duration>>>);
 
     #[async_trait::async_trait]
     impl HookHandler for RealHandler {
@@ -2860,13 +2961,16 @@ mod tests {
         async fn run(
             &self,
             _envelope: &[u8],
-            _remaining: Duration,
+            remaining: Duration,
         ) -> Result<Vec<u8>, crate::delivery::HandlerRunFailure> {
+            self.1.lock().unwrap().push(remaining);
             Ok(Vec::new())
         }
     }
 
+    #[derive(Clone)]
     struct RealDbSeams {
+        budgets: Arc<Mutex<Vec<Duration>>>,
         url: String,
         handler_digest: String,
         audit: Arc<Mutex<Vec<RecordedAudit>>>,
@@ -2897,7 +3001,7 @@ mod tests {
 
         fn handler(&self, binding: HookHandlerBinding<'_>) -> Option<Self::Handler> {
             (binding.handler_digest == self.handler_digest)
-                .then(|| RealHandler(self.handler_digest.clone()))
+                .then(|| RealHandler(self.handler_digest.clone(), Arc::clone(&self.budgets)))
         }
 
         async fn record_audit(&self, record: DeliveryAuditRecord<'_>) -> Result<(), DeliveryError> {
@@ -2939,6 +3043,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_drain_passes_only_remaining_time_to_the_executor() {
+        let budgets = Arc::new(Mutex::new(Vec::new()));
+        let service = DeliveryService::new(
+            RealDbSeams {
+                budgets: Arc::clone(&budgets),
+                url: String::new(),
+                handler_digest: "digest".to_owned(),
+                audit: Arc::default(),
+                successes: Arc::default(),
+            },
+            DeliveryConfig {
+                schema: "test".to_owned(),
+                idempotency_domain: vec![],
+                delivery_source: STORED_SOURCE.to_owned(),
+            },
+        );
+        let mut claim = proposal_claim();
+        claim.attempt_started_at = SystemTime::now();
+        let material = || DeliveryMaterial {
+            event_type: String::new(),
+            body: Vec::new(),
+            payload_digest: Vec::new(),
+            destination_binding_digest: "digest".to_owned(),
+            logical_destination_id: None,
+            deployed_attempt_timeout_ms: 1000,
+            deployed_maximum_attempts: 1,
+            data_schema: String::new(),
+            event_time: SystemTime::now(),
+        };
+        let local = service
+            .local_only_for_package(
+                &claim.package_revision,
+                Instant::now() + Duration::from_millis(500),
+            )
+            .unwrap();
+        local.run_local_handler(&claim, material()).await.unwrap();
+        assert_eq!(budgets.lock().unwrap().len(), 1);
+        assert!(
+            budgets.lock().unwrap()[0] <= Duration::from_millis(500),
+            "the executor must receive the drain's remaining budget"
+        );
+        let local = service
+            .local_only_for_package(
+                &claim.package_revision,
+                Instant::now() + Duration::from_secs(2),
+            )
+            .unwrap();
+        local.run_local_handler(&claim, material()).await.unwrap();
+        assert!(
+            budgets.lock().unwrap()[1] <= Duration::from_secs(1),
+            "the drain cannot widen the captured attempt budget"
+        );
+        let local = service
+            .local_only_for_package(&claim.package_revision, Instant::now())
+            .unwrap();
+        let result = local.run_local_handler(&claim, material()).await.unwrap();
+        assert_eq!(result.outcome, DeliveryAuditOutcome::HandlerDeadline);
+        assert_eq!(
+            budgets.lock().unwrap().len(),
+            2,
+            "expired drain never runs the executor"
+        );
+    }
+
+    #[tokio::test]
     #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
     async fn the_worker_loop_notes_an_idle_iteration_without_failure_as_a_success() {
         let url = std::env::var("HOOKS_TEST_DATABASE_URL")
@@ -2957,6 +3126,7 @@ mod tests {
         let successes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let service = DeliveryService::new(
             RealDbSeams {
+                budgets: Arc::default(),
                 url,
                 handler_digest: String::new(),
                 audit: Arc::new(Mutex::new(Vec::new())),
@@ -3063,6 +3233,7 @@ mod tests {
         let audit = Arc::new(Mutex::new(Vec::new()));
         let service = DeliveryService::new(
             RealDbSeams {
+                budgets: Arc::default(),
                 url,
                 handler_digest: handler_digest.to_owned(),
                 audit: Arc::clone(&audit),

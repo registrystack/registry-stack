@@ -65,7 +65,7 @@ traceability:
   - {id: BREG-SEC-64, state: enforced, negativeId: BREG-NEG-64, negativeTest: {path: crates/registry-breg/tests/postgres_proposal_security.rs, name: signed_proposal_start_and_lifecycle_receipts_reject_sibling_grants}}
   - {id: BREG-SEC-65, state: enforced, negativeId: BREG-NEG-65, negativeTest: {path: crates/registry-breg/tests/postgres_action_evidence.rs, name: commit_evidence_is_guard_only_and_replay_never_reacquires}}
   - {id: BREG-SEC-66, state: enforced, negativeId: BREG-NEG-66, negativeTest: {path: crates/registry-breg/tests/postgres_hook_changes.rs, name: real_postgres_a_retained_local_delivery_survives_restart_verification}}
-  - {id: BREG-SEC-67, state: enforced, negativeId: BREG-NEG-67, negativeTest: {path: crates/registry-breg/tests/postgres_hook_changes.rs, name: real_postgres_terminal_retry_fences_a_late_proposal_application}}
+  - {id: BREG-SEC-67, state: enforced, negativeId: BREG-NEG-67, negativeTest: {path: crates/registry-breg/tests/support/hook_activation.rs, name: classified_proposal_completion_preserves_registry_and_lease_fences}}
   - {id: BREG-SEC-68, state: enforced, negativeId: BREG-NEG-68, negativeTest: {path: crates/registry-breg/tests/postgres_hook_changes.rs, name: real_postgres_a_hidden_effect_proposal_finalizes_as_applied}}
   - {id: BREG-SEC-69, state: enforced, negativeId: BREG-NEG-69, negativeTest: {path: crates/registry-breg/tests/postgres_webhook_outbox.rs, name: real_postgres_delivery_schema_refuses_a_delivered_row_that_keeps_raw_answer_bytes}}
   - {id: BREG-SEC-70, state: enforced, negativeId: BREG-NEG-70, negativeTest: {path: crates/registry-breg/tests/postgres_field_encryption.rs, name: encrypted_fields_round_trip_and_store_only_envelopes}}
@@ -118,7 +118,7 @@ traceability:
   - {id: BREG-SEC-117, state: enforced, negativeId: BREG-NEG-117, negativeTest: {path: crates/registry-breg/tests/postgres_migration.rs, name: real_postgres_an_activation_keeps_a_claim_that_names_another_database}}
   - {id: BREG-SEC-118, state: enforced, negativeId: BREG-NEG-118, negativeTest: {path: crates/registry-breg/tests/postgres_migration.rs, name: real_postgres_split_apply_names_the_fix_for_every_runtime_write_authority}}
   - {id: BREG-SEC-119, state: enforced, negativeId: BREG-NEG-119, negativeTest: {path: crates/registry-breg/tests/postgres_startup.rs, name: split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writes_nothing}}
-  - {id: BREG-SEC-120, state: enforced, negativeId: BREG-NEG-120, negativeTest: {path: crates/registry-breg/tests/postgres_migration.rs, name: real_postgres_a_refused_activation_request_entry_changes_nothing}}
+  - {id: BREG-SEC-120, state: enforced, negativeId: BREG-NEG-120, negativeTest: {path: crates/registry-breg/tests/support/hook_activation.rs, name: retained_hook_refusal_audit_failures_preserve_ready_state}}
   - {id: BREG-SEC-121, state: enforced, negativeId: BREG-NEG-121, negativeTest: {path: crates/registry-breg/tests/postgres_migration.rs, name: real_postgres_an_operator_reference_is_recorded_only_as_its_keyed_hash}}
   - {id: BREG-SEC-122, state: enforced, negativeId: BREG-NEG-122, negativeTest: {path: crates/registry-breg/tests/postgres_migration.rs, name: real_postgres_an_unrecognised_registry_state_is_refused_and_changes_nothing}}
   - {id: BREG-SEC-123, state: enforced, negativeId: BREG-NEG-123, negativeTest: {path: crates/registry-breg/tests/standing_agent_ceiling.rs, name: standing_agent_cannot_hold_a_proposal_lifecycle_decision}}

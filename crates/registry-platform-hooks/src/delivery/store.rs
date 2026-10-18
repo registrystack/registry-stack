@@ -22,14 +22,15 @@ use registry_platform_dispatch::postgres::{
     TransitionOutcome,
 };
 use registry_platform_dispatch::{
-    AttemptTimeoutBound, DispatchError, JobPolicy, RetrySchedule, Sent, UncertainOutcome,
+    AttemptTimeoutBound, DispatchError, JobPolicy, RetrySchedule, SendOutcome, Sent,
+    UncertainOutcome,
 };
 use tokio_postgres::{Row, Transaction};
 
 use super::seams::{
     DeliveryAuditDisposition, DeliveryAuditOutcome, DeliveryAuditPhase, DeliveryAuditRecord,
     DeliveryError, DeliveryOperationalEvent, DeliverySeams, DeliveryTransitionCode,
-    HookDestination, HookHandler, HookHandlerBinding, ProposalReceiptRecovery,
+    HookDestination, HookHandler, HookHandlerBinding, ProposalOutcome, ProposalReceiptRecovery,
 };
 use super::service::{
     bounded_text, proposal_columns, validate_captured_policy, AttemptResult, DeliveryFailureReason,
@@ -99,7 +100,8 @@ pub(super) const DISPATCH_SQL: DispatchSql = DispatchSql {
                   delivery.package_revision,
                   delivery.logical_destination_id,
                   delivery.destination_binding_digest,
-                  delivery.handler_kind",
+                  delivery.handler_kind,
+                  state.proposal_code",
         joins: "JOIN {schema}.registry_webhook_deliveries AS delivery
                   ON delivery.event_id = state.event_id
                  AND delivery.compiled_delivery_id = state.compiled_delivery_id
@@ -141,6 +143,7 @@ pub(super) struct HookStore<S: DeliverySeams> {
     pub(super) seams: S,
     pub(super) schema: String,
     pub(super) dead_letter_reason_column: AtomicU8,
+    pub(super) local_package_revision: Option<String>,
 }
 
 impl<S: DeliverySeams> HookStore<S> {
@@ -177,6 +180,27 @@ pub(super) fn binding_is_activated<S: DeliverySeams>(
                     .is_some_and(|handler| handler.handler_digest() == destination_binding_digest)
         }
         None => false,
+    }
+}
+
+// Only a consistent terminal decision can use the product's completion
+// preflight. Transient, uncertain, non-proposal and local outcomes keep the
+// ordinary identity fence, even if detail incorrectly carries a proposal.
+fn settled_url_proposal(
+    handler_kind: HookHandlerKind,
+    sent: &Sent<AttemptResult>,
+) -> Option<&ProposalOutcome> {
+    if handler_kind != HookHandlerKind::Url {
+        return None;
+    }
+    let outcome = sent.detail.proposal.as_ref()?;
+    match (&sent.outcome, outcome) {
+        (
+            SendOutcome::Accepted { .. },
+            ProposalOutcome::Applied { .. } | ProposalOutcome::Refused { .. },
+        )
+        | (SendOutcome::Permanent { .. }, ProposalOutcome::DeadLettered { .. }) => Some(outcome),
+        _ => None,
     }
 }
 
@@ -276,7 +300,33 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
     }
 
     async fn verify_transaction(&self, transaction: &Transaction<'_>) -> Result<(), DispatchError> {
-        Ok(self.seams.verify_transaction(transaction).await?)
+        self.seams.verify_transaction(transaction).await?;
+        if let Some(revision) = &self.local_package_revision {
+            // The scope is transaction-local and bound as data. Every claim
+            // and expired-lease recovery uses it after the product preflight.
+            transaction
+                .query_one(
+                    "SELECT set_config('registry_hooks.local_package_revision', $1, true)",
+                    &[revision],
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn verify_finish_transaction(
+        &self,
+        transaction: &Transaction<'_>,
+        job: &LeasedJob<HookJob>,
+        sent: &Sent<AttemptResult>,
+    ) -> Result<(), DispatchError> {
+        if let Some(outcome) = settled_url_proposal(job.job.handler_kind, sent) {
+            self.seams
+                .verify_proposal_completion(transaction, outcome)
+                .await?;
+            return Ok(());
+        }
+        self.verify_transaction(transaction).await
     }
 
     fn claim_record(&self, job: &HookJob) -> HookRecord {
@@ -368,7 +418,11 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
             &package_revision,
             &destination_binding_digest,
         );
-        Ok((operator_replay && binding_activated).then_some(HookRecord { package_revision }))
+        let proposal_code = row.try_get::<_, Option<String>>(first + 5)?;
+        Ok((operator_replay
+            && binding_activated
+            && self.seams.proposal_replay_allowed(proposal_code.as_deref()))
+        .then_some(HookRecord { package_revision }))
     }
 
     async fn record_attempt_audit(
@@ -654,5 +708,70 @@ impl<S: DeliverySeams> DispatchStore for HookStore<S> {
             return Err(DispatchError::Unavailable);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::seams::{ProposalCode, ProposalSummary};
+    use super::*;
+    use registry_platform_dispatch::FailureCode;
+
+    #[test]
+    fn only_consistent_terminal_url_proposals_use_completion_verification() {
+        let outcomes = [
+            SendOutcome::Accepted {
+                receiver_reference: None,
+            },
+            SendOutcome::Permanent {
+                code: FailureCode::new("proposal-refused").unwrap(),
+            },
+            SendOutcome::Transient { retry_after: None },
+            SendOutcome::MaybeSent,
+        ];
+        let proposals = [
+            None,
+            Some(ProposalOutcome::Applied {
+                resulting_revision: 1,
+            }),
+            Some(ProposalOutcome::Refused {
+                code: ProposalCode::new("test.refused".to_owned()).unwrap(),
+                summary: ProposalSummary::new("The proposal was refused.".to_owned()).unwrap(),
+            }),
+            Some(ProposalOutcome::DeadLettered {
+                code: ProposalCode::new("test.dead_lettered".to_owned()).unwrap(),
+                summary: ProposalSummary::new("The proposal cannot be applied.".to_owned())
+                    .unwrap(),
+            }),
+        ];
+        // Rows are transport outcomes, columns are no proposal, applied,
+        // refused, and dead-lettered. Inconsistent pairs stay fail-closed.
+        let allowed = [
+            [false, true, true, false],
+            [false, false, false, true],
+            [false; 4],
+            [false; 4],
+        ];
+        for kind in [
+            HookHandlerKind::Url,
+            HookHandlerKind::Rhai,
+            HookHandlerKind::Wasm,
+        ] {
+            for (send_index, outcome) in outcomes.iter().enumerate() {
+                for (proposal_index, proposal) in proposals.iter().enumerate() {
+                    let mut detail = AttemptResult::from(DeliveryAuditOutcome::Delivered);
+                    detail.proposal = proposal.clone();
+                    let sent = Sent {
+                        outcome: outcome.clone(),
+                        detail,
+                    };
+                    assert_eq!(
+                        settled_url_proposal(kind, &sent).is_some(),
+                        kind == HookHandlerKind::Url && allowed[send_index][proposal_index],
+                        "kind: {kind:?}; send: {outcome:?}; proposal: {proposal:?}"
+                    );
+                }
+            }
+        }
     }
 }

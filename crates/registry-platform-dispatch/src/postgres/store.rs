@@ -332,6 +332,22 @@ pub trait DispatchStore: Send + Sync + 'static {
     /// expects, before any read or write.
     async fn verify_transaction(&self, transaction: &Transaction<'_>) -> Result<(), DispatchError>;
 
+    /// Verify a completed send before recording its fenced disposition.
+    ///
+    /// Defaults to the ordinary transaction identity check. A consumer may
+    /// distinguish recording an already settled outcome from admitting new
+    /// work, but must still verify its database and preserve the lease fence.
+    /// Claim, material reads, recovery, and operator transitions continue to
+    /// use [`Self::verify_transaction`].
+    async fn verify_finish_transaction(
+        &self,
+        transaction: &Transaction<'_>,
+        _job: &LeasedJob<Self::Job>,
+        _sent: &Sent<Self::Detail>,
+    ) -> Result<(), DispatchError> {
+        self.verify_transaction(transaction).await
+    }
+
     /// Decode the claim columns from index `first`.
     fn decode_claim(&self, row: &Row, first: usize) -> Result<Decoded<Self::Job>, ClaimRefusal>;
 
