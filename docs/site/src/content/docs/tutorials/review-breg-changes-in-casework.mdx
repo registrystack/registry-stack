@@ -13,61 +13,64 @@ locale: en
 standards_referenced: []
 tutorial_test:
   toolset: casework
-  skip: requires the reader's tested sealed BReg package and matching Casework project; native pairing and producer/provider composition have owning product tests
+  skip: needs a package built from the reader's own tested BReg project; pairing and the BReg to Casework review journey are covered by the product test suites
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Your registry can hold a Proposal until a person approves it. Here you pair one Action's review
-context with a Casework policy, then bind Casework as your Base Registry Engine (BReg) review
-authority. The registry keeps submission, correlation, and application; Casework records the
-decision and writes nothing to your registry.
+Your registry can hold a [Proposal](../../reference/glossary/#proposal) until a person approves
+it. Here you connect one Action's Proposals to a Casework
+[ReviewPolicy](../../reference/glossary/#review-policy), then point your Base Registry Engine
+(BReg) at Casework for the decision. The registry keeps submission and application; Casework
+records the decision and writes nothing to your registry.
 
 <QuickstartMeta
-  outcome="A checked Casework package paired with a registry's review context, and a review authority bound on both sides."
+  outcome="A checked Casework package paired with a registry Action, and Casework bound as that registry's review authority."
   time="About 20 minutes after both projects are ready"
   level="Authoring and package verification"
-  prerequisites={['Matching bregctl and caseworkctl binaries', 'A tested BReg package whose Action requires review', 'A Casework project with a matching review policy and context provider', 'A shell']}
+  prerequisites={['Matching bregctl and caseworkctl binaries', 'A tested BReg package whose Action requires review', 'A Casework project with a matching ReviewPolicy and context provider', 'A shell']}
 />
 
-## Start from the maintained pair
+## Start from two projects built to pair
 
-The facility template and Casework's canonical-review example are built to pair. The template's
-`correct-address` Action creates a Proposal that requires review by the `casework` authority. The
-Casework project declares the matching provider, `facility-proposal-context`, for the source
-namespace `facility-registry`.
+Create both projects from templates that already agree:
 
-Install copies that match your binaries with `bregctl init --template facility-registry facility`
-and `caseworkctl init review --template canonical-review`. You can also read the
-[facility template](https://github.com/registrystack/registry-stack/tree/main/products/breg/examples/facility)
-and the
-[canonical-review example](https://github.com/registrystack/registry-stack/tree/main/products/casework/examples/canonical-review)
-in the repository. For your own Action, declare the same pieces with your own identifiers, as
-[Author a Casework policy](../../configure/casework/#choose-context-custody) describes.
+```sh test-skip="the reader builds and tests the registry package before pairing"
+bregctl init --template facility-registry facility
+caseworkctl init --template canonical-review review
+```
 
-Set the paths and identifiers. The package is the built directory with its manifest and checksums,
-not your editable source:
+In `facility`, the `correct-address` Action creates a Proposal that requires review by an
+authority named `casework`. In `review`, a
+[context provider](../../reference/glossary/#context-provider) named `facility-proposal-context`
+lets reviewers see that Proposal: Casework reads it from your registry under each reviewer's own
+access. For your own Action, declare the same pieces with your own
+identifiers, as [Author a Casework policy](../../configure/casework/#read-the-review-policy-and-its-producer)
+describes.
 
-```sh test-skip="the reader supplies the exact project and tested producer package"
-casework_project=/absolute/path/to/casework-project
-breg_package=/absolute/path/to/breg-build/package
+Pairing reads the built registry package, not your editable source. Before you go on, test
+`facility` against its own database and seal its package with
+[`bregctl package`](../../reference/cli/bregctl/package/), as
+[Check, test, package](../../operate/breg/#check-test-package) walks through. Then name the paths
+and identifiers once:
+
+```sh test-skip="the reader supplies the exact project and tested registry package"
+casework_project=/absolute/path/to/review
+breg_package=/absolute/path/to/facility-package
 provider_id=facility-proposal-context
 action_id=correct-address
 ```
 
 {/* Evidence: crates/registry-bregctl/src/dev/examples/review.rs, prepare and local_clients;
-    crates/registry-caseworkctl/src/lib.rs, Provider;
+    crates/registry-caseworkctl/src/lib.rs, Init and Provider;
     products/breg/examples/facility/registry.yaml;
-    products/breg/examples/facility/README.md;
-    products/casework/examples/canonical-review/casework.yaml;
-    products/casework/examples/canonical-review/README.md;
+    products/casework/examples/canonical-review/casework.yaml, contextProviders;
     crates/registry-breg/src/package.rs. */}
 
-## Pair the review context
+## Pair the Proposal context
 
-A provider pair checks that the Proposal context your Action exports is the one the Casework
-provider pins. The canonical-review example declares that provider under `contextProviders` in
-`products/casework/examples/canonical-review/casework.yaml`. Preview the pair; it writes nothing:
+The registry package exports the shape of the Proposal the Action creates, and the context
+provider pins the shape it expects. Preview whether they match; the preview writes nothing:
 
 ```sh
 caseworkctl provider pair "$casework_project" \
@@ -75,9 +78,9 @@ caseworkctl provider pair "$casework_project" \
   --breg-package "$breg_package" --action-id "$action_id"
 ```
 
-A working pair reports `"ok": true`, the verified context `contract`, and the package's
+A working pair reports `"ok": true`, the verified `contract`, and the package's
 `registryRevision`. Its `readerAuthority` names `get-review-status` with `"sourceWrites": false`:
-Casework reads review status from your registry and never writes to it. Write the pair:
+Casework only reads review status from your registry. Write the pair into the Casework project:
 
 ```sh
 caseworkctl provider pair "$casework_project" \
@@ -85,37 +88,38 @@ caseworkctl provider pair "$casework_project" \
   --breg-package "$breg_package" --action-id "$action_id" --apply
 ```
 
-The report now says `"applied": true`. If the policy's contract pin does not match the package's
-export, the command exits 1 with `caseworkctl.refused`; regenerate the export, vendor its schema,
-and update the pin before you retry.
+The report now says `"applied": true`. If the pin and the export differ, the command exits 1 with
+`caseworkctl.refused`; rebuild the registry package, then pair again.
 
 {/* Evidence: crates/registry-caseworkctl/src/provider_pair.rs, pair and native_export;
-    crates/registry-caseworkctl/src/lib.rs, classify_failure and DOMAIN_REFUSAL_EXIT;
-    products/casework/examples/canonical-review/casework.yaml, contextProviders. */}
+    crates/registry-caseworkctl/src/lib.rs, classify_failure and DOMAIN_REFUSAL_EXIT. */}
 
-## Check and package
+## Check and package the Casework project
+
+Confirm offline that the two projects still agree, then build the package you deploy:
 
 ```sh
 caseworkctl check "$casework_project" --against-breg-package "$breg_package"
 caseworkctl package "$casework_project" --output ./paired-casework-package
 ```
 
-The check confirms the context contract and the exact schema bytes offline: it proves the
-projects agree, not that either service is reachable. Rebuild and recheck whenever the BReg
-package changes.
+The check compares the context contract and its exact schema bytes. It proves the projects agree,
+not that either service is reachable. Rebuild and recheck whenever the registry package changes.
 
 {/* Evidence: crates/registry-caseworkctl/src/provider_pair.rs, compare;
     crates/registry-caseworkctl/src/lib.rs, against_breg_package;
     crates/registry-caseworkctl/src/project.rs. */}
 
-## Bind the review authority
+## Bind Casework as the review authority
 
-A review authority is the service your registry asks for a decision. The project names it, and the
-runtime configuration binds it to an endpoint and a credential;
+A review authority is the service your registry asks for a decision. The registry project names
+it, and the registry's runtime configuration binds it to Casework's URL and a credential;
 [Review authorities, declared twice](../../configure/breg-actions/#review-authorities-declared-twice)
-shows both halves. Three things in that binding must agree with the Casework producer:
+shows both halves. On the Casework side, your registry is a trusted
+[producer](../../reference/glossary/#producer), the caller allowed to submit a
+[ReviewRequest](../../reference/glossary/#review-request):
 
-```yaml title="products/casework/examples/canonical-review/casework.yaml"
+```yaml title="review/casework.yaml"
 trustedProducers:
   facility-registry:
     profile: requester
@@ -127,24 +131,23 @@ trustedProducers:
     retention: {receiptRetentionDays: 30}
 ```
 
-- `producerId` equals the producer's key, `facility-registry` here. Both products fold it into
-  each submission's digest.
-- The binding's `profile`, and its credential's issuer and subject, match the producer's `profile`,
-  `issuer`, and `subject`.
-- `recoveryDays` is required and must not exceed `receiptRetentionDays`, which is at most 365. The
-  registry retries an uncertain submission against a receipt Casework keeps only that long. No tool
-  compares the two values.
+Three values in the registry's binding must agree with that entry:
 
-Each submission carries a subject binding: the source namespace, the Proposal, its version, and its
-`effectDigest`. Casework decides on that exact binding, and the registry accepts only a result that
-matches it.
+- `producerId` equals the producer's key, `facility-registry`. Both products fold it into each
+  submission's digest.
+- The binding's `profile`, and its credential's issuer and subject, equal the producer's
+  `profile`, `issuer`, and `subject`.
+- `recoveryDays` must not exceed `receiptRetentionDays`, which is at most 365. The registry
+  retries an uncertain submission against an admission [receipt](../../reference/glossary/#receipt)
+  Casework keeps only that long. No tool compares the two values.
 
-By default the registry polls Casework for results. For a completion signal instead, add
-`completionTokenRef` and `completionRecipient` to the binding together. Then give the Casework
-producer a completion destination that presents the same token.
+`sourceNamespaces` lists the registry names this producer may submit for. Casework decides on the
+exact Proposal version and its `effectDigest`, and the registry accepts only a
+[ReviewResult](../../reference/glossary/#review-result) that matches them.
 
-A reviewer reads the Proposal under their own registry access profile. The provider's status
-credential checks review status only and never supplies displayed fields.
+By default the registry polls Casework for results. To be called instead, add
+`completionTokenRef` and `completionRecipient` to the binding together, and give the producer a
+completion destination, the registry URL Casework calls, that presents the same token.
 
 {/* Evidence: crates/registry-breg/src/runtime_config.rs, RawReviewAuthorityConfig;
     crates/registry-breg/src/review_store.rs, MAXIMUM_REVIEW_RECOVERY_DAYS and enqueue_submission;
@@ -152,38 +155,36 @@ credential checks review status only and never supplies displayed fields.
     crates/registry-review-client/src/client.rs, check_accepted;
     crates/registry-casework/src/review.rs, producer_for_actor and producer_for_create;
     crates/registry-casework-core/src/config.rs, ProducerRetention and MAXIMUM_RECEIPT_RETENTION_DAYS;
-    crates/registry-bregctl/src/dev/examples/review.rs, bind_producer;
     crates/registry-casework-breg/src/lib.rs;
-    products/casework/examples/canonical-review/casework.yaml;
-    products/casework/RUNTIME-CONFIG.md. */}
+    products/casework/examples/canonical-review/casework.yaml, trustedProducers. */}
 
 ## Read the signals
 
-Submit a Proposal for the paired Action, then read it with a profile that holds the `apply` grant.
+Submit a Proposal for the paired Action, then read it with an access profile that may apply it.
 While Casework reviews it, the Proposal's `apply` link is unavailable with reason `pending-review`
-and recovery `refresh`.
+and recovery `refresh`. A reviewer then finds the work as a
+[ReviewTask](../../reference/glossary/#review-task) in Casework.
 
 Two binding faults read differently:
 
-- Casework answers a credential that matches no producer, or a policy or source namespace the
-  producer does not list, with 403 `operation.not-authorized`. The registry records `remote-refused`
-  and logs a warning with the authority, status, and problem code. The Proposal reads `review-ended`
-  with recovery `revise`.
+- A credential that matches no producer, or a policy or source namespace the producer does not
+  list, is refused with 403 `operation.not-authorized`. The registry logs a warning with the
+  authority, status, and problem code, and the Proposal reads `review-ended` with recovery
+  `revise`.
 - A `producerId` that differs from the producer's key fails the registry's own acceptance check.
   The Proposal reads `dependency-outage` with recovery `retry` until `recoveryDays` pass, then
   `review-ended`. When a review never settles, check `producerId` first.
 
 After the decision, the Proposal follows its usual states: `applied`, `rejected`, or `submitted`
 with Revise offered when changes are requested. [Proposals](../../configure/breg-actions/#proposals)
-covers those states and application; a Casework decision never grants authority to apply.
+covers those states; a Casework decision never grants authority to apply.
 
 {/* Evidence: crates/registry-breg/src/mutation/proposal.rs, apply_refusal and review_progress;
     crates/registry-breg/src/review_store.rs, terminal_submission_error;
     crates/registry-casework-core/src/http.rs, OPERATION_NOT_AUTHORIZED_PROBLEM;
-    crates/registry-casework/src/problem.rs, ProblemCode;
     crates/registry-casework/src/review.rs, producer_for_create;
     crates/registry-casework/tests/breg_review_journey.rs. */}
 
 ## Next
 
-[Author a Casework policy](../../configure/casework/)
+[Registry Casework API](../../reference/apis/registry-casework/)

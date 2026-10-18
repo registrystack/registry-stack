@@ -1,6 +1,6 @@
 ---
 title: Registry Casework overview
-description: What Registry Casework decides, what it never owns, and the first tutorial that takes one review request to a human decision.
+description: What Registry Casework gives a system that needs a human answer, what you define, what it refuses, and where to start.
 status: current
 owner: registry-docs
 source_repos:
@@ -9,62 +9,55 @@ last_reviewed: "2026-09-20"
 doc_type: explanation
 locale: en
 standards_referenced: []
-tutorial_test:
-  toolset: casework
 ---
 
 If people in your institution must answer or approve something before another system acts on it,
 [Registry Casework](../../reference/glossary/#registry-casework) gives them that review and returns
 their answer to the system that asked.
 
-## What Casework decides
+## What a producer gets
 
-Casework runs one lifecycle, and `caseworkctl` prints it:
+A [producer](../../reference/glossary/#producer) is the system that needs the answer. It sends a
+[ReviewRequest](../../reference/glossary/#review-request) naming the subject and the policy to
+review it under, and later reads one [ReviewResult](../../reference/glossary/#review-result): the
+outcome, any public reason, and the exact subject and policy it answers. The result never names
+the reviewer. A retry under the same idempotency key returns the first request, not a second.
 
-```sh
-caseworkctl lifecycle
-```
+## What you define
 
-```json test-excerpt
-{
-  "id": "review-request",
-  "label": "Casework review request lifecycle"
-}
-```
+You write a [ReviewPolicy](../../reference/glossary/#review-policy) in YAML: the stages a request
+passes through, which people decide each stage and how many must approve, the outcomes a
+[Decision](../../reference/glossary/#decision) may record, what reviewers see, which producers may
+ask, and the deadlines that apply. `caseworkctl` checks the policy offline and pins it to a digest
+before any request uses it.
 
-A system sends Casework a [ReviewRequest](../../reference/glossary/#review-request): the subject to
-review and the policy to review it under. The request stays `reviewing` until a person's decision
-settles it:
+## What runs
 
-```json test-excerpt
-{
-  "event": "settle",
-  "from": "reviewing",
-  "guard": "an answer, which as a non-approving decision settles the request at once regardless of quorum",
-  "to": "answered"
-}
-```
+`casework` is an HTTP service that keeps review state in PostgreSQL and verifies tokens from your
+own OpenID Connect issuer. Reviewers claim and decide tasks through its API, so your application
+supplies their screens. A request stays `reviewing` until a decision settles it as approved,
+rejected, changes-requested or answered, or until its producer cancels it or supersedes it with a
+replacement.
 
-A [Decision](../../reference/glossary/#decision) is one reviewer's recorded choice of an outcome the policy declares. Casework counts
-decisions, settles the request, and keeps the result for the system that sent it.
+## What Casework refuses
 
-{/* Evidence: crates/registry-casework-core/src/lifecycle.rs, "review-request";
-    crates/registry-review-protocol/src/lib.rs, ReviewCreateRequest and ReviewRequestLifecycle;
-    crates/registry-casework-core/src/review.rs, Decision; products/casework/README.md. */}
+Casework refuses an untrusted producer, a stale policy pin, an ineligible reviewer, and a
+decision against a changed task, and it never writes to the source;
+[How Casework works](../../explanation/how-casework-works/) explains each boundary.
 
-## What Casework never owns
+## When it is not the right product
 
-The system that sent the request keeps the subject and decides any later change to it. Casework has
-no write or apply authority over that source, and a settled request grants none. When reviewers
-need current data, the source decides what each reviewer may see, under that reviewer's own
-credential.
+Casework is for human judgment. A check a program can make from data belongs in the producer or
+in an [Evidence Gateway](../../reference/glossary/#evidence-gateway) assertion, and a change to a
+registry stays with that registry, which decides whether to apply an approved review.
 
-Casework serves an API, so your application supplies the reviewers' screens. It keeps review state
-in PostgreSQL and verifies tokens from your own OpenID Connect issuer.
+## Where to start
 
-{/* Evidence: products/casework/README.md; crates/registry-casework/src/review.rs,
-    preflight_review_disclosure; crates/registry-casework/src/auth.rs. */}
+[Decide your first ReviewRequest](../../tutorials/first-casework/) runs Casework on your machine
+and takes one request to a decision in about 20 minutes.
 
-## Next
-
-- [Decide your first ReviewRequest](../../tutorials/first-casework/)
+{/* Evidence: crates/registry-review-protocol/src/lib.rs, ReviewCreateRequest, ReviewResult and
+    ReviewRequestLifecycle; crates/registry-casework-core/src/lifecycle.rs, "review-request" settle
+    transitions including cancelled and superseded; crates/registry-caseworkctl/src/project.rs,
+    check() and explain() refusals; crates/registry-casework/src/review.rs,
+    preflight_review_disclosure; crates/registry-casework/src/auth.rs; products/casework/README.md. */}

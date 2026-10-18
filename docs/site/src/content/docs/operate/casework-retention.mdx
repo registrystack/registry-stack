@@ -13,10 +13,9 @@ locale: en
 standards_referenced: []
 ---
 
-If you operate Registry Casework, this page sets how long a review is kept, what the audit journal
-records, and how a producer collects a result before it is gone. It uses the project from
-[Decide your first ReviewRequest](../../tutorials/first-casework/); the commands read a deployment,
-so none is replayed here.
+Decide how long Registry Casework keeps a review, what survives erasure, and what the audit
+journal records, so a producer collects its result in time and a caller recovers safely when an
+audit write fails.
 
 ## Retention windows
 
@@ -36,7 +35,8 @@ policy author sets two of them per `ReviewPolicy`, in `casework.yaml`:
   3,650 days.
 
 Both run from the request's terminal settlement; a request still under review has no expiry. Each
-trusted producer also sets how long its admission receipt can be recovered:
+trusted [producer](../../reference/glossary/#producer) also sets how long its admission
+[receipt](../../reference/glossary/#receipt) can be recovered:
 
 ```yaml
     retention: {receiptRetentionDays: 30}
@@ -59,6 +59,34 @@ recorded in the audit journal.
     crates/registry-casework/src/review/maintenance.rs, erase_expired_reviews_at();
     crates/registry-casework/tests/support/maintenance_audit_regressions.rs. */}
 
+## What remains after the review is erased
+
+When the terminal window closes, Casework deletes the ReviewResult, the decisions, private drafts,
+history and notes, the ReviewTasks, clock occurrences, and pending completion calls, and drops
+every stored response it would have replayed. It also scrubs the ReviewRequest: the submitted
+context, the subject and source fields, the requester reference, the result constraints, and the
+completion destination are removed, and the subject is replaced by the submission digest.
+
+If `accountabilityRetentionDays` is longer, these remain until it closes:
+
+1. the accountability record: who decided, the private reason, and the public reason flag;
+2. the scrubbed ReviewRequest: its producer, policy binding, lifecycle state, submission digest,
+   and timestamps;
+3. pseudonymous stand-ins for the producer and the initiating caller, so the initiator can still
+   learn that its result expired;
+4. each idempotency record: the caller's issuer and subject, access profile, operation, resource,
+   `Idempotency-Key`, and request hash, without the stored response, so a resend is refused with
+   `idempotency.expired` instead of admitted again;
+5. the submission reservation, keyed by the digest: the same submission is answered
+   `review.result-expired`, and different content for the same producer, subject, version, and
+   policy is `review.submission-conflict`.
+
+Then all of it is deleted.
+
+{/* Evidence: crates/registry-casework/src/review/maintenance.rs, erase_expired_reviews_at();
+    crates/registry-casework/src/review.rs, casework_review_submission_reservations lookups and
+    the stored idempotency response lookup. */}
+
 ## Recover before the result window closes
 
 The result carries its own deadline, `availableUntil`: its settlement time plus
@@ -67,11 +95,13 @@ review answers `202`. After it, the result read answers `410` with no body.
 
 A producer that lost the admission response retries the same body under the same
 `Idempotency-Key` within its receipt window; Casework answers `200` with the request it already
-accepted, rather than `201`. A changed body under that key is refused, not admitted.
+accepted, rather than `201`. A changed body under that key is `idempotency.key-reused`, and a
+resend after the response was erased is `idempotency.expired`.
 
 {/* Evidence: crates/registry-casework/src/http.rs, get_review_result() and create_review_request();
     crates/registry-review-protocol/src/lib.rs, ReviewResult;
-    crates/registry-casework/src/problem.rs, IdempotencyKeyReused. */}
+    crates/registry-casework/src/review.rs, review_idempotent_response();
+    crates/registry-casework/src/problem.rs, IdempotencyKeyReused and IdempotencyExpired. */}
 
 ## Completion destinations
 
@@ -91,14 +121,20 @@ readable until `availableUntil`.
 ## Keep the audit file
 
 The [audit journal](../../reference/glossary/#audit-journal) is the file Casework appends one line
-to before each admitted operation and one after it commits. This is the request line of the
-decision in the first tutorial:
+to before each admitted operation and one after it commits. On a deployment it is the file
+`audit.path` names; a development session keeps its own under `.casework/dev/audit/` in the
+project until the session is removed. Search it for the decisions reviewers made:
 
-```sh test-skip="reads a deployment's audit journal; the line was observed in the development session's journal"
-rg '"casework.review-decided"' /var/lib/registry-casework/audit.ndjson
+```sh
+rg '"casework.review-decided"' /var/lib/registry-casework/audit/casework.ndjson
 ```
 
-```text test-excerpt
+The first matching line is the request entry; the next has `"phase":"response"` and adds the
+pseudonymous ReviewRequest and ReviewTask, the accountability event id, and whether a public
+reason was given. This is the request entry of the decision in
+[Decide your first ReviewRequest](../../tutorials/first-casework/):
+
+```text
 {"schema":"registry-casework-audit/v1","eventId":"<id>","time":"<time>","phase":"request","correlation":"<id>","record":{"event":"casework.review-decided","principalPseudonym":"<pseudonym>","profileId":"staff"}}
 ```
 
@@ -114,12 +150,31 @@ covers rotation.
     crates/registry-platform-audit/src/writer.rs;
     crates/registry-casework/src/config.rs. */}
 
-A refused audit write fails the operation with `service.unavailable` and `/ready` answers `503`
-until you repair the destination and restart. A database restore can bring back data that was
-already erased; [Back up and restore Casework](../advanced/back-up-and-restore/#restore-registry-casework)
-gives the order of recovery.
+## Recover from a refused audit write
 
-{/* Evidence: crates/registry-casework/src/service.rs, ready();
+A refused audit write answers `503` with `service.unavailable`, and `/ready` answers `503` until
+you repair the destination and restart. The caller cannot tell from the response which entry
+failed, and the two cases differ:
+
+- The request entry is written before the database transaction opens. If it is refused, nothing
+  changed.
+- The response entry is written after PostgreSQL commits. If it is refused, the change stands:
+  the decision is recorded, the claim is held, or the ReviewRequest is admitted, and the journal
+  lacks its response line.
+
+So a caller that receives `503` on a mutation must not assume it failed. Once Casework is ready,
+resend the same `Idempotency-Key` with the same body and `If-Match`: Casework returns the stored
+response if the change committed and runs it if it did not. For a route without an idempotency
+key, such as grant revocation or a caseload apply, read the resource instead. Only then choose
+another operation; a fresh key on a stale picture can apply a second change.
+
+A database restore can bring back data that was already erased;
+[Back up and restore Casework](../advanced/back-up-and-restore/#restore-registry-casework) gives
+the order of recovery.
+
+{/* Evidence: crates/registry-casework/src/audit.rs, AuditOperation::begin, commit and complete;
+    crates/registry-casework/src/http.rs, AuditUnavailable to service.unavailable;
+    crates/registry-casework/src/service.rs, ready();
     crates/registry-platform-audit/src/writer.rs, AuditUnavailableReason;
     products/casework/scripts/test-backup-restore.sh. */}
 

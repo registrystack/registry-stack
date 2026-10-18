@@ -9,89 +9,103 @@ last_reviewed: "2026-09-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
-tutorial_test:
-  toolset: casework
-  after: configure/casework
 ---
 
 import ConfigurationReference from '../../../components/ConfigurationReference.astro';
 import reference from '../../../data/generated/casework-configuration.json';
 
-If you operate Registry Casework, this page takes the project from
-[Decide your first ReviewRequest](../../tutorials/first-casework/) through the steps a deployment
-repeats: check a runtime configuration, package the project, activate the package, and read its
-state. You continue in that project, with its development session stopped and retained.
+If you operate Registry Casework, deploy a reviewed policy package against PostgreSQL, verify its
+activation, then establish the teams that can see and decide its review tasks. Casework returns a
+review result; the producer keeps all authority to change its subject.
 
-## What you need
+{/* Evidence: products/casework/README.md; crates/registry-casework-core/src/adapter.rs, ReviewContextProvider. */}
 
-A deployment needs PostgreSQL, the [`casework`](/reference/cli/casework/serve/) binary, and one
-runtime configuration file: the YAML file that tells the runtime where its package, database,
-secrets, token issuer and audit journal are. [`caseworkctl`](/reference/cli/caseworkctl/) checks,
-packages and activates against that same file.
+## What you provide
 
-## Restart the session
+- PostgreSQL 17 or newer, with TLS and separate migration and runtime credentials.
+- An OpenID Connect issuer, the intended audience, and an explicit list of admitted clients.
+- A private HTTP listener behind a TLS proxy you operate.
+- A reviewed [policy package](../../reference/glossary/#policy-package), the matching binaries,
+  and secret files the process can read.
+- A durable audit destination and an archive for it.
+- A [directory](../../reference/glossary/#directory) team serving each queue reviewers work.
 
-```sh
-caseworkctl dev start tutorial-work/casework
-```
+Review and directory state live in PostgreSQL; the audit journal lives outside it. A
+current-source policy also needs a read-only context provider.
 
-```json test-excerpt
-{"directory": {"revision": 1, "teams": 1}, "state": "ready"}
-```
+{/* Evidence: crates/registry-casework/src/{config,runtime,store,auth}.rs;
+    crates/registry-casework/src/audit.rs. */}
 
-A retained session restarts on the ports it was first given, with its database intact.
+## Install the runtime
 
-{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, start and stop. */}
-
-## Read the runtime configuration
-
-The session wrote a runtime configuration for its own runtime:
+Install matching `casework` and `caseworkctl` binaries on the serving and operator hosts:
 
 ```sh
-cat tutorial-work/casework/.casework/dev/operator.yaml
-cfg="$PWD/tutorial-work/casework/.casework/dev/operator.yaml"
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/casework-install.sh | bash
+casework --version
+caseworkctl --version
 ```
 
-```text test-excerpt
-database:
-  migrationUrlRef: secret:file/migration-database-url
-  runtimeUrlRef: secret:file/runtime-database-url
-  trustedRootCertificateRef: secret:file/database-root.pem
-identity:
-  databaseId: casework-local-session
-kind: CaseworkRuntimeConfig
-listener:
-  bind: <address>
-  networkExposure: private-address
-  tlsTermination: development-loopback
-package:
-  root: <path>
-secretProviders:
-  file:
-    root: <path>
+Read the installer before running it. Its `SHA256SUMS` check does not establish release
+authenticity; use the
+[release verification procedure](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
+for that.
+
+The container image carries both binaries. Its entrypoint serves Casework from
+`/etc/registry-casework/runtime.yaml`; run operator commands with the entrypoint set to
+`/usr/local/bin/caseworkctl`. Pin the image digest, mount the package, runtime file, and secret
+root read-only, and give the audit directory durable writable storage.
+
+{/* Evidence: crates/registry-casework/install.sh; release/docker/Dockerfile.casework, ENTRYPOINT and CMD. */}
+
+## Provision PostgreSQL
+
+Use a new database. As your PostgreSQL administrator, create a schema-owning migration role, a
+separate runtime role, and the database:
+
+```sql
+CREATE ROLE casework_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS PASSWORD '<migration-password>';
+CREATE ROLE casework_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS PASSWORD '<runtime-password>';
+CREATE DATABASE casework;
 ```
 
-Every `caseworkctl` command that reads a runtime configuration takes it as an absolute path, so
-`cfg` holds one.
+In that database, grant connection access and give the migration role the schema:
 
-{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, operator.yaml;
-    crates/registry-platform-config/src/loader.rs, validate_absolute_lexical_path(). */}
+```sql
+REVOKE ALL ON DATABASE casework FROM PUBLIC;
+GRANT CONNECT ON DATABASE casework TO casework_migration, casework_runtime;
+ALTER SCHEMA public OWNER TO casework_migration;
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+```
+
+Only `caseworkctl apply` uses the migration credential, so keep it off the serving host. Apply
+grants the runtime role what it serves with and keeps the activation ledger read-only to it.
+
+If apply reports `casework.activation.role-mode-weakened`, make the ownership, privilege, or
+trigger correction it names, then plan again; never give the runtime role ledger writes to get past
+it. When both credentials name one role, the deployment records single-role mode, and `status`
+says the runtime credential can activate packages.
+
+{/* Evidence: crates/registry-casework/src/activation.rs, grant_runtime_role(), observe_role(), and stray_authority();
+    products/casework/RUNTIME-CONFIG.md, database. */}
 
 ## Write the runtime file
 
-A deployment writes its own file. This is
-`products/casework/examples/canonical-review/runtime.example.yaml`:
+The runtime file is yours, kept apart from the authored policy. This one uses mounted secrets and
+a TLS proxy in front:
 
 ```yaml
 apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1
 kind: CaseworkRuntimeConfig
 identity:
-  databaseId: casework-canonical-review
+  databaseId: casework-decisions
 package:
   root: /srv/registry-casework/package
 listener:
-  bind: 127.0.0.1:8100
-  tlsTermination: development-loopback
+  bind: 10.42.0.7:8100
+  tlsTermination: operator-controlled-upstream
   networkExposure: private-address
 secretProviders:
   file:
@@ -103,14 +117,37 @@ authentication:
   oidc:
     issuer: https://identity.example.test/realms/registry
     audience: urn:example:casework
-    allowedClients: unrestricted
+    allowedClients: [casework-console, review-producer]
     scopeClaim: scope
     humanIdentity:
       claim: registry_actor_kind
       value: human
 audit:
-  path: /var/lib/registry-casework/audit.ndjson
+  path: /var/lib/registry-casework/audit/casework.ndjson
   hashKeyRef: secret:file/casework-audit-key
+```
+
+Every path is absolute, and the runtime file may not pass through a symbolic link. Unknown keys and
+explicit nulls are refused at their position; omit a key to take its default.
+`identity.databaseId` is your stable name for this deployment: the first apply records it, and
+every later apply and start refuses a database that recorded another.
+
+Each `...Ref` key names a secret, never its value: `secret:file/<name>` resolves under
+`secretProviders.file.root`. Mount each secret as a file owned by the runtime user, mode `0400` or
+`0600`, with no symbolic or extra hard link. `operator-controlled-upstream` requires
+`allowedClients` to list its clients. Ship the audit journal to your archive;
+[Review retention and audit](../casework-retention/#keep-the-audit-file) covers its key and
+rotation.
+
+{/* Evidence: crates/registry-casework/src/config.rs, RuntimeConfig;
+    crates/registry-platform-config/src/secrets.rs, validate_file_metadata();
+    products/casework/RUNTIME-CONFIG.md. */}
+
+### Add a current-source provider
+
+A current-source policy names a provider by its `deploymentRef`. Bind it to a read-only provider:
+
+```yaml
 contextProviders:
   facility-registry:
     baseUrl: https://registry.example.test
@@ -123,234 +160,202 @@ contextProviders:
     clientAssertionKeyRef: secret:file/breg-status-client-key
 ```
 
-Every `...Ref` key names a secret, never its value: `secret:file/<name>` resolves under
-`secretProviders.file.root`, and `secret:env/<NAME>` only when `secretProviders.environment` is
-declared. `tlsTermination: development-loopback` allows plaintext on loopback only; a production
-listener sets `operator-controlled-upstream` and sits behind the TLS proxy you run.
+This Base Registry Engine (BReg) status reader checks reviewability only; its `statusProfile`
+must match the authored service-status profile. Human display uses the reviewer's own bearer, so
+source authorization and disclosure still apply. A Casework approval never applies a BReg
+Proposal.
 
-{/* Evidence: products/casework/examples/canonical-review/runtime.example.yaml;
-    products/casework/generated/runtime/runtime.schema.json, SecretReference and TlsTermination. */}
+{/* Evidence: products/casework/examples/canonical-review/{casework.yaml,runtime.example.yaml};
+    crates/registry-casework-breg/src/config.rs;
+    crates/registry-casework/src/runtime.rs, build_context_providers(). */}
+
+### Check the runtime file offline
+
+Check the authored project against the runtime file before anything touches a database:
+
+```sh
+caseworkctl check ./decisions --runtime-config /etc/registry-casework/runtime.yaml
+```
+
+The check opens no package, database, issuer, provider, or secret. Add `--environment` to fill
+`${VAR}` expressions from the current environment. A clean check does not prove live readiness.
 
 <ConfigurationReference contracts={reference.contracts.filter((contract) => contract.id === 'runtime')} prefix="casework" />
 
-## Check the project against it
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, check_runtime_config();
+    crates/registry-caseworkctl/src/lib.rs, CheckArgs. */}
 
-```sh
-caseworkctl check tutorial-work/casework --runtime-config "$cfg"
-```
+## Verify the package before it opens the listener
 
-```json test-excerpt
-{"databaseAccess": false, "filesChecked": 3, "networkAccess": false}
-```
+Write the package with `caseworkctl package`, install it in its own directory, and set
+`package.root` to it. Record its `packageDigest` in your change record and set
+`package.expectedDigest` to the same value, so that replacing files under `package.root` cannot
+change what a restart loads. Never edit a package in place: apply and startup both verify every
+file against `SHA256SUMS`, and an authored directory without one is refused.
 
-The check reads the project and the runtime configuration together, without touching the
-database or the network.
+Keep earlier package directories for recovery, and plan every activation, rollbacks included.
 
-{/* Evidence: crates/registry-caseworkctl/src/project.rs, check() and check_runtime_config(). */}
+{/* Evidence: crates/registry-casework/src/config.rs, verify_casework_package() and expected_digest;
+    products/casework/RUNTIME-CONFIG.md, package. */}
 
-## Package the project
+## Refuse a package that strands pinned work
 
-```sh
-caseworkctl package tutorial-work/casework --output tutorial-work/package
-cat tutorial-work/package/SHA256SUMS
-```
+An accepted review keeps the policy closure it was admitted under. A candidate that removes a
+policy, producer, profile, team, queue, provider, or context contract an open review still needs is
+refused with `casework.activation.stranded-work`, and so is a change to pinned policy content under
+the same policy version. There is no override. Let the affected reviews finish, have their producer
+cancel them, or prepare a successor that keeps what they need.
 
-```text test-excerpt
-<digest>  casework.yaml
-```
-
-The [policy package](../../reference/glossary/#policy-package) is the directory a runtime's
-`package.root` names. Its [package digest](../../reference/glossary/#package-digest) covers
-`SHA256SUMS`, and `secretsIncluded: false` in the report confirms it holds no secret.
-
-{/* Evidence: crates/registry-caseworkctl/src/project.rs, package();
-    crates/registry-casework/src/config.rs, RuntimePackageConfig. */}
-
-## Diagnose the deployment
-
-```sh
-caseworkctl doctor --runtime-config "$cfg"
-```
-
-```json test-excerpt
-{"checks": {"audit": "ready", "configuration": "ready", "database": "ready", "package": "ready"}}
-```
-
-`doctor` connects to the database and audit journal and compares the configured package with the
-one the database runs.
-
-{/* Evidence: crates/registry-caseworkctl/src/project.rs, doctor(). */}
+{/* Evidence: crates/registry-casework/src/pinned_work.rs, compare_pinned_work() and stranded_work_refusal();
+    crates/registry-casework/src/activation.rs, stranded-work. */}
 
 ## Plan, apply, and serve
 
-The database records each activation: which package it runs and which one came before. The
-session already applied its package, so applying it again is refused:
-
-```sh test-exit="1"
-caseworkctl apply --runtime-config "$cfg"
-```
-
-```text test-expect
-error[casework.activation.already-active] runtime.yaml:/package
-  package sha256:<digest> is already the active package in this database; nothing needs applying
-  next: The package is already active. Check caseworkctl status before choosing a different package.
-1 error, 0 warnings
-```
-
-Change the project, package it again, and point a copy of the configuration at the new package:
-
-```diff test-edit title="tutorial-work/casework/casework.yaml"
-   decisions:
--    label: Decisions awaiting review
-+    label: Decisions awaiting a reviewer
-```
+From the operator host, read the plan, apply it with the migration credential, and read the
+result:
 
 ```sh
-caseworkctl package tutorial-work/casework --output tutorial-work/package-next
-sed "s#^  root: .*/\.casework/dev/package\$#  root: $PWD/tutorial-work/package-next#" \
-  "$cfg" > tutorial-work/successor.yaml
-next="$PWD/tutorial-work/successor.yaml"
-caseworkctl plan --runtime-config "$next"
+caseworkctl plan --runtime-config /etc/registry-casework/runtime.yaml
+caseworkctl apply --runtime-config /etc/registry-casework/runtime.yaml \
+  --operator-reference CHANGE-1234 --backup-reference nightly-before-activation
+caseworkctl status --runtime-config /etc/registry-casework/runtime.yaml
 ```
 
-```json test-excerpt
-{"changesPending": true, "planKind": "successor", "refusals": []}
-```
+`plan` writes nothing; read its package digest, pending schema versions, role mode, and refusals.
+Applying the package that is already active is refused with
+`casework.activation.already-active`. `--operator-reference` is stored as a keyed hash;
+`--backup-reference` is stored as text, so use a snapshot identifier without personal data.
 
-The plan is read-only. It refuses a successor that would strand pinned work. Apply it under a
-reference your change record keeps:
+If apply returns `casework.activation.applied-unaudited`, the activation committed but its audit
+entry did not: restore audit, read `status`, and record the recovery. A runtime role that cannot
+read the ledger gets `casework.activation.ledger-unreadable`; apply restores its grants. Exit codes
+are `0` for success, `1` for a refusal, `2` for usage, and `3` for an operational failure.
+
+Then serve as the runtime user:
 
 ```sh
-caseworkctl apply --runtime-config "$next" --operator-reference tutorial-change-1
+casework --runtime-config /etc/registry-casework/runtime.yaml serve
+curl --fail http://10.42.0.7:8100/ready
 ```
 
-```json test-excerpt
-{"applyOrder": 2, "planKind": "successor", "predecessorPackageDigest": "sha256:<digest>"}
-```
-
-A running runtime keeps the package it started with, and startup refuses a database whose active
-package is not the configured one. Restart the runtime with the successor file:
-`casework --runtime-config <absolute path> serve`.
+Startup refuses a database whose active package is not the configured one. `/ready` checks the
+database and audit writer only; check source context and queue staffing with real identities.
 
 {/* Evidence: crates/registry-casework/src/activation.rs, plan_activation() and apply_activation();
     crates/registry-caseworkctl/src/project.rs, plan() and apply();
-    crates/registry-casework/src/pinned_work.rs. */}
+    crates/registry-caseworkctl/src/report.rs, USAGE_EXIT and OPERATIONAL_FAILURE_EXIT;
+    crates/registry-casework/src/runtime.rs, check_activation();
+    crates/registry-casework/src/service.rs, ready(). */}
 
-## Read the activation history
+### Earlier database and audit state
 
-```sh
-caseworkctl status --runtime-config "$next"
+The current contract refuses retired Casework schemas with `casework.activation.retired-schema`,
+and a database newer than the binary with `casework.activation.schema-newer`. Keep such a database
+with the release that wrote it and provision a fresh one. Never delete ledger rows or run migration
+SQL by hand to get past either refusal.
+
+A restore returns review state to its backup point, and the external audit journal must not be
+rewound. Follow [Casework restore and reconciliation](../advanced/back-up-and-restore/#restore-registry-casework)
+before reviewers resume.
+
+{/* Evidence: crates/registry-casework/src/activation.rs, retired-schema and schema-newer;
+    products/casework/scripts/test-backup-restore.sh. */}
+
+### Scrape metrics and the running version
+
+The API listener serves no metrics. Open a private telemetry listener for them:
+
+```yaml
+metricsListener:
+  bind: 127.0.0.1:9100
 ```
 
-```json test-excerpt
-{"singleRoleStatement": "single-role mode: the ledger check catches a wrong package, but not someone holding this credential"}
-```
+It serves `/metrics` and `/version` only, on a loopback or private address that is not the API
+listener's. Metrics count open review requests, open tasks, and due tasks, with no subject
+identifiers. `/version` reports the binary version and the package digest the process serves, so a
+rollout can confirm what each process runs.
 
-`history` lists both activations. Single-role mode means the runtime's database role can write
-the activation ledger; give the runtime a role of its own in production.
+{/* Evidence: crates/registry-casework/src/metrics.rs, metrics_router();
+    crates/registry-casework/src/config.rs, MetricsListenerConfig;
+    products/casework/RUNTIME-CONFIG.md, metricsListener. */}
 
-{/* Evidence: crates/registry-caseworkctl/src/project.rs, status();
-    crates/registry-casework/src/activation.rs, grant_runtime_role() and observe_role(). */}
+## Establish directory authority
 
-## Check readiness
-
-```sh
-casework_url=http://127.0.0.1:8182
-curl --silent --output /dev/null --write-out 'HTTP %{http_code}\n' "$casework_url/ready"
-curl --silent --output /dev/null --write-out 'HTTP %{http_code}\n' "$casework_url/metrics"
-curl --silent --output /dev/null --write-out 'HTTP %{http_code}\n' "$casework_url/version"
-```
-
-```text test-expect
-HTTP 200
-HTTP 404
-HTTP 404
-```
-
-`/ready` answers `200` once the database and audit writer are ready. Counters and the active
-package digest are served only on an operator-private listener, which `metricsListener.bind` in the
-[runtime configuration](../casework/#casework-runtime-configuration) opens and the session does not
-set.
-
-{/* Evidence: crates/registry-casework/src/http.rs, router(), health() and ready();
-    crates/registry-casework/src/metrics.rs, metrics_router(). */}
-
-## Establish the directory
-
-The session started with `teams: 1`: its [directory](../../reference/glossary/#directory), the
-administrator's record of teams, their staff and supervisors, and the queues they serve. In a
-deployment an administrator bootstraps the first team and changes teams through the
-[directory API](../../reference/apis/casework/operations/getdirectory/), each write naming the
-directory revision it expects.
+A fresh deployment has an empty directory, so no reviewer sees a task until an administrator
+bootstraps the first team and its served queues.
+[Staff the Casework directory](../../configure/casework-directory/) gives the requests. Each
+directory write names the revision it expects, and membership and queue service are live
+authority for old and new tasks alike.
 
 {/* Evidence: crates/registry-casework/src/assignment.rs, bootstrap_directory() and update_directory_team();
-    crates/registry-caseworkctl/src/dev/mod.rs. */}
+    crates/registry-casework/src/http.rs, /v1/directory/bootstrap. */}
 
-## Stop and remove the session
+### Size the review queue reads
 
-```sh
-caseworkctl dev stop tutorial-work/casework
-```
+The `inbox` policy in `casework.yaml` bounds each task-list, next-task, and holdings read. Defaults
+are `maximumCandidateScan: 100`, `maximumSourceReads: 25`, and `pageDeadlineMilliseconds: 2000`;
+counts go up to 10,000 and the deadline to 30,000. Concealed candidates still spend the scan budget.
+Filtering or sorting by live source reference scans the whole bounded queue; an exact subject or
+queue selector narrows it, a smaller page does not.
 
-The project changed after the session started, so the retained session refuses to start again:
+A read that exhausts its candidate, source, or time budget is refused with
+`review.query-too-broad`. Measure representative source latency before raising budgets. A caseload
+preview refuses more than 100 claimed tasks; split it by queue or move tasks one at a time.
 
-```sh test-exit="3"
-caseworkctl dev start tutorial-work/casework
-```
+{/* Evidence: crates/registry-casework-core/src/config.rs, InboxPolicy and its defaults;
+    crates/registry-casework/src/review.rs, QueryTooBroad;
+    crates/registry-casework/src/review/staffing.rs, caseload preview bound. */}
 
-```text test-expect
-error[caseworkctl.dev.inputs-changed] .casework/dev
-  The authored project, clients file, or ports differ from the retained development session, which still holds records.
-  next: Run caseworkctl dev stop --remove to discard the retained session and start again from the edited inputs, or copy the authored files to a new project directory to keep it.
-1 error, 0 warnings
-```
+### Check readiness with doctor
 
-Removing the session deletes its database, credentials and audit journal; keep anything you need
-first.
+Run the operator preflight as the runtime user:
 
 ```sh
-caseworkctl dev stop tutorial-work/casework --remove
+caseworkctl doctor --runtime-config /etc/registry-casework/runtime.yaml
 ```
 
-```json test-excerpt
-{"directory": {"revision": 0, "teams": 0}, "state": "stopped"}
-```
+Doctor checks the configuration, the package, the database activation, open reviews against the
+configured package, and that the audit path is writable. It accepts the package already active.
+It opens no listener and proves no issuer or provider access; use `/ready` and an authenticated
+task read for those.
 
-{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, stop and InputsChanged. */}
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, doctor();
+    products/casework/RUNTIME-CONFIG.md, doctor repeats the pinned-work check. */}
+
+## Change the active package
+
+A running process keeps the package it started with and does not recheck the activation ledger,
+so a predecessor left serving after apply goes on admitting work under the old package. Take it out
+of your proxy's routing, stop every process serving it, then plan, apply, and start the successor
+at once. The successor repeats the pinned-work check before it opens its listener. If it refuses
+with `casework.activation.stranded-work`, plan and apply the predecessor again, serve it until the
+named reviews finish or are cancelled, and retry the change.
+[Change an active package](../change-a-casework-package/) walks the plan and apply against a local
+session.
+
+{/* Evidence: crates/registry-casework/src/runtime.rs, serve_from_path() and check_pinned_work();
+    crates/registry-casework/src/service.rs, ready() checks only the database and audit writer;
+    crates/registry-casework/src/pinned_work.rs, stranded_work_refusal(). */}
 
 ## Troubleshooting
 
-A relative runtime configuration path is refused before anything is read:
-
-```sh test-exit="1"
-caseworkctl doctor --runtime-config tutorial-work/casework/.casework/dev/operator.yaml
-```
-
-```text test-expect
-error[platform.runtime-config.path] runtime.yaml:
-  The runtime configuration was refused.
-  next: Give the absolute path of the runtime configuration file, without . or .. components.
-1 error, 0 warnings
-```
-
-`init` never writes over an existing directory. The report does not say so; pick a path that does
-not exist:
-
-```sh test-exit="1"
-caseworkctl init tutorial-work/casework
-```
-
-```text test-expect
-error[caseworkctl.refused] runtime
-  The authored input was refused.
-  next: Correct the named input or runtime dependency, then retry.
-1 error, 0 warnings
-```
+| Symptom | Recovery |
+| --- | --- |
+| `platform.runtime-config.path` | Give the absolute path of the runtime file, without `.` or `..` components. |
+| Startup names a different active package | Plan and apply the configured package, or point `package.root` at the active one. |
+| `review.policy-mismatch` on admission | Reconcile the producer's policy pin with the deployed policy. |
+| A current-source task is concealed or unavailable | Check the reviewer's source profile, the context binding, and the provider. Never use the status credential for human display. |
+| `review.query-too-broad` | Narrow the queue or subject, review the `inbox` budgets, or split a caseload move. |
+| `precondition.failed` | Read the task or directory again and take a fresh preview where one is required. |
+| `service.unavailable` and `/ready` returns `503` | Repair the database or the audit path, space, or permissions and restart. Retry an interrupted write with its original key. |
 
 {/* Evidence: crates/registry-platform-config/src/loader.rs, validate_absolute_lexical_path();
-    crates/registry-caseworkctl/src/project.rs, init();
-    crates/registry-caseworkctl/src/lib.rs, classify_failure(). */}
+    crates/registry-casework/src/runtime.rs, PackageNotActive;
+    crates/registry-casework/src/problem.rs;
+    crates/registry-platform-audit/src/writer.rs. */}
 
 ## Next
 
-[Review retention and audit](../casework-retention/)
+- [Change an active package](../change-a-casework-package/)
+- [Review retention and audit](../casework-retention/)
+- [Back up and restore Casework](../advanced/back-up-and-restore/#restore-registry-casework)

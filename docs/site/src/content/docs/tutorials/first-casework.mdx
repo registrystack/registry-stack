@@ -24,12 +24,12 @@ producer. The request carries its own snapshot, so no source registry is needed.
   outcome="One ReviewRequest decided by staff and read by its producer, who is refused the task."
   time="About 20 minutes, plus image downloads"
   level="Local evaluation only"
-  prerequisites={['Running Docker', 'curl 7.76 or later', 'Python 3', 'Free loopback ports 8182, 8183 and 55473']}
+  prerequisites={['Running Docker', 'curl 7.76 or later', 'jq', 'Free loopback ports 8092, 8093 and 15433']}
 />
 
 ## Install casework and caseworkctl
 
-`casework` is the review service and [`caseworkctl`](/reference/cli/caseworkctl/) its tool. The
+`casework` is the review service and [`caseworkctl`](../../reference/cli/caseworkctl/) its tool. The
 installer checks the checksums on the
 [releases page](https://github.com/registrystack/registry-stack/releases/latest) and puts both
 in `~/.local/bin`; keep it on your `PATH`.
@@ -50,11 +50,14 @@ casework <version>
 caseworkctl <version>
 ```
 
-## Create and check the project
+## Create the project
+
+Create a project from the standalone template and work inside it:
 
 ```sh
 mkdir -p tutorial-work
 caseworkctl init tutorial-work/casework --template standalone-decision
+cd tutorial-work/casework
 ```
 
 ```json test-excerpt
@@ -68,16 +71,14 @@ caseworkctl init tutorial-work/casework --template standalone-decision
 }
 ```
 
-This tutorial's token issuer listens on port 8183. Point the trusted producer at it:
+## Check what the policy allows
 
-```diff test-edit title="tutorial-work/casework/casework.yaml"
--issuer: http://127.0.0.1:8093
-+issuer: http://127.0.0.1:8183
-```
+The project declares one [ReviewPolicy](../../reference/glossary/#review-policy), `decision`: who
+may ask, which team answers, and the outcomes allowed. Check it offline and run its fixture:
 
 ```sh
-caseworkctl check tutorial-work/casework
-caseworkctl test tutorial-work/casework
+caseworkctl check .
+caseworkctl test .
 ```
 
 ```json test-excerpt
@@ -88,83 +89,99 @@ caseworkctl test tutorial-work/casework
 }
 ```
 
-The project declares one [ReviewPolicy](../../reference/glossary/#review-policy), `decision`:
-who may ask, which team answers, and the outcomes allowed. The check pins it to a digest, and
-the test runs its offline fixture.
-
-## Start the development session
+The digest pins the policy's behavior. To read what that behavior is, explain it:
 
 ```sh
-caseworkctl dev start tutorial-work/casework \
-  --casework-port 8182 --issuer-port 8183 --database-port 55473
+caseworkctl explain .
 ```
 
 ```json test-excerpt
 {
-  "caseworkUrl": "http://127.0.0.1:8182",
+  "contextCustody": "admitted bounded snapshot",
+  "refusals": [
+    "untrusted producer",
+    "policy binding mismatch",
+    "concealed source",
+    "changed subject or contract",
+    "stale task revision",
+    "ineligible reviewer"
+  ]
+}
+```
+
+Casework keeps the snapshot the producer sends and refuses each listed case.
+
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, check(), test(), explain(). */}
+
+## Start the development session
+
+```sh
+caseworkctl dev start
+```
+
+```json test-excerpt
+{
+  "caseworkUrl": "http://127.0.0.1:8092",
   "directory": {"revision": 1, "teams": 1},
   "state": "ready"
 }
 ```
 
-PostgreSQL and a token issuer run in Docker, with one staff team seeded.
-`tutorial-work/casework/.casework/dev/` holds private credentials; keep it out of version
-control. Get five-minute tokens for the producer (`requester`) and for `staff`:
+PostgreSQL and a token issuer run in Docker, with one staff team seeded. `.casework/dev/` holds
+private credentials; keep it out of version control. Get tokens for the producer (`requester`)
+and for `staff`:
 
 ```sh
-caseworkctl dev token requester tutorial-work/casework
-caseworkctl dev token staff tutorial-work/casework
-casework_url=http://127.0.0.1:8182
-headers=tutorial-work/casework/.casework/dev/secrets
-sed 's/: .*/: <redacted>/' "$headers/requester.header"
+caseworkctl dev token requester
+caseworkctl dev token staff
+casework_url=http://127.0.0.1:8092
+headers=.casework/dev/secrets
 ```
 
-```text test-excerpt
-Authorization: <redacted>
-Registry-Casework-Profile: <redacted>
-Registry-Review-Profile: <redacted>
+```json test-excerpt
+{"headerFile": "<path>"}
 ```
 
-Each header file carries a token and the caller's profiles.
+Each header file carries a token and the caller's profiles. Tokens last five minutes; when a call
+answers `401`, run `dev token` again.
 
-{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, header_file. */}
+{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, start, the dev token report, header_file. */}
 
 ## Submit a ReviewRequest
 
-Fetch the policy, then build and send a request that pins it and carries a digested snapshot:
+Save the request. It names the policy, the subject under review, and the snapshot a reviewer will
+read:
+
+```json title="request.json" test-file
+{
+  "policy": {"id": "decision"},
+  "subject": {
+    "source": "standalone",
+    "type": "batch",
+    "id": "LIC-2026-0041",
+    "version": "1",
+    "digest": "sha256:6a3167d79ae3308448b24f2c9c0b9ac1cf116a7ad8be0c167c7e8660e43662bb"
+  },
+  "requesterReference": "LIC-2026-0041",
+  "context": {
+    "mode": "submitted",
+    "snapshot": {"reference": "LIC-2026-0041", "summary": "Review licence batch LIC-2026-0041"}
+  }
+}
+```
+
+The subject digest is the producer's own fingerprint of the version it asks about, here the
+SHA-256 of the snapshot's compact JSON; Casework binds the request and its result to it. Send it:
 
 ```sh
-curl --fail-with-body --silent --show-error \
-  --header @"$headers/requester.header" \
-  --output tutorial-work/policy.json \
-  "$casework_url/v1/review-policies/decision"
-python3 - <<'PYREQUEST'
-import hashlib
-import json
-from pathlib import Path
-
-snapshot = {"reference": "LIC-2026-0041", "summary": "Review licence batch LIC-2026-0041"}
-content = json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()
-request = {
-    "policy": json.loads(Path("tutorial-work/policy.json").read_text())["identity"],
-    "subject": {
-        "source": "standalone", "type": "batch", "id": "LIC-2026-0041", "version": "1",
-        "digest": "sha256:" + hashlib.sha256(content).hexdigest(),
-    },
-    "requesterReference": "LIC-2026-0041",
-    "context": {"mode": "submitted", "snapshot": snapshot},
-}
-Path("tutorial-work/request.json").write_text(json.dumps(request))
-PYREQUEST
 curl --fail-with-body --silent --show-error \
   --header @"$headers/requester.header" \
   --header 'Idempotency-Key: tutorial-review-1' \
   --header 'Content-Type: application/json' \
-  --data-binary @tutorial-work/request.json \
-  --output tutorial-work/requested.json --write-out 'HTTP %{http_code}\n' \
+  --data-binary @request.json --output accepted.json \
   "$casework_url/v1/review-requests"
-python3 -m json.tool tutorial-work/requested.json
-request_id="$(python3 -c 'import json; print(json.load(open("tutorial-work/requested.json"))["requestId"])')"
+jq . accepted.json
+request_id="$(jq -r .requestId accepted.json)"
 ```
 
 ```json test-excerpt
@@ -175,10 +192,12 @@ request_id="$(python3 -c 'import json; print(json.load(open("tutorial-work/reque
 }
 ```
 
-The same body under the same key returns this request again, not a second one.
+The request named only the policy ID, so Casework bound it to the active version and the digest
+`check` printed. The same body under the same key returns this request, not a second one.
 
 {/* Evidence: crates/registry-casework/src/http.rs, create_review_request;
-    crates/registry-review-protocol/src/lib.rs, ReviewCreateRequest, ReviewRequestAccepted;
+    crates/registry-casework/src/review.rs, PolicySelection::matches at admission;
+    crates/registry-review-protocol/src/lib.rs, ReviewCreateRequest, PolicySelection, ReviewRequestAccepted;
     crates/registry-casework/tests/review_http.rs, producer_http_create_recover_conflict_and_pending_result_are_closed. */}
 
 ## Read the ReviewTask
@@ -187,21 +206,18 @@ The request opened a [ReviewTask](../../reference/glossary/#review-task). List i
 
 ```sh
 curl --fail-with-body --silent --show-error \
-  --header @"$headers/staff.header" \
-  --output tutorial-work/tasks.json \
+  --header @"$headers/staff.header" --output tasks.json \
   "$casework_url/v1/review-tasks?limit=25"
-task_id="$(python3 -c 'import json; print(json.load(open("tutorial-work/tasks.json"))["items"][0]["taskId"])')"
-task_revision="$(python3 -c 'import json; print(json.load(open("tutorial-work/tasks.json"))["items"][0]["revision"])')"
+task_id="$(jq -r '.items[0].taskId' tasks.json)"
+task_revision="$(jq -r '.items[0].revision' tasks.json)"
 ```
 
-Try it as the producer:
+Try to read it as the producer:
 
 ```sh
 curl --silent --show-error \
   --header @"$headers/requester.header" \
-  --output tutorial-work/refused.json --write-out 'HTTP %{http_code}\n' \
-  "$casework_url/v1/review-tasks/$task_id"
-python3 -m json.tool tutorial-work/refused.json
+  "$casework_url/v1/review-tasks/$task_id" | jq .
 ```
 
 ```json test-excerpt
@@ -210,31 +226,32 @@ python3 -m json.tool tutorial-work/refused.json
 
 A producer may read its result, never the human task.
 
-{/* Evidence: crates/registry-casework/src/http.rs, get_review_task. */}
+{/* Evidence: crates/registry-casework/src/http.rs, review_tasks, get_review_task. */}
 
 ## Claim and decide
 
-[Claim](../../reference/glossary/#claim) the task at the revision you read:
+[Claim](../../reference/glossary/#claim) the task at the revision you read, so no one else decides
+it while you work:
 
 ```sh
 curl --fail-with-body --silent --show-error --request POST \
   --header @"$headers/staff.header" \
   --header "If-Match: \"$task_revision\"" \
   --header 'Idempotency-Key: tutorial-claim-1' \
-  --output tutorial-work/claimed.json \
+  --output claimed.json \
   "$casework_url/v1/review-tasks/$task_id/claim"
-python3 -m json.tool tutorial-work/claimed.json
-claimed_revision="$(python3 -c 'import json; print(json.load(open("tutorial-work/claimed.json"))["revision"])')"
+jq . claimed.json
+claimed_revision="$(jq -r .revision claimed.json)"
 ```
 
 ```json test-excerpt
 {
   "revision": 2,
-  "state": {"held": {"holder": {"issuer": "http://127.0.0.1:8183", "subject": "<subject>"}}}
+  "state": {"held": {"holder": {"issuer": "http://127.0.0.1:8093", "subject": "<subject>"}}}
 }
 ```
 
-You hold the task at revision 2. Decide it with a declared outcome:
+You hold the task at revision 2. Decide it with one of the policy's outcomes:
 
 ```sh
 curl --fail-with-body --silent --show-error --request POST \
@@ -256,12 +273,12 @@ HTTP 204
 
 ## Read the ReviewResult
 
+Back as the producer, fetch the answer:
+
 ```sh
 curl --fail-with-body --silent --show-error \
   --header @"$headers/requester.header" \
-  --output tutorial-work/result.json --write-out 'HTTP %{http_code}\n' \
-  "$casework_url/v1/review-requests/$request_id/result"
-python3 -m json.tool tutorial-work/result.json
+  "$casework_url/v1/review-requests/$request_id/result" | jq .
 ```
 
 ```json test-excerpt
@@ -275,15 +292,11 @@ and submission digest. It names no reviewer and is kept until `availableUntil`.
     crates/registry-review-protocol/src/lib.rs, ReviewResult;
     crates/registry-casework/tests/review_http.rs, standalone_structured_answer_can_be_claimed_decided_and_polled_over_http. */}
 
-## Leave the session running
+## Leave it running
 
-The next pages use this project. Stopping the session keeps its database:
-
-```sh
-caseworkctl dev stop tutorial-work/casework
-```
-
-`caseworkctl dev start tutorial-work/casework`, without flags, restarts it on the same ports.
+The next page continues with this session and its policy, so leave it running. When you are
+finished with Casework, run `caseworkctl dev stop --remove` in `tutorial-work/casework` to delete
+the session's containers, database and credentials.
 
 {/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, stop. */}
 
