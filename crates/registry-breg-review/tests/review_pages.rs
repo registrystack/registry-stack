@@ -10,52 +10,10 @@ use axum::http::StatusCode;
 use registry_breg_client::BRegProblemCode;
 use support::{
     browser, cookie_pair, sign_in_to, start_narrow_scope_provider, write_secret, AuditSink,
-    Environment, Harness, Options, ACTION, ADDRESS_A, B_REQUEST_ID, CITIZEN_A, CITIZEN_B,
-    CLIENT_ID, CURRENT_LINE_A, EXPECTED_CSP, FOREIGN_TARGET_REQUEST_ID, HOSTILE_STREET,
-    OTHER_REQUEST_ID, PROFILE, PROPOSED_LOCALITY, REQUEST_ID, RESOURCE, SCOPE, TARGET_FIELD,
+    Harness, Options, ACTION, ADDRESS_A, B_REQUEST_ID, CITIZEN_A, CITIZEN_B, CLIENT_ID,
+    CURRENT_LINE_A, EXPECTED_CSP, FOREIGN_TARGET_REQUEST_ID, HOSTILE_STREET, OTHER_REQUEST_ID,
+    PROFILE, PROPOSED_LOCALITY, REQUEST_ID, RESOURCE, SCOPE, TARGET_FIELD,
 };
-
-#[tokio::test]
-async fn production_startup_carries_the_explicit_http_issuer_opt_in_into_discovery() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let environment =
-        Environment::prepare(listener.local_addr().unwrap(), &Options::default()).await;
-    drop(listener);
-    let source = std::fs::read_to_string(&environment.config_path).unwrap();
-    let development_listener = format!(
-        "listener:\n  bind: \"{}\"\n  tlsTermination: development-loopback",
-        environment.address
-    );
-    let production_listener = "listener:\n  bind: 10.0.0.5:8115\n  tlsTermination: operator-controlled-upstream\n  networkExposure: private-address";
-    let public_origin = format!("publicOrigin: {}", environment.origin);
-    let registry_base = source
-        .lines()
-        .find(|line| line.starts_with("  baseUrl: http://"))
-        .unwrap();
-    let issuer = format!("  issuer: {}", environment.authorization_server.issuer());
-    let production = source
-        .replace(&development_listener, production_listener)
-        .replace(&public_origin, "publicOrigin: https://review.example")
-        .replace(registry_base, "  baseUrl: https://registry.example/base");
-    assert_ne!(production, source);
-
-    let root = environment.config_path.parent().unwrap();
-    let without_path = root.join("production-without-opt-in.yaml");
-    std::fs::write(&without_path, &production).unwrap();
-    assert!(registry_breg_review::RuntimeConfig::load(&without_path).is_err());
-
-    let with_opt_in = production.replace(&issuer, &format!("{issuer}\n  allowInsecureHttp: true"));
-    assert_ne!(with_opt_in, production);
-    let with_path = root.join("production-with-opt-in.yaml");
-    std::fs::write(&with_path, with_opt_in).unwrap();
-    let config = registry_breg_review::RuntimeConfig::load(&with_path)
-        .expect("the explicit production HTTP issuer opt-in loads");
-    let writer =
-        registry_platform_audit::AuditWriter::from_line_sink(Box::new(AuditSink::default()));
-    let _router = registry_breg_review::router_with_audit_writer(config, writer)
-        .await
-        .expect("production startup carries the opt-in into discovered endpoints");
-}
 
 fn review_path() -> String {
     format!("/proposals/{REQUEST_ID}")

@@ -115,12 +115,9 @@ pub struct RuntimeConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SignInConfig {
     /// The provider's issuer. An https URL with no query or fragment; plain
-    /// http is accepted on a loopback host under `development-loopback`, or
-    /// elsewhere when `allowInsecureHttp` explicitly permits it.
+    /// http is accepted only on a loopback host under `development-loopback`,
+    /// because the page sends its client credentials to the token endpoint.
     pub issuer: Url,
-    /// Permit plain HTTP to the declared issuer beyond loopback.
-    #[serde(default)]
-    pub allow_insecure_http: bool,
     /// The page's client identifier at the provider.
     pub client_id: ExternalId,
     /// Secret reference to the client's private JWK, used for
@@ -132,13 +129,6 @@ pub struct SignInConfig {
     #[serde(deserialize_with = "scope_list")]
     #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 16)))]
     pub scopes: UniqueList<ScopeToken>,
-}
-
-impl SignInConfig {
-    pub(crate) fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
-        self.allow_insecure_http
-            .then_some("signIn.allowInsecureHttp permits plain HTTP to the configured issuer")
-    }
 }
 
 /// The Base Registry Engine deployment and the one access profile the page
@@ -660,18 +650,15 @@ fn endpoint_findings(
     ];
     for (pointer, endpoint) in endpoints {
         let url = endpoint.to_url();
-        let issuer_http_opt_in = pointer == "/signIn/issuer" && config.sign_in.allow_insecure_http;
-        let secure = url.scheme() == "https"
-            || (development && loopback_host(&url))
-            || (issuer_http_opt_in && url.scheme() == "http");
+        let secure = url.scheme() == "https" || (development && loopback_host(&url));
         if termination_known && !secure {
             findings.push(Finding::new(
                 "breg.review-runtime.plain-http-endpoint",
                 pointer,
                 "the endpoint uses plain http, which is accepted only on a loopback host under \
                  listener.tlsTermination development-loopback",
-                "Write an https URL, run on loopback with listener.tlsTermination \
-                 development-loopback, or set signIn.allowInsecureHttp: true for the issuer.",
+                "Write an https URL, or run on loopback with listener.tlsTermination \
+                 development-loopback.",
             ));
         } else if url.query().is_some() || url.fragment().is_some() {
             findings.push(Finding::new(
@@ -705,22 +692,12 @@ fn loopback_host(url: &url::Url) -> bool {
 }
 
 /// Whether `url`, read from the provider's discovery document, is an
-/// endpoint the runtime may call for this mode: https, plain http on a
-/// loopback host in development, or plain http under the explicit issuer
-/// opt-in, with no user information or fragment.
-pub(crate) fn allowed_discovered_endpoint(
-    url: &url::Url,
-    issuer: &url::Url,
-    development: bool,
-    allow_insecure_http: bool,
-) -> bool {
-    // The plain HTTP opt-in covers only the issuer's own origin.
+/// endpoint the runtime may call for this mode: https, or plain http on a
+/// loopback host in development, with no user information or fragment.
+pub(crate) fn allowed_discovered_endpoint(url: &url::Url, development: bool) -> bool {
     let secure = match url.scheme() {
         "https" => true,
-        "http" => {
-            (allow_insecure_http && url.origin() == issuer.origin())
-                || (development && loopback_host(url))
-        }
+        "http" => development && loopback_host(url),
         _ => false,
     };
     secure
@@ -1299,16 +1276,17 @@ audit:
             "breg.review-runtime.plain-http-endpoint",
             "/signIn/issuer",
         );
+        // Sign-in sends client credentials to the token endpoint, so the page
+        // has no plain HTTP opt-in: the key is unknown.
         let opted_in = document().replace(
             "  issuer: https://id.example",
             "  issuer: http://id.example\n  allowInsecureHttp: true",
         );
-        let config = load(&opted_in).expect("explicit HTTP issuer opt-in");
-        assert!(config.sign_in.allow_insecure_http);
-        assert_eq!(
-            config.sign_in.insecure_http_startup_diagnostic(),
-            Some("signIn.allowInsecureHttp permits plain HTTP to the configured issuer")
-        );
+        assert!(load(&opted_in).is_err());
+        assert!(findings_of(&opted_in).contains(&(
+            "config.unknown-key".to_owned(),
+            "/signIn/allowInsecureHttp".to_owned()
+        )));
         refused(
             &development().replace("bind: 127.0.0.1:8115", "bind: 0.0.0.0:8115"),
             "breg.review-runtime.public-bind",
@@ -1494,54 +1472,29 @@ audit:
     #[test]
     fn a_discovered_endpoint_follows_the_mode() {
         let parse = |text: &str| url::Url::parse(text).expect("url");
-        let issuer = parse("http://id.example");
         assert!(allowed_discovered_endpoint(
             &parse("https://id.example/token"),
-            &issuer,
-            false,
-            false,
+            false
         ));
         assert!(!allowed_discovered_endpoint(
             &parse("http://127.0.0.1:9000/token"),
-            &issuer,
-            false,
-            false,
+            false
         ));
         assert!(allowed_discovered_endpoint(
             &parse("http://127.0.0.1:9000/token"),
-            &issuer,
-            true,
-            false,
+            true
         ));
         assert!(!allowed_discovered_endpoint(
             &parse("http://id.example/token"),
-            &issuer,
-            true,
-            false,
-        ));
-        assert!(allowed_discovered_endpoint(
-            &parse("http://id.example/token"),
-            &issuer,
-            false,
-            true,
-        ));
-        assert!(!allowed_discovered_endpoint(
-            &parse("http://keys.example/token"),
-            &issuer,
-            false,
-            true,
+            true
         ));
         assert!(!allowed_discovered_endpoint(
             &parse("https://user@id.example/token"),
-            &issuer,
-            false,
-            false,
+            false
         ));
         assert!(!allowed_discovered_endpoint(
             &parse("https://id.example/token#a"),
-            &issuer,
-            false,
-            false,
+            false
         ));
     }
 }
