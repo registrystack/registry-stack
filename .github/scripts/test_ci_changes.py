@@ -2956,6 +2956,32 @@ on:
                 self.assertTrue(Path(path).is_file())
                 self.assertTrue(classify(self.workspace, (path,))["docs"])
 
+    def test_messaging_coordinator_and_render_schema_changes_run_docs(self) -> None:
+        """The docs configuration reference pages are generated from these files."""
+        for path in (
+            "products/messaging/generated/authoring/project.schema.json",
+            "products/messaging/generated/authoring/template.schema.json",
+            "products/messaging/generated/authoring/provider.schema.json",
+            "products/messaging/generated/runtime/runtime.schema.json",
+            "products/coordinator/generated/project/project.schema.json",
+            "products/coordinator/generated/scenarios/scenarios.schema.json",
+            "products/coordinator/generated/runtime/runtime.schema.json",
+            "products/coordinator/generated/operations/catalog.json",
+            "products/render/schemas/bundle.schema.json",
+            "products/render/schemas/labels.schema.json",
+            "products/render/schemas/runtime.schema.json",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(Path(path).is_file())
+                self.assertTrue(classify(self.workspace, (path,))["docs"])
+        # An operation's own input schema is not read by any docs generator.
+        self.assertFalse(
+            classify(
+                self.workspace,
+                ("products/coordinator/generated/operations/evaluation.evaluate.v1.input.schema.json",),
+            )["docs"]
+        )
+
     def test_casework_config_schema_change_runs_docs(self) -> None:
         """The docs Casework configure and operate pages are generated from these files."""
         for path in (

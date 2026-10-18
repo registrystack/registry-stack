@@ -1297,6 +1297,16 @@ def classify(
             "products/scheduling/generated/records/*",
             "products/scheduling/generated/fixture/*",
             "products/scheduling/generated/runtime/*",
+            # The Messaging, Coordinator, and Render configuration reference
+            # pages are generated from these schemas, and the Coordinator one
+            # from its operation catalogue as well.
+            "products/messaging/generated/authoring/*",
+            "products/messaging/generated/runtime/*",
+            "products/coordinator/generated/project/*",
+            "products/coordinator/generated/scenarios/*",
+            "products/coordinator/generated/runtime/*",
+            "products/coordinator/generated/operations/catalog.json",
+            "products/render/schemas/*",
             # The Casework configure and operate pages render tables generated
             # from these schemas.
             "products/casework/generated/project/*",
