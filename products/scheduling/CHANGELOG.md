@@ -12,7 +12,11 @@
 - Prune every delivered outbox intent (confirmation, change, cancellation,
   reminder) and terminal observer delivery metadata in bounded batches using `retention.receiptRetentionDays`. Preserve active and
   uncertain work, dead letters through payload expiry, shared-event siblings,
-  audit evidence, and spent idempotency keys.
+  audit evidence, and spent idempotency keys. Dead-letter metadata ages from the
+  original `dead_lettered_at`, not from later payload expiry. Completed expiry
+  and erased payload bytes remain prerequisites; an already old dead letter can
+  be removed as soon as expiry completes instead of waiting another metadata
+  window.
 
 - Raw claim owners expire after `retention.claimOwnerRetentionDays` (default 7,
   range 1 through 365) following an appointment's end or cancellation, or a

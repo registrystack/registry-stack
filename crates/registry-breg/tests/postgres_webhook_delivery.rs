@@ -3868,3 +3868,6 @@ async fn exercise_terminal_metadata_horizons(check_dead_letter: bool) {
         "completed discard erasure must not wait an extra scheduled horizon"
     );
 }
+
+#[path = "support/webhook_retention_logs.rs"]
+mod retention_logs;

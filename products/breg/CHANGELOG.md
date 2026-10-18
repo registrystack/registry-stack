@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Automatically erase expired Action and Proposal Evidence uses under the runtime
+  role after their fixed 24-hour window, in bounded, audited batches. Manual
+  `bregctl evidence-retention erase-expired` remains available to operators.
+- Prune terminal webhook metadata after both the receipt and payload retention
+  horizons permit it, preserving active and uncertain work, replay protection,
+  and audit records. Dead letters also require completed payload expiry.
+  Nonempty ticks report committed deletion counts; failures report a closed,
+  value-free reason and any prior committed progress. Idle ticks stay silent.
+- Include a closed `refusalReason` in read audit records where the refusal has a
+  defined reason, without recording caller selectors or record values.
+
 - BREAKING: request, operator, access-log and webhook audit records now name activation UUIDs
   `activationId`, reserving `packageRevision` for package digests. The affected
   audit schemas advance as documented in [audit identity](contracts/audit-identity.md).

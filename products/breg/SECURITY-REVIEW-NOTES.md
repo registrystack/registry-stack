@@ -8,6 +8,47 @@ security-invariant matrix in `contracts/security-invariant-matrix.yaml` is the
 row-per-invariant baseline; this file is the narrative behind the decisions
 and the residuals the matrix rows do not state.
 
+## Runtime Evidence expiry and terminal webhook retention
+
+Expired retained assertions and terminal delivery metadata must not accumulate
+indefinitely merely because an operator did not schedule cleanup. The supervised
+Evidence worker in `action_evidence_retention.rs` runs every minute, with at most
+100 batches per tick and 1,000 expired rows per table per batch. It preserves the
+fixed 24-hour acceptance window. A fixed security-definer function grants the
+runtime only expiry execution, with a pinned search path; it grants neither
+assertion reads nor arbitrary Evidence deletion. Each batch has an audit attempt
+and terminal outcome, a shared activation lock, an exact registry identity check,
+and a bounded query. Cancellation retains the pool's cancellation guard. Manual
+erasure remains an independently authorized migration-credential operation.
+
+The webhook worker uses the shared Hooks retention primitive and narrowly scoped
+DELETE grants on its three delivery tables. It retains metadata for at least the
+receipt and payload horizons. Dead letters age from their original terminal time
+and require completed expiry and erased payloads. Active or uncertain work,
+shared-event siblings, spent idempotency keys, and audit history remain protected.
+Neither cleanup path recreates erased material or grants replay authority.
+
+Webhook operational logs carry only committed counts and a closed failure reason:
+`registry-not-ready`, `lock-timeout`, `query-cancelled`, or `database`. A later batch
+failure reports only earlier committed progress. A capped tick emits one warning,
+a normal nonempty tick one completion, and an idle tick no completion. SQLSTATE
+57014 means query cancellation; it does not establish a statement timeout. Raw
+PostgreSQL error text, SQL, identifiers, and retained values are never logged.
+Private admission diagnostics share the existing transaction implementation and
+map back to the original errors for all non-retention callers.
+
+Read audit `refusalReason` uses a closed vocabulary where the refusal boundary
+establishes one. It adds no selector, credential, or record value to the audit.
+The PostgreSQL Evidence retention, read/access-log, and webhook delivery suites
+cover expiry, admission, audit, replay preservation, and cancellation. The webhook
+log tests exercise capped and idle ticks, partial committed work, maintenance,
+lock timeout, query cancellation, and raw-error canaries against PostgreSQL.
+
+The batch bounds limit work rather than guarantee immediate erasure: downtime,
+lock contention, audit failure, and a backlog can delay cleanup. Restore can
+reintroduce previously erased rows; the runtime applies the same expiry rules
+after startup admission. Backup retention remains an operator responsibility.
+
 ## Linear Immediate Action policies and target locking
 
 Immediate Action authorization groups compatible effects into one policy per
