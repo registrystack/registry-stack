@@ -1,0 +1,65 @@
+---
+title: Registry Scheduling overview
+description: What Registry Scheduling gives a system that books people into limited capacity, what you define, what it refuses, and where to start.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+If people must book a time at a counter, a station, or a field visit, and two of them must never
+get the same place, [Registry Scheduling](../../reference/glossary/#registry-scheduling) publishes
+what can be booked and keeps every booking in one ledger.
+
+## What a caller gets
+
+A caller reads the [offerings](../../reference/glossary/#offering) a deployment publishes and the
+free starts for one of them. It takes a short [hold](../../reference/glossary/#hold) while a person
+confirms, then turns the hold into an [appointment](../../reference/glossary/#appointment), which
+it can later reschedule or cancel. A retry under the same idempotency key returns the first
+answer, never a second booking.
+
+## What you define
+
+You write a booking policy in YAML: the services offered, how long each appointment lasts and how
+far ahead it can be booked, the opening hours, public holidays, how long a hold lasts, and when
+reminders are due. Beside it, a records file lists the supply the policy books from: locations,
+[resource pools](../../reference/glossary/#resource-pool) of interchangeable stations or staff, and
+arrival windows. `schedulingctl` checks both offline, replays your
+[fixtures](../../reference/glossary/#scheduling-fixture) against them, and packages the policy under
+a digest.
+
+## What runs
+
+`scheduling` is an HTTP service that keeps the ledger in PostgreSQL 17 or newer and verifies tokens
+from your own OpenID Connect issuer. Every hold and appointment is claimed inside one transaction,
+so two callers racing for the last station get one appointment and one refusal. Reminder intents
+and appointment events are delivered afterwards, from an outbox.
+
+## What Scheduling refuses
+
+Scheduling refuses a booking without a [task grant](../../reference/glossary/#task-grant) for that
+service, location, and action, a start outside the published hours, a booking made against a policy
+revision that has changed, and a start with no free capacity.
+[How Registry Scheduling works](../../explanation/how-scheduling-works/) explains each boundary.
+
+## When it is not the right product
+
+Scheduling does not decide who may have a service; the system that owns that rule does, and
+issues the grant. It is not a work queue, which is [Registry Casework](../casework/), and it sends
+no messages: a reminder leaves as data for a system such as
+[Registry Messaging](../messaging/) to deliver.
+
+## Where to start
+
+[Prove your first booking policy](../../tutorials/first-scheduling/) creates a project, checks it,
+and runs its fixtures offline in about 10 minutes, with no database.
+
+{/* Evidence: products/scheduling/README.md, Boundary and What Scheduling is not;
+    crates/registry-scheduling/src/http.rs routes; crates/registry-scheduling/src/store.rs
+    capacity transaction; crates/registry-schedulingctl/src/project.rs, check(), test() and
+    package(); crates/registry-scheduling-core/src/problem.rs. */}

@@ -1,0 +1,270 @@
+---
+title: Author a Scheduling policy
+description: Close a holiday, read the hold and reminder rules, bind an appointment observer, and plan the package, all offline in one Registry Scheduling project.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: how-to
+persona:
+  - operator
+locale: en
+standards_referenced:
+  - json-schema
+tutorial_test:
+  toolset: scheduling
+  after: tutorials/first-scheduling
+---
+
+If you are writing the policy a Registry Scheduling deployment will serve, you edit one project
+directory and prove it offline. You continue in `./scheduling`, the project from
+[Prove your first booking policy](../../tutorials/first-scheduling/), where the fixture already
+closes `station-2`.
+
+## Read the opening hours
+
+An offering is bookable only inside an [opening](../../reference/glossary/#opening): the weekly
+hours one location publishes. `check` listed two under `effective.openings`. This is the one that
+serves `registry-update-30`:
+
+```yaml title="scheduling/scheduling.yaml" test-excerpt="scheduling/scheduling.yaml"
+- id: bangkok-counter-hours
+  location: bangkok-counter
+  holidaySet: office-holidays
+  weekdays: [mon, tue, wed, thu, fri]
+  startTime: "09:00"
+  endTime: "12:30"
+  effectiveFrom: "2026-10-01"
+  effectiveUntil: "2026-12-31"
+```
+
+Times are wall-clock times at the location, read in the time zone its location record names, so
+the counter opens at 09:00 Bangkok time on weekdays. The opening ends on `effectiveUntil`; from
+2027 this offering publishes no starts until you extend that date and deploy the change.
+
+## Close a public holiday
+
+Every opening names a [holiday set](../../reference/glossary/#holiday-set), and a date in that set
+closes the opening for the whole day. The starter's set closes nothing yet. Close Tuesday 13
+October 2026:
+
+```diff test-edit title="scheduling/scheduling.yaml"
+ - id: office-holidays
+   revision: 1
++  dates:
++    - "2026-10-13"
+   because: Public holidays observed by the registry offices.
+```
+
+Prove it with a case at the end of the counter fixture. A booking at 09:00 that day must be
+refused:
+
+```yaml title="scheduling/fixtures/counter-stations.yaml" test-append
+  - name: the-holiday-is-not-served
+    request:
+      offering: registry-update-30
+      start: 2026-10-13T02:00:00Z
+      party:
+        recipients: 1
+        attendees: 1
+      duplicateKey: subject:four
+      policyRevision: 1
+    expect:
+      type: refused
+      code: schedule.unpublished
+```
+
+```sh
+schedulingctl test ./scheduling --format json
+```
+
+```json test-excerpt
+{
+  "detail": "refused schedule.unpublished (detailed: schedule.unpublished)",
+  "name": "the-holiday-is-not-served",
+  "status": "pass"
+}
+```
+
+`schedule.unpublished` is the answer for any start the policy does not publish, whether the day
+is a holiday, a weekend, or outside the opening hours.
+
+A closure that affects one location for part of a day is not policy. It is an exception record in
+`records.yaml`, which the operator applies to a running deployment without a new package:
+
+```yaml title="scheduling/records.yaml" test-excerpt="scheduling/records.yaml"
+exceptions:
+  - id: hall-prep
+    location: new-york-hall
+    kind: closure
+    date: "2026-11-01"
+    startTime: "00:15"
+    endTime: "00:45"
+```
+
+{/* Evidence: crates/registry-scheduling-core/src/policy.rs, HolidaySetPolicy and
+    OpeningPatternPolicy; crates/registry-scheduling-core/src/fixture.rs;
+    products/scheduling/generated/records/records.schema.json, CalendarExceptionRecord. */}
+
+## Read the hold and reminder rules
+
+A caller first takes a [hold](../../reference/glossary/#hold) on a start, then confirms it as an
+appointment. The hold policy applies to every offering:
+
+```yaml title="scheduling/scheduling.yaml" test-excerpt="scheduling/scheduling.yaml"
+holdPolicy:
+  ttlMinutes: 5
+  maximumPerCaller: 3
+  because: Holds are short because counter capacity is scarce.
+```
+
+An unconfirmed hold returns its station to the pool after five minutes, and one caller holds at
+most three at a time. The offering adds its own rules:
+
+```yaml title="scheduling/scheduling.yaml" test-excerpt="scheduling/scheduling.yaml"
+cancellationCutoffMinutes: 240
+reminders:
+  - offsetMinutes: 1440
+    because: One reminder the day before a counter update.
+  - offsetMinutes: 120
+    because: A second reminder two hours before, when stations are scarce.
+duplicateActiveKey: subject
+```
+
+A caller may not cancel within four hours of the start. Each confirmed appointment records two
+reminder intents, due one day and two hours before it; the runtime delivers them to the reminder
+destination the operator configures, or keeps them readable in its outbox when there is none.
+`duplicateActiveKey: subject` is the rule the fixture's second case proved: one active booking per
+subject.
+
+Every entry carries `because`, a sentence for the next person who reads the policy. It is part of
+the policy, so a changed reason changes the digest too.
+
+{/* Evidence: crates/registry-scheduling-core/src/policy.rs, HoldPolicy, OfferingPolicy and
+    ReminderOffsetPolicy; products/scheduling/README.md, Events and observers. */}
+
+## Tell another system when an appointment is confirmed
+
+An observer [hook](../../reference/glossary/#scheduling-hook) sends a signed event after an
+appointment is confirmed, rescheduled, or cancelled. The policy names the trigger and the fields it
+sends; it holds no address and no secret. Add one at the end of `scheduling.yaml`:
+
+```yaml title="scheduling/scheduling.yaml" test-append
+hooks:
+  - id: appointment-confirmed
+    phase: after
+    trigger: appointment.confirmed
+    projection:
+      - appointmentId
+      - start
+    handler:
+      type: url
+      destinationId: case-system
+```
+
+```sh test-exit="1"
+schedulingctl check ./scheduling
+```
+
+```text test-excerpt
+error[scheduling.runtime.unbound-hook-destination] ./scheduling/runtime.example.yaml:<position> /destinations/hooks
+  destinations.hooks must bind every destination scheduling.yaml hooks[].handler.destinationId names
+```
+
+`check` reads `runtime.example.yaml` as the runtime reads its own file, and refuses a hook with
+nowhere to deliver. The address and signing key belong to the deployment. Bind them there:
+
+```diff test-edit title="scheduling/runtime.example.yaml"
+-destinations: {}
++destinations:
++  hooks:
++    case-system:
++      url: https://cases.example.test/scheduling-events
++      hmacSha256KeyRef: secret:file/case-system-hmac
+```
+
+```sh
+schedulingctl check ./scheduling
+```
+
+```text test-excerpt
+Authoring check passed.
+```
+
+The projection is closed per trigger. A confirmed or rescheduled appointment may send
+`appointmentId`, `revision`, `offering`, `start`, `end`, `state`, and `policyRevision`; a
+cancellation sends only `appointmentId`, `revision`, and `state`. `check` refuses any other field
+with `scheduling.project.unsupported-hook-projection`, so a hook never sends the station, the
+caller, or the cancellation reason. A cancellation intent sent to the reminder destination does
+carry the reason. Delivery happens after the appointment commits,
+at least once, signed with HMAC-SHA256, and the receiver's answer never changes a booking.
+
+{/* Evidence: crates/registry-scheduling-core/src/policy.rs, HookPolicy and ObserverTrigger;
+    crates/registry-scheduling/src/hooks.rs; crates/registry-schedulingctl/src/project.rs, check()
+    and the runtime example check; crates/registry-scheduling/src/store.rs, the cancellation
+    outbox payload; products/scheduling/README.md, Events and observers (at least once). */}
+
+## Plan the package
+
+The runtime serves a package, not the project directory. Ask what the package would hold:
+
+```sh
+schedulingctl package ./scheduling --dry-run --format json
+```
+
+```json test-excerpt
+{
+  "dryRun": true,
+  "runtimeConfigurationIncluded": false,
+  "secretsIncluded": false
+}
+```
+
+The report lists one file, `scheduling.yaml`, and a `packageDigest` the runtime verifies at
+startup. `records.yaml` and the runtime file stay out: the operator applies records to the
+database and keeps the runtime file with the deployment.
+
+{/* Evidence: crates/registry-schedulingctl/src/project.rs, package(). */}
+
+## When callers arrive in a window
+
+The `standalone-arrival-window` template sells arrival windows instead of exact times: a caller
+books a place in a two-hour block, and the block's capacity is counted in units. Create it beside
+your project and explain it:
+
+```sh
+schedulingctl init ./arrival --template standalone-arrival-window
+schedulingctl explain ./arrival --format json
+```
+
+```json test-excerpt
+{
+  "arrival": {
+    "horizonDays": 45,
+    "leadTimeMinutes": 60,
+    "window": "household-morning-window"
+  },
+  "id": "household-morning",
+  "mode": "arrival-window"
+}
+```
+
+The window itself is a record in `./arrival/records.yaml`, with its start, end, and `units`. A
+`subquotas` entry caps how many of those units one channel, `public` or `assisted`, may take. A
+subquota is a ceiling, not a reservation: the other channel may still use units the first leaves
+free.
+
+{/* Evidence: crates/registry-schedulingctl/src/templates.rs, standalone-arrival-window;
+    products/scheduling/generated/records/records.schema.json, PublishedWindow and WindowSubquota;
+    products/scheduling/README.md, Arrival windows and channel subquotas. */}
+
+## Configuration reference
+
+The [Registry Scheduling configuration reference](../../reference/scheduling-configuration/) lists
+every key of `scheduling.yaml`, `records.yaml`, the fixtures, and the runtime file.
+
+## Next
+
+[Deploy and operate Registry Scheduling](../../operate/scheduling/) packages this project, activates
+it on PostgreSQL, applies its records, and starts the runtime.

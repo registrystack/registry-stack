@@ -1,0 +1,289 @@
+---
+title: Deploy and operate Registry Scheduling
+description: Install the Scheduling runtime, write its runtime file, activate a package and its records, serve, and change, retain, and upgrade a deployment in command order.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: how-to
+persona:
+  - operator
+locale: en
+standards_referenced: []
+---
+
+Take the project you authored to a running deployment, then change, retain, and upgrade it. Every
+step runs `schedulingctl` or `scheduling` against one runtime file.
+
+## What you provide
+
+- PostgreSQL 17 or newer, reachable over TLS. Registry Scheduling requires TLS on every database
+  connection and refuses one it cannot protect.
+- An OpenID Connect issuer whose access tokens carry the read scope and, for bookings, the
+  [task grant](../../reference/glossary/#task-grant) another system issues.
+- A directory of secret files owned by the runtime user, each with mode 0400 or 0600.
+- A TLS edge in front of the listener. Scheduling serves plain HTTP on a private address and
+  refuses a public one.
+
+## Install the runtime
+
+The installer puts `scheduling` and `schedulingctl` in `~/.local/bin`. The runtime is published
+for Linux amd64 only; on Linux arm64 and macOS arm64 the installer installs `schedulingctl` alone.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registry-scheduling/install.sh | bash
+schedulingctl --version
+```
+
+It checks every downloaded asset against the release's `SHA256SUMS` but does not prove where the
+release came from. For that, follow the release verification guide for your tag, then rerun the
+installer with `SCHEDULING_ASSET_DIR` set to the verified directory. `SCHEDULING_VERSION` pins a
+tag, such as the one of the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest).
+
+The runtime is also published as the image `ghcr.io/registrystack/scheduling:<tag>`. Deploy it by
+the digest the release manifest names, not by the tag. The image runs `/usr/local/bin/scheduling`
+as UID 65532, reads `/etc/registry-scheduling/runtime.yaml`, and carries the matching
+`schedulingctl`. To run an operator command with the image's exact bytes, override the entrypoint
+and mount the runtime file, the package, and the secrets read-only and the audit directory
+writable, each at the location your `runtime.yaml` names:
+
+```sh
+docker run --rm \
+  --entrypoint /usr/local/bin/schedulingctl \
+  -v /etc/registry-scheduling/runtime.yaml:/etc/registry-scheduling/runtime.yaml:ro \
+  -v /etc/registry-scheduling/package:/etc/registry-scheduling/package:ro \
+  -v /run/secrets/registry-scheduling:/run/secrets/registry-scheduling:ro \
+  -v /var/lib/registry-scheduling:/var/lib/registry-scheduling:rw \
+  "ghcr.io/registrystack/scheduling@sha256:<verified-digest>" \
+  apply --runtime-config /etc/registry-scheduling/runtime.yaml --operator-reference CHG-1234
+```
+
+`apply` needs the migration credential and writes its own audit file beside `audit.path`. Mount
+the migration credential only for `apply`, and keep it out of the serving container.
+
+{/* Evidence: crates/registry-scheduling/install.sh, usage() and the platform case;
+    release/docker/Dockerfile.scheduling; release/scripts/release_candidate.py;
+    crates/registry-schedulingctl/src/activation.rs, module comment and apply_audited(). */}
+
+## Write the runtime file
+
+`schedulingctl init` wrote `runtime.example.yaml` beside your policy. Copy it to the host as
+`runtime.yaml` and edit it:
+
+- `package.root`: `/etc/registry-scheduling/package`, the directory you pass to
+  `schedulingctl package --output`. Every path in the file must be absolute and must not pass
+  through a symbolic link. So must the `--runtime-config` path; a relative one is refused with
+  `platform.runtime-config.path`.
+- `identity.databaseId`: a name for the one database this deployment owns. The first `apply`
+  records it, and every later command refuses a database that names another.
+- `listener`: `bind`, plus `tlsTermination: operator-controlled-upstream` behind your TLS edge.
+  `development-loopback` is refused on any address but loopback.
+- `secretProviders.file.root` and the `*Ref` keys: secret references such as
+  `secret:file/runtime-database-url`, resolved under that root.
+- `database.runtimeUrlRef` and `database.migrationUrlRef`: two PostgreSQL URLs. Give them
+  different roles. With one role for both, the serving credential could rewrite the activation
+  record, and `apply`, `status`, and `serve` say so.
+- `authentication.oidc`: your `issuer`, `audience`, and the exact `allowedClients` that may call.
+- `taskGrantStatus`: either a list of the task authorities Scheduling asks about every grant
+  before it books, or `unchecked-final-fifteen-minutes`, which asks nothing and accepts only a
+  grant with 15 minutes or less left.
+- `audit`: `hashKeyRef`, a key you generate with `openssl rand -hex 32`, plus either a file
+  `path` or `destination: stdout`.
+- `destinations`: where reminders and the hook events your policy names are delivered.
+
+[Scheduling configuration](../../reference/scheduling-configuration/) lists every key and default.
+
+Check the file offline against your project. Nothing is read from the database or the network:
+
+```sh
+schedulingctl check ./scheduling --runtime-config /etc/registry-scheduling/runtime.yaml
+```
+
+```text
+Authoring check passed.
+databaseAccess: false
+networkAccess: false
+```
+
+## Package the policy
+
+```sh
+schedulingctl package ./scheduling --output /etc/registry-scheduling/package
+```
+
+```text
+Package written.
+packageDigest: sha256:<digest>
+runtimeConfigurationIncluded: false
+secretsIncluded: false
+```
+
+`--output` refuses a directory that already exists. The package holds `scheduling.yaml` and a
+`SHA256SUMS` file. Set `package.expectedDigest` to the digest if the runtime must refuse any other
+package.
+
+## Plan and apply
+
+`plan` connects with the runtime credential and writes nothing:
+
+```sh
+schedulingctl plan --runtime-config /etc/registry-scheduling/runtime.yaml
+```
+
+```text
+Activation planned; nothing was written.
+changesPending: true
+databaseIdCheck: initial
+pendingSchemaVersions: [100]
+policy: {"activeDigest":null,"candidateDigest":"sha256:<digest>","revision":2,"revisionAdvances":true}
+refusals: []
+```
+
+`apply` connects with the migration credential and, in one transaction, creates the schema,
+publishes the policy, grants the runtime role its access, and records the activation. The operator
+reference is kept only as a keyed hash; `--backup REF` records the backup you took first.
+
+```sh
+schedulingctl apply --runtime-config /etc/registry-scheduling/runtime.yaml \
+  --operator-reference CHG-1234
+```
+
+```text
+Package activated.
+applyOrder: 1
+effects: {"policyDigest":"sha256:<digest>","policyRevision":2,"policyRevisionAdvanced":true,"schedulingIdAdopted":true}
+schemaVersionsApplied: [100]
+```
+
+Callers send the published `policyRevision` with each booking. Applying the active package again is
+refused with `schedulingctl.activation.package-already-active`.
+
+## Apply the environment records
+
+The supply lives in the database, not in the package. Apply `records.yaml`:
+
+```sh
+schedulingctl records apply --runtime-config /etc/registry-scheduling/runtime.yaml \
+  /etc/registry-scheduling/records.yaml
+```
+
+```text
+Environment records applied.
+applied: {"exceptions":1,"locations":2,"members":3,"pools":2,"windows":0}
+```
+
+:::danger
+`records apply` replaces every record the database holds with the document you pass. A location,
+pool, member, window, or closure the document leaves out is gone. It refuses only to move, remove,
+or shrink a window below its live holds and appointments, and names the window and the deficit.
+:::
+
+## Serve
+
+```sh
+scheduling --runtime-config /etc/registry-scheduling/runtime.yaml serve
+```
+
+Startup verifies the package against the activation record. It refuses a schema with pending
+versions, a package that was not applied, and a database that names another `databaseId`. It logs
+`verified Scheduling package` with the digest but not the address it listens on. Ask the readiness
+route instead:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8105/readyz
+```
+
+```text
+200
+```
+
+`/readyz` answers unavailable while PostgreSQL is unreachable, while the schema is not the one
+this release expects, and while the audit destination refuses writes, because no booking proceeds
+without its audit entry.
+
+## Read the deployment
+
+`status` names the active package and every activation:
+
+```sh
+schedulingctl status --runtime-config /etc/registry-scheduling/runtime.yaml
+```
+
+```text
+Activation status read.
+pendingSchemaVersions: []
+schemaVersion: 100
+verifiedPackageDigest: sha256:<digest>
+```
+
+`intents` lists the reminders and confirmations nobody is delivering: every intent, when no
+reminder destination is configured, and any intent a destination refused until its attempts ran
+out.
+
+```sh
+schedulingctl intents --runtime-config /etc/registry-scheduling/runtime.yaml
+```
+
+```text
+Undelivered delivery intents listed.
+intents: [{"appointmentRevision":1,"attempts":1,"deliveryState":"local","purpose":"confirmation",...}]
+```
+
+## Change the policy
+
+Edit the project and run `schedulingctl test`. Package into a new directory, set `package.root`
+to it, then plan and apply. The apply publishes the next policy revision, and a caller still
+holding the old one is refused with `policy.changed` and reads the service again.
+
+An offering with live holds or appointments must keep its service, location, mode, and pool or
+window. A change to any of them is refused with `schedulingctl.activation.policy-in-use`; let the
+bookings end or move them first. Any earlier package can be applied again as a new activation.
+
+## Retention
+
+The runtime runs its own retention sweep. Three keys under `retention` each default to seven
+days, a placeholder rather than a recommendation:
+
+- `receiptRetentionDays`: how long an idempotency receipt lasts. A retry after that is refused
+  with `idempotency.expired`.
+- `claimOwnerRetentionDays`: how long after an appointment ends, or a hold lapses, the caller's
+  issuer and subject stay on it.
+- `hookPayloadRetentionDays`: how long an undelivered hook event is retried.
+
+`audit.retentionDays` (default 90) removes rotated audit files.
+
+:::danger
+Once `claimOwnerRetentionDays` passes, the appointment no longer belongs to anyone: its former
+owner can no longer read, list, or recover it, and no receipt for it can be replayed. Set the key
+to the period your callers need to look a booking up again.
+:::
+
+## Upgrade
+
+Before 1.0, a release reads only the state its immediate predecessor wrote, so upgrade one release
+at a time: install the next release, run `plan`, which lists the pending schema versions, take a
+backup, `apply` with `--backup`, then restart `serve`. A runtime started against a schema older
+than its own refuses to start until you apply.
+
+:::danger
+A schema migration cannot be undone by applying an earlier package. Restore the backup you named in
+`--backup` instead. A release that starts a fresh baseline says so in its notes and must be applied
+to a new, empty database; the old ledger is not carried over.
+:::
+
+## Next
+
+- [How Registry Scheduling works](../../explanation/how-scheduling-works/) explains holds, task
+  grants, and recovery from the caller's side.
+- [Registry Scheduling API](../../reference/apis/registry-scheduling/) lists the routes and
+  problem codes.
+
+{/* Evidence: crates/registry-schedulingctl/src/{activation,records,intents}.rs;
+    crates/registry-scheduling/src/store/activation.rs, publication and PolicyInUse;
+    crates/registry-scheduling/src/runtime.rs, startup ready() and check_active_package(), workers
+    and retention; crates/registry-scheduling/src/http.rs, readyz();
+    crates/registry-schedulingctl/src/project.rs, package(); crates/registry-platform-config/src/loader.rs,
+    validate_absolute_lexical_path(); products/scheduling/README.md and RUNTIME-CONFIG.md. Success lines observed with scheduling 0.42.0-dev against
+    PostgreSQL 17, the standalone-exact-time project, and single-role credentials. */}
