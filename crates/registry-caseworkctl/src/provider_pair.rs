@@ -7,6 +7,43 @@ use registry_platform_config::{sha256_uri, verify_package, PackageLimits, Verifi
 use serde_json::{json, Value};
 use std::{fs, path::Path, process::Command};
 
+/// Closed pairing causes keep diagnostics useful without rendering peer output.
+#[derive(Debug)]
+pub(super) enum PairingFailure {
+    ContractMismatch { path: String },
+    UnservedCapability { path: String },
+    VersionMismatch,
+}
+
+impl PairingFailure {
+    pub(super) fn diagnostic(&self) -> (&'static str, &str, &'static str, &'static str) {
+        match self {
+            Self::ContractMismatch { path } => (
+                "casework.provider-pair.contract-mismatch", path,
+                "policy context contract does not match the native export",
+                "Vendor the native schema and pin its ID, revision and exact file digest at this path, then pair and recompile the review policy.",
+            ),
+            Self::UnservedCapability { path } => (
+                "casework.provider-pair.unserved-capability", path,
+                "native BReg provider cannot expose the requested service-purpose capability",
+                "Remove the unserved capability at this path or select a provider that serves it, then pair again.",
+            ),
+            Self::VersionMismatch => (
+                "casework.provider-pair.version-mismatch", "--bregctl",
+                "bregctl must be the same Registry Stack release as caseworkctl",
+                "Select a bregctl executable from the same Registry Stack release with --bregctl, then pair again.",
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for PairingFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.diagnostic().2)
+    }
+}
+impl std::error::Error for PairingFailure {}
+
 fn verify(package: &Path, bregctl: &Path) -> Result<(Value, VerifiedPackage)> {
     let version = Command::new(bregctl)
         .arg("--version")
@@ -14,7 +51,7 @@ fn verify(package: &Path, bregctl: &Path) -> Result<(Value, VerifiedPackage)> {
         .context("starting bregctl")?;
     let version = std::str::from_utf8(&version.stdout)?.trim();
     if !version.ends_with(registry_platform_buildinfo::DISPLAY_VERSION) {
-        bail!("bregctl must be the same Registry Stack release");
+        return Err(PairingFailure::VersionMismatch.into());
     }
     let output = Command::new(bregctl)
         .args(["--format", "json", "check", "--package"])
@@ -129,7 +166,10 @@ pub(super) fn compare(
             &verified,
         )?;
         if native.contract != export.contract || native.schema_bytes != export.schema_bytes {
-            bail!("native producer contract differs from the imported provider export; regenerate and recompile the review policy");
+            return Err(PairingFailure::ContractMismatch {
+                path: format!("/contextProviders/{}/description", provider.id),
+            }
+            .into());
         }
         for review in &policy.review_policies {
             if let ReviewContextPolicy::CurrentSource {
@@ -138,7 +178,10 @@ pub(super) fn compare(
             } = &review.context
             {
                 if id == &provider.id && contract != &native.contract {
-                    bail!("review policy context pin differs from native producer contract");
+                    return Err(PairingFailure::ContractMismatch {
+                        path: format!("/reviewPolicies/{}/context/contract", review.id),
+                    }
+                    .into());
                 }
             }
         }
@@ -174,7 +217,10 @@ pub(super) fn pair(
         } = &review.context
         {
             if id == &provider.id && contract != &export.contract {
-                bail!("policy context contract does not match the native export; vendor the native schema and pin its ID, revision and exact file digest first");
+                return Err(PairingFailure::ContractMismatch {
+                    path: format!("/reviewPolicies/{}/context/contract", review.id),
+                }
+                .into());
             }
         }
     }
@@ -183,7 +229,10 @@ pub(super) fn pair(
         .iter()
         .any(|cap| !registry_casework_breg::SERVED_CAPABILITIES.contains(cap))
     {
-        bail!("native BReg provider cannot expose minimized service-purpose fields");
+        return Err(PairingFailure::UnservedCapability {
+            path: format!("/contextProviders/{}/capabilities", provider.id),
+        }
+        .into());
     }
     let relative = provider
         .description
@@ -448,5 +497,136 @@ mod tests {
         );
         fs::write(path, b"{\"changed\":true}").unwrap();
         assert!(captured_native_file(temporary.path(), &verified, relative).is_err());
+    }
+    #[test]
+    fn pairing_refusal_names_contract_mismatch() {
+        pairing_refusal(
+            "contract-mismatch",
+            "/reviewPolicies/facility-address-review/context/contract",
+            "contract",
+        );
+    }
+
+    #[test]
+    fn pairing_refusal_names_unserved_capability() {
+        pairing_refusal(
+            "unserved-capability",
+            "/contextProviders/facility-proposal-context/capabilities",
+            "capability",
+        );
+    }
+
+    #[test]
+    fn pairing_refusal_names_version_mismatch() {
+        pairing_refusal("version-mismatch", "--bregctl", "release");
+    }
+
+    fn pairing_refusal(cause: &str, pointer: &str, message: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let temporary = crate::canonical_tempdir();
+        let project = temporary.path().join("review");
+        crate::project::init(&project, "canonical-review").unwrap();
+        let policy_file = project.join("casework.yaml");
+        let with_header_note = fs::read_to_string(&policy_file).unwrap().replacen(
+            '\n',
+            "\n# Retain this offline authoring header.\n",
+            1,
+        );
+        fs::write(&policy_file, with_header_note).unwrap();
+        let original_value = crate::project::read_project(&project)
+            .unwrap()
+            .document
+            .to_json_value();
+        let package = temporary.path().join("native-package");
+        let relative = "generated/review-context-schemas/correct-address.schema.json";
+        fs::create_dir_all(package.join("generated/review-context-schemas")).unwrap();
+        let schema_bytes = fs::read(project.join("schemas/correct-address.schema.json")).unwrap();
+        let schema: Value = serde_json::from_slice(&schema_bytes).unwrap();
+        fs::write(package.join(relative), &schema_bytes).unwrap();
+        fs::write(
+            package.join("generated/review-context-schemas/index.json"),
+            serde_json::to_vec(&json!({"correct-address":{
+                "id":schema["$id"],"revision":schema["x-registry-definition-revision"],
+                "digest":sha256_uri(&schema_bytes),"path":relative}}))
+            .unwrap(),
+        )
+        .unwrap();
+        let verified = registry_platform_config::write_sum_file(
+            &package,
+            None,
+            &PackageLimits::default(),
+            "bregctl package",
+        )
+        .unwrap();
+        // The fixture CLI supplies only the version/package-check report;
+        // pair still verifies the sealed native bytes and compiled policy.
+        let bregctl = temporary.path().join("bregctl");
+        fs::write(
+            &bregctl,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = --version ]; then\n  printf '%s\\n' 'bregctl {}'\nelse\n  printf '%s\\n' '{{\"ok\":true,\"packageDigest\":\"{}\"}}'\nfi\n",
+                registry_platform_buildinfo::DISPLAY_VERSION,
+                verified.digest()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&bregctl, fs::Permissions::from_mode(0o700)).unwrap();
+
+        {
+            let mut authored = original_value.clone();
+            match cause {
+                "contract-mismatch" => {
+                    authored["reviewPolicies"]["facility-address-review"]["context"]["contract"]
+                        ["revision"] = json!(format!("sha256:{}", "a".repeat(64)));
+                }
+                "unserved-capability" => {
+                    authored["contextProviders"]["facility-proposal-context"]["capabilities"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!("routing-context"));
+                }
+                "version-mismatch" => {
+                    fs::write(
+                        &bregctl,
+                        "#!/bin/sh\nprintf '%s\\n' 'bregctl incompatible-release-canary'\n",
+                    )
+                    .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            fs::write(&policy_file, serde_norway::to_string(&authored).unwrap()).unwrap();
+            let error = pair(
+                &project,
+                "facility-proposal-context",
+                &package,
+                "correct-address",
+                &bregctl,
+                false,
+            )
+            .expect_err("pairing must refuse this configuration");
+            let original_cause = match cause {
+                "contract-mismatch" => "policy context contract does not match",
+                "unserved-capability" => "native BReg provider cannot expose",
+                "version-mismatch" => "bregctl must be the same",
+                _ => unreachable!(),
+            };
+            assert!(
+                error.to_string().contains(original_cause),
+                "unexpected fixture refusal: {error}"
+            );
+            let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Authoring, &error);
+            assert_eq!(exit, 1);
+            assert_eq!(
+                diagnostic["code"],
+                format!("casework.provider-pair.{cause}")
+            );
+            assert_eq!(diagnostic["path"], pointer);
+            assert!(diagnostic["message"].as_str().unwrap().contains(message));
+            assert!(diagnostic["suggestedAction"].as_str().unwrap().len() > 20);
+            assert!(!diagnostic
+                .to_string()
+                .contains("incompatible-release-canary"));
+            assert!(!project.join("context-providers").exists());
+        }
     }
 }

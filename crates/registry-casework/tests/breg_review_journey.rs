@@ -49,7 +49,26 @@ use std::{
     },
 };
 use tokio::net::TcpListener;
+use tracing::instrument::WithSubscriber;
 use uuid::Uuid;
+
+#[derive(Clone, Default)]
+struct ReviewLogs(Arc<std::sync::Mutex<Vec<u8>>>);
+impl std::io::Write for ReviewLogs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for ReviewLogs {
+    type Writer = Self;
+    fn make_writer(&'a self) -> Self {
+        self.clone()
+    }
+}
 
 const BREG_AUDIENCE: &str = "urn:casework:facility-breg";
 const CASEWORK_AUDIENCE: &str = "urn:casework:facility-review";
@@ -220,7 +239,7 @@ impl ReviewResultSource for LiveApproval {
         .map_err(|_| MutationError::PreconditionFailed)
     }
 }
-fn review_binding() -> Arc<ReviewAuthorityRegistry> {
+fn review_binding(producer_id: &str) -> Arc<ReviewAuthorityRegistry> {
     let client = ReviewClient::new(registry_review_client::ReviewClientConfig::new(
         "http://127.0.0.1:9/".parse().unwrap(),
     ))
@@ -231,7 +250,7 @@ fn review_binding() -> Arc<ReviewAuthorityRegistry> {
             client,
             Arc::new(NoToken),
             "facility-address-review".into(),
-            "facility-registry".into(),
+            producer_id.into(),
             7,
             None,
             None,
@@ -433,6 +452,15 @@ async fn post_review(url: &Url, token: &str, body: &Value, key: &str) -> (Status
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
+    native_proposal_journey("facility-registry").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_pairing_reports_explicit_producer_identity_mismatch() {
+    native_proposal_journey("configured-breg-producer").await;
+}
+
+async fn native_proposal_journey(producer_id: &'static str) {
     let idp = MockIdp::start().await;
     let scratch = tempfile::tempdir().unwrap();
     let initial = compile(&canonical_source());
@@ -462,7 +490,10 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
         registry,
         claims("fixture:seed", "facility-administration"),
         move |service| {
-            service.with_proposal_review_substitute_for_test(review_binding(), approval_for_fixture)
+            service.with_proposal_review_substitute_for_test(
+                review_binding(producer_id),
+                approval_for_fixture,
+            )
         },
     )
     .await;
@@ -606,7 +637,7 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
             .unwrap(),
             Arc::new(StaticToken::new(producer.clone()).unwrap()),
             "requester".into(),
-            "facility-registry".into(),
+            producer_id.into(),
             7,
             None,
             None,
@@ -615,16 +646,78 @@ async fn native_proposal_requires_pinned_casework_approval_before_breg_apply() {
     );
     let authorities =
         ReviewAuthorityRegistry::new(BTreeMap::from([("casework".into(), authority)])).unwrap();
+    let logs = ReviewLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(logs.clone())
+        .finish();
     assert!(
         registry_breg::review_store::run_review_authority_once_for_test(
             &fixture.pool,
             &authorities,
             &fixture.mutations,
         )
+        .with_subscriber(subscriber)
         .await
         .unwrap()
     );
     let row = fixture.database.admin.query_one("SELECT state,accepted_binding,last_error_code FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1", &[&proposal_id]).await.unwrap();
+    if producer_id != "facility-registry" {
+        assert_eq!(
+            row.get::<_, Option<String>>(2).as_deref(),
+            Some("producer-identity-mismatch"),
+            "an explicit configured producer mismatch must be distinct from uncertain delivery"
+        );
+        assert_eq!(row.get::<_, String>(0), "failed");
+        let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        let event: Value = output
+            .lines()
+            .filter(|line| line.contains("producer-identity-mismatch"))
+            .map(|line| serde_json::from_str(line).unwrap())
+            .next()
+            .expect("bounded operator mismatch diagnostic");
+        assert_eq!(event["fields"]["configured_producer_id"], producer_id);
+        assert_eq!(event["fields"]["provider_producer_id"], "facility-registry");
+        assert!(event.to_string().len() < 2048);
+        for canary in [
+            &producer,
+            proposal.id(),
+            &facility,
+            "3 Civic Road",
+            "Chiang Mai",
+            casework_url.as_str(),
+        ] {
+            assert!(
+                !output.contains(canary),
+                "operator logs withhold submission bodies, credentials and source identifiers"
+            );
+        }
+
+        assert!(row.get::<_, Option<Value>>(1).is_none());
+        assert_eq!(
+            fixture
+                .database
+                .admin
+                .query_one(
+                    "SELECT count(*) FROM registry_internal.registry_proposal_review_results",
+                    &[]
+                )
+                .await
+                .unwrap()
+                .get::<_, i64>(0),
+            0,
+            "mismatched acceptance cannot become application evidence"
+        );
+        casework_server.abort();
+        breg_server.abort();
+        admin
+            .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
+            .await
+            .unwrap();
+        fixture.finish().await;
+        return;
+    }
     assert_eq!(
         row.get::<_, String>(0),
         "accepted",

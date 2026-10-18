@@ -1666,7 +1666,7 @@ pub(crate) async fn enqueue_submission(
 /// whose submitted version is being revised or rebased, in that lifecycle
 /// transaction. A closed job is never claimed or recovered again.
 pub(crate) async fn close_application_jobs(
-    transaction: &Transaction<'_>,
+    transaction: &impl GenericClient,
     action_id: &str,
     proposal_id: Uuid,
 ) -> Result<(), MutationError> {
@@ -1784,8 +1784,11 @@ pub(crate) async fn retry_submission_work(
     Ok(())
 }
 
+// Failed rounds still need withdrawal when the source ends them. A retained
+// acceptance can be cancelled; an exhausted delivery without one stays failed.
+// Do not reopen an already withdrawn failed cancellation on later activations.
 pub(crate) async fn schedule_cancellation(
-    transaction: &Transaction<'_>,
+    transaction: &impl GenericClient,
     action_id: &str,
     proposal_id: Uuid,
     submission_version: i64,
@@ -1807,7 +1810,7 @@ pub(crate) async fn schedule_cancellation(
                     lease_until=NULL,next_attempt_at=transaction_timestamp(),
                     updated_at=transaction_timestamp()
               WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
-                AND state NOT IN ('cancelled','failed')",
+                AND (state NOT IN ('cancelled','failed') OR (state='failed' AND NOT withdrawn))",
             &[&action_id, &proposal_id, &submission_version],
         )
         .await
@@ -1817,6 +1820,7 @@ pub(crate) async fn schedule_cancellation(
 
 #[derive(Clone, Debug)]
 pub struct ClaimedReviewSubmission {
+    pub producer_id: String,
     pub action_id: String,
     pub proposal_id: Uuid,
     pub submission_version: i64,
@@ -1842,6 +1846,12 @@ pub async fn claim_submission(
                   WHERE next_attempt_at <= transaction_timestamp()
                     AND authority=$2
                     AND recovery_deadline > transaction_timestamp()
+                    AND (withdrawn OR EXISTS (
+                        SELECT 1 FROM registry_internal.registry_proposal_state p
+                         WHERE (p.action_id,p.proposal_id)=(s.action_id,s.proposal_id)
+                           AND p.state='submitted' AND p.submission_version=s.submission_version
+                           AND p.blocked_reason IS NULL
+                    ))
                     AND (state IN ('pending','uncertain')
                          OR (state='submitting' AND lease_until < transaction_timestamp()))
                     AND (
@@ -1867,13 +1877,14 @@ pub async fn claim_submission(
                 AND s.proposal_id=c.proposal_id AND s.submission_version=c.submission_version
              RETURNING s.action_id,s.proposal_id,s.submission_version,s.authority,
                        s.idempotency_key,s.create_request,s.expected_submission_digest,
-                       s.lease_until,s.expected_policy,s.accepted_binding",
+                       s.lease_until,s.expected_policy,s.accepted_binding,s.producer_id",
             &[&lease_seconds, &authority],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
     row.map(|row| {
         Ok(ClaimedReviewSubmission {
+            producer_id: row.get(10),
             action_id: row.get(0),
             proposal_id: row.get(1),
             submission_version: row.get(2),
@@ -1909,11 +1920,12 @@ pub async fn run_one_submission(
         return Ok(false);
     };
     let response = review_client
-        .create_or_recover_request(
+        .create_or_recover_request_for_producer(
             ReviewAuth::new(token, profile),
             &job.idempotency_key,
             &job.request,
             &job.expected_submission_digest,
+            &job.producer_id,
         )
         .await;
     match response {
@@ -1973,6 +1985,25 @@ pub async fn run_one_submission(
                 .map_err(|_| MutationError::Unavailable)?;
             if updated != 1 {
                 return Err(MutationError::PreconditionFailed);
+            }
+        }
+        Err(ReviewClientError::ProducerIdentityMismatch {
+            expected, actual, ..
+        }) => {
+            let updated = client.execute(
+                "UPDATE registry_internal.registry_proposal_review_submissions
+                    SET state='failed',lease_until=NULL,last_error_code='producer-identity-mismatch',
+                        updated_at=transaction_timestamp()
+                  WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
+                    AND state='submitting' AND lease_until=$4",
+                &[&job.action_id, &job.proposal_id, &job.submission_version, &job.lease_until],
+            ).await.map_err(|_| MutationError::Unavailable)?;
+            if updated == 1 {
+                tracing::warn!(
+                    configured_producer_id = %expected,
+                    provider_producer_id = %actual,
+                    "BReg review handoff recorded producer-identity-mismatch; align reviewAuthorities producerId with the provider's trustedProducers identity before new submissions; the provider may retain the mismatched review"
+                );
             }
         }
         Err(error) if terminal_submission_error(&error) => {
@@ -2249,9 +2280,10 @@ pub async fn reconcile_result(
     // prove it is the same Proposal before retaining a result or creating a job.
     let locked_proposal =
         Uuid::parse_str(&accepted.subject.id).map_err(|_| MutationError::PreconditionFailed)?;
-    transaction
+    let lifecycle = transaction
         .query_opt(
-            "SELECT 1 FROM registry_internal.registry_proposal_state
+            "SELECT state,submission_version,blocked_reason
+               FROM registry_internal.registry_proposal_state
               WHERE proposal_id=$1 FOR UPDATE",
             &[&locked_proposal],
         )
@@ -2335,7 +2367,12 @@ pub async fn reconcile_result(
         .map_err(|_| MutationError::Unavailable)?;
     let mode: String = row.get(4);
     let withdrawn: bool = row.get(6);
-    if status == "approved" && mode == "automatic" && !withdrawn {
+    // Retain exact historical evidence even when activation or the requester
+    // ended this round. Only the current unblocked round can advance work.
+    let current = lifecycle.get::<_, String>(0) == "submitted"
+        && lifecycle.get::<_, i64>(1) == version
+        && lifecycle.get::<_, Option<String>>(2).is_none();
+    if status == "approved" && mode == "automatic" && !withdrawn && current {
         let workflow =
             crate::proposal_store::load(transaction, &entity_id, proposal_id, false).await?;
         let frozen = workflow
@@ -2348,7 +2385,7 @@ pub async fn reconcile_result(
         }
         enqueue_automatic_application(transaction, &entity_id, proposal_id, frozen).await?;
     }
-    if !withdrawn {
+    if !withdrawn && current {
         mutations
             .record_review_result(
                 transaction,

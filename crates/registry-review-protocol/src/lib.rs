@@ -26,6 +26,9 @@ pub const MAXIMUM_PORTABLE_JSON_INTEGER: u64 = 9_007_199_254_740_991;
 pub const REVIEW_REQUESTS_PATH: &str = "/v1/review-requests";
 pub const REVIEW_RESULTS_FEED_PATH: &str = "/v1/review-results";
 pub const REVIEW_COMPLETIONS_PATH: &str = "/v1/review-completions";
+/// Authenticated producer identity on successful create/recovery responses.
+/// One ASCII identifier of at most 128 bytes; never an identity inferred from a digest.
+pub const REVIEW_PRODUCER_HEADER: &str = "registry-review-producer";
 pub const REVIEW_PROFILE_HEADER: &str = "registry-review-profile";
 pub const REVIEW_VALIDATION_PATH_HEADER: &str = "registry-review-validation-path";
 pub const REVIEW_VALIDATION_REASON_HEADER: &str = "registry-review-validation-reason";

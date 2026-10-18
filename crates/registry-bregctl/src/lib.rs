@@ -3131,6 +3131,10 @@ fn review_recovery_failure(command: &'static str, error: ReviewRecoveryCliError)
             "review-recovery.submission.not-found",
             "no retained review submission or application job exists for this exact request proposal version".to_owned(),
         ),
+        ReviewRecoveryCliError::Ineligible { reason: "package-changed", .. } => (
+            "review-recovery.submission.ineligible",
+            "the current request is blocked by a package change (package-changed); its requester must Rebase and submit for fresh Review, or Cancel it; restoring the old package does not reopen the closed work".to_owned(),
+        ),
         ReviewRecoveryCliError::Ineligible {
             reason,
             state,
@@ -13304,6 +13308,34 @@ mod tests {
         assert!(encoded.contains("review-recovery.submission.ineligible"));
         assert!(encoded
             .contains("reason request-erased, state failed, code result-poll-attempts-exhausted"));
+    }
+
+    #[test]
+    fn package_changed_recovery_directs_the_requester_to_fresh_review_or_cancel() {
+        for command in [
+            "review-recovery resubmit",
+            "review-recovery retry-application",
+        ] {
+            let report = review_recovery_failure(
+                command,
+                ReviewRecoveryCliError::Ineligible {
+                    reason: "package-changed",
+                    state: "cancelled".into(),
+                    code: None,
+                },
+            );
+            let encoded = serde_json::to_string(&report).unwrap();
+            for expected in [
+                "package-changed",
+                "Rebase",
+                "fresh Review",
+                "Cancel",
+                "does not reopen",
+            ] {
+                assert!(encoded.contains(expected));
+            }
+            assert!(!encoded.contains("proposal-not-submitted"));
+        }
     }
 
     #[test]

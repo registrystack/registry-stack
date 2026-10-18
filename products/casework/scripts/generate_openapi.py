@@ -209,6 +209,10 @@ def document(contract: dict, wire: dict) -> dict:
         if endpoint.revision:parameters.append(parameter("If-Match","header",{"type":"string","pattern":'^"[1-9][0-9]*"$' if endpoint.revision=="positive" else '^"(?:0|[1-9][0-9]*)"$'},True,"Quoted current revision."))
         if endpoint.idempotency:parameters.append(parameter("Idempotency-Key","header",{"type":"string","minLength":1,"maxLength":128,"pattern":"^[!-~]+$"},True,"Retain this exact key and request bytes for explicit recovery."))
         responses={str(status):response(endpoint.response if status in (200,201) else None) for status in op["successStatuses"]}
+        if endpoint.body == "ReviewCreateRequest":
+            for status in ("200", "201"):
+                if status in responses:
+                    responses[status]["headers"]["Registry-Review-Producer"] = {"description":"Authenticated trusted producer identity for this acceptance or exact recovery. Optional for compatibility with older providers; never a substitute for the submission digest.","schema":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_.:-]+$"}}
         codes=set(op["problems"])|set(contract["frameworkProblems"])
         for status,value in problem_responses(codes,catalog).items():
             if status not in responses:responses[status]=value
