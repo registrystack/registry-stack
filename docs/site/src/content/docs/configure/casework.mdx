@@ -38,17 +38,18 @@ caseworkctl check .
 
 ```json test-excerpt
 {
-  "filesChecked": 2,
+  "filesChecked": 3,
   "policyBindings": [
     {"digest": "sha256:<digest>", "id": "decision", "version": "1"}
   ]
 }
 ```
 
-Check reads `casework.yaml`, `dev-clients.yaml` and any `holiday-sets/`, and prints one binding for
-each [ReviewPolicy](../../reference/glossary/#review-policy). When a file is wrong, it prints a
-refusal with a code such as `casework.review-policy.unknown-queue`, the file, line, and JSON
-pointer, and the next step to take.
+Check reads `casework.yaml`, `dev-clients.yaml`, the development session's state file while one
+exists, and any `holiday-sets/`, and prints one binding for each
+[ReviewPolicy](../../reference/glossary/#review-policy). When a file is wrong, it prints a refusal
+with a code such as `casework.review-policy.unknown-queue`, the file, line, and JSON pointer, and
+the next step to take.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, init(), check(), check_holiday_sets();
     products/casework/examples/standalone-decision/casework.yaml;
@@ -178,7 +179,7 @@ caseworkctl test .
 
 ```json test-excerpt
 {
-  "filesChecked": 3,
+  "filesChecked": 4,
   "policyBindings": [
     {"digest": "sha256:<digest>", "id": "decision", "version": "1"}
   ]
