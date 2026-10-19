@@ -250,15 +250,18 @@ database and audit writer only; check source context and queue staffing with rea
 ### Earlier database and audit state
 
 The current contract refuses retired Casework schemas with `casework.activation.retired-schema`,
-and a database newer than the binary with `casework.activation.schema-newer`. Keep such a database
-with the release that wrote it and provision a fresh one. Never delete ledger rows or run migration
+a database a pre-1.0 release wrote with `casework.activation.beta-schema`, and a database newer
+than the binary with `casework.activation.schema-newer`. Keep such a database with the release
+that wrote it and provision a fresh one; for a pre-1.0 database, follow
+[the upgrade runbook](../advanced/upgrade-and-retire/#upgrade-in-this-order). Never delete ledger rows or run migration
 SQL by hand to get past either refusal.
 
 A restore returns review state to its backup point, and the external audit journal must not be
 rewound. Follow [Casework restore and reconciliation](../advanced/back-up-and-restore/#restore-registry-casework)
 before reviewers resume.
 
-{/* Evidence: crates/registry-casework/src/activation.rs, retired-schema and schema-newer;
+{/* Evidence: crates/registry-casework/src/activation.rs, retired-schema, beta-schema, and
+    schema-newer; crates/registry-casework/src/store.rs, StoreError::Pre1_0Schema;
     products/casework/scripts/test-backup-restore.sh. */}
 
 ### Scrape metrics and the running version
