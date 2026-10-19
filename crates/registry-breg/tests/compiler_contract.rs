@@ -4743,6 +4743,7 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
         value["components"]["schemas"]["Problem"]["properties"]["code"]["enum"],
         json!([
             "action.evidence_failed",
+            "action.guard_failed",
             "action.handler_failed",
             "action.refused",
             "authentication.refused",
