@@ -1132,17 +1132,18 @@ impl MutationTransaction {
             application_id,
         )?;
 
-        self.lock_existing_action_targets(
-            transaction.transaction(),
-            registry,
-            action,
-            claims,
-            target_authority,
-            input_values,
-            application_id,
-            preconditions,
-        )
-        .await?;
+        let guard_failure = self
+            .lock_existing_action_targets(
+                transaction.transaction(),
+                registry,
+                action,
+                claims,
+                target_authority,
+                input_values,
+                application_id,
+                preconditions,
+            )
+            .await?;
 
         if !action.commit_evidence.is_empty() {
             let frozen = frozen.ok_or(MutationError::PreconditionFailed)?;
@@ -1185,6 +1186,12 @@ impl MutationTransaction {
                 application_id,
             )
             .await?;
+        // A failed field guard answers only after every other check passed, so
+        // its distinct refusal never stands in for a stale or hidden target.
+        if let Some(input) = guard_failure {
+            check_current_action_grant(claims)?;
+            return Err(MutationError::FieldGuardFailed { input });
+        }
         let ordered = ordered_action_effects(effects)?;
         let groups = ordered_action_effect_groups(&ordered, &patch_bases, reserved_creates)?;
         let mut rows = BTreeMap::<String, CurrentRow>::new();
@@ -1608,7 +1615,7 @@ impl MutationTransaction {
         input_values: &ActionInputs,
         application_id: Uuid,
         preconditions: &BTreeMap<String, String>,
-    ) -> Result<(), MutationError> {
+    ) -> Result<Option<String>, MutationError> {
         enum Role<'a> {
             Patch(&'a CompiledPlanEffect),
             Link(&'a str),
@@ -1618,6 +1625,7 @@ impl MutationTransaction {
         // another. Acquire the complete set in one order before either phase;
         // sorting each phase independently permits opposite-role deadlocks.
         let mut targets = BTreeMap::new();
+        let mut guard_failure = None;
         for effect in &action.effects {
             if let CompiledPlanTargetBinding::Existing { input } = &effect.target.binding {
                 let record_id = Uuid::parse_str(&input_record_id(input_values, input)?)
@@ -1702,6 +1710,7 @@ impl MutationTransaction {
                 self.audit.profile(),
                 registry.registry_id(),
                 preconditions,
+                &mut guard_failure,
             )?;
         }
         transaction
@@ -1712,7 +1721,7 @@ impl MutationTransaction {
             )
             .await
             .map_err(map_database_error)?;
-        Ok(())
+        Ok(guard_failure)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2668,6 +2677,7 @@ fn verify_action_requirements(
     audit: &AuditProfile,
     registry_id: &str,
     preconditions: &BTreeMap<String, String>,
+    guard_failure: &mut Option<String>,
 ) -> Result<(), MutationError> {
     for requirement in action
         .requires
@@ -2706,10 +2716,9 @@ fn verify_action_requirements(
                 &current.data,
                 &time::OffsetDateTime::now_utc().date().to_string(),
                 matches!(field.field_type, FieldTypeSource::Timestamp),
-            ) {
-                return Err(MutationError::FieldGuardFailed {
-                    input: requirement.input.clone(),
-                });
+            ) && guard_failure.is_none()
+            {
+                *guard_failure = Some(requirement.input.clone());
             }
         }
     }
@@ -3114,17 +3123,18 @@ impl MutationTransaction {
         }
         // This transaction proves current admission only. Its locks and entire
         // pooled connection are released before any Evidence request.
-        self.lock_existing_action_targets(
-            transaction.transaction(),
-            registry,
-            action,
-            claims,
-            target_authority,
-            &normalized,
-            application_id,
-            &input.preconditions,
-        )
-        .await?;
+        let guard_failure = self
+            .lock_existing_action_targets(
+                transaction.transaction(),
+                registry,
+                action,
+                claims,
+                target_authority,
+                &normalized,
+                application_id,
+                &input.preconditions,
+            )
+            .await?;
         self.verify_action_link_references(
             transaction.transaction(),
             registry,
@@ -3156,6 +3166,11 @@ impl MutationTransaction {
             )
             .await?;
         check_current_action_grant(claims)?;
+        // As at commit, a failed field guard answers only after every other
+        // admission check passed, and no Evidence is requested for it.
+        if let Some(input) = guard_failure {
+            return Err(MutationError::FieldGuardFailed { input });
+        }
         transaction
             .commit()
             .await

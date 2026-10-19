@@ -40,6 +40,7 @@ use zeroize::Zeroizing;
 const ID: &str = "00000000-0000-4000-8000-000000000101";
 const FOREIGN_ID: &str = "00000000-0000-4000-8000-000000000202";
 const TOMBSTONED_ID: &str = "00000000-0000-4000-8000-000000000303";
+const OTHER_ID: &str = "00000000-0000-4000-8000-000000000404";
 const PACKAGE: &str = "action-requirements";
 
 async fn setup() -> (
@@ -597,6 +598,149 @@ async fn immediate_action_availability_preserves_disclosure_and_commit_boundarie
         .iter()
         .all(|count| *count == 0));
     database.cleanup().await;
+
+    // A second reference input sorts after the guarded one. A failed field
+    // guard is answered as `action.guard_failed` only when every other check
+    // passed: a missing, foreign, or tombstoned second reference, or a stale
+    // condition on it, still answers the generic refusal.
+    let mut source = with_other_parent(with_parent_get(support::project(), &["status", "zone"]));
+    let (database, registry, identity) = setup_with_project(source.clone()).await;
+    insert_parent(
+        &database,
+        &registry,
+        &identity.activation_id,
+        FOREIGN_ID,
+        "active",
+        "zone-b",
+    )
+    .await;
+    insert_parent(
+        &database,
+        &registry,
+        &identity.activation_id,
+        TOMBSTONED_ID,
+        "tombstoned",
+        "zone-a",
+    )
+    .await;
+    insert_parent(
+        &database,
+        &registry,
+        &identity.activation_id,
+        OTHER_ID,
+        "active",
+        "zone-a",
+    )
+    .await;
+    database
+        .admin
+        .execute(
+            &status_sql(&registry),
+            &[&"inactive", &Uuid::parse_str(ID).unwrap()],
+        )
+        .await
+        .unwrap();
+    let two_reference_app = app(&database, registry.clone(), identity, None);
+    for (key, other) in [
+        ("other-missing", "00000000-0000-4000-8000-000000000999"),
+        ("other-foreign", FOREIGN_ID),
+        ("other-tombstoned", TOMBSTONED_ID),
+    ] {
+        let refused = invoke_with_input(
+            two_reference_app.clone(),
+            key,
+            json!({"parentId":ID, "otherParentId":other, "label":"synthetic"}),
+        )
+        .await;
+        assert_eq!(refused.0, StatusCode::PRECONDITION_FAILED, "{}", refused.1);
+        assert_eq!(
+            refused.1["code"], "precondition.failed",
+            "{key}: {}",
+            refused.1
+        );
+    }
+    let guard_failed = invoke_with_input(
+        two_reference_app,
+        "other-visible",
+        json!({"parentId":ID, "otherParentId":OTHER_ID, "label":"synthetic"}),
+    )
+    .await;
+    assert_eq!(
+        guard_failed.0,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        guard_failed.1
+    );
+    assert_eq!(guard_failed.1["code"], "action.guard_failed");
+    assert!(counts(&database, &registry)
+        .await
+        .iter()
+        .all(|count| *count == 0));
+    database.cleanup().await;
+
+    source["actions"][0]["commitGuards"]["targets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"input":"other-parent", "revision":"unchanged"}));
+    let (database, registry, identity) = setup_with_project(source).await;
+    insert_parent(
+        &database,
+        &registry,
+        &identity.activation_id,
+        OTHER_ID,
+        "active",
+        "zone-a",
+    )
+    .await;
+    let stale_app = app(&database, registry.clone(), identity, None);
+    let conditions = post_action(
+        stale_app.clone(),
+        "/v1/actions/register-child/target-conditions",
+        json!({"input":{"otherParentId":OTHER_ID}}),
+        None,
+    )
+    .await;
+    assert_eq!(conditions.0, StatusCode::OK, "{}", conditions.1);
+    for (status, id) in [("active", OTHER_ID), ("inactive", ID)] {
+        database
+            .admin
+            .execute(
+                &status_sql(&registry),
+                &[&status, &Uuid::parse_str(id).unwrap()],
+            )
+            .await
+            .unwrap();
+    }
+    let stale = post_action(
+        stale_app,
+        "/v1/actions/register-child",
+        json!({
+            "input":{"parentId":ID, "otherParentId":OTHER_ID, "label":"synthetic"},
+            "preconditions":conditions.1["preconditions"].clone()
+        }),
+        Some("stale-other"),
+    )
+    .await;
+    assert_eq!(stale.0, StatusCode::PRECONDITION_FAILED, "{}", stale.1);
+    assert_eq!(stale.1["code"], "precondition.failed");
+    assert!(counts(&database, &registry)
+        .await
+        .iter()
+        .all(|count| *count == 0));
+    database.cleanup().await;
+}
+
+/// Adds a second required reference to `parent`. It carries no field guard,
+/// so its own checks are reference visibility and any revision condition.
+fn with_other_parent(mut source: Value) -> Value {
+    source["actions"][0]["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"other-parent", "apiName":"otherParentId", "type":"reference",
+            "target":"parent", "required":true, "classification":"restricted"
+        }));
+    source
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

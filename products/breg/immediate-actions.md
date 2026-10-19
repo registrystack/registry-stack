@@ -118,8 +118,9 @@ concurrency, form completeness, every guard, Functions, and Evidence inside
 the mutation transaction. `available: true` means only that this target's field
 guards are currently satisfied, including the case where it has no field
 guards. A safely disclosed field guard that fails at commit answers
-`412 action.guard_failed`; stale conditions and failures that cannot be
-disclosed remain `412 precondition.failed`.
+`412 action.guard_failed` when every other commit check passed; stale
+conditions, any other refusal, and failures that cannot be disclosed remain
+`412 precondition.failed`.
 
 ## Inspect and test the function
 

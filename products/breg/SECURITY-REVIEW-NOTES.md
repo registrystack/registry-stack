@@ -26,20 +26,27 @@ Evidence, and other targets are outside the advisory result. The route supplies
 no mutation authority, reserves no state, and does not replace the authoritative
 checks inside the mutation transaction.
 
-When Invoke fails a current field guard, the runtime returns
-`412 action.guard_failed` only after the same selected profile can perform the
-ordinary target Get and read the fields that establish the failed guard. Stale
-conditions, failed authority, a guard that no longer fails when reread after
-rollback, and guard details outside that disclosure remain the generic
-`412 precondition.failed`. This prevents the distinct code from becoming a
-hidden-field or row-existence oracle while letting an authorized application
-distinguish a confirmed business-state refusal from stale input.
+When Invoke fails a current field guard, the runtime records the failure and
+finishes every other check in the transaction: target locking and visibility,
+condition tokens, commit Evidence, link references, and patch authorization.
+It returns `412 action.guard_failed` only when none of those refused and the
+same selected profile can perform the ordinary target Get and read the fields
+that establish the failed guard. Any other refusal wins, whichever target it
+concerns. Stale conditions, failed authority, a guard that no longer fails when
+reread after rollback, and guard details outside that disclosure remain the
+generic `412 precondition.failed`. A hook-proposed Action whose guard fails
+settles as the refused `hook.proposal.precondition_failed`. This prevents the
+distinct code from becoming a hidden-field or row-existence oracle while
+letting an authorized application distinguish a confirmed business-state
+refusal from stale input.
 
 The focused PostgreSQL Action availability test covers selected-profile Get
 authority, row concealment, hidden guard and boundary fields, closed unknown
 responses, and the split between the distinct guard code and the generic
-precondition code. Runtime mutation tests continue to prove that observation
-does not bypass commit-time authority, concurrency, or guards.
+precondition code, including a second reference that is missing, foreign,
+tombstoned, or stale while the first reference fails its guard. Runtime
+mutation tests continue to prove that observation does not bypass commit-time
+authority, concurrency, or guards.
 
 Availability can become stale immediately after it is returned. Applications
 must treat the answer as a form hint and handle Invoke refusal. The result
