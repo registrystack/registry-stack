@@ -208,6 +208,8 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
         inventory += ("registry-render",)
     if REGISTRY_RELEASE.release_roster.coordinator_in_release(version_tuple):
         inventory += ("coordinator", "coordinatorctl")
+    if REGISTRY_RELEASE.release_roster.scheduling_installer_in_release(version_tuple):
+        inventory += ("scheduling-installer",)
     if version_tuple >= (0, 39, 0):
         inventory = tuple(name for name in inventory if not name.startswith("relay"))
     data = {

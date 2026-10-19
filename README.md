@@ -119,21 +119,24 @@ curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/downl
 # Registry Casework: casework and caseworkctl
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/casework-install.sh | bash
 
+# Registry Scheduling: schedulingctl, and the scheduling runtime on Linux amd64
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/scheduling-install.sh | bash
+
 # Evidence Gateway: evidence, evidencectl, and evidence-oid4vci
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
 ```
 
 Each installer verifies the binaries against the published `SHA256SUMS` before
 writing them to `$HOME/.local/bin`, or to the directory `BREG_INSTALL_DIR`,
-`CASEWORK_INSTALL_DIR`, or `EVIDENCECTL_INSTALL_DIR`
-names. Registry Discovery and Registry Manifest publish binaries and no
+`CASEWORK_INSTALL_DIR`, `SCHEDULING_INSTALL_DIR`, or `EVIDENCECTL_INSTALL_DIR`
+names. The Scheduling installer installs the `scheduling` runtime only on
+Linux amd64, the one platform it is published for; on Linux arm64 and macOS
+arm64 it installs `schedulingctl` alone. Registry Discovery and Registry Manifest publish binaries and no
 installer: download `discovery-<tag>-linux-amd64`,
 `discoveryctl-<tag>-linux-amd64`, or
 `registry-manifest-<tag>-linux-amd64` from the
 [release page](https://github.com/registrystack/registry-stack/releases) and
-check it against the release checksum chain. Registry Scheduling publishes a
-`scheduling-<tag>-linux-amd64` runtime binary and `schedulingctl` binaries
-beside its container image, and no installer. Registry Messaging publishes
+check it against the release checksum chain. Registry Messaging publishes
 `messaging` and `messagingctl` Linux amd64 binaries, Registry Render a
 `registry-render` Linux amd64 binary, and the BReg citizen services
 `breg-mcp` and `breg-review` binaries, each beside its container image and

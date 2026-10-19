@@ -283,6 +283,8 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
             expected_inventory.add("scheduling")
         if parsed_version >= SCHEDULINGCTL_RELEASE_MINIMUM_VERSION:
             expected_inventory.add("schedulingctl")
+        if release_roster.scheduling_installer_in_release(parsed_version):
+            expected_inventory.add("scheduling-installer")
         if release_roster.messaging_in_release(parsed_version):
             expected_inventory.update({"messaging", "messagingctl"})
         if release_roster.render_in_release(parsed_version):

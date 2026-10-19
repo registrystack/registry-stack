@@ -60,6 +60,22 @@ class ReleaseRosterTest(TestCase):
         with mock.patch.object(release_roster, "SCHEDULING_CLIENT_FIRST_RELEASE", None):
             self.assertFalse(release_roster.scheduling_client_in_release((1, 0, 0)))
 
+    def test_scheduling_installer_is_published_from_v0_42(self) -> None:
+        self.assertEqual((0, 42, 0), release_roster.SCHEDULING_INSTALLER_FIRST_RELEASE)
+        self.assertFalse(release_roster.scheduling_installer_in_release((0, 41, 0)))
+        self.assertFalse(release_roster.scheduling_installer_in_release((0, 41, 99)))
+        self.assertTrue(release_roster.scheduling_installer_in_release((0, 42, 0)))
+        self.assertTrue(release_roster.scheduling_installer_in_release((1, 0, 0)))
+        with mock.patch.object(release_roster, "SCHEDULING_INSTALLER_FIRST_RELEASE", None):
+            self.assertFalse(release_roster.scheduling_installer_in_release((1, 0, 0)))
+        for version, expected in (("0.41.9", "false\n"), ("v0.42.0", "true\n")):
+            with self.subTest(command="scheduling-installer-in-release", version=version):
+                stdout = io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                    result = release_roster.main(["scheduling-installer-in-release", version])
+                self.assertEqual(0, result)
+                self.assertEqual(expected, stdout.getvalue())
+
     def test_unified_clients_hold_coordinator_until_its_client_returns(self) -> None:
         self.assertIsNone(release_roster.COORDINATOR_CLIENT_FIRST_RELEASE)
         for version in ((0, 41, 0), (0, 42, 0), (1, 0, 0)):

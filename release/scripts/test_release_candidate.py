@@ -970,6 +970,40 @@ class ReleaseCandidateTest(TestCase):
             },
         )
 
+    def test_scheduling_installer_joins_only_the_v0_42_roster(self) -> None:
+        historical = self.module._release_payload_inventory("0.41.0")
+        current = self.module._release_payload_inventory("0.42.0")
+
+        self.assertFalse(
+            [name for name in historical if name.startswith("scheduling") and name.endswith(".sh")]
+        )
+        self.assertEqual(
+            {
+                "scheduling-v0.42.0-install.sh": "installer",
+                "scheduling-install.sh": "installer",
+            },
+            {
+                name: kind
+                for name, kind in current.items()
+                if name.startswith("scheduling") and name.endswith("install.sh")
+            },
+        )
+        # The installer offers only what the release publishes per platform:
+        # the runtime on Linux amd64 and schedulingctl on all three.
+        self.assertEqual(
+            {
+                "scheduling-v0.42.0-linux-amd64",
+                "schedulingctl-v0.42.0-linux-amd64",
+                "schedulingctl-v0.42.0-linux-arm64",
+                "schedulingctl-v0.42.0-macos-arm64.tar.gz",
+            },
+            {
+                name
+                for name, kind in current.items()
+                if kind == "binary" and name.startswith("scheduling")
+            },
+        )
+
     def test_render_and_oid4vci_images_join_only_the_v0_38_roster(self) -> None:
         self.hold_out("BREG_SERVICES_FIRST_RELEASE")
         self.hold_out("MESSAGING_FIRST_RELEASE")
@@ -1177,6 +1211,7 @@ class ReleaseCandidateTest(TestCase):
 
     @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_coordinator_joins_only_the_rosters_from_its_first_release(self) -> None:
+        self.hold_out("SCHEDULING_INSTALLER_FIRST_RELEASE")
         self.assertEqual(
             self.module._candidate_image_names("0.41.99") | {"coordinator"},
             self.module._candidate_image_names("0.42.0"),
