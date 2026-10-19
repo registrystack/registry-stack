@@ -1120,6 +1120,11 @@ Coverage in `crates/registry-breg/tests/support/hook_activation.rs` includes
 scope, time-budget and Wasm tests, the in-flight predecessor answer and
 committed-receipt tests, and
 `classified_proposal_completion_preserves_registry_and_lease_fences`.
+Its faults cover the lease token, generation, database, package, maintenance
+state, and an unreadable registry state. No fault case covers the attempt
+comparison in the shared Dispatch lease transition or the shared activation
+lock that `verify_delivery_transaction` in `crates/registry-breg/src/webhook.rs`
+takes; both are enforced, and their assurance rests on review of that code.
 `in_flight_predecessor_answer_keeps_unreadable_activation_uncertain` continues
 through final-lease recovery, explicit replay, a second receiver request, and
 the successor's proposal refusal without a mutation. Complementing this

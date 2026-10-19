@@ -20,12 +20,14 @@
   Reference-hash inputs and domains are unchanged.
 - Expire and audit every webhook delivery after its shared payload expires,
   including siblings whose payload was already erased.
-- Refuse activation before maintenance with `apply.hooks.local-retained` when
-  local hook work still needs the active package. `bregctl webhook drain`
-  attempts due local work under that package with attempt and time bounds.
-  Apply audits this retained-local guard refusal as `refused`; an incomplete
-  refusal audit returns `apply.audit.refusal-incomplete` with ready state
-  unchanged. Other activation failure classifications retain their contracts.
+- BREAKING: activation refuses before maintenance with
+  `apply.hooks.local-retained` when local hook work still needs the active
+  package. `bregctl webhook drain` attempts due local work under that package
+  with attempt and time bounds. Apply audits this retained-local guard refusal
+  in `breg-activation-audit/v1` with the outcome `refused`, which audit
+  consumers have not seen before; an incomplete refusal audit returns
+  `apply.audit.refusal-incomplete` with ready state unchanged. Other activation
+  failure classifications retain their contracts.
 - Let settled URL proposal decisions finish delivery after activation.
   Uncommitted proposals classified under a successor become non-replayable
   `hook.proposal.package_unavailable` dead letters, while committed answers
@@ -34,8 +36,11 @@
   proposal code and may remain eligible for explicit replay to the receiver.
   `webhook list` exposes `proposalCode` and a bounded `proposalSummary` for
   the superseded-activation refusal; it does not expose other handler-authored
-  summaries. `replayEligible` includes both captured operator permission and
-  product proposal policy, alongside state, payload, and binding checks.
+  summaries.
+- BREAKING: `webhook list` reports `replayEligible` only when the captured
+  operator permission and the product proposal policy both allow a replay,
+  alongside the state, payload, and binding checks. A dead letter that replay
+  would refuse now reads `false`; it read `true` before.
 - Classify added events as disclosure widening and removed events as narrowing.
   Changed projections and destinations require disclosure review in diff output;
   event changes remain applicable without reviewed migration SQL.
