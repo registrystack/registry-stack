@@ -98,7 +98,9 @@ so a binary that cannot run leaves the installed toolset selected.
    consumers depend on stable record IDs, plan the reload as re-registration with that remap, or
    do not cut a production registry over in this release.
    1. Pause every caller, readers as well as writers and import runs, until step 9 resumes
-      traffic, then close the import authorities still open with `bregctl import-authority close`.
+      traffic; only Casework's context-provider reads and the review results `breg` consumes from
+      Casework continue, until item 2 stops Casework. Then close the import authorities still
+      open with `bregctl import-authority close`.
    2. When Casework reviews this registry's change requests or reads it through its context
       provider, drain and stop v0.41.0 Casework now, as step 5 describes, so every late decision
       is applied before the export and Casework never reads the v0.42.0 registry.
@@ -108,7 +110,8 @@ so a binary that cannot run leaves the installed toolset selected.
       with `bregctl webhook replay`. Continue when `bregctl webhook list` shows no pending
       delivery, or record the deliveries you accept losing, since they stop with the runtime.
    5. While v0.41.0 still serves, export every Record type the fresh registry needs with
-      `bregctl data export`, as
+      `bregctl data export`, naming with `--field` every field the reload needs, since it exports
+      only the fields you name, as
       [Export with a checkpoint](../../breg-data/#export-with-a-checkpoint) describes. An entity
       with no export-enabled access profile cannot be exported this way; take its records from
       another verified source.
@@ -148,9 +151,11 @@ so a binary that cannot run leaves the installed toolset selected.
    A completion wake-up carries no result and retries from the outbox, so keep v0.41.0 serving
    until each producer has fetched every terminal result, or record each undelivered result for
    manual reconciliation. Record the directory's teams, members, supervisors, and served queues
-   with `GET /v1/directory`, then pause staff mutations, stop the v0.41.0 runtime, take a final
-   `pg_dump` of its database, and keep the database, package, runtime file, and audit until its
-   work and accountability obligations are resolved. When Casework reviews or reads BReg, do this
+   with `GET /v1/directory`, its absences with `GET /v1/directory/absences`, and each holiday-set
+   revision your clocks use with `GET /v1/directory/holidays/{id}/revisions/{revision}`, then
+   pause staff mutations, stop the v0.41.0 runtime, take a final `pg_dump` of its database, and
+   keep the database, package, runtime file, and audit until its work and accountability
+   obligations are resolved. When Casework reviews or reads BReg, do this
    during step 4, before the BReg export, and start v0.42.0 Casework only after pairing it with
    the new context export.
    Rewrite the project in the v0.42.0 format; `caseworkctl check` names each old spelling and its
@@ -161,7 +166,8 @@ so a binary that cannot run leaves the installed toolset selected.
    `caseworkctl doctor` with the same runtime file, package, and database. Require readiness
    before resuming staff traffic; see [plan, apply, and serve](../../casework/#plan-apply-and-serve).
    The fresh database has an empty directory, and `caseworkctl` does not recreate it: bootstrap
-   the recorded teams and served queues through the directory API, as
+   the recorded teams and served queues, then post the absences and holiday-set revisions to the
+   same routes, as
    [Establish directory authority](../../casework/#establish-directory-authority) describes, and
    resume producer submissions only once a reviewer can see a task.
 6. **Upgrade Evidence.** Author the normalized `evidence.yaml`, target, and target authority
@@ -259,7 +265,10 @@ so a binary that cannot run leaves the installed toolset selected.
      `BRegRecoveryHint`, and `refresh` and `receipt-only` in `BRegApplicationRecoveryHint`.
    - **Casework.** A review decision names its `outcome`: an approve without one is refused with
      `400` `request.invalid` and reason `outcome-not-declared`, and the clients refuse a decision
-     receipt without one. The `AssignmentContext` export is removed.
+     receipt without one. The `AssignmentContext` export is removed. `/v1/work-items`, with its
+     prepared attempts and source actions, is removed in favour of review requests, tasks,
+     decisions, and results; `/v1/review-kinds` becomes `/v1/review-policies`, and `/v1/holdings`
+     becomes `/v1/review-tasks/holdings`.
    - **Discovery.** `validateSelection` and `validate_selection` are removed; call
      `validateSelectionStructure` or `validate_selection_structure`, which behave the same.
    - **Scheduling.** Reminder receivers parse the shared hook envelope that appointment observers
@@ -288,7 +297,13 @@ so a binary that cannot run leaves the installed toolset selected.
     crates/registry-breg/src/review_store.rs, on_approved_mode 'automatic' and the application
     queue (present since v0.41.0);
     crates/registry-casework/src/http.rs, directory() and /v1/directory/bootstrap (no caseworkctl
-    directory command); crates/registry-casework-core/src/model.rs, TeamRecord;
+    directory command); crates/registry-casework-core/src/model.rs, TeamRecord; /v1/directory/absences and
+    /v1/directory/holidays/{id}/revisions/{revision} (no holiday list route);
+    crates/registry-bregctl/src/lib.rs, data export --field (required, repeat per field) and
+    WebhookCommand in v0.42.0; configure/evidence-oid4vci.mdx, offers held in process memory;
+    products/casework/CHANGELOG.md, WorkItems replaced; crates/registry-casework/src/http.rs,
+    /v1/review-policies and /v1/review-tasks/holdings (v0.41.0: /v1/work-items, /v1/review-kinds,
+    /v1/holdings);
     crates/registry-casework/src/runtime.rs, deliver_review_completion() and
     casework_review_completion_outbox (wake-ups retried from the outbox);
     products/casework/CHANGELOG.md, Unreleased (v0.42.0) entries: baseline version 100,
@@ -350,8 +365,9 @@ runtime and a v0.42.0 client calls routes the previous release does not serve.
   Records only. Read Proposals through the client's Proposal list and submission reads
   (`listProposals` and `readProposalSubmission`) under a grant that may read them. When no grant
   can read a Proposal, it cannot be carried back, so either accept losing it or roll forward
-  instead. Stop
-  every v0.42.0 `breg` and keep its database. Start the previous
+  instead. Let its pending webhooks deliver, replaying eligible dead letters with
+  `bregctl webhook replay` until `bregctl webhook list` shows none, or record the deliveries you
+  accept losing. Stop every v0.42.0 `breg` and keep its database. Start the previous
   `breg` with the previous package and runtime file against the retained database; the v0.42.0
   tools cannot read the earlier package or runtime file. Re-enter the recorded changes through the
   previous release's interfaces. When the retained database itself is damaged, restore the final
@@ -369,7 +385,9 @@ runtime and a v0.42.0 client calls routes the previous release does not serve.
   package, and runtime file against the retained database. Producers must resubmit the open reviews to the previous deployment, and
   a decision taken after the cutover must be taken again there. BReg and Casework roll back
   together, because each refuses the other's review results across the release boundary.
-- **Evidence.** Restart the previous binary with the previous bundle and runtime file. Keep the
+- **Evidence.** Stop `evidence-oid4vci` first, since it holds v0.42.0 offers in memory, then
+  restart the previous Evidence binary with the previous bundle and runtime file, and the previous
+  adapter after it. Keep the
   v0.42.0 signing keys' public key set available to relying parties, because assertions it issued
   stay valid for up to `maximumAssertionValiditySeconds`; keep it for that period plus the verifier
   clock skew, as step 2 of [Retire Evidence](#retire-evidence) describes.
@@ -389,12 +407,14 @@ runtime and a v0.42.0 client calls routes the previous release does not serve.
   post-cutover message that was accepted but never sent. A message the v0.42.0 deployment sent
   stays recorded only in its database, and its later provider callbacks reach whichever runtime
   serves the callback URL; the previous runtime answers them as `unmatched`.
-- **Scheduling.** While v0.42.0 still serves, enumerate every appointment it accepted after the
+- **Scheduling.** Stop new hold and appointment admissions, let in-flight requests resolve, and
+  while v0.42.0 still serves, enumerate every appointment it accepted after the
   cutover from each booking product's own records, since `GET /v1/appointments` needs an exact
   external reference; if any cannot be accounted for, do not roll Scheduling back, because its
   capacity could be sold twice. Then stop the v0.42.0 runtime and keep its database for
   inspection; no restore is needed. Every hold and appointment it accepted after the cutover is
-  absent from the retained database. Reconcile each one before the previous runtime resumes
+  absent from the retained database, except one rebooked from that database at the cutover, which
+  it still holds and must not be rebooked again. Reconcile each one before the previous runtime resumes
   booking: rebook it there through its owning product, or reduce the affected window's supply with
   the previous `schedulingctl records apply`, and tell the people who hold it. Then start the
   previous binary, package, and runtime file against the retained database.
