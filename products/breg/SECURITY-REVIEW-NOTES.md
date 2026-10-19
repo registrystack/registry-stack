@@ -8,6 +8,45 @@ security-invariant matrix in `contracts/security-invariant-matrix.yaml` is the
 row-per-invariant baseline; this file is the narrative behind the decisions
 and the residuals the matrix rows do not state.
 
+## Immediate Action availability and guard refusal disclosure
+
+An application may ask whether one referenced target currently satisfies an
+immediate Action's field guards before presenting Invoke. The availability
+route uses the exact selected Action profile and ordinary Get authority for the
+target. A missing or row-denied target stays the ordinary concealed 404. A
+guard or row boundary that depends on an unreadable field, and a profile that
+lacks ordinary Get authority, returns the closed `not-disclosed` result without
+an observed revision or missing-input names. The implementation does not read
+hidden guard or boundary values to classify that result, and no answer includes
+a guard ID or Record value.
+
+Only per-target field guards are evaluated. Revision checks are neutral because
+the observation supplies no condition token. Functions, SQL uniqueness,
+Evidence, and other targets are outside the advisory result. The route supplies
+no mutation authority, reserves no state, and does not replace the authoritative
+checks inside the mutation transaction.
+
+When Invoke fails a current field guard, the runtime returns
+`412 action.guard_failed` only after the same selected profile can perform the
+ordinary target Get and read the fields that establish the failed guard. Stale
+conditions, failed authority, a guard that no longer fails when reread after
+rollback, and guard details outside that disclosure remain the generic
+`412 precondition.failed`. This prevents the distinct code from becoming a
+hidden-field or row-existence oracle while letting an authorized application
+distinguish a confirmed business-state refusal from stale input.
+
+The focused PostgreSQL Action availability test covers selected-profile Get
+authority, row concealment, hidden guard and boundary fields, closed unknown
+responses, and the split between the distinct guard code and the generic
+precondition code. Runtime mutation tests continue to prove that observation
+does not bypass commit-time authority, concurrency, or guards.
+
+Availability can become stale immediately after it is returned. Applications
+must treat the answer as a form hint and handle Invoke refusal. The result
+describes only the selected target's declared field guards, including a true
+result when none apply. It gives no answer about form completeness, Functions,
+Evidence, other targets, SQL constraints, or any other commit prerequisite.
+
 ## Runtime Evidence expiry and terminal webhook retention
 
 Expired retained assertions and terminal delivery metadata must not accumulate

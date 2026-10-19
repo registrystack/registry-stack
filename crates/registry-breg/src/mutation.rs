@@ -2183,6 +2183,10 @@ pub enum MutationError {
     AuthorizationRefused,
     #[error("mutation precondition failed")]
     PreconditionFailed,
+    /// Internal cause only. HTTP must retain the generic precondition refusal
+    /// unless a fresh, ordinary authorized GET safely confirms the failed guard.
+    #[error("mutation precondition failed")]
+    FieldGuardFailed { input: String },
     #[error("the current review result does not match the retained approval")]
     ProposalReviewResultMismatch,
     #[error("mutation conflicts with current state")]

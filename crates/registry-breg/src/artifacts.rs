@@ -253,6 +253,24 @@ pub(crate) fn generate_artifacts(
                 &openapi_action_condition_response_schema(action),
             )?;
         }
+        if action_has_availability(action) {
+            insert_json_value(
+                &mut artifacts,
+                &format!(
+                    "generated/action-schemas/{}.availability.input.schema.json",
+                    action.id
+                ),
+                &openapi_action_availability_request_schema(action),
+            )?;
+            insert_json_value(
+                &mut artifacts,
+                &format!(
+                    "generated/action-schemas/{}.availability.response.schema.json",
+                    action.id
+                ),
+                &openapi_action_availability_response_schema(action),
+            )?;
+        }
     }
     let openapi = openapi_document(OpenApiDocumentInput {
         registry_id,
@@ -663,6 +681,14 @@ pub(crate) fn openapi_action_condition_response_schema_id(action_id: &str) -> St
     format!("action-{action_id}-target-conditions-response")
 }
 
+pub(crate) fn openapi_action_availability_request_schema_id(action_id: &str) -> String {
+    format!("action-{action_id}-availability-input")
+}
+
+pub(crate) fn openapi_action_availability_response_schema_id(action_id: &str) -> String {
+    format!("action-{action_id}-availability-response")
+}
+
 pub(crate) fn openapi_action_response_schema_id(action_id: &str) -> String {
     format!("action-{action_id}-invoke-response")
 }
@@ -729,6 +755,133 @@ pub(crate) fn openapi_action_condition_response_schema(action: &CompiledAction) 
         "required": ["preconditions"],
         "properties": {
             "preconditions": action_preconditions_schema(condition_inputs.iter().copied()),
+        },
+        "x-registry-action": action.id,
+    })
+}
+
+pub(crate) fn action_has_availability(action: &CompiledAction) -> bool {
+    !action.execution.is_proposal()
+        && action
+            .inputs
+            .iter()
+            .any(|input| matches!(&input.field_type, FieldTypeSource::Reference { .. }))
+}
+
+pub(crate) fn openapi_action_availability_request_schema(action: &CompiledAction) -> Value {
+    let condition_inputs = action_condition_inputs(action);
+    let reference_inputs = action
+        .inputs
+        .iter()
+        .filter(|input| matches!(&input.field_type, FieldTypeSource::Reference { .. }))
+        .collect::<Vec<_>>();
+    let mut input_schema = action_input_properties_schema(
+        action.inputs.iter(),
+        &condition_inputs,
+        action.handler.is_some(),
+    );
+    input_schema["required"] = json!([]);
+    let target_input_names = reference_inputs
+        .iter()
+        .map(|input| Value::String(input.api_name.clone()))
+        .collect::<Vec<_>>();
+    let target_shapes = reference_inputs
+        .iter()
+        .map(|input| {
+            json!({
+                "properties": {
+                    "targetInput": {"const": input.api_name},
+                    "input": {
+                        "required": [input.api_name],
+                        "properties": {
+                            (input.api_name.clone()): field_schema(&input.field_type),
+                        },
+                    },
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": format!("urn:breg:action:{}:availability-input", action.id),
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["targetInput", "input"],
+        "properties": {
+            "targetInput": {"type": "string", "enum": target_input_names},
+            "input": input_schema,
+        },
+        "oneOf": target_shapes,
+        "x-registry-action": action.id,
+    })
+}
+
+pub(crate) fn openapi_action_availability_response_schema(action: &CompiledAction) -> Value {
+    let input_names = action
+        .inputs
+        .iter()
+        .map(|input| Value::String(input.api_name.clone()))
+        .collect::<Vec<_>>();
+    let observed_revision = json!({"type": "integer", "format": "int64", "minimum": 1});
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": format!("urn:breg:action:{}:availability-response", action.id),
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["availability"],
+        "properties": {
+            "availability": {
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["available", "observedRevision"],
+                        "properties": {
+                            "available": {"const": true},
+                            "observedRevision": observed_revision,
+                        },
+                    },
+                    {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["available", "observedRevision", "reason", "recovery"],
+                        "properties": {
+                            "available": {"const": false},
+                            "observedRevision": observed_revision,
+                            "reason": {"const": "guard-not-satisfied"},
+                            "recovery": {"const": "none"},
+                        },
+                    },
+                    {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["available", "observedRevision", "reason", "recovery", "missingInputs"],
+                        "properties": {
+                            "available": {"type": "null"},
+                            "observedRevision": observed_revision,
+                            "reason": {"const": "input-required"},
+                            "recovery": {"const": "correct-input"},
+                            "missingInputs": {
+                                "type": "array",
+                                "minItems": 1,
+                                "uniqueItems": true,
+                                "items": {"type": "string", "enum": input_names},
+                            },
+                        },
+                    },
+                    {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["available", "observedRevision", "reason", "recovery"],
+                        "properties": {
+                            "available": {"type": "null"},
+                            "observedRevision": {"type": "null"},
+                            "reason": {"const": "not-disclosed"},
+                            "recovery": {"const": "none"},
+                        },
+                    },
+                ]
+            }
         },
         "x-registry-action": action.id,
     })
@@ -898,6 +1051,9 @@ pub(crate) fn openapi_action_operation(
         json_request_body(json!({"$ref": format!(
             "#/components/schemas/{}",
             match route.kind {
+                ActionRouteKind::Availability => {
+                    openapi_action_availability_request_schema_id(&action.id)
+                }
                 ActionRouteKind::Invoke => openapi_action_input_schema_id(&action.id),
                 ActionRouteKind::TargetConditions => {
                     openapi_action_condition_request_schema_id(&action.id)
@@ -1084,6 +1240,14 @@ pub(crate) fn public_action_metadata_entry(
                 "requiresIdempotencyKey": false,
                 "inputSchema": openapi_action_condition_request_schema_id(&action.id),
                 "responseSchema": openapi_action_condition_response_schema_id(&action.id),
+            })),
+            "availability": action_has_availability(action).then(|| json!({
+                "method": "POST",
+                "path": format!("{}/availability", action.route),
+                "operationId": format!("actions.{}.availability", action.id),
+                "requiresIdempotencyKey": false,
+                "inputSchema": openapi_action_availability_request_schema_id(&action.id),
+                "responseSchema": openapi_action_availability_response_schema_id(&action.id),
             })),
         },
         "bounds": {
@@ -1407,6 +1571,14 @@ fn bearer_security() -> Value {
 
 fn action_operation_responses(route: &CompiledActionRoute, action: &CompiledAction) -> Value {
     let success = match route.kind {
+        ActionRouteKind::Availability => success_response(
+            "Action availability returned",
+            StatusResponseHeaders::NoStore,
+            json!({"$ref": format!(
+                "#/components/schemas/{}",
+                openapi_action_availability_response_schema_id(&action.id)
+            )}),
+        ),
         ActionRouteKind::Invoke => success_response(
             "Immediate action committed",
             StatusResponseHeaders::ActionMutation,
@@ -1554,10 +1726,16 @@ fn action_problem_responses(
         );
         responses.insert(
             "412",
-            vec![ProblemExample {
-                code: "precondition.failed",
-                detail: "The mutation precondition failed.",
-            }],
+            vec![
+                ProblemExample {
+                    code: "action.guard_failed",
+                    detail: "The action guard was not satisfied.",
+                },
+                ProblemExample {
+                    code: "precondition.failed",
+                    detail: "The mutation precondition failed.",
+                },
+            ],
         );
     }
     responses
@@ -1565,6 +1743,7 @@ fn action_problem_responses(
 
 fn action_route_kind_name(kind: ActionRouteKind) -> &'static str {
     match kind {
+        ActionRouteKind::Availability => "availability",
         ActionRouteKind::Invoke => "invoke",
         ActionRouteKind::TargetConditions => "target-conditions",
     }
@@ -1785,6 +1964,16 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
             input_schemas.insert(
                 openapi_action_condition_response_schema_id(&action.id),
                 openapi_action_condition_response_schema(action),
+            );
+        }
+        if action_has_availability(action) {
+            input_schemas.insert(
+                openapi_action_availability_request_schema_id(&action.id),
+                openapi_action_availability_request_schema(action),
+            );
+            input_schemas.insert(
+                openapi_action_availability_response_schema_id(&action.id),
+                openapi_action_availability_response_schema(action),
             );
         }
         input_schemas.insert(

@@ -4995,6 +4995,10 @@ fn problem_contract(
             &["The declared Evidence dependency could not be accepted."],
         )),
         (500, "action.handler_failed") => Some(("Internal Server Error", &HANDLER_FAILED_DETAILS)),
+        (412, "action.guard_failed") => Some((
+            "Precondition Failed",
+            &["The action guard was not satisfied."],
+        )),
         (422, "action.refused") => Some(("Unprocessable Entity", &[])),
         (404, "resource.not_found") => {
             Some(("Not Found", &["The requested resource was not found."]))
@@ -8095,6 +8099,7 @@ journeys:
             (404, "lookup.unresolved"),
             (409, "mutation.conflict"),
             (409, "idempotency.conflict"),
+            (412, "action.guard_failed"),
             (412, "precondition.failed"),
             (415, "unsupported.media_type"),
             (428, "precondition.required"),

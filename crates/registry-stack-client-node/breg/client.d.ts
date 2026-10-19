@@ -516,6 +516,7 @@ export interface BRegActionDescriptor {
   readonly accessProfile: string
   readonly invokePath: string | null
   readonly targetConditionsPath: string | null
+  readonly availabilityPath: string | null
   readonly bounds: {
     readonly maximumTargets: SafeInteger
     readonly maximumFieldMutations: SafeInteger
@@ -532,6 +533,12 @@ export interface BRegActionReceipt {
     readonly revision: SafeInteger
   }>>
 }
+
+export type BRegActionAvailability =
+  | { readonly available: true; readonly observedRevision: number }
+  | { readonly available: false; readonly observedRevision: number; readonly reason: 'guard-not-satisfied'; readonly recovery: 'none' }
+  | { readonly available: null; readonly observedRevision: number; readonly reason: 'input-required'; readonly recovery: 'correct-input'; readonly missingInputs: ReadonlyArray<string> }
+  | { readonly available: null; readonly observedRevision: null; readonly reason: 'not-disclosed'; readonly recovery: 'none' }
 
 export interface BRegBatchCreateItem {
   readonly operation: 'create'
@@ -900,6 +907,8 @@ export declare class BaseRegistryClient {
   lookupRecord(entityRoute: string, selector: string, values?: JsonObject | null, options?: RecordProjectionOptions | null): Promise<CompleteOutcome<RecordEnvelope>>
   actionTargetConditions(binding: BRegActionBinding, inputs: JsonObject): Promise<BRegActionTargetConditions>
   actionTargetConditionsJson(binding: BRegActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
+  actionAvailability(binding: BRegActionBinding, targetInput: string, inputs: JsonObject): Promise<CompleteOutcome<BRegActionAvailability>>
+  actionAvailabilityJson(binding: BRegActionBinding, targetInput: string, inputsJson: string): Promise<JsonOutcome>
   invokeAction(binding: BRegActionBinding, inputs: JsonObject, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): Promise<CompleteOutcome<BRegActionReceipt>>
   invokeActionJson(binding: BRegActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | null): Promise<JsonOutcome>
   /** Validate and retain one invocation before any I/O, for recovery after a lost response. */

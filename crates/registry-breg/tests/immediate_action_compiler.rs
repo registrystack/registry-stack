@@ -444,7 +444,7 @@ fn household_contact_action_compiles_routes_effects_and_authority() {
             "person".to_owned()
         ]
     );
-    assert_eq!(inventory.routes.len(), 2);
+    assert_eq!(inventory.routes.len(), 3);
     assert!(inventory.routes.iter().any(|route| {
         route.kind == ActionRouteKind::Invoke
             && route.path == "/v1/actions/register-household-contact"
@@ -455,7 +455,34 @@ fn household_contact_action_compiles_routes_effects_and_authority() {
         route.kind == ActionRouteKind::TargetConditions
             && route.path == "/v1/actions/register-household-contact/target-conditions"
     }));
-    assert_eq!(inventory.access.len(), 2);
+    assert!(inventory.routes.iter().any(|route| {
+        route.id == "actions.register-household-contact.availability"
+            && route.kind == ActionRouteKind::Availability
+            && route.path == "/v1/actions/register-household-contact/availability"
+            && route.operation == Operation::Invoke
+            && route.access_profiles == vec!["contact-registrar".to_owned()]
+            && route.default_access_profile.as_deref() == Some("contact-registrar")
+    }));
+    assert_eq!(inventory.access.len(), 3);
+    let availability_access = inventory
+        .access
+        .iter()
+        .find(|entry| entry.route_id == "actions.register-household-contact.availability")
+        .expect("availability carries the Action profile binding");
+    assert_eq!(availability_access.action_id, "register-household-contact");
+    assert_eq!(availability_access.operation, Operation::Invoke);
+    assert_eq!(
+        availability_access
+            .profile_ids
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["contact-registrar"]
+    );
+    assert_eq!(
+        availability_access.default_profile_id.as_deref(),
+        Some("contact-registrar")
+    );
 }
 
 #[test]

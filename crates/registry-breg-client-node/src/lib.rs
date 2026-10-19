@@ -8,19 +8,19 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use napi::{bindgen_prelude::Buffer, Error as NapiError, Result};
 use napi_derive::napi;
 use registry_breg_client::{
-    verify_webhook_delivery as verify_core_webhook_delivery, BRegActionBinding,
-    BRegActionInvocationRequest, BRegActionTargetConditions as CoreActionTargetConditions,
-    BRegActionTargetConditionsRequest, BRegAsOfContinuation, BRegAsOfContinuationProjection,
-    BRegAsOfListRequest, BRegBatchBinding, BRegBatchBuilder, BRegBatchRequest, BRegBoundingBox,
-    BRegChangeContext, BRegComplete, BRegContinuation, BRegContinuationProjection,
-    BRegCreateBinding, BRegCreateRequest, BRegCurrentContinuation,
-    BRegCurrentContinuationProjection, BRegCurrentListRequest, BRegDirectWrite, BRegEtag,
-    BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest,
-    BRegGeoJsonOptions, BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
-    BRegIngestionPrefixDigest as CoreIngestionPrefixDigest, BRegIngestionRunListQuery,
-    BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
-    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding,
-    BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
+    verify_webhook_delivery as verify_core_webhook_delivery, BRegActionAvailabilityRequest,
+    BRegActionBinding, BRegActionInvocationRequest,
+    BRegActionTargetConditions as CoreActionTargetConditions, BRegActionTargetConditionsRequest,
+    BRegAsOfContinuation, BRegAsOfContinuationProjection, BRegAsOfListRequest, BRegBatchBinding,
+    BRegBatchBuilder, BRegBatchRequest, BRegBoundingBox, BRegChangeContext, BRegComplete,
+    BRegContinuation, BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest,
+    BRegCurrentContinuation, BRegCurrentContinuationProjection, BRegCurrentListRequest,
+    BRegDirectWrite, BRegEtag, BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection,
+    BRegGeoJsonListRequest, BRegGeoJsonOptions, BRegIngestionChunk as CoreIngestionChunk,
+    BRegIngestionError, BRegIngestionPrefixDigest as CoreIngestionPrefixDigest,
+    BRegIngestionRunListQuery, BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest,
+    BRegMetadata as CoreMetadata, BRegMetadataSelectionError, BRegMetadataSelectionErrorKind,
+    BRegPage, BRegPatchBinding, BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
     BRegPreparedCreate as CorePreparedCreate, BRegProblemCode, BRegProtocolFailure,
     BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
     BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegReleaseSelection,
@@ -2057,6 +2057,7 @@ fn action_descriptor_value(value: &registry_breg_client::BRegActionDescriptor) -
         })).collect::<Vec<_>>(),
         "accessProfile": value.access_profile(), "invokePath": value.invoke_path(),
         "targetConditionsPath": value.target_conditions_path(),
+        "availabilityPath": value.availability_path(),
         "bounds": {
             "maximumTargets": bounds.maximum_targets(),
             "maximumFieldMutations": bounds.maximum_field_mutations(),
@@ -3161,6 +3162,28 @@ impl BaseRegistryClient {
         })
     }
 
+    /// Read current field-guard availability for one selected reference.
+    #[napi]
+    pub async fn action_availability(
+        &self,
+        binding: &ActionBinding,
+        target_input: String,
+        inputs: Value,
+    ) -> Result<CompleteOutcome> {
+        let request = BRegActionAvailabilityRequest::new(
+            &binding.inner,
+            target_input,
+            input_object(inputs, "action inputs must be an object")?,
+        )
+        .map_err(|error| binding_error("invalid-request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .action_availability(&binding.inner, &request)
+            .await
+            .map_err(client_error)?;
+        complete_value(value, metadata)
+    }
+
     /// Invoke one metadata-selected immediate action. An invocation whose
     /// outcome is unknown is resent identically under the same key, at most
     /// `maxMutationRetries` times.
@@ -3827,6 +3850,31 @@ impl BaseRegistryClient {
             inner: value,
             trace_id: metadata.trace_id().as_str().to_owned(),
         })
+    }
+
+    /// Read field-guard availability from exact action-input JSON.
+    #[napi]
+    pub async fn action_availability_json(
+        &self,
+        binding: &ActionBinding,
+        target_input: String,
+        inputs_json: String,
+    ) -> Result<JsonOutcome> {
+        let request = BRegActionAvailabilityRequest::new(
+            &binding.inner,
+            target_input,
+            input_object(
+                exact_input(&inputs_json)?,
+                "action inputs must be an object",
+            )?,
+        )
+        .map_err(|error| binding_error("invalid-request", error.to_string()))?;
+        let BRegComplete { value, metadata } = self
+            .inner
+            .action_availability(&binding.inner, &request)
+            .await
+            .map_err(client_error)?;
+        complete_json_value(value, metadata)
     }
 
     /// Invoke an action from exact JSON and preserve exact receipt values.

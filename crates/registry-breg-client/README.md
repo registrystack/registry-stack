@@ -138,6 +138,17 @@ context. Batch responses have a dedicated snapshot/results type. Tombstone
 returns a native revision envelope and removes the record from live lists while
 permitted retained history remains readable.
 
+An immediate Action with reference inputs may advertise an optional
+`routes.availability` contract. Build `BRegActionAvailabilityRequest` from the
+selected opaque Action binding, one reference input's API name, and any supplied
+input subset, then call `action_availability`. The target reference must be a
+present canonical UUID. Every supplied value is validated before credentials or
+I/O, but unrelated required form inputs may remain absent. The result distinguishes
+available, guard-not-satisfied, input-required, and not-disclosed observations.
+This unkeyed POST is sent once. It evaluates current field-guard availability
+only; invocation remains the authoritative commit check, and a readable guard
+failure is the typed 412 `action.guard_failed` problem.
+
 The maintained capability inventory is
 `products/breg/contracts/client-capabilities.json`; the BReg client-contract gate
 checks it against compiled OpenAPI and Rust, Node, and Python entry points.

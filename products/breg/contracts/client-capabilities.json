@@ -411,14 +411,17 @@
       "id": "immediate-actions",
       "rust": [
         "action_target_conditions",
+        "action_availability",
         "invoke_action"
       ],
       "node": [
         "actionTargetConditions",
+        "actionAvailability",
         "invokeAction"
       ],
       "python": [
         "action_target_conditions",
+        "action_availability",
         "invoke_action"
       ]
     },

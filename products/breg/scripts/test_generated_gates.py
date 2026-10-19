@@ -38,6 +38,8 @@ class GeneratedGateTests(unittest.TestCase):
         baseline = SCRIPT_DIR.parent / "generated/facility"
         required = (
             "compiled/actions.json",
+            "generated/action-schemas/register-facility.availability.input.schema.json",
+            "generated/action-schemas/register-facility.availability.response.schema.json",
             "generated/action-schemas/register-facility.invoke.input.schema.json",
             "generated/action-schemas/register-facility.invoke.response.schema.json",
             "generated/action-schemas/correct-address.invoke.response.schema.json",
@@ -51,7 +53,12 @@ class GeneratedGateTests(unittest.TestCase):
                 (candidate / artifact).unlink()
                 errors = COMPARATOR.compare(baseline, candidate)
                 self.assertTrue(any(artifact in error for error in errors), errors)
-        response = json.loads((baseline / required[3]).read_text())
+        response = json.loads(
+            (
+                baseline
+                / "generated/action-schemas/correct-address.invoke.response.schema.json"
+            ).read_text()
+        )
         self.assertTrue({"actionId", "submissionVersion", "state", "links"} <= response["properties"].keys())
         self.assertEqual(["draft", "submitted", "applied", "cancelled", "rejected"], response["properties"]["state"]["enum"])
 

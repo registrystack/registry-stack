@@ -11,12 +11,13 @@ use axum::http::{HeaderName, HeaderValue, Request, Response, StatusCode};
 use axum::routing::any;
 use axum::Router;
 use registry_breg_client::{
-    ingestion_chunk_digest, ingestion_prefix_digest, BRegActionInvocationRequest, BRegBatchBuilder,
-    BRegBatchError, BRegBatchOperation, BRegCreateRequest, BRegDirectWrite, BRegEtag,
-    BRegIdempotencyKey, BRegIngestionChunk, BRegIngestionRunListQuery, BRegIngestionRunRequest,
-    BRegIngestionRunStatus, BRegMetadataErrorKind, BRegMetadataSelectionErrorKind,
-    BRegPatchRequest, BRegProblemCode, BRegProblemFieldPath, BRegProtocolFailure, BRegRecordFormat,
-    BRegRefusalCode, BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
+    ingestion_chunk_digest, ingestion_prefix_digest, BRegActionAvailabilityRequest,
+    BRegActionInvocationRequest, BRegBatchBuilder, BRegBatchError, BRegBatchOperation,
+    BRegCreateRequest, BRegDirectWrite, BRegEtag, BRegIdempotencyKey, BRegIngestionChunk,
+    BRegIngestionRunListQuery, BRegIngestionRunRequest, BRegIngestionRunStatus,
+    BRegMetadataErrorKind, BRegMetadataSelectionErrorKind, BRegPatchRequest, BRegProblemCode,
+    BRegProblemFieldPath, BRegProtocolFailure, BRegRecordFormat, BRegRefusalCode,
+    BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
     BREG_INGESTION_CHUNK_ALGORITHM_VERSION, REGISTRY_RECORD_CONTEXT_IDENTIFIER,
 };
 use registry_platform_httputil::client::{
@@ -1152,6 +1153,62 @@ async fn row_local_constraint_conflicts_remain_typed() {
 }
 
 #[tokio::test]
+async fn action_guard_failures_reject_undeclared_constraint_and_field_extensions() {
+    // A commit guard is not a row-local SQL constraint. Only the fixed
+    // value-free Problem is admitted for this code.
+    for extensions in [
+        json!({}),
+        json!({"recordType":"company", "constraintId":"canary-current-status",
+            "constraintKind":"vocabulary", "field":"status"}),
+        json!({"recordType":"company", "fieldId":"canary-status"}),
+    ] {
+        let generic = problem_response(BRegProblemCode::ActionGuardFailed);
+        let mut body: Value = serde_json::from_slice(&generic.body).unwrap();
+        body.as_object_mut()
+            .unwrap()
+            .extend(extensions.as_object().unwrap().clone());
+        let response = MockResponse {
+            body: serde_json::to_vec(&body).unwrap(),
+            ..generic
+        };
+        let fixture = single_attempt_client(vec![metadata_response(), response]).await;
+        let metadata = fixture
+            .client
+            .registry_contract(Some("company-writer"))
+            .await
+            .unwrap()
+            .value;
+        let error = fixture
+            .client
+            .create_record(
+                &create_binding(&metadata),
+                &create_request(),
+                &key("guard-failed"),
+                BRegRecordFormat::Json,
+            )
+            .await
+            .unwrap_err();
+        if extensions.as_object().unwrap().is_empty() {
+            assert_eq!(
+                error.problem_code(),
+                Some(BRegProblemCode::ActionGuardFailed)
+            );
+            assert!(!error.is_outcome_unknown());
+        } else {
+            assert!(matches!(
+                error,
+                BaseRegistryClientError::Protocol {
+                    failure: BRegProtocolFailure::Problem,
+                    ..
+                }
+            ));
+        }
+        assert!(error.constraint().is_none());
+        assert!(!format!("{error:?}: {error}").contains("canary"));
+    }
+}
+
+#[tokio::test]
 async fn pattern_conflicts_preserve_typed_conflicts_and_reject_inexact_metadata() {
     let generic = problem_response(BRegProblemCode::MutationConflict);
     let mut pattern: Value = serde_json::from_slice(&generic.body).unwrap();
@@ -1896,6 +1953,7 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
 
     match code {
         Code::ActionEvidenceFailed => "The declared Evidence dependency could not be accepted.",
+        Code::ActionGuardFailed => "The action guard was not satisfied.",
         Code::ActionHandlerFailed => "The action handler could not produce an accepted result.",
         Code::ActionRefused => REFUSAL_LABEL,
         Code::AuthenticationRefused => "The bearer credential is missing or refused.",
@@ -2194,6 +2252,85 @@ async fn an_action_invocation_with_an_unknown_outcome_is_resent_byte_identically
         "/tenant/base/v1/actions/register-company?accessProfile=company-writer"
     );
     assert_resent_identically(&requests[1..], "invoke-resend-1");
+}
+
+#[tokio::test]
+async fn action_availability_is_metadata_bound_validated_and_sent_once() {
+    let mut metadata = metadata_fixture();
+    metadata["actions"] = json!([{
+        "id": "rename-company", "route": "/v1/actions/rename-company",
+        "conditionRoute": null,
+        "apiName": "renameCompany", "revision": REVISION, "display": {}, "execution": {"mode":"immediate"},
+        "inputMode": "fixed", "maximumInputStringBytes": null,
+        "inputs": [
+            {"id":"target","apiName":"targetId","schema":{"type":"string","format":"uuid"},
+                "fieldType":{"type":"reference","target":"company","onDelete":"restrict"},
+                "required":true,"nullable":false,"classification":"internal"},
+            {"id":"legal-name","apiName":"legalName","schema":{"type":"string","minLength":1,"maxLength":100},
+                "fieldType":{"type":"string","minimumLength":1,"maximumLength":100},
+                "required":true,"nullable":false,"classification":"internal"}
+        ],
+        "referenceInputs": [{"input":"target","apiName":"targetId","targetRecordType":"company"}],
+        "requiredConditionKeys": [],
+        "resultEffects": [{"effect":"company","recordType":"company","operation":"patch"}],
+        "access": {"selectedProfile":"company-writer"},
+        "routes": {
+            "invoke": {"method":"POST","path":"/v1/actions/rename-company",
+                "operationId":"actions.rename-company.invoke","requiresIdempotencyKey":true,
+                "inputSchema":"action-rename-company-invoke-input","responseSchema":"action-rename-company-invoke-response"},
+            "targetConditions": null,
+            "availability": {"method":"POST","path":"/v1/actions/rename-company/availability",
+                "operationId":"actions.rename-company.availability","requiresIdempotencyKey":false,
+                "inputSchema":"action-rename-company-availability-input","responseSchema":"action-rename-company-availability-response"}
+        },
+        "bounds": {"maximumTargets":4,"maximumFieldMutations":8,"maximumSnapshotBytes":1024}
+    }]);
+    let fixture = test_client(vec![
+        MockResponse::json(StatusCode::OK, metadata),
+        MockResponse::json(
+            StatusCode::OK,
+            json!({"availability":{"available":null,"observedRevision":7,
+                "reason":"input-required","recovery":"correct-input","missingInputs":["legalName"]}}),
+        )
+        .with_header("cache-control", "no-store")
+        .with_header("vary", "authorization, accept"),
+    ])
+    .await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let action = metadata
+        .select_action("rename-company", "company-writer")
+        .unwrap();
+    let request = BRegActionAvailabilityRequest::new(
+        &action,
+        "targetId",
+        Map::from_iter([("targetId".to_owned(), json!(RECORD_ID))]),
+    )
+    .unwrap();
+    let result = fixture
+        .client
+        .action_availability(&action, &request)
+        .await
+        .unwrap();
+    assert_eq!(result.value.available(), None);
+    assert_eq!(result.value.observed_revision(), Some(7));
+    assert_eq!(result.value.missing_inputs().unwrap(), ["legalName"]);
+    let requests = fixture.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].method, "POST");
+    assert_eq!(
+        requests[1].uri,
+        "/tenant/base/v1/actions/rename-company/availability?accessProfile=company-writer"
+    );
+    assert!(requests[1].idempotency_key.is_none());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&requests[1].body).unwrap(),
+        json!({"targetInput":"targetId","input":{"targetId":RECORD_ID}})
+    );
 }
 
 #[tokio::test]

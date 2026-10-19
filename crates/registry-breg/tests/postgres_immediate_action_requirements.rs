@@ -10,7 +10,7 @@ mod support;
 
 use axum::{
     body::{to_bytes, Body},
-    http::{Request, StatusCode},
+    http::{Method, Request, StatusCode},
 };
 use postgres_harness::TestDatabase;
 use registry_breg::{
@@ -38,6 +38,8 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 const ID: &str = "00000000-0000-4000-8000-000000000101";
+const FOREIGN_ID: &str = "00000000-0000-4000-8000-000000000202";
+const TOMBSTONED_ID: &str = "00000000-0000-4000-8000-000000000303";
 const PACKAGE: &str = "action-requirements";
 
 async fn setup() -> (
@@ -156,7 +158,26 @@ async fn invoke(app: axum::Router, key: &str, parent: &str) -> (StatusCode, Valu
 }
 
 async fn invoke_with_input(mut app: axum::Router, key: &str, input: Value) -> (StatusCode, Value) {
-    let claims = VerifiedRequestClaims::authenticated(
+    let claims = registrar_claims();
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/v1/actions/register-child")
+        .header("content-type", "application/json")
+        .header("idempotency-key", key)
+        .body(Body::from(
+            serde_json::to_vec(&json!({"input": input})).unwrap(),
+        ))
+        .unwrap();
+    request.extensions_mut().insert(claims);
+    let response = app.call(request).await.unwrap();
+    let status = response.status();
+    let body =
+        serde_json::from_slice(&to_bytes(response.into_body(), 128 * 1024).await.unwrap()).unwrap();
+    (status, body)
+}
+
+fn registrar_claims() -> VerifiedRequestClaims {
+    VerifiedRequestClaims::authenticated(
         "registry_principal",
         "registrar",
         BTreeSet::from([
@@ -169,17 +190,51 @@ async fn invoke_with_input(mut app: axum::Router, key: &str, input: Value) -> (S
             VerifiedClaimValue::direct_string("zone-a").unwrap(),
         )]),
     )
-    .unwrap();
+    .unwrap()
+}
+
+async fn post_action(
+    mut app: axum::Router,
+    path: &str,
+    body: Value,
+    idempotency_key: Option<&str>,
+) -> (StatusCode, Value) {
     let mut request = Request::builder()
         .method("POST")
-        .uri("/v1/actions/register-child")
+        .uri(path)
         .header("content-type", "application/json")
-        .header("idempotency-key", key)
-        .body(Body::from(
-            serde_json::to_vec(&json!({"input": input})).unwrap(),
-        ))
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
-    request.extensions_mut().insert(claims);
+    if let Some(key) = idempotency_key {
+        request
+            .headers_mut()
+            .insert("idempotency-key", key.parse().unwrap());
+    }
+    request.extensions_mut().insert(registrar_claims());
+    let response = app.call(request).await.unwrap();
+    let status = response.status();
+    let body =
+        serde_json::from_slice(&to_bytes(response.into_body(), 128 * 1024).await.unwrap()).unwrap();
+    (status, body)
+}
+
+async fn availability(app: axum::Router, input: Value) -> (StatusCode, Value) {
+    post_action(
+        app,
+        "/v1/actions/register-child/availability",
+        json!({"targetInput":"parentId", "input":input}),
+        None,
+    )
+    .await
+}
+
+async fn get_parent(mut app: axum::Router, id: &str) -> (StatusCode, Value) {
+    let mut request = Request::builder()
+        .method(Method::GET)
+        .uri(format!("/v1/records/parents/{id}?accessProfile=registrar"))
+        .body(Body::empty())
+        .unwrap();
+    request.extensions_mut().insert(registrar_claims());
     let response = app.call(request).await.unwrap();
     let status = response.status();
     let body =
@@ -230,6 +285,317 @@ async fn action_input_equality_is_authorized_atomic_and_replayed_from_the_receip
     .await;
     assert_eq!(refused.0, StatusCode::PRECONDITION_FAILED, "{}", refused.1);
     assert_eq!(after, counts(&database, &registry).await);
+    database.cleanup().await;
+}
+
+fn with_parent_get(source: Value, readable_fields: &[&str]) -> Value {
+    with_parent_get_boundaries(
+        source,
+        readable_fields,
+        json!([{"field":"zone", "claim":"zone", "operator":"equals"}]),
+    )
+}
+
+fn with_parent_get_boundaries(
+    mut source: Value,
+    readable_fields: &[&str],
+    row_boundaries: Value,
+) -> Value {
+    source["accessProfiles"][0]["permissions"]["records"] = json!([{
+        "recordType": "parent",
+        "operations": ["get"],
+        "readableFields": readable_fields,
+        "rowBoundaries": row_boundaries
+    }]);
+    source
+}
+
+async fn insert_parent(
+    database: &TestDatabase,
+    registry: &registry_breg::CompiledRegistry,
+    activation_id: &str,
+    id: &str,
+    lifecycle: &str,
+    zone: &str,
+) {
+    let parent = &registry.entities()["parent"];
+    database
+        .admin
+        .execute(
+            &format!(
+                "INSERT INTO registry_data.{} (record_id, record_revision, record_lifecycle, active_package_revision, {}, {}) VALUES ($1, 1, $2, $3, 'active', $4)",
+                q(&parent.physical_table),
+                q(&parent.fields["status"].physical_name),
+                q(&parent.fields["zone"].physical_name),
+            ),
+            &[
+                &Uuid::parse_str(id).unwrap(),
+                &lifecycle,
+                &activation_id,
+                &zone,
+            ],
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn immediate_action_availability_preserves_disclosure_and_commit_boundaries() {
+    let source = with_parent_get(support::project(), &["status", "zone"]);
+    let (database, registry, identity) = setup_with_project(source).await;
+    insert_parent(
+        &database,
+        &registry,
+        &identity.activation_id,
+        FOREIGN_ID,
+        "active",
+        "zone-b",
+    )
+    .await;
+    insert_parent(
+        &database,
+        &registry,
+        &identity.activation_id,
+        TOMBSTONED_ID,
+        "tombstoned",
+        "zone-a",
+    )
+    .await;
+    let visible_app = app(&database, registry.clone(), identity, None);
+    let before = counts(&database, &registry).await;
+
+    let available = availability(visible_app.clone(), json!({"parentId":ID})).await;
+    assert_eq!(available.0, StatusCode::OK, "{}", available.1);
+    assert_eq!(
+        available.1,
+        json!({"availability":{"available":true,"observedRevision":1}}),
+        "an unrelated required form input may remain unfilled"
+    );
+    assert_eq!(before, counts(&database, &registry).await);
+
+    let missing = availability(
+        visible_app.clone(),
+        json!({"parentId":"00000000-0000-4000-8000-000000000999"}),
+    )
+    .await;
+    let get_foreign = get_parent(visible_app.clone(), FOREIGN_ID).await;
+    let foreign = availability(visible_app.clone(), json!({"parentId":FOREIGN_ID})).await;
+    let tombstoned = availability(visible_app.clone(), json!({"parentId":TOMBSTONED_ID})).await;
+    assert_eq!(missing.0, StatusCode::NOT_FOUND, "{}", missing.1);
+    assert_eq!(get_foreign.0, StatusCode::NOT_FOUND, "{}", get_foreign.1);
+    assert_eq!(foreign.0, missing.0, "{}", foreign.1);
+    assert_eq!(foreign.1["code"], missing.1["code"]);
+    assert_eq!(tombstoned.0, missing.0, "{}", tombstoned.1);
+    assert_eq!(tombstoned.1["code"], missing.1["code"]);
+
+    database
+        .admin
+        .execute(
+            &status_sql(&registry),
+            &[&"inactive", &Uuid::parse_str(ID).unwrap()],
+        )
+        .await
+        .unwrap();
+    let unavailable = availability(visible_app.clone(), json!({"parentId":ID})).await;
+    assert_eq!(unavailable.0, StatusCode::OK, "{}", unavailable.1);
+    assert_eq!(
+        unavailable.1,
+        json!({"availability":{
+            "available":false,
+            "observedRevision":2,
+            "reason":"guard-not-satisfied",
+            "recovery":"none"
+        }})
+    );
+    let visible_guard_failure = invoke(visible_app, "visible-guard", ID).await;
+    assert_eq!(
+        visible_guard_failure.0,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        visible_guard_failure.1
+    );
+    assert_eq!(visible_guard_failure.1["code"], "action.guard_failed");
+    assert_eq!(before, counts(&database, &registry).await);
+    database.cleanup().await;
+
+    let source = with_parent_get_boundaries(
+        support::project(),
+        &["status", "zone"],
+        json!("unrestricted"),
+    );
+    let (database, registry, identity) = setup_with_project(source).await;
+    insert_parent(
+        &database,
+        &registry,
+        &identity.activation_id,
+        FOREIGN_ID,
+        "active",
+        "zone-b",
+    )
+    .await;
+    let boundary_app = app(&database, registry.clone(), identity, None);
+    let get_foreign = get_parent(boundary_app.clone(), FOREIGN_ID).await;
+    assert_eq!(get_foreign.0, StatusCode::OK, "{}", get_foreign.1);
+    let action_foreign = availability(boundary_app, json!({"parentId":FOREIGN_ID})).await;
+    assert_eq!(
+        action_foreign.0,
+        StatusCode::NOT_FOUND,
+        "{}",
+        action_foreign.1
+    );
+    assert!(counts(&database, &registry)
+        .await
+        .iter()
+        .all(|count| *count == 0));
+    database.cleanup().await;
+
+    for readable_fields in [None, Some(&["zone"][..])] {
+        let source = readable_fields.map_or_else(support::project, |fields| {
+            with_parent_get(support::project(), fields)
+        });
+        let (database, registry, identity) = setup_with_project(source).await;
+        let app = app(&database, registry.clone(), identity, None);
+        let concealed = availability(app.clone(), json!({"parentId":ID})).await;
+        assert_eq!(concealed.0, StatusCode::OK, "{}", concealed.1);
+        assert_eq!(
+            concealed.1,
+            json!({"availability":{
+                "available":null,
+                "observedRevision":null,
+                "reason":"not-disclosed",
+                "recovery":"none"
+            }})
+        );
+        database
+            .admin
+            .execute(
+                &status_sql(&registry),
+                &[&"inactive", &Uuid::parse_str(ID).unwrap()],
+            )
+            .await
+            .unwrap();
+        let hidden_guard_failure = invoke(app, "hidden-guard", ID).await;
+        assert_eq!(
+            hidden_guard_failure.0,
+            StatusCode::PRECONDITION_FAILED,
+            "{}",
+            hidden_guard_failure.1
+        );
+        assert_eq!(hidden_guard_failure.1["code"], "precondition.failed");
+        assert!(counts(&database, &registry)
+            .await
+            .iter()
+            .all(|count| *count == 0));
+        database.cleanup().await;
+    }
+
+    let mut source = with_parent_get(support::project(), &["status", "zone"]);
+    source["actions"][0]["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"expected-status", "apiName":"expectedStatus", "type":"vocabulary-code",
+            "vocabulary":"status", "values":["active","inactive"], "required":true,
+            "classification":"restricted"
+        }));
+    source["actions"][0]["commitGuards"]["targets"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("equals");
+    source["actions"][0]["commitGuards"]["targets"][0]["equalsFromInput"] =
+        json!("expected-status");
+    let (database, registry, identity) = setup_with_project(source).await;
+    let equality_app = app(&database, registry.clone(), identity, None);
+    let missing_input = availability(equality_app.clone(), json!({"parentId":ID})).await;
+    assert_eq!(missing_input.0, StatusCode::OK, "{}", missing_input.1);
+    assert_eq!(
+        missing_input.1,
+        json!({"availability":{
+            "available":null,
+            "observedRevision":1,
+            "reason":"input-required",
+            "recovery":"correct-input",
+            "missingInputs":["expectedStatus"]
+        }})
+    );
+    let matching = availability(
+        equality_app.clone(),
+        json!({"parentId":ID, "expectedStatus":"active"}),
+    )
+    .await;
+    assert_eq!(
+        matching.1,
+        json!({"availability":{"available":true,"observedRevision":1}})
+    );
+    let mismatching = availability(
+        equality_app.clone(),
+        json!({"parentId":ID, "expectedStatus":"inactive"}),
+    )
+    .await;
+    assert_eq!(mismatching.0, StatusCode::OK, "{}", mismatching.1);
+    assert_eq!(mismatching.1["availability"]["available"], false);
+    let input_guard_failure = invoke_with_input(
+        equality_app,
+        "input-guard",
+        json!({"parentId":ID, "label":"synthetic", "expectedStatus":"inactive"}),
+    )
+    .await;
+    assert_eq!(
+        input_guard_failure.0,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        input_guard_failure.1
+    );
+    assert_eq!(input_guard_failure.1["code"], "action.guard_failed");
+    assert!(counts(&database, &registry)
+        .await
+        .iter()
+        .all(|count| *count == 0));
+    database.cleanup().await;
+
+    let mut source = with_parent_get(support::project(), &["status", "zone"]);
+    source["actions"][0]["commitGuards"]["targets"] =
+        json!([{"input":"parent", "revision":"unchanged"}]);
+    let (database, registry, identity) = setup_with_project(source).await;
+    let revision_app = app(&database, registry.clone(), identity, None);
+    let revision_availability = availability(revision_app.clone(), json!({"parentId":ID})).await;
+    assert_eq!(
+        revision_availability.1,
+        json!({"availability":{"available":true,"observedRevision":1}}),
+        "revision guards are checked by the condition exchange, not as failed field guards"
+    );
+    let conditions = post_action(
+        revision_app.clone(),
+        "/v1/actions/register-child/target-conditions",
+        json!({"input":{"parentId":ID}}),
+        None,
+    )
+    .await;
+    assert_eq!(conditions.0, StatusCode::OK, "{}", conditions.1);
+    database
+        .admin
+        .execute(
+            &status_sql(&registry),
+            &[&"active", &Uuid::parse_str(ID).unwrap()],
+        )
+        .await
+        .unwrap();
+    let stale = post_action(
+        revision_app,
+        "/v1/actions/register-child",
+        json!({
+            "input":{"parentId":ID, "label":"synthetic"},
+            "preconditions":conditions.1["preconditions"].clone()
+        }),
+        Some("stale-revision"),
+    )
+    .await;
+    assert_eq!(stale.0, StatusCode::PRECONDITION_FAILED, "{}", stale.1);
+    assert_eq!(stale.1["code"], "precondition.failed");
+    assert!(counts(&database, &registry)
+        .await
+        .iter()
+        .all(|count| *count == 0));
     database.cleanup().await;
 }
 

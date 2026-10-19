@@ -53,6 +53,8 @@ export declare class BaseRegistryClient {
   executeProposal(attempt: BRegPreparedProposal): Promise<BRegProposal>
   /** Fetch opaque target conditions for one metadata-selected action. */
   actionTargetConditions(binding: BRegActionBinding, inputs: any): Promise<BRegActionTargetConditions>
+  /** Read current field-guard availability for one selected reference. */
+  actionAvailability(binding: BRegActionBinding, targetInput: string, inputs: any): Promise<CompleteOutcome>
   /**
    * Invoke one metadata-selected immediate action. An invocation whose
    * outcome is unknown is resent identically under the same key, at most
@@ -135,6 +137,8 @@ export declare class BaseRegistryClient {
   lookupRecordJson(entityRoute: string, selector: string, valuesJson?: string | undefined | null, options?: any | undefined | null): Promise<JsonOutcome>
   /** Fetch opaque target conditions from exact action-input JSON. */
   actionTargetConditionsJson(binding: BRegActionBinding, inputsJson: string): Promise<BRegActionTargetConditions>
+  /** Read field-guard availability from exact action-input JSON. */
+  actionAvailabilityJson(binding: BRegActionBinding, targetInput: string, inputsJson: string): Promise<JsonOutcome>
   /** Invoke an action from exact JSON and preserve exact receipt values. */
   invokeActionJson(binding: BRegActionBinding, inputsJson: string, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<JsonOutcome>
   /** Prepare inert invocation evidence from exact action-input JSON. */

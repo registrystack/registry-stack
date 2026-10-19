@@ -13,7 +13,7 @@ own `breg/ctl-report/v1alpha1` version.
 | `access --scenario` | `BRegAccessPreview` | `v1alpha4` | `AccessPreview.schema.json` |
 | `actions` | `BRegActionsExplanation` | `v1alpha5` | `ActionsExplanation.schema.json` |
 | `proposals` | `BRegProposalsExplanation` | `v1alpha1` | `ProposalsExplanation.schema.json` |
-| `routes` | `BRegRoutesExplanation` | `v1alpha5` | `RoutesExplanation.schema.json` |
+| `routes` | `BRegRoutesExplanation` | `v1alpha6` | `RoutesExplanation.schema.json` |
 | `queries` | `BRegQueriesExplanation` | `v1alpha5` | `QueriesExplanation.schema.json` |
 | `events` | `BRegEventsExplanation` | `v1alpha6` | `EventsExplanation.schema.json` |
 | `lifecycle` | `BRegLifecycleExplanation` | `v1alpha6` | `LifecycleExplanation.schema.json` |
@@ -49,10 +49,14 @@ a form can distinguish multiline `text` from a bounded `string` and discover a
 reference's target. Its internal shape follows the engine field type contract;
 the JSON value `schema` remains the validation contract for field values.
 
-Consumers of the five formats above at `v1alpha5` must select that
+Consumers of the four unchanged formats above at `v1alpha5` must select that
 schema and use the native fields above. `ProposalsExplanation` starts at
 `v1alpha1`. Event inspection adds the owning hook phase and Proposal transition
 selection. `AccessPreview` retains `v1alpha4` because its pinned shape is unchanged.
+
+`RoutesExplanation` `v1alpha6` adds `availability` to the closed Action route
+kind set for immediate Actions with reference inputs. Consumers select the
+`v1alpha6` schema.
 
 `LifecycleExplanation` `v1alpha6` adds the terminal `rejected` state, the
 `reject` transition from `submitted`, and the `review-authority-result`

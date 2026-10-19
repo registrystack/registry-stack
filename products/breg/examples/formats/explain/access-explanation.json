@@ -26,6 +26,15 @@
         "profileIds": [
           "facility-registrar"
         ],
+        "routeId": "actions.register-facility.availability"
+      },
+      {
+        "actionId": "register-facility",
+        "defaultProfileId": "facility-registrar",
+        "operation": "invoke",
+        "profileIds": [
+          "facility-registrar"
+        ],
         "routeId": "actions.register-facility.invoke"
       }
     ],
@@ -1097,6 +1106,18 @@
         "method": "POST",
         "operation": "invoke",
         "path": "/v1/actions/register-facility"
+      },
+      {
+        "accessProfiles": [
+          "facility-registrar"
+        ],
+        "actionId": "register-facility",
+        "defaultAccessProfile": "facility-registrar",
+        "id": "actions.register-facility.availability",
+        "kind": "availability",
+        "method": "POST",
+        "operation": "invoke",
+        "path": "/v1/actions/register-facility/availability"
       }
     ]
   },

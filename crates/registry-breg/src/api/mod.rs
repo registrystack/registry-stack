@@ -5248,9 +5248,9 @@ fn mutation_problem(error: MutationError) -> Response {
     match error {
         MutationError::InvalidRequest => invalid_request(),
         MutationError::InvalidRequestAt(location) => invalid_request_at(&location),
-        MutationError::AuthorizationRefused | MutationError::PreconditionFailed => {
-            precondition_failed()
-        }
+        MutationError::AuthorizationRefused
+        | MutationError::PreconditionFailed
+        | MutationError::FieldGuardFailed { .. } => precondition_failed(),
         MutationError::Conflict => fixed_problem(ProblemCode::MutationConflict),
         MutationError::ProposalRejected => fixed_problem(ProblemCode::ProposalRejected),
         MutationError::ProposalReviewResultMismatch => {
