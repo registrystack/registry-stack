@@ -7544,7 +7544,7 @@ const ACCESS_PREVIEW: ExplainFormat = ExplainFormat {
     kind: "BRegAccessPreview",
 };
 const ROUTES_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/routes-explanation/v1alpha5",
+    api_version: "id.registrystack.org/formats/breg/routes-explanation/v1alpha6",
     kind: "BRegRoutesExplanation",
 };
 const QUERIES_EXPLANATION: ExplainFormat = ExplainFormat {
@@ -9271,6 +9271,7 @@ fn query_field_identity<'a>(
 
 fn action_route_kind_wire_name(kind: registry_breg::model::ActionRouteKind) -> &'static str {
     match kind {
+        registry_breg::model::ActionRouteKind::Availability => "availability",
         registry_breg::model::ActionRouteKind::Invoke => "invoke",
         registry_breg::model::ActionRouteKind::TargetConditions => "target-conditions",
     }

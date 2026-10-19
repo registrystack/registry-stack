@@ -1007,6 +1007,7 @@ pub struct BRegActionDescriptor {
     access_profile: String,
     invoke_path: Option<String>,
     target_conditions_path: Option<String>,
+    availability_path: Option<String>,
     bounds: BRegActionBounds,
 }
 
@@ -1067,6 +1068,10 @@ impl BRegActionDescriptor {
     #[must_use]
     pub fn target_conditions_path(&self) -> Option<&str> {
         self.target_conditions_path.as_deref()
+    }
+    #[must_use]
+    pub fn availability_path(&self) -> Option<&str> {
+        self.availability_path.as_deref()
     }
     #[must_use]
     pub const fn bounds(&self) -> BRegActionBounds {
@@ -1654,6 +1659,17 @@ fn action_contract_is_exact(action: &BRegActionDescriptor) -> bool {
         None if !action.required_condition_keys.is_empty() => return false,
         _ => {}
     }
+    match &action.availability_path {
+        Some(path)
+            if action.mode != BRegActionMode::Immediate
+                || action.reference_inputs.is_empty()
+                || !path.starts_with("/v1/")
+                || path.contains(['?', '#', '%', '\\']) =>
+        {
+            return false;
+        }
+        _ => {}
+    }
     for reference in &action.reference_inputs {
         let Some(input) = action
             .inputs
@@ -2026,6 +2042,7 @@ pub struct BRegActionBinding {
     access_profile: String,
     invoke_path: String,
     target_conditions_path: Option<String>,
+    availability_path: Option<String>,
     definition_revision: String,
     required_condition_keys: BTreeSet<String>,
     result_effects: BTreeMap<String, String>,
@@ -2053,6 +2070,7 @@ impl BRegActionBinding {
                 .clone()
                 .expect("selected Action has a promoted invocation route"),
             target_conditions_path: action.target_conditions_path.clone(),
+            availability_path: action.availability_path.clone(),
             definition_revision: action.definition_revision.clone(),
             required_condition_keys: action.required_condition_keys.iter().cloned().collect(),
             result_effects: action
@@ -2103,6 +2121,10 @@ impl BRegActionBinding {
     #[must_use]
     pub fn target_conditions_path(&self) -> Option<&str> {
         self.target_conditions_path.as_deref()
+    }
+    #[must_use]
+    pub fn availability_path(&self) -> Option<&str> {
+        self.availability_path.as_deref()
     }
     #[must_use]
     pub fn definition_revision(&self) -> &str {
@@ -3267,6 +3289,23 @@ fn parse_actions(value: Value) -> Result<Vec<BRegActionDescriptor>, BRegMetadata
         if target_conditions_path != condition_route {
             return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
         }
+        let availability_path = match routes.remove("availability").unwrap_or(Value::Null) {
+            Value::Null => None,
+            value => Some(parse_action_route(
+                value,
+                &format!("actions.{id}.availability"),
+                false,
+                &format!("action-{id}-availability-input"),
+                &format!("action-{id}-availability-response"),
+            )?),
+        };
+        let expected_availability_path = route
+            .as_ref()
+            .filter(|_| mode == BRegActionMode::Immediate && !reference_inputs.is_empty())
+            .map(|path| format!("{path}/availability"));
+        if availability_path.is_some() && availability_path != expected_availability_path {
+            return Err(metadata_error(BRegMetadataErrorKind::DanglingReference));
+        }
         if mode == BRegActionMode::Proposal
             && (condition_route.is_some() || !required_condition_keys.is_empty())
         {
@@ -3306,6 +3345,7 @@ fn parse_actions(value: Value) -> Result<Vec<BRegActionDescriptor>, BRegMetadata
             access_profile,
             invoke_path,
             target_conditions_path,
+            availability_path,
             bounds,
         });
     }

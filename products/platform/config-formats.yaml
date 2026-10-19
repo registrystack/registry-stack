@@ -1109,17 +1109,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/routes-explanation/v1alpha5
+      apiVersion: id.registrystack.org/formats/breg/routes-explanation/v1alpha6
       kind: BRegRoutesExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: ROUTES_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/routes-explanation/v1alpha5
+      apiVersion: id.registrystack.org/formats/breg/routes-explanation/v1alpha6
       kind: BRegRoutesExplanation
     schema:
       path: products/breg/contracts/explain/RoutesExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha5.schema.json
+      id: https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha6.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none

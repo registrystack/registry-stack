@@ -61,12 +61,31 @@
       "description": "The declared Evidence dependency could not be accepted.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "action.evidence_failed",
         "httpStatuses": [
           503
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-breg/action/guard_failed",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Precondition Failed",
+      "description": "The action guard was not satisfied.",
+      "source": {
+        "path": "crates/registry-breg/src/problem.rs",
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
+      },
+      "problem": {
+        "code": "action.guard_failed",
+        "httpStatuses": [
+          412
         ]
       }
     },
@@ -80,7 +99,7 @@
       "description": "The action handler could not produce an accepted result.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "action.handler_failed",
@@ -99,7 +118,7 @@
       "description": "The action was refused by a declared business rule.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "action.refused",
@@ -118,7 +137,7 @@
       "description": "The bearer credential is missing or refused.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "authentication.refused",
@@ -137,7 +156,7 @@
       "description": "The idempotency key is bound to another request.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "idempotency.conflict",
@@ -156,7 +175,7 @@
       "description": "The held response of the idempotency key expired; the key stays spent.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "idempotency.expired",
@@ -175,7 +194,7 @@
       "description": "The chunk does not match the expected next chunk.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "ingestion.chunk_mismatch",
@@ -194,7 +213,7 @@
       "description": "The selected access profile does not match the run's bound profile.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "ingestion.profile_mismatch",
@@ -213,7 +232,7 @@
       "description": "The stored receipt of the chunk was erased.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "ingestion.receipt_erased",
@@ -232,7 +251,7 @@
       "description": "The ingestion run is blocked and refuses further chunks.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "ingestion.run_blocked",
@@ -251,7 +270,7 @@
       "description": "The ingestion run is not open for this transition.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "ingestion.run_not_open",
@@ -270,7 +289,7 @@
       "description": "The lookup did not resolve exactly one record.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "lookup.unresolved",
@@ -289,7 +308,7 @@
       "description": "The mutation conflicts with current state.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "mutation.conflict",
@@ -308,7 +327,7 @@
       "description": "The mutation precondition failed.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "precondition.failed",
@@ -327,7 +346,7 @@
       "description": "The mutation precondition is required.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "precondition.required",
@@ -346,7 +365,7 @@
       "description": "The review rejected this Proposal, and a rejection is final. A review result of changes-requested is what lets a Proposal be revised for another attempt.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "proposal.rejected",
@@ -365,7 +384,7 @@
       "description": "The current review result does not match the retained approval.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "proposal.review_result_mismatch",
@@ -384,7 +403,7 @@
       "description": "The review result and application receipt of the submission are no longer retained.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "proposal.submission_expired",
@@ -403,7 +422,7 @@
       "description": "The query cursor is invalid.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "query.cursor_invalid",
@@ -422,7 +441,7 @@
       "description": "The query request is invalid.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "query.invalid",
@@ -441,7 +460,7 @@
       "description": "The request is invalid.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "request.invalid",
@@ -460,7 +479,7 @@
       "description": "The request timed out.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "request.timeout",
@@ -479,7 +498,7 @@
       "description": "The requested resource was not found.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "resource.not_found",
@@ -498,7 +517,7 @@
       "description": "The Registry field-encryption service is unavailable.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "runtime.field_encryption.unavailable",
@@ -517,7 +536,7 @@
       "description": "Registry runtime is not ready.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "runtime.not_ready",
@@ -536,7 +555,7 @@
       "description": "The Registry mutation service is unavailable.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "service.unavailable",
@@ -555,7 +574,7 @@
       "description": "The Registry data service is unavailable.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "source.unavailable",
@@ -574,7 +593,7 @@
       "description": "A statistical dataset contains a code outside its declared domain.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "statistical_dataset.domain_violation",
@@ -593,7 +612,7 @@
       "description": "The statistical dataset release operation is not eligible.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "statistical_dataset.release_refused",
@@ -612,7 +631,7 @@
       "description": "The statistical dataset computation was superseded or its package changed.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "statistical_dataset.version_conflict",
@@ -631,7 +650,7 @@
       "description": "The statistical dataset version was withdrawn.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "statistical_dataset.version_withdrawn",
@@ -650,7 +669,7 @@
       "description": "The request media type is not supported.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "7c9c9ba30cedaa76880e3874f58cc93f2099fce0a83b150ff1e7d0b37f523d3b"
+        "sha256": "195cdc0a38ca34e09cff30e0017f6ac78a2e1ca6e2234fb5b13a2f7ca13e8f0c"
       },
       "problem": {
         "code": "unsupported.media_type",
@@ -3668,7 +3687,7 @@
       "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project.",
       "source": {
         "path": "crates/registry-breg/src/artifacts.rs",
-        "sha256": "4d6c73c3c59b20b980f9dce75616e7875d39cdba74d48ee4bd4758bb41cdc9c3"
+        "sha256": "5c6238c8006682b3f6db01b933c423d39a8b70a6ca80d272f82c9241dcaf840f"
       },
       "artifact": {
         "path": "products/breg/generated/facility/generated/action-contracts.schema.json",
@@ -3965,20 +3984,20 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha5.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/routes-explanation/routes-explanation.v1alpha6.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha5",
+      "compatibilityLine": "v1alpha6",
       "owner": "breg",
       "title": "RoutesExplanation",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/RoutesExplanation.schema.json",
-        "sha256": "db2c9d516dbd7f11d2c3edad1232770f72e313f36dd0d75b26cf96a6a388fd78"
+        "sha256": "1d26b2aee434f0e83ef227e9a502912e72f4ce60510852db5b9d6be1554a6f83"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/RoutesExplanation.schema.json",
-        "sha256": "db2c9d516dbd7f11d2c3edad1232770f72e313f36dd0d75b26cf96a6a388fd78",
+        "sha256": "1d26b2aee434f0e83ef227e9a502912e72f4ce60510852db5b9d6be1554a6f83",
         "mediaType": "application/schema+json"
       }
     },

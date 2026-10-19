@@ -2168,6 +2168,23 @@ fn compile_action_routes(
             default_access_profile: default.map(|profile| profile.id.clone()),
         });
     }
+    if !action.execution.is_proposal()
+        && action
+            .inputs
+            .iter()
+            .any(|input| matches!(input.field_type, FieldTypeSource::Reference { .. }))
+    {
+        routes.push(CompiledActionRoute {
+            id: format!("actions.{}.availability", action.id),
+            action_id: action.id.clone(),
+            kind: ActionRouteKind::Availability,
+            method: HttpMethod::Post,
+            path: format!("{}/availability", action.route),
+            operation: Operation::Invoke,
+            access_profiles: profile_ids.iter().cloned().collect(),
+            default_access_profile: default.map(|profile| profile.id.clone()),
+        });
+    }
     routes
 }
 

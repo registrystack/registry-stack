@@ -77,6 +77,13 @@ Immediate actions explicitly acquire target conditions when the served action
 requires them. Conditions are opaque and can only be used with the selected
 action and the same target inputs.
 
+If the Action descriptor has an `availability_path`, query each selected
+reference with `action_availability(action, "targetId", inputs)`. The input may
+omit unrelated required form fields, while every supplied value is validated
+before token acquisition or I/O. This single unkeyed POST is only a current
+hint. Invocation remains authoritative and a readable field-guard failure is
+reported as 412 `action.guard_failed`.
+
 ```python
 contract = client.registry_contract(profile)
 action = contract.select_action("rename-company", profile)

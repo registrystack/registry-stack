@@ -31,6 +31,10 @@ pub enum BRegActionError {
     InvalidInput,
     #[error("the Base Registry Engine action has no target-condition exchange")]
     TargetConditionsUnavailable,
+    #[error("the Base Registry Engine action has no availability exchange")]
+    AvailabilityUnavailable,
+    #[error("the Base Registry Engine action availability target is invalid")]
+    InvalidAvailabilityTarget,
     #[error("the Base Registry Engine action target inputs do not match its declared conditions")]
     TargetConditionInputMismatch,
     #[error("the Base Registry Engine action target conditions belong to another selected action")]
@@ -41,6 +45,127 @@ pub enum BRegActionError {
     BodyEncoding,
     #[error("the Base Registry Engine action response does not match the selected action")]
     InvalidResponse,
+}
+
+/// Exact availability request bound to one caller-filtered immediate action.
+pub struct BRegActionAvailabilityRequest {
+    body: Zeroizing<Vec<u8>>,
+    binding: ActionAvailabilityRequestBinding,
+    supplied_inputs: BTreeSet<String>,
+}
+
+impl BRegActionAvailabilityRequest {
+    /// Build one per-reference availability query. Every supplied value is
+    /// validated, while unrelated required form inputs may remain absent.
+    pub fn new(
+        action: &BRegActionBinding,
+        target_input: impl Into<String>,
+        inputs: Map<String, Value>,
+    ) -> Result<Self, BRegActionError> {
+        let target_input = target_input.into();
+        let path = action
+            .availability_path()
+            .ok_or(BRegActionError::AvailabilityUnavailable)?;
+        validate_availability_inputs(action, &target_input, &inputs)?;
+        let supplied_inputs = inputs.keys().cloned().collect();
+        let body = encode_bounded(
+            &ActionAvailabilityEnvelope {
+                target_input: &target_input,
+                input: &inputs,
+            },
+            action.bounds().maximum_snapshot_bytes(),
+        )?;
+        Ok(Self {
+            body: Zeroizing::new(body),
+            binding: ActionAvailabilityRequestBinding::from_action(action, path),
+            supplied_inputs,
+        })
+    }
+
+    #[must_use]
+    pub fn body_len(&self) -> usize {
+        self.body.len()
+    }
+}
+
+impl fmt::Debug for BRegActionAvailabilityRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegActionAvailabilityRequest")
+            .field("body_bytes", &self.body.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Validated availability of one immediate action for one selected reference.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BRegActionAvailability {
+    available: Option<bool>,
+    observed_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    missing_inputs: Option<Vec<String>>,
+}
+
+impl BRegActionAvailability {
+    #[must_use]
+    pub const fn available(&self) -> Option<bool> {
+        self.available
+    }
+
+    #[must_use]
+    pub const fn observed_revision(&self) -> Option<u64> {
+        self.observed_revision
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    #[must_use]
+    pub fn recovery(&self) -> Option<&str> {
+        self.recovery.as_deref()
+    }
+
+    #[must_use]
+    pub fn missing_inputs(&self) -> Option<&[String]> {
+        self.missing_inputs.as_deref()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct ActionAvailabilityRequestBinding {
+    source_binding: String,
+    registry_revision: String,
+    action_identifier: String,
+    access_profile: String,
+    action_revision: String,
+    path: String,
+}
+
+impl ActionAvailabilityRequestBinding {
+    fn from_action(action: &BRegActionBinding, path: &str) -> Self {
+        Self {
+            source_binding: action.source_binding().to_owned(),
+            registry_revision: action.registry_revision().to_owned(),
+            action_identifier: action.action_identifier().to_owned(),
+            access_profile: action.access_profile().to_owned(),
+            action_revision: action.definition_revision().to_owned(),
+            path: path.to_owned(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionAvailabilityEnvelope<'a> {
+    target_input: &'a str,
+    input: &'a Map<String, Value>,
 }
 
 /// Exact condition-input request bound to one caller-filtered immediate action.
@@ -343,6 +468,43 @@ impl BRegActionReceipt {
 }
 
 impl BaseRegistryClient {
+    /// Read the current field-guard availability for one selected reference.
+    /// This performs exactly one exchange and never retries automatically.
+    pub async fn action_availability(
+        &self,
+        action: &BRegActionBinding,
+        request: &BRegActionAvailabilityRequest,
+    ) -> Result<BRegComplete<BRegActionAvailability>, BaseRegistryClientError> {
+        let path = action.availability_path().ok_or_else(|| {
+            BaseRegistryClientError::invalid_request(
+                "the Base Registry Engine action has no availability exchange",
+            )
+        })?;
+        let expected = ActionAvailabilityRequestBinding::from_action(action, path);
+        if request.binding != expected || !action.matches_source(&self.source_binding()) {
+            return Err(BaseRegistryClientError::invalid_request(
+                "the Base Registry Engine availability request belongs to another selected action",
+            ));
+        }
+        let raw = self
+            .execute_bound_json(path, action.access_profile(), request.body.to_vec(), None)
+            .await?;
+        let availability =
+            decode_availability(raw.value.as_bytes(), action, &request.supplied_inputs).map_err(
+                |_| {
+                    BaseRegistryClientError::protocol(
+                        200,
+                        crate::BRegProtocolFailure::Body,
+                        Some(raw.metadata.trace_id().clone()),
+                    )
+                },
+            )?;
+        Ok(BRegComplete {
+            value: availability,
+            metadata: raw.metadata,
+        })
+    }
+
     /// Retain the exact invocation and idempotency key before sending. No I/O.
     pub fn prepare_action(
         &self,
@@ -612,6 +774,140 @@ fn validate_inputs(
         }
     }
     Ok(())
+}
+
+fn validate_availability_inputs(
+    action: &BRegActionBinding,
+    target_input: &str,
+    inputs: &Map<String, Value>,
+) -> Result<(), BRegActionError> {
+    let reference = action
+        .reference_inputs()
+        .iter()
+        .find(|reference| reference.api_name() == target_input)
+        .ok_or(BRegActionError::InvalidAvailabilityTarget)?;
+    let target = inputs
+        .get(reference.api_name())
+        .filter(|value| !value.is_null())
+        .ok_or(BRegActionError::InvalidAvailabilityTarget)?;
+    if target.as_str().and_then(canonical_uuid).is_none() {
+        return Err(BRegActionError::InvalidAvailabilityTarget);
+    }
+    for (name, value) in inputs {
+        let contract = action
+            .inputs()
+            .iter()
+            .find(|input| input.api_name() == name)
+            .ok_or(BRegActionError::UnknownInput)?;
+        if value.is_null() {
+            if contract.nullable() && name != target_input {
+                continue;
+            }
+            return Err(BRegActionError::InvalidInput);
+        }
+        if !valid_action_input(
+            value,
+            contract.field_type(),
+            action.maximum_input_string_bytes(),
+        ) {
+            return Err(BRegActionError::InvalidInput);
+        }
+    }
+    Ok(())
+}
+
+fn decode_availability(
+    bytes: &[u8],
+    action: &BRegActionBinding,
+    supplied_inputs: &BTreeSet<String>,
+) -> Result<BRegActionAvailability, BRegActionError> {
+    let value =
+        crate::strict_json::from_slice(bytes).map_err(|_| BRegActionError::InvalidResponse)?;
+    let outer = value
+        .as_object()
+        .filter(|object| object.len() == 1)
+        .ok_or(BRegActionError::InvalidResponse)?;
+    let availability = outer
+        .get("availability")
+        .and_then(Value::as_object)
+        .ok_or(BRegActionError::InvalidResponse)?;
+    if availability.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "available" | "observedRevision" | "reason" | "recovery" | "missingInputs"
+        )
+    }) {
+        return Err(BRegActionError::InvalidResponse);
+    }
+    let available = match availability.get("available") {
+        Some(Value::Bool(value)) => Some(*value),
+        Some(Value::Null) => None,
+        _ => return Err(BRegActionError::InvalidResponse),
+    };
+    let observed_revision = match availability.get("observedRevision") {
+        Some(Value::Number(value)) => value
+            .as_u64()
+            .filter(|revision| *revision > 0 && *revision <= i64::MAX as u64),
+        Some(Value::Null) => None,
+        _ => return Err(BRegActionError::InvalidResponse),
+    };
+    if availability.get("observedRevision") != Some(&Value::Null) && observed_revision.is_none() {
+        return Err(BRegActionError::InvalidResponse);
+    }
+    let optional_string = |name: &str| match availability.get(name) {
+        None => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(BRegActionError::InvalidResponse),
+    };
+    let reason = optional_string("reason")?;
+    let recovery = optional_string("recovery")?;
+    let missing_inputs = availability
+        .get("missingInputs")
+        .map(|value| {
+            value
+                .as_array()
+                .ok_or(BRegActionError::InvalidResponse)?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .ok_or(BRegActionError::InvalidResponse)
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
+    let valid = match (
+        available,
+        observed_revision,
+        reason.as_deref(),
+        recovery.as_deref(),
+        missing_inputs.as_deref(),
+    ) {
+        (Some(true), Some(_), None, None, None) => true,
+        (Some(false), Some(_), Some("guard-not-satisfied"), Some("none"), None) => true,
+        (None, Some(_), Some("input-required"), Some("correct-input"), Some(missing)) => {
+            let unique = missing.iter().collect::<BTreeSet<_>>();
+            !missing.is_empty()
+                && unique.len() == missing.len()
+                && missing.iter().all(|name| {
+                    !supplied_inputs.contains(name)
+                        && action.inputs().iter().any(|input| input.api_name() == name)
+                })
+        }
+        (None, None, Some("not-disclosed"), Some("none"), None) => true,
+        _ => false,
+    };
+    if !valid {
+        return Err(BRegActionError::InvalidResponse);
+    }
+    Ok(BRegActionAvailability {
+        available,
+        observed_revision,
+        reason,
+        recovery,
+        missing_inputs,
+    })
 }
 
 fn decode_conditions(
@@ -1093,6 +1389,12 @@ mod tests {
                         "operationId":"actions.update-item.target-conditions", "requiresIdempotencyKey":false,
                         "inputSchema":"action-update-item-target-conditions-input",
                         "responseSchema":"action-update-item-target-conditions-response"
+                    },
+                    "availability": {
+                        "method":"POST", "path":"/v1/actions/update-item/availability",
+                        "operationId":"actions.update-item.availability", "requiresIdempotencyKey":false,
+                        "inputSchema":"action-update-item-availability-input",
+                        "responseSchema":"action-update-item-availability-response"
                     }
                 },
                 "bounds": {"maximumTargets":16,"maximumFieldMutations":128,"maximumSnapshotBytes":2097152}
@@ -1117,6 +1419,85 @@ mod tests {
             serde_json::to_value(&condition).unwrap(),
             json!({"ifMatch": "\"secret-condition-canary\""})
         );
+    }
+
+    #[test]
+    fn availability_request_validates_subset_and_response_cases() {
+        let action = action_binding(true);
+        let target = "00000000-0000-4000-8000-000000000001";
+        let request = BRegActionAvailabilityRequest::new(
+            &action,
+            "targetId",
+            json!({"targetId": target}).as_object().unwrap().clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&request.body).unwrap(),
+            json!({"targetInput":"targetId","input":{"targetId":target}})
+        );
+        assert!(BRegActionAvailabilityRequest::new(
+            &action,
+            "targetId",
+            json!({"targetId":target,"label":false})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .is_err());
+        assert!(BRegActionAvailabilityRequest::new(
+            &action,
+            "label",
+            json!({"targetId":target}).as_object().unwrap().clone(),
+        )
+        .is_err());
+
+        let cases = [
+            (
+                json!({"availability":{"available":true,"observedRevision":3}}),
+                Some(true),
+            ),
+            (
+                json!({"availability":{"available":true,"observedRevision":i64::MAX}}),
+                Some(true),
+            ),
+            (
+                json!({"availability":{"available":false,"observedRevision":3,"reason":"guard-not-satisfied","recovery":"none"}}),
+                Some(false),
+            ),
+            (
+                json!({"availability":{"available":null,"observedRevision":3,"reason":"input-required","recovery":"correct-input","missingInputs":["label"]}}),
+                None,
+            ),
+            (
+                json!({"availability":{"available":null,"observedRevision":null,"reason":"not-disclosed","recovery":"none"}}),
+                None,
+            ),
+        ];
+        for (document, expected) in cases {
+            let decoded = decode_availability(
+                &serde_json::to_vec(&document).unwrap(),
+                &action,
+                &request.supplied_inputs,
+            )
+            .unwrap();
+            assert_eq!(decoded.available(), expected);
+        }
+        for invalid in [
+            json!({"availability":{"available":true,"observedRevision":0}}),
+            json!({"availability":{"available":true,"observedRevision":u64::MAX}}),
+            json!({"availability":{"available":false,"observedRevision":3,"reason":"other","recovery":"none"}}),
+            json!({"availability":{"available":null,"observedRevision":3,"reason":"input-required","recovery":"correct-input","missingInputs":[]}}),
+            json!({"availability":{"available":null,"observedRevision":3,"reason":"input-required","recovery":"correct-input","missingInputs":["label","label"]}}),
+            json!({"availability":{"available":null,"observedRevision":3,"reason":"input-required","recovery":"correct-input","missingInputs":["targetId"]}}),
+            json!({"availability":{"available":null,"observedRevision":null,"reason":"not-disclosed","recovery":"none","missingInputs":[]}}),
+        ] {
+            assert!(decode_availability(
+                &serde_json::to_vec(&invalid).unwrap(),
+                &action,
+                &request.supplied_inputs,
+            )
+            .is_err());
+        }
     }
 
     #[test]

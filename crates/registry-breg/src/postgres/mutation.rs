@@ -1862,6 +1862,7 @@ impl PostgresRecordMutationService {
                         Some(IngestionServiceError::RequestInvalid),
                     ),
                     MutationError::PreconditionFailed
+                    | MutationError::FieldGuardFailed { .. }
                     | MutationError::ProposalReviewResultMismatch
                     | MutationError::Conflict
                     | MutationError::ProposalRejected
@@ -2245,7 +2246,9 @@ fn strict_action_target_authority(
         .collect()
 }
 
-fn api_boundary(boundary: &VerifiedRowBoundary) -> Result<RowBoundaryContext, MutationError> {
+pub(crate) fn api_boundary(
+    boundary: &VerifiedRowBoundary,
+) -> Result<RowBoundaryContext, MutationError> {
     match boundary.operator() {
         ApiRowBoundaryOperator::Equals => {
             let value = boundary

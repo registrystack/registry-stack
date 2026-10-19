@@ -629,6 +629,7 @@ pub enum CompiledPlanValue {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ActionRouteKind {
+    Availability,
     Invoke,
     TargetConditions,
 }

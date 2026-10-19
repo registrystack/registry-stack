@@ -39,7 +39,7 @@ fn envelope(contract: &str) -> (&'static str, &'static str) {
             "BRegAccessPreview",
         ),
         "RoutesExplanation" => (
-            "id.registrystack.org/formats/breg/routes-explanation/v1alpha5",
+            "id.registrystack.org/formats/breg/routes-explanation/v1alpha6",
             "BRegRoutesExplanation",
         ),
         "QueriesExplanation" => (
@@ -258,6 +258,17 @@ fn explain_routes_matches_contract() {
     for (name, relative) in FIXTURES {
         let explanation = explain("routes", &fixture_path(relative));
         assert_matches_contract(name, "RoutesExplanation", &explanation);
+        if *name == "facility" {
+            let availability = explanation["routes"]
+                .as_array()
+                .expect("routes array")
+                .iter()
+                .find(|route| route["id"] == "actions.register-facility.availability")
+                .expect("reference-target Action availability route");
+            assert_eq!(availability["actionRouteKind"], "availability");
+            assert_eq!(availability["operation"], "invoke");
+            assert_eq!(availability["requiresIdempotencyKey"], false);
+        }
     }
 }
 

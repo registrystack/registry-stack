@@ -503,8 +503,26 @@ target. Effects, revisions, audit, receipt, and outbox commit together or not at
 original request with its original key when the outcome is uncertain. See
 [Actions and Proposals](../../configure/breg-actions/) for the model.
 
+An immediate Action with a reference input advertises one `routes.availability` endpoint at
+`POST /v1/actions/{action}/availability`. Send `targetInput` with the reference input's exact
+`apiName`, plus an `input` object containing its UUID and any declared form values already known.
+Each request checks one target. Query several reference inputs separately.
+The response reports advisory `available` as `true`, `false`, or `null`. A known answer includes
+`observedRevision`. `guard-not-satisfied` means a field guard failed. `input-required` names a
+nonempty set of declared API input names in `missingInputs`. `not-disclosed` carries
+`observedRevision: null` and no missing-input names because the selected profile cannot safely
+inspect the guard or boundary. A known failed guard takes precedence over missing guard input.
+No availability response names a guard ID or a Record value.
+The route evaluates only field guards for that one target. It does not run a Function, test SQL
+uniqueness or Evidence, inspect other targets, supply a condition token, or grant mutation
+authority. A true answer means only that the selected target's field guards are currently satisfied,
+including when it has none. Form completeness, Functions, Evidence, other targets, and SQL
+constraints may still refuse. Invoke checks authority, concurrency, and every guard in the commit
+transaction.
+
 {/* Evidence: crates/registry-breg/src/api/actions.rs; crates/registry-breg/src/immediate_actions.rs; crates/registry-breg/src/mutation.rs;
-    crates/registry-breg/tests/postgres_mutation.rs;
+    crates/registry-breg/tests/postgres_mutation.rs; crates/registry-breg/tests/postgres_immediate_action_requirements.rs;
+    products/breg/immediate-actions.md;
     crates/registry-breg-client/src/metadata.rs; crates/registry-breg-client/src/actions.rs. */}
 
 ## Problem documents

@@ -46,6 +46,18 @@ project types come from the same compiled contract; generic metadata clients
 remain available. The facility console uses these contracts for typed Action
 inputs, titles, reference navigation, refusals, and Proposal resumption.
 
+An immediate Action with a reference input also advertises one
+`routes.availability` endpoint. Each request selects one declared reference
+input as its target and may include any declared input subset needed to
+evaluate that target's field guards. Query several targets separately. Its
+answer is advisory and names the observed revision when it is disclosed. An
+unknown answer distinguishes missing form input from facts the current profile
+may not read without exposing hidden fields, row boundaries, or target
+existence. The route grants no token or mutation authority, and Invoke repeats
+every current check at commit time. A true answer covers only the selected
+target's field guards; form completeness, Functions, Evidence, other targets,
+and SQL constraints may still refuse Invoke.
+
 For build-time form generation, `bregctl generate actions PROJECT --output DIR`
 writes the public `action-contracts/v1` document and its schema under
 `generated/`. Check the format version and each Action's revision when consuming
