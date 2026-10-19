@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:00372758674ea778e74a7b8c41805519385c9d0fd24b608cdd711a3e1149d609",
+      "sha256:55bd09ff8d5ba056734c822e4c950e950ecf608e890c5e3192b1083dc2d2897f",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
@@ -52,7 +52,7 @@
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305"
+    "definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7"
   },
   "policies": [
     {
@@ -75,8 +75,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.41.0 Linux amd64 messaging local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-12",
+      "rationale": "Reviewed the v0.42.0 Linux amd64 messaging local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "reviewed_at": "2026-10-19",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -93,14 +93,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
-      "component_layer_id": "sha256:00372758674ea778e74a7b8c41805519385c9d0fd24b608cdd711a3e1149d609",
+      "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
+      "component_layer_id": "sha256:55bd09ff8d5ba056734c822e4c950e950ecf608e890c5e3192b1083dc2d2897f",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0b49ac7cae090fef7cba7e0f3b6c6ea69d8d97e522187f717204adcabf60c08d",
-        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
+        "reference_image_digest": "sha256:ffd07ff0c951e92cc3149e632060de9323952a07b819bc5d356f0af1a2fdaa02",
+        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+        "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -120,10 +120,10 @@
           },
           {
             "path": "/usr/local/bin/messaging",
-            "sha256": "sha256:8d4685af58168f99b60a85c9d91b7df98b70abbd69abc95e25652b52df158039"
+            "sha256": "sha256:11385444ec395abfc6794e72d45f736e83177f60be259a131b74fb7bd27a19cb"
           }
         ],
-        "definition_digest": "sha256:37ed5bc080cbdce6cf57f4afa8a3835d16543a36cf66f59f507f4f9b3c5b4af5"
+        "definition_digest": "sha256:e775d4bf3aed59a7b0dcbd7c24c888f848dfeb39dac1f9e1295c50c6d26fd021"
       }
     },
     {
@@ -133,8 +133,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.41.0 Linux amd64 messaging local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-12",
+      "rationale": "Reviewed the v0.42.0 Linux amd64 messaging local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "reviewed_at": "2026-10-19",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -151,14 +151,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
-      "component_layer_id": "sha256:00372758674ea778e74a7b8c41805519385c9d0fd24b608cdd711a3e1149d609",
+      "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
+      "component_layer_id": "sha256:55bd09ff8d5ba056734c822e4c950e950ecf608e890c5e3192b1083dc2d2897f",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0b49ac7cae090fef7cba7e0f3b6c6ea69d8d97e522187f717204adcabf60c08d",
-        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
+        "reference_image_digest": "sha256:ffd07ff0c951e92cc3149e632060de9323952a07b819bc5d356f0af1a2fdaa02",
+        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+        "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -178,10 +178,10 @@
           },
           {
             "path": "/usr/local/bin/messaging",
-            "sha256": "sha256:8d4685af58168f99b60a85c9d91b7df98b70abbd69abc95e25652b52df158039"
+            "sha256": "sha256:11385444ec395abfc6794e72d45f736e83177f60be259a131b74fb7bd27a19cb"
           }
         ],
-        "definition_digest": "sha256:37ed5bc080cbdce6cf57f4afa8a3835d16543a36cf66f59f507f4f9b3c5b4af5"
+        "definition_digest": "sha256:e775d4bf3aed59a7b0dcbd7c24c888f848dfeb39dac1f9e1295c50c6d26fd021"
       }
     },
     {
@@ -191,8 +191,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.41.0 Linux amd64 messaging local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports not-fixed with no fixed version for zlib1g 1:1.3.dfsg+really1.3.1-1+b1. The base carries zlib, including gzwrite, gzfwrite, gzprintf and gzvprintf. The reviewed application executables neither need libz nor contain libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. No reviewed dynamic lookup opens that closure, and the bounded source paths expose no stalled gzip-write followed by formatted-output operation. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-12",
+      "rationale": "Reviewed the v0.42.0 Linux amd64 messaging local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports not-fixed with no fixed version for zlib1g 1:1.3.dfsg+really1.3.1-1+b1. The base carries zlib, including gzwrite, gzfwrite, gzprintf and gzvprintf. The reviewed application executables neither need libz nor contain libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. No reviewed dynamic lookup opens that closure, and the bounded source paths expose no stalled gzip-write followed by formatted-output operation. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "reviewed_at": "2026-10-19",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -209,14 +209,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+      "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0b49ac7cae090fef7cba7e0f3b6c6ea69d8d97e522187f717204adcabf60c08d",
-        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
+        "reference_image_digest": "sha256:ffd07ff0c951e92cc3149e632060de9323952a07b819bc5d356f0af1a2fdaa02",
+        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+        "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -236,10 +236,10 @@
           },
           {
             "path": "/usr/local/bin/messaging",
-            "sha256": "sha256:8d4685af58168f99b60a85c9d91b7df98b70abbd69abc95e25652b52df158039"
+            "sha256": "sha256:11385444ec395abfc6794e72d45f736e83177f60be259a131b74fb7bd27a19cb"
           }
         ],
-        "definition_digest": "sha256:37ed5bc080cbdce6cf57f4afa8a3835d16543a36cf66f59f507f4f9b3c5b4af5"
+        "definition_digest": "sha256:e775d4bf3aed59a7b0dcbd7c24c888f848dfeb39dac1f9e1295c50c6d26fd021"
       }
     },
     {
@@ -249,8 +249,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.41.0 Linux amd64 messaging local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-12",
+      "rationale": "Reviewed the v0.42.0 Linux amd64 messaging local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "reviewed_at": "2026-10-19",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -267,14 +267,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+      "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0b49ac7cae090fef7cba7e0f3b6c6ea69d8d97e522187f717204adcabf60c08d",
-        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
+        "reference_image_digest": "sha256:ffd07ff0c951e92cc3149e632060de9323952a07b819bc5d356f0af1a2fdaa02",
+        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+        "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -294,10 +294,10 @@
           },
           {
             "path": "/usr/local/bin/messaging",
-            "sha256": "sha256:8d4685af58168f99b60a85c9d91b7df98b70abbd69abc95e25652b52df158039"
+            "sha256": "sha256:11385444ec395abfc6794e72d45f736e83177f60be259a131b74fb7bd27a19cb"
           }
         ],
-        "definition_digest": "sha256:37ed5bc080cbdce6cf57f4afa8a3835d16543a36cf66f59f507f4f9b3c5b4af5"
+        "definition_digest": "sha256:e775d4bf3aed59a7b0dcbd7c24c888f848dfeb39dac1f9e1295c50c6d26fd021"
       }
     },
     {
@@ -307,8 +307,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.41.0 Linux amd64 messaging local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-12",
+      "rationale": "Reviewed the v0.42.0 Linux amd64 messaging local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "reviewed_at": "2026-10-19",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -325,14 +325,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+      "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0b49ac7cae090fef7cba7e0f3b6c6ea69d8d97e522187f717204adcabf60c08d",
-        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
+        "reference_image_digest": "sha256:ffd07ff0c951e92cc3149e632060de9323952a07b819bc5d356f0af1a2fdaa02",
+        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+        "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -352,10 +352,10 @@
           },
           {
             "path": "/usr/local/bin/messaging",
-            "sha256": "sha256:8d4685af58168f99b60a85c9d91b7df98b70abbd69abc95e25652b52df158039"
+            "sha256": "sha256:11385444ec395abfc6794e72d45f736e83177f60be259a131b74fb7bd27a19cb"
           }
         ],
-        "definition_digest": "sha256:37ed5bc080cbdce6cf57f4afa8a3835d16543a36cf66f59f507f4f9b3c5b4af5"
+        "definition_digest": "sha256:e775d4bf3aed59a7b0dcbd7c24c888f848dfeb39dac1f9e1295c50c6d26fd021"
       }
     },
     {
@@ -365,8 +365,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.41.0 Linux amd64 messaging local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-12",
+      "rationale": "Reviewed the v0.42.0 Linux amd64 messaging local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "reviewed_at": "2026-10-19",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -383,14 +383,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+      "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0b49ac7cae090fef7cba7e0f3b6c6ea69d8d97e522187f717204adcabf60c08d",
-        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
+        "reference_image_digest": "sha256:ffd07ff0c951e92cc3149e632060de9323952a07b819bc5d356f0af1a2fdaa02",
+        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+        "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -410,10 +410,10 @@
           },
           {
             "path": "/usr/local/bin/messaging",
-            "sha256": "sha256:8d4685af58168f99b60a85c9d91b7df98b70abbd69abc95e25652b52df158039"
+            "sha256": "sha256:11385444ec395abfc6794e72d45f736e83177f60be259a131b74fb7bd27a19cb"
           }
         ],
-        "definition_digest": "sha256:37ed5bc080cbdce6cf57f4afa8a3835d16543a36cf66f59f507f4f9b3c5b4af5"
+        "definition_digest": "sha256:e775d4bf3aed59a7b0dcbd7c24c888f848dfeb39dac1f9e1295c50c6d26fd021"
       }
     },
     {
@@ -423,8 +423,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.41.0 Linux amd64 messaging local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-12",
+      "rationale": "Reviewed the v0.42.0 Linux amd64 messaging local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "reviewed_at": "2026-10-19",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -441,14 +441,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+      "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0b49ac7cae090fef7cba7e0f3b6c6ea69d8d97e522187f717204adcabf60c08d",
-        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
+        "reference_image_digest": "sha256:ffd07ff0c951e92cc3149e632060de9323952a07b819bc5d356f0af1a2fdaa02",
+        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+        "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -468,10 +468,10 @@
           },
           {
             "path": "/usr/local/bin/messaging",
-            "sha256": "sha256:8d4685af58168f99b60a85c9d91b7df98b70abbd69abc95e25652b52df158039"
+            "sha256": "sha256:11385444ec395abfc6794e72d45f736e83177f60be259a131b74fb7bd27a19cb"
           }
         ],
-        "definition_digest": "sha256:37ed5bc080cbdce6cf57f4afa8a3835d16543a36cf66f59f507f4f9b3c5b4af5"
+        "definition_digest": "sha256:e775d4bf3aed59a7b0dcbd7c24c888f848dfeb39dac1f9e1295c50c6d26fd021"
       }
     },
     {
@@ -481,8 +481,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.41.0 Linux amd64 messaging local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-12",
+      "rationale": "Reviewed the v0.42.0 Linux amd64 messaging local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "reviewed_at": "2026-10-19",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -499,14 +499,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+      "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0b49ac7cae090fef7cba7e0f3b6c6ea69d8d97e522187f717204adcabf60c08d",
-        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
+        "reference_image_digest": "sha256:ffd07ff0c951e92cc3149e632060de9323952a07b819bc5d356f0af1a2fdaa02",
+        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+        "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -526,10 +526,10 @@
           },
           {
             "path": "/usr/local/bin/messaging",
-            "sha256": "sha256:8d4685af58168f99b60a85c9d91b7df98b70abbd69abc95e25652b52df158039"
+            "sha256": "sha256:11385444ec395abfc6794e72d45f736e83177f60be259a131b74fb7bd27a19cb"
           }
         ],
-        "definition_digest": "sha256:37ed5bc080cbdce6cf57f4afa8a3835d16543a36cf66f59f507f4f9b3c5b4af5"
+        "definition_digest": "sha256:e775d4bf3aed59a7b0dcbd7c24c888f848dfeb39dac1f9e1295c50c6d26fd021"
       }
     },
     {
@@ -539,8 +539,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.41.0 Linux amd64 messaging local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-12",
+      "rationale": "Reviewed the v0.42.0 Linux amd64 messaging local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "reviewed_at": "2026-10-19",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -557,14 +557,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+      "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0b49ac7cae090fef7cba7e0f3b6c6ea69d8d97e522187f717204adcabf60c08d",
-        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
+        "reference_image_digest": "sha256:ffd07ff0c951e92cc3149e632060de9323952a07b819bc5d356f0af1a2fdaa02",
+        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+        "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -584,10 +584,10 @@
           },
           {
             "path": "/usr/local/bin/messaging",
-            "sha256": "sha256:8d4685af58168f99b60a85c9d91b7df98b70abbd69abc95e25652b52df158039"
+            "sha256": "sha256:11385444ec395abfc6794e72d45f736e83177f60be259a131b74fb7bd27a19cb"
           }
         ],
-        "definition_digest": "sha256:37ed5bc080cbdce6cf57f4afa8a3835d16543a36cf66f59f507f4f9b3c5b4af5"
+        "definition_digest": "sha256:e775d4bf3aed59a7b0dcbd7c24c888f848dfeb39dac1f9e1295c50c6d26fd021"
       }
     },
     {
@@ -597,8 +597,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.41.0 Linux amd64 messaging local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-12",
+      "rationale": "Reviewed the v0.42.0 Linux amd64 messaging local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "reviewed_at": "2026-10-19",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -615,14 +615,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+      "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0b49ac7cae090fef7cba7e0f3b6c6ea69d8d97e522187f717204adcabf60c08d",
-        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
+        "reference_image_digest": "sha256:ffd07ff0c951e92cc3149e632060de9323952a07b819bc5d356f0af1a2fdaa02",
+        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+        "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -642,10 +642,10 @@
           },
           {
             "path": "/usr/local/bin/messaging",
-            "sha256": "sha256:8d4685af58168f99b60a85c9d91b7df98b70abbd69abc95e25652b52df158039"
+            "sha256": "sha256:11385444ec395abfc6794e72d45f736e83177f60be259a131b74fb7bd27a19cb"
           }
         ],
-        "definition_digest": "sha256:37ed5bc080cbdce6cf57f4afa8a3835d16543a36cf66f59f507f4f9b3c5b4af5"
+        "definition_digest": "sha256:e775d4bf3aed59a7b0dcbd7c24c888f848dfeb39dac1f9e1295c50c6d26fd021"
       }
     },
     {
@@ -655,8 +655,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.41.0 Linux amd64 messaging local reproduction from rehearsal 38322311043 on 2026-10-12. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-12",
+      "rationale": "Reviewed the v0.42.0 Linux amd64 messaging local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/messaging.json and exposure/messaging.messagingctl.json record no review-required dynamic lookup in /usr/local/bin/messaging and /usr/local/bin/messagingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "reviewed_at": "2026-10-19",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -673,14 +673,14 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+      "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:0b49ac7cae090fef7cba7e0f3b6c6ea69d8d97e522187f717204adcabf60c08d",
-        "reference_source_revision": "b2c781a930d4eabb4a896a516e5d9ed4e6ebdb62",
+        "reference_image_digest": "sha256:ffd07ff0c951e92cc3149e632060de9323952a07b819bc5d356f0af1a2fdaa02",
+        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:3ac51f67da83b480fa6ce0b86cb9b268d9ef49b65bfa827dca56bd9b36179305",
+        "runtime_definition_digest": "sha256:93f68b57c6b97f0bd662e6087ab26625b4ca8a0884e48a53896cbd7bc0c216c7",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -700,10 +700,10 @@
           },
           {
             "path": "/usr/local/bin/messaging",
-            "sha256": "sha256:8d4685af58168f99b60a85c9d91b7df98b70abbd69abc95e25652b52df158039"
+            "sha256": "sha256:11385444ec395abfc6794e72d45f736e83177f60be259a131b74fb7bd27a19cb"
           }
         ],
-        "definition_digest": "sha256:37ed5bc080cbdce6cf57f4afa8a3835d16543a36cf66f59f507f4f9b3c5b4af5"
+        "definition_digest": "sha256:e775d4bf3aed59a7b0dcbd7c24c888f848dfeb39dac1f9e1295c50c6d26fd021"
       }
     }
   ]
