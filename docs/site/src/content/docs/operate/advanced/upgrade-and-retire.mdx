@@ -35,21 +35,34 @@ rolling upgrade that mixes releases is not supported:
   process still running the previous package fails readiness until it restarts onto the successor.
   Plan the restart as part of the activation, not after it.
 
-Read the target release's state and package requirements before applying. Current BReg and
-Casework refuse their retired database models, and current Scheduling and Messaging refuse a
-database a pre-1.0 release wrote; keep the previous database and its binaries for accountability,
-and start the replacement on a fresh database. Evidence requires its
-normalized authored project and target. None of these replacements provides an in-place
-conversion of the retired contract. See [Upgrades and state](../../../reference/api-stability/#upgrades-and-state).
+Read the target release's state and package requirements before applying. v0.42.0 starts a
+fresh baseline for every product that keeps state: BReg, Casework, Scheduling, and Messaging carry
+no state forward from v0.41.0, and Evidence requires its normalized authored project and target.
+An upgrade from v0.41.0 is therefore a fresh install beside the deployment it replaces. You stop
+each v0.41.0 runtime, keep its database untouched for reconciliation and rollback, and apply the
+v0.42.0 package to a fresh database. No product converts v0.41.0 state in place. Casework,
+Scheduling, and Messaging refuse a database a pre-1.0 release wrote at `plan`, `apply`, and
+startup, naming the fresh-install recovery. BReg names no such refusal, so point it only at a
+fresh database. See [Upgrades and state](../../../reference/api-stability/#upgrades-and-state).
 
 {/* Evidence: Cargo.toml, [workspace.package] version (every crate uses version.workspace);
     crates/registry-casework-breg/src/lib.rs, BregContextProvider and ReviewContextError::ContractChanged;
     docs/site/src/content/docs/reference/api-stability.mdx, "Upgrades and state";
     crates/registry-evidencectl/src/evidence_binary.rs and source_add.rs, check_public_bregctl();
     docs/site/src/content/docs/operate/breg-changes.mdx, "Activate the successor";
-    release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR;
-    release/notes/config-conventions/stack.md, "BREAKING: v0.40.0 does not upgrade v0.39.0 state
-    in place". */}
+    release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR (v0.42.0);
+    CONTRIBUTING.md, the BReg, Casework, Evidence, Messaging, and Scheduling fresh baselines;
+    products/breg/CHANGELOG.md, Unreleased (v0.42.0), "Apply this release to a fresh database; it
+    carries no state migration from 0.41";
+    products/casework/CHANGELOG.md, Unreleased (v0.42.0), baseline version 100;
+    crates/registry-casework/src/store.rs, refuse_unsupported_schema() and StoreError::Pre1_0Schema;
+    products/scheduling/CHANGELOG.md, Unreleased (v0.42.0), fresh baseline;
+    crates/registry-scheduling/src/store.rs, refuse_pre_1_0_schema();
+    products/messaging/CHANGELOG.md, Unreleased (v0.42.0), fresh baseline;
+    crates/registry-messaging/src/store.rs, StoreError::Pre1_0Schema;
+    products/evidence/CHANGELOG.md, Unreleased (v0.42.0), normalized evidence.yaml project;
+    crates/registry-breg/src/migration.rs, MigrationError::UnrecognizedDatabase (refuses only a
+    database from before the activation ledger, which a v0.41.0 database is not). */}
 
 ## Upgrade in this order
 
@@ -57,8 +70,9 @@ BReg goes first, because Casework and Evidence both read it. Pair Casework with 
 exact BReg context contract before starting its runtime. Evidence and its wallet-facing front end come next. Scheduling and
 Messaging read none of them and upgrade independently, before the clients. Read the target
 release's notes for every deployed product. Complete their required drains and outcome
-reconciliation before that product's apply, and make the listed project and runtime-file changes
-in its upgrade step. Rehearse the whole sequence on a restored copy first, as
+reconciliation before you stop that product's v0.41.0 runtime, because work left in its database
+is not carried to the fresh one, and make the listed project and runtime-file changes in its
+upgrade step. Rehearse the whole sequence on a restored copy first, as
 [Run a disaster-recovery drill](../back-up-and-restore/#run-a-disaster-recovery-drill) describes.
 
 Version-specific procedures in released notes apply to that release's contracts. They do not
@@ -68,27 +82,44 @@ so a binary that cannot run leaves the installed toolset selected.
 
 1. **Back up every database.** Take the BReg and Casework `pg_dump`s, and the Scheduling and
    Messaging ones when they run. Copy those products' packages and runtime files, and keep the
-   previous release's binaries. These backups are the only way back; see [Roll back](#roll-back).
+   previous release's binaries. The v0.41.0 databases themselves are the way back, so leave them
+   in place and unchanged; the dumps protect them against damage. See [Roll back](#roll-back).
 2. **Stop `evidence-oid4vci`**, when it runs. Its outstanding offers end here; see
    [Serve](../../../configure/evidence-oid4vci/#serve).
 3. **Pause and drain Evidence traffic** for every question that reads BReg, or pause the whole
    instance when you cannot drain one question at a time. Keep the previous Evidence candidate.
-4. **Upgrade BReg.** Preserve a retired Request-based deployment with its old binaries and
-   database; activate the current native Registry project on a fresh database. For a deployment
-   already using the native model, test and package the candidate with the matched tooling,
-   then plan and apply the successor. Keep `database.roles` unchanged when resuming an
-   interrupted apply. Restart every runtime onto the exact active package and verify readiness;
-   see [Activate the successor](../../breg-changes/#activate-the-successor).
-5. **Upgrade Casework.** The current review-only model requires a fresh database when replacing
-   a retired WorkItem schema. Preserve the old database, binary, package, and audit until its work
-   and accountability obligations are resolved; the new runtime refuses that schema before mutation
-   and performs no in-place conversion. For a deployment already on the review-only baseline,
-   package the candidate policy and run `caseworkctl plan --runtime-config FILE` before applying.
-   Finish affected reviews if the candidate would remove pinned policy or authority; there is no
-   orphan bypass. Re-pair a changed native context export with `caseworkctl provider pair` and verify
-   the exact contract before packaging. Stop the earlier runtime, run `caseworkctl apply`, then
-   `caseworkctl doctor` with the same runtime file, package, and database. Require readiness before
-   resuming staff traffic; see [plan, apply, and serve](../../casework/#plan-apply-and-serve).
+4. **Upgrade BReg.** v0.42.0 carries no BReg state forward from v0.41.0: records, revision
+   history, change requests, and pending webhook deliveries stay in the v0.41.0 database. Before
+   you stop it, close the import authorities still open with `bregctl import-authority close`, and
+   check `bregctl webhook list` when receivers must see pending deliveries, because they stop with
+   the runtime. Stop every v0.41.0 `breg`, and keep its database, package, runtime file, audit
+   files, and binaries unchanged. Rewrite the project as `recordTypes` and Actions, then test and
+   package it with the v0.42.0 tooling. In the runtime file, move retention windows into the
+   top-level `retention` block and rename a `taskGrantStatus` entry's `caseworkResource` to
+   `statusResource`; each old key is refused with `config.removed-key` naming its new path. Point
+   the runtime file at a fresh UTF8 database on PostgreSQL 17 or later, prepared as
+   [Provision PostgreSQL](../../breg/#provision-postgresql) describes, and activate the package
+   there with `bregctl plan` and `bregctl apply --initial`, as
+   [Activate and serve](../../breg/#activate-and-serve) describes. A first activation requires a
+   database that has never held a package, so pointing it at the v0.41.0 database fails; give it a
+   fresh one instead. Start every `breg` on the exact active package and verify readiness. Load the
+   records the registry must hold through
+   [Validate the input](../../breg-data/#validate-the-input) and
+   [Import with a checkpoint](../../breg-data/#import-with-a-checkpoint).
+5. **Upgrade Casework.** v0.42.0 Casework installs its complete schema as baseline version 100
+   and refuses a v0.41.0 database: `caseworkctl plan` and `apply` report
+   `casework.activation.beta-schema`, and readiness and startup refuse with the same
+   fresh-database instruction. Reviews open in the v0.41.0 database are not carried forward, so
+   before you stop it, finish them or cancel them through each bound producer's supported
+   interface, and record any that remain. Stop the v0.41.0 runtime, and keep its database,
+   package, runtime file, and audit until its work and accountability obligations are resolved.
+   Rewrite the project in the v0.42.0 format; `caseworkctl check` names each old spelling and its
+   replacement. Pair the v0.42.0 BReg context export with `caseworkctl provider pair` and verify
+   the exact contract before packaging. Point the runtime file at a fresh database prepared as
+   [Provision PostgreSQL](../../casework/#provision-postgresql) describes, run
+   `caseworkctl plan --runtime-config FILE` and `caseworkctl apply --runtime-config FILE`, then
+   `caseworkctl doctor` with the same runtime file, package, and database. Require readiness
+   before resuming staff traffic; see [plan, apply, and serve](../../casework/#plan-apply-and-serve).
 6. **Upgrade Evidence.** Author the normalized `evidence.yaml`, target, and target authority
    for the current tooling; retired split authoring documents are refused. Re-import changed
    BReg source exports into that project, review the source changes, and run check and fixtures
@@ -100,8 +131,24 @@ so a binary that cannot run leaves the installed toolset selected.
 7. **Upgrade Scheduling**, when it runs. The current release installs its complete schema as a
    fresh baseline and refuses a database a pre-1.0 release wrote at `plan`, `apply`, and startup.
    Holds and appointments recorded in the previous database are not carried forward: retain that
-   database, its package, runtime file, and audit journal for reconciliation. The runtime file
-   requires a top-level `taskGrantStatus`. List the task authorities whenever Scheduling must check
+   database, its package, runtime file, and audit journal for reconciliation. Dropping booked
+   appointments this way is acceptable only before production.
+
+   Before the cut, record every appointment that must still be honoured. `schedulingctl` has no
+   export command, so keep the step 1 `pg_dump` and have each booking product list its own
+   appointments with `GET /v1/appointments`, which returns only the caller's appointments for one
+   external reference. Tell the products that show those appointments, and the people who hold
+   them, that they will not appear in the upgraded deployment until rebooked. After you apply,
+   re-establish supply with `schedulingctl records apply` so the carried bookings are not sold
+   twice: publish each affected window's `units` net of them, add a `closure` exception for the
+   time they occupy, or have the owning products rebook them before you open booking traffic.
+
+   The runtime file requires a top-level `taskGrantStatus`, and each entry names its resource
+   `statusResource`. Rename `retention.attemptReceiptRetentionDays` to
+   `retention.receiptRetentionDays`; each old key is refused with `config.removed-key`. The
+   `authentication.oidc` scope defaults are now `scope`, `scheduling:read`, and
+   `scheduling:explain`, so set `scopeClaim`, `readsScope`, or `explainScope` when your issuer
+   emits the earlier spellings. List the task authorities whenever Scheduling must check
    current status or revocation, and when it accepts deferred work. The
    `taskGrantStatus: unchecked-final-fifteen-minutes` path checks only remaining lifetime because a
    signed token does not identify its original grant mode. It admits any grant with at most 900
@@ -110,8 +157,9 @@ so a binary that cannot run leaves the installed toolset selected.
    Run `schedulingctl check PROJECT --runtime-config FILE`, then stop the previous runtime or keep
    its destination bindings until hook deliveries drain. Point the runtime file at a fresh database,
    then run `schedulingctl plan --runtime-config FILE` and `schedulingctl apply --runtime-config
-   FILE`. Start `scheduling`, then use `schedulingctl status --runtime-config FILE` to confirm the
-   activation.
+   FILE`. Apply the environment records with `schedulingctl records apply --runtime-config FILE
+   RECORDS`, start `scheduling`, then use `schedulingctl status --runtime-config FILE` to confirm
+   the activation.
 8. **Upgrade Messaging**, when it runs. The current release installs its complete schema as a
    fresh baseline and refuses a database a pre-1.0 release wrote at `plan`, `apply`, and startup.
    Messages still queued in the previous database are not carried forward, so drain them first
@@ -119,106 +167,177 @@ so a binary that cannot run leaves the installed toolset selected.
    Stop new submissions, let in-flight senders finish retrying submissions whose answers they lost,
    then stop every previous `messaging` runtime. Give graceful shutdown time to finish sends already
    in flight. Refresh the `pg_dump` after every earlier runtime stops, and retain the previous
-   database and audit journal for reconciliation. Rebuild the package when the release notes
-   require it, update `package.root`, and repin `package.expectedDigest` when set. Point the
-   runtime file at a fresh database prepared as
+   database and audit journal for reconciliation.
+
+   Provider callbacks for messages the previous deployment sent keep arriving at the callback URL.
+   The current runtime answers a verified callback that names no message it holds with `204`,
+   stores nothing, and counts it as `unmatched` in `messaging_provider_callbacks_total`. A
+   provider does not retry a `204`, so that delivery report never reaches Messaging. Choose one
+   of two paths. To keep the reports, leave the previous runtime serving callbacks, with
+   submissions stopped and its queue empty, through each callback provider's documented reporting
+   cutoff, as step 2 of [Retire Messaging](#retire-messaging) describes, and cut over after it.
+   To cut over at once, accept that late reports are lost to Messaging, and reconcile them
+   afterwards: compare each provider's records with the retained database, read through the
+   previous `messagingctl messages show` while the previous runtime stays stopped.
+
+   Rename `retention.submissionReceiptRetentionDays` to `retention.receiptRetentionDays` in the
+   runtime file; the old key is refused with `config.removed-key`. `authentication.oidc.scopeClaim`
+   now defaults to `scope`, so set it explicitly when your issuer emits `registry_scopes`. Rebuild
+   the package when the release notes require it, update `package.root`, and repin
+   `package.expectedDigest` when set. Point the runtime file at a fresh database prepared as
    [Provision PostgreSQL](../../messaging/#provision-postgresql) describes, then run `messagingctl
    plan --runtime-config FILE` and `messagingctl apply --runtime-config FILE`. Confirm the
    activation with `messagingctl status --runtime-config FILE`, start the current `messaging`, and
    require `GET /ready` to answer `200` before you resume submissions.
-9. **Upgrade clients, then resume traffic.** Move Python applications to Python 3.11 or later and
-   Node.js applications to Node.js 24.11.0 or later before installing the v0.41.0 client packages.
-   Update exhaustive Rust matches on the Scheduling or Messaging `ProblemCode` enums for
-   `ReceiptUnresolved`. Treat `CaseworkTaskAssertionSource` `invalid-credential` as a grant refusal:
-   request a new approval and stop retrying that credential. In BReg metadata, an unsupported
-   `requiredCapabilities` value disables only the affected binding and can make selection report
-   `required-capability`. Handle a valid unknown BReg Problem by its HTTP status and trace ID
-   without inferring code or extension semantics. Roll out every application that embeds a
-   Registry Stack client at v0.41.0 before it calls the upgraded runtimes, then resume traffic.
+9. **Upgrade clients, then resume traffic.** Install the v0.42.0 client packages, which still
+   require Python 3.11 or later and Node.js 24.11.0 or later, and update applications for these
+   changes:
+   - **BReg.** Proposals replace Requests: use `startProposal`, `prepareProposal`,
+     `executeProposal`, and `recoverProposal` (snake case in Rust and Python), `actions` and
+     `selectAction` in place of the immediate-Action methods, and `revision` in place of
+     `contractFingerprint`. The client refuses BReg metadata older than version 2, so regenerate
+     project packages and clients together. The Proposal list takes `limit` instead of `top`, and
+     ingestion run listings page with `cursor` and `nextCursor`. Every Proposal carries `turn`,
+     and a Proposal whose Review is rejected ends in `rejected` and answers further commands with
+     `409` `proposal.rejected`. Drop any branch on the removed recovery values: `terminal` in
+     `BRegRecoveryHint`, and `refresh` and `receipt-only` in `BRegApplicationRecoveryHint`.
+   - **Casework.** A review decision names its `outcome`: an approve without one is refused with
+     `400` `request.invalid` and reason `outcome-not-declared`, and the clients refuse a decision
+     receipt without one. The `AssignmentContext` export is removed.
+   - **Discovery.** `validateSelection` and `validate_selection` are removed; call
+     `validateSelectionStructure` or `validate_selection_structure`, which behave the same.
+   - **Scheduling.** Reminder receivers parse the shared hook envelope that appointment observers
+     receive, sent as `content-type: application/json`.
+
+   Roll out every application that embeds a Registry Stack client at v0.42.0 before it calls the
+   upgraded runtimes, then resume traffic.
 
 {/* Evidence: docs/site/src/content/docs/operate/casework.mdx, "Upgrade Casework and BReg in
     lock-step" (BReg first, readiness fails in between);
     docs/site/src/content/docs/configure/evidence-oid4vci.mdx, "Operational limits" (stop the
     adapter, restart Evidence, start the adapter);
     products/breg/EVIDENCE.md, "Independently evolving providers require a paused, coordinated
-    cutover"; crates/registry-casework/src/activation.rs, apply_activation();
+    cutover";
+    products/breg/CHANGELOG.md, Unreleased (v0.42.0) entries: fresh database with no state
+    migration from 0.41, PostgreSQL 17 minimum and UTF8, top-level retention block,
+    statusResource, recordTypes and Actions, Proposal client methods, metadata version 2, limit
+    and nextCursor, turn, rejected, BRegRecoveryHint and BRegApplicationRecoveryHint values,
+    Review results name an outcome;
+    crates/registry-breg/src/migration.rs, "uninitialized-database" (initial activation check);
+    crates/registry-bregctl/src/lib.rs, ImportAuthorityCommand and WebhookCommand;
+    products/casework/CHANGELOG.md, Unreleased (v0.42.0) entries: baseline version 100,
+    ReviewDecisionReceipt outcome, outcome-not-declared, AssignmentContext export removed,
+    project format aligned;
+    crates/registry-casework/src/store.rs, refuse_unsupported_schema() and
+    StoreError::Pre1_0Schema; crates/registry-casework/src/activation.rs, "beta-schema";
     crates/registry-casework/src/pinned_work.rs, compare_pinned_work();
-    crates/registry-breg/src/migration.rs, MigrationError::ResumeRolesDiffer;
-    products/breg/CHANGELOG.md, v0.41.0 - 2026-10-13 entries;
-    products/casework/CHANGELOG.md, v0.41.0 - 2026-10-13 entries and migration 0022;
-    products/evidence/CHANGELOG.md, v0.41.0 - 2026-10-13 entries;
-    products/scheduling/CHANGELOG.md, v0.41.0 - 2026-10-13 entries and Unreleased fresh baseline;
+    products/evidence/CHANGELOG.md, Unreleased (v0.42.0) entries: normalized evidence.yaml
+    project, separate target and target authority, BReg --record-type source setup;
+    products/scheduling/CHANGELOG.md, Unreleased (v0.42.0) entries: fresh baseline,
+    statusResource, receiptRetentionDays, reminder hook envelope, scope defaults;
     crates/registry-scheduling/src/store.rs, refuse_pre_1_0_schema();
-    crates/registry-schedulingctl/src/lib.rs, CheckArgs, ActivationArgs, and ApplyArgs;
-    products/messaging/CHANGELOG.md, v0.41.0 - 2026-10-13 entries and Unreleased fresh baseline;
-    crates/registry-messaging/src/store.rs, StoreError::Pre1_0Schema;
-    docs/site/src/content/docs/operate/messaging.mdx, "Plan, apply, inspect, and serve";
-    crates/registry-messaging/src/runtime.rs, shutdown_signal() and Listeners::serve_until();
+    crates/registry-schedulingctl/src/lib.rs, CheckArgs, ActivationArgs, ApplyArgs,
+    RecordsApplyArgs, and no export command;
+    products/scheduling/README.md, GET /v1/appointments and records apply;
     release/notes/v0.36.0.md, "Upgrade Scheduling, Relay, and Discovery from v0.35.0"
     (apply before start, hook drain);
+    products/scheduling/examples/standalone-arrival-window/records.yaml, units;
+    crates/registry-scheduling-core/src/model.rs, ExceptionRecordKind::Closure;
+    products/messaging/CHANGELOG.md, Unreleased (v0.42.0) entries: fresh baseline,
+    receiptRetentionDays, scopeClaim default;
+    crates/registry-messaging/src/store.rs, StoreError::Pre1_0Schema;
+    crates/registry-messaging/src/receipts.rs, ReceiptOutcome::Unmatched;
+    products/messaging/RUNTIME-CONFIG.md, "Provider callbacks" (a verified callback naming no
+    message answers 204);
+    docs/site/src/content/docs/operate/messaging.mdx, "Plan, apply, inspect, and serve";
+    crates/registry-messaging/src/runtime.rs, shutdown_signal() and Listeners::serve_until();
+    products/discovery/CHANGELOG.md, Unreleased (v0.42.0) validateSelectionStructure entry;
+    crates/registry-stack-client-py/pyproject.toml, requires-python;
+    crates/registry-stack-client-node/package.json, engines;
     release/glibc-floor.env, REGISTRY_GLIBC_FLOOR;
     crates/registry-breg/install.sh; crates/registry-casework/install.sh;
     crates/registry-scheduling/install.sh; crates/registry-evidencectl/install.sh,
     staged Linux --version checks;
-    release/scripts/rehearse-upgrade.py rehearses each product alone, not this composition. */}
+    release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR (rehearses each product alone, not
+    this composition). */}
 
 ## Roll back
 
-No product migrates backwards. A Casework binary refuses a database whose schema is newer than it
-supports, and a BReg package applies forward only. Evidence refuses a runtime file carrying keys
-its release does not know. To return to the previous release:
+No product migrates backwards, and in v0.42.0 none needs to: the upgrade never touched the v0.41.0
+databases you kept in steps 4 to 8. To roll back a product, stop its v0.42.0 runtime and restart
+the previous binary, package, and runtime file against the retained database. Never point a
+v0.41.0 runtime at a v0.42.0 database: Casework, Scheduling, and Messaging v0.41.0 refuse schema
+version 100 as newer than they know. Everything the upgraded deployment accepted after the
+cutover exists only in its v0.42.0 database, so keep that database unchanged and reconcile its
+work into the retained one before the previous runtime resumes traffic.
 
-- **BReg.** To return to the previous release, stop every `breg` and retire the upgraded
-  database, restore the step 1 `pg_dump` into a fresh database, and point the previous runtime file copied
-  in step 1 at it. The restored copy carries the claim of the database it was dumped from, so
-  adopt it with the previous release's `bregctl instance-claim adopt --runtime-config FILE
-  --acknowledge-original-retired` (see
-  [After a logical restore](../back-up-and-restore/#after-a-logical-restore) for why), then
-  start the previous `breg` with the previous package and that runtime file; the new release's
-  tools cannot read the earlier package or runtime file. To undo only a model
-  change, roll forward to a successor that reverts it, and when the data itself must go back,
-  restore the pre-activation backup; see
+- **BReg.** Stop consumer traffic to the v0.42.0 `breg`, and while it still serves, record the
+  records and Proposals it accepted after the cutover, with `bregctl data export` where a profile
+  allows it (see [Export with a checkpoint](../../breg-data/#export-with-a-checkpoint)). Stop
+  every v0.42.0 `breg` and keep its database. Start the previous
+  `breg` with the previous package and runtime file against the retained database; the v0.42.0
+  tools cannot read the earlier package or runtime file. Re-enter the recorded changes through the
+  previous release's interfaces. When the retained database itself is damaged, restore the step 1
+  `pg_dump` into a fresh database instead, point a copy of the previous runtime file at it, and
+  adopt its claim with the previous release's `bregctl instance-claim adopt --runtime-config FILE
+  --acknowledge-original-retired` before starting `breg`; see
+  [After a logical restore](../back-up-and-restore/#after-a-logical-restore) for why. To undo
+  only a model change within one release, roll forward to a successor that reverts it; see
   [Roll back by rolling forward](../../breg-changes/#roll-back-by-rolling-forward).
-- **Casework.** Restore the pre-apply backup and run the previous binary, package, and runtime
-  file copied in step 1; see
-  [Restore Registry Casework](../back-up-and-restore/#restore-registry-casework) for what that
-  restore loses.
+- **Casework.** Stop the v0.42.0 runtime and keep its database. Record the reviews it accepted
+  and decided after the cutover, then start the previous binary, package, and runtime file against
+  the retained database. Producers must resubmit the open reviews to the previous deployment, and
+  a decision taken after the cutover must be taken again there. BReg and Casework roll back
+  together, because each refuses the other's review results across the release boundary.
 - **Evidence.** Restart the previous binary with the previous bundle and runtime file.
-- **Messaging.** Stop the upgraded runtime. Before you restore, use the upgraded
-  `messagingctl messages list` and `messages show`, the audit archive, and provider records to
-  record every message effect after the stopped, pre-apply snapshot. Preserve the upgraded database
-  unchanged, and restore that snapshot into a separate fresh database. Point a copy of the previous
-  runtime file at the restored database, and keep both runtimes stopped while you inspect the copy
-  with the previous `messagingctl messages list` and `messages show`. Its supported actions can retry `failed`, settle `unknown`, or cancel
-  `queued` messages; apply one only when the restored dispatch state is eligible and external
-  evidence supports the decision. Start the previous binary with the previous package and runtime
-  file only after every post-snapshot effect is represented in the restored state. Never point the
-  previous runtime at the migrated database: readiness refuses a schema version the binary does
-  not know. Do not start it to inspect restored state: its worker immediately resumes queued
-  dispatch. A new post-snapshot submission is absent from the restore, and a message sent after the
-  snapshot can return as `queued`, which the previous tools cannot mark `submitted`. When either
-  gap exists, keep the upgraded database and fix forward: use the upgraded `messages list`,
-  `messages show`, and eligible operator actions with provider evidence to reconcile its state,
-  correct its package or runtime configuration, and restart a runtime that supports that database.
-- **Scheduling.** Restore the pre-apply database backup, then run the previous binary, package,
-  and runtime file copied in step 1. Always restore first: an earlier Scheduling runtime may not
-  detect a schema newer than its own.
+- **Messaging.** Stop new submissions, then stop the v0.42.0 runtime and keep its database
+  unchanged. With the upgraded `messagingctl messages list` and `messages show`, the audit
+  archive, and provider records, record every message the v0.42.0 deployment accepted, sent, or
+  settled. Keep the previous runtime stopped while you inspect the retained database with the
+  previous `messagingctl messages list` and `messages show`. Its supported actions can retry
+  `failed`, settle `unknown`, or cancel `queued` messages; apply one only when the retained
+  dispatch state is eligible and provider evidence supports the decision, because the previous
+  worker resumes queued dispatch as soon as it starts. Then start the previous binary with the
+  previous package and runtime file against the retained database, and resubmit through it any
+  post-cutover message that was accepted but never sent. A message the v0.42.0 deployment sent
+  stays recorded only in its database, and its later provider callbacks reach whichever runtime
+  serves the callback URL; the previous runtime answers them as `unmatched`.
+- **Scheduling.** Stop the v0.42.0 runtime and keep its database for inspection; no restore is
+  needed. Every hold and appointment it accepted after the cutover is absent from the retained
+  database. Reconcile each one before the previous runtime resumes booking: rebook it there through
+  its owning product, or reduce the affected window's supply with the previous `schedulingctl
+  records apply`, and tell the people who hold it. Then start the previous binary, package, and
+  runtime file against the retained database.
+
+:::caution[Reconcile Scheduling before resuming bookings]
+A rolled-back Scheduling deployment does not know the appointments the upgraded one confirmed. If
+you resume booking traffic before you reconcile them, it sells that capacity again and
+double-books it.
+:::
 
 Because the release rule holds in both directions, rolling back one product means rolling back
 every product that must match it: Casework refuses a BReg that went back without it.
 
-{/* Evidence: crates/registry-casework/src/store.rs, refuse_unsupported_schema();
+{/* Evidence: crates/registry-casework/src/store.rs, refuse_unsupported_schema() and
+    StoreError::SchemaNewer (present since v0.41.0); products/scheduling/CHANGELOG.md and
+    products/messaging/CHANGELOG.md, Unreleased (v0.42.0) fresh-baseline entries (a pre-1.0
+    binary refuses version 100 as newer); crates/registry-scheduling/src/store.rs,
+    refuse_pre_1_0_schema(); crates/registry-messaging/src/store.rs, StoreError::Pre1_0Schema and
+    ready(); crates/registry-messaging/tests/postgres_migrate.rs,
+    a_store_carrying_an_unknown_version_is_not_ready;
+    products/breg/CHANGELOG.md, Unreleased (v0.42.0) fresh-database entry and Review results name
+    an outcome; products/casework/CHANGELOG.md, Unreleased (v0.42.0) outcome entries;
     crates/registry-bregctl/src/package_lifecycle.rs, PACKAGE_DIRECTORY (the package child of
     --output); crates/registry-breg/src/instance_claim.rs, module docs (a logical copy keeps its
     original's claim; v0.35.0 ships instance-claim adopt);
+    crates/registry-bregctl/src/lib.rs, DataCommand::Export;
     crates/registry-platform-audit/src/writer.rs, single-writer lock;
     crates/registry-evidence/src/cli.rs, Check (--runtime-config, --without-audit-lock);
-    crates/registry-messaging/src/store.rs, ready();
-    crates/registry-messaging/tests/postgres_migrate.rs,
-    a_store_carrying_an_unknown_version_is_not_ready;
     crates/registry-messaging/src/runtime.rs, Assembled and Listeners::serve_until();
     crates/registry-messagingctl/src/lib.rs, Command and eligible_dispatch();
-    crates/registry-breg/src/migration.rs, MigrationError::PackageBinding;
+    crates/registry-messaging/src/receipts.rs, ReceiptOutcome::Unmatched;
+    products/scheduling/README.md, records apply refuses to reduce a window below its live
+    bookings; crates/registry-breg/src/migration.rs, MigrationError::PackageBinding;
     crates/registry-evidence/src/config.rs, deny_unknown_fields on the runtime file. */}
 
 ## Retire a deployment
