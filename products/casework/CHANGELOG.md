@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.42.0 - 2026-10-20
+
 - Return the admitted producer ID as bounded Review acceptance metadata on
   creation and recovery, preserving the accepted JSON envelope.
 - Preserve the specific provider-pair refusal and configuration path for contract,

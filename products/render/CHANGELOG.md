@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.42.0 - 2026-10-20
+
+- `registry-render init` prints a first render command that runs as printed
+  from any directory: its `--data` path names the scaffold's own fixture.
+
 ## 0.41.0 - 2026-10-13
 
 - No user-visible product changes in this release.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.42.0 - 2026-10-20
+
 - `authentication.oidc.allowInsecureHttp` permits plain HTTP to the issuer and
   JWKS endpoint beyond loopback under the `local` assurance profile only.
   `production` and `evidence-grade` bundles still require HTTPS for both: a
@@ -16,7 +18,7 @@
   `coequal_acceptance_definition` to `coequalAcceptanceDefinition`,
   `privacy_expectation` to `privacyExpectation`, `observed_at` to `observedAt`,
   and `expected_value` to `expectedValue`. Use the
-  [complete control-key mapping](../../release/notes/unreleased.md#evidence-fixture-controls)
+  [complete control-key mapping](../../release/notes/v0.42.0.md#evidence-authoring-and-local-development)
   for each location. Preserve nested source, response, selector, claim, fact and
   expected-value payload keys and Rhai ABI names. Run `evidencectl test PROJECT
   --target TARGET --deny-warnings`, then rebuild any package that captures these

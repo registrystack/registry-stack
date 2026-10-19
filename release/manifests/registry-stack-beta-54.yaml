@@ -1,0 +1,52 @@
+stack:
+  release: beta-54
+  version: 0.42.0
+  source_repo: registrystack/registry-stack
+  source_tag: v0.42.0
+
+artifacts:
+  registry-manifest: 0.42.0
+  evidence: 0.42.0
+  evidencectl: 0.42.0
+  evidence-oid4vci: 0.42.0
+  evidencectl-installer: 0.42.0
+  registry-docs: 0.42.0
+  discovery: 0.42.0
+  discoveryctl: 0.42.0
+  breg: 0.42.0
+  bregctl: 0.42.0
+  breg-mcp: 0.42.0
+  breg-review: 0.42.0
+  breg-installer: 0.42.0
+  casework: 0.42.0
+  caseworkctl: 0.42.0
+  casework-installer: 0.42.0
+  scheduling: 0.42.0
+  schedulingctl: 0.42.0
+  scheduling-installer: 0.42.0
+  messaging: 0.42.0
+  messagingctl: 0.42.0
+  registry-render: 0.42.0
+  registry-client-node: 0.42.0
+  registry-client-python: 0.42.0
+
+identifier_catalog:
+  path: products/identifiers/generated/catalog.v1.json
+  sha256: eafcdb4bfe719e6f41fb8a48113f98eb15d0d3184e7ac10525d1c82adab37710
+  entry_count: 259
+
+external: {}
+
+warnings:
+  - code: fresh-state-baseline
+    classification: breaking-change
+    detail: No product reads state v0.41.0 wrote. Install v0.42.0 on fresh databases beside the v0.41.0 deployment and keep the v0.41.0 databases for reconciliation and rollback. See release/notes/v0.42.0.md.
+  - code: breg-postgresql-17-utf8
+    classification: breaking-change
+    detail: BReg requires PostgreSQL 17 or later and a UTF8 database, matching Casework, Scheduling, and Messaging.
+  - code: review-and-registry-model
+    classification: breaking-change
+    detail: BReg projects declare recordTypes and Actions with durable Proposals; Casework reviews use ReviewPolicy, ReviewRequest, ReviewTask, and ReviewResult; Evidence authoring uses one normalized evidence.yaml project. See release/notes/v0.42.0.md.
+  - code: configuration-and-wire-renames
+    classification: breaking-change
+    detail: Configuration names, issuer network policy, webhook and audit envelopes, diagnostics, and client and Rust APIs change as listed in release/notes/v0.42.0.md.

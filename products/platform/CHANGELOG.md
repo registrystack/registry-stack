@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.42.0 - 2026-10-20
+
 - BREAKING: token-verifying runtimes use one issuer network policy. Endpoints the operator
   declares, the issuer and a configured JWKS URI, may resolve to private or loopback
   addresses on any origin. A discovery `jwks_uri` inherits that allowance only on the

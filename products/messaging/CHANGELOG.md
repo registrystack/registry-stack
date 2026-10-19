@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.42.0 - 2026-10-20
+
 - Apply this release to a fresh database. Messaging now installs its complete
   schema as one baseline numbered version 100, above every version a pre-1.0
   release applied, and later migrations take 101, 102, and onward. A database
