@@ -2686,8 +2686,8 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
             trace_id,
         };
     };
-    if (extensions.declared_field && code != BRegProblemCode::MutationConflict)
-        || (extensions.constraint.is_some() && code != BRegProblemCode::MutationConflict)
+    if (extensions.declared_field || extensions.constraint.is_some())
+        && code != BRegProblemCode::MutationConflict
         || extensions
             .field_path
             .as_ref()
