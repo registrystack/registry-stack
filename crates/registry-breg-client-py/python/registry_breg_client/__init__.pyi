@@ -191,6 +191,43 @@ class BRegActionTargetConditions:
     @property
     def trace_id(self) -> str: ...
 
+class BRegActionAvailable(TypedDict):
+    available: Literal[True]
+    observedRevision: int
+
+class BRegActionGuardUnavailable(TypedDict):
+    available: Literal[False]
+    observedRevision: int
+    reason: Literal["guard-not-satisfied"]
+    recovery: Literal["none"]
+
+class BRegActionInputRequired(TypedDict):
+    available: None
+    observedRevision: int
+    reason: Literal["input-required"]
+    recovery: Literal["correct-input"]
+    missingInputs: list[str]
+
+class BRegActionNotDisclosed(TypedDict):
+    available: None
+    observedRevision: None
+    reason: Literal["not-disclosed"]
+    recovery: Literal["none"]
+
+BRegActionAvailability = (
+    BRegActionAvailable
+    | BRegActionGuardUnavailable
+    | BRegActionInputRequired
+    | BRegActionNotDisclosed
+)
+
+class BRegActionAvailabilityOutcome(TypedDict):
+    kind: Literal["complete"]
+    value: BRegActionAvailability
+    trace_id: str
+    etag: str | None
+    location: str | None
+
 class BRegPreparedCreate:
     @staticmethod
     def from_bytes(value: bytes) -> BRegPreparedCreate: ...
@@ -487,6 +524,12 @@ class BaseRegistryClient:
         binding: BRegActionBinding,
         inputs: dict[str, JsonValue],
     ) -> BRegActionTargetConditions: ...
+    def action_availability(
+        self,
+        binding: BRegActionBinding,
+        target_input: str,
+        inputs: dict[str, JsonValue],
+    ) -> BRegActionAvailabilityOutcome: ...
     def invoke_action(
         self,
         binding: BRegActionBinding,

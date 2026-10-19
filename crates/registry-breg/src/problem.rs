@@ -23,6 +23,7 @@ pub fn type_uri(code: &str) -> String {
 #[non_exhaustive]
 pub enum ProblemCode {
     ActionEvidenceFailed,
+    ActionGuardFailed,
     ActionHandlerFailed,
     ActionRefused,
     AuthenticationRefused,
@@ -60,6 +61,7 @@ impl ProblemCode {
     /// Every registered code, ordered by its code string.
     pub const ALL: &'static [Self] = &[
         Self::ActionEvidenceFailed,
+        Self::ActionGuardFailed,
         Self::ActionHandlerFailed,
         Self::ActionRefused,
         Self::AuthenticationRefused,
@@ -98,6 +100,7 @@ impl ProblemCode {
     /// is registered and published but never listed in a generated document.
     pub const DOCUMENTED: &'static [Self] = &[
         Self::ActionEvidenceFailed,
+        Self::ActionGuardFailed,
         Self::ActionHandlerFailed,
         Self::ActionRefused,
         Self::AuthenticationRefused,
@@ -134,6 +137,7 @@ impl ProblemCode {
     pub const fn code(self) -> &'static str {
         match self {
             Self::ActionEvidenceFailed => "action.evidence_failed",
+            Self::ActionGuardFailed => "action.guard_failed",
             Self::ActionHandlerFailed => "action.handler_failed",
             Self::ActionRefused => "action.refused",
             Self::AuthenticationRefused => "authentication.refused",
@@ -187,7 +191,9 @@ impl ProblemCode {
             | Self::IngestionReceiptErased
             | Self::ProposalSubmissionExpired
             | Self::StatisticalDatasetVersionWithdrawn => 410,
-            Self::PreconditionFailed | Self::ProposalReviewResultMismatch => 412,
+            Self::ActionGuardFailed
+            | Self::PreconditionFailed
+            | Self::ProposalReviewResultMismatch => 412,
             Self::UnsupportedMediaType => 415,
             Self::ActionRefused | Self::StatisticalDatasetReleaseRefused => 422,
             Self::PreconditionRequired => 428,
@@ -230,6 +236,7 @@ impl ProblemCode {
     pub const fn description(self) -> &'static str {
         match self {
             Self::ActionEvidenceFailed => "The declared Evidence dependency could not be accepted.",
+            Self::ActionGuardFailed => "The action guard was not satisfied.",
             Self::ActionHandlerFailed => "The action handler could not produce an accepted result.",
             Self::ActionRefused => "The action was refused by a declared business rule.",
             Self::AuthenticationRefused => "The bearer credential is missing or refused.",
@@ -302,6 +309,12 @@ mod tests {
     #[test]
     fn action_faults_and_business_refusals_have_their_exact_public_contracts() {
         for (problem, status, title, code) in [
+            (
+                ProblemCode::ActionGuardFailed,
+                412,
+                "Precondition Failed",
+                "action.guard_failed",
+            ),
             (
                 ProblemCode::ActionHandlerFailed,
                 500,

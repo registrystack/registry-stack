@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Admission for compiled immediate actions. Entity CRUD grants are not consulted.
+//! Admission for compiled immediate actions. Ordinary GET authority additionally
+//! bounds the state disclosed by an advisory availability read.
+
+mod availability;
 
 #[cfg(test)]
 #[path = "tests/immediate_action_tests.rs"]
@@ -59,6 +62,16 @@ pub(super) fn append_openapi(
                 schemas.insert(
                     openapi_action_response_schema_id(&action.id),
                     openapi_action_response_schema(action, Some(surface.context.result_effects())),
+                );
+            }
+            ActionRouteKind::Availability => {
+                schemas.insert(
+                    openapi_action_availability_request_schema_id(&action.id),
+                    openapi_action_availability_request_schema(action),
+                );
+                schemas.insert(
+                    openapi_action_availability_response_schema_id(&action.id),
+                    openapi_action_availability_response_schema(action),
                 );
             }
             ActionRouteKind::TargetConditions => {
@@ -313,7 +326,34 @@ pub(super) async fn dispatch(
         Err(error) => return refusal(invalid_action_request(error)).await,
     };
     match route.kind {
+        ActionRouteKind::Availability => {
+            match availability::observe(
+                &service,
+                &surface,
+                &claims,
+                &headers,
+                &parsed.input,
+                parsed
+                    .target_input
+                    .as_deref()
+                    .expect("availability target was validated"),
+                &correlation,
+            )
+            .await
+            {
+                Ok(result) => {
+                    match HeldReadResponse::from_json(&json!({"availability": result.value()})) {
+                        Ok(response) => exact_non_record_no_store(response),
+                        Err(_) => unavailable(),
+                    }
+                }
+                Err(response) => refusal(response).await,
+            }
+        }
         ActionRouteKind::Invoke => {
+            // Retain the bounded validated inputs for a disclosure-safe re-read
+            // only after a field guard has refused and the transaction rolled back.
+            let observed_input = parsed.input.clone();
             let outcome = mutations
                 .invoke_action(ImmediateActionInput {
                     route_id: &route.id,
@@ -338,6 +378,26 @@ pub(super) async fn dispatch(
                         .headers_mut()
                         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
                     response
+                }
+                Err(MutationError::FieldGuardFailed { input }) => {
+                    match availability::observe(
+                        &service,
+                        &surface,
+                        &claims,
+                        &headers,
+                        &observed_input,
+                        &input,
+                        &correlation,
+                    )
+                    .await
+                    {
+                        Ok(availability::Availability::NotSatisfied { .. }) => {
+                            fixed_problem(ProblemCode::ActionGuardFailed)
+                        }
+                        // Visibility and the record may have changed since rollback.
+                        // Never turn the private cause into an existence oracle.
+                        _ => precondition_failed(),
+                    }
                 }
                 Err(error) => mutation_problem(error),
             }
@@ -405,6 +465,7 @@ async fn action_refusal(
 struct ParsedActionBody {
     input: Map<String, Value>,
     preconditions: BTreeMap<String, String>,
+    target_input: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -431,10 +492,11 @@ fn parse_body(
 ) -> Result<ParsedActionBody, ParseActionError> {
     let value = parse_json_strict(bytes).map_err(|_| ParseActionError::at(""))?;
     let envelope = value.as_object().ok_or_else(|| ParseActionError::at(""))?;
-    if envelope
-        .keys()
-        .any(|name| name != "input" && (name != "preconditions" || kind != ActionRouteKind::Invoke))
-    {
+    if envelope.keys().any(|name| {
+        name != "input"
+            && (name != "preconditions" || kind != ActionRouteKind::Invoke)
+            && (name != "targetInput" || kind != ActionRouteKind::Availability)
+    }) {
         return Err(ParseActionError::at(""));
     }
     let wire_input = envelope
@@ -446,7 +508,8 @@ fn parse_body(
         .inputs
         .iter()
         .filter(|input| {
-            kind == ActionRouteKind::Invoke || condition_inputs.contains(input.id.as_str())
+            kind != ActionRouteKind::TargetConditions
+                || condition_inputs.contains(input.id.as_str())
         })
         .collect::<Vec<_>>();
     let mut input = Map::new();
@@ -464,7 +527,7 @@ fn parse_body(
         }
         let nullable = action.handler.is_some()
             && !declared.required
-            && kind == ActionRouteKind::Invoke
+            && kind != ActionRouteKind::TargetConditions
             && !condition_inputs.contains(declared.id.as_str());
         let valid = if nullable && value.is_null() {
             true
@@ -482,9 +545,10 @@ fn parse_body(
         input.insert(declared.id.clone(), value.clone());
     }
     if let Some(declared) = accepted_inputs.iter().find(|declared| {
-        (declared.required
-            || kind == ActionRouteKind::TargetConditions
-            || condition_inputs.contains(declared.id.as_str()))
+        kind != ActionRouteKind::Availability
+            && (declared.required
+                || kind == ActionRouteKind::TargetConditions
+                || condition_inputs.contains(declared.id.as_str()))
             && !input.contains_key(&declared.id)
     }) {
         return Err(ParseActionError::at(json_pointer([
@@ -565,9 +629,31 @@ fn parse_body(
             ])));
         }
     }
+    let target_input = if kind == ActionRouteKind::Availability {
+        let target = envelope
+            .get("targetInput")
+            .and_then(Value::as_str)
+            .and_then(|name| action.inputs.iter().find(|input| input.api_name == name))
+            .filter(|input| matches!(input.field_type, FieldTypeSource::Reference { .. }))
+            .ok_or_else(|| ParseActionError::at("/targetInput"))?;
+        if !input
+            .get(&target.id)
+            .and_then(Value::as_str)
+            .is_some_and(valid_canonical_record_uuid)
+        {
+            return Err(ParseActionError::at(json_pointer([
+                "input",
+                target.api_name.as_str(),
+            ])));
+        }
+        Some(target.id.clone())
+    } else {
+        None
+    };
     Ok(ParsedActionBody {
         input,
         preconditions,
+        target_input,
     })
 }
 

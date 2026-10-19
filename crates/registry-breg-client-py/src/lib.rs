@@ -6,18 +6,19 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use breg_client_sdk::{
-    verify_webhook_delivery as verify_core_webhook_delivery, BRegActionBinding,
-    BRegActionInvocationRequest, BRegActionTargetConditions, BRegActionTargetConditionsRequest,
-    BRegAsOfContinuation, BRegAsOfContinuationProjection, BRegAsOfListRequest, BRegBatchBinding,
-    BRegBatchBuilder, BRegBoundingBox, BRegChangeContext, BRegComplete, BRegContinuation,
-    BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest, BRegCurrentContinuation,
-    BRegCurrentContinuationProjection, BRegCurrentListRequest, BRegDirectWrite, BRegEtag,
-    BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest,
-    BRegGeoJsonOptions, BRegIdempotencyKey, BRegIngestionChunk as CoreIngestionChunk,
-    BRegIngestionError, BRegIngestionPrefixDigest as CoreIngestionPrefixDigest,
-    BRegIngestionRunListQuery, BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest,
-    BRegMetadata as CoreMetadata, BRegMetadataSelectionError, BRegMetadataSelectionErrorKind,
-    BRegPage, BRegPatchBinding, BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
+    verify_webhook_delivery as verify_core_webhook_delivery, BRegActionAvailabilityRequest,
+    BRegActionBinding, BRegActionInvocationRequest, BRegActionTargetConditions,
+    BRegActionTargetConditionsRequest, BRegAsOfContinuation, BRegAsOfContinuationProjection,
+    BRegAsOfListRequest, BRegBatchBinding, BRegBatchBuilder, BRegBoundingBox, BRegChangeContext,
+    BRegComplete, BRegContinuation, BRegContinuationProjection, BRegCreateBinding,
+    BRegCreateRequest, BRegCurrentContinuation, BRegCurrentContinuationProjection,
+    BRegCurrentListRequest, BRegDirectWrite, BRegEtag, BRegGeoJsonContinuation,
+    BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest, BRegGeoJsonOptions,
+    BRegIdempotencyKey, BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
+    BRegIngestionPrefixDigest as CoreIngestionPrefixDigest, BRegIngestionRunListQuery,
+    BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
+    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding,
+    BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
     BRegPreparedCreate as CorePreparedCreate, BRegProblemCode, BRegProtocolFailure,
     BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
     BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegReleaseSelection,
@@ -1197,6 +1198,7 @@ fn action_value(value: &breg_client_sdk::BRegActionDescriptor) -> Value {
         "access_profile": value.access_profile(),
         "invoke_path": value.invoke_path(),
         "target_conditions_path": value.target_conditions_path(),
+        "availability_path": value.availability_path(),
         "bounds": {
             "maximum_targets": bounds.maximum_targets(),
             "maximum_field_mutations": bounds.maximum_field_mutations(),
@@ -2907,6 +2909,31 @@ impl BaseRegistryClient {
             inner: value.value,
             trace_id: value.metadata.trace_id().as_str().to_owned(),
         })
+    }
+
+    #[pyo3(signature = (binding, target_input, inputs))]
+    fn action_availability<'py>(
+        &self,
+        py: Python<'py>,
+        binding: PyRef<'_, ActionBinding>,
+        target_input: &str,
+        inputs: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request = BRegActionAvailabilityRequest::new(
+            &binding.inner,
+            target_input,
+            json_object(py, inputs, "inputs")?,
+        )
+        .map_err(|error| invalid(py, error.to_string()))?;
+        let binding = binding.inner.clone();
+        let request = Arc::new(request);
+        let value = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.action_availability(&binding, request.as_ref()))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        complete_value(py, &value.value, &value.metadata)
     }
 
     #[pyo3(signature = (binding, inputs, idempotency_key, conditions=None))]

@@ -131,6 +131,7 @@ impl std::fmt::Debug for BRegConstraintViolation {
 #[non_exhaustive]
 pub enum BRegProblemCode {
     ActionEvidenceFailed,
+    ActionGuardFailed,
     ActionHandlerFailed,
     ActionRefused,
     AuthenticationRefused,
@@ -165,8 +166,9 @@ pub enum BRegProblemCode {
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 32] = [
+    pub const ALL: [Self; 33] = [
         Self::ActionEvidenceFailed,
+        Self::ActionGuardFailed,
         Self::ActionHandlerFailed,
         Self::ActionRefused,
         Self::AuthenticationRefused,
@@ -204,6 +206,7 @@ impl BRegProblemCode {
     pub const fn code(self) -> &'static str {
         match self {
             Self::ActionEvidenceFailed => "action.evidence_failed",
+            Self::ActionGuardFailed => "action.guard_failed",
             Self::ActionHandlerFailed => "action.handler_failed",
             Self::ActionRefused => "action.refused",
             Self::AuthenticationRefused => "authentication.refused",
@@ -258,7 +261,9 @@ impl BRegProblemCode {
             | Self::IngestionReceiptErased
             | Self::ProposalSubmissionExpired
             | Self::StatisticalDatasetVersionWithdrawn => 410,
-            Self::PreconditionFailed | Self::ProposalReviewResultMismatch => 412,
+            Self::ActionGuardFailed
+            | Self::PreconditionFailed
+            | Self::ProposalReviewResultMismatch => 412,
             Self::UnsupportedMediaType => 415,
             Self::ActionRefused | Self::StatisticalDatasetReleaseRefused => 422,
             Self::PreconditionRequired => 428,
@@ -308,6 +313,7 @@ impl BRegProblemCode {
     pub const fn detail(self) -> &'static str {
         match self {
             Self::ActionEvidenceFailed => "The declared Evidence dependency could not be accepted.",
+            Self::ActionGuardFailed => "The action guard was not satisfied.",
             Self::ActionHandlerFailed => "The action handler could not produce an accepted result.",
             // The published sentence for the code. A refusal carries its
             // package-declared label on the wire, which `accepts_detail` reads.

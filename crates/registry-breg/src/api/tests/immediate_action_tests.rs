@@ -1500,3 +1500,170 @@ async fn task_record_reads_intersect_profile_with_composed_proposal_scope() {
     let claims = auth.authenticate(&idp.mint_token(wrong)).await.unwrap();
     assert!(task_grant_binding(profile, &claims).is_err());
 }
+
+#[test]
+fn availability_accepts_partial_inputs_but_requires_one_declared_reference() {
+    let registry = compiled();
+    let action = &registry.actions().actions[0];
+    let id = "00000000-0000-4000-8000-000000000101";
+    let valid = json!({"targetInput":"caseId","input":{"caseId":id}});
+    let parsed = parse_body(
+        action,
+        ActionRouteKind::Availability,
+        &serde_json::to_vec(&valid).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(parsed.target_input.as_deref(), Some("case-ref"));
+    assert_eq!(
+        parsed.input,
+        json!({"case-ref":id}).as_object().unwrap().clone()
+    );
+    assert!(parsed.preconditions.is_empty());
+    for (body, path) in [
+        (json!({"input":{"caseId":id}}), "/targetInput"),
+        (
+            json!({"targetInput":"case-ref","input":{"caseId":id}}),
+            "/targetInput",
+        ),
+        (
+            json!({"targetInput":"newLabel","input":{"caseId":id}}),
+            "/targetInput",
+        ),
+        (json!({"targetInput":"caseId","input":{}}), "/input/caseId"),
+        (
+            json!({"targetInput":"caseId","input":{"caseId":null}}),
+            "/input/caseId",
+        ),
+        (
+            json!({"targetInput":"caseId","input":{"caseId":"wrong"}}),
+            "/input/caseId",
+        ),
+        (
+            json!({"targetInput":"caseId","input":{"caseId":id,"newLabel":42}}),
+            "/input/newLabel",
+        ),
+        (
+            json!({"targetInput":"caseId","input":{"caseId":id,"secret":"value"}}),
+            "/input",
+        ),
+        (
+            json!({"targetInput":"caseId","input":{"caseId":id},"preconditions":{}}),
+            "",
+        ),
+    ] {
+        assert_eq!(
+            parse_error_path(
+                action,
+                ActionRouteKind::Availability,
+                &serde_json::to_vec(&body).unwrap()
+            ),
+            path
+        );
+    }
+}
+
+struct AvailabilityReadProbe {
+    calls: std::sync::atomic::AtomicUsize,
+    response: Result<Option<HeldReadResponse>, ReadServiceError>,
+}
+impl RecordReadService for AvailabilityReadProbe {
+    fn get(
+        &self,
+        request: RecordReadRequest,
+    ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(request.context.selected_profile(), "registrar");
+        assert_eq!(request.operation_id, "records.case.get");
+        assert_eq!(request.representation, CursorRepresentation::Json);
+        assert_eq!(
+            request.selected_fields,
+            BTreeSet::from(["label".into(), "region".into()])
+        );
+        let response = self.response.clone();
+        Box::pin(async move { response })
+    }
+    fn list(
+        &self,
+        _: RecordReadRequest,
+    ) -> ServiceFuture<'_, Result<HeldReadResponse, ReadServiceError>> {
+        panic!("availability must never list records")
+    }
+    fn lookup(
+        &self,
+        _: RecordReadRequest,
+    ) -> ServiceFuture<'_, Result<Option<HeldReadResponse>, ReadServiceError>> {
+        panic!("availability must use the authorized direct GET")
+    }
+}
+
+#[tokio::test]
+async fn availability_never_probes_hidden_fields_or_borrows_another_profiles_reads() {
+    let id = "00000000-0000-4000-8000-000000000101";
+    // Keep wire field names different from logical IDs to exercise both mappings.
+    let source = PROJECT.replace("{id: label, type:", "{id: label, apiName: displayLabel, type:")
+        .replace("    plan:\n", "    commitGuards:\n      targets: [{input: case-ref, field: label, equals: Ready}]\n    plan:\n");
+    for (reads, readable, expected, expected_reads) in [
+        (true, vec!["label", "region"], Some(true), 1),
+        (true, vec!["label"], None, 0),
+        (true, vec!["region"], None, 0),
+        (false, vec!["label", "region"], None, 0),
+    ] {
+        let mut project = parse_project_yaml(source.as_bytes()).unwrap();
+        let permission = json!({"recordType":"case","operations":["get"],"readableFields":readable,"rowBoundaries":"unrestricted"});
+        let owner = if reads { 0 } else { 1 };
+        let mut profile = serde_json::to_value(&project.access_profiles[owner]).unwrap();
+        profile["permissions"]["records"] = json!([permission]);
+        project.access_profiles[owner] = serde_json::from_value(profile).unwrap();
+        let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
+        let mut service = service_for(registry.clone(), true);
+        let probe = Arc::new(AvailabilityReadProbe {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            response: Ok(Some(
+                HeldReadResponse::from_json(&json!({"data":{
+                    "recordIdentifier":id,"revisionIdentifier":"7",
+                    "domainData":{"displayLabel":"Ready","region":"north"}
+                }}))
+                .unwrap(),
+            )),
+        });
+        service.records = probe.clone();
+        let claims = claims(
+            "registry_principal",
+            ["case.rename", "case.supervise"],
+            Some("case-management"),
+            true,
+        );
+        let route = registry
+            .actions()
+            .routes
+            .iter()
+            .find(|route| route.kind == ActionRouteKind::Availability)
+            .unwrap();
+        let options = QueryOptions::default();
+        let surface = authorize_action(&service, route, &claims, &options).unwrap();
+        let result = availability::observe(
+            &service,
+            &surface,
+            &claims,
+            &HeaderMap::new(),
+            json!({"case-ref":id}).as_object().unwrap(),
+            "case-ref",
+            &RequestCorrelation::breg_created(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.value()["available"], json!(expected));
+        assert_eq!(
+            result.value()["observedRevision"],
+            if expected.is_some() {
+                json!(7)
+            } else {
+                Value::Null
+            }
+        );
+        assert_eq!(
+            probe.calls.load(std::sync::atomic::Ordering::SeqCst),
+            expected_reads
+        );
+    }
+}

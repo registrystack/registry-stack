@@ -40,8 +40,9 @@ pub use config::{
     TlsPolicy,
 };
 pub(crate) use context::{
-    begin_action_transaction, ActionClaimContext, ImmediateActionLinkBinding,
-    ImmediateActionLinkContext, ImmediateActionTargetBinding, ImmediateActionTargetContext,
+    begin_action_transaction, snapshot_matches_boundaries, ActionClaimContext,
+    ImmediateActionLinkBinding, ImmediateActionLinkContext, ImmediateActionTargetBinding,
+    ImmediateActionTargetContext,
 };
 pub(crate) use context::{
     begin_proposal_transaction, ProposalAuthority, ProposalAuthorityOperation, ProposalTargetPhase,
@@ -77,10 +78,12 @@ pub(crate) use migration_ledger::{
     MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind,
 };
 pub use migration_ledger::{ActivationPlanKind, RoleMode};
+pub(crate) use mutation::api_boundary;
 pub use mutation::{
     IngestionChunkSubmitInput, IngestionRunCreateInput, IngestionRunListQuery,
     IngestionServiceError, PostgresRecordMutationService,
 };
+pub(crate) use read::compiled_api_name;
 pub use read::PostgresRecordReadService;
 #[cfg(feature = "postgres-test")]
 pub use read::ReadFaultPoint;

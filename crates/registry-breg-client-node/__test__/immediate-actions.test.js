@@ -27,6 +27,7 @@ const metadata = {
     routes: {
       invoke: { method: 'POST', path: '/v1/actions/update-item', operationId: 'actions.update-item.invoke', requiresIdempotencyKey: true, inputSchema: 'action-update-item-invoke-input', responseSchema: 'action-update-item-invoke-response' },
       targetConditions: { method: 'POST', path: '/v1/actions/update-item/target-conditions', operationId: 'actions.update-item.target-conditions', requiresIdempotencyKey: false, inputSchema: 'action-update-item-target-conditions-input', responseSchema: 'action-update-item-target-conditions-response' },
+      availability: { method: 'POST', path: '/v1/actions/update-item/availability', operationId: 'actions.update-item.availability', requiresIdempotencyKey: false, inputSchema: 'action-update-item-availability-input', responseSchema: 'action-update-item-availability-response' },
     },
     bounds: { maximumTargets: 16, maximumFieldMutations: 128, maximumSnapshotBytes: 2097152 },
   }],
@@ -43,6 +44,7 @@ test('metadata-selected immediate action conditions and invocations use exact ca
     response.setHeader('vary', 'authorization, accept');
     if (request.url.startsWith('/v1/registry')) return response.end(JSON.stringify(metadata));
     if (request.url.includes('/target-conditions')) return response.end(`{"preconditions":{"targetId":{"ifMatch":"\\"opaque-condition\\""}}}`);
+    if (request.url.includes('/availability')) return response.end('{"availability":{"available":false,"observedRevision":3,"reason":"guard-not-satisfied","recovery":"none"}}');
     return response.end(`{"action":"update-item","applicationId":"${applicationId}","results":{"item":{"recordType":"item","recordId":"${targetId}","revision":9007199254740992}}}`);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -55,6 +57,11 @@ test('metadata-selected immediate action conditions and invocations use exact ca
     assert.deepEqual(JSON.parse(contract.actions[0].inputs[1].schemaJson), metadata.actions[0].inputs[1].schema);
     assert.match(contract.actionsJson, /"update-item"/);
     const binding = contract.selectAction('update-item', 'writer');
+    const availability = await client.actionAvailability(binding, 'targetId', { targetId });
+    assert.deepEqual(availability.value, { available: false, observedRevision: 3, reason: 'guard-not-satisfied', recovery: 'none' });
+    assert.deepEqual(JSON.parse(requests.at(-1).body), { targetInput: 'targetId', input: { targetId } });
+    const availabilityJson = await client.actionAvailabilityJson(binding, 'targetId', `{"targetId":"${targetId}"}`);
+    assert.match(availabilityJson.valueJson, /"guard-not-satisfied"/);
     const conditions = await client.actionTargetConditions(binding, { targetId });
     assert.deepEqual(conditions.preconditionKeys, ['targetId']);
     assert.equal(conditions.valueJson, '{"preconditions":{"targetId":{"ifMatch":"\\"opaque-condition\\""}}}');
@@ -69,6 +76,7 @@ test('metadata-selected immediate action conditions and invocations use exact ca
     assert.match(requests.at(-1).body, /"preconditions":\{"targetId":\{"ifMatch":"\\"opaque-condition\\""\}\}/);
     const count = requests.length;
     await assert.rejects(client.invokeAction(binding, { targetId, unknown: true }, 'invalid'), error => error.kind === 'invalid-request');
+    await assert.rejects(client.actionAvailability(binding, 'targetId', { targetId, unknown: true }), error => error.kind === 'invalid-request');
     assert.throws(() => client.invokeAction(binding, { targetId, sequence: Number.MAX_SAFE_INTEGER + 1 }, 'unsafe'), error => error.kind === 'invalid-request');
     const foreign = new BaseRegistryClient({ baseUrl: 'http://127.0.0.1:1' });
     await assert.rejects(foreign.invokeAction(binding, { targetId }, 'foreign', conditions), error => error.kind === 'invalid-request');

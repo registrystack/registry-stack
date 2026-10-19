@@ -2144,6 +2144,7 @@ fn action_for_route<'a>(
                 )
                 && match kind {
                     ActionRouteKind::Invoke => action.route == route.path,
+                    ActionRouteKind::Availability => false,
                     ActionRouteKind::TargetConditions => {
                         action.condition_route.as_deref() == Some(route.path.as_str())
                     }
@@ -2706,7 +2707,9 @@ fn verify_action_requirements(
                 &time::OffsetDateTime::now_utc().date().to_string(),
                 matches!(field.field_type, FieldTypeSource::Timestamp),
             ) {
-                return Err(MutationError::PreconditionFailed);
+                return Err(MutationError::FieldGuardFailed {
+                    input: requirement.input.clone(),
+                });
             }
         }
     }

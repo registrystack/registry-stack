@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Advertise a per-target availability route for immediate Actions with
+  reference inputs. The route evaluates disclosed field guards without
+  granting mutation authority and returns a closed unknown result when the
+  required target facts cannot be disclosed. A safely disclosed field guard
+  that fails at commit now answers `412 action.guard_failed`; stale or hidden
+  precondition failures remain `412 precondition.failed`. The routes explanation
+  format advances to `v1alpha6` and includes the `availability` Action route kind.
 - Automatically erase expired Action and Proposal Evidence uses under the runtime
   role after their fixed 24-hour window, in bounded, audited batches. Manual
   `bregctl evidence-retention erase-expired` remains available to operators.

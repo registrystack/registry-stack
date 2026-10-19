@@ -266,6 +266,14 @@ def metadata() -> dict:
                         "inputSchema": "action-rename-company-target-conditions-input",
                         "responseSchema": "action-rename-company-target-conditions-response",
                     },
+                    "availability": {
+                        "method": "POST",
+                        "path": "/v1/actions/rename-company/availability",
+                        "operationId": "actions.rename-company.availability",
+                        "requiresIdempotencyKey": False,
+                        "inputSchema": "action-rename-company-availability-input",
+                        "responseSchema": "action-rename-company-availability-response",
+                    },
                 },
                 "bounds": {
                     "maximumTargets": 4,
@@ -320,6 +328,18 @@ class MutationParityTests(unittest.TestCase):
                 if self.path.startswith("/v1/actions/rename-company/target-conditions"):
                     self.respond(
                         {"preconditions": {"targetId": {"ifMatch": ETAG}}},
+                        mutation=True,
+                    )
+                elif self.path.startswith("/v1/actions/rename-company/availability"):
+                    self.respond(
+                        {
+                            "availability": {
+                                "available": False,
+                                "observedRevision": 3,
+                                "reason": "guard-not-satisfied",
+                                "recovery": "none",
+                            }
+                        },
                         mutation=True,
                     )
                 elif self.path.startswith("/v1/actions/rename-company"):
@@ -472,7 +492,29 @@ class MutationParityTests(unittest.TestCase):
         binding = self.contract.select_action(
             "rename-company", "company-writer"
         )
+        availability = self.client.action_availability(
+            binding, "targetId", {"targetId": RECORD_ID}
+        )
+        self.assertEqual(
+            availability["value"],
+            {
+                "available": False,
+                "observedRevision": 3,
+                "reason": "guard-not-satisfied",
+                "recovery": "none",
+            },
+        )
+        self.assertEqual(
+            json.loads(self.requests[-1][3]),
+            {"targetInput": "targetId", "input": {"targetId": RECORD_ID}},
+        )
         before = len(self.requests)
+        with self.assertRaises(BaseRegistryClientError) as invalid:
+            self.client.action_availability(
+                binding, "targetId", {"targetId": RECORD_ID, "unknown": True}
+            )
+        self.assertEqual(invalid.exception.kind, "invalid-request")
+        self.assertEqual(len(self.requests), before)
         with self.assertRaises(BaseRegistryClientError) as invalid:
             self.client.invoke_action(
                 binding,

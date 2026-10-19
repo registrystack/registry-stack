@@ -2325,7 +2325,7 @@ fn query_field_type(
     }
 }
 
-pub(super) fn compiled_api_name<'a>(entity: &'a CompiledEntity, field_id: &str) -> Option<&'a str> {
+pub(crate) fn compiled_api_name<'a>(entity: &'a CompiledEntity, field_id: &str) -> Option<&'a str> {
     entity
         .stored_fields
         .iter()

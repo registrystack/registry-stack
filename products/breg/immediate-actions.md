@@ -69,6 +69,58 @@ work; an external webhook failure cannot roll back the registry transaction.
 Use the [durable webhook receiver](examples/webhook-receiver/README.md) when an
 adopting service needs durable acceptance and deduplication.
 
+### Check one target's advisory availability
+
+An immediate Action with at least one reference input advertises one
+`routes.availability` endpoint. `targetInput` selects one reference input for
+that request. Send that reference and any other declared input values already
+available to the application:
+
+```json
+{
+  "targetInput": "itemId",
+  "input": {
+    "itemId": "00000000-0000-0000-0000-000000000001"
+  }
+}
+```
+
+The check evaluates field-based `commitGuards` for that one target under the
+selected Action profile and its ordinary Get disclosure. It returns the
+observed target revision with `available: true` or with `available: false` and
+the reason `guard-not-satisfied`. If a declared input needed by a guard is
+absent, `available` is `null`, the reason is `input-required`, and
+`missingInputs` names only declared API input names. If the guard or row
+boundary depends on a field the caller cannot read, or the profile lacks Get
+authority for the target Record type, the answer is `available: null` with
+`observedRevision: null`, `not-disclosed`, and no missing-input names. A target
+denied by the ordinary Get boundary and a missing target both use the concealed
+404. Query reference inputs separately when an Action has several targets. A
+known failed guard takes precedence over missing guard input; correcting that
+guard may expose an `input-required` result on the next check.
+No availability response names a guard ID or a Record value.
+
+```json
+{
+  "availability": {
+    "available": null,
+    "observedRevision": null,
+    "reason": "not-disclosed",
+    "recovery": "none"
+  }
+}
+```
+
+Availability is an observation. It does not run a Function, test SQL
+uniqueness or Evidence, mint a condition token, grant mutation authority, or
+reserve the observed revision. Invoke still checks current authority,
+concurrency, form completeness, every guard, Functions, and Evidence inside
+the mutation transaction. `available: true` means only that this target's field
+guards are currently satisfied, including the case where it has no field
+guards. A safely disclosed field guard that fails at commit answers
+`412 action.guard_failed`; stale conditions and failures that cannot be
+disclosed remain `412 precondition.failed`.
+
 ## Inspect and test the function
 
 ```sh
@@ -86,8 +138,9 @@ does not prove runtime authority or commit guards.
 
 Select the Action from caller-filtered metadata. Its fixed execution mode and
 advertised routes distinguish immediate Invoke from Proposal Start. Obtain any
-required target conditions through the selected binding, retain the user's input
-and conditions, and prepare one invocation with a caller-owned idempotency key.
+required target conditions through the selected binding, use advisory
+availability to guide the form when the Action advertises it, retain the user's
+input and conditions, and prepare one invocation with a caller-owned idempotency key.
 The server rechecks package identity, current authority, guards, and concurrency.
 
 Recover a lost response using the same prepared request and key. A replay returns

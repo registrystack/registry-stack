@@ -160,6 +160,13 @@ Conditions keep strong entity tags opaque and bound to the selected action and
 original target input. Invocation performs one request with the caller's
 idempotency key.
 
+When the selected immediate Action advertises `availabilityPath`, call
+`actionAvailability(binding, targetInput, inputs)` for each selected reference.
+It accepts a validated subset of the Action inputs and is a single unkeyed POST.
+The answer can be available, guard-not-satisfied, input-required with missing
+API input names, or not-disclosed. It is a current hint; `invokeAction` still
+performs the authoritative guard check and may return `action.guard_failed`.
+
 `batchRecords` accepts an ordered array of create and patch items plus an
 optional change or correction context. It enforces the served item and body
 bounds, writable fields, per-patch ETags, bounded reason text, and source

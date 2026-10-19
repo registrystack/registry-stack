@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::contract::Operation;
+use crate::model::ActionRouteKind;
 use crate::{compile_project, parse_project_json, CompileProfile};
 use serde_json::json;
 
@@ -213,6 +215,8 @@ fn action_schemas_and_authority_inventory_are_in_the_rederived_package_closure()
     let inventory: Value = serde_json::from_slice(&files["inventories/actions.json"]).unwrap();
     assert_eq!(inventory["actions"][0]["id"], "rename-item");
     for suffix in [
+        "availability.input",
+        "availability.response",
         "invoke.input",
         "invoke.response",
         "target-conditions.input",
@@ -237,6 +241,87 @@ fn action_schemas_and_authority_inventory_are_in_the_rederived_package_closure()
     assert_eq!(serialized["actions"], inventory);
     let decoded: CompiledRegistryMigrationBaseline = serde_json::from_value(serialized).unwrap();
     assert_eq!(decoded.actions, *compiled.actions());
+}
+
+#[test]
+fn reference_target_actions_publish_bounded_availability_contracts() {
+    let compiled = compile(&source());
+    let action = &compiled.actions().actions[0];
+    let route = compiled
+        .actions()
+        .routes
+        .iter()
+        .find(|route| route.kind == ActionRouteKind::Availability)
+        .expect("the immediate action has a reference target");
+    assert_eq!(route.id, "actions.rename-item.availability");
+    assert_eq!(route.path, "/v1/actions/rename-item/availability");
+    assert_eq!(route.operation, Operation::Invoke);
+    assert_eq!(route.access_profiles, vec!["operator"]);
+
+    let metadata: Value = serde_json::from_slice(
+        &compiled
+            .artifacts()
+            .get("generated/metadata/registry.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    assert_eq!(
+        metadata["actions"][0]["routes"]["availability"],
+        json!({
+            "method": "POST",
+            "path": "/v1/actions/rename-item/availability",
+            "operationId": "actions.rename-item.availability",
+            "requiresIdempotencyKey": false,
+            "inputSchema": "action-rename-item-availability-input",
+            "responseSchema": "action-rename-item-availability-response",
+        })
+    );
+
+    let request_schema: Value = serde_json::from_slice(
+        &compiled
+            .artifacts()
+            .get("generated/action-schemas/rename-item.availability.input.schema.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let request_validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&request_schema)
+        .unwrap();
+    assert!(request_validator
+        .validate(&json!({"targetInput":"itemId", "input":{"itemId":"00000000-0000-0000-0000-000000000001"}}))
+        .is_ok());
+    assert!(request_validator
+        .validate(&json!({"targetInput":"itemId", "input":{"newLabel":"renamed"}}))
+        .is_err());
+
+    let response_schema: Value = serde_json::from_slice(
+        &compiled
+            .artifacts()
+            .get("generated/action-schemas/rename-item.availability.response.schema.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let response_validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&response_schema)
+        .unwrap();
+    for response in [
+        json!({"availability":{"available":true,"observedRevision":3}}),
+        json!({"availability":{"available":false,"observedRevision":3,"reason":"guard-not-satisfied","recovery":"none"}}),
+        json!({"availability":{"available":null,"observedRevision":3,"reason":"input-required","recovery":"correct-input","missingInputs":["newLabel"]}}),
+        json!({"availability":{"available":null,"observedRevision":null,"reason":"not-disclosed","recovery":"none"}}),
+    ] {
+        assert!(response_validator.validate(&response).is_ok(), "{response}");
+    }
+    assert!(response_validator
+        .validate(&json!({"availability":{"available":false,"observedRevision":3,"reason":"guard-not-satisfied","recovery":"correct-input"}}))
+        .is_err());
+
+    assert!(!action.execution.is_proposal());
 }
 
 #[test]
