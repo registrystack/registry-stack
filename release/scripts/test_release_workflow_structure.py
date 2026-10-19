@@ -1741,6 +1741,25 @@ class MacOSFipsWorkflowStructureTest(unittest.TestCase):
         self.assertLess(node.index(bundle), node.index(pack))
         self.assertIn('--library-directory "${platform_dir}"', node)
 
+    def test_candidate_optional_wheel_arguments_expand_empty_under_macos_bash(self) -> None:
+        # The macOS runner's bash is 3.2, where expanding an empty array under
+        # `set -u` fails as an unbound variable.
+        _, document = workflow("release-candidate.yml")
+        python = step_run(document, "clients", "Build Python client wheels")
+        for name in (
+            "macos_wheel_args",
+            "casework_wheel_args",
+            "messaging_wheel_args",
+            "scheduling_wheel_args",
+            "coordinator_wheel_args",
+        ):
+            with self.subTest(array=name):
+                expansion = f'"${{{name}[@]}}"'
+                guarded = f"${{{name}[@]+{expansion}}}"
+                self.assertIn(f"{name}=()", python)
+                self.assertIn(guarded, python)
+                self.assertEqual(python.count(expansion), python.count(guarded))
+
     def test_installed_client_smokes_cannot_use_build_directory_libraries(self) -> None:
         _, document = workflow("release-candidate.yml")
         for name in ("Smoke Python client wheels", "Smoke Node client packages"):

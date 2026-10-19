@@ -1038,17 +1038,19 @@ jobs:
                 (( client_major > 0 || client_minor >= 33 )); then
               macos_wheel_args=(--macos-library-root "${CARGO_TARGET_DIR}")
             fi
+            # macOS runs bash 3.2, which rejects an empty "${array[@]}"
+            # under `set -u`; each optional array expands only when set.
             python3 release/scripts/assemble-registry-client-wheel.py \
-              "${macos_wheel_args[@]}" \
+              ${macos_wheel_args[@]+"${macos_wheel_args[@]}"} \
               --version "${CLIENT_VERSION}" \
               --output-dir "${wheel_dir}" \
               --discovery-wheel "${built_wheel_dir}/registry_discovery_client-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
               --evidence-wheel "${built_wheel_dir}/registry_evidence_client-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
               --breg-wheel "${built_wheel_dir}/registry_breg_client_native-${CLIENT_VERSION}-${{ matrix.registry_wheel_tag }}.whl" \
-              "${casework_wheel_args[@]}" \
-              "${messaging_wheel_args[@]}" \
-              "${scheduling_wheel_args[@]}" \
-              "${coordinator_wheel_args[@]}"
+              ${casework_wheel_args[@]+"${casework_wheel_args[@]}"} \
+              ${messaging_wheel_args[@]+"${messaging_wheel_args[@]}"} \
+              ${scheduling_wheel_args[@]+"${scheduling_wheel_args[@]}"} \
+              ${coordinator_wheel_args[@]+"${coordinator_wheel_args[@]}"}
             expected_wheels=1
           else
             cp "${built_wheel_dir}"/*.whl "${wheel_dir}/"
