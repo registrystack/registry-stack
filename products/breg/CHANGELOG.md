@@ -65,8 +65,8 @@
   Changed projections and destinations require disclosure review in diff output;
   event changes remain applicable without reviewed migration SQL.
 
-- Apply this release to a fresh database; it carries no state migration
-  from 0.41.
+- BREAKING: this release carries no state migration from 0.41; apply it to a
+  fresh database and keep the 0.41 database for reconciliation and rollback.
 - Native adopter tests can capture several disclosed Action results from one
   resumable `bregctl examples` invocation and assert an exact unordered set of
   collection member identities plus selected domain field values in journeys.
