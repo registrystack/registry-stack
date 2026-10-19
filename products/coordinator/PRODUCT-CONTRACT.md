@@ -169,7 +169,9 @@ remain the shared assurance for product independence and generated contract drif
 A fresh start must match the active computed revision. Recovery of an unknown admission retains
 the original verified identity, key, revision, and input even after activation changes. Conflicting
 reuse is refused. Existing runs retain their original protected definitions and prepared commands.
-A changed definition under an ID and human version already used by retained history is refused.
+A run binds the computed revision of the reviewed package it was admitted under. The human
+workflow version is a label recorded with the run and never compared, so it does not identify a
+definition and a changed definition may reuse it.
 
 `GET /v1/workflows/{workflow}` discovers the permitted active typed contract. Generated TypeScript
 and Python wrappers provide typed `start`, `get`, and `cancel` through maintained public generic

@@ -21,7 +21,7 @@ The maintained runtime products include:
   channel for an authorized caller, rendered from a reviewed template through
   an operator-configured provider, and reports what is known about delivery.
 - **Registry Coordinator** runs finite, reviewed workflows admitted by an authorized
-  caller, an explicitly trusted event source, or the shared Review protocol: product API calls made through the maintained
+  caller or an explicitly trusted event source: product API calls made through the maintained
   product clients, separated by waits, with progress kept durable across
   outages and restarts. Products retain effect ownership and authorization; a
   wait never renews an approval or creates downstream authority. A run
@@ -29,7 +29,7 @@ The maintained runtime products include:
   including a Casework result, exact BReg Proposal application, or bounded external
   read. A completion wake-up only advances an eligible authoritative read.
   Authenticated product events may start a run through an authored typed trigger.
-  A Review workflow maps explicit terminal outcomes to immutable review results.
+  A run may submit its own Review request to Casework as a producer; Coordinator is not a Review provider.
   Neither admission path grants authority to mutate the source or another product.
 
 The products compose without merging their boundaries. Evidence may use a Base
