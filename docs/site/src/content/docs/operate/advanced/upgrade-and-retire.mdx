@@ -91,31 +91,53 @@ so a binary that cannot run leaves the installed toolset selected.
 3. **Pause and drain Evidence traffic** for every question that reads BReg, or pause the whole
    instance when you cannot drain one question at a time. Keep the previous Evidence candidate.
 4. **Upgrade BReg.** v0.42.0 carries no BReg state forward from v0.41.0: records, revision
-   history, change requests, and pending webhook deliveries stay in the v0.41.0 database. Before
-   you stop it, close the import authorities still open with `bregctl import-authority close`, and
-   check `bregctl webhook list` when receivers must see pending deliveries, because they stop with
-   the runtime. Stop every v0.41.0 `breg`, take a final `pg_dump` of its database, and keep the
-   database, package, runtime file, audit
-   files, and binaries unchanged. Rewrite the project as `recordTypes` and Actions, then test and
-   package it with the v0.42.0 tooling. In the runtime file, move retention windows into the
-   top-level `retention` block and rename a `taskGrantStatus` entry's `caseworkResource` to
-   `statusResource`; each old key is refused with `config.removed-key` naming its new path. Point
-   the runtime file at a fresh UTF8 database on PostgreSQL 17 or later, prepared as
-   [Provision PostgreSQL](../../breg/#provision-postgresql) describes, and activate the package
-   there with `bregctl plan` and `bregctl apply --initial`, as
-   [Activate and serve](../../breg/#activate-and-serve) describes. A first activation requires a
-   database that has never held a package, so pointing it at the v0.41.0 database fails; give it a
-   fresh one instead. Start every `breg` on the exact active package and verify readiness. Load the
-   records the registry must hold through
-   [Validate the input](../../breg-data/#validate-the-input) and
-   [Import with a checkpoint](../../breg-data/#import-with-a-checkpoint).
+   history, change requests, and pending webhook deliveries stay in the v0.41.0 database. Records
+   you reload into v0.42.0 are created anew and get new record IDs. Record URLs and IDs that
+   clients or other products hold do not survive the reload, and relationship fields that carry
+   old IDs must be remapped to the new ones. v0.42.0 has no identity-preserving path, so when
+   consumers depend on stable record IDs, plan the reload as re-registration with that remap, or
+   do not cut a production registry over in this release.
+   1. Pause every writer, including import runs, then close the import authorities still open
+      with `bregctl import-authority close`.
+   2. Finish, cancel, or record each draft, submitted, or review-pending change request. One that
+      must continue is re-entered as a v0.42.0 Proposal after the cutover.
+   3. Let the running v0.41.0 `breg` deliver pending webhooks, and replay eligible dead letters
+      with `bregctl webhook replay`. Continue when `bregctl webhook list` shows no pending
+      delivery, or record the deliveries you accept losing, since they stop with the runtime.
+   4. While v0.41.0 still serves, export every Record type the fresh registry needs with
+      `bregctl data export`, as
+      [Export with a checkpoint](../../breg-data/#export-with-a-checkpoint) describes. An entity
+      with no export-enabled access profile cannot be exported this way; take its records from
+      another verified source.
+   5. When Casework reads this registry through its context provider, settle its open reviews and
+      stop v0.41.0 Casework now, as step 5 describes, so it never reads the v0.42.0 registry.
+   6. Stop every v0.41.0 `breg`, take a final `pg_dump` of its database, and keep the database,
+      package, runtime file, audit files, and binaries unchanged.
+   7. Rewrite the project as `recordTypes` and Actions, then test and package it with the v0.42.0
+      tooling. In the runtime file, move retention windows into the top-level `retention` block
+      and rename a `taskGrantStatus` entry's `caseworkResource` to `statusResource`; each old key
+      is refused with `config.removed-key` naming its new path.
+   8. Point the runtime file at a fresh UTF8 database on PostgreSQL 17 or later, prepared as
+      [Provision PostgreSQL](../../breg/#provision-postgresql) describes, and activate the package
+      there with `bregctl plan` and `bregctl apply --initial`, as
+      [Activate and serve](../../breg/#activate-and-serve) describes. A first activation requires
+      a database that has never held a package, so pointing it at the v0.41.0 database fails.
+      Start every `breg` on the exact active package and verify readiness.
+   9. Turn each exported line into a `create` item for its v0.42.0 Record type, replacing old IDs
+      in relationship fields with the new ones, and load the Record types in dependency order so
+      each referenced record exists first. Use
+      [Validate the input](../../breg-data/#validate-the-input) and
+      [Import with a checkpoint](../../breg-data/#import-with-a-checkpoint).
 5. **Upgrade Casework.** v0.42.0 Casework installs its complete schema as baseline version 100
    and refuses a v0.41.0 database: `caseworkctl plan` and `apply` report
    `casework.activation.beta-schema`, and readiness and startup refuse with the same
    fresh-database instruction. Reviews open in the v0.41.0 database are not carried forward, so
-   before you stop it, finish them or cancel them through each bound producer's supported
-   interface, and record any that remain. Stop the v0.41.0 runtime, take a final `pg_dump` of its
-   database, and keep the database, package, runtime file, and audit until its work and accountability obligations are resolved.
+   before you stop it, pause producer submissions and staff mutations, finish or cancel the open
+   reviews through each bound producer's supported interface, and record any that remain. Stop
+   the v0.41.0 runtime, take a final `pg_dump` of its database, and keep the database, package,
+   runtime file, and audit until its work and accountability obligations are resolved. When
+   Casework reads BReg through its context provider, do this before the v0.42.0 BReg serves, as
+   step 4 requires, and start v0.42.0 Casework only after pairing it with the new context export.
    Rewrite the project in the v0.42.0 format; `caseworkctl check` names each old spelling and its
    replacement. Pair the v0.42.0 BReg context export with `caseworkctl provider pair` and verify
    the exact contract before packaging. Point the runtime file at a fresh database prepared as
@@ -234,7 +256,10 @@ so a binary that cannot run leaves the installed toolset selected.
     and nextCursor, turn, rejected, BRegRecoveryHint and BRegApplicationRecoveryHint values,
     Review results name an outcome;
     crates/registry-breg/src/migration.rs, "uninitialized-database" (initial activation check);
-    crates/registry-bregctl/src/lib.rs, ImportAuthorityCommand and WebhookCommand;
+    crates/registry-bregctl/src/lib.rs, ImportAuthorityCommand, WebhookCommand (Replay and List,
+    also in v0.41.0), and DataCommand::Export (needs a serving registry, export-enabled profile);
+    crates/registry-breg/src/data.rs, DataImportOperation::Create (only operation and data, so a
+    reloaded record gets a new ID);
     products/casework/CHANGELOG.md, Unreleased (v0.42.0) entries: baseline version 100,
     ReviewDecisionReceipt outcome, outcome-not-declared, AssignmentContext export removed,
     project format aligned;
@@ -309,15 +334,22 @@ work into the retained one before the previous runtime resumes traffic.
   package, and runtime file against the retained database. Producers must resubmit the open reviews to the previous deployment, and
   a decision taken after the cutover must be taken again there. BReg and Casework roll back
   together, because each refuses the other's review results across the release boundary.
-- **Evidence.** Restart the previous binary with the previous bundle and runtime file.
-- **Messaging.** Stop new submissions, then stop the v0.42.0 runtime and keep its database
+- **Evidence.** Restart the previous binary with the previous bundle and runtime file. Keep the
+  v0.42.0 signing keys' public key set available to relying parties, because assertions it issued
+  stay valid for up to `maximumAssertionValiditySeconds`; keep it for that period plus the verifier
+  clock skew, as step 2 of [Retire Evidence](#retire-evidence) describes.
+- **Messaging.** Stop new submissions, let in-flight senders finish retrying the submissions
+  whose answers they lost, then stop the v0.42.0 runtime and keep its database
   unchanged. With the upgraded `messagingctl messages list` and `messages show`, the audit
   archive, and provider records, record every message the v0.42.0 deployment accepted, sent, or
   settled. Keep the previous runtime stopped while you inspect the retained database with the
   previous `messagingctl messages list` and `messages show`. Its supported actions can retry
   `failed`, settle `unknown`, or cancel `queued` messages; apply one only when the retained
   dispatch state is eligible and provider evidence supports the decision, because the previous
-  worker resumes queued dispatch as soon as it starts. Then start the previous binary with the
+  worker resumes queued dispatch as soon as it starts. The retained database holds no idempotency
+  record for a key spent against v0.42.0, so a sender that retries such a key against v0.41.0 sends
+  that message a second time: before traffic resumes, make sure no sender will retry a
+  post-cutover key. Then start the previous binary with the
   previous package and runtime file against the retained database, and resubmit through it any
   post-cutover message that was accepted but never sent. A message the v0.42.0 deployment sent
   stays recorded only in its database, and its later provider callbacks reach whichever runtime
@@ -352,6 +384,8 @@ every product that must match it: Casework refuses a BReg that went back without
     original's claim; v0.35.0 ships instance-claim adopt);
     crates/registry-bregctl/src/lib.rs, DataCommand::Export (Records only);
     crates/registry-breg-client/src/proposal.rs, list_proposals() and read_proposal_submission();
+    docs/site/src/content/docs/operate/messaging.mdx, fresh-database idempotency caution;
+    crates/registry-evidence/src/config.rs, maximumAssertionValiditySeconds bounds;
     crates/registry-casework-client/src/client.rs, supervisory_review_tasks(), review_results(),
     and review_history(); crates/registry-caseworkctl/src/lib.rs, Command (no review export);
     crates/registry-platform-audit/src/writer.rs, single-writer lock;

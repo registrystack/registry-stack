@@ -276,8 +276,9 @@ for reconciliation, and apply the current package to a fresh database as
 Messages still queued, and Scheduling holds and appointments, in the previous database are not
 carried forward.
 
-Upgrades are forward-only: no release reads state a later release wrote. To roll back, restore the
-backup taken before the upgrade and run the previous release, as
+Upgrades are forward-only: no release reads state a later release wrote. To roll back, run the
+previous release against the database you retained at the upgrade, and restore a backup only when
+that database is damaged, as
 [Roll back](../../operate/advanced/upgrade-and-retire/#roll-back) describes.
 
 Registry Evidence, Registry Discovery, and Registry Manifest have no migrated state. Base Registry
