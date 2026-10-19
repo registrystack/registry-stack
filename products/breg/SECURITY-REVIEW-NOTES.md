@@ -4110,3 +4110,51 @@ check.
   cloud metadata or link-local. The operator who writes the runtime file is
   trusted to name the issuer.
 - No security invariant row changes.
+
+## Review identity and activation cancellation
+
+Successful Review handoff metadata names the admitted producer explicitly. The
+client bounds and validates it, preserves exact subject, policy and digest
+checks, and never treats an identity mismatch as proof of rollback. BReg records
+a distinct configuration failure and logs only the two bounded IDs. The real
+BReg/Casework pairing regression and shared-client HTTP tests cover mismatch,
+legacy absence, malformed metadata and uncertain effects. An explicit mismatch
+is diagnosed only after the response digest matches the complete original
+request and its subject source under the producer named by the provider.
+Arbitrary, stale-request and wrong-namespace digests remain ambiguous protocol
+failures rather than configuration diagnoses.
+
+Activation withdraws blocked submitted rounds and closes application jobs in its
+existing transaction. Submission leases fence an in-flight response; recovery
+uses the original idempotency key solely to obtain and cancel the accepted
+review. Result reconciliation retains exact historical evidence while refusing
+to advance withdrawn or blocked work. Recovery keeps its existing audited
+migration authority and reports the package-change reason only while the exact
+Proposal is still submitted. Cancellation retains the existing withdrawn or
+terminal refusal, even when the old block reason remains. Exact rollback can
+clear the package block but cannot reopen a withdrawn round or closed job.
+The go-live tests cover rollback with and without a prior job, late results,
+producer cancellation, already failed rounds, lease fencing and the private
+aggregate metric. Activation uses a fixed number of set-based updates per
+Action, sharing ordinary lifecycle cancellation predicates. A PostgreSQL
+statement-count regression checks mixed round states, older unfinished jobs,
+lease fencing and rollback through a test-only bookkeeping entry point;
+native activation journeys separately cover the closed-catalog boundary.
+Authorized Get preserves the blocked projection of a cancelled automatic job
+while the Proposal remains submitted, including after rollback. Native
+activation/Get/Cancel and automatic Rebase tests preserve exact application bindings, non-owner and
+current row-boundary refusal, and the closed job's lack of automatic retry.
+The no-job path also requires the exact retained binding before exposing a
+withdrawn round whose approval arrived late. Withdrawal takes precedence over
+result status for current turn and Apply availability. Real-router Get, List,
+turn filtering, Cancel and Rebase/Submit regressions cover automatic and manual
+rounds after activation and exact rollback, including an AlreadyTerminal cancel
+response. They retain wrong-owner, current-disclosure, malformed-binding and
+non-withdrawn approved/no-job refusals, and prove no old job is created. SEC-181
+keeps its shape-substitution proof; SEC-185 selects withdrawal and non-revival.
+
+Casework's existing producer cancellation settles concealed tasks and clocks
+without source reads. Its HTTP proof also refuses another producer and retains
+reviewer and supervisor concealment. Remote cancellation is asynchronous, so
+in-flight work and dependency outages are settled through retained exact
+recovery; the change does not claim a cross-service atomic transaction.

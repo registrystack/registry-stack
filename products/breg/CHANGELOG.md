@@ -9,6 +9,16 @@
   that fails at commit now answers `412 action.guard_failed`; stale or hidden
   precondition failures remain `412 precondition.failed`. The routes explanation
   format advances to `v1alpha6` and includes the `availability` Action route kind.
+- Distinguish an explicit Review producer-ID mismatch from uncertain transport
+  outcomes, with bounded diagnostics naming both configured IDs.
+- BREAKING: when activation blocks submitted work, atomically withdraw its Review
+  and close its application jobs. Before activating an incompatible package, check
+  affected submitted Proposals and arrange requester recovery. A restoring package
+  cannot revive those rounds or jobs; the requester must Cancel, or Rebase and
+  Submit for fresh Review. Late results remain evidence, and authorized Get and
+  List stay available even when approval arrives before any job exists. Recovery
+  names the package-change block, and private metrics count its closed jobs.
+
 - Automatically erase expired Action and Proposal Evidence uses under the runtime
   role after their fixed 24-hour window, in bounded, audited batches. Manual
   `bregctl evidence-retention erase-expired` remains available to operators.

@@ -195,9 +195,11 @@ Review instead:
 | Review submission failed for good | `review-ended`, recovery `revise` |
 | `answered`, or cancelled or superseded by the provider | `review-ended`, recovery `revise` |
 
-A cancel or supersession BReg caused by withdrawing is not an outcome and
-reads as pending until the withdrawal settles. When Revise is the recovery, the
-Retry link reports the same reason instead of `invalid-input`.
+Withdrawal ends the current round immediately, including while remote cancellation
+is pending or a late approval remains as historical evidence. Apply reads
+`review-ended` and the turn returns to `party`; a package block still takes
+precedence. When Revise is the recovery, the Retry link reports the same reason
+instead of `invalid-input`.
 
 ### Whose turn it is
 
@@ -235,7 +237,7 @@ cancelled; a changes-requested result records a `review-returned` event.
 | `rejected` | The Proposal is `rejected`, a terminal state. Every command link reads `review-rejected` with recovery `receipt-only`: Submit, Edit, Revise, Rebase, Apply, Retry and Cancel answer 409 `proposal.rejected`, also after a package activation changes the Action revision; an attachment upload or removal is an Edit and answers the same. Start a new Proposal to propose the work again. |
 | `changes-requested` | The Proposal stays `submitted`. Apply reads `review-changes-requested` with recovery `revise`. Revise submits the corrected version. |
 | `answered` | Apply reads `review-ended` with recovery `revise`. An answer is not a decision on a change. |
-| `cancelled` or `superseded` by the provider | Apply reads `review-ended` with recovery `revise`. A cancel or supersession BReg caused by withdrawing is not an outcome and reads as pending. |
+| `cancelled` or `superseded` by the provider | Apply reads `review-ended` with recovery `revise`. A round BReg withdrew also reads as ended; a late approval cannot restore Apply authority. |
 
 ### The decision
 
@@ -268,6 +270,63 @@ change must take effect.
 Cancel, and Revise or Rebase of a submitted Proposal, close the Proposal's
 queued, applying or blocked automatic application job in the same transaction.
 The job reads `cancelled`; it never applies a superseded version.
+
+### When activation blocks submitted work
+
+A successful package activation that marks a submitted Proposal
+`package-changed` closes its queued, applying or blocked application jobs and
+withdraws its Review in the same transaction. A never-sent Review is cancelled
+locally. An accepted Review uses the existing producer cancellation operation.
+An already-sent request with an uncertain outcome recovers the same request and
+idempotency key only to obtain its acceptance and cancel it. Cancellation may
+remain pending while the authority is unavailable. Failed rounds are withdrawn
+too: a retained acceptance can be cancelled, while an exhausted delivery without
+an acceptance stays closed.
+
+A late exact result is retained under the existing retention rules, but cannot
+queue an application or advance the withdrawn round. Rebase and Submit create a
+fresh version and Review. Rolling back to the frozen Action revision can clear
+`blockedReason`; it never revives a cancelled round or a closed job, including
+when no application job existed before withdrawal. A closed automatic application
+remains observable as `blocked` with `contract-changed`, `correct-input`, and
+`automaticRetry.scheduled: false`, including after rollback clears the package
+block. The Proposal stays submitted and its authorized requester can still
+Rebase or Cancel; observing it never requeues the old application. This includes
+an approved result received after withdrawal when no application job exists:
+Get, List and turn filtering keep the Proposal recoverable, while its retained
+decision remains historical evidence. Manual rounds also return the turn to the
+requester and refuse Apply after a restoring package clears the block.
+
+`bregctl review-recovery resubmit` and `retry-application` refuse a currently
+blocked, still-submitted Proposal with reason `package-changed` and direct its
+requester to Rebase for fresh Review or Cancel. Once cancelled, it receives the
+existing terminal or withdrawn refusal instead. The recovery operations keep their
+authority and cannot reopen a withdrawn round after rollback.
+
+The private metrics listener exposes `breg_proposal_application_blocked_jobs`:
+the count of application jobs closed or held by a package change on the current
+submitted Proposal. These jobs do not age the runnable application queue. The
+count drops when that version is no longer current, its Proposal is cancelled,
+or rollback clears the block. A failed database sample omits the series.
+Database operators can list the same retained jobs without reading source values:
+
+```sql
+SELECT q.action_id, q.proposal_id, q.submission_version, q.state
+FROM registry_internal.registry_proposal_application_jobs q
+JOIN registry_internal.registry_proposal_state p USING (action_id, proposal_id)
+WHERE p.state = 'submitted' AND p.submission_version = q.submission_version
+  AND p.blocked_reason = 'package-changed'
+  AND q.state IN ('queued', 'applying', 'blocked', 'cancelled');
+```
+
+A distinct handoff failure, `producer-identity-mismatch`, means a valid provider
+acceptance explicitly named a different producer ID. The bounded warning names
+BReg's configured `reviewAuthorities` `producerId` and the provider's admitted
+producer ID. Align them with the provider's `trustedProducers` configuration
+before submitting new work. The provider may retain the mismatched Review;
+this diagnosis does not mean its mutation rolled back. Transport failures,
+missing metadata with a wrong digest, and malformed acceptances retain uncertain
+effect handling. Submission bodies and credentials are excluded from the warning.
 
 ### Read one submission
 

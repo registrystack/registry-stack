@@ -203,13 +203,24 @@ time or is stuck. `breg_queue_oldest_pending_age_seconds` is how long the oldest
 waited; when it grows while the worker age stays small, the worker cannot keep up or keeps failing
 one item.
 
+`breg_proposal_application_blocked_jobs` counts application jobs held or closed for the current
+submitted version while its Proposal has `package-changed`. A zero queue age does not mean these
+jobs can run. The count falls when the requester cancels or replaces that submission, or when a
+restoring package clears the block; that lower count does not reopen closed work. Withdrawn
+Reviews without an application job are not counted. A failed database sample omits the series.
+Use [blocked Proposal recovery](../breg-changes/#recover-a-blocked-proposal) for affected work.
+
+{/* Evidence: crates/registry-breg/src/metrics.rs, read_queues();
+    crates/registry-breg/tests/support/review_go_live.rs,
+    activation_blocked_application_remains_counted_without_queue_age. */}
+
 The process writes JSON lines on standard output. A failed iteration is a warning with a `code` such
 as `webhook.worker.iteration_failed`, `review.result_lookups.unavailable`, or
 `metrics.queue_sample.failed`, and serving continues. When a worker or the metrics listener panics
 or returns, the process logs a code naming it, such as `review.worker.panicked`, drains requests,
 and exits with status 1. The same code on every restart names the worker to investigate.
 
-{/* Evidence: crates/registry-breg/src/metrics.rs, ProgressWorker, PendingQueue, read_queue_ages();
+{/* Evidence: crates/registry-breg/src/metrics.rs, ProgressWorker, PendingQueue, read_queues();
     crates/registry-breg/src/startup.rs, OperationalEvent, background_task_stop_code(), SupervisedTask;
     crates/registry-breg/src/review_store.rs, ReviewWorker;
     crates/registry-breg/src/attachment_verification_worker.rs;

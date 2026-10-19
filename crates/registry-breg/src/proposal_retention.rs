@@ -958,8 +958,23 @@ pub(crate) async fn mark_incompatible_proposals(
                 updated_at=transaction_timestamp()
             WHERE action_id=$1 AND state IN ('draft','submitted')",
             &[&action.id,&action.definition_revision,&candidate_digest,&activation]).await.map_err(map_retention_error)?;
+        crate::review_store::withdraw_blocked_proposals(client, &action.id)
+            .await
+            .map_err(|_| ProposalRetentionError::Unavailable)?;
     }
     Ok(())
+}
+
+/// Exercise activation bookkeeping inside a disposable test transaction.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn mark_incompatible_proposals_for_test(
+    client: &impl GenericClient,
+    candidate: &CompiledRegistry,
+    candidate_digest: &str,
+    activation_id: &str,
+) -> Result<()> {
+    mark_incompatible_proposals(client, candidate, candidate_digest, activation_id).await
 }
 
 /// Erase payload detail for exactly one Proposal version while keeping

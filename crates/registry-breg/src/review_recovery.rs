@@ -62,6 +62,8 @@ pub enum ReviewRecoveryRefusal {
     DetailErased,
     /// The request no longer awaits review for this proposal version.
     ProposalNotSubmitted,
+    /// Activation blocked the current submission; its requester must Rebase or Cancel.
+    PackageChanged,
     /// The submission's state and code do not call for this operation.
     SubmissionState,
     /// The application job has no transient failure with remaining attempts.
@@ -77,6 +79,7 @@ impl ReviewRecoveryRefusal {
             Self::ResultRecorded => "result-recorded",
             Self::DetailErased => "detail-erased",
             Self::ProposalNotSubmitted => "proposal-not-submitted",
+            Self::PackageChanged => "package-changed",
             Self::SubmissionState => "submission-state",
             Self::ApplicationState => "application-state",
             Self::ApprovalUnavailable => "approval-unavailable",
@@ -314,7 +317,8 @@ impl ReviewRecoveryOperatorService {
                             SELECT 1 FROM registry_internal.registry_proposal_review_results r
                              WHERE (r.action_id,r.proposal_id,r.submission_version)
                                    =(s.action_id,s.proposal_id,s.submission_version)),
-                        w.state='submitted' AND w.submission_version=s.submission_version
+                        w.state='submitted' AND w.submission_version=s.submission_version,
+                        CASE WHEN w.submission_version=s.submission_version THEN w.blocked_reason END
                    FROM registry_internal.registry_proposal_review_submissions s
                    LEFT JOIN registry_internal.registry_proposal_state w
                      ON (w.action_id,w.proposal_id)=(s.action_id,s.proposal_id)
@@ -336,6 +340,17 @@ impl ReviewRecoveryOperatorService {
         let request_retained: bool = row.get(4);
         let result_recorded: bool = row.get(5);
         let proposal_submitted = row.get::<_, Option<bool>>(6) == Some(true);
+        if operation == Operation::Resubmit
+            && proposal_submitted
+            && row.get::<_, Option<String>>(7).is_some()
+        {
+            return Err(ReviewRecoveryError::Ineligible {
+                reason: ReviewRecoveryRefusal::PackageChanged,
+                state,
+                code,
+            }
+            .into());
+        }
         let refusal = eligibility(
             operation,
             &state,
@@ -421,10 +436,11 @@ async fn retry_application_in_transaction(
     let row = transaction
         .query_opt(
             "SELECT j.state,j.last_error_code,COALESCE(s.authority,'builtin'),COALESCE(s.withdrawn,false),
-                w.state='submitted' AND w.submission_version=j.submission_version AND w.blocked_reason IS NULL,
+                w.state='submitted' AND w.submission_version=j.submission_version,
                 p.effect_digest=j.proposal_digest AND p.snapshot IS NOT NULL
                     AND p.snapshot->>'systemGrantRevision'=j.system_grant_revision,
-                j.attempt_count<j.maximum_attempts
+                j.attempt_count<j.maximum_attempts,
+                CASE WHEN w.submission_version=j.submission_version THEN w.blocked_reason END
            FROM registry_internal.registry_proposal_application_jobs j
            LEFT JOIN registry_internal.registry_proposal_review_submissions s
              USING (action_id,proposal_id,submission_version)
@@ -445,7 +461,9 @@ async fn retry_application_in_transaction(
         .ok_or(ReviewRecoveryError::NotFound)?;
     let state: String = row.get(0);
     let code: Option<String> = row.get(1);
-    let reason = if row.get::<_, bool>(3) {
+    let reason = if row.get::<_, bool>(4) && row.get::<_, Option<String>>(7).is_some() {
+        Some(ReviewRecoveryRefusal::PackageChanged)
+    } else if row.get::<_, bool>(3) {
         Some(ReviewRecoveryRefusal::Withdrawn)
     } else if !row.get::<_, bool>(4) {
         Some(ReviewRecoveryRefusal::ProposalNotSubmitted)

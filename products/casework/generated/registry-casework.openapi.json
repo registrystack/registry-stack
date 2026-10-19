@@ -11777,6 +11777,15 @@
             },
             "description": "Success",
             "headers": {
+              "Registry-Review-Producer": {
+                "description": "Authenticated trusted producer identity for this acceptance or exact recovery. Optional for compatibility with older providers; never a substitute for the submission digest.",
+                "schema": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9_.:-]+$",
+                  "type": "string"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -11792,6 +11801,15 @@
             },
             "description": "Success",
             "headers": {
+              "Registry-Review-Producer": {
+                "description": "Authenticated trusted producer identity for this acceptance or exact recovery. Optional for compatibility with older providers; never a substitute for the submission digest.",
+                "schema": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9_.:-]+$",
+                  "type": "string"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }

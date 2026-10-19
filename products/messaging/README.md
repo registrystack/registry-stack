@@ -10,9 +10,21 @@ attempt. It is a native Rust runtime over PostgreSQL with no broker.
 
 ## Status
 
-Not yet released. Messaging builds from source in this repository and now
-uses the shared platform activation ledger. Registry Stack 0.38.0 is planned
-to be the first release carrying its binaries, container image, and clients.
+Released since Registry Stack 0.38.0. Each release publishes:
+
+- `messaging` and `messagingctl` binaries for Linux amd64 only, as
+  `messaging-<tag>-linux-amd64` and `messagingctl-<tag>-linux-amd64` on the
+  [release page](https://github.com/registrystack/registry-stack/releases),
+  checked against the release `SHA256SUMS`;
+- the `ghcr.io/registrystack/messaging:<tag>` container image, for
+  linux/amd64 only;
+- a `messaging` namespace in the unified clients: `@registrystack/client` on
+  npm (Linux x64 and arm64 with glibc, macOS arm64) and `registry-stack-client`
+  on PyPI (manylinux x86_64 and aarch64, macOS arm64).
+
+There is no Messaging installer, and no Linux arm64 or macOS build of the
+runtime or `messagingctl`. Other platforms build from source in this
+repository.
 
 Pre-1.0 and under construction. This version is the product skeleton:
 

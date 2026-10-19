@@ -11,9 +11,9 @@ use registry_platform_httputil::{
 use registry_review_protocol::{
     review_cancel_path, review_request_path, review_result_path, ReviewCancelRequest,
     ReviewCancelResponse, ReviewCreateRequest, ReviewRequestAccepted, ReviewRequestView,
-    ReviewResult, ReviewResultFeedPage, SubmissionDigest, REVIEW_PROFILE_HEADER,
-    REVIEW_REQUESTS_PATH, REVIEW_RESULTS_FEED_PATH, REVIEW_VALIDATION_PATH_HEADER,
-    REVIEW_VALIDATION_REASON_HEADER,
+    ReviewResult, ReviewResultFeedPage, SubmissionDigest, REVIEW_PRODUCER_HEADER,
+    REVIEW_PROFILE_HEADER, REVIEW_REQUESTS_PATH, REVIEW_RESULTS_FEED_PATH,
+    REVIEW_VALIDATION_PATH_HEADER, REVIEW_VALIDATION_REASON_HEADER,
 };
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{RequestBuilder, Response, StatusCode, Url};
@@ -86,6 +86,53 @@ impl ReviewClient {
         request: &ReviewCreateRequest,
         expected_submission_digest: &SubmissionDigest,
     ) -> Result<ReviewComplete<ReviewRequestAccepted>, ReviewClientError> {
+        self.create_request(
+            auth,
+            idempotency_key,
+            request,
+            expected_submission_digest,
+            None,
+        )
+        .await
+    }
+
+    /// Check the provider's explicit producer identity when it supplies one.
+    /// Older providers without this metadata still require the exact original
+    /// submission digest. A mismatch never permits accepting another binding.
+    pub async fn create_or_recover_request_for_producer(
+        &self,
+        auth: ReviewAuth<'_>,
+        idempotency_key: &str,
+        request: &ReviewCreateRequest,
+        expected_submission_digest: &SubmissionDigest,
+        expected_producer: &str,
+    ) -> Result<ReviewComplete<ReviewRequestAccepted>, ReviewClientError> {
+        if expected_producer.trim().is_empty()
+            || expected_producer.len() > 128
+            || expected_producer.chars().any(char::is_control)
+        {
+            return Err(ReviewClientError::invalid_request(
+                "the expected producer identity is invalid",
+            ));
+        }
+        self.create_request(
+            auth,
+            idempotency_key,
+            request,
+            expected_submission_digest,
+            Some(expected_producer),
+        )
+        .await
+    }
+
+    async fn create_request(
+        &self,
+        auth: ReviewAuth<'_>,
+        idempotency_key: &str,
+        request: &ReviewCreateRequest,
+        expected_submission_digest: &SubmissionDigest,
+        expected_producer: Option<&str>,
+    ) -> Result<ReviewComplete<ReviewRequestAccepted>, ReviewClientError> {
         request
             .check()
             .map_err(|_| ReviewClientError::invalid_request("the review request is invalid"))?;
@@ -96,17 +143,57 @@ impl ReviewClient {
         let outgoing = self
             .authorized(self.http.post(url).json(request), &auth)?
             .header(HeaderName::from_static(IDEMPOTENCY_KEY_HEADER), key);
-        let (complete, status) = self
-            .send_json_one_of_with_status(outgoing, &[StatusCode::OK, StatusCode::CREATED])
-            .await?;
-        check_accepted(
-            &complete.value,
-            &request.policy,
-            &request.subject,
-            expected_submission_digest,
-            &complete.trace_id,
-            status,
-        )?;
+        let response = self.send(outgoing).await?;
+        let status = response.status();
+        if !matches!(status, StatusCode::OK | StatusCode::CREATED) {
+            return Err(self.problem_or_status(response, None).await);
+        }
+        let trace_id = response_trace(status, response.headers())?;
+        if !exact_media_type(response.headers(), JSON_MEDIA_TYPE) {
+            return Err(protocol(
+                status,
+                ReviewProtocolFailure::MediaType,
+                Some(trace_id),
+            ));
+        }
+        let producer = accepted_producer(response.headers(), status, &trace_id)?;
+        let value: ReviewRequestAccepted = self.read_json(response, status, &trace_id).await?;
+        check_accepted(&value, &request.policy, &request.subject, &trace_id, status)?;
+        if let (Some(expected), Some(actual)) = (expected_producer, producer) {
+            if expected != actual {
+                // The provider binds its admitted producer to this exact request
+                // and subject namespace. A stale body is not identity evidence.
+                let actual_digest = registry_review_protocol::submission_digest(
+                    &actual,
+                    &request.subject.source,
+                    request,
+                )
+                .map_err(|_| {
+                    protocol(status, ReviewProtocolFailure::Body, Some(trace_id.clone()))
+                })?;
+                if value.submission_digest != actual_digest {
+                    return Err(protocol(
+                        status,
+                        ReviewProtocolFailure::Body,
+                        Some(trace_id),
+                    ));
+                }
+                return Err(ReviewClientError::ProducerIdentityMismatch {
+                    status: status.as_u16(),
+                    expected: expected.to_owned(),
+                    actual,
+                    trace_id,
+                });
+            }
+        }
+        if value.submission_digest != *expected_submission_digest {
+            return Err(protocol(
+                status,
+                ReviewProtocolFailure::Body,
+                Some(trace_id),
+            ));
+        }
+        let complete = ReviewComplete { value, trace_id };
         Ok(complete)
     }
 
@@ -500,11 +587,36 @@ impl ReviewClient {
     }
 }
 
+fn accepted_producer(
+    headers: &reqwest::header::HeaderMap,
+    status: StatusCode,
+    trace_id: &str,
+) -> Result<Option<String>, ReviewClientError> {
+    let mut values = headers.get_all(REVIEW_PRODUCER_HEADER).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    let value = value.to_str().ok().filter(|value| {
+        !value.is_empty()
+            && value.len() <= 128
+            && value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+    });
+    match (value, values.next()) {
+        (Some(value), None) => Ok(Some(value.to_owned())),
+        _ => Err(protocol(
+            status,
+            ReviewProtocolFailure::ProducerIdentity,
+            Some(trace_id.to_owned()),
+        )),
+    }
+}
+
 fn check_accepted(
     value: &ReviewRequestAccepted,
     expected_policy: &registry_review_protocol::PolicySelection,
     expected_subject: &registry_review_protocol::SubjectBinding,
-    expected_submission_digest: &SubmissionDigest,
     trace_id: &str,
     status: StatusCode,
 ) -> Result<(), ReviewClientError> {
@@ -527,7 +639,6 @@ fn check_accepted(
     if value.request_id.is_nil()
         || !expected_policy.matches(&value.policy)
         || value.subject != *expected_subject
-        || value.submission_digest != *expected_submission_digest
     {
         return Err(protocol(
             status,

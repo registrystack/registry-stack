@@ -52,6 +52,12 @@ const METRICS_MEDIA_TYPE: &str = "text/plain; version=0.0.4";
 /// The bound on the one statement that samples the queue ages.
 const QUEUE_SAMPLE_STATEMENT_TIMEOUT: &str = "5s";
 
+/// One database instant for runnable ages and package-blocked application work.
+pub(crate) struct QueueSample {
+    ages: Vec<(PendingQueue, f64)>,
+    blocked_application_jobs: i64,
+}
+
 /// Upper bounds, in seconds, of the request duration histogram.
 const DURATION_BUCKETS: [f64; 9] = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0];
 
@@ -260,7 +266,7 @@ impl Metrics {
 
     /// Render the Prometheus text exposition of the current registry, with
     /// the queue ages when they were sampled for this scrape.
-    pub(crate) fn render(&self, queue_ages: Option<&[(PendingQueue, f64)]>) -> String {
+    pub(crate) fn render(&self, queue_sample: Option<&QueueSample>) -> String {
         let series = self
             .series
             .lock()
@@ -339,10 +345,21 @@ impl Metrics {
             "# HELP breg_queue_oldest_pending_age_seconds Seconds the oldest due item in each queue has waited to be claimed, sampled at scrape; zero when none is due.\n",
         );
         body.push_str("# TYPE breg_queue_oldest_pending_age_seconds gauge\n");
-        for (queue, seconds) in queue_ages.unwrap_or_default() {
+        for (queue, seconds) in queue_sample
+            .map(|sample| sample.ages.as_slice())
+            .unwrap_or_default()
+        {
             body.push_str(&format!(
                 "breg_queue_oldest_pending_age_seconds{{queue=\"{}\"}} {seconds}\n",
                 queue.label()
+            ));
+        }
+        body.push_str("# HELP breg_proposal_application_blocked_jobs Application jobs closed or held by a package change on the current submitted proposal, sampled at scrape.\n");
+        body.push_str("# TYPE breg_proposal_application_blocked_jobs gauge\n");
+        if let Some(sample) = queue_sample {
+            body.push_str(&format!(
+                "breg_proposal_application_blocked_jobs {}\n",
+                sample.blocked_application_jobs
             ));
         }
         body.push_str(
@@ -362,10 +379,10 @@ impl Metrics {
     /// sample could not be read: that scrape then publishes no queue age,
     /// so the series goes stale rather than reporting an empty queue, and a
     /// failure emits a closed operational event.
-    pub(crate) async fn sample_queue_ages(&self) -> Option<Vec<(PendingQueue, f64)>> {
+    pub(crate) async fn sample_queues(&self) -> Option<QueueSample> {
         let pool = self.pool.as_ref()?;
         let _sampling = self.queue_sample.lock().await;
-        match read_queue_ages(pool).await {
+        match read_queues(pool).await {
             Ok(ages) => Some(ages),
             Err(()) => {
                 crate::startup::OperationalEvent::MetricsQueueSampleFailed.emit();
@@ -382,7 +399,7 @@ impl Metrics {
 /// extends its lease without advancing `next_attempt_at`, so a claimable
 /// submission has waited since the later of the two; `GREATEST` ignores a
 /// NULL lease.
-async fn read_queue_ages(pool: &RuntimePool) -> Result<Vec<(PendingQueue, f64)>, ()> {
+async fn read_queues(pool: &RuntimePool) -> Result<QueueSample, ()> {
     let mut client = pool.get().await.map_err(|_| ())?;
     let transaction = client
         .build_transaction()
@@ -423,7 +440,12 @@ async fn read_queue_ages(pool: &RuntimePool) -> Result<Vec<(PendingQueue, f64)>,
                                  AND q.attempt_count < q.maximum_attempts
                                  AND p.state='submitted' AND p.submission_version=q.submission_version
                                  AND p.blocked_reason IS NULL AND p.detail_erased_at IS NULL
-                                 AND q.next_attempt_at <= transaction_timestamp()), 0)",
+                                 AND q.next_attempt_at <= transaction_timestamp()), 0),
+                    (SELECT count(*) FROM registry_internal.registry_proposal_application_jobs q
+                       JOIN registry_internal.registry_proposal_state p USING(action_id,proposal_id)
+                      WHERE p.state='submitted' AND p.submission_version=q.submission_version
+                        AND p.blocked_reason='package-changed'
+                        AND q.state IN ('queued','applying','blocked','cancelled'))",
                 schema = crate::webhook::DELIVERY_SCHEMA,
                 submission_claimable = crate::review_store::REVIEW_SUBMISSION_CLAIMABLE,
             ),
@@ -437,8 +459,12 @@ async fn read_queue_ages(pool: &RuntimePool) -> Result<Vec<(PendingQueue, f64)>,
         .map(|(column, queue)| Ok((queue, row.try_get::<_, f64>(column)?)))
         .collect::<Result<Vec<_>, tokio_postgres::Error>>()
         .map_err(|_| ())?;
+    let blocked_application_jobs = row.try_get::<_, i64>(3).map_err(|_| ())?;
     transaction.commit().await.map_err(|_| ())?;
-    Ok(ages)
+    Ok(QueueSample {
+        ages,
+        blocked_application_jobs,
+    })
 }
 
 fn labels(key: &HttpSeriesKey) -> String {
@@ -476,8 +502,8 @@ pub fn metrics_app(metrics: Arc<Metrics>) -> Router {
 }
 
 async fn render_metrics(State(metrics): State<Arc<Metrics>>) -> Response {
-    let queue_ages = metrics.sample_queue_ages().await;
-    let mut response = (StatusCode::OK, metrics.render(queue_ages.as_deref())).into_response();
+    let queue_ages = metrics.sample_queues().await;
+    let mut response = (StatusCode::OK, metrics.render(queue_ages.as_ref())).into_response();
     response
         .headers_mut()
         .insert(CONTENT_TYPE, HeaderValue::from_static(METRICS_MEDIA_TYPE));
@@ -616,11 +642,16 @@ mod tests {
             "an unsampled scrape publishes no queue age:\n{unsampled}"
         );
 
-        let sampled = metrics.render(Some(&[
-            (PendingQueue::WebhookDelivery, 0.0),
-            (PendingQueue::ReviewSubmission, 90.5),
-            (PendingQueue::ReviewApplication, 0.0),
-        ]));
+        assert!(!unsampled.contains("breg_proposal_application_blocked_jobs 0\n"));
+        let sampled = metrics.render(Some(&QueueSample {
+            ages: vec![
+                (PendingQueue::WebhookDelivery, 0.0),
+                (PendingQueue::ReviewSubmission, 90.5),
+                (PendingQueue::ReviewApplication, 0.0),
+            ],
+            blocked_application_jobs: 2,
+        }));
+        assert!(sampled.contains("breg_proposal_application_blocked_jobs 2\n"));
         for expected in [
             "breg_queue_oldest_pending_age_seconds{queue=\"webhook-delivery\"} 0\n",
             "breg_queue_oldest_pending_age_seconds{queue=\"review-submission\"} 90.5\n",
