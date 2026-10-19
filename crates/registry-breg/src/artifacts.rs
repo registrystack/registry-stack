@@ -1570,30 +1570,42 @@ fn bearer_security() -> Value {
 }
 
 fn action_operation_responses(route: &CompiledActionRoute, action: &CompiledAction) -> Value {
-    let success = match route.kind {
-        ActionRouteKind::Availability => success_response(
-            "Action availability returned",
-            StatusResponseHeaders::NoStore,
-            json!({"$ref": format!(
-                "#/components/schemas/{}",
-                openapi_action_availability_response_schema_id(&action.id)
-            )}),
-        ),
-        ActionRouteKind::Invoke => success_response(
-            "Immediate action committed",
-            StatusResponseHeaders::ActionMutation,
-            json!({"$ref": format!("#/components/schemas/{}", openapi_action_response_schema_id(&action.id))}),
-        ),
-        ActionRouteKind::TargetConditions => success_response(
-            "Action target conditions returned",
-            StatusResponseHeaders::NoStore,
-            json!({"$ref": format!(
-                "#/components/schemas/{}",
-                openapi_action_condition_response_schema_id(&action.id)
-            )}),
-        ),
+    let (success_status, success) = if route.operation == Operation::Start {
+        (
+            "201",
+            success_response(
+                "Proposal created",
+                StatusResponseHeaders::ProposalCreate,
+                json!({"$ref": format!("#/components/schemas/{}", openapi_action_response_schema_id(&action.id))}),
+            ),
+        )
+    } else {
+        let success = match route.kind {
+            ActionRouteKind::Availability => success_response(
+                "Action availability returned",
+                StatusResponseHeaders::NoStore,
+                json!({"$ref": format!(
+                    "#/components/schemas/{}",
+                    openapi_action_availability_response_schema_id(&action.id)
+                )}),
+            ),
+            ActionRouteKind::Invoke => success_response(
+                "Immediate action committed",
+                StatusResponseHeaders::ActionMutation,
+                json!({"$ref": format!("#/components/schemas/{}", openapi_action_response_schema_id(&action.id))}),
+            ),
+            ActionRouteKind::TargetConditions => success_response(
+                "Action target conditions returned",
+                StatusResponseHeaders::NoStore,
+                json!({"$ref": format!(
+                    "#/components/schemas/{}",
+                    openapi_action_condition_response_schema_id(&action.id)
+                )}),
+            ),
+        };
+        ("200", success)
     };
-    let mut responses = Map::from_iter([("200".to_owned(), success)]);
+    let mut responses = Map::from_iter([(success_status.to_owned(), success)]);
     for (status, problems) in action_problem_responses(route.kind, action) {
         let mut examples = problems
             .iter()
@@ -1694,22 +1706,24 @@ fn action_problem_responses(
         });
     }
     if kind == ActionRouteKind::Invoke {
-        if let Some(handler) = &action.handler {
-            if !action.evidence.is_empty() {
+        if !action.execution.is_proposal() {
+            if !action.evidence.is_empty() || !action.commit_evidence.is_empty() {
                 responses.entry("503").or_default().push(ProblemExample {
                     code: "action.evidence_failed",
                     detail: "The declared Evidence dependency could not be accepted.",
                 });
             }
-            responses.insert(
-                "500",
-                vec![ProblemExample {
-                    code: "action.handler_failed",
-                    detail: "The action handler could not produce an accepted result.",
-                }],
-            );
-            if !handler.refusals.is_empty() {
-                responses.insert("422", Vec::new());
+            if let Some(handler) = &action.handler {
+                responses.insert(
+                    "500",
+                    vec![ProblemExample {
+                        code: "action.handler_failed",
+                        detail: "The action handler could not produce an accepted result.",
+                    }],
+                );
+                if !handler.refusals.is_empty() {
+                    responses.insert("422", Vec::new());
+                }
             }
         }
         responses.insert(
@@ -1732,19 +1746,20 @@ fn action_problem_responses(
                 detail: "The held response of the idempotency key expired; the key stays spent.",
             }],
         );
-        responses.insert(
-            "412",
-            vec![
+        let mut precondition_problems = vec![ProblemExample {
+            code: "precondition.failed",
+            detail: "The mutation precondition failed.",
+        }];
+        if !action.execution.is_proposal() {
+            precondition_problems.insert(
+                0,
                 ProblemExample {
                     code: "action.guard_failed",
                     detail: "The action guard was not satisfied.",
                 },
-                ProblemExample {
-                    code: "precondition.failed",
-                    detail: "The mutation precondition failed.",
-                },
-            ],
-        );
+            );
+        }
+        responses.insert("412", precondition_problems);
     }
     responses
 }
@@ -3070,6 +3085,7 @@ enum StatusResponseHeaders {
     NoStore,
     Mutation,
     MutationCreate,
+    ProposalCreate,
     ActionMutation,
 }
 
@@ -3094,6 +3110,10 @@ fn success_response(description: &str, headers: StatusResponseHeaders, schema: V
         StatusResponseHeaders::MutationCreate => json!({
             "ETag": etag_header(),
             "Location": {"description": "Relative URL of the created record.", "schema": {"type": "string"}},
+        }),
+        StatusResponseHeaders::ProposalCreate => json!({
+            "ETag": proposal_etag_header(),
+            "Location": {"description": "Relative URL of the created Proposal.", "schema": {"type": "string"}},
         }),
         StatusResponseHeaders::ActionMutation => json!({}),
     };
@@ -3143,6 +3163,13 @@ fn no_store_header() -> Value {
 fn etag_header() -> Value {
     json!({
         "description": "Strong Registry ETag bound to the record, package revision, caller profile, and response field set.",
+        "schema": {"type": "string", "pattern": "^\\\"breg-[\\x21\\x23-\\x7E]+\\\"$"}
+    })
+}
+
+fn proposal_etag_header() -> Value {
+    json!({
+        "description": "Strong Registry ETag for the created Proposal.",
         "schema": {"type": "string", "pattern": "^\\\"breg-[\\x21\\x23-\\x7E]+\\\"$"}
     })
 }

@@ -3687,7 +3687,7 @@
       "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project.",
       "source": {
         "path": "crates/registry-breg/src/artifacts.rs",
-        "sha256": "7e3882867dfbebba69cbf8c7f5472b2c356743b24aab202edfc527bc8f0c946a"
+        "sha256": "0aebcd1d073370a1f93d6962d47c4d3425b8f865ac77dc966010646c67ef197b"
       },
       "artifact": {
         "path": "products/breg/generated/facility/generated/action-contracts.schema.json",

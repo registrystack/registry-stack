@@ -19,6 +19,10 @@
 - BREAKING: the routes explanation format advances from `v1alpha5` to
   `v1alpha6` and includes the `availability` Action route kind. Consumers must
   select the `v1alpha6` schema.
+- Correct generated Action response contracts: Proposal Start advertises its
+  `201` Proposal response with `ETag` and `Location`, without immediate guard,
+  handler, or Evidence failures. Immediate Invoke includes Evidence failures
+  when Evidence is declared only in commit guards.
 - Distinguish an explicit Review producer-ID mismatch from uncertain transport
   outcomes, with bounded diagnostics naming both configured IDs.
 - BREAKING: when activation blocks submitted work, atomically withdraw its Review
