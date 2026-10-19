@@ -11,7 +11,17 @@
   Submit for fresh Review. Late results remain evidence, and authorized Get and
   List stay available even when approval arrives before any job exists. Recovery
   names the package-change block, and private metrics count its closed jobs.
-
+- A `409 mutation.conflict` from a direct record create, patch or batch that
+  violates a compare, int-range or vocabulary constraint now carries the
+  members `recordType`, `constraintId` and `constraintKind` (`compare`,
+  `int-range` or `vocabulary`), plus `left` and `right` for a compare
+  constraint or `field` otherwise. The server omits all of them when the
+  caller cannot read every field the constraint references; unique and
+  temporal non-overlap conflicts stay generic. Clients that hold this problem
+  to a closed member set must accept these members. The maintained clients
+  expose them as the conflict's constraint, and a fixture journey's generic
+  `mutation.conflict` expectation accepts them only when they match a declared
+  constraint the step's access profile can read.
 - Automatically erase expired Action and Proposal Evidence uses under the runtime
   role after their fixed 24-hour window, in bounded, audited batches. Manual
   `bregctl evidence-retention erase-expired` remains available to operators.
