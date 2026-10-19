@@ -97,20 +97,21 @@ so a binary that cannot run leaves the installed toolset selected.
    old IDs must be remapped to the new ones. v0.42.0 has no identity-preserving path, so when
    consumers depend on stable record IDs, plan the reload as re-registration with that remap, or
    do not cut a production registry over in this release.
-   1. Pause every writer, including import runs, then close the import authorities still open
-      with `bregctl import-authority close`.
-   2. Finish, cancel, or record each draft, submitted, or review-pending change request. One that
+   1. Pause every caller, readers as well as writers and import runs, until step 9 resumes
+      traffic, then close the import authorities still open with `bregctl import-authority close`.
+   2. When Casework reviews this registry's change requests or reads it through its context
+      provider, drain and stop v0.41.0 Casework now, as step 5 describes, so every late decision
+      is applied before the export and Casework never reads the v0.42.0 registry.
+   3. Finish, cancel, or record each draft, submitted, or review-pending change request. One that
       must continue is re-entered as a v0.42.0 Proposal after the cutover.
-   3. Let the running v0.41.0 `breg` deliver pending webhooks, and replay eligible dead letters
+   4. Let the running v0.41.0 `breg` deliver pending webhooks, and replay eligible dead letters
       with `bregctl webhook replay`. Continue when `bregctl webhook list` shows no pending
       delivery, or record the deliveries you accept losing, since they stop with the runtime.
-   4. While v0.41.0 still serves, export every Record type the fresh registry needs with
+   5. While v0.41.0 still serves, export every Record type the fresh registry needs with
       `bregctl data export`, as
       [Export with a checkpoint](../../breg-data/#export-with-a-checkpoint) describes. An entity
       with no export-enabled access profile cannot be exported this way; take its records from
       another verified source.
-   5. When Casework reads this registry through its context provider, settle its open reviews and
-      stop v0.41.0 Casework now, as step 5 describes, so it never reads the v0.42.0 registry.
    6. Stop every v0.41.0 `breg`, take a final `pg_dump` of its database, and keep the database,
       package, runtime file, audit files, and binaries unchanged.
    7. Rewrite the project as `recordTypes` and Actions, then test and package it with the v0.42.0
@@ -126,7 +127,10 @@ so a binary that cannot run leaves the installed toolset selected.
    9. Turn each exported line into a `create` item for its v0.42.0 Record type and load the
       Record types in dependency order, so each referenced record exists first. Use
       [Validate the input](../../breg-data/#validate-the-input) and
-      [Import with a checkpoint](../../breg-data/#import-with-a-checkpoint). A `create` item
+      [Import with a checkpoint](../../breg-data/#import-with-a-checkpoint); a type whose loading
+      profile holds an `import` grant also needs an open import authority, as
+      [Load records through an import window](../../breg-data/#load-records-through-an-import-window)
+      describes. A `create` item
       cannot carry the old ID, and `bregctl data import` reports counts only, so it gives you no
       map from old IDs to new ones. Build the map yourself: after loading a Record type, export
       it from the v0.42.0 registry with `bregctl data export` and match old and new records on a
@@ -139,15 +143,16 @@ so a binary that cannot run leaves the installed toolset selected.
    and refuses a v0.41.0 database: `caseworkctl plan` and `apply` report
    `casework.activation.beta-schema`, and readiness and startup refuse with the same
    fresh-database instruction. Reviews open in the v0.41.0 database are not carried forward, so
-   before you stop it, pause producer submissions and staff mutations, finish or cancel the open
+   before you stop it, pause producer submissions, let staff decide or producers cancel the open
    reviews through each bound producer's supported interface, and record any that remain.
-   Finishing a review is not enough: a completion wake-up carries no result and retries from the
-   outbox, so keep v0.41.0 serving until each producer has fetched every terminal result, or
-   record each undelivered result for manual reconciliation. Stop
-   the v0.41.0 runtime, take a final `pg_dump` of its database, and keep the database, package,
-   runtime file, and audit until its work and accountability obligations are resolved. When
-   Casework reads BReg through its context provider, do this before the v0.42.0 BReg serves, as
-   step 4 requires, and start v0.42.0 Casework only after pairing it with the new context export.
+   A completion wake-up carries no result and retries from the outbox, so keep v0.41.0 serving
+   until each producer has fetched every terminal result, or record each undelivered result for
+   manual reconciliation. Record the directory's teams, members, supervisors, and served queues
+   with `GET /v1/directory`, then pause staff mutations, stop the v0.41.0 runtime, take a final
+   `pg_dump` of its database, and keep the database, package, runtime file, and audit until its
+   work and accountability obligations are resolved. When Casework reviews or reads BReg, do this
+   during step 4, before the BReg export, and start v0.42.0 Casework only after pairing it with
+   the new context export.
    Rewrite the project in the v0.42.0 format; `caseworkctl check` names each old spelling and its
    replacement. Pair the v0.42.0 BReg context export with `caseworkctl provider pair` and verify
    the exact contract before packaging. Point the runtime file at a fresh database prepared as
@@ -155,6 +160,10 @@ so a binary that cannot run leaves the installed toolset selected.
    `caseworkctl plan --runtime-config FILE` and `caseworkctl apply --runtime-config FILE`, then
    `caseworkctl doctor` with the same runtime file, package, and database. Require readiness
    before resuming staff traffic; see [plan, apply, and serve](../../casework/#plan-apply-and-serve).
+   The fresh database has an empty directory, and `caseworkctl` does not recreate it: bootstrap
+   the recorded teams and served queues through the directory API, as
+   [Establish directory authority](../../casework/#establish-directory-authority) describes, and
+   resume producer submissions only once a reviewer can see a task.
 6. **Upgrade Evidence.** Author the normalized `evidence.yaml`, target, and target authority
    for the current tooling; retired split authoring documents are refused. Re-import changed
    BReg source exports into that project, review the source changes, and run check and fixtures
@@ -276,6 +285,10 @@ so a binary that cannot run leaves the installed toolset selected.
     crates/registry-breg/src/data.rs, DataImportOperation::Create (only operation and data, so a
     reloaded record gets a new ID);
     crates/registry-bregctl/src/data_lifecycle.rs, DataImportOutcome (counts only, no ID map);
+    crates/registry-breg/src/review_store.rs, on_approved_mode 'automatic' and the application
+    queue (present since v0.41.0);
+    crates/registry-casework/src/http.rs, directory() and /v1/directory/bootstrap (no caseworkctl
+    directory command); crates/registry-casework-core/src/model.rs, TeamRecord;
     crates/registry-casework/src/runtime.rs, deliver_review_completion() and
     casework_review_completion_outbox (wake-ups retried from the outbox);
     products/casework/CHANGELOG.md, Unreleased (v0.42.0) entries: baseline version 100,
@@ -327,7 +340,9 @@ the previous binary, package, and runtime file against the retained database. Ne
 v0.41.0 runtime at a v0.42.0 database: Casework, Scheduling, and Messaging v0.41.0 refuse schema
 version 100 as newer than they know. Everything the upgraded deployment accepted after the
 cutover exists only in its v0.42.0 database, so keep that database unchanged and reconcile its
-work into the retained one before the previous runtime resumes traffic.
+work into the retained one before the previous runtime resumes traffic. Before it does, redeploy
+each application that calls it with its v0.41.0 client, since no client may run ahead of its
+runtime and a v0.42.0 client calls routes the previous release does not serve.
 
 - **BReg.** Stop consumer traffic to the v0.42.0 `breg`, and while it still serves, record what
   it accepted after the cutover. Export Records with `bregctl data export` where a profile allows
