@@ -83,7 +83,9 @@ so a binary that cannot run leaves the installed toolset selected.
 1. **Back up every database.** Take the BReg and Casework `pg_dump`s, and the Scheduling and
    Messaging ones when they run. Copy those products' packages and runtime files, and keep the
    previous release's binaries. The v0.41.0 databases themselves are the way back, so leave them
-   in place and unchanged; the dumps protect them against damage. See [Roll back](#roll-back).
+   in place and unchanged; the dumps protect them against damage. Each product's step below
+   refreshes its dump after its v0.41.0 runtime stops, so the copy you keep holds its final
+   writes. See [Roll back](#roll-back).
 2. **Stop `evidence-oid4vci`**, when it runs. Its outstanding offers end here; see
    [Serve](../../../configure/evidence-oid4vci/#serve).
 3. **Pause and drain Evidence traffic** for every question that reads BReg, or pause the whole
@@ -92,7 +94,8 @@ so a binary that cannot run leaves the installed toolset selected.
    history, change requests, and pending webhook deliveries stay in the v0.41.0 database. Before
    you stop it, close the import authorities still open with `bregctl import-authority close`, and
    check `bregctl webhook list` when receivers must see pending deliveries, because they stop with
-   the runtime. Stop every v0.41.0 `breg`, and keep its database, package, runtime file, audit
+   the runtime. Stop every v0.41.0 `breg`, take a final `pg_dump` of its database, and keep the
+   database, package, runtime file, audit
    files, and binaries unchanged. Rewrite the project as `recordTypes` and Actions, then test and
    package it with the v0.42.0 tooling. In the runtime file, move retention windows into the
    top-level `retention` block and rename a `taskGrantStatus` entry's `caseworkResource` to
@@ -111,8 +114,8 @@ so a binary that cannot run leaves the installed toolset selected.
    `casework.activation.beta-schema`, and readiness and startup refuse with the same
    fresh-database instruction. Reviews open in the v0.41.0 database are not carried forward, so
    before you stop it, finish them or cancel them through each bound producer's supported
-   interface, and record any that remain. Stop the v0.41.0 runtime, and keep its database,
-   package, runtime file, and audit until its work and accountability obligations are resolved.
+   interface, and record any that remain. Stop the v0.41.0 runtime, take a final `pg_dump` of its
+   database, and keep the database, package, runtime file, and audit until its work and accountability obligations are resolved.
    Rewrite the project in the v0.42.0 format; `caseworkctl check` names each old spelling and its
    replacement. Pair the v0.42.0 BReg context export with `caseworkctl provider pair` and verify
    the exact contract before packaging. Point the runtime file at a fresh database prepared as
@@ -135,17 +138,20 @@ so a binary that cannot run leaves the installed toolset selected.
    appointments this way is acceptable only before production.
 
    Before the cut, record every appointment that must still be honoured. `schedulingctl` has no
-   export command, so keep the step 1 `pg_dump` and have each booking product list its own
-   appointments with `GET /v1/appointments`, which returns only the caller's appointments for one
-   external reference. Tell the products that show those appointments, and the people who hold
+   export command, so take a `pg_dump` after the previous runtime stops, and have each booking
+   product list its own appointments with `GET /v1/appointments`, which returns only the caller's
+   appointments for one exact external reference. An appointment booked without an external
+   reference cannot be listed that way: take it from the booking product's own records, and do not
+   cut over while an appointment you must honour cannot be accounted for. Tell the products that show those appointments, and the people who hold
    them, that they will not appear in the upgraded deployment until rebooked. After you apply,
    re-establish supply with `schedulingctl records apply` so the carried bookings are not sold
    twice: publish each affected window's `units` net of them, add a `closure` exception for the
    time they occupy, or have the owning products rebook them before you open booking traffic.
 
    The runtime file requires a top-level `taskGrantStatus`, and each entry names its resource
-   `statusResource`. Rename `retention.attemptReceiptRetentionDays` to
-   `retention.receiptRetentionDays`; each old key is refused with `config.removed-key`. The
+   `statusResource`. Replace `retention.attemptReceiptRetentionDays` with
+   `retention.receiptRetentionDays`, reviewing the value and reducing it to at most 365 days; each
+   old key is refused with `config.removed-key`. The
    `authentication.oidc` scope defaults are now `scope`, `scheduling:read`, and
    `scheduling:explain`, so set `scopeClaim`, `readsScope`, or `explainScope` when your issuer
    emits the earlier spellings. List the task authorities whenever Scheduling must check
@@ -164,25 +170,29 @@ so a binary that cannot run leaves the installed toolset selected.
    fresh baseline and refuses a database a pre-1.0 release wrote at `plan`, `apply`, and startup.
    Messages still queued in the previous database are not carried forward, so drain them first
    when they must still be sent, as step 1 of [Retire Messaging](#retire-messaging) describes.
-   Stop new submissions, let in-flight senders finish retrying submissions whose answers they lost,
-   then stop every previous `messaging` runtime. Give graceful shutdown time to finish sends already
-   in flight. Refresh the `pg_dump` after every earlier runtime stops, and retain the previous
-   database and audit journal for reconciliation.
+   Stop new submissions, and let in-flight senders finish retrying submissions whose answers they
+   lost.
 
    Provider callbacks for messages the previous deployment sent keep arriving at the callback URL.
    The current runtime answers a verified callback that names no message it holds with `204`,
    stores nothing, and counts it as `unmatched` in `messaging_provider_callbacks_total`. A
    provider does not retry a `204`, so that delivery report never reaches Messaging. Choose one
-   of two paths. To keep the reports, leave the previous runtime serving callbacks, with
-   submissions stopped and its queue empty, through each callback provider's documented reporting
-   cutoff, as step 2 of [Retire Messaging](#retire-messaging) describes, and cut over after it.
-   To cut over at once, accept that late reports are lost to Messaging, and reconcile them
-   afterwards: compare each provider's records with the retained database, read through the
-   previous `messagingctl messages show` while the previous runtime stays stopped.
+   of two paths before you stop the previous runtime. To keep the reports, leave it serving
+   callbacks, with submissions stopped and its queue empty, through each callback provider's
+   documented reporting cutoff, as step 2 of [Retire Messaging](#retire-messaging) describes. To
+   cut over at once, accept that late reports are lost to Messaging, and reconcile them afterwards:
+   compare each provider's records with the retained database, read through the previous
+   `messagingctl messages show` while the previous runtime stays stopped.
 
-   Rename `retention.submissionReceiptRetentionDays` to `retention.receiptRetentionDays` in the
-   runtime file; the old key is refused with `config.removed-key`. `authentication.oidc.scopeClaim`
-   now defaults to `scope`, so set it explicitly when your issuer emits `registry_scopes`. Rebuild
+   Then stop every previous `messaging` runtime, giving graceful shutdown time to finish sends
+   already in flight. Refresh the `pg_dump` after every earlier runtime stops, and retain the
+   previous database and audit journal for reconciliation.
+
+   Replace `retention.submissionReceiptRetentionDays` with `retention.receiptRetentionDays` in the
+   runtime file, reviewing the value and reducing it to at most 365 days and at most
+   `recordRetentionDays`; the old key is refused with `config.removed-key`.
+   `authentication.oidc.scopeClaim` now defaults to `scope`, so set it explicitly when your issuer
+   emits `registry_scopes`. Rebuild
    the package when the release notes require it, update `package.root`, and repin
    `package.expectedDigest` when set. Point the runtime file at a fresh database prepared as
    [Provision PostgreSQL](../../messaging/#provision-postgresql) describes, then run `messagingctl
@@ -238,7 +248,10 @@ so a binary that cannot run leaves the installed toolset selected.
     crates/registry-scheduling/src/store.rs, refuse_pre_1_0_schema();
     crates/registry-schedulingctl/src/lib.rs, CheckArgs, ActivationArgs, ApplyArgs,
     RecordsApplyArgs, and no export command;
-    products/scheduling/README.md, GET /v1/appointments and records apply;
+    products/scheduling/README.md, GET /v1/appointments and records apply, "External record
+    references" (existing admissions may omit them);
+    products/scheduling/CHANGELOG.md and products/messaging/CHANGELOG.md, receiptRetentionDays
+    maximum 365 days;
     release/notes/v0.36.0.md, "Upgrade Scheduling, Relay, and Discovery from v0.35.0"
     (apply before start, hook drain);
     products/scheduling/examples/standalone-arrival-window/records.yaml, units;
@@ -271,22 +284,29 @@ version 100 as newer than they know. Everything the upgraded deployment accepted
 cutover exists only in its v0.42.0 database, so keep that database unchanged and reconcile its
 work into the retained one before the previous runtime resumes traffic.
 
-- **BReg.** Stop consumer traffic to the v0.42.0 `breg`, and while it still serves, record the
-  records and Proposals it accepted after the cutover, with `bregctl data export` where a profile
-  allows it (see [Export with a checkpoint](../../breg-data/#export-with-a-checkpoint)). Stop
+- **BReg.** Stop consumer traffic to the v0.42.0 `breg`, and while it still serves, record what
+  it accepted after the cutover. Export Records with `bregctl data export` where a profile allows
+  it (see [Export with a checkpoint](../../breg-data/#export-with-a-checkpoint)); it exports
+  Records only. Read Proposals through the client's Proposal list and submission reads
+  (`listProposals` and `readProposalSubmission`) under a grant that may read them. When no grant
+  can read a Proposal, it cannot be carried back, so either accept losing it or roll forward
+  instead. Stop
   every v0.42.0 `breg` and keep its database. Start the previous
   `breg` with the previous package and runtime file against the retained database; the v0.42.0
   tools cannot read the earlier package or runtime file. Re-enter the recorded changes through the
-  previous release's interfaces. When the retained database itself is damaged, restore the step 1
-  `pg_dump` into a fresh database instead, point a copy of the previous runtime file at it, and
-  adopt its claim with the previous release's `bregctl instance-claim adopt --runtime-config FILE
+  previous release's interfaces. When the retained database itself is damaged, restore the final
+  `pg_dump` taken in step 4 into a fresh database instead, point a copy of the previous runtime
+  file at it, and adopt its claim with the previous release's `bregctl instance-claim adopt --runtime-config FILE
   --acknowledge-original-retired` before starting `breg`; see
   [After a logical restore](../back-up-and-restore/#after-a-logical-restore) for why. To undo
   only a model change within one release, roll forward to a successor that reverts it; see
   [Roll back by rolling forward](../../breg-changes/#roll-back-by-rolling-forward).
-- **Casework.** Stop the v0.42.0 runtime and keep its database. Record the reviews it accepted
-  and decided after the cutover, then start the previous binary, package, and runtime file against
-  the retained database. Producers must resubmit the open reviews to the previous deployment, and
+- **Casework.** Pause producer submissions and staff mutations to v0.42.0 Casework, and while it
+  still serves, record the reviews it accepted and decided after the cutover. `caseworkctl` has no
+  review export, so read them through the Casework API under an authorized supervisory grant
+  (supervisory review tasks, review results, and review history), or from each producer's own
+  records. Then stop the v0.42.0 runtime, keep its database, and start the previous binary,
+  package, and runtime file against the retained database. Producers must resubmit the open reviews to the previous deployment, and
   a decision taken after the cutover must be taken again there. BReg and Casework roll back
   together, because each refuses the other's review results across the release boundary.
 - **Evidence.** Restart the previous binary with the previous bundle and runtime file.
@@ -330,7 +350,10 @@ every product that must match it: Casework refuses a BReg that went back without
     crates/registry-bregctl/src/package_lifecycle.rs, PACKAGE_DIRECTORY (the package child of
     --output); crates/registry-breg/src/instance_claim.rs, module docs (a logical copy keeps its
     original's claim; v0.35.0 ships instance-claim adopt);
-    crates/registry-bregctl/src/lib.rs, DataCommand::Export;
+    crates/registry-bregctl/src/lib.rs, DataCommand::Export (Records only);
+    crates/registry-breg-client/src/proposal.rs, list_proposals() and read_proposal_submission();
+    crates/registry-casework-client/src/client.rs, supervisory_review_tasks(), review_results(),
+    and review_history(); crates/registry-caseworkctl/src/lib.rs, Command (no review export);
     crates/registry-platform-audit/src/writer.rs, single-writer lock;
     crates/registry-evidence/src/cli.rs, Check (--runtime-config, --without-audit-lock);
     crates/registry-messaging/src/runtime.rs, Assembled and Listeners::serve_until();
