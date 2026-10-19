@@ -183,7 +183,7 @@ pub struct RuntimeCheck {
     pub unavailable: bool,
 }
 
-/// Check the runtime file at the absolute `path` as `discovery serve` reads
+/// Check the runtime file at the absolute `path` as `discovery --runtime-config` reads
 /// it, with no package, network, or secret material (CFG-CHECK-1).
 ///
 /// With `substitute` set, `${NAME}` expressions are filled from the process

@@ -4,7 +4,7 @@
 //! runtime files.
 //!
 //! Each schema is derived from the types `discoveryctl check` and
-//! `discovery serve` read, never written by hand. Regenerate the committed
+//! the `discovery` runtime read, never written by hand. Regenerate the committed
 //! documents in `products/discovery/schemas` with:
 //!
 //! ```bash
