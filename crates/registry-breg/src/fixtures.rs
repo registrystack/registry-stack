@@ -39,7 +39,7 @@ use crate::api::{VerifiedClaimValue, VerifiedRequestClaims};
 use crate::auth::RegistryAuthenticator;
 use crate::compiler::{compile_project_with_assets, module_digest_with_assets, CompileProfile};
 use crate::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
-use crate::contract::{AccessProfileSource, LookupValueOrigin, Operation};
+use crate::contract::{AccessProfileSource, ConstraintSource, LookupValueOrigin, Operation};
 use crate::data::{validate_field_value, DataImportOperation, DataImportPlan, FieldValue};
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::event_destination::EventDestinationActivationError;
@@ -1066,6 +1066,11 @@ struct FixtureProblemBindings {
     /// of an action location.
     record_request_locations: bool,
     pattern_field: Option<(String, String)>,
+    /// Each row-local constraint a direct record write may name in a
+    /// `mutation.conflict`, keyed by constraint id, with the exact members
+    /// the runtime adds. A constraint is bound only when the step's profile
+    /// reads every field it references.
+    row_local_constraints: BTreeMap<String, Map<String, Value>>,
 }
 
 #[derive(Clone)]
@@ -1485,6 +1490,7 @@ pub fn validate_fixture_journeys(
                     &action,
                     entity_id.as_deref(),
                     action_id.as_deref(),
+                    &profile.readable_fields,
                     registry,
                 )?;
                 Ok(ValidatedStep {
@@ -2804,6 +2810,7 @@ fn compile_problem_bindings(
     request: &ActionSource,
     entity_id: Option<&str>,
     action_id: Option<&str>,
+    readable_fields: &BTreeSet<String>,
     registry: &CompiledRegistry,
 ) -> Result<FixtureProblemBindings, FixtureError> {
     let mut bindings = FixtureProblemBindings::default();
@@ -2906,6 +2913,50 @@ fn compile_problem_bindings(
             .filter(|field| field.pattern.is_some())
             .ok_or(FixtureError::LogicalReferenceRefused)?;
         bindings.pattern_field = Some((expected_entity.clone(), field.id.clone()));
+    }
+    if expectation.problem_code.as_deref() == Some("mutation.conflict")
+        && bindings.pattern_field.is_none()
+        && matches!(
+            request.operation(),
+            Operation::Create | Operation::Patch | Operation::Batch
+        )
+    {
+        if let Some(entity) = entity_id.and_then(|id| registry.entities().get(id)) {
+            for (constraint_id, constraint) in &entity.constraints {
+                let (kind, fields) = match constraint {
+                    ConstraintSource::Compare { left, right, .. } => {
+                        ("compare", vec![("left", left), ("right", right)])
+                    }
+                    ConstraintSource::IntRange { field, .. } => {
+                        ("int-range", vec![("field", field)])
+                    }
+                    ConstraintSource::Vocabulary { field, .. } => {
+                        ("vocabulary", vec![("field", field)])
+                    }
+                    ConstraintSource::Unique { .. }
+                    | ConstraintSource::TemporalNonOverlap { .. } => continue,
+                };
+                if !fields
+                    .iter()
+                    .all(|(_, field)| readable_fields.contains(*field))
+                {
+                    continue;
+                }
+                let mut members = Map::new();
+                members.insert("recordType".to_owned(), Value::String(entity.id.clone()));
+                members.insert(
+                    "constraintId".to_owned(),
+                    Value::String(constraint_id.clone()),
+                );
+                members.insert("constraintKind".to_owned(), Value::String(kind.to_owned()));
+                for (name, field) in fields {
+                    members.insert(name.to_owned(), Value::String(field.clone()));
+                }
+                bindings
+                    .row_local_constraints
+                    .insert(constraint_id.clone(), members);
+            }
+        }
     }
     Ok(bindings)
 }
@@ -4465,6 +4516,19 @@ fn assert_response_with_observations(
                     return Err(FixtureError::ExpectationMismatch);
                 }
                 Some("The field does not conform to its declared storage pattern.")
+            } else if code == "mutation.conflict" && document.get("constraintId").is_some() {
+                let members = document
+                    .get("constraintId")
+                    .and_then(Value::as_str)
+                    .and_then(|id| step.problem_bindings.row_local_constraints.get(id))
+                    .ok_or(FixtureError::ExpectationMismatch)?;
+                for (name, value) in members {
+                    keys.push(name.as_str());
+                    if document.get(name) != Some(value) {
+                        return Err(FixtureError::ExpectationMismatch);
+                    }
+                }
+                None
             } else {
                 None
             };
@@ -8200,6 +8264,178 @@ journeys:
             let mut changed = document.clone();
             changed["fieldPath"] = json!(path);
             assert!(assert_response(invalid, StatusCode::BAD_REQUEST, &changed).is_err());
+        }
+    }
+
+    fn row_local_constraint_suite(fields: &str, data: &str) -> ValidatedFixtureJourneys {
+        let module = parse_module_yaml(MODULE_SOURCE).expect("module fixture parses");
+        let source = String::from_utf8(production_project_source(
+            &module_digest(&module),
+            COMPILER_SOURCE_REVISION,
+        ))
+        .unwrap()
+        .replacen(
+            "      - {id: quantity, type: int64, required: true, classification: public}\n",
+            "      - {id: quantity, type: int64, required: true, classification: public}\n      - {id: valid-from, type: int64, classification: public}\n      - {id: valid-to, type: int64, classification: public}\n",
+            1,
+        )
+        .replacen(
+            "      - {type: unique, fields: [label]}\n",
+            "      - {type: unique, fields: [label]}\n      - {id: chronological, type: compare, left: valid-from, operator: less-than-or-equal, right: valid-to}\n      - {id: bounded-quantity, type: int-range, field: quantity, minimum: 0, maximum: 10}\n",
+            1,
+        )
+        .replacen(
+            "          readableFields: [jurisdiction, label, note, quantity]\n          writableFields: [jurisdiction, label, note, quantity]\n",
+            &format!("          readableFields: [{fields}]\n          writableFields: [{fields}]\n"),
+            1,
+        );
+        let project = parse_project_yaml(source.as_bytes()).expect("constraint project parses");
+        let registry =
+            compile_project_with_assets(&project, &[module], &[], CompileProfile::Authoring)
+                .expect("constraint project compiles");
+        let step = |id: &str, request: &str| {
+            format!(
+                "      - id: {id}\n        recordType: widget\n        accessProfile: operator\n        claims:\n          principal: fixture-operator\n          purpose: case-management\n          directClaims: {{jurisdiction: zone-a}}\n        request: {request}\n        expect: {{outcome: refusal, status: 409, problemCode: mutation.conflict}}\n"
+            )
+        };
+        let journeys = format!(
+            "apiVersion: id.registrystack.org/formats/breg/journeys/v1\nkind: BRegJourneys\njourneys:\n  - id: widget-constraints\n    steps:\n{}{}",
+            step(
+                "create-out-of-order",
+                &format!("{{type: create, data: {{jurisdiction: zone-a, label: first, quantity: 1, {data}}}}}"),
+            ),
+            step(
+                "batch-out-of-order",
+                &format!("{{type: batch, items: [{{type: create, data: {{jurisdiction: zone-a, label: second, quantity: 1, {data}}}}}]}}"),
+            ),
+        );
+        validate_fixture_journeys(journeys.as_bytes(), &registry)
+            .expect("constraint journeys validate")
+    }
+
+    #[test]
+    fn row_local_constraint_problem_members_are_closed_against_declared_constraints() {
+        let suite = row_local_constraint_suite(
+            "jurisdiction, label, note, quantity, valid-from, valid-to",
+            "validFrom: 2, validTo: 1",
+        );
+        let generic = json!({"type":crate::problem::ProblemCode::MutationConflict.type_uri(),"title":"Conflict","status":409,"detail":"The mutation conflicts with current state.","code":"mutation.conflict","traceId":"11111111111111111111111111111111"});
+        let mut compare = generic.clone();
+        for (name, value) in [
+            ("recordType", "widget"),
+            ("constraintId", "chronological"),
+            ("constraintKind", "compare"),
+            ("left", "valid-from"),
+            ("right", "valid-to"),
+        ] {
+            compare[name] = json!(value);
+        }
+        let mut range = generic.clone();
+        for (name, value) in [
+            ("recordType", "widget"),
+            ("constraintId", "bounded-quantity"),
+            ("constraintKind", "int-range"),
+            ("field", "quantity"),
+        ] {
+            range[name] = json!(value);
+        }
+        for step in &suite.journeys[0].steps {
+            assert_response(step, StatusCode::CONFLICT, &generic).unwrap();
+            assert_response(step, StatusCode::CONFLICT, &compare).unwrap();
+            assert_response(step, StatusCode::CONFLICT, &range).unwrap();
+            for (document, field, value) in [
+                (&compare, "recordType", json!("unrelated")),
+                (&compare, "constraintId", json!("undeclared")),
+                (&compare, "constraintKind", json!("int-range")),
+                (&compare, "left", json!("validFrom")),
+                (&compare, "left", json!("valid-to")),
+                (&compare, "right", json!("label")),
+                (&range, "constraintKind", json!("vocabulary")),
+                (&range, "field", json!("label")),
+                (&range, "constraintId", json!("chronological")),
+                (&compare, "detail", json!("private-canary")),
+            ] {
+                let mut changed = document.clone();
+                changed[field] = value;
+                assert_eq!(
+                    assert_response(step, StatusCode::CONFLICT, &changed),
+                    Err(FixtureError::ExpectationMismatch),
+                    "{field}"
+                );
+            }
+            for (document, field, value) in [
+                (&compare, "value", json!("private-canary")),
+                (&compare, "field", json!("valid-from")),
+                (&range, "left", json!("quantity")),
+                (&generic, "constraintKind", json!("compare")),
+                (&generic, "left", json!("valid-from")),
+            ] {
+                let mut changed = document.clone();
+                changed[field] = value;
+                assert_eq!(
+                    assert_response(step, StatusCode::CONFLICT, &changed),
+                    Err(FixtureError::ResponseShapeRefused),
+                    "{field}"
+                );
+            }
+            for missing_keys in [
+                vec!["constraintKind"],
+                vec!["recordType"],
+                vec!["left"],
+                vec!["left", "right"],
+                vec!["recordType", "constraintKind", "left", "right"],
+            ] {
+                let mut missing = compare.clone();
+                for key in missing_keys {
+                    missing.as_object_mut().unwrap().remove(key);
+                }
+                assert!(assert_response(step, StatusCode::CONFLICT, &missing).is_err());
+            }
+            let mut without_id = compare.clone();
+            without_id.as_object_mut().unwrap().remove("constraintId");
+            assert_eq!(
+                assert_response(step, StatusCode::CONFLICT, &without_id),
+                Err(FixtureError::ResponseShapeRefused)
+            );
+            let mut other_code = (*step).clone();
+            other_code.expect.problem_code = Some("idempotency.conflict".to_owned());
+            let mut idempotency = compare.clone();
+            idempotency["type"] =
+                json!(crate::problem::ProblemCode::IdempotencyConflict.type_uri());
+            idempotency["code"] = json!("idempotency.conflict");
+            idempotency["detail"] = json!(
+                problem_contract(409, Some("idempotency.conflict"))
+                    .unwrap()
+                    .1[0]
+            );
+            assert_eq!(
+                assert_response(&other_code, StatusCode::CONFLICT, &idempotency),
+                Err(FixtureError::ResponseShapeRefused)
+            );
+        }
+    }
+
+    #[test]
+    fn row_local_constraint_problem_members_require_every_referenced_field_readable() {
+        let suite = row_local_constraint_suite(
+            "jurisdiction, label, note, quantity, valid-from",
+            "validFrom: 2",
+        );
+        let mut compare = json!({"type":crate::problem::ProblemCode::MutationConflict.type_uri(),"title":"Conflict","status":409,"detail":"The mutation conflicts with current state.","code":"mutation.conflict","traceId":"11111111111111111111111111111111"});
+        for (name, value) in [
+            ("recordType", "widget"),
+            ("constraintId", "chronological"),
+            ("constraintKind", "compare"),
+            ("left", "valid-from"),
+            ("right", "valid-to"),
+        ] {
+            compare[name] = json!(value);
+        }
+        for step in &suite.journeys[0].steps {
+            assert_eq!(
+                assert_response(step, StatusCode::CONFLICT, &compare),
+                Err(FixtureError::ExpectationMismatch)
+            );
         }
     }
 
