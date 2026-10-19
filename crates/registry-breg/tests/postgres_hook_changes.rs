@@ -412,6 +412,13 @@ const TALLY_PROPOSAL_HOOK_SCRIPT: &[u8] = br#"fn handle(ctx) {
 /// on the referenced tally beside the followup create, so one applied
 /// proposal commits two result records at different revisions.
 fn tally_proposal_registry() -> CompiledRegistry {
+    tally_proposal_registry_with_commit_guards(None)
+}
+
+/// The two-revision journey registry with `commit_guards` declared on the
+/// `open-followup` action, so a journey can propose against a referenced
+/// tally whose current state fails a field guard.
+fn tally_proposal_registry_with_commit_guards(commit_guards: Option<Value>) -> CompiledRegistry {
     let hooks = r#"[{"phase":"after","id":"case-created","trigger":"created","principal":"case-hook","projection":["label","tally","tally-condition"],"handler":{"type":"rhai","script":"hooks/propose-tally.rhai","abi":"registry.hook-handler/v1"}}]"#;
     let mut project: Value = serde_json::from_str(&hook_project_json(
         hooks,
@@ -451,6 +458,9 @@ fn tally_proposal_registry() -> CompiledRegistry {
         .as_array_mut()
         .unwrap()
         .push(json!("tally"));
+    if let Some(commit_guards) = commit_guards {
+        project["actions"][0]["commitGuards"] = commit_guards;
+    }
     let operator = &mut project["accessProfiles"][0]["permissions"]["records"];
     for field in ["tally", "tally-condition"] {
         operator[0]["readableFields"]
@@ -2561,52 +2571,7 @@ async fn real_postgres_resulting_revision_follows_byte_order_under_a_locale_coll
         .await
         .expect("runtime mutation connection is available");
 
-    let tally_plan = MutationPlan::from_compiled(&setup.compiled, "records.tally.create")
-        .expect("tally create plan compiles");
-    let tally_claims = ClaimContext::for_compiled(
-        &setup.compiled,
-        "tally",
-        Some("operator-principal".to_owned()),
-        "operator",
-        Some("case-management".to_owned()),
-        vec![RowBoundaryContext::Equals {
-            field: "jurisdiction".to_owned(),
-            value: "zone-a".to_owned(),
-        }],
-    )
-    .expect("compiled tally authority context is valid");
-    setup
-        .coordinator
-        .execute(
-            &mut mutation_client,
-            MutationRequest {
-                plan: &tally_plan,
-                idempotency_key: "tally",
-                claims: &tally_claims,
-                record_id: None,
-                expected_etag: None,
-                body: MutationBody::Create(Map::from_iter([
-                    ("jurisdiction".to_owned(), json!("zone-a")),
-                    ("label".to_owned(), json!("untallied")),
-                ])),
-                response_fields: BTreeSet::from(["jurisdiction".to_owned(), "label".to_owned()]),
-                representation: registry_breg::record_profile::RecordRepresentation::Json,
-                correlation: registry_breg::correlation::RequestCorrelation::breg_created(),
-            },
-        )
-        .await
-        .expect("operator creates the tally record");
-    let tally_table = &setup.compiled.entities()["tally"].physical_table;
-    let tally_id: Uuid = setup
-        .database
-        .admin
-        .query_one(
-            &format!("SELECT record_id FROM registry_data.{tally_table}"),
-            &[],
-        )
-        .await
-        .expect("the tally record is readable")
-        .get(0);
+    let tally_id = create_tally(&setup, &mut mutation_client).await;
 
     let event = create_case_with(
         &setup,
@@ -2685,6 +2650,116 @@ async fn real_postgres_resulting_revision_follows_byte_order_under_a_locale_coll
 
     setup.teardown().await;
     receiver.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_a_proposal_failing_a_commit_guard_settles_as_refused() {
+    // The referenced tally is created `untallied`, so the declared field
+    // guard fails when the proposal applies. The delivery must settle as a
+    // refusal on its first attempt, not hold its lease as an uncertain apply.
+    let receiver = HttpsReceiver::start().await;
+    let registry = tally_proposal_registry_with_commit_guards(Some(json!({
+        "targets": [{"input": "tally", "field": "label", "equals": "ready"}]
+    })));
+    let setup = setup(registry, &receiver, false).await;
+    let mut mutation_client = setup
+        .pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+    let tally_id = create_tally(&setup, &mut mutation_client).await;
+    let event = create_case_with(
+        &setup,
+        &mut mutation_client,
+        "guarded",
+        Map::from_iter([
+            ("tally".to_owned(), json!(tally_id.to_string())),
+            (
+                "tallyCondition".to_owned(),
+                json!(tally_condition_token(&tally_id, 1)),
+            ),
+        ]),
+    )
+    .await;
+    let delivery_id = single_delivery(&event).to_owned();
+    drop(mutation_client);
+
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered),
+        "a guard-refused proposal still completes its delivery"
+    );
+    let row = delivery_row(&setup, event.event_id, &delivery_id).await;
+    assert_eq!(row.state, "delivered");
+    assert_eq!(row.attempt, 1);
+    assert_eq!(row.disposition.as_deref(), Some("refused"));
+    assert_eq!(row.resulting_revision, None);
+    assert_eq!(
+        row.code.as_deref(),
+        Some("hook.proposal.precondition_failed"),
+        "{:?}",
+        row.summary
+    );
+    assert_eq!(
+        record_count(&setup, "followup").await,
+        0,
+        "a guard-refused proposal applies nothing"
+    );
+    assert_eq!(record_count(&setup, "tally").await, 1);
+
+    setup.teardown().await;
+    receiver.stop().await;
+}
+
+/// One operator-created `zone-a` tally record labelled `untallied`, the
+/// referenced target of the two-revision proposal.
+async fn create_tally(setup: &Setup, client: &mut deadpool_postgres::Client) -> Uuid {
+    let tally_plan = MutationPlan::from_compiled(&setup.compiled, "records.tally.create")
+        .expect("tally create plan compiles");
+    let tally_claims = ClaimContext::for_compiled(
+        &setup.compiled,
+        "tally",
+        Some("operator-principal".to_owned()),
+        "operator",
+        Some("case-management".to_owned()),
+        vec![RowBoundaryContext::Equals {
+            field: "jurisdiction".to_owned(),
+            value: "zone-a".to_owned(),
+        }],
+    )
+    .expect("compiled tally authority context is valid");
+    setup
+        .coordinator
+        .execute(
+            client,
+            MutationRequest {
+                plan: &tally_plan,
+                idempotency_key: "tally",
+                claims: &tally_claims,
+                record_id: None,
+                expected_etag: None,
+                body: MutationBody::Create(Map::from_iter([
+                    ("jurisdiction".to_owned(), json!("zone-a")),
+                    ("label".to_owned(), json!("untallied")),
+                ])),
+                response_fields: BTreeSet::from(["jurisdiction".to_owned(), "label".to_owned()]),
+                representation: registry_breg::record_profile::RecordRepresentation::Json,
+                correlation: registry_breg::correlation::RequestCorrelation::breg_created(),
+            },
+        )
+        .await
+        .expect("operator creates the tally record");
+    let tally_table = &setup.compiled.entities()["tally"].physical_table;
+    setup
+        .database
+        .admin
+        .query_one(
+            &format!("SELECT record_id FROM registry_data.{tally_table}"),
+            &[],
+        )
+        .await
+        .expect("the tally record is readable")
+        .get(0)
 }
 
 /// The existing-target condition token the action's target-conditions route

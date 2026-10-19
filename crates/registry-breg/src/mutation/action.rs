@@ -855,7 +855,7 @@ impl MutationTransaction {
                 // applies again either.
                 return conflicting_hook_answer();
             }
-            Err(MutationError::PreconditionFailed) => {
+            Err(MutationError::PreconditionFailed | MutationError::FieldGuardFailed { .. }) => {
                 return refused_proposal(
                     "hook.proposal.precondition_failed",
                     "The proposed mutation found its target in an unexpected state.",
