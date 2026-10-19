@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::contract::Operation;
+use crate::contract::{ModuleAssetSource, Operation};
 use crate::model::ActionRouteKind;
-use crate::{compile_project, parse_project_json, CompileProfile};
+use crate::{compile_project, compile_project_with_assets, parse_project_json, CompileProfile};
 use serde_json::json;
 
 fn source() -> Value {
@@ -24,6 +24,11 @@ fn source() -> Value {
 fn compile(value: &Value) -> CompiledRegistry {
     let project = parse_project_json(&serde_json::to_vec(value).unwrap()).unwrap();
     compile_project(&project, &[], CompileProfile::Authoring).unwrap()
+}
+
+fn compile_with_assets(value: &Value, assets: &[ModuleAssetSource]) -> CompiledRegistry {
+    let project = parse_project_json(&serde_json::to_vec(value).unwrap()).unwrap();
+    compile_project_with_assets(&project, &[], assets, CompileProfile::Authoring).unwrap()
 }
 
 fn source_without_actions() -> Value {
@@ -300,6 +305,9 @@ fn reference_target_actions_publish_bounded_availability_contracts() {
         })
     );
     assert!(availability_examples["service.unavailable"].is_object());
+    assert!(openapi["paths"][&route.path]["post"]["responses"]
+        .get("412")
+        .is_none());
 
     let invoke = compiled
         .actions()
@@ -310,6 +318,18 @@ fn reference_target_actions_publish_bounded_availability_contracts() {
     let invoke_examples = &openapi["paths"][&invoke.path]["post"]["responses"]["503"]["content"]
         ["application/problem+json"]["examples"];
     assert!(invoke_examples["runtime.field_encryption.unavailable"].is_object());
+    assert_eq!(
+        openapi["paths"][&invoke.path]["post"]["responses"]["412"]["content"]
+            ["application/problem+json"]["examples"]["action.guard_failed"]["value"],
+        json!({
+            "type": "https://id.registrystack.org/problems/registry-breg/action/guard_failed",
+            "title": "Precondition Failed",
+            "status": 412,
+            "detail": "The action guard was not satisfied.",
+            "code": "action.guard_failed",
+            "traceId": "11111111111111111111111111111111",
+        })
+    );
 
     let target_conditions = compiled
         .actions()
@@ -322,6 +342,11 @@ fn reference_target_actions_publish_bounded_availability_contracts() {
     assert!(target_condition_examples
         .get("runtime.field_encryption.unavailable")
         .is_none());
+    assert!(
+        openapi["paths"][&target_conditions.path]["post"]["responses"]
+            .get("412")
+            .is_none()
+    );
 
     let proposal = compile(&proposal_source(
         &["get", "edit", "submit", "cancel", "apply"],
@@ -346,6 +371,36 @@ fn reference_target_actions_publish_bounded_availability_contracts() {
             ["application/problem+json"]["examples"]
             .get("runtime.field_encryption.unavailable")
             .is_none()
+    );
+    let proposal_precondition_examples = &proposal_openapi["paths"][&proposal_route.path]["post"]
+        ["responses"]["412"]["content"]["application/problem+json"]["examples"];
+    assert!(proposal_precondition_examples["precondition.failed"].is_object());
+    assert!(proposal_precondition_examples
+        .get("action.guard_failed")
+        .is_none());
+    let proposal_responses = &proposal_openapi["paths"][&proposal_route.path]["post"]["responses"];
+    assert!(proposal_responses.get("200").is_none());
+    assert_eq!(proposal_responses["201"]["description"], "Proposal created");
+    assert_eq!(
+        proposal_responses["201"]["content"]["application/json"]["schema"],
+        json!({"$ref": "#/components/schemas/action-rename-item-invoke-response"})
+    );
+    assert_eq!(
+        proposal_openapi["components"]["schemas"]["action-rename-item-invoke-response"],
+        crate::artifacts::proposal_schema()
+    );
+    assert_eq!(
+        proposal_responses["201"]["headers"]["ETag"]["description"],
+        "Strong Registry ETag for the created Proposal."
+    );
+    assert_eq!(
+        proposal_responses["201"]["headers"]["Location"]["description"],
+        "Relative URL of the created Proposal."
+    );
+    assert!(proposal_responses["201"]["headers"]["traceparent"].is_object());
+    assert_eq!(
+        proposal_responses["201"]["headers"]["Cache-Control"]["schema"]["const"],
+        "no-store"
     );
 
     let request_schema: Value = serde_json::from_slice(
@@ -609,6 +664,146 @@ fn proposal_source(operations: &[&str], readable_inputs: &[&str]) -> Value {
         "targets":[{"recordType":"item","rowBoundaries":"unrestricted"}]
     }]);
     value
+}
+
+fn evidence_contract_asset() -> ModuleAssetSource {
+    ModuleAssetSource {
+        module: None,
+        path: "evidence/contracts.json".into(),
+        bytes: include_bytes!(
+            "../../../../../products/breg/acceptance/farmer-landholding-evidence/evidence/farmer-contracts.json"
+        )
+        .to_vec(),
+    }
+}
+
+fn proposal_handler_evidence_source() -> Value {
+    let mut value = proposal_source(
+        &["get", "edit", "submit", "cancel", "apply"],
+        &["item", "label"],
+    );
+    value["functions"] = json!([{
+        "id": "rename-plan",
+        "runtime": "rhai",
+        "source": "handlers/rename.rhai",
+        "entrypoint": "plan",
+        "abi": "registry.action-plan/v1",
+    }]);
+    value["evidenceProviders"] = json!([{
+        "id": "provider",
+        "contracts": "evidence/contracts.json",
+        "subjectResolution": "trusted-provider-exact-selector",
+    }]);
+    value["recordTypes"][0]["fields"][0]["minimumLength"] = json!(3);
+    value["actions"][0]["inputs"][1]["minimumLength"] = json!(3);
+    value["actions"][0]["commitGuards"] = json!({"evidence": [{
+        "id": "commit-status",
+        "provider": "provider",
+        "requirement": "urn:example:farmer:status-v1",
+        "subjects": {"farmer": {
+            "profile": "farmer-number-v1",
+            "selectors": {"farmer-number": {"type": "input", "input": "label"}},
+        }},
+        "requires": [{"output": "active", "equals": true}],
+        "maximumObservationAgeSeconds": 60,
+    }]});
+    value["actions"][0]["plan"] = json!({
+        "type": "function",
+        "function": "rename-plan",
+        "inputs": ["item", "label"],
+        "refusals": [{"code": "rename-refused", "label": "The rename was refused."}],
+        "writes": [{
+            "id": "renamed",
+            "target": {"fromInput": "item"},
+            "operation": "patch",
+            "fields": ["label"],
+        }],
+    });
+    value
+}
+
+fn commit_evidence_source() -> Value {
+    let mut value = source();
+    value["evidenceProviders"] = json!([{
+        "id": "provider",
+        "contracts": "evidence/contracts.json",
+        "subjectResolution": "trusted-provider-exact-selector",
+    }]);
+    value["recordTypes"][0]["fields"][0]["minimumLength"] = json!(3);
+    value["actions"][0]["inputs"][1]["minimumLength"] = json!(3);
+    value["actions"][0]["commitGuards"] = json!({"evidence": [{
+        "id": "commit-status",
+        "provider": "provider",
+        "requirement": "urn:example:farmer:status-v1",
+        "subjects": {"farmer": {
+            "profile": "farmer-number-v1",
+            "selectors": {"farmer-number": {"type": "input", "input": "label"}},
+        }},
+        "requires": [{"output": "active", "equals": true}],
+        "maximumObservationAgeSeconds": 60,
+    }]});
+    value
+}
+
+#[test]
+fn action_problem_examples_follow_the_execution_that_can_emit_them() {
+    let proposal_assets = vec![
+        ModuleAssetSource {
+            module: None,
+            path: "handlers/rename.rhai".into(),
+            bytes: b"fn plan(ctx) { #{effects: []} }".to_vec(),
+        },
+        evidence_contract_asset(),
+    ];
+    let proposal = compile_with_assets(&proposal_handler_evidence_source(), &proposal_assets);
+    let proposal_route = proposal
+        .actions()
+        .routes
+        .iter()
+        .find(|route| route.kind == ActionRouteKind::Invoke)
+        .unwrap();
+    let proposal_openapi: Value = serde_json::from_slice(
+        &proposal
+            .artifacts()
+            .get("generated/openapi.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let proposal_responses = &proposal_openapi["paths"][&proposal_route.path]["post"]["responses"];
+    assert!(proposal_responses.get("500").is_none());
+    assert!(proposal_responses.get("422").is_none());
+    assert!(
+        proposal_responses["503"]["content"]["application/problem+json"]["examples"]
+            .get("action.evidence_failed")
+            .is_none()
+    );
+
+    let commit_evidence =
+        compile_with_assets(&commit_evidence_source(), &[evidence_contract_asset()]);
+    let action = &commit_evidence.actions().actions[0];
+    assert!(action.handler.is_none());
+    assert!(action.evidence.is_empty());
+    assert_eq!(action.commit_evidence.len(), 1);
+    let invoke = commit_evidence
+        .actions()
+        .routes
+        .iter()
+        .find(|route| route.kind == ActionRouteKind::Invoke)
+        .unwrap();
+    let openapi: Value = serde_json::from_slice(
+        &commit_evidence
+            .artifacts()
+            .get("generated/openapi.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    assert!(
+        openapi["paths"][&invoke.path]["post"]["responses"]["503"]["content"]
+            ["application/problem+json"]["examples"]["action.evidence_failed"]
+            .is_object()
+    );
 }
 
 #[test]
