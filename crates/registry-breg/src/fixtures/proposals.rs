@@ -240,6 +240,7 @@ pub(super) fn validate_step(
         &step.request,
         None,
         Some(&action.id),
+        &profile.readable_fields,
         registry,
     )?;
     Ok(ValidatedStep {
