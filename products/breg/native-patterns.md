@@ -97,7 +97,13 @@ of the step; execution requires that exact pair in the response. Preflight does
 not evaluate PostgreSQL expressions or infer the failed field from input values.
 Omit both identifiers when expecting a generic conflict, such as a duplicate
 unique value or a concealed Proposal application failure. That expectation
-requires a response without field metadata.
+accepts a response without field metadata. On a direct create, patch or batch it
+also accepts the members a row-local constraint refusal adds (`recordType`,
+`constraintId`, `constraintKind`, and `left` and `right` or `field`) when they
+exactly match a compare, int-range or vocabulary constraint declared on the
+step's record type whose fields the step's access profile reads. Any other
+member, such as `fieldId`, and unknown, partial or mismatched constraint members
+are refused.
 
 ## Related pattern: fixed identity, correctable description
 
