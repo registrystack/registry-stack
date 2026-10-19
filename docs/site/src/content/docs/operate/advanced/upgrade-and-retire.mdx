@@ -123,17 +123,27 @@ so a binary that cannot run leaves the installed toolset selected.
       [Activate and serve](../../breg/#activate-and-serve) describes. A first activation requires
       a database that has never held a package, so pointing it at the v0.41.0 database fails.
       Start every `breg` on the exact active package and verify readiness.
-   9. Turn each exported line into a `create` item for its v0.42.0 Record type, replacing old IDs
-      in relationship fields with the new ones, and load the Record types in dependency order so
-      each referenced record exists first. Use
+   9. Turn each exported line into a `create` item for its v0.42.0 Record type and load the
+      Record types in dependency order, so each referenced record exists first. Use
       [Validate the input](../../breg-data/#validate-the-input) and
-      [Import with a checkpoint](../../breg-data/#import-with-a-checkpoint).
+      [Import with a checkpoint](../../breg-data/#import-with-a-checkpoint). A `create` item
+      cannot carry the old ID, and `bregctl data import` reports counts only, so it gives you no
+      map from old IDs to new ones. Build the map yourself: after loading a Record type, export
+      it from the v0.42.0 registry with `bregctl data export` and match old and new records on a
+      field the project holds unique. Only then rewrite the relationship fields of the types that
+      reference it, and load those. A Record type with no unique field to match on, or with
+      populated self-references or cycles that its enforced foreign keys refuse in one pass,
+      cannot be reloaded with its relationships intact by the shipped tooling: do not cut such a
+      registry over in this release.
 5. **Upgrade Casework.** v0.42.0 Casework installs its complete schema as baseline version 100
    and refuses a v0.41.0 database: `caseworkctl plan` and `apply` report
    `casework.activation.beta-schema`, and readiness and startup refuse with the same
    fresh-database instruction. Reviews open in the v0.41.0 database are not carried forward, so
    before you stop it, pause producer submissions and staff mutations, finish or cancel the open
-   reviews through each bound producer's supported interface, and record any that remain. Stop
+   reviews through each bound producer's supported interface, and record any that remain.
+   Finishing a review is not enough: a completion wake-up carries no result and retries from the
+   outbox, so keep v0.41.0 serving until each producer has fetched every terminal result, or
+   record each undelivered result for manual reconciliation. Stop
    the v0.41.0 runtime, take a final `pg_dump` of its database, and keep the database, package,
    runtime file, and audit until its work and accountability obligations are resolved. When
    Casework reads BReg through its context provider, do this before the v0.42.0 BReg serves, as
@@ -159,8 +169,10 @@ so a binary that cannot run leaves the installed toolset selected.
    database, its package, runtime file, and audit journal for reconciliation. Dropping booked
    appointments this way is acceptable only before production.
 
-   Before the cut, record every appointment that must still be honoured. `schedulingctl` has no
-   export command, so take a `pg_dump` after the previous runtime stops, and have each booking
+   Before the cut, stop new hold and appointment admissions, let in-flight requests resolve, and
+   let every live hold be confirmed, released, or expire; holds cannot be listed, so wait out the
+   longest hold lifetime. Then record every appointment that must still be honoured.
+   `schedulingctl` has no export command, so take a `pg_dump` after the previous runtime stops, and have each booking
    product list its own appointments with `GET /v1/appointments`, which returns only the caller's
    appointments for one exact external reference. An appointment booked without an external
    reference cannot be listed that way: take it from the booking product's own records, and do not
@@ -182,8 +194,11 @@ so a binary that cannot run leaves the installed toolset selected.
    signed token does not identify its original grant mode. It admits any grant with at most 900
    seconds remaining without checking revocation, including the final 900 seconds of a deferred
    grant. Use it only when the deployment accepts that stale-authority window.
-   Run `schedulingctl check PROJECT --runtime-config FILE`, then stop the previous runtime or keep
-   its destination bindings until hook deliveries drain. Point the runtime file at a fresh database,
+   Run `schedulingctl check PROJECT --runtime-config FILE`. Keep the previous runtime serving
+   long enough for its reminder and observer deliveries to run; no command shows pending
+   deliveries (`schedulingctl intents` lists only the ones the sweep stopped carrying), and
+   shutdown abandons the rest, so record the deliveries you accept losing before you stop it.
+   Point the runtime file at a fresh database,
    then run `schedulingctl plan --runtime-config FILE` and `schedulingctl apply --runtime-config
    FILE`. Apply the environment records with `schedulingctl records apply --runtime-config FILE
    RECORDS`, start `scheduling`, then use `schedulingctl status --runtime-config FILE` to confirm
@@ -260,6 +275,9 @@ so a binary that cannot run leaves the installed toolset selected.
     also in v0.41.0), and DataCommand::Export (needs a serving registry, export-enabled profile);
     crates/registry-breg/src/data.rs, DataImportOperation::Create (only operation and data, so a
     reloaded record gets a new ID);
+    crates/registry-bregctl/src/data_lifecycle.rs, DataImportOutcome (counts only, no ID map);
+    crates/registry-casework/src/runtime.rs, deliver_review_completion() and
+    casework_review_completion_outbox (wake-ups retried from the outbox);
     products/casework/CHANGELOG.md, Unreleased (v0.42.0) entries: baseline version 100,
     ReviewDecisionReceipt outcome, outcome-not-declared, AssignmentContext export removed,
     project format aligned;
@@ -272,7 +290,9 @@ so a binary that cannot run leaves the installed toolset selected.
     statusResource, receiptRetentionDays, reminder hook envelope, scope defaults;
     crates/registry-scheduling/src/store.rs, refuse_pre_1_0_schema();
     crates/registry-schedulingctl/src/lib.rs, CheckArgs, ActivationArgs, ApplyArgs,
-    RecordsApplyArgs, and no export command;
+    RecordsApplyArgs, IntentsArgs, and no export command;
+    crates/registry-schedulingctl/src/intents.rs, lists only intents the sweep stopped carrying;
+    crates/registry-scheduling-core/src/problem.rs, "A hold cannot be read and expires on its own";
     products/scheduling/README.md, GET /v1/appointments and records apply, "External record
     references" (existing admissions may omit them);
     products/scheduling/CHANGELOG.md and products/messaging/CHANGELOG.md, receiptRetentionDays
@@ -356,7 +376,9 @@ work into the retained one before the previous runtime resumes traffic.
   serves the callback URL; the previous runtime answers them as `unmatched`.
 - **Scheduling.** Stop the v0.42.0 runtime and keep its database for inspection; no restore is
   needed. Every hold and appointment it accepted after the cutover is absent from the retained
-  database. Reconcile each one before the previous runtime resumes booking: rebook it there through
+  database. While v0.42.0 still serves, enumerate those appointments from each booking product's
+  own records, since `GET /v1/appointments` needs an exact external reference; if any cannot be
+  accounted for, do not roll Scheduling back, because its capacity could be sold twice. Reconcile each one before the previous runtime resumes booking: rebook it there through
   its owning product, or reduce the affected window's supply with the previous `schedulingctl
   records apply`, and tell the people who hold it. Then start the previous binary, package, and
   runtime file against the retained database.
