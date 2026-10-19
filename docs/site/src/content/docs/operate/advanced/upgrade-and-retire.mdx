@@ -374,14 +374,15 @@ work into the retained one before the previous runtime resumes traffic.
   post-cutover message that was accepted but never sent. A message the v0.42.0 deployment sent
   stays recorded only in its database, and its later provider callbacks reach whichever runtime
   serves the callback URL; the previous runtime answers them as `unmatched`.
-- **Scheduling.** Stop the v0.42.0 runtime and keep its database for inspection; no restore is
-  needed. Every hold and appointment it accepted after the cutover is absent from the retained
-  database. While v0.42.0 still serves, enumerate those appointments from each booking product's
-  own records, since `GET /v1/appointments` needs an exact external reference; if any cannot be
-  accounted for, do not roll Scheduling back, because its capacity could be sold twice. Reconcile each one before the previous runtime resumes booking: rebook it there through
-  its owning product, or reduce the affected window's supply with the previous `schedulingctl
-  records apply`, and tell the people who hold it. Then start the previous binary, package, and
-  runtime file against the retained database.
+- **Scheduling.** While v0.42.0 still serves, enumerate every appointment it accepted after the
+  cutover from each booking product's own records, since `GET /v1/appointments` needs an exact
+  external reference; if any cannot be accounted for, do not roll Scheduling back, because its
+  capacity could be sold twice. Then stop the v0.42.0 runtime and keep its database for
+  inspection; no restore is needed. Every hold and appointment it accepted after the cutover is
+  absent from the retained database. Reconcile each one before the previous runtime resumes
+  booking: rebook it there through its owning product, or reduce the affected window's supply with
+  the previous `schedulingctl records apply`, and tell the people who hold it. Then start the
+  previous binary, package, and runtime file against the retained database.
 
 :::caution[Reconcile Scheduling before resuming bookings]
 A rolled-back Scheduling deployment does not know the appointments the upgraded one confirmed. If
