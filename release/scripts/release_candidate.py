@@ -494,6 +494,9 @@ def _release_payload_inventory(version: str) -> dict[str, str]:
             inventory[f"schedulingctl-{tag}-{platform}"] = "binary"
     if release_roster.scheduling_binary_in_release(version_tuple):
         inventory[f"scheduling-{tag}-linux-amd64"] = "binary"
+    if release_roster.scheduling_installer_in_release(version_tuple):
+        inventory[f"scheduling-{tag}-install.sh"] = "installer"
+        inventory["scheduling-install.sh"] = "installer"
     if release_roster.messaging_in_release(version_tuple):
         inventory[f"messaging-{tag}-linux-amd64"] = "binary"
         inventory[f"messagingctl-{tag}-linux-amd64"] = "binary"

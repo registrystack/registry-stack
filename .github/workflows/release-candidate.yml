@@ -763,7 +763,8 @@ jobs:
             --output candidate-native-shard
           # These groups contain complete installer toolsets. Exercise the
           # relocated release bytes while the Cargo output is unavailable.
-          if [[ "${{ matrix.group }}" == core || "${{ matrix.group }}" == casework ]]; then
+          if [[ "${{ matrix.group }}" == core || "${{ matrix.group }}" == casework ||
+                "${{ matrix.group }}" == scheduling ]]; then
             installer_assets="${RUNNER_TEMP}/macos-installer-assets"
             installer_destination="${RUNNER_TEMP}/macos-installer-bin"
             mkdir -p "${installer_assets}"
@@ -777,11 +778,17 @@ jobs:
               EVIDENCECTL_ASSET_DIR="${installer_assets}" \
               EVIDENCECTL_INSTALL_DIR="${installer_destination}" \
                 bash crates/registry-evidencectl/install.sh
-            else
+            elif [[ "${{ matrix.group }}" == casework ]]; then
               CASEWORK_VERSION="${{ needs.validate.outputs.tag }}" \
               CASEWORK_ASSET_DIR="${installer_assets}" \
               CASEWORK_INSTALL_DIR="${installer_destination}" \
                 bash crates/registry-casework/install.sh
+            else
+              # macOS publishes schedulingctl alone, which is this shard.
+              SCHEDULING_VERSION="${{ needs.validate.outputs.tag }}" \
+              SCHEDULING_ASSET_DIR="${installer_assets}" \
+              SCHEDULING_INSTALL_DIR="${installer_destination}" \
+                bash crates/registry-scheduling/install.sh
             fi
           fi
 
@@ -1927,6 +1934,51 @@ jobs:
             "${casework_install_dir}/caseworkctl" package \
               "${casework_project}" --output "${casework_package}"
             test -f "${casework_package}/SHA256SUMS"
+            rm candidate/bundle-root/SHA256SUMS
+          fi
+          scheduling_installer_in_release="$(python3 release/scripts/release_roster.py \
+            scheduling-installer-in-release "${version}")"
+          if [[ "${scheduling_installer_in_release}" == true ]]; then
+            scheduling_installer="scheduling-${{ needs.validate.outputs.tag }}-install.sh"
+            awk -v version="${{ needs.validate.outputs.tag }}" '
+              $0 == "default_version=\"\"" {
+                print "default_version=\"" version "\""
+                rendered = 1
+                next
+              }
+              { print }
+              END { if (!rendered) exit 1 }
+            ' crates/registry-scheduling/install.sh \
+              > "candidate/bundle-root/${scheduling_installer}"
+            chmod 0755 "candidate/bundle-root/${scheduling_installer}"
+            cp "candidate/bundle-root/${scheduling_installer}" \
+              candidate/bundle-root/scheduling-install.sh
+            chmod 0755 candidate/bundle-root/scheduling-install.sh
+            (
+              cd candidate/bundle-root
+              sha256sum -- \
+                "scheduling-${{ needs.validate.outputs.tag }}-linux-amd64" \
+                "schedulingctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
+                > SHA256SUMS
+            )
+            scheduling_install_dir="${RUNNER_TEMP}/candidate-scheduling-install"
+            SCHEDULING_ASSET_DIR="${GITHUB_WORKSPACE}/candidate/bundle-root" \
+            SCHEDULING_INSTALL_DIR="${scheduling_install_dir}" \
+              bash "candidate/bundle-root/${scheduling_installer}"
+            for scheduling_binary in scheduling schedulingctl; do
+              observed="$("${scheduling_install_dir}/${scheduling_binary}" --version)"
+              test "${observed}" = \
+                "${scheduling_binary} ${{ needs.validate.outputs.version }}"
+            done
+            scheduling_project="${RUNNER_TEMP}/candidate-scheduling-project"
+            scheduling_package="${RUNNER_TEMP}/candidate-scheduling-package"
+            "${scheduling_install_dir}/schedulingctl" init \
+              --template standalone-exact-time "${scheduling_project}"
+            "${scheduling_install_dir}/schedulingctl" check "${scheduling_project}"
+            "${scheduling_install_dir}/schedulingctl" test "${scheduling_project}"
+            "${scheduling_install_dir}/schedulingctl" package \
+              "${scheduling_project}" --output "${scheduling_package}"
+            test -f "${scheduling_package}/SHA256SUMS"
             rm candidate/bundle-root/SHA256SUMS
           fi
           messaging_in_release="$(python3 release/scripts/release_roster.py \

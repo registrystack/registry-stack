@@ -2634,6 +2634,114 @@ class RegistryReleaseTest(TestCase):
 
 
 
+    def test_release_builds_installs_and_smokes_scheduling_from_v0_42(self) -> None:
+        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        assemble = workflow.split("\n  assemble:", 1)[1].split("\n  attest:", 1)[0]
+        macos = workflow.split("\n  build-macos-platforms:", 1)[1].split(
+            "\n  clients:", 1
+        )[0]
+        installer = ROOT / "crates/registry-scheduling/install.sh"
+        installer_text = installer.read_text(encoding="utf-8")
+
+        self.assertIn("scheduling-installer-in-release", assemble)
+        self.assertIn(
+            'scheduling_installer="scheduling-${{ needs.validate.outputs.tag }}-install.sh"',
+            assemble,
+        )
+        self.assertIn("' crates/registry-scheduling/install.sh \\\n", assemble)
+        self.assertIn(
+            "candidate/bundle-root/scheduling-install.sh", assemble
+        )
+        self.assertIn(
+            '"schedulingctl-${{ needs.validate.outputs.tag }}-linux-amd64" \\\n'
+            "                > SHA256SUMS",
+            assemble,
+        )
+        self.assertIn('SCHEDULING_ASSET_DIR="${GITHUB_WORKSPACE}/candidate/bundle-root"', assemble)
+        self.assertIn('SCHEDULING_INSTALL_DIR="${scheduling_install_dir}"', assemble)
+        self.assertIn(
+            "for scheduling_binary in scheduling schedulingctl; do", assemble
+        )
+        self.assertIn("--template standalone-exact-time", assemble)
+        self.assertIn('schedulingctl" check', assemble)
+        self.assertIn('schedulingctl" test', assemble)
+        self.assertIn('schedulingctl" package', assemble)
+        # The macOS scheduling shard is the complete macOS Scheduling toolset,
+        # so its installer joins the relocated-bytes smoke beside core and
+        # casework.
+        self.assertIn('"${{ matrix.group }}" == scheduling', macos)
+        self.assertIn('SCHEDULING_ASSET_DIR="${installer_assets}"', macos)
+        self.assertIn("bash crates/registry-scheduling/install.sh", macos)
+        self.assertIn("binaries=(scheduling schedulingctl)", installer_text)
+        self.assertIn(
+            "releases/latest/download/scheduling-install.sh", installer_text
+        )
+
+        os_name = subprocess.run(
+            ["uname", "-s"], check=True, capture_output=True, text=True
+        ).stdout.strip()
+        architecture = subprocess.run(
+            ["uname", "-m"], check=True, capture_output=True, text=True
+        ).stdout.strip()
+        if os_name == "Linux" and architecture in {"x86_64", "amd64"}:
+            platform_name = "linux-amd64"
+            binaries = ("scheduling", "schedulingctl")
+        elif os_name == "Linux" and architecture in {"arm64", "aarch64"}:
+            platform_name = "linux-arm64"
+            binaries = ("schedulingctl",)
+        else:
+            # The macOS bundle path is covered by test_macos_installers.
+            raise SkipTest(
+                f"plain-binary installer fixture does not cover {os_name}/{architecture}"
+            )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            assets = root / "assets"
+            destination = root / "bin"
+            assets.mkdir()
+            checksums = []
+            for binary in binaries:
+                name = f"{binary}-v0.42.0-{platform_name}"
+                # The installer starts each staged Linux binary, so the fixture
+                # is a script that starts.
+                body = f"#!/bin/sh\necho '{binary} fixture'\n".encode()
+                (assets / name).write_bytes(body)
+                checksums.append(f"{hashlib.sha256(body).hexdigest()}  {name}\n")
+            (assets / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8")
+            stamped = root / "scheduling-v0.42.0-install.sh"
+            stamped.write_text(
+                installer_text.replace(
+                    'default_version=""', 'default_version="v0.42.0"', 1
+                ),
+                encoding="utf-8",
+            )
+            environment = os.environ.copy()
+            environment.pop("SCHEDULING_VERSION", None)
+            environment.update(
+                {
+                    "SCHEDULING_ASSET_DIR": str(assets),
+                    "SCHEDULING_INSTALL_DIR": str(destination),
+                }
+            )
+            result = subprocess.run(
+                ["bash", str(stamped)],
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            for binary in binaries:
+                installed = destination / binary
+                self.assertEqual(
+                    f"#!/bin/sh\necho '{binary} fixture'\n", installed.read_text()
+                )
+                self.assertTrue(installed.stat().st_mode & stat.S_IXUSR)
+            if "scheduling" not in binaries:
+                self.assertFalse((destination / "scheduling").exists())
+
     def test_release_image_scans_are_policy_enforced_and_preserved(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
@@ -3426,6 +3534,47 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('"schedulingctl-${tag}-linux-amd64"', recipe)
         self.assertIn("image_bin_binaries+=(schedulingctl)", recipe)
 
+    def test_scheduling_installer_release_surface_begins_at_v0_42(self) -> None:
+        module = load_registry_release()
+        published = {
+            name: "0.41.0"
+            for name in module.RELAY_V2_ARTIFACT_INVENTORY
+            | {
+                "registry-docs",
+                "discovery",
+                "discoveryctl",
+                "breg",
+                "bregctl",
+                "breg-installer",
+                "breg-mcp",
+                "breg-review",
+                "casework",
+                "caseworkctl",
+                "casework-installer",
+                "scheduling",
+                "schedulingctl",
+                "messaging",
+                "messagingctl",
+                "registry-render",
+                "registry-client-node",
+                "registry-client-python",
+            }
+            if name != "mint"
+            and not name.startswith("relay")
+            and name not in {"evidence-client-node", "evidence-client-python"}
+        }
+        self.assertEqual([], module.artifact_inventory_errors("0.41.0", published))
+        self.assertNotEqual(
+            [],
+            module.artifact_inventory_errors(
+                "0.41.0", published | {"scheduling-installer": "0.41.0"}
+            ),
+        )
+        future = {name: "0.42.0" for name in published}
+        self.assertNotEqual([], module.artifact_inventory_errors("0.42.0", future))
+        future["scheduling-installer"] = "0.42.0"
+        self.assertEqual([], module.artifact_inventory_errors("0.42.0", future))
+
     @mock.patch.object(load_release_roster(), "COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_messaging_release_surface_begins_at_its_first_release(self) -> None:
         module = load_registry_release()
@@ -3470,6 +3619,8 @@ class RegistryReleaseTest(TestCase):
                 inventory["discoveryctl"] = version
             if module.release_roster.coordinator_in_release(version_tuple):
                 inventory.update({"coordinator": version, "coordinatorctl": version})
+            if module.release_roster.scheduling_installer_in_release(version_tuple):
+                inventory["scheduling-installer"] = version
             if version_tuple >= (0, 39, 0):
                 inventory = {name: value for name, value in inventory.items() if not name.startswith("relay")}
             return inventory
@@ -3572,6 +3723,8 @@ class RegistryReleaseTest(TestCase):
                 inventory.update({"messaging": version, "messagingctl": version})
             if roster.coordinator_in_release(version_tuple):
                 inventory.update({"coordinator": version, "coordinatorctl": version})
+            if roster.scheduling_installer_in_release(version_tuple):
+                inventory["scheduling-installer"] = version
             return inventory
 
         historical = released("0.40.0")
@@ -3706,6 +3859,8 @@ class RegistryReleaseTest(TestCase):
                         current.update({"messaging": version, "messagingctl": version})
                     if module.release_roster.coordinator_in_release(version_tuple):
                         current.update({"coordinator": version, "coordinatorctl": version})
+                    if module.release_roster.scheduling_installer_in_release(version_tuple):
+                        current["scheduling-installer"] = version
                     if version_tuple >= (0, 39, 0):
                         current = {name: value for name, value in current.items() if not name.startswith("relay")}
                     self.assertEqual(
@@ -5332,6 +5487,8 @@ def write_manifest(
     if load_release_roster().coordinator_in_release(version_tuple):
         artifacts["coordinator"] = version
         artifacts["coordinatorctl"] = version
+    if load_release_roster().scheduling_installer_in_release(version_tuple):
+        artifacts["scheduling-installer"] = version
     if version_tuple >= (0, 39, 0):
         artifacts = {name: value for name, value in artifacts.items() if not name.startswith("relay")}
     manifest = {
