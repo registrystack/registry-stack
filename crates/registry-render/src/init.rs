@@ -215,9 +215,10 @@ pub fn scaffold(dir: &Path, labels: &[String]) -> Result<i32, RenderProblem> {
     write_new(&dir.join("fixtures/data.json"), FIXTURE_DATA)?;
     write_new(&dir.join("README.md"), README)?;
     println!(
-        "scaffolded {} — first render:\n  registry-render compile --bundle {} --type letter --data fixtures/data.json --issued-at 2026-01-01T00:00:00Z --out letter.pdf",
+        "scaffolded {}. First render:\n  registry-render compile --bundle {} --type letter --data {} --issued-at 2026-01-01T00:00:00Z --out letter.pdf",
         dir.display(),
-        dir.display()
+        dir.display(),
+        dir.join("fixtures").join("data.json").display()
     );
     Ok(0)
 }

@@ -86,6 +86,47 @@ fn default_scaffold_compiles_offline_with_zero_edits_and_no_warnings() {
 }
 
 #[test]
+fn init_prints_a_first_render_command_that_runs_as_printed() {
+    // Replay the printed command from a directory other than the bundle's
+    // parent, so a path resolved against the bundle instead of the
+    // current directory fails here.
+    let dir = tempdir().join("bundle");
+    let init = run(&["init", dir.to_str().unwrap()]);
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let stdout = String::from_utf8(init.stdout).expect("init prints UTF-8");
+    assert!(
+        !stdout.contains('\u{2014}'),
+        "init output carries no em dash: {stdout}"
+    );
+    let mut lines = stdout.lines();
+    assert_eq!(
+        lines.next(),
+        Some(format!("scaffolded {}. First render:", dir.display()).as_str())
+    );
+    let command = lines.next().expect("init prints the first render command");
+    assert_eq!(lines.next(), None, "{stdout}");
+    let mut words = command.split_whitespace();
+    assert_eq!(words.next(), Some("registry-render"), "{command}");
+    let elsewhere = tempdir();
+    let replayed = render_bin()
+        .args(words)
+        .current_dir(&elsewhere)
+        .output()
+        .expect("spawn render");
+    assert!(
+        replayed.status.success(),
+        "{command}\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&replayed.stdout),
+        String::from_utf8_lossy(&replayed.stderr)
+    );
+    assert!(elsewhere.join("letter.pdf").is_file(), "{command}");
+}
+
+#[test]
 fn cfg_schema_7_init_writes_the_schema_modeline_first() {
     let dir = tempdir();
     let init = run(&["init", dir.to_str().unwrap(), "--labels", "en,fr"]);
