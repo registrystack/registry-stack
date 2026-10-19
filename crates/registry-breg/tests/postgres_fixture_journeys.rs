@@ -115,6 +115,47 @@ journeys:
         expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
 "#;
 
+const COMPARE_CONSTRAINT_JOURNEY_SOURCE: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: compare-constraint-refusals
+    steps:
+      - id: create-out-of-order
+        recordType: widget
+        accessProfile: operator
+        claims:
+          principal: fixture-operator
+          purpose: case-management
+          directClaims: {jurisdiction: zone-a}
+        request:
+          type: create
+          data: {jurisdiction: zone-a, label: first, quantity: 1, validFrom: 2, validTo: 1}
+        expect: {outcome: refusal, status: 409, problemCode: mutation.conflict}
+      - id: batch-create-out-of-order
+        recordType: widget
+        accessProfile: operator
+        claims:
+          principal: fixture-operator
+          purpose: case-management
+          directClaims: {jurisdiction: zone-a}
+        request:
+          type: batch
+          items:
+            - {type: create, data: {jurisdiction: zone-a, label: second, quantity: 1, validFrom: 2, validTo: 1}}
+        expect: {outcome: refusal, status: 409, problemCode: mutation.conflict}
+      - id: create-out-of-order-without-reading-valid-to
+        recordType: widget
+        accessProfile: write-only-end
+        claims:
+          principal: fixture-operator
+          purpose: case-management
+          directClaims: {jurisdiction: zone-a}
+        request:
+          type: create
+          data: {jurisdiction: zone-a, label: third, quantity: 1, validFrom: 2, validTo: 1}
+        expect: {outcome: refusal, status: 409, problemCode: mutation.conflict}
+"#;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fixture_import_uses_real_ingestion_and_leaves_no_open_authority() {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
@@ -283,6 +324,74 @@ async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
     );
 
     assert_exact_durable_journey_outcomes(&database, &registry, &audit_path).await;
+    drop(prepared);
+    idp.stop().await;
+    drop(package);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fixture_test_accepts_the_real_runtime_row_local_constraint_refusal() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    let database = TestDatabase::create(8).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let (compiled, project_source) = compiled_compare_constraint_fixture();
+    let registry = Arc::new(compiled);
+    let expected_catalog = ExpectedManagedCatalog::compiled(&registry);
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("administrator installs the compiler-owned schema");
+    let schema_fingerprint =
+        managed_schema_fingerprint(&migration, &database.runtime_role, &expected_catalog)
+            .await
+            .expect("closed managed schema fingerprint computes");
+    let package = package_fixture_with_journeys(
+        &project_source,
+        &schema_fingerprint,
+        COMPARE_CONSTRAINT_JOURNEY_SOURCE,
+    );
+    initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &registry,
+        RegistryStateTestIdentity {
+            package_id: &package.package.manifest().package_id,
+            database_id: DATABASE_ID,
+            label: &package.revision,
+        },
+    )
+    .await
+    .expect("administrator activates the exact verified package identity");
+    drop(migration);
+    migration_task.abort();
+
+    let idp = MockIdp::start().await;
+    let config_path = package.write_runtime_config(&database, &idp);
+    let prepared =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .expect("verified startup constructs the authenticated fixture runtime");
+    let suite = validate_fixture_journeys(COMPARE_CONSTRAINT_JOURNEY_SOURCE, &registry)
+        .expect("constraint journeys preflight");
+    let tokens = (0..3).map(|_| operator_token(&idp, true)).collect();
+    let runner = prepare_runner(&package, &suite, &prepared, tokens)
+        .await
+        .expect("runner derives exact package and same-database facts");
+    // The runtime names the constraint to `operator`, which reads both
+    // compared fields, and withholds it from `write-only-end`; the runner
+    // accepts both answers.
+    let completed = runner
+        .run_all()
+        .await
+        .expect("every constraint refusal passes through the prepared HTTP router");
+    let receipt = completed
+        .build_receipt(&suite)
+        .expect("complete real-router journey emits a bound receipt");
+    assert_eq!(
+        receipt.successful_journey_ids(),
+        ["compare-constraint-refusals"]
+    );
+
     drop(prepared);
     idp.stop().await;
     drop(package);
@@ -1521,6 +1630,48 @@ fn compiled_fixture() -> (registry_breg::CompiledRegistry, Vec<u8>) {
     let project = parse_project_yaml(&project_source).expect("project fixture parses");
     let registry = compile_project(&project, &[module], CompileProfile::Production)
         .expect("fixture project compiles in Production");
+    (registry, project_source)
+}
+
+/// The fixture project with a declared `compare` constraint the `operator`
+/// profile reads in full, and a `write-only-end` profile that writes both
+/// compared fields but cannot read `valid-to`, so the runtime names the
+/// constraint to the first profile only.
+fn compiled_compare_constraint_fixture() -> (registry_breg::CompiledRegistry, Vec<u8>) {
+    let module = parse_module_yaml(MODULE_SOURCE).expect("module fixture parses");
+    let fields = "jurisdiction, label, note, quantity";
+    let mut project_source = String::from_utf8(compiled_fixture().1)
+        .expect("project fixture is UTF-8")
+        .replacen(
+            "      - {id: quantity, type: int64, required: true, classification: public}\n",
+            "      - {id: quantity, type: int64, required: true, classification: public}\n      - {id: valid-from, type: int64, classification: public}\n      - {id: valid-to, type: int64, classification: public}\n",
+            1,
+        )
+        .replacen(
+            "      - {type: unique, fields: [label]}\n",
+            "      - {type: unique, fields: [label]}\n      - {id: chronological, type: compare, left: valid-from, operator: less-than-or-equal, right: valid-to}\n",
+            1,
+        )
+        .replacen(
+            &format!("          readableFields: [{fields}]\n          writableFields: [{fields}]\n"),
+            &format!("          readableFields: [{fields}, valid-from, valid-to]\n          writableFields: [{fields}, valid-from, valid-to]\n"),
+            1,
+        );
+    let write_only_end = format!(
+        "  - id: write-only-end\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    requiredPurposes: [case-management]\n    permissions:\n      records:\n        - recordType: widget\n          operations: [create]\n          readableFields: [{fields}, valid-from]\n          writableFields: [{fields}, valid-from, valid-to]\n          rowBoundaries:\n            - {{field: jurisdiction, claim: jurisdiction, operator: equals}}\n"
+    );
+    assert!(
+        project_source.contains("right: valid-to}")
+            && project_source.contains(
+                "writableFields: [jurisdiction, label, note, quantity, valid-from, valid-to]"
+            ),
+        "fixture declares the compare constraint and grants both compared fields"
+    );
+    project_source.push_str(&write_only_end);
+    let project_source = project_source.into_bytes();
+    let project = parse_project_yaml(&project_source).expect("constraint project fixture parses");
+    let registry = compile_project(&project, &[module], CompileProfile::Production)
+        .expect("constraint fixture project compiles in Production");
     (registry, project_source)
 }
 
