@@ -3309,6 +3309,32 @@ fn action_artifact_selector_publishes_only_public_action_contracts() {
     assert!(output_root
         .join("generated/action-schemas/register-household-contact.invoke.response.schema.json")
         .is_file());
+    let availability_input: Value = serde_json::from_slice(
+        &fs::read(output_root.join(
+            "generated/action-schemas/register-household-contact.availability.input.schema.json",
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        availability_input["$id"],
+        "urn:breg:action:register-household-contact:availability-input"
+    );
+    assert_eq!(
+        availability_input["properties"]["targetInput"]["enum"],
+        json!(["householdId"])
+    );
+    let availability_response: Value = serde_json::from_slice(
+        &fs::read(output_root.join(
+            "generated/action-schemas/register-household-contact.availability.response.schema.json",
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        availability_response["$id"],
+        "urn:breg:action:register-household-contact:availability-response"
+    );
     assert!(output_root
         .join(
             "generated/action-schemas/register-household-contact.target-conditions.input.schema.json"
@@ -3328,6 +3354,8 @@ fn action_artifact_selector_publishes_only_public_action_contracts() {
         vec![
             "generated/action-contracts.json",
             "generated/action-contracts.schema.json",
+            "generated/action-schemas/register-household-contact.availability.input.schema.json",
+            "generated/action-schemas/register-household-contact.availability.response.schema.json",
             "generated/action-schemas/register-household-contact.invoke.input.schema.json",
             "generated/action-schemas/register-household-contact.invoke.response.schema.json",
             "generated/action-schemas/register-household-contact.target-conditions.input.schema.json",
@@ -3361,6 +3389,14 @@ fn schema_selector_includes_action_input_output_schemas() {
     assert!(output_root
         .join("generated/action-schemas/register-household-contact.invoke.response.schema.json")
         .is_file());
+    assert!(output_root
+        .join("generated/action-schemas/register-household-contact.availability.input.schema.json")
+        .is_file());
+    assert!(output_root
+        .join(
+            "generated/action-schemas/register-household-contact.availability.response.schema.json"
+        )
+        .is_file());
 }
 
 #[test]
@@ -3381,8 +3417,25 @@ fn metadata_selector_publishes_action_metadata_without_private_grant_details() {
     assert!(output.status.success(), "{output:?}");
     let metadata = fs::read_to_string(output_root.join("generated/metadata/registry.json"))
         .expect("metadata artifact reads");
-    assert!(metadata.contains("register-household-contact"));
-    assert!(metadata.contains("householdId"));
+    let document: Value = serde_json::from_str(&metadata).expect("metadata is JSON");
+    let action = document["actions"]
+        .as_array()
+        .expect("metadata actions")
+        .iter()
+        .find(|action| action["id"] == "register-household-contact")
+        .expect("fixture Action metadata");
+    assert_eq!(action["inputs"][0]["apiName"], "householdId");
+    assert_eq!(
+        action["routes"]["availability"],
+        json!({
+            "inputSchema": "action-register-household-contact-availability-input",
+            "method": "POST",
+            "operationId": "actions.register-household-contact.availability",
+            "path": "/v1/actions/register-household-contact/availability",
+            "requiresIdempotencyKey": false,
+            "responseSchema": "action-register-household-contact-availability-response"
+        })
+    );
     assert!(!metadata.contains("private_claim_name"));
     assert!(!metadata.contains("other_private_claim"));
     assert!(!metadata.contains("rowBoundaries"));
@@ -3653,7 +3706,7 @@ fn explain_routes_includes_served_immediate_action_routes() {
         .iter()
         .filter(|route| route["actionId"] == "register-household-contact")
         .collect::<Vec<_>>();
-    assert_eq!(action_routes.len(), 2);
+    assert_eq!(action_routes.len(), 3);
     assert!(action_routes.iter().any(|route| {
         let profiles = route["accessProfiles"]
             .as_array()
@@ -3676,6 +3729,16 @@ fn explain_routes_includes_served_immediate_action_routes() {
             && route["path"] == "/v1/actions/register-household-contact/target-conditions"
             && route["operation"] == "invoke"
             && route["requiresIdempotencyKey"] == false
+    }));
+    assert!(action_routes.iter().any(|route| {
+        route["type"] == "action"
+            && route["id"] == "actions.register-household-contact.availability"
+            && route["actionRouteKind"] == "availability"
+            && route["path"] == "/v1/actions/register-household-contact/availability"
+            && route["operation"] == "invoke"
+            && route["requiresIdempotencyKey"] == false
+            && route["accessProfiles"] == json!(["contact-auditor", "contact-registrar"])
+            && route["defaultAccessProfile"] == "contact-registrar"
     }));
     let rendered = serde_json::to_string(&explanation).expect("routes explanation serializes");
     assert!(!rendered.contains("private_claim_name"));
@@ -3757,10 +3820,23 @@ fn explain_access_includes_action_only_grants_and_target_reach() {
         registrar["requiredPurposes"],
         json!(["contact-registration"])
     );
+    let routes = explanation["actions"]["routes"].as_array().unwrap();
+    assert_eq!(routes.len(), 3);
+    let availability = routes
+        .iter()
+        .find(|route| route["id"] == "actions.register-household-contact.availability")
+        .expect("availability route is included in access inspection");
+    assert_eq!(availability["kind"], "availability");
     assert_eq!(
-        explanation["actions"]["routes"].as_array().unwrap().len(),
-        2
+        availability["path"],
+        "/v1/actions/register-household-contact/availability"
     );
+    assert_eq!(availability["operation"], "invoke");
+    assert_eq!(
+        availability["accessProfiles"],
+        json!(["contact-auditor", "contact-registrar"])
+    );
+    assert_eq!(availability["defaultAccessProfile"], "contact-registrar");
     assert!(explanation["claimContract"]["purposeRequired"]
         .as_bool()
         .unwrap());
