@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-docs
-last_reviewed: "2026-09-25"
+last_reviewed: "2026-10-20"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -15,6 +15,202 @@ This page records notable changes to the documentation site and the product vers
 documents.
 Per-product release notes live in each product repository; the entries below link to the
 relevant product pages on this site rather than duplicating release notes.
+
+## v0.42.0 beta-54
+
+- BREAKING: v0.42.0 reads no state that v0.41.0 wrote. The Base Registry Engine (BReg) carries no
+  state migration from v0.41.0 and names no refusal for an earlier database, so point it only at a
+  fresh one. Casework, Scheduling, and Messaging each install their schema as one baseline
+  numbered 100 and refuse a ledger below it at `plan`, `apply`, and startup. Evidence needs a newly authored normalized
+  project, target, and target authority. Migration: finish, drain, or record open work, keep each
+  v0.41.0 database unchanged for reconciliation and rollback, and apply the v0.42.0 packages to
+  fresh databases as [upgrade and retire](../operate/advanced/upgrade-and-retire/) describes. See
+  [upgrades and state](../reference/api-stability/#upgrades-and-state).
+
+{/* Evidence: products/breg/CHANGELOG.md, "it carries no state migration from 0.41";
+    products/casework/CHANGELOG.md, products/scheduling/CHANGELOG.md, and
+    products/messaging/CHANGELOG.md, "refuses it as newer than that release knows";
+    crates/registry-casework/src/store.rs, refuse_unsupported_schema;
+    crates/registry-scheduling/src/store.rs, refuse_pre_1_0_schema;
+    crates/registry-messaging/src/store.rs, Pre1_0Schema;
+    release/scripts/rehearse-upgrade.py, FORWARD_PATH_FLOOR. */}
+
+- BReg requires PostgreSQL 17 or later and a UTF8 database. Generated text columns and
+  indexes use the built-in `pg_catalog.pg_c_utf8` collation, and a non-UTF8 database is refused
+  with recovery guidance. Migration: provision the fresh BReg database on PostgreSQL 17 or later
+  with UTF8 encoding.
+
+{/* Evidence: products/breg/CHANGELOG.md, "pg_c_utf8";
+    crates/registry-breg/src/postgres/schema.rs, pg_c_utf8. */}
+
+- BREAKING: BReg projects declare `recordTypes` and Actions, and durable Proposals replace the
+  entity-backed change-request model and its routes, with no compatibility layer. The Rust,
+  Node.js, and Python clients use standalone Proposal methods (`startProposal`,
+  `prepareProposal`, `executeProposal`, `recoverProposal`, the Proposal attachment methods,
+  `getProposal`, and `listProposals`); `immediateActions` becomes `actions`,
+  `selectImmediateAction` becomes `selectAction`, `contractFingerprint` becomes `revision`, and
+  BReg metadata is version 2. The Proposal list takes `limit` and refuses `top`; ingestion runs
+  take `cursor`, answer `nextCursor`, and refuse `after`. Proposal documents and events carry a
+  required `turn`, lists filter by `turn` and `state=rejected`, and a page may hold fewer than
+  `limit` items. A Proposal event's `subject.recordReference` is `/v1/proposals/{id}`. A rejecting
+  Review ends the Proposal in the terminal state `rejected` and commands answer `409
+  proposal.rejected`; a changes-requested result records `review-returned`. Under required Review
+  `applicationStatus.state` reads `awaiting-review` until approval, `application-refused` means
+  only an executor refusal, and the `apply` link reports `review-changes-requested` or
+  `review-ended` with recovery `revise`. `applicationStatus.recovery` is `retry` or
+  `correct-input`, and link availability no longer lists `terminal`. `bregctl explain lifecycle`,
+  `bregctl explain events`, and `bregctl explain routes` answer `v1alpha6`. Migration: rewrite
+  the project, rebuild the package, update clients and receivers together, keep paging while
+  `nextCursor` is present, and start a new Proposal after a rejection. See
+  [manage changes](../operate/breg-changes/).
+
+{/* Evidence: products/breg/CHANGELOG.md, the Unreleased BREAKING entries for record types and
+    Actions, standalone Proposal methods, "refuses `top`", `turn`, `recordReference`,
+    `review-returned`, `awaiting-review`, `correct-input`, recovery `terminal`, and `v1alpha6`. */}
+
+- BREAKING: an immediate BReg Action whose declared field guard fails at commit answers `412
+  action.guard_failed` instead of `412 precondition.failed` when the current-target admission
+  checks pass and the selected profile can read the failed guard's target fields. The code
+  confirms that blocker; it does not promise the Action would otherwise succeed. A stale condition
+  or a guard the caller cannot read remains `412 precondition.failed`. Migration: clients that
+  match `precondition.failed`, for example to offer reload and retry, must accept the new code.
+
+{/* Evidence: products/breg/CHANGELOG.md, `action.guard_failed`;
+    products/breg/immediate-actions.md, "Check one target's advisory availability". */}
+
+- BREAKING: a decided Casework ReviewResult and every `ReviewDecisionReceipt` name the selected
+  `outcome`, and BReg reads it. An approve without an outcome is refused with `400
+  request.invalid` and reason `outcome-not-declared`, a policy with `purpose: approval` must
+  declare its approval outcomes, and approvals in one stage must name the same outcome
+  (`approval-outcome-differs`). Every outcome declares `publicReason: required`, `optional`, or
+  `none`; a decision's `publicReason` is bounded at 2000 bytes and released to the producer. A
+  private `reason` over its bound answers `maximum-bytes-exceeded` instead of `text-invalid`.
+  Migration: upgrade Casework and every review producer, including BReg, together, because mixed
+  versions leave an approved Proposal `submitted`; add `publicReason` to every outcome and send
+  `outcome` with every approval.
+
+{/* Evidence: products/casework/CHANGELOG.md, "names the selected `outcome`",
+    `outcome-not-declared`, `approval-outcome-differs`, `publicReason`, and
+    `maximum-bytes-exceeded`; products/breg/CHANGELOG.md, "names its outcome". */}
+
+- BREAKING: Casework replaces source-owned WorkItems with one ReviewPolicy, ReviewRequest,
+  ReviewTask, Decision, and ReviewResult model and refuses retained legacy schemas. The project
+  format follows the cross-product configuration conventions: duration objects such as
+  `after: {hours: 48}`, `terminalRetentionDays` and `accountabilityRetentionDays`,
+  `retention: {receiptRetentionDays}` for trusted producers, ID-keyed mappings in place of lists,
+  `type: stage`, anchor objects, `atRisk: {before: {workingDays: N}}`, and no `completeOn` or
+  routing `when: {activity}`. Producer findings read `no-policies`, `too-many-policies`,
+  `invalid-policy`, `duplicate-policy`, `receipt-retention-out-of-range`, and
+  `receipt-retention-exceeds-result-retention`. Task list, next-task, and holdings reads finish a
+  bounded scan or refuse `review.query-too-broad`. In Rust, `ClockPolicyError` gains
+  `Calendar { at, reason }` and is no longer `Copy`. Migration: rewrite the project from the
+  error each old spelling reports, use a fresh database, update scripts that match the old codes,
+  and narrow broad queues. See [change a Casework package](../operate/change-a-casework-package/).
+
+{/* Evidence: products/casework/CHANGELOG.md, the Unreleased BREAKING entries for the review model,
+    the configuration-conventions table, producer findings, `review.query-too-broad`, and
+    `ClockPolicyError`. */}
+
+- BREAKING: configuration names converge. BReg moves `idempotency.receiptRetentionDays` and
+  `eventDelivery.payloadRetentionDays` into a top-level `retention` block as
+  `receiptRetentionDays` and `hookPayloadRetentionDays`. BReg and Scheduling `taskGrantStatus`
+  entries name `statusResource` instead of `caseworkResource`, and the Rust field
+  `TaskGrantStatusConfig::casework_resource` becomes `status_resource`. Scheduling
+  `retention.attemptReceiptRetentionDays` and Messaging
+  `retention.submissionReceiptRetentionDays` become `retention.receiptRetentionDays`, at most 365.
+  Messaging and Scheduling default `scopeClaim` to `scope`, and Scheduling defaults `readsScope` to
+  `scheduling:read` and `explainScope` to `scheduling:explain`. Old keys report
+  `config.removed-key`. Migration: rename each key, and set the scope settings explicitly when
+  your issuer emits the earlier spellings.
+
+{/* Evidence: products/breg/CHANGELOG.md, `hookPayloadRetentionDays` and `statusResource`;
+    products/scheduling/CHANGELOG.md, `attemptReceiptRetentionDays` and `scheduling:read`;
+    products/messaging/CHANGELOG.md, `submissionReceiptRetentionDays` and `registry_scopes`;
+    products/platform/CHANGELOG.md, `status_resource`. */}
+
+- BREAKING: every token-verifying runtime, including Coordinator source builds, uses one issuer
+  network policy. An operator-declared issuer or JWKS URI may resolve to a private or loopback
+  address; a discovered cross-origin `jwks_uri` must use HTTPS and may not. Cloud metadata and
+  link-local addresses are always refused, and plain HTTP beyond loopback needs
+  `allowInsecureHttp: true`. Migration: declare a private key endpoint as
+  `jwksSource: {type: uri, uri: ...}` or serve it from the issuer origin. See
+  [connect an OIDC issuer](../operate/advanced/connect-an-oidc-issuer/).
+
+{/* Evidence: products/platform/CHANGELOG.md, `allowInsecureHttp`;
+    products/coordinator/CHANGELOG.md, `jwksSource`. */}
+
+- BREAKING: BReg audit records name activation UUIDs `activationId`, and import authority records
+  keep `authorityActivationId`. Activation refuses with `apply.hooks.local-retained` while local
+  hook work needs the active package and audits the refusal with outcome `refused`.
+  `bregctl webhook list` reports `replayEligible` only when operator permission and the proposal
+  policy both allow a replay. Events without a compiled delivery, and every
+  `registry-platform-hooks` envelope, are bounded at 1 MiB instead of 2 MiB. Scheduling reminder
+  events use the shared hook envelope with content type `application/json`. A stalled `stdout`
+  audit destination refuses audited requests with `AuditUnavailableReason::Stalled` after
+  5 seconds. Migration: update audit consumers and replay automation, run `bregctl webhook drain`
+  before apply, project smaller events, and parse reminders as the hook envelope. See
+  [BReg webhooks](../operate/breg-webhooks/).
+
+{/* Evidence: products/breg/CHANGELOG.md, `activationId`, `apply.hooks.local-retained`,
+    `replayEligible`, and "1 MiB"; products/platform/CHANGELOG.md, `MAX_ENVELOPE_BYTES` and
+    `AuditUnavailableReason::Stalled`; products/scheduling/CHANGELOG.md, "shared hook envelope". */}
+
+- BREAKING: `bregctl doctor` names why a database connection was refused with
+  `startup.database.unreachable`, `capacity-exhausted`, `tls-refused`,
+  `authentication-refused`, `missing`, `timeout`, `configuration-refused`, or `secret-refused`
+  instead of `startup.database.connection-refused`, and reports `startup.database.catalog-drift`
+  instead of `startup.database.unready`. A `canonicalBaseIri` in the reserved `.invalid`
+  namespace is refused as `breg.registry.canonical-base-iri-reserved` outside a database
+  initialized for `local`. Migration: update automation that matches the old codes, and point
+  `canonicalBaseIri` at a hostname you control. See
+  [inspect and diagnose](../operate/advanced/inspect-and-diagnose/).
+
+{/* Evidence: products/breg/CHANGELOG.md, `startup.database.catalog-drift` and
+    `breg.registry.canonical-base-iri-reserved`. */}
+
+- BREAKING: Evidence authoring uses one normalized `evidence.yaml` project with Sources,
+  Functions, AssertionDefinitions, and Outputs, plus a separate target and complete target
+  authority. `EvidenceFixture` control keys use camelCase, such as `syntheticOnly` and
+  `expectedValue`, and old spellings report `config.removed-key`. Local development starts with
+  `evidencectl dev start PROJECT`; `dev --detach` and `dev --project` are removed. Migration:
+  author the current model, rename fixture control keys, run `evidencectl test PROJECT --target
+  TARGET --deny-warnings`, and rebuild the package.
+
+{/* Evidence: products/evidence/CHANGELOG.md, "one normalized `evidence.yaml`",
+    `EvidenceFixture`, and `evidencectl dev start`;
+    release/notes/v0.42.0.md, "Evidence authoring and local development". */}
+
+- BREAKING: the Discovery bindings and `@registrystack/client` no longer export
+  `validateSelection` or `validate_selection`. `registry-platform-calendar` resolves a deadline in
+  a daylight-saving gap to the first instant after it and in a fold to the earlier instant, and
+  `CalendarEvaluationError` offset variants carry their values. Migration: call
+  `validateSelectionStructure` or `validate_selection_structure`, and match the calendar error
+  variants with `{ .. }`.
+
+{/* Evidence: products/discovery/CHANGELOG.md, `validate_selection_structure`;
+    products/platform/CHANGELOG.md, `CalendarEvaluationError` and "daylight-saving". */}
+
+- BReg serves one submitted Proposal version at `GET /v1/proposals/{id}/submissions/{version}`,
+  shows a reviewer's `publicReason`, sweeps expired Evidence uses and terminal webhook metadata,
+  uses declared `recordTypes[].indexes` for filtered, sorted lists, and advertises a per-target
+  availability check for immediate Actions with reference inputs. Casework accepts
+  `revokedKeyIds` and `maximumTokenLifetimeSeconds`, keeps decided tasks in own-decision and
+  supervision reads, and adds caseload preview and apply. Scheduling prunes outbox and observer
+  metadata and expires raw claim owners after `retention.claimOwnerRetentionDays`. BReg, Casework,
+  and Messaging local development pull PostgreSQL from Docker Hub again, so development egress
+  allowlists need Docker Hub.
+
+{/* Evidence: products/breg/CHANGELOG.md, `proposal.submission_expired`, `indexes`, and
+    "per-target availability route";
+    products/casework/CHANGELOG.md, `revokedKeyIds` and "Caseload";
+    products/scheduling/CHANGELOG.md, `claimOwnerRetentionDays`. */}
+
+- Registry Coordinator source is in the repository, but v0.42.0 publishes no Coordinator binary,
+  image, or client namespace. Build it from source as
+  [configure the Coordinator](../configure/coordinator/) describes.
+
+{/* Evidence: release/scripts/release_roster.py, COORDINATOR_FIRST_RELEASE;
+    docs/site/src/content/docs/configure/coordinator.mdx, "cargo build". */}
 
 ## v0.41.0 beta-53
 

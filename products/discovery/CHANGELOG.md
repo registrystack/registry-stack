@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.42.0 - 2026-10-20
+
 - BREAKING: the Discovery Node.js binding and the `@registrystack/client`
   facade no longer export `validateSelection`, and the Python binding no
   longer exports `validate_selection`. Both were deprecated aliases for the

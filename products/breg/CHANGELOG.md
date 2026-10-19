@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.42.0 - 2026-10-20
+
 - Advertise a per-target availability route for immediate Actions with
   reference inputs. The route evaluates disclosed field guards without
   granting mutation authority and returns a closed unknown result when the
@@ -105,7 +107,7 @@
   polymorphic ranges, cycles, explicit targets and selected target entities
   remain refused. Existing single-valued projections, Actions, access grants
   and runtime behavior are unchanged.
-- Generated text columns and indexes use PostgreSQL's built-in
+- BREAKING: generated text columns and indexes use PostgreSQL's built-in
   `pg_catalog.pg_c_utf8` collation, and the managed-catalog fingerprint is
   stable across PostgreSQL 17 and 18. PostgreSQL 17 is now the minimum for
   runtime, spatial provisioning, migration receipts, and schema-test receipts.
