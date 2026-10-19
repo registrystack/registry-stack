@@ -1186,8 +1186,9 @@ impl MutationTransaction {
                 application_id,
             )
             .await?;
-        // A failed field guard answers only after every other check passed, so
-        // its distinct refusal never stands in for a stale or hidden target.
+        // Before surfacing a failed guard, finish every current-target and
+        // admission precheck above and recheck the grant. Effect application and
+        // proposed-value authorization below run only after guards pass.
         if let Some(input) = guard_failure {
             check_current_action_grant(claims)?;
             return Err(MutationError::FieldGuardFailed { input });
@@ -3166,8 +3167,9 @@ impl MutationTransaction {
             )
             .await?;
         check_current_action_grant(claims)?;
-        // As at commit, a failed field guard answers only after every other
-        // admission check passed, and no Evidence is requested for it.
+        // Initial Evidence preflight validates current target state and forms
+        // commit-Evidence requests, but stops before external acquisition when
+        // a guard is already false. Finalization revalidates acquired Evidence.
         if let Some(input) = guard_failure {
             return Err(MutationError::FieldGuardFailed { input });
         }

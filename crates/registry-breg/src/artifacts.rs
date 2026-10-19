@@ -1685,6 +1685,14 @@ fn action_problem_responses(
             }],
         ),
     ]);
+    if kind == ActionRouteKind::Availability
+        || (kind == ActionRouteKind::Invoke && !action.execution.is_proposal())
+    {
+        responses.entry("503").or_default().push(ProblemExample {
+            code: "runtime.field_encryption.unavailable",
+            detail: "The Registry field-encryption service is unavailable.",
+        });
+    }
     if kind == ActionRouteKind::Invoke {
         if let Some(handler) = &action.handler {
             if !action.evidence.is_empty() {

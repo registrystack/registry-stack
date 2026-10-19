@@ -42,6 +42,8 @@
 //! artifact revisions without changing SQL or Action fingerprints.
 //! Immediate Action availability routes and schemas, and the `action.guard_failed`
 //! Problem, likewise move artifact revisions only.
+//! Publishing the field-encryption outage Problem on immediate Action invoke and
+//! availability operations likewise moves Action fixture artifact revisions only.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
@@ -75,7 +77,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
         ddl_sha256: "19e503d71d515e5a9e2af9c109b91cce856eb041849d9d0208dfeb454365e7ba",
-        revision: "sha256:000ded5177f3be3d467220e0aeb15c936108aae2e145a87d5ec31ab7f4108291",
+        revision: "sha256:ab230321e1af201fd82ba755d3ac0d5f4276a8d62b018d5c678650242882bfa6",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -86,7 +88,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
         ddl_sha256: "92c531b3cf49292bcbaa33b663fd2fc2fdd934d0f96635261f0f9d463ef914d8",
-        revision: "sha256:c401b3655b749f79565938eae706b5986d4c1d4961281162eb91c1e0dd309542",
+        revision: "sha256:c884fbf1a694ed07de771662e33d46fd29595c720e1583faa0eb9dc4044f75c5",
     },
     Fixture {
         name: "household-contact-actions",
@@ -97,7 +99,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
         ddl_sha256: "6699bf442105e684adbe6ca506cfbbef90700b0298decdd9ec3f7a3a90cf4e67",
-        revision: "sha256:474e3447f515a14852f7ceca9536c71d59bb37b605df111658c054a1c952cdac",
+        revision: "sha256:3cfbdf8364797123d5408dad610455b3aa206cb05934d808bfe9098456d5af49",
     },
 ];
 

@@ -109,11 +109,32 @@ async fn setup() -> (
     Arc<registry_breg::CompiledRegistry>,
     ExpectedRegistryIdentity,
 ) {
-    setup_with_handler_source(None).await
+    setup_with_handler_sources(None, None).await
 }
 
 async fn setup_with_handler_source(
     handler_source: Option<&str>,
+) -> (
+    TestDatabase,
+    Arc<registry_breg::CompiledRegistry>,
+    ExpectedRegistryIdentity,
+) {
+    setup_with_handler_sources(handler_source, None).await
+}
+
+async fn setup_with_coordinated_handler_source(
+    handler_source: &str,
+) -> (
+    TestDatabase,
+    Arc<registry_breg::CompiledRegistry>,
+    ExpectedRegistryIdentity,
+) {
+    setup_with_handler_sources(None, Some(handler_source)).await
+}
+
+async fn setup_with_handler_sources(
+    simple_handler_source: Option<&str>,
+    coordinated_handler_source: Option<&str>,
 ) -> (
     TestDatabase,
     Arc<registry_breg::CompiledRegistry>,
@@ -201,8 +222,9 @@ async fn setup_with_handler_source(
     .map(|path| {
         let source = std::fs::read_to_string(root.join(path)).unwrap();
         let source = if path == "scripts/register-person.rhai" {
-            handler_source.map_or(source, str::to_owned)
+            simple_handler_source.map_or(source, str::to_owned)
         } else {
+            let source = coordinated_handler_source.map_or(source, str::to_owned);
             // A test-only optional patch branch exercises clear through the
             // ordinary HTTP handler, compiled field ceiling, and SQL writer.
             source.replace(
@@ -1093,6 +1115,64 @@ async fn action_handler_faults_log_only_compiled_locations_and_static_causes() {
         handler_logs[1]["fields"]["handler_failure"],
         "action.handler.execution"
     );
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn malformed_handler_output_wins_over_a_failed_field_guard() {
+    let _test_guard = HANDLER_TEST_LOCK.lock().await;
+    let (database, registry, identity) = setup_with_coordinated_handler_source(
+        r#"fn plan(ctx) {
+            #{effects: [#{id: "person", set: #{
+                identifier: ctx.inputs.identifier, "display-name": false
+            }}]}
+        }"#,
+    )
+    .await;
+    let register = &registry.entities()["register"];
+    database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.{} SET {} = false WHERE record_id = $1",
+                q(&register.physical_table),
+                q(&register.fields["active"].physical_name)
+            ),
+            &[&Uuid::parse_str(ID).unwrap()],
+        )
+        .await
+        .unwrap();
+    let app = app(&database, registry.clone(), identity, None);
+    let condition = send(
+        app.clone(),
+        "POST",
+        "/v1/actions/register-person-with-registration/target-conditions",
+        "handler-before-guard-condition",
+        json!({"input":{"registerId":ID}}),
+        "person-registrar",
+    )
+    .await;
+    assert_eq!(condition.0, StatusCode::OK, "{}", condition.1);
+    let mut body = input("0123456789012");
+    body["input"]["registerId"] = json!(ID);
+    body["input"]["registrationCode"] = json!("reg-order");
+    body["input"]["recordRegistration"] = json!(false);
+    body["input"]["updateRegister"] = json!(false);
+    body["preconditions"] = condition.1["preconditions"].clone();
+    let before = counts(&database, &registry).await;
+    let failed = send(
+        app,
+        "POST",
+        "/v1/actions/register-person-with-registration",
+        "handler-before-guard",
+        body,
+        "person-registrar",
+    )
+    .await;
+    assert_eq!(failed.0, StatusCode::INTERNAL_SERVER_ERROR, "{}", failed.1);
+    assert_eq!(failed.1["code"], "action.handler_failed");
+    assert_eq!(before, counts(&database, &registry).await);
+    database.assert_every_audit_request_answered_once();
     database.cleanup().await;
 }
 

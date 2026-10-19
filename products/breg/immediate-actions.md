@@ -113,13 +113,15 @@ No availability response names a guard ID or a Record value.
 
 Availability is an observation. It does not run a Function, test SQL
 uniqueness or Evidence, mint a condition token, grant mutation authority, or
-reserve the observed revision. Invoke still checks current authority,
-concurrency, form completeness, every guard, Functions, and Evidence inside
-the mutation transaction. `available: true` means only that this target's field
+reserve the observed revision. Invoke remains responsible for current authority,
+concurrency, form completeness, every guard, Functions, and Evidence; all required
+checks must succeed before effects commit. `available: true` means only that this target's field
 guards are currently satisfied, including the case where it has no field
 guards. A safely disclosed field guard that fails at commit answers
-`412 action.guard_failed` when every other commit check passed; stale
-conditions, any other refusal, and failures that cannot be disclosed remain
+`412 action.guard_failed` after current-target admission checks pass. The code
+confirms that blocker; effect application, proposed-value authorization, and database
+constraints run only after guards pass. An earlier refusal retains its normal
+response. Stale conditions and guard failures that cannot be disclosed remain
 `412 precondition.failed`.
 
 ## Inspect and test the function

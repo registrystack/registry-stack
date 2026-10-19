@@ -278,6 +278,76 @@ fn reference_target_actions_publish_bounded_availability_contracts() {
         })
     );
 
+    let openapi: Value = serde_json::from_slice(
+        &compiled
+            .artifacts()
+            .get("generated/openapi.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    let availability_examples = &openapi["paths"][&route.path]["post"]["responses"]["503"]
+        ["content"]["application/problem+json"]["examples"];
+    assert_eq!(
+        availability_examples["runtime.field_encryption.unavailable"]["value"],
+        json!({
+            "type": "https://id.registrystack.org/problems/registry-breg/runtime/field_encryption/unavailable",
+            "title": "Service Unavailable",
+            "status": 503,
+            "detail": "The Registry field-encryption service is unavailable.",
+            "code": "runtime.field_encryption.unavailable",
+            "traceId": "11111111111111111111111111111111",
+        })
+    );
+    assert!(availability_examples["service.unavailable"].is_object());
+
+    let invoke = compiled
+        .actions()
+        .routes
+        .iter()
+        .find(|route| route.kind == ActionRouteKind::Invoke)
+        .unwrap();
+    let invoke_examples = &openapi["paths"][&invoke.path]["post"]["responses"]["503"]["content"]
+        ["application/problem+json"]["examples"];
+    assert!(invoke_examples["runtime.field_encryption.unavailable"].is_object());
+
+    let target_conditions = compiled
+        .actions()
+        .routes
+        .iter()
+        .find(|route| route.kind == ActionRouteKind::TargetConditions)
+        .unwrap();
+    let target_condition_examples = &openapi["paths"][&target_conditions.path]["post"]["responses"]
+        ["503"]["content"]["application/problem+json"]["examples"];
+    assert!(target_condition_examples
+        .get("runtime.field_encryption.unavailable")
+        .is_none());
+
+    let proposal = compile(&proposal_source(
+        &["get", "edit", "submit", "cancel", "apply"],
+        &["item", "label"],
+    ));
+    let proposal_route = proposal
+        .actions()
+        .routes
+        .iter()
+        .find(|route| route.kind == ActionRouteKind::Invoke)
+        .unwrap();
+    let proposal_openapi: Value = serde_json::from_slice(
+        &proposal
+            .artifacts()
+            .get("generated/openapi.json")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    assert!(
+        proposal_openapi["paths"][&proposal_route.path]["post"]["responses"]["503"]["content"]
+            ["application/problem+json"]["examples"]
+            .get("runtime.field_encryption.unavailable")
+            .is_none()
+    );
+
     let request_schema: Value = serde_json::from_slice(
         &compiled
             .artifacts()
