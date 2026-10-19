@@ -64,6 +64,28 @@ async fn setup_with_age(
     Arc<registry_breg::CompiledRegistry>,
     ExpectedRegistryIdentity,
 ) {
+    setup_with_options(source, maximum_age, false).await
+}
+
+async fn setup_with_local_get(
+    source: Option<&str>,
+) -> (
+    TestDatabase,
+    Arc<registry_breg::CompiledRegistry>,
+    ExpectedRegistryIdentity,
+) {
+    setup_with_options(source, 60, true).await
+}
+
+async fn setup_with_options(
+    source: Option<&str>,
+    maximum_age: u64,
+    local_get: bool,
+) -> (
+    TestDatabase,
+    Arc<registry_breg::CompiledRegistry>,
+    ExpectedRegistryIdentity,
+) {
     let database = TestDatabase::create(1).await;
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/acceptance/farmer-landholding-evidence");
@@ -94,6 +116,13 @@ async fn setup_with_age(
     document["accessProfiles"][0]["permissions"]["actions"][0]["targets"].as_array_mut().unwrap().push(json!({
         "recordType":"local-register", "rowBoundaries":[{"field":"zone","claim":"zone","operator":"equals"}]
     }));
+    if local_get {
+        document["accessProfiles"][0]["permissions"]["records"] = json!([{
+            "recordType":"local-register", "operations":["get"],
+            "readableFields":["active","zone"],
+            "rowBoundaries":[{"field":"zone","claim":"zone","operator":"equals"}]
+        }]);
+    }
     project = parse_project_yaml(&serde_json::to_vec(&document).unwrap()).unwrap();
     for action in &mut project.actions {
         for capability in &mut action.evidence {
@@ -264,6 +293,63 @@ async fn counts(database: &TestDatabase, registry: &registry_breg::CompiledRegis
 }
 
 const TARGET: &str = "7431a75f-8e07-4859-b946-a8479bca089d";
+
+#[tokio::test(flavor = "current_thread")]
+async fn already_failed_local_guard_refuses_before_external_evidence() {
+    let provider = EvidenceProvider::start().await;
+    let (database, registry, identity) = setup_with_local_get(None).await;
+    let entity = &registry.entities()["local-register"];
+    let table = q(&entity.physical_table);
+    let zone = q(&entity.fields["zone"].physical_name);
+    let active = q(&entity.fields["active"].physical_name);
+    let checked = q(&entity.fields["checked"].physical_name);
+    database.admin.execute(&format!(
+        "INSERT INTO registry_data.{table} (record_id, record_revision, record_lifecycle, active_package_revision, {zone}, {active}, {checked}) VALUES ($1, 1, 'active', $2, 'permitted', false, false)"
+    ), &[&uuid::Uuid::parse_str(TARGET).unwrap(), &identity.activation_id]).await.unwrap();
+    let (app, _pool) = app(&database, registry.clone(), identity, &provider, None);
+    let condition = send(
+        app.clone(),
+        &format!("{ACTION}/target-conditions"),
+        "failed-guard-condition",
+        json!({"input":{"localRegister":TARGET}}),
+        true,
+    )
+    .await;
+    assert_eq!(condition.0, StatusCode::OK, "{}", condition.1);
+    assert_eq!(provider.calls(), 0);
+
+    let mut body = input("failed-guard", false);
+    body["input"]["localRegister"] = json!(TARGET);
+    body["preconditions"] = condition.1["preconditions"].clone();
+    let before = counts(&database, &registry).await;
+    let refused = send(app, ACTION, "failed-guard", body, true).await;
+    assert_eq!(refused.0, StatusCode::PRECONDITION_FAILED, "{}", refused.1);
+    assert_eq!(refused.1["code"], "action.guard_failed");
+    assert_eq!(
+        provider.calls(),
+        0,
+        "a guard known to be false at admission must not request Evidence"
+    );
+    assert_eq!(
+        counts(&database, &registry).await,
+        before,
+        "a preflight guard refusal leaves no business write, revision, receipt, or retained Evidence"
+    );
+    let row = database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT record_revision, {checked} FROM registry_data.{table} WHERE record_id=$1"
+            ),
+            &[&uuid::Uuid::parse_str(TARGET).unwrap()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, i64>(0), 1);
+    assert!(!row.get::<_, bool>(1));
+    database.assert_every_audit_request_answered_once();
+    database.cleanup().await;
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn final_local_target_checks_refuse_changes_during_external_wait_even_for_omitted_slots() {

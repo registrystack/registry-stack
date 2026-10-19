@@ -8,11 +8,14 @@
   required target facts cannot be disclosed.
 - BREAKING: an immediate Action whose declared field guard fails at commit now
   answers `412 action.guard_failed` instead of `412 precondition.failed` when
-  every other commit check passed and the selected profile can read the failed
-  guard's target fields. Stale conditions, any other refusal, and failures that
-  cannot be disclosed remain `412 precondition.failed`. Clients that match
-  `precondition.failed`, for example to offer reload and retry, must accept the
-  new code; older Rust clients report it as an unrecognized problem.
+  current-target admission checks pass and the selected profile can read the
+  failed guard's target fields. The code confirms that blocker; it does not
+  promise the Action would otherwise succeed. Effect application, proposed-value
+  authorization, and database constraints run only after guards pass. An
+  earlier refusal retains its normal response, while a stale condition or a
+  guard that cannot be disclosed remains `412 precondition.failed`. Clients
+  that match `precondition.failed`, for example to offer reload and retry, must
+  accept the new code; older Rust clients report it as an unrecognized problem.
 - BREAKING: the routes explanation format advances from `v1alpha5` to
   `v1alpha6` and includes the `availability` Action route kind. Consumers must
   select the `v1alpha6` schema.
