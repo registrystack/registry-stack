@@ -207,7 +207,10 @@ fn problem_code(code: &BRegProblemCode) -> ToolErrorCode {
         BRegProblemCode::IdempotencyConflict => ToolErrorCode::IdempotencyConflict,
         // These value-free refusals do not establish a stale revision or a
         // withdrawn grant. Only a local revision comparison can name staleness.
+        // A failed Action guard is a current business-state refusal of the
+        // change, not a stale input.
         BRegProblemCode::IdempotencyExpired
+        | BRegProblemCode::ActionGuardFailed
         | BRegProblemCode::PreconditionFailed
         | BRegProblemCode::PreconditionRequired
         | BRegProblemCode::MutationConflict => ToolErrorCode::ChangeRefused,
@@ -323,6 +326,7 @@ mod tests {
             (BRegProblemCode::PreconditionFailed, "change-refused"),
             (BRegProblemCode::PreconditionRequired, "change-refused"),
             (BRegProblemCode::MutationConflict, "change-refused"),
+            (BRegProblemCode::ActionGuardFailed, "change-refused"),
             (BRegProblemCode::ResourceNotFound, "not-found"),
             (BRegProblemCode::LookupUnresolved, "not-found"),
             (
