@@ -785,7 +785,7 @@ fn check_mapping(
 }
 
 /// Check the `.yaml` and `.yml` files beside `origins.yaml`: each runtime
-/// file as `discovery serve` reads it, and a refusal for every other kind.
+/// file as `discovery --runtime-config` reads it, and a refusal for every other kind.
 fn check_root_files(root: &Path, environment: bool, findings: &mut Findings) {
     let Ok(entries) = fs::read_dir(root) else {
         findings.unreadable(root);
@@ -877,7 +877,7 @@ fn foreign_kind(path: &Path, at: Option<Position>) -> Diagnostic {
     diagnostic
 }
 
-/// Check the runtime file at `path` as `discovery serve` reads it, naming
+/// Check the runtime file at `path` as `discovery --runtime-config` reads it, naming
 /// the file as it was given.
 fn check_runtime_file(path: &Path, environment: bool, findings: &mut Findings) {
     let given = path.display().to_string();

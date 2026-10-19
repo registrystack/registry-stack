@@ -71,7 +71,7 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         runtime_config: Option<PathBuf>,
         /// One index file, as `discoveryctl package` wrote it, checked on
-        /// its own exactly as `discovery serve` parses it.
+        /// its own exactly as `discovery --runtime-config` parses it at startup.
         #[arg(long, value_name = "FILE")]
         index: Option<PathBuf>,
         /// Accept an http loopback catalog URL, for development.
@@ -585,6 +585,19 @@ mod tests {
         let (exit, stdout, _) = run_cli(&["--help"]);
         assert_eq!(exit, ExitCode::SUCCESS);
         assert!(stdout.contains("check"), "{stdout}");
+    }
+
+    #[test]
+    fn check_help_names_the_discovery_invocation_that_exists() {
+        // The `discovery` binary has no subcommands: it serves one index
+        // from the file named by `--runtime-config`.
+        let (exit, stdout, stderr) = run_cli(&["check", "--help"]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{stderr}");
+        assert!(!stdout.contains("discovery serve"), "{stdout}");
+        assert!(
+            stdout.contains("exactly as `discovery --runtime-config` parses it at startup"),
+            "{stdout}"
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! it (CFG-CHECK-1).
 //!
 //! The index is generated, never authored: it is one canonical JSON document
-//! that `discovery serve` parses from its package. The check parses it the
+//! that the `discovery` runtime parses from its package. The check parses it the
 //! same way, so a file this check accepts is an index the runtime accepts,
 //! and every refusal names the rebuild that fixes it. Diagnostics never
 //! repeat the index's contents.
@@ -26,7 +26,7 @@ pub struct IndexReport {
     pub index: Option<DiscoveryIndex>,
 }
 
-/// Check the index file at `path` exactly as `discovery serve` parses the
+/// Check the index file at `path` exactly as the `discovery` runtime parses the
 /// index of a verified package, without the package around it.
 #[must_use]
 pub fn inspect_index_file(path: &Path) -> IndexReport {
