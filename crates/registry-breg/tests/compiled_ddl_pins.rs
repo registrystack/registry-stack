@@ -40,6 +40,8 @@
 //! unchanged because their authored contracts did not change.
 //! The specific `proposal.review_result_mismatch` Problem likewise changes
 //! artifact revisions without changing SQL or Action fingerprints.
+//! Immediate Action availability routes and schemas, and the `action.guard_failed`
+//! Problem, likewise move artifact revisions only.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
@@ -62,7 +64,7 @@ const FIXTURES: &[Fixture] = &[
         ),
         module: None,
         ddl_sha256: "b29dd51145e008de342526941bada68781b9d8067a8384643ede258e9471c28a",
-        revision: "sha256:00e4bb6340694ee6f26a29d696e6ce93e9c452d9fc804fc42531c4b5ce83d660",
+        revision: "sha256:6b631862b5b91c26e1159a0a11480678cace8b8d601ed4b11aeca707985bdaa0",
     },
     Fixture {
         name: "asset-registration-actions",
@@ -73,7 +75,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
         ddl_sha256: "19e503d71d515e5a9e2af9c109b91cce856eb041849d9d0208dfeb454365e7ba",
-        revision: "sha256:4dd8291e1832019a2e03af19cab9541642315161492350a3cbf1a5565d4095c2",
+        revision: "sha256:000ded5177f3be3d467220e0aeb15c936108aae2e145a87d5ec31ab7f4108291",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -84,7 +86,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
         ddl_sha256: "92c531b3cf49292bcbaa33b663fd2fc2fdd934d0f96635261f0f9d463ef914d8",
-        revision: "sha256:75b102106ddc7bccd7b0b81be0bd4dacf0d5dff6b7f4e618498b8d0dcecf8eff",
+        revision: "sha256:c401b3655b749f79565938eae706b5986d4c1d4961281162eb91c1e0dd309542",
     },
     Fixture {
         name: "household-contact-actions",
@@ -95,7 +97,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
         ddl_sha256: "6699bf442105e684adbe6ca506cfbbef90700b0298decdd9ec3f7a3a90cf4e67",
-        revision: "sha256:6902bfc35a1e5caef1d82fe0e68dea436590cf9092de854dd4960f62c351d817",
+        revision: "sha256:474e3447f515a14852f7ceca9536c71d59bb37b605df111658c054a1c952cdac",
     },
 ];
 
