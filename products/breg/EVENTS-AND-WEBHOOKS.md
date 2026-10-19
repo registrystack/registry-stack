@@ -125,7 +125,9 @@ Before maintenance, `plan` and `apply` refuse blocking local work with
 indicator, and the distinct compiled delivery identifiers from that bounded set.
 Plan writes no state or audit; apply audits the outcome as `refused`. The active
 package remains ready with no target pinned. Use `bregctl webhook drain` under
-the active package to attempt due local work before go-live. It has explicit
+the active package to attempt due local work before go-live. Because activation
+refuses while local work that can still run is retained under any activation,
+all such work is under the active package, and drain needs no other. It has explicit
 attempt and time budgets, respects live leases and scheduled retries, and never
 replays a dead letter or discards work. Retained blockers keep the existing
 explicit replay and discard recovery. Replay uses the captured handler under the
@@ -150,10 +152,12 @@ If the worker is interrupted before recording a proposal result and no committed
 receipt can be recovered, final-lease recovery records `worker-interrupted`
 without a proposal code. Explicit replay can remain eligible under the captured
 operator permission, product proposal policy, active binding, and retained,
-unexpired payload checks. Such a replay can send the event to the receiver again.
-Only a returned proposal classified under the successor receives
-`hook.proposal.package_unavailable`; interruption alone does not establish that
-result or disable replay.
+unexpired payload checks. Such a replay sends the event to the receiver again.
+For a delivery captured before go-live, that is all a replay can do: any
+proposal the receiver returns is classified under the successor and
+dead-lettered as `hook.proposal.package_unavailable`, so the replay never
+applies a change. The interruption itself records no proposal code and leaves
+replay available.
 
 The stored outbox payload is that envelope, byte for byte, and the delivery
 worker sends it unchanged. The worker refuses a stored row that is not an

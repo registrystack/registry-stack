@@ -190,6 +190,8 @@ bregctl --format json webhook drain \
 ```
 
 The command attempts only due local work under the active package's existing authority.
+That covers all the local work there is: activation refuses while local work that can still run
+is retained under any activation, so no earlier package's local work survives a go-live.
 It stops when no local attempt is due, after the attempt budget, or at the time budget.
 `completedAttempts` counts settled attempts and `stopReason` explains the stop.
 `remaining` contains the bounded retained count, compiled delivery identifiers, and `truncated` flag.
@@ -236,9 +238,10 @@ when delivery completion succeeds afterward. The predecessor worker cannot claim
 If the worker is interrupted before recording the proposal result and there is no committed
 receipt to recover, final-lease recovery records `worker-interrupted` without a proposal code.
 Explicit replay can remain eligible when the captured operator permission, product proposal
-policy, active binding, and retained, unexpired payload allow it. A replay can deliver the event
-to the receiver again. Only a returned proposal classified under the successor receives
-`hook.proposal.package_unavailable`; interruption alone does not establish that result.
+policy, active binding, and retained, unexpired payload allow it. A replay sends the event
+to the receiver again, and that is all it can do for a delivery captured before go-live.
+Any proposal the receiver returns is classified under the successor and dead-lettered as
+`hook.proposal.package_unavailable`, so the replay never applies a change.
 Inspect the recovered delivery before deciding whether to replay or discard it.
 
 {/* Evidence: crates/registry-breg/src/mutation/action.rs;
