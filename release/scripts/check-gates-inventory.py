@@ -807,6 +807,10 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ".github/workflows/codeql.yml",
         (
             "pull_request:",
+            # A superseded pull request analysis is cancelled; a main or
+            # scheduled analysis always runs to completion.
+            "group: codeql-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}",
+            "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
             "security-events: write",
             "github/codeql-action/init@",
             "queries: security-and-quality",
