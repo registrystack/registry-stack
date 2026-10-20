@@ -7,6 +7,7 @@ use registry_evidence_authoring::{
     target::{TargetAssuranceProfile, TargetSigner},
 };
 use registry_platform_crypto::{canonicalize_json, domain_separated_sha256};
+use registry_platform_yaml::Report;
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
@@ -130,6 +131,21 @@ pub(crate) fn compile(root: &Path) -> Result<(EvidenceProject, CompiledProject)>
     })?;
     Ok((project, compiled))
 }
+
+fn retain_diagnostics(error: anyhow::Error, retained: &Report) -> anyhow::Error {
+    let Some(report) = authored::report_in(&error) else {
+        return error;
+    };
+    let files_checked = report.files_checked().or(retained.files_checked());
+    let mut diagnostics = report.clone().into_diagnostics();
+    diagnostics.extend(retained.clone().into_diagnostics());
+    let mut report = Report::new(diagnostics);
+    if let Some(files) = files_checked {
+        report.set_files_checked(files);
+    }
+    report.into()
+}
+
 pub(crate) fn inspect(root: &Path, target: Option<&Path>, command: &str) -> Result<Checked> {
     let target = target.map(crate::target::target_path);
     let snapshot = crate::project_snapshot::capture_project(root)?;
@@ -138,8 +154,10 @@ pub(crate) fn inspect(root: &Path, target: Option<&Path>, command: &str) -> Resu
     let decoded = project::read_project(project::PROJECT_FILE, &project_bytes)
         .map_err(|report| authored::project_refusal(report.into(), snapshot.root(), root))?;
     let diagnostics = authored::rebase(decoded.document.warnings(), root);
-    let (project, mut compiled) = compile(snapshot.root())
-        .map_err(|error| authored::project_refusal(error, snapshot.root(), root))?;
+    let (project, mut compiled) = compile(snapshot.root()).map_err(|error| {
+        let error = authored::project_refusal(error, snapshot.root(), root);
+        retain_diagnostics(error, &diagnostics)
+    })?;
     for function in &mut compiled.functions {
         let path = function["source"]
             .as_str()
