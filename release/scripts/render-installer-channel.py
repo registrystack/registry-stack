@@ -29,14 +29,26 @@ build=""
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 	--channel)
-		[ "$#" -ge 2 ] || { echo "--channel needs a value." >&2; exit 2; }
-		[ -z "$channel" ] || { echo "--channel may be supplied only once." >&2; exit 2; }
+		[ "$#" -ge 2 ] || {
+			echo "--channel needs a value." >&2
+			exit 2
+		}
+		[ -z "$channel" ] || {
+			echo "--channel may be supplied only once." >&2
+			exit 2
+		}
 		channel="$2"
 		shift 2
 		;;
 	--build)
-		[ "$#" -ge 2 ] || { echo "--build needs an immutable nightly tag." >&2; exit 2; }
-		[ -z "$build" ] || { echo "--build may be supplied only once." >&2; exit 2; }
+		[ "$#" -ge 2 ] || {
+			echo "--build needs an immutable nightly tag." >&2
+			exit 2
+		}
+		[ -z "$build" ] || {
+			echo "--build may be supplied only once." >&2
+			exit 2
+		}
 		build="$2"
 		shift 2
 		;;
@@ -196,7 +208,7 @@ run_unpinned_installer() {
 	fi
 	expected_base="${tag#v}"
 	expected_base="${expected_base%%-nightly.*}"
-	if [ "$manifest_version" != "${tag#v}" ] || [ "$base_version" != "$expected_base" ] || \
+	if [ "$manifest_version" != "${tag#v}" ] || [ "$base_version" != "$expected_base" ] ||
 		[ "$source_sha" != "${BASH_REMATCH[4]}" ] || [ -z "$created_at" ]; then
 		echo "Refusing internally inconsistent nightly metadata." >&2
 		exit 1

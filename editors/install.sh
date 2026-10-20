@@ -14,7 +14,7 @@ REGISTRY_STACK_CLI_CANDIDATE_ERROR=''
 REGISTRY_STACK_CLI_VERSION=''
 
 usage() {
-  cat <<'EOF'
+	cat <<'EOF'
 Install Registry Stack semantic navigation for an editor.
 
 Usage:
@@ -35,37 +35,37 @@ EOF
 }
 
 fail() {
-  printf 'error: %s\n' "$*" >&2
-  exit 1
+	printf 'error: %s\n' "$*" >&2
+	exit 1
 }
 
 require_command() {
-  local command_name="$1"
-  command -v "${command_name}" >/dev/null 2>&1 ||
-    fail "required command '${command_name}' was not found on PATH"
+	local command_name="$1"
+	command -v "${command_name}" >/dev/null 2>&1 ||
+		fail "required command '${command_name}' was not found on PATH"
 }
 
 external_command_path() {
-  local command_name="$1"
-  local command_path
-  command_path="$(type -P "${command_name}")" ||
-    fail "required external command '${command_name}' was not found on PATH"
-  case "${command_path}" in
-    /*) ;;
-    */*)
-      command_path="$(cd -- "${command_path%/*}" && pwd -P)/${command_path##*/}"
-      ;;
-    *)
-      command_path="${PWD}/${command_path}"
-      ;;
-  esac
-  [[ -f "${command_path}" && -x "${command_path}" ]] ||
-    fail "command '${command_name}' is not an executable file: ${command_path}"
-  printf '%s\n' "${command_path}"
+	local command_name="$1"
+	local command_path
+	command_path="$(type -P "${command_name}")" ||
+		fail "required external command '${command_name}' was not found on PATH"
+	case "${command_path}" in
+	/*) ;;
+	*/*)
+		command_path="$(cd -- "${command_path%/*}" && pwd -P)/${command_path##*/}"
+		;;
+	*)
+		command_path="${PWD}/${command_path}"
+		;;
+	esac
+	[[ -f "${command_path}" && -x "${command_path}" ]] ||
+		fail "command '${command_name}' is not an executable file: ${command_path}"
+	printf '%s\n' "${command_path}"
 }
 
 workspace_version() {
-  awk '
+	awk '
     /^\[workspace\.package\][[:space:]]*$/ { in_workspace_package = 1; next }
     in_workspace_package && /^\[/ { exit }
     in_workspace_package && /^[[:space:]]*version[[:space:]]*=/ {
@@ -84,265 +84,265 @@ workspace_version() {
 # substitution: bash runs a substitution in a subshell, and a subshell's
 # variable assignments do not survive it.
 registry_stack_cli_version() {
-  REGISTRY_STACK_CLI_CANDIDATE_ERROR=''
-  REGISTRY_STACK_CLI_VERSION=''
-  local version_output
-  version_output="$("${REGISTRY_STACK_CLI_PATH}" --version)" || {
-    REGISTRY_STACK_CLI_CANDIDATE_ERROR="could not run ${REGISTRY_STACK_CLI_NAME} --version"
-    return 1
-  }
-  case "${version_output}" in
-    "${REGISTRY_STACK_CLI_NAME} "*)
-      version_output="${version_output#* }"
-      REGISTRY_STACK_CLI_VERSION="${version_output%% *}"
-      ;;
-    *)
-      REGISTRY_STACK_CLI_CANDIDATE_ERROR="unexpected ${REGISTRY_STACK_CLI_NAME} version output: ${version_output}"
-      return 1
-      ;;
-  esac
+	REGISTRY_STACK_CLI_CANDIDATE_ERROR=''
+	REGISTRY_STACK_CLI_VERSION=''
+	local version_output
+	version_output="$("${REGISTRY_STACK_CLI_PATH}" --version)" || {
+		REGISTRY_STACK_CLI_CANDIDATE_ERROR="could not run ${REGISTRY_STACK_CLI_NAME} --version"
+		return 1
+	}
+	case "${version_output}" in
+	"${REGISTRY_STACK_CLI_NAME} "*)
+		version_output="${version_output#* }"
+		REGISTRY_STACK_CLI_VERSION="${version_output%% *}"
+		;;
+	*)
+		REGISTRY_STACK_CLI_CANDIDATE_ERROR="unexpected ${REGISTRY_STACK_CLI_NAME} version output: ${version_output}"
+		return 1
+		;;
+	esac
 }
 
 canonical_open_path() {
-  local requested_path="$1"
-  [[ -d "${requested_path}" ]] ||
-    fail "directory to open does not exist: ${requested_path}"
+	local requested_path="$1"
+	[[ -d "${requested_path}" ]] ||
+		fail "directory to open does not exist: ${requested_path}"
 
-  (cd -- "${requested_path}" && pwd -P)
+	(cd -- "${requested_path}" && pwd -P)
 }
 
 verify_registry_stack_cli() {
-  local expected_version
-  expected_version="$(workspace_version)"
-  [[ -n "${expected_version}" ]] ||
-    fail "could not read the workspace version from ${REPO_ROOT}/Cargo.toml"
+	local expected_version
+	expected_version="$(workspace_version)"
+	[[ -n "${expected_version}" ]] ||
+		fail "could not read the workspace version from ${REPO_ROOT}/Cargo.toml"
 
-  # Evidence tooling embeds the shared server for every supported product.
-  # The other product CLIs remain independent of its dependency closure.
-  local -a candidate_names=(evidencectl)
-  local -a candidate_errors=()
-  local candidate_name
+	# Evidence tooling embeds the shared server for every supported product.
+	# The other product CLIs remain independent of its dependency closure.
+	local -a candidate_names=(evidencectl)
+	local -a candidate_errors=()
+	local candidate_name
 
-  for candidate_name in "${candidate_names[@]}"; do
-    command -v "${candidate_name}" >/dev/null 2>&1 || continue
-    REGISTRY_STACK_CLI_NAME="${candidate_name}"
-    REGISTRY_STACK_CLI_PATH="$(external_command_path "${candidate_name}")"
+	for candidate_name in "${candidate_names[@]}"; do
+		command -v "${candidate_name}" >/dev/null 2>&1 || continue
+		REGISTRY_STACK_CLI_NAME="${candidate_name}"
+		REGISTRY_STACK_CLI_PATH="$(external_command_path "${candidate_name}")"
 
-    if ! registry_stack_cli_version; then
-      candidate_errors+=("${REGISTRY_STACK_CLI_CANDIDATE_ERROR}")
-      continue
-    fi
-    local installed_version="${REGISTRY_STACK_CLI_VERSION}"
+		if ! registry_stack_cli_version; then
+			candidate_errors+=("${REGISTRY_STACK_CLI_CANDIDATE_ERROR}")
+			continue
+		fi
+		local installed_version="${REGISTRY_STACK_CLI_VERSION}"
 
-    # The adopter CLI ships from this workspace and shares its
-    # version. A CLI built from a source checkout reports a development version
-    # of the workspace version it was built from, so both spellings match this
-    # checkout. Only the version itself has to agree.
-    if [[ "${installed_version}" != "${expected_version}" &&
-      "${installed_version}" != "${expected_version}-dev" ]]; then
-      candidate_errors+=("this checkout is ${expected_version} but ${candidate_name} is ${installed_version}; install the matching ${candidate_name}")
-      continue
-    fi
+		# The adopter CLI ships from this workspace and shares its
+		# version. A CLI built from a source checkout reports a development version
+		# of the workspace version it was built from, so both spellings match this
+		# checkout. Only the version itself has to agree.
+		if [[ "${installed_version}" != "${expected_version}" &&
+			"${installed_version}" != "${expected_version}-dev" ]]; then
+			candidate_errors+=("this checkout is ${expected_version} but ${candidate_name} is ${installed_version}; install the matching ${candidate_name}")
+			continue
+		fi
 
-    if ! "${REGISTRY_STACK_CLI_PATH}" tooling language-server --help >/dev/null; then
-      candidate_errors+=("${candidate_name} ${installed_version} does not provide tooling language-server")
-      continue
-    fi
+		if ! "${REGISTRY_STACK_CLI_PATH}" tooling language-server --help >/dev/null; then
+			candidate_errors+=("${candidate_name} ${installed_version} does not provide tooling language-server")
+			continue
+		fi
 
-    printf 'Using %s %s from %s\n' \
-      "${candidate_name}" "${installed_version}" "${REGISTRY_STACK_CLI_PATH}"
-    return 0
-  done
+		printf 'Using %s %s from %s\n' \
+			"${candidate_name}" "${installed_version}" "${REGISTRY_STACK_CLI_PATH}"
+		return 0
+	done
 
-  if ((${#candidate_errors[@]} == 0)); then
-    fail "required external command 'evidencectl' was not found on PATH"
-  fi
+	if ((${#candidate_errors[@]} == 0)); then
+		fail "required external command 'evidencectl' was not found on PATH"
+	fi
 
-  local candidate_error
-  for candidate_error in "${candidate_errors[@]}"; do
-    printf 'error: %s\n' "${candidate_error}" >&2
-  done
-  exit 1
+	local candidate_error
+	for candidate_error in "${candidate_errors[@]}"; do
+		printf 'error: %s\n' "${candidate_error}" >&2
+	done
+	exit 1
 }
 
 install_vscode() {
-  local open_path="$1"
-  local profile="$2"
-  local vscode_root="${REPO_ROOT}/editors/vscode"
-  local vsix="${vscode_root}/registry-stack-dev.vsix"
-  local install_metadata="${vscode_root}/dist/registry-stack-cli-path"
-  local cli_path
-  local profile_label='active profile'
-  local -a profile_args=()
+	local open_path="$1"
+	local profile="$2"
+	local vscode_root="${REPO_ROOT}/editors/vscode"
+	local vsix="${vscode_root}/registry-stack-dev.vsix"
+	local install_metadata="${vscode_root}/dist/registry-stack-cli-path"
+	local cli_path
+	local profile_label='active profile'
+	local -a profile_args=()
 
-  cli_path="${REGISTRY_STACK_CLI_PATH}"
+	cli_path="${REGISTRY_STACK_CLI_PATH}"
 
-  if [[ -n "${profile}" ]]; then
-    profile_label="profile ${profile}"
-    profile_args=(--profile "${profile}")
-  fi
+	if [[ -n "${profile}" ]]; then
+		profile_label="profile ${profile}"
+		profile_args=(--profile "${profile}")
+	fi
 
-  require_command node
-  require_command npm
-  require_command code
-  require_command unzip
-  [[ -f "${vscode_root}/package.json" ]] ||
-    fail "VS Code extension source was not found at ${vscode_root}"
+	require_command node
+	require_command npm
+	require_command code
+	require_command unzip
+	[[ -f "${vscode_root}/package.json" ]] ||
+		fail "VS Code extension source was not found at ${vscode_root}"
 
-  local node_version
-  local node_major
-  node_version="$(node --version)"
-  node_major="${node_version#v}"
-  node_major="${node_major%%.*}"
-  [[ "${node_major}" =~ ^[0-9]+$ ]] ||
-    fail "unexpected Node.js version output: ${node_version}"
-  ((node_major >= 24)) ||
-    fail "Node.js 24 or newer is required; found ${node_version}"
+	local node_version
+	local node_major
+	node_version="$(node --version)"
+	node_major="${node_version#v}"
+	node_major="${node_major%%.*}"
+	[[ "${node_major}" =~ ^[0-9]+$ ]] ||
+		fail "unexpected Node.js version output: ${node_version}"
+	((node_major >= 24)) ||
+		fail "Node.js 24 or newer is required; found ${node_version}"
 
-  printf 'Packaging Registry Stack for VS Code\n'
-  npm --prefix "${vscode_root}" ci
-  mkdir -p "${vscode_root}/dist"
-  [[ -d "${vscode_root}/dist" && ! -L "${vscode_root}/dist" ]] ||
-    fail "VS Code dist path must be a regular directory: ${vscode_root}/dist"
-  [[ ! -e "${install_metadata}" && ! -L "${install_metadata}" ]] ||
-    fail "temporary installer metadata already exists: ${install_metadata}"
-  if ! (
-    trap 'rm -f -- "${install_metadata}"' EXIT HUP INT TERM
-    printf '%s\n' "${cli_path}" > "${install_metadata}"
-    REGISTRY_STACK_EXPECT_CLI_PATH="${cli_path}" \
-      npm --prefix "${vscode_root}" run package:dev
-  ); then
-    fail "VS Code extension packaging failed"
-  fi
-  [[ -f "${vsix}" && ! -L "${vsix}" ]] ||
-    fail "VS Code package was not created at ${vsix}"
+	printf 'Packaging Registry Stack for VS Code\n'
+	npm --prefix "${vscode_root}" ci
+	mkdir -p "${vscode_root}/dist"
+	[[ -d "${vscode_root}/dist" && ! -L "${vscode_root}/dist" ]] ||
+		fail "VS Code dist path must be a regular directory: ${vscode_root}/dist"
+	[[ ! -e "${install_metadata}" && ! -L "${install_metadata}" ]] ||
+		fail "temporary installer metadata already exists: ${install_metadata}"
+	if ! (
+		trap 'rm -f -- "${install_metadata}"' EXIT HUP INT TERM
+		printf '%s\n' "${cli_path}" >"${install_metadata}"
+		REGISTRY_STACK_EXPECT_CLI_PATH="${cli_path}" \
+			npm --prefix "${vscode_root}" run package:dev
+	); then
+		fail "VS Code extension packaging failed"
+	fi
+	[[ -f "${vsix}" && ! -L "${vsix}" ]] ||
+		fail "VS Code package was not created at ${vsix}"
 
-  printf 'Installing %s into the VS Code %s\n' "${EXTENSION_ID}" "${profile_label}"
-  code "${profile_args[@]}" --install-extension "${vsix}" --force
+	printf 'Installing %s into the VS Code %s\n' "${EXTENSION_ID}" "${profile_label}"
+	code "${profile_args[@]}" --install-extension "${vsix}" --force
 
-  printf '\nRegistry Stack editor support is installed for VS Code.\n'
-  printf 'Project setup: python3 editors/configure.py <product> <project>\n'
-  printf 'Workspace trust remains your decision when a project opens.\n'
-  if [[ -n "${open_path}" ]]; then
-    printf 'Opening %s with the VS Code %s.\n' "${open_path}" "${profile_label}"
-    code "${profile_args[@]}" --new-window "${open_path}"
-  else
-    printf 'Open a Registry Stack project when you are ready.\n'
-  fi
+	printf '\nRegistry Stack editor support is installed for VS Code.\n'
+	printf 'Project setup: python3 editors/configure.py <product> <project>\n'
+	printf 'Workspace trust remains your decision when a project opens.\n'
+	if [[ -n "${open_path}" ]]; then
+		printf 'Opening %s with the VS Code %s.\n' "${open_path}" "${profile_label}"
+		code "${profile_args[@]}" --new-window "${open_path}"
+	else
+		printf 'Open a Registry Stack project when you are ready.\n'
+	fi
 }
 
 install_zed() {
-  local open_path="$1"
-  local zed_root="${REPO_ROOT}/editors/zed"
+	local open_path="$1"
+	local zed_root="${REPO_ROOT}/editors/zed"
 
-  require_command rustup
-  require_command cargo
-  [[ -f "${zed_root}/Cargo.toml" ]] ||
-    fail "Zed extension source was not found at ${zed_root}"
+	require_command rustup
+	require_command cargo
+	[[ -f "${zed_root}/Cargo.toml" ]] ||
+		fail "Zed extension source was not found at ${zed_root}"
 
-  if ! rustup target list --installed | grep -Fxq 'wasm32-wasip2'; then
-    printf 'Installing the Rust target required by Zed\n'
-    rustup target add wasm32-wasip2
-  fi
+	if ! rustup target list --installed | grep -Fxq 'wasm32-wasip2'; then
+		printf 'Installing the Rust target required by Zed\n'
+		rustup target add wasm32-wasip2
+	fi
 
-  printf 'Checking the Registry Stack extension for Zed\n'
-  cargo check --locked --target wasm32-wasip2 \
-    --manifest-path "${zed_root}/Cargo.toml"
+	printf 'Checking the Registry Stack extension for Zed\n'
+	cargo check --locked --target wasm32-wasip2 \
+		--manifest-path "${zed_root}/Cargo.toml"
 
-  if [[ -n "${open_path}" ]]; then
-    require_command zed
-  fi
+	if [[ -n "${open_path}" ]]; then
+		require_command zed
+	fi
 
-  printf '\nRegistry Stack editor support is prepared for Zed.\n'
-  printf 'Project setup: python3 editors/configure.py <product> <project>\n'
-  printf 'Zed requires one manual installation step:\n'
-  printf '  1. Run "Zed: Install Dev Extension" from the command palette.\n'
-  printf '  2. Select %s\n' "${zed_root}"
-  printf '  3. Run "editor: restart language server".\n'
-  printf 'Development-extension approval remains your decision.\n'
+	printf '\nRegistry Stack editor support is prepared for Zed.\n'
+	printf 'Project setup: python3 editors/configure.py <product> <project>\n'
+	printf 'Zed requires one manual installation step:\n'
+	printf '  1. Run "Zed: Install Dev Extension" from the command palette.\n'
+	printf '  2. Select %s\n' "${zed_root}"
+	printf '  3. Run "editor: restart language server".\n'
+	printf 'Development-extension approval remains your decision.\n'
 
-  if [[ -n "${open_path}" ]]; then
-    printf 'Opening %s in Zed. Quit an existing Zed process first if it does not inherit PATH.\n' \
-      "${open_path}"
-    zed "${open_path}"
-  else
-    printf 'Open a Registry Stack project from this shell when you are ready.\n'
-  fi
+	if [[ -n "${open_path}" ]]; then
+		printf 'Opening %s in Zed. Quit an existing Zed process first if it does not inherit PATH.\n' \
+			"${open_path}"
+		zed "${open_path}"
+	else
+		printf 'Open a Registry Stack project from this shell when you are ready.\n'
+	fi
 }
 
 main() {
-  if (($# == 0)); then
-    usage >&2
-    exit 2
-  fi
+	if (($# == 0)); then
+		usage >&2
+		exit 2
+	fi
 
-  case "$1" in
-    -h | --help)
-      usage
-      exit 0
-      ;;
-  esac
+	case "$1" in
+	-h | --help)
+		usage
+		exit 0
+		;;
+	esac
 
-  local editor="$1"
-  shift
-  case "${editor}" in
-    vscode | zed) ;;
-    *)
-      usage >&2
-      fail "unsupported editor '${editor}'; expected vscode or zed"
-      ;;
-  esac
+	local editor="$1"
+	shift
+	case "${editor}" in
+	vscode | zed) ;;
+	*)
+		usage >&2
+		fail "unsupported editor '${editor}'; expected vscode or zed"
+		;;
+	esac
 
-  local requested_open_path=''
-  local vscode_profile=''
-  local profile_set="false"
+	local requested_open_path=''
+	local vscode_profile=''
+	local profile_set="false"
 
-  while (($# > 0)); do
-    case "$1" in
-      --open)
-        (($# >= 2)) || fail "--open requires a path"
-        [[ -n "$2" ]] || fail "--open cannot be empty"
-        requested_open_path="$2"
-        shift 2
-        ;;
-      --profile)
-        (($# >= 2)) || fail "--profile requires a name"
-        [[ -n "$2" ]] || fail "--profile cannot be empty"
-        vscode_profile="$2"
-        profile_set="true"
-        shift 2
-        ;;
-      -h | --help)
-        usage
-        exit 0
-        ;;
-      *)
-        fail "unknown option: $1"
-        ;;
-    esac
-  done
+	while (($# > 0)); do
+		case "$1" in
+		--open)
+			(($# >= 2)) || fail "--open requires a path"
+			[[ -n "$2" ]] || fail "--open cannot be empty"
+			requested_open_path="$2"
+			shift 2
+			;;
+		--profile)
+			(($# >= 2)) || fail "--profile requires a name"
+			[[ -n "$2" ]] || fail "--profile cannot be empty"
+			vscode_profile="$2"
+			profile_set="true"
+			shift 2
+			;;
+		-h | --help)
+			usage
+			exit 0
+			;;
+		*)
+			fail "unknown option: $1"
+			;;
+		esac
+	done
 
-  if [[ "${editor}" == "zed" && "${profile_set}" == "true" ]]; then
-    fail "--profile applies only to VS Code"
-  fi
+	if [[ "${editor}" == "zed" && "${profile_set}" == "true" ]]; then
+		fail "--profile applies only to VS Code"
+	fi
 
-  [[ -f "${REPO_ROOT}/Cargo.toml" ]] ||
-    fail "Registry Stack repository root was not found at ${REPO_ROOT}"
+	[[ -f "${REPO_ROOT}/Cargo.toml" ]] ||
+		fail "Registry Stack repository root was not found at ${REPO_ROOT}"
 
-  local open_path=''
-  if [[ -n "${requested_open_path}" ]]; then
-    open_path="$(canonical_open_path "${requested_open_path}")"
-  fi
-  verify_registry_stack_cli
+	local open_path=''
+	if [[ -n "${requested_open_path}" ]]; then
+		open_path="$(canonical_open_path "${requested_open_path}")"
+	fi
+	verify_registry_stack_cli
 
-  case "${editor}" in
-    vscode)
-      install_vscode "${open_path}" "${vscode_profile}"
-      ;;
-    zed)
-      install_zed "${open_path}"
-      ;;
-  esac
+	case "${editor}" in
+	vscode)
+		install_vscode "${open_path}" "${vscode_profile}"
+		;;
+	zed)
+		install_zed "${open_path}"
+		;;
+	esac
 }
 
 main "$@"
