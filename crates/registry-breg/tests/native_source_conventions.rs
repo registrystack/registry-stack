@@ -152,6 +152,70 @@ fn duplicate_authored_labels_warn_with_normalized_comparison_and_locations() {
 }
 
 #[test]
+fn reader_refusals_keep_duplicate_label_warnings_for_projects_and_modules() {
+    let mut project = facility();
+    project["recordTypes"][0]["display"]["label"] = json!("Café");
+    project["recordTypes"][1]["display"]["label"] = json!("CAFE\u{301}");
+    let mut profile = project["accessProfiles"][1].clone();
+    profile["id"] = json!("facility_reader");
+    project["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(profile);
+    let report = read_project_yaml("registry.yaml", &bytes(&project)).unwrap_err();
+    for code in [
+        "breg.record-type.duplicate-label",
+        "breg.access-profile.id-collision",
+    ] {
+        assert!(
+            report
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == code),
+            "missing {code}: {report:#?}"
+        );
+    }
+
+    let module = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule",
+        "id":"local-module",
+        "version":"0.1.0",
+        "recordTypes":[
+            {
+                "id":"entry-one",
+                "route":"entries",
+                "primaryDataset":"directory",
+                "mutationMode":"mutable",
+                "display":{"label":"Directory entry"},
+                "fields":[]
+            },
+            {
+                "id":"entry_one",
+                "route":"entry-copies",
+                "primaryDataset":"directory",
+                "mutationMode":"mutable",
+                "display":{"label":"directory entry"},
+                "fields":[]
+            }
+        ]
+    });
+    let report = read_module_yaml("module.yaml", &bytes(&module)).unwrap_err();
+    for code in [
+        "breg.record-type.duplicate-label",
+        "breg.record-type.id-collision",
+    ] {
+        assert!(
+            report
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == code),
+            "missing {code}: {report:#?}"
+        );
+    }
+}
+
+#[test]
 fn duplicate_presentation_text_warns_in_each_breg_namespace() {
     let mut source = facility();
     let refusal = source["actions"][1]["plan"]["refusals"][0].clone();
@@ -445,6 +509,7 @@ fn compiler_warns_for_duplicate_refusal_labels_across_project_and_module() {
         "kind":"BRegModule",
         "id":"local-module",
         "version":"0.1.0",
+        "valueTypes":project_source["valueTypes"].clone(),
         "functions":[function],
         "actions":[action]
     });

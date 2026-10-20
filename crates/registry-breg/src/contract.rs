@@ -4708,7 +4708,9 @@ pub fn read_project_yaml(file: &str, bytes: &[u8]) -> Result<Decoded<RegistryPro
     if errors.is_empty() {
         Ok(decoded)
     } else {
-        Err(Report::new(errors))
+        let mut report = decoded.document.warnings();
+        report.extend(Report::new(errors));
+        Err(report)
     }
 }
 
@@ -4805,7 +4807,9 @@ pub fn read_module_yaml(file: &str, bytes: &[u8]) -> Result<Decoded<RegistryModu
     if errors.is_empty() {
         Ok(decoded)
     } else {
-        Err(Report::new(errors))
+        let mut report = decoded.document.warnings();
+        report.extend(Report::new(errors));
+        Err(report)
     }
 }
 
