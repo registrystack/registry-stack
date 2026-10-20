@@ -47,6 +47,7 @@ pub mod attachment_verification_worker;
 pub mod audit;
 #[cfg(feature = "runtime")]
 pub mod auth;
+pub(crate) mod authoring_integrity;
 #[cfg(feature = "runtime")]
 pub mod cli;
 #[cfg(feature = "runtime")]

@@ -1952,7 +1952,9 @@ pub struct IssuerConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PublicationConfig {
     pub service_id: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
     pub title: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
     pub description: String,
     pub endpoint_url: registry_platform_yaml::Url,
     pub jurisdictions: Vec<String>,

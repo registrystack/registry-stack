@@ -3,8 +3,9 @@ use std::path::Path;
 
 pub use registry_platform_yaml::ProjectIdentity;
 use registry_platform_yaml::{
-    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, Identified, Reader, Refusal, RemovedKey,
-    Report, RetiredApiVersion, ScalarHook, ScalarSite,
+    duplicate_display_text_diagnostics, local_id_collision_diagnostics, ApiVersion,
+    AuthoredDisplayText, AuthoredId, Decoded, Diagnostic, EnvelopeRule, Expect, FormatSpec,
+    Identified, Reader, Refusal, RemovedKey, Report, RetiredApiVersion, ScalarHook, ScalarSite,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -550,10 +551,12 @@ impl CaseworkProject {
             return Err(findings_report(&decoded.document, &schema_findings));
         }
         let findings = decoded.value.findings();
-        if findings.is_empty() {
-            Ok(decoded)
+        let mut report = findings_report(&decoded.document, &findings);
+        report.extend(Report::new(project_integrity_diagnostics(&mut decoded)));
+        if report.has_errors() {
+            Err(report)
         } else {
-            Err(findings_report(&decoded.document, &findings))
+            Ok(decoded)
         }
     }
 
@@ -1391,6 +1394,231 @@ impl CaseworkProject {
     }
 }
 
+fn project_integrity_diagnostics(decoded: &mut Decoded<CaseworkProject>) -> Vec<Diagnostic> {
+    fn collisions(
+        document: &registry_platform_yaml::Document,
+        code: &str,
+        values: &[(String, String)],
+    ) -> Vec<Diagnostic> {
+        let entries = values
+            .iter()
+            .map(|(id, pointer)| AuthoredId { id, pointer })
+            .collect::<Vec<_>>();
+        local_id_collision_diagnostics(document, code, &entries)
+    }
+
+    fn duplicate_labels(
+        document: &registry_platform_yaml::Document,
+        code: &str,
+        kind: &str,
+        values: &[(String, String, String)],
+    ) -> Vec<Diagnostic> {
+        let entries = values
+            .iter()
+            .map(|(id, label, pointer)| AuthoredDisplayText {
+                id,
+                text: label,
+                pointer,
+            })
+            .collect::<Vec<_>>();
+        duplicate_display_text_diagnostics(document, code, kind, &entries)
+    }
+
+    fn keyed_ids<T: Identified>(base: &str, values: &[T]) -> Vec<(String, String)> {
+        values
+            .iter()
+            .map(|value| {
+                let id = value.id().to_owned();
+                let pointer = format!(
+                    "{base}/{}",
+                    registry_platform_yaml::escape_pointer_segment(&id)
+                );
+                (id, pointer)
+            })
+            .collect()
+    }
+
+    let project = &decoded.value;
+    let document = &decoded.document;
+    let mut errors = Vec::new();
+    for (code, values) in [
+        (
+            "casework.project.access-profile-id-collision",
+            keyed_ids("/accessProfiles", &project.access_profiles),
+        ),
+        (
+            "casework.project.queue-id-collision",
+            keyed_ids("/queues", &project.queues),
+        ),
+        (
+            "casework.project.context-provider-id-collision",
+            keyed_ids("/contextProviders", &project.context_providers),
+        ),
+        (
+            "casework.project.team-id-collision",
+            keyed_ids("/teams", &project.teams),
+        ),
+        (
+            "casework.project.review-policy-id-collision",
+            keyed_ids("/reviewPolicies", &project.review_policies),
+        ),
+        (
+            "casework.project.trusted-producer-id-collision",
+            keyed_ids("/trustedProducers", &project.trusted_producers),
+        ),
+        (
+            "casework.project.calendar-id-collision",
+            keyed_ids("/calendars", &project.calendars),
+        ),
+        (
+            "casework.project.clock-id-collision",
+            keyed_ids("/clocks", &project.clocks),
+        ),
+        (
+            "casework.project.task-template-id-collision",
+            keyed_ids("/taskTemplates", &project.task_templates),
+        ),
+    ] {
+        errors.extend(collisions(document, code, &values));
+    }
+
+    for policy in &project.review_policies {
+        let base = format!(
+            "/reviewPolicies/{}",
+            registry_platform_yaml::escape_pointer_segment(&policy.id)
+        );
+        for (code, values) in [
+            (
+                "casework.review-policy.routing-id-collision",
+                policy
+                    .routing
+                    .iter()
+                    .enumerate()
+                    .map(|(index, rule)| (rule.id.clone(), format!("{base}/routing/{index}/id")))
+                    .collect(),
+            ),
+            (
+                "casework.review-policy.stage-id-collision",
+                policy
+                    .stages
+                    .iter()
+                    .enumerate()
+                    .map(|(index, stage)| (stage.id.clone(), format!("{base}/stages/{index}/id")))
+                    .collect(),
+            ),
+            (
+                "casework.review-policy.outcome-id-collision",
+                keyed_ids(&format!("{base}/outcomes"), &policy.outcomes),
+            ),
+        ] {
+            errors.extend(collisions(document, code, &values));
+        }
+    }
+
+    for clock in &project.clocks {
+        let Some((reminders, steps)) = clock.authored_nested_ids() else {
+            continue;
+        };
+        let base = format!(
+            "/clocks/{}",
+            registry_platform_yaml::escape_pointer_segment(clock.id())
+        );
+        errors.extend(collisions(
+            document,
+            "casework.clock.reminder-id-collision",
+            &keyed_ids(&format!("{base}/reminders"), reminders),
+        ));
+        errors.extend(collisions(
+            document,
+            "casework.clock.step-id-collision",
+            &steps
+                .iter()
+                .enumerate()
+                .map(|(index, step)| (step.id.clone(), format!("{base}/steps/{index}/id")))
+                .collect::<Vec<_>>(),
+        ));
+    }
+
+    let warning_groups = [
+        (
+            "casework.project.duplicate-queue-label",
+            "queues",
+            project
+                .queues
+                .iter()
+                .map(|item| {
+                    let pointer = format!(
+                        "/queues/{}/label",
+                        registry_platform_yaml::escape_pointer_segment(&item.id)
+                    );
+                    (item.id.clone(), item.label.clone(), pointer)
+                })
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "casework.project.duplicate-team-label",
+            "teams",
+            project
+                .teams
+                .iter()
+                .map(|item| {
+                    let pointer = format!(
+                        "/teams/{}/label",
+                        registry_platform_yaml::escape_pointer_segment(&item.id)
+                    );
+                    (item.id.clone(), item.label.clone(), pointer)
+                })
+                .collect(),
+        ),
+        (
+            "casework.project.duplicate-task-template-label",
+            "task templates",
+            project
+                .task_templates
+                .iter()
+                .map(|item| {
+                    let pointer = format!(
+                        "/taskTemplates/{}/label",
+                        registry_platform_yaml::escape_pointer_segment(&item.id)
+                    );
+                    (item.id.clone(), item.label.clone(), pointer)
+                })
+                .collect(),
+        ),
+    ];
+    let mut warnings = Vec::new();
+    for (code, kind, values) in &warning_groups {
+        warnings.extend(duplicate_labels(document, code, kind, values));
+    }
+    for policy in &project.review_policies {
+        let base = format!(
+            "/reviewPolicies/{}/outcomes",
+            registry_platform_yaml::escape_pointer_segment(&policy.id)
+        );
+        let values = policy
+            .outcomes
+            .iter()
+            .map(|outcome| {
+                let pointer = format!(
+                    "{base}/{}/label",
+                    registry_platform_yaml::escape_pointer_segment(&outcome.id)
+                );
+                (outcome.id.clone(), outcome.label.clone(), pointer)
+            })
+            .collect::<Vec<_>>();
+        warnings.extend(duplicate_labels(
+            document,
+            "casework.review-policy.duplicate-outcome-label",
+            "review outcomes",
+            &values,
+        ));
+    }
+    for warning in warnings {
+        decoded.document.push_warning(warning);
+    }
+    errors
+}
+
 /// The indices of the profiles that do not require a scope absent from the
 /// combined scopes of every other profile at the same or a lower role. The
 /// selected profile carries the caller's identity and role, so credentials
@@ -1702,6 +1930,11 @@ pub struct TeamPolicy {
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub label: String,
     pub serves: Vec<String>,
     pub member_profiles: Vec<String>,
@@ -1715,6 +1948,11 @@ pub struct QueuePolicy {
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub label: String,
 }
 

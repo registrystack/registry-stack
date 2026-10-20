@@ -12,7 +12,8 @@ use registry_platform_calendar::{
     CalendarEvaluationError, CalendarException, CalendarExceptionKind,
 };
 use registry_platform_yaml::{
-    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, Identified, Reader, RemovedKey, Report,
+    local_id_collision_diagnostics, ApiVersion, AuthoredId, Decoded, Diagnostic, EnvelopeRule,
+    Expect, FormatSpec, Identified, Reader, RemovedKey, Report,
 };
 
 use crate::diagnostics::{findings_report, FindingArea, PolicyCheckReason, SchedulingDiagnostic};
@@ -748,6 +749,7 @@ impl SchedulingRecords {
         for finding in project_findings {
             report.push(finding.to_unplaced_diagnostic());
         }
+        report.extend(Report::new(records_integrity_diagnostics(&decoded)));
         if report.has_errors() {
             Err(report)
         } else {
@@ -776,6 +778,87 @@ impl SchedulingRecords {
             exceptions: self.exceptions,
         }
     }
+}
+
+fn records_integrity_diagnostics(decoded: &Decoded<SchedulingRecords>) -> Vec<Diagnostic> {
+    fn collisions(
+        document: &registry_platform_yaml::Document,
+        code: &str,
+        values: &[(String, String)],
+    ) -> Vec<Diagnostic> {
+        let entries = values
+            .iter()
+            .map(|(id, pointer)| AuthoredId { id, pointer })
+            .collect::<Vec<_>>();
+        local_id_collision_diagnostics(document, code, &entries)
+    }
+    fn list_ids<T: Identified>(base: &str, values: &[T]) -> Vec<(String, String)> {
+        values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| (value.id().to_owned(), format!("{base}/{index}/id")))
+            .collect()
+    }
+
+    let records = &decoded.value;
+    let mut diagnostics = Vec::new();
+    for (code, values) in [
+        (
+            "scheduling.records.location-id-collision",
+            list_ids("/locations", &records.locations),
+        ),
+        (
+            "scheduling.records.pool-id-collision",
+            list_ids("/pools", &records.pools),
+        ),
+        (
+            "scheduling.records.window-id-collision",
+            list_ids("/windows", &records.windows),
+        ),
+        (
+            "scheduling.records.exception-id-collision",
+            list_ids("/exceptions", &records.exceptions),
+        ),
+    ] {
+        diagnostics.extend(collisions(&decoded.document, code, &values));
+    }
+    for (pool_index, pool) in records.pools.iter().enumerate() {
+        let values = pool
+            .members
+            .iter()
+            .enumerate()
+            .map(|(member_index, member)| {
+                (
+                    member.resource_id.clone(),
+                    format!("/pools/{pool_index}/members/{member_index}/resourceId"),
+                )
+            })
+            .collect::<Vec<_>>();
+        diagnostics.extend(collisions(
+            &decoded.document,
+            "scheduling.records.pool-member-id-collision",
+            &values,
+        ));
+    }
+    for (window_index, window) in records.windows.iter().enumerate() {
+        let values = window
+            .subquotas
+            .iter()
+            .enumerate()
+            .map(|(subquota_index, subquota)| {
+                (
+                    subquota.id.clone(),
+                    format!("/windows/{window_index}/subquotas/{subquota_index}/id"),
+                )
+            })
+            .collect::<Vec<_>>();
+        diagnostics.extend(collisions(
+            &decoded.document,
+            "scheduling.records.window-subquota-id-collision",
+            &values,
+        ));
+    }
+    diagnostics
 }
 
 /// A request for one admission decision. The evaluator is pure: it resolves

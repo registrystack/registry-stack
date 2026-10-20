@@ -9,6 +9,7 @@ use std::collections::BTreeSet;
 use registry_platform_canonical_json::{
     canonicalize_json, parse_json_strict, JcsError, StrictJsonError,
 };
+use registry_platform_yaml::DisplayText;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -485,6 +486,7 @@ pub fn is_valid_public_text(value: &str) -> bool {
         && value.chars().count() <= MAX_STRING_CHARACTERS
         && !value.chars().any(char::is_control)
         && value.trim() == value
+        && DisplayText::new(value).is_ok()
 }
 
 fn validate_text(field: &'static str, value: &str) -> Result<(), ProfileError> {
@@ -689,6 +691,16 @@ mod tests {
         assert!(is_valid_identifier(
             "https://example.org/vocabulary#RegisteredBusiness"
         ));
+    }
+
+    #[test]
+    fn public_text_refuses_reordering_controls_and_keeps_multilingual_marks() {
+        assert!(!is_valid_public_text("review\u{202e}txt"));
+        assert!(!is_valid_public_text("review\u{2028}next"));
+        assert!(!is_valid_public_text("review\u{fdd0}text"));
+        assert!(is_valid_public_text("نام\u{200c}خانوادگی"));
+        assert!(is_valid_public_text("العربية\u{200f} English"));
+        assert!(is_valid_public_text("soft\u{00ad}hyphen"));
     }
 
     #[test]

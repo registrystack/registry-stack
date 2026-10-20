@@ -349,7 +349,7 @@
             "$ref": "#/components/schemas/ClockStepInstant"
           },
           "because": {
-            "type": "string"
+            "$ref": "#/components/schemas/DisplayText"
           },
           "id": {
             "$ref": "#/components/schemas/LocalId"
@@ -780,6 +780,10 @@
           "servedQueues"
         ],
         "type": "object"
+      },
+      "DisplayText": {
+        "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+        "type": "string"
       },
       "ElapsedDuration": {
         "description": "An elapsed budget in exactly one unit; a day is 24 elapsed hours.",
@@ -2449,7 +2453,7 @@
             "$ref": "#/components/schemas/LocalId"
           },
           "label": {
-            "type": "string"
+            "$ref": "#/components/schemas/DisplayText"
           }
         },
         "required": [
@@ -3068,9 +3072,13 @@
             "type": "string"
           },
           "description": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DisplayText"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "id": {
@@ -3282,7 +3290,7 @@
             "$ref": "#/components/schemas/LocalId"
           },
           "label": {
-            "type": "string"
+            "$ref": "#/components/schemas/DisplayText"
           },
           "publicReason": {
             "$ref": "#/components/schemas/ReviewPublicReasonRule",
@@ -4371,7 +4379,7 @@
         "additionalProperties": false,
         "properties": {
           "because": {
-            "type": "string"
+            "$ref": "#/components/schemas/DisplayText"
           },
           "id": {
             "$ref": "#/components/schemas/LocalId"
@@ -4983,7 +4991,7 @@
             "$ref": "#/components/schemas/LocalId"
           },
           "label": {
-            "type": "string"
+            "$ref": "#/components/schemas/DisplayText"
           },
           "lifetimeSeconds": {
             "format": "uint64",
@@ -5144,7 +5152,7 @@
             "$ref": "#/components/schemas/LocalId"
           },
           "label": {
-            "type": "string"
+            "$ref": "#/components/schemas/DisplayText"
           },
           "memberProfiles": {
             "items": {

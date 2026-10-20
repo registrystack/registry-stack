@@ -133,6 +133,11 @@ pub(crate) fn compile(root: &Path) -> Result<(EvidenceProject, CompiledProject)>
 pub(crate) fn inspect(root: &Path, target: Option<&Path>, command: &str) -> Result<Checked> {
     let target = target.map(crate::target::target_path);
     let snapshot = crate::project_snapshot::capture_project(root)?;
+    let project_path = snapshot.root().join(project::PROJECT_FILE);
+    let project_bytes = authored::read_authored_file(&project_path, "Evidence project")?;
+    let diagnostics = project::read_project(project::PROJECT_FILE, &project_bytes)?
+        .document
+        .warnings();
     let (project, mut compiled) = compile(snapshot.root())
         .map_err(|error| authored::project_refusal(error, snapshot.root(), root))?;
     for function in &mut compiled.functions {
@@ -194,9 +199,9 @@ pub(crate) fn inspect(root: &Path, target: Option<&Path>, command: &str) -> Resu
         report: crate::report::success(
             command,
             "complete",
-            json!({"project":root,"target":target.as_deref(),"proof":"authoring","diagnostics":[],"projectPresentation":{"id":project.id,"label":project.label,"description":project.description},"selectorProfiles":project.selector_profiles,"capabilityCeilings":{"acquisitionCapabilities":project.acquisition_capabilities,"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size},"assertionDefinitions":definitions,"sources":project.sources.iter().map(|(id,source)| json!({"id":id,"label":source.label,"description":source.description,"type":source.source_type,"connection":source.connection,"facts":source.facts,"response":source.response,"prepare":source.prepare,"resolvedPreparation":{"generated":source.prepare.is_none(),"script":compiled.model["sources"][id.as_str()]["request"]["prepareScript"],"limits":compiled.model["sources"][id.as_str()]["request"]["preparationLimits"]},"extract":source.extract,"limits":source.limits})).collect::<Vec<_>>(),"functions":compiled.functions,"authority":authority,"offline":true,"networkAccess":false,"secretResolution":false,"fixtureExecution":false}),
+            json!({"project":root,"target":target.as_deref(),"proof":"authoring","diagnostics":diagnostics.to_json_value(),"projectPresentation":{"id":project.id,"label":project.label,"description":project.description},"selectorProfiles":project.selector_profiles,"capabilityCeilings":{"acquisitionCapabilities":project.acquisition_capabilities,"maximumHolderBoundBatchSize":project.maximum_holder_bound_batch_size},"assertionDefinitions":definitions,"sources":project.sources.iter().map(|(id,source)| json!({"id":id,"label":source.label,"description":source.description,"type":source.source_type,"connection":source.connection,"facts":source.facts,"response":source.response,"prepare":source.prepare,"resolvedPreparation":{"generated":source.prepare.is_none(),"script":compiled.model["sources"][id.as_str()]["request"]["prepareScript"],"limits":compiled.model["sources"][id.as_str()]["request"]["preparationLimits"]},"extract":source.extract,"limits":source.limits})).collect::<Vec<_>>(),"functions":compiled.functions,"authority":authority,"offline":true,"networkAccess":false,"secretResolution":false,"fixtureExecution":false}),
         ),
-        diagnostics: registry_platform_yaml::Report::new(Vec::new()),
+        diagnostics,
     })
 }
 

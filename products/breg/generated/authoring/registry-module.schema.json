@@ -379,7 +379,7 @@
           "type": "string"
         },
         "label": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         }
       },
       "required": [
@@ -1919,6 +1919,10 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource",
+          "default": {}
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
         }
@@ -1970,16 +1974,20 @@
       "additionalProperties": false,
       "properties": {
         "description": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "label": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "titleField": {
           "type": "string"
         }
       },
       "type": "object"
+    },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "type": "string"
     },
     "EntityExtensionSource": {
       "additionalProperties": false,

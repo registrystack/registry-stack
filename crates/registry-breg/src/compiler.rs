@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_hooks::HOOK_HANDLER_ABI_V1;
+use registry_platform_yaml::{duplicate_display_text_pairs, lookalike_local_id_pairs};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -260,6 +261,8 @@ pub fn compile_project_with_assets(
         &mut findings,
     );
     let (module_order, module_map) = order_modules(project, modules, &mut diagnostics);
+    validate_cross_file_local_id_collisions(project, modules, &mut diagnostics);
+    validate_cross_file_duplicate_display_labels(project, modules, &mut findings);
     let mut functions = BTreeMap::new();
     for (module, function) in project
         .functions
@@ -442,6 +445,567 @@ pub fn compile_project_with_assets(
         findings,
         revision,
     ))
+}
+
+struct SourcedLocalId<'a> {
+    id: &'a str,
+    path: String,
+    source: Option<&'a str>,
+}
+
+fn add_cross_file_collisions(
+    code: &str,
+    values: &[SourcedLocalId<'_>],
+    errors: &mut Vec<Diagnostic>,
+) {
+    for (first, second) in lookalike_local_id_pairs(values.iter().map(|value| value.id)) {
+        let first = &values[first];
+        let second = &values[second];
+        if first.source == second.source {
+            continue;
+        }
+        errors.push(Diagnostic::error(
+            code,
+            &second.path,
+            &format!(
+                "local identifiers `{}` and `{}` differ only by `-` versus `_`",
+                first.id, second.id
+            ),
+        ));
+    }
+}
+
+struct SourcedDisplayText<'a> {
+    id: &'a str,
+    text: &'a str,
+    path: String,
+    source: Option<&'a str>,
+}
+
+fn add_cross_file_duplicate_labels(
+    code: &str,
+    kind: &str,
+    values: &[SourcedDisplayText<'_>],
+    findings: &mut Vec<Diagnostic>,
+) {
+    for (first, second) in duplicate_display_text_pairs(values.iter().map(|value| value.text)) {
+        let first = &values[first];
+        let second = &values[second];
+        if first.source == second.source {
+            continue;
+        }
+        findings.push(Diagnostic::finding(
+            code,
+            &second.path,
+            &format!(
+                "{kind} `{}` and `{}` have display text that compares the same",
+                first.id, second.id
+            ),
+        ));
+    }
+}
+
+fn collect_entity_field_labels<'a>(
+    entity: &'a EntitySource,
+    path: &str,
+    source: Option<&'a str>,
+    labels: &mut Vec<SourcedDisplayText<'a>>,
+) {
+    labels.extend(entity.fields.iter().filter_map(|field| {
+        field
+            .display
+            .label
+            .as_deref()
+            .map(|text| SourcedDisplayText {
+                id: &field.id,
+                text,
+                path: format!("{path}.fields[id={}].display.label", field.id),
+                source,
+            })
+    }));
+    for derived in &entity.derived {
+        labels.extend(derived.fields.iter().filter_map(|field| {
+            field
+                .display
+                .label
+                .as_deref()
+                .map(|text| SourcedDisplayText {
+                    id: &field.id,
+                    text,
+                    path: format!(
+                        "{path}.derived[id={}].fields[id={}].display.label",
+                        derived.id, field.id
+                    ),
+                    source,
+                })
+        }));
+    }
+}
+
+fn collect_extension_field_labels<'a>(
+    extension: &'a EntityExtensionSource,
+    path: &str,
+    source: &'a str,
+    labels: &mut Vec<SourcedDisplayText<'a>>,
+) {
+    labels.extend(extension.fields.iter().filter_map(|field| {
+        field
+            .display
+            .label
+            .as_deref()
+            .map(|text| SourcedDisplayText {
+                id: &field.id,
+                text,
+                path: format!("{path}.fields[id={}].display.label", field.id),
+                source: Some(source),
+            })
+    }));
+    for derived in &extension.derived {
+        labels.extend(derived.fields.iter().filter_map(|field| {
+            field
+                .display
+                .label
+                .as_deref()
+                .map(|text| SourcedDisplayText {
+                    id: &field.id,
+                    text,
+                    path: format!(
+                        "{path}.derived[id={}].fields[id={}].display.label",
+                        derived.id, field.id
+                    ),
+                    source: Some(source),
+                })
+        }));
+    }
+}
+
+#[derive(Default)]
+struct MergedLocalIdNamespaces<'a> {
+    fields: Vec<SourcedLocalId<'a>>,
+    derived: Vec<SourcedLocalId<'a>>,
+    constraints: Vec<SourcedLocalId<'a>>,
+    indexes: Vec<SourcedLocalId<'a>>,
+    profiles: Vec<SourcedLocalId<'a>>,
+    selectors: Vec<SourcedLocalId<'a>>,
+    read_paths: Vec<SourcedLocalId<'a>>,
+}
+
+fn collect_entity_local_ids<'a>(
+    entity: &'a EntitySource,
+    path: &str,
+    source: Option<&'a str>,
+    namespaces: &mut MergedLocalIdNamespaces<'a>,
+    hooks: &mut Vec<SourcedLocalId<'a>>,
+) {
+    namespaces
+        .fields
+        .extend(entity.fields.iter().map(|field| SourcedLocalId {
+            id: &field.id,
+            path: format!("{path}.fields[id={}].id", field.id),
+            source,
+        }));
+    for derived in &entity.derived {
+        namespaces.derived.push(SourcedLocalId {
+            id: &derived.id,
+            path: format!("{path}.derived[id={}].id", derived.id),
+            source,
+        });
+        namespaces
+            .fields
+            .extend(derived.fields.iter().map(|field| SourcedLocalId {
+                id: &field.id,
+                path: format!(
+                    "{path}.derived[id={}].fields[id={}].id",
+                    derived.id, field.id
+                ),
+                source,
+            }));
+    }
+    namespaces.constraints.extend(
+        entity
+            .constraints
+            .iter()
+            .filter_map(ConstraintSource::explicit_id)
+            .map(|id| SourcedLocalId {
+                id,
+                path: format!("{path}.constraints[id={id}].id"),
+                source,
+            }),
+    );
+    namespaces
+        .indexes
+        .extend(entity.indexes.iter().map(|index| SourcedLocalId {
+            id: &index.id,
+            path: format!("{path}.indexes[id={}].id", index.id),
+            source,
+        }));
+    namespaces
+        .profiles
+        .extend(entity.access_profiles.iter().map(|profile| SourcedLocalId {
+            id: &profile.id,
+            path: format!("{path}.accessProfiles[id={}].id", profile.id),
+            source,
+        }));
+    namespaces.selectors.extend(
+        entity
+            .selector_profiles
+            .iter()
+            .map(|selector| SourcedLocalId {
+                id: &selector.id,
+                path: format!("{path}.selectorProfiles[id={}].id", selector.id),
+                source,
+            }),
+    );
+    namespaces
+        .read_paths
+        .extend(entity.read_paths.iter().map(|read_path| SourcedLocalId {
+            id: &read_path.id,
+            path: format!("{path}.readPaths[id={}].id", read_path.id),
+            source,
+        }));
+    hooks.extend(entity.hooks.iter().map(|hook| SourcedLocalId {
+        id: &hook.id,
+        path: format!("{path}.hooks[id={}].id", hook.id),
+        source,
+    }));
+}
+
+fn collect_extension_local_ids<'a>(
+    extension: &'a EntityExtensionSource,
+    path: &str,
+    source: &'a str,
+    namespaces: &mut MergedLocalIdNamespaces<'a>,
+    hooks: &mut Vec<SourcedLocalId<'a>>,
+) {
+    namespaces
+        .fields
+        .extend(extension.fields.iter().map(|field| SourcedLocalId {
+            id: &field.id,
+            path: format!("{path}.fields[id={}].id", field.id),
+            source: Some(source),
+        }));
+    for derived in &extension.derived {
+        namespaces.derived.push(SourcedLocalId {
+            id: &derived.id,
+            path: format!("{path}.derived[id={}].id", derived.id),
+            source: Some(source),
+        });
+        namespaces
+            .fields
+            .extend(derived.fields.iter().map(|field| SourcedLocalId {
+                id: &field.id,
+                path: format!(
+                    "{path}.derived[id={}].fields[id={}].id",
+                    derived.id, field.id
+                ),
+                source: Some(source),
+            }));
+    }
+    namespaces.constraints.extend(
+        extension
+            .constraints
+            .iter()
+            .filter_map(ConstraintSource::explicit_id)
+            .map(|id| SourcedLocalId {
+                id,
+                path: format!("{path}.constraints[id={id}].id"),
+                source: Some(source),
+            }),
+    );
+    namespaces
+        .indexes
+        .extend(extension.indexes.iter().map(|index| SourcedLocalId {
+            id: &index.id,
+            path: format!("{path}.indexes[id={}].id", index.id),
+            source: Some(source),
+        }));
+    namespaces.profiles.extend(
+        extension
+            .access_profiles
+            .iter()
+            .map(|profile| SourcedLocalId {
+                id: &profile.id,
+                path: format!("{path}.accessProfiles[id={}].id", profile.id),
+                source: Some(source),
+            }),
+    );
+    namespaces
+        .selectors
+        .extend(
+            extension
+                .selector_profiles
+                .iter()
+                .map(|selector| SourcedLocalId {
+                    id: &selector.id,
+                    path: format!("{path}.selectorProfiles[id={}].id", selector.id),
+                    source: Some(source),
+                }),
+        );
+    namespaces
+        .read_paths
+        .extend(extension.read_paths.iter().map(|read_path| SourcedLocalId {
+            id: &read_path.id,
+            path: format!("{path}.readPaths[id={}].id", read_path.id),
+            source: Some(source),
+        }));
+    hooks.extend(extension.hooks.iter().map(|hook| SourcedLocalId {
+        id: &hook.id,
+        path: format!("{path}.hooks[id={}].id", hook.id),
+        source: Some(source),
+    }));
+}
+
+#[allow(clippy::too_many_lines)]
+fn validate_cross_file_local_id_collisions(
+    project: &RegistryProject,
+    modules: &[RegistryModule],
+    errors: &mut Vec<Diagnostic>,
+) {
+    let mut module_ids = project
+        .modules
+        .iter()
+        .enumerate()
+        .map(|(index, module)| SourcedLocalId {
+            id: &module.id,
+            path: format!("project.modules[{index}].id"),
+            source: None,
+        })
+        .collect::<Vec<_>>();
+    let mut records = project
+        .entities
+        .iter()
+        .map(|entity| SourcedLocalId {
+            id: &entity.id,
+            path: format!("recordTypes[id={}].id", entity.id),
+            source: None,
+        })
+        .collect::<Vec<_>>();
+    let mut actions = project
+        .actions
+        .iter()
+        .map(|action| SourcedLocalId {
+            id: &action.id,
+            path: format!("actions[id={}].id", action.id),
+            source: None,
+        })
+        .collect::<Vec<_>>();
+    let mut functions = project
+        .functions
+        .iter()
+        .map(|function| SourcedLocalId {
+            id: &function.id,
+            path: format!("functions[id={}].id", function.id),
+            source: None,
+        })
+        .collect::<Vec<_>>();
+    let mut entities = BTreeMap::<&str, MergedLocalIdNamespaces<'_>>::new();
+    let mut hooks = Vec::new();
+    for entity in &project.entities {
+        collect_entity_local_ids(
+            entity,
+            &format!("recordTypes[id={}]", entity.id),
+            None,
+            entities.entry(&entity.id).or_default(),
+            &mut hooks,
+        );
+    }
+    for (profile_index, profile) in project.access_profiles.iter().enumerate() {
+        for grant in &profile.permissions.entities {
+            entities
+                .entry(&grant.entity)
+                .or_default()
+                .profiles
+                .push(SourcedLocalId {
+                    id: &profile.id,
+                    path: format!("accessProfiles[{profile_index}].id"),
+                    source: None,
+                });
+        }
+    }
+
+    let mut ordered_modules = modules.iter().collect::<Vec<_>>();
+    ordered_modules.sort_by(|left, right| left.id.cmp(&right.id));
+    for module in ordered_modules {
+        let source = module.id.as_str();
+        module_ids.push(SourcedLocalId {
+            id: &module.id,
+            path: format!("modules[id={}].id", module.id),
+            source: Some(source),
+        });
+        records.extend(module.entities.iter().map(|entity| SourcedLocalId {
+            id: &entity.id,
+            path: format!("modules[id={}].recordTypes[id={}].id", module.id, entity.id),
+            source: Some(source),
+        }));
+        actions.extend(module.actions.iter().map(|action| SourcedLocalId {
+            id: &action.id,
+            path: format!("modules[id={}].actions[id={}].id", module.id, action.id),
+            source: Some(source),
+        }));
+        functions.extend(module.functions.iter().map(|function| SourcedLocalId {
+            id: &function.id,
+            path: format!("modules[id={}].functions[id={}].id", module.id, function.id),
+            source: Some(source),
+        }));
+        for entity in &module.entities {
+            collect_entity_local_ids(
+                entity,
+                &format!("modules[id={}].recordTypes[id={}]", module.id, entity.id),
+                Some(source),
+                entities.entry(&entity.id).or_default(),
+                &mut hooks,
+            );
+        }
+        for extension in &module.extend_entities {
+            collect_extension_local_ids(
+                extension,
+                &format!(
+                    "modules[id={}].extendRecordTypes[recordType={}]",
+                    module.id, extension.entity
+                ),
+                source,
+                entities.entry(&extension.entity).or_default(),
+                &mut hooks,
+            );
+        }
+    }
+
+    for (code, values) in [
+        ("breg.module.id-collision", &module_ids),
+        ("breg.record-type.id-collision", &records),
+        ("breg.action.id-collision", &actions),
+        ("breg.function.id-collision", &functions),
+        ("breg.hook.id-collision", &hooks),
+    ] {
+        add_cross_file_collisions(code, values, errors);
+    }
+    for namespaces in entities.values() {
+        for (code, values) in [
+            ("breg.field.id-collision", &namespaces.fields),
+            ("breg.derived.id-collision", &namespaces.derived),
+            ("breg.constraint.id-collision", &namespaces.constraints),
+            ("breg.index.id-collision", &namespaces.indexes),
+            ("breg.access-profile.id-collision", &namespaces.profiles),
+            ("breg.selector-profile.id-collision", &namespaces.selectors),
+            ("breg.read-path.id-collision", &namespaces.read_paths),
+        ] {
+            add_cross_file_collisions(code, values, errors);
+        }
+    }
+}
+
+fn validate_cross_file_duplicate_display_labels(
+    project: &RegistryProject,
+    modules: &[RegistryModule],
+    findings: &mut Vec<Diagnostic>,
+) {
+    let mut records = project
+        .entities
+        .iter()
+        .filter_map(|entity| {
+            entity
+                .display
+                .label
+                .as_deref()
+                .map(|text| SourcedDisplayText {
+                    id: &entity.id,
+                    text,
+                    path: format!("recordTypes[id={}].display.label", entity.id),
+                    source: None,
+                })
+        })
+        .collect::<Vec<_>>();
+    let mut actions = project
+        .actions
+        .iter()
+        .filter_map(|action| {
+            action
+                .display
+                .label
+                .as_deref()
+                .map(|text| SourcedDisplayText {
+                    id: &action.id,
+                    text,
+                    path: format!("actions[id={}].display.label", action.id),
+                    source: None,
+                })
+        })
+        .collect::<Vec<_>>();
+    let mut fields = BTreeMap::<&str, Vec<SourcedDisplayText<'_>>>::new();
+    for entity in &project.entities {
+        collect_entity_field_labels(
+            entity,
+            &format!("recordTypes[id={}]", entity.id),
+            None,
+            fields.entry(&entity.id).or_default(),
+        );
+    }
+
+    let mut ordered_modules = modules.iter().collect::<Vec<_>>();
+    ordered_modules.sort_by(|left, right| left.id.cmp(&right.id));
+    for module in ordered_modules {
+        let source = module.id.as_str();
+        records.extend(module.entities.iter().filter_map(|entity| {
+            entity
+                .display
+                .label
+                .as_deref()
+                .map(|text| SourcedDisplayText {
+                    id: &entity.id,
+                    text,
+                    path: format!(
+                        "modules[id={}].recordTypes[id={}].display.label",
+                        module.id, entity.id
+                    ),
+                    source: Some(source),
+                })
+        }));
+        actions.extend(module.actions.iter().filter_map(|action| {
+            action
+                .display
+                .label
+                .as_deref()
+                .map(|text| SourcedDisplayText {
+                    id: &action.id,
+                    text,
+                    path: format!(
+                        "modules[id={}].actions[id={}].display.label",
+                        module.id, action.id
+                    ),
+                    source: Some(source),
+                })
+        }));
+        for entity in &module.entities {
+            collect_entity_field_labels(
+                entity,
+                &format!("modules[id={}].recordTypes[id={}]", module.id, entity.id),
+                Some(source),
+                fields.entry(&entity.id).or_default(),
+            );
+        }
+        for extension in &module.extend_entities {
+            collect_extension_field_labels(
+                extension,
+                &format!(
+                    "modules[id={}].extendRecordTypes[recordType={}]",
+                    module.id, extension.entity
+                ),
+                source,
+                fields.entry(&extension.entity).or_default(),
+            );
+        }
+    }
+
+    add_cross_file_duplicate_labels(
+        "breg.record-type.duplicate-label",
+        "record types",
+        &records,
+        findings,
+    );
+    add_cross_file_duplicate_labels("breg.action.duplicate-label", "actions", &actions, findings);
+    for labels in fields.values() {
+        add_cross_file_duplicate_labels("breg.field.duplicate-label", "fields", labels, findings);
+    }
 }
 
 fn validate_project_header(

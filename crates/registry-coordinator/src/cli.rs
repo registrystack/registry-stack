@@ -356,7 +356,10 @@ fn check(
     let mut report = Report::default();
     let mut exit_code = 1;
     let loaded = project.and_then(|path| match Definition::load_project(path) {
-        Ok(loaded) => Some(loaded),
+        Ok(loaded) => {
+            report.extend(loaded.1.warnings());
+            Some(loaded)
+        }
         Err(error) => {
             exit_code = exit_code.max(error.exit_code);
             report.extend(error.report());

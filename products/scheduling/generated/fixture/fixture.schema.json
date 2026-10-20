@@ -98,6 +98,10 @@
       ],
       "type": "string"
     },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "type": "string"
+    },
     "ExceptionRecordKind": {
       "description": "The layer an exception occupies, mirrored for records.",
       "enum": [
@@ -439,7 +443,7 @@
       "description": "A published arrival window with its capacity.",
       "properties": {
         "because": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "end": {
           "format": "date-time",
@@ -512,7 +516,7 @@
           "description": "Every party costs the same fixed units.",
           "properties": {
             "because": {
-              "type": "string"
+              "$ref": "#/$defs/DisplayText"
             },
             "type": {
               "const": "fixed",
@@ -537,7 +541,7 @@
           "description": "A party costs its recipient count times `per_recipient`.",
           "properties": {
             "because": {
-              "type": "string"
+              "$ref": "#/$defs/DisplayText"
             },
             "perRecipient": {
               "format": "uint32",
@@ -572,7 +576,7 @@
               "type": "array"
             },
             "because": {
-              "type": "string"
+              "$ref": "#/$defs/DisplayText"
             },
             "input": {
               "$ref": "#/$defs/BandedInput"
@@ -655,7 +659,7 @@
       "description": "One band of a banded units table: parties up to `up_to` recipients cost\n`units`.",
       "properties": {
         "because": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "units": {
           "format": "uint32",
@@ -682,7 +686,7 @@
       "description": "The staffing block a window's supply is carved from, when the window is\nbacked by the same concrete resources an exact-time pool sells.\n\nA pool that backs a window may not also back an exact-time offering: a\nwindow claim occupies the window's own supply while an exact-time claim\noccupies the member it books, so the two modes would double-book the same\nstaffing in a ledger that cannot see the conflict. That mix is refused at\npublication whatever this block declares.\n\n`reserved_members` records how many pool members the window's supply is\nintended to use. The current ledger does not enforce that partition between\nwindows, so two windows backed by the same pool may not overlap, whatever\neither staffing block declares. Disjoint windows may reuse the pool.",
       "properties": {
         "because": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "pool": {
           "$ref": "#/$defs/LocalId"
@@ -705,7 +709,7 @@
       "description": "A per-channel ceiling within a window's published capacity.",
       "properties": {
         "because": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "channel": {
           "$ref": "#/$defs/Channel"

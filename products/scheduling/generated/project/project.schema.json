@@ -40,6 +40,10 @@
       ],
       "type": "string"
     },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "type": "string"
+    },
     "ExactTimeOffering": {
       "additionalProperties": false,
       "description": "The exact-time block of an offering: appointment length, protections, and\nthe interchangeable pool that backs it.",
@@ -114,7 +118,7 @@
       "description": "The hold policy every offering inherits.",
       "properties": {
         "because": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "maximumPerCaller": {
           "description": "The most live holds one caller may keep at once.",
@@ -143,7 +147,7 @@
       "description": "A named, revisioned set of holiday dates.",
       "properties": {
         "because": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "dates": {
           "description": "The dates the set closes. A set that closes no date omits the member.",
@@ -258,7 +262,7 @@
           "description": "Present exactly when `mode` is `arrival-window`."
         },
         "because": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "cancellationCutoffMinutes": {
           "description": "How late before the displayed start a booking may still be cancelled.",
@@ -279,7 +283,7 @@
           "$ref": "#/$defs/LocalId"
         },
         "label": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "location": {
           "$ref": "#/$defs/LocalId"
@@ -335,7 +339,7 @@
       "description": "A bounded weekly opening pattern over local wall-clock time. The timezone\ncomes from the location record the pattern references.",
       "properties": {
         "because": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "effectiveFrom": {
           "type": "string"
@@ -415,7 +419,7 @@
       "description": "One authored reminder offset: a notification intent becomes due this many\nminutes before the displayed start of an appointment on the offering.",
       "properties": {
         "because": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "offsetMinutes": {
           "format": "uint32",
@@ -446,7 +450,7 @@
           "$ref": "#/$defs/LocalId"
         },
         "label": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         }
       },
       "required": [

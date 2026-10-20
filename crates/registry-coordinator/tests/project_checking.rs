@@ -66,6 +66,44 @@ fn project_check_discovers_companions_and_aggregates_stray_yaml_refusals() {
 }
 
 #[test]
+fn project_check_reports_duplicate_display_text_and_deny_warnings_refuses_it() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    project(&root);
+    let path = root.join("workflow.yaml");
+    let authored = fs::read_to_string(&path)
+        .unwrap()
+        .replacen(
+            "    due:\n      type:",
+            "    due:\n      title: Review request\n      type:",
+            1,
+        )
+        .replacen(
+            "    read-application:\n      type:",
+            "    read-application:\n      title: review request\n      type:",
+            1,
+        );
+    fs::write(&path, authored).unwrap();
+
+    let (exit, report) = check(&root, &[]);
+    assert_eq!(exit, 0, "{report}");
+    let warning = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["code"] == "coordinator.project.duplicate-step-title")
+        .expect("the product check reports the duplicate title");
+    assert_eq!(warning["path"], "/workflow/steps/read-application/title");
+
+    let (exit, denied) = check(&root, &["--deny-warnings"]);
+    assert_eq!(exit, 1, "{denied}");
+    assert_eq!(
+        denied["diagnostics"][0]["code"],
+        "coordinator.project.duplicate-step-title"
+    );
+}
+
+#[test]
 fn project_check_executes_scenarios_and_checks_unused_step_references() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();

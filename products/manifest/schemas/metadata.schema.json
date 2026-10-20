@@ -47,7 +47,7 @@
           "type": "string"
         },
         "name": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "spatial": {
           "type": "string"
@@ -197,7 +197,7 @@
           "$ref": "#/$defs/LocalizedText"
         },
         "endpoint_description": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "endpoint_url": {
           "type": "string"
@@ -271,7 +271,7 @@
           "type": "string"
         },
         "owner": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "policy": {
           "$ref": "#/$defs/DatasetPolicyManifest"
@@ -350,6 +350,10 @@
         }
       },
       "type": "object"
+    },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "type": "string"
     },
     "DistributionManifest": {
       "additionalProperties": false,
@@ -462,7 +466,7 @@
           "type": "array"
         },
         "name": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "relationships": {
           "default": [],
@@ -773,7 +777,7 @@
           "type": "string"
         },
         "name": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "required": {
           "default": false,
@@ -833,7 +837,7 @@
           "type": "integer"
         },
         "name": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "required": {
           "default": false,
@@ -991,7 +995,7 @@
           "type": "string"
         },
         "name": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         }
       },
       "required": [
@@ -1013,7 +1017,7 @@
           "type": "string"
         },
         "name": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         }
       },
       "required": [
@@ -1037,16 +1041,15 @@
     "LocalizedText": {
       "anyOf": [
         {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         {
           "additionalProperties": {
-            "type": "string"
+            "$ref": "#/$defs/DisplayText"
           },
           "type": "object"
         }
-      ],
-      "description": "Text written either as one string or as a mapping from language tag to\ntext. The node kind chooses the variant, so a decoding error inside either\nform keeps its position. Each variant serializes as the form it was\nwritten in."
+      ]
     },
     "OdrlEnforcementProfile": {
       "additionalProperties": false,
@@ -1205,7 +1208,7 @@
           "type": "string"
         },
         "name": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         }
       },
       "required": [
@@ -1239,7 +1242,7 @@
           "type": "string"
         },
         "name": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "role": {
           "type": "string"
