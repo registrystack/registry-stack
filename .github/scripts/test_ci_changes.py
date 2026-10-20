@@ -1810,6 +1810,21 @@ class CiChangesTest(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["messaging_tutorial"])
+        # The source-neutral core is linked by the runtime, so a change to it
+        # reaches the replay through reverse dependencies.
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-messaging-core/src/lib.rs",))[
+                "messaging_tutorial"
+            ]
+        )
+        # Pages that share the tutorials directory and reach none of the
+        # Registry Messaging replay.
+        for path in (
+            "docs/site/src/content/docs/tutorials/first-casework.mdx",
+            "docs/site/scripts/check-casework-tutorial.sh",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(classify(self.workspace, (path,))["messaging_tutorial"])
 
     def test_render_tutorial_inputs_cover_the_replayed_tutorial(self) -> None:
         # The Render page runs under the runner's `none` toolset from the
@@ -1850,21 +1865,6 @@ class CiChangesTest(unittest.TestCase):
                 "render_tutorial"
             ]
         )
-        # The source-neutral core is linked by the runtime, so a change to it
-        # reaches the replay through reverse dependencies.
-        self.assertTrue(
-            classify(self.workspace, ("crates/registry-messaging-core/src/lib.rs",))[
-                "messaging_tutorial"
-            ]
-        )
-        # Pages that share the tutorials directory and reach none of the
-        # Registry Messaging replay.
-        for path in (
-            "docs/site/src/content/docs/tutorials/first-casework.mdx",
-            "docs/site/scripts/check-casework-tutorial.sh",
-        ):
-            with self.subTest(path=path):
-                self.assertFalse(classify(self.workspace, (path,))["messaging_tutorial"])
 
     def test_scheduling_tutorial_inputs_cover_every_replayed_tutorial(self) -> None:
         # Each page's tutorial_test frontmatter is the source of truth for
