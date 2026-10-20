@@ -866,7 +866,6 @@ impl SchedulingPolicy {
         let integrity = policy_integrity_diagnostics(&mut decoded);
         let findings = decoded.value.check();
         let mut report = findings_report(&decoded.document, &findings);
-        report.extend(decoded.document.warnings());
         report.extend(Report::new(integrity));
         if report.has_errors() {
             Err(report)
@@ -2024,6 +2023,17 @@ holdPolicy:
                 "missing {code}: {report:#?}"
             );
         }
+        assert_eq!(
+            report
+                .diagnostics()
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic.code == "scheduling.project.duplicate-service-label"
+                })
+                .count(),
+            1,
+            "the reader warning is reported exactly once"
+        );
     }
 
     #[test]

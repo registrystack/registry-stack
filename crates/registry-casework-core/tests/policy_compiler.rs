@@ -327,6 +327,15 @@ fn captured_schema_bytes_are_the_only_compiler_inputs() {
             "missing {code}: {report:#?}"
         );
     }
+    assert_eq!(
+        report
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "casework.project.duplicate-queue-label")
+            .count(),
+        1,
+        "the reader warning is reported exactly once"
+    );
     let mut changed = captured;
     changed.get_mut("schemas/display.json").unwrap().push(b'\n');
     assert!(CaseworkProject::read_with_schemas("casework.yaml", &document, &changed).is_err());

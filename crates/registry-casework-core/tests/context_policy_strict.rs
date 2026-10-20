@@ -113,6 +113,15 @@ fn project_check_keeps_duplicate_label_warnings_beside_semantic_errors() {
             "missing {code}: {report:#?}"
         );
     }
+    assert_eq!(
+        report
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "casework.project.duplicate-queue-label")
+            .count(),
+        1,
+        "the reader warning is reported exactly once"
+    );
 }
 
 #[test]

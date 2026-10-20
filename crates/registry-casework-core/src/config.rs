@@ -550,13 +550,11 @@ impl CaseworkProject {
         let schema_findings = decoded.value.resolve_display_schemas(resolver);
         if !schema_findings.is_empty() {
             let mut report = findings_report(&decoded.document, &schema_findings);
-            report.extend(decoded.document.warnings());
             report.extend(Report::new(integrity));
             return Err(report);
         }
         let findings = decoded.value.findings();
         let mut report = findings_report(&decoded.document, &findings);
-        report.extend(decoded.document.warnings());
         report.extend(Report::new(integrity));
         if report.has_errors() {
             Err(report)

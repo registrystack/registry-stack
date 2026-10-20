@@ -757,7 +757,6 @@ impl SchedulingRecords {
         for finding in project_findings {
             report.push(finding.to_unplaced_diagnostic());
         }
-        report.extend(decoded.document.warnings());
         report.extend(Report::new(integrity));
         if report.has_errors() {
             Err(report)
