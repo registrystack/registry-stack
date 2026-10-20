@@ -645,13 +645,15 @@ fn verify_borrowed_issuer(owner: &BorrowedIssuer) -> Result<()> {
         );
     }
     let origin = format!("http://127.0.0.1:{}", owner.port);
-    let agent = ureq::AgentBuilder::new()
-        .try_proxy_from_env(false)
-        .redirects(0)
-        .timeout_connect(Duration::from_secs(1))
-        .timeout_read(Duration::from_secs(2))
-        .timeout_write(Duration::from_secs(1))
+    let config = ureq::Agent::config_builder()
+        .proxy(None)
+        .max_redirects(0)
+        .timeout_connect(Some(Duration::from_secs(1)))
+        .timeout_send_request(Some(Duration::from_secs(1)))
+        .timeout_recv_response(Some(Duration::from_secs(2)))
+        .timeout_recv_body(Some(Duration::from_secs(2)))
         .build();
+    let agent: ureq::Agent = config.into();
     for (path, expected) in [
         ("/.well-known/openid-configuration", "issuer"),
         ("/oauth2/jwks", "keys"),
@@ -662,6 +664,7 @@ fn verify_borrowed_issuer(owner: &BorrowedIssuer) -> Result<()> {
             .context("the shared BREG issuer is not answering")?;
         let mut bytes = Vec::new();
         response
+            .into_body()
             .into_reader()
             .take(MAX_HTTP_BODY_BYTES + 1)
             .read_to_end(&mut bytes)?;
@@ -3022,12 +3025,15 @@ fn wait_for_http(
     seconds: u64,
     terminate: &AtomicBool,
 ) -> Result<()> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_millis(250))
-        .timeout_read(Duration::from_secs(2))
-        .timeout_write(Duration::from_millis(500))
-        .redirects(0)
+    let config = ureq::Agent::config_builder()
+        .proxy(None)
+        .max_redirects(0)
+        .timeout_connect(Some(Duration::from_millis(250)))
+        .timeout_send_request(Some(Duration::from_millis(500)))
+        .timeout_recv_response(Some(Duration::from_secs(2)))
+        .timeout_recv_body(Some(Duration::from_secs(2)))
         .build();
+    let agent: ureq::Agent = config.into();
     let deadline = Instant::now() + Duration::from_secs(seconds);
     while Instant::now() < deadline {
         ensure_supervisor_active(terminate)?;
@@ -3037,6 +3043,7 @@ fn wait_for_http(
         if let Ok(response) = agent.get(url).call() {
             let mut bytes = Vec::new();
             response
+                .into_body()
                 .into_reader()
                 .take(MAX_HTTP_BODY_BYTES + 1)
                 .read_to_end(&mut bytes)?;
