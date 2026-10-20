@@ -5,6 +5,12 @@ import { test } from 'node:test';
 
 import YAML from 'yaml';
 
+import {
+  UNRELEASED_PRODUCT_VERSION,
+  loadReleaseArtifacts,
+  releaseLabelErrors,
+} from './docset-release-products.mjs';
+
 const siteRoot = resolve(import.meta.dirname, '..');
 const repoRoot = resolve(siteRoot, '../..');
 
@@ -110,9 +116,22 @@ test('current docs stay under /dev/ while the newest published release is the re
     released.description.startsWith(`Released Registry Stack ${released.id} `),
     `${released.id} description must say it is released`,
   );
+  // A product the release manifest does not ship keeps the unreleased label
+  // at the release's ref; docset-release-artifacts.yaml decides which.
+  assert.deepEqual(
+    releaseLabelErrors({
+      docsets: { docsets: [released] },
+      manifests,
+      releaseArtifacts: await loadReleaseArtifacts(siteRoot),
+    }),
+    [],
+  );
   for (const [productId, product] of Object.entries(released.products)) {
     if (productId === 'crosswalk') continue;
-    assert.equal(product.version, released.id);
+    assert.ok(
+      [released.id, UNRELEASED_PRODUCT_VERSION].includes(product.version),
+      `${productId} ${released.id} docs must carry the release version or the unreleased label`,
+    );
     assert.equal(
       product.ref,
       releasedManifest.stack.source_ref,

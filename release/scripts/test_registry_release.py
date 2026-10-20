@@ -4537,6 +4537,147 @@ class RegistryReleaseTest(TestCase):
         self.assertEqual(0, unpublished_result.returncode, unpublished_result.stderr)
         self.assertEqual(0, offline_result.returncode, offline_result.stderr)
 
+    def validate_prepared_docset_products(
+        self, products: dict, **frozen: dict
+    ) -> subprocess.CompletedProcess[str]:
+        """Validate the prepared v0.9.0 docset fixture with extra product entries.
+
+        The fixture's ``applies_from`` is v0.9.0, so the prepared docset is held
+        to the shipped-product rule and the frozen v0.8.0 docset is not.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            write_prepared_next_release(root, manifest_dir, docsets)
+            data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
+            data["docsets"][0]["products"].update(frozen.get("v0.8.0", {}))
+            data["docsets"][1]["products"].update(products)
+            docsets.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+            return run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+            )
+
+    def test_validate_docsets_accepts_main_source_label_for_unshipped_product(
+        self,
+    ) -> None:
+        result = self.validate_prepared_docset_products(
+            {
+                "registry-coordinator": {
+                    "version": "main source (unreleased)",
+                    "ref": "f30a541df539c2e16de09733c5944c744a60493c",
+                }
+            }
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_validate_docsets_rejects_release_label_for_unshipped_product(
+        self,
+    ) -> None:
+        result = self.validate_prepared_docset_products(
+            {
+                "registry-coordinator": {
+                    "version": "v0.9.0",
+                    "ref": "f30a541df539c2e16de09733c5944c744a60493c",
+                }
+            }
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "docset v0.9.0 product registry-coordinator version 'v0.9.0' must be "
+            "'main source (unreleased)' because release manifest v0.9.0 ships no "
+            "coordinator artifact",
+            result.stderr,
+        )
+
+    def test_validate_docsets_rejects_main_source_label_for_shipped_product(
+        self,
+    ) -> None:
+        result = self.validate_prepared_docset_products(
+            {
+                "registry-stack": {
+                    "version": "main source (unreleased)",
+                    "ref": "f30a541df539c2e16de09733c5944c744a60493c",
+                }
+            }
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "docset v0.9.0 product registry-stack version 'main source (unreleased)' "
+            "does not match release manifest version 'v0.9.0'",
+            result.stderr,
+        )
+
+    def test_validate_docsets_rejects_unshipped_product_on_another_ref(self) -> None:
+        result = self.validate_prepared_docset_products(
+            {
+                "registry-coordinator": {
+                    "version": "main source (unreleased)",
+                    "ref": "HEAD",
+                }
+            }
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("product registry-coordinator ref 'HEAD'", result.stderr)
+
+    def test_validate_docsets_rejects_product_without_release_artifact(self) -> None:
+        result = self.validate_prepared_docset_products(
+            {
+                "registry-unknown": {
+                    "version": "v0.9.0",
+                    "ref": "f30a541df539c2e16de09733c5944c744a60493c",
+                }
+            }
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "docset v0.9.0 product registry-unknown names no release artifact "
+            "in docset-release-artifacts.yaml",
+            result.stderr,
+        )
+
+    def test_validate_docsets_leaves_docsets_before_applies_from_as_published(
+        self,
+    ) -> None:
+        result = self.validate_prepared_docset_products(
+            {},
+            **{
+                "v0.8.0": {
+                    "registry-coordinator": {
+                        "version": "v0.8.0",
+                        "ref": "f30a541df539c2e16de09733c5944c744a60493c",
+                    }
+                }
+            },
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_validate_docsets_requires_release_artifact_map(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            (root / "docset-release-artifacts.yaml").unlink()
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("docset-release-artifacts.yaml", result.stderr)
+
     def test_validate_docsets_rejects_unusable_published_release_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -5578,6 +5719,18 @@ def write_docset_fixture(root: Path) -> tuple[Path, Path]:
                         "bundle_sha256": "a" * 64,
                         "tree_sha256": "b" * 64,
                     }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "docset-release-artifacts.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "applies_from": "v0.9.0",
+                "products": {
+                    "registry-stack": "registry-manifest",
+                    "registry-coordinator": "coordinator",
                 },
             }
         ),

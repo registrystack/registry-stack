@@ -3,7 +3,7 @@
 // shared-page region in that docset's build.
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 
@@ -18,6 +18,7 @@ import {
   resolveDocsetProductRegions,
   selectedDocset,
 } from '../src/lib/docset-products.mjs';
+import { releaseLabelErrors, UNRELEASED_PRODUCT_VERSION } from './docset-release-products.mjs';
 
 const siteRoot = resolve(import.meta.dirname, '..');
 const docsRoot = resolve(siteRoot, 'src/content/docs');
@@ -48,8 +49,9 @@ test('the latest docset publishes Registry Messaging and the BReg citizen servic
   assert.throws(() => selectedDocset(manifest, { DOCS_DOCSET: 'missing' }), /"missing" not found/);
 });
 
-// Registry Coordinator first ships in v0.41.0, so the latest docset names it
-// and no docset archived before v0.41.0 does.
+// Registry Coordinator is unreleased: no release manifest ships its
+// coordinator artifact. The latest docset publishes it from main source, and
+// no docset archived before v0.41.0 names it.
 test('the latest docset publishes Registry Coordinator', () => {
   const manifest = parse(readFileSync(resolve(siteRoot, 'src/data/docsets.yaml'), 'utf8'));
   const latest = manifest.docsets.find((docset) => docset.id === 'latest');
@@ -69,6 +71,66 @@ test('no docset archived before v0.41.0 publishes Registry Coordinator', () => {
   for (const docset of earlier) {
     assert.equal(docset.products?.['registry-coordinator'], undefined, docset.id);
   }
+});
+
+const repoRoot = resolve(siteRoot, '../..');
+
+function loadReleaseManifests() {
+  const manifests = new Map();
+  const directory = resolve(repoRoot, 'release/manifests');
+  for (const name of readdirSync(directory)) {
+    if (!/^registry-stack-.+\.yaml$/.test(name)) continue;
+    const manifest = parse(readFileSync(resolve(directory, name), 'utf8'));
+    if (manifest?.stack?.source_tag) manifests.set(manifest.stack.source_tag, manifest);
+  }
+  return manifests;
+}
+
+const releaseArtifacts = parse(readFileSync(resolve(siteRoot, 'src/data/docset-release-artifacts.yaml'), 'utf8'));
+
+// Release preparation labels a product the selected manifest does not ship
+// `main source (unreleased)`, as the latest docset does. Docsets archived
+// before applies_from are frozen as published.
+test('no archived docset labels a product with a release version its manifest does not ship', () => {
+  const docsets = parse(readFileSync(resolve(siteRoot, 'src/data/docsets.yaml'), 'utf8'));
+  assert.deepEqual(releaseLabelErrors({ docsets, manifests: loadReleaseManifests(), releaseArtifacts }), []);
+});
+
+test('the release label check refuses a release version for an unshipped product', () => {
+  const ref = 'a'.repeat(40);
+  const manifests = new Map([['v9.0.0', {
+    stack: { version: '9.0.0', source_tag: 'v9.0.0', source_ref: ref },
+    artifacts: { 'registry-docs': '9.0.0' },
+    external: {},
+  }]]);
+  const docset = (coordinator) => ({ docsets: [{
+    id: 'v9.0.0', status: 'archived', availability: 'released',
+    products: { 'registry-stack': { version: 'v9.0.0', ref }, 'registry-coordinator': { version: coordinator, ref } },
+  }] });
+  assert.deepEqual(releaseLabelErrors({ docsets: docset(UNRELEASED_PRODUCT_VERSION), manifests, releaseArtifacts }), []);
+  assert.deepEqual(releaseLabelErrors({ docsets: docset('v9.0.0'), manifests, releaseArtifacts }), [
+    "docset v9.0.0 labels registry-coordinator 'v9.0.0' but release manifest v9.0.0 ships no coordinator artifact; label it 'main source (unreleased)'",
+  ]);
+  const unmapped = docset(UNRELEASED_PRODUCT_VERSION);
+  unmapped.docsets[0].products['registry-unknown'] = { version: 'v9.0.0', ref };
+  assert.deepEqual(releaseLabelErrors({ docsets: unmapped, manifests, releaseArtifacts }), [
+    'docset v9.0.0 product registry-unknown names no release artifact in docset-release-artifacts.yaml',
+  ]);
+});
+
+test('the release label check leaves docsets before applies_from as published', () => {
+  const ref = 'a'.repeat(40);
+  const manifests = new Map([['v0.42.0', {
+    stack: { version: '0.42.0', source_tag: 'v0.42.0', source_ref: ref },
+    artifacts: { 'registry-docs': '0.42.0' },
+    external: {},
+  }]]);
+  const docsets = { docsets: [{
+    id: 'v0.42.0', status: 'archived', availability: 'released',
+    products: { 'registry-coordinator': { version: 'v0.42.0', ref } },
+  }] };
+  assert.equal(releaseArtifacts.applies_from, 'v0.43.0');
+  assert.deepEqual(releaseLabelErrors({ docsets, manifests, releaseArtifacts }), []);
 });
 
 test('no docset archived before v0.38.0 publishes Registry Messaging or the BReg citizen services', () => {

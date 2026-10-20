@@ -15,6 +15,7 @@ docsets:
     products:
       registry-stack: { version: main source (unreleased), ref: HEAD }
       registry-evidence: { version: main source (unreleased), ref: HEAD }
+      registry-coordinator: { version: main source (unreleased), ref: HEAD }
   # This comment and the historical scalar styles survive preparation.
   - id: v0.26.1
     status: archived
@@ -45,16 +46,29 @@ repos:
         last_reviewed: unreviewed
 `;
 
-async function fixture(t, { external = {}, manifestVersion = '0.29.0', releaseId = 'beta-41' } = {}) {
+const releaseArtifactsSource = `applies_from: v0.29.0
+products:
+  registry-stack: registry-docs
+  registry-evidence: evidence
+  registry-coordinator: coordinator
+`;
+
+async function fixture(t, {
+  external = {}, manifestVersion = '0.29.0', releaseId = 'beta-41', sourceRef,
+} = {}) {
   const root = await mkdtemp(resolve(tmpdir(), 'prepare-docs-metadata-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const siteRoot = resolve(root, 'docs/site');
   await mkdir(resolve(siteRoot, 'src/data'), { recursive: true });
   await mkdir(resolve(root, 'release/manifests'), { recursive: true });
   await writeFile(resolve(root, `release/manifests/registry-stack-${releaseId}.yaml`), YAML.stringify({
-    stack: { release: releaseId, version: manifestVersion, source_tag: 'v0.29.0' },
-    artifacts: { 'registry-docs': '0.29.0' }, external,
+    stack: {
+      release: releaseId, version: manifestVersion, source_tag: 'v0.29.0',
+      ...(sourceRef ? { source_ref: sourceRef } : {}),
+    },
+    artifacts: { 'registry-docs': '0.29.0', evidence: '0.29.0' }, external,
   }));
+  await writeFile(resolve(siteRoot, 'src/data/docset-release-artifacts.yaml'), releaseArtifactsSource);
   await writeFile(resolve(siteRoot, 'src/data/docsets.yaml'), docsetsSource);
   await writeFile(resolve(siteRoot, 'src/data/repo-docs.yaml'), repoDocsSource);
   const read = async (name) => readFile(resolve(siteRoot, `src/data/${name}.yaml`), 'utf8');
@@ -86,6 +100,35 @@ test('prepares a future candidate from current product metadata and explicit ext
     docsets: ['v0.29.0'], standards_referenced: [], last_reviewed: 'unreviewed',
   });
   assert.equal(docs[2].docset_overrides, undefined);
+});
+
+test('labels a product the manifest does not ship as main source at the docset ref', async (t) => {
+  const { prepare, read } = await fixture(t);
+  await prepare();
+  const candidate = YAML.parse(await read('docsets')).docsets.find((entry) => entry.id === 'v0.29.0');
+  assert.deepEqual(candidate.products, {
+    'registry-stack': { version: 'v0.29.0', ref: 'v0.29.0' },
+    'registry-evidence': { version: 'v0.29.0', ref: 'v0.29.0' },
+    'registry-coordinator': { version: 'main source (unreleased)', ref: 'v0.29.0' },
+  });
+});
+
+test('pins an unshipped product to the manifest source ref when one is recorded', async (t) => {
+  const sourceRef = 'c'.repeat(40);
+  const { prepare, read } = await fixture(t, { sourceRef });
+  await prepare();
+  const candidate = YAML.parse(await read('docsets')).docsets.find((entry) => entry.id === 'v0.29.0');
+  assert.deepEqual(candidate.products['registry-coordinator'], {
+    version: 'main source (unreleased)', ref: sourceRef,
+  });
+  assert.deepEqual(candidate.products['registry-evidence'], { version: 'v0.29.0', ref: sourceRef });
+});
+
+test('refuses a current product that names no release artifact', async (t) => {
+  const { prepare, read, write } = await fixture(t);
+  await write('docset-release-artifacts', releaseArtifactsSource.replace('  registry-coordinator: coordinator\n', ''));
+  await assert.rejects(prepare(), /registry-coordinator names no release artifact in docset-release-artifacts\.yaml/);
+  assert.equal(await read('docsets'), docsetsSource);
 });
 
 test('preserves original YAML bytes and historical semantic records with idempotent reruns', async (t) => {

@@ -1,0 +1,25 @@
+# The release manifest artifact that ships each docset product. A release
+# ships a product when its manifest's `artifacts` map names that artifact.
+#
+# `registry-release prepare-docs` copies the current docset's products into
+# the candidate docset. It labels a product the selected manifest ships with
+# the release version, and a product it does not ship `main source
+# (unreleased)`, as the latest docset does; both sit at the docset's ref.
+# A docset product with no entry here stops preparation.
+#
+# `registry-release validate-docsets` and the docs tests hold every release
+# docset from `applies_from` on to the same rule. Docsets archived before it
+# are frozen as published, including labels this rule would now refuse:
+# v0.42.0 labels the unreleased Registry Coordinator v0.42.0, and v0.33.0 to
+# v0.37.0 label Registry Render before any release shipped it.
+applies_from: v0.43.0
+products:
+  registry-stack: registry-docs
+  registry-manifest: registry-manifest
+  registry-evidence: evidence
+  registry-casework: casework
+  registry-scheduling: scheduling
+  registry-render: registry-render
+  registry-messaging: messaging
+  registry-breg-services: breg-mcp
+  registry-coordinator: coordinator
