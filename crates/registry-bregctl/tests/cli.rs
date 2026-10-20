@@ -4439,6 +4439,8 @@ modules:
     version: "1"
 recordTypes:
   - id: case-file
+    display:
+      label: Review
     primaryDataset: collision-fixture
     route: case-files
     mutationMode: mutable
@@ -4449,17 +4451,22 @@ recordTypes:
     fs::create_dir_all(&module_directory).expect("module directory creates");
     fs::write(
         module_directory.join("module.yaml"),
-        br#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+        format!(
+            r#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
 kind: BRegModule
 id: core
 version: "1"
 recordTypes:
   - id: case_file
+    display:
+      label: "R{}eview"
     primaryDataset: collision-fixture
     route: archived-case-files
     mutationMode: mutable
     fields: []
 "#,
+            '\u{200b}'
+        ),
     )
     .expect("module fixture writes");
 
@@ -4491,6 +4498,35 @@ recordTypes:
     assert_eq!(related["column"], 9);
     assert_eq!(related["message"], "the first identifier is defined here");
     assert_check_diagnostic(diagnostic, Some("BRegModule"));
+
+    let warning = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.record-type.duplicate-label")
+        .unwrap_or_else(|| panic!("missing warning beside cross-file collision: {report}"));
+    assert_eq!(warning["severity"], "warning");
+    assert_eq!(warning["path"], "/recordTypes/0/display/label");
+    assert_eq!(
+        warning["source"]["file"],
+        module_directory.join("module.yaml").display().to_string()
+    );
+    assert_eq!(warning["source"]["line"], 8);
+    assert_eq!(warning["source"]["column"], 14);
+    assert_eq!(warning["related"].as_array().unwrap().len(), 1);
+    let warning_related = &warning["related"][0];
+    assert_eq!(warning_related["path"], "/recordTypes/0/display/label");
+    assert_eq!(
+        warning_related["file"],
+        project.path().join("registry.yaml").display().to_string()
+    );
+    assert_eq!(warning_related["line"], 16);
+    assert_eq!(warning_related["column"], 14);
+    assert_eq!(
+        warning_related["message"],
+        "the first display text is defined here"
+    );
+    assert_check_diagnostic(warning, Some("BRegModule"));
 }
 
 #[test]

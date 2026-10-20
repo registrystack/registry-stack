@@ -62,7 +62,8 @@ impl Diagnostic {
     }
 }
 
-/// All errors from one compile, sorted independently of input order.
+/// All diagnostics from one failed compile, with errors before findings and
+/// each severity sorted independently of input order.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct CompileFailure {
@@ -81,10 +82,29 @@ impl CompileFailure {
     }
 
     pub(crate) fn from_errors(mut diagnostics: Vec<Diagnostic>) -> Self {
-        diagnostics.sort();
+        sort_failure_diagnostics(&mut diagnostics);
         diagnostics.dedup();
         Self { diagnostics }
     }
+
+    pub(crate) fn with_findings(mut self, findings: &[Diagnostic]) -> Self {
+        self.diagnostics.extend_from_slice(findings);
+        sort_failure_diagnostics(&mut self.diagnostics);
+        self.diagnostics.dedup();
+        self
+    }
+}
+
+fn sort_failure_diagnostics(diagnostics: &mut [Diagnostic]) {
+    diagnostics.sort_by(|left, right| {
+        let rank = |severity| match severity {
+            DiagnosticSeverity::Error => 0,
+            DiagnosticSeverity::Finding => 1,
+        };
+        rank(left.severity)
+            .cmp(&rank(right.severity))
+            .then_with(|| left.cmp(right))
+    });
 }
 
 impl fmt::Display for CompileFailure {
@@ -117,5 +137,19 @@ mod tests {
 
         let serialized = serde_json::to_value(diagnostic).unwrap();
         assert!(serialized.get("related").is_none());
+    }
+
+    #[test]
+    fn compile_failure_keeps_errors_before_retained_findings() {
+        let failure =
+            CompileFailure::from_one(Diagnostic::error("breg.error", "project", "refused"))
+                .with_findings(&[Diagnostic::finding(
+                    "breg.finding",
+                    "project",
+                    "review this",
+                )]);
+
+        assert_eq!(failure.diagnostics[0].severity, DiagnosticSeverity::Error);
+        assert_eq!(failure.diagnostics[1].severity, DiagnosticSeverity::Finding);
     }
 }
