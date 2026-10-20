@@ -476,7 +476,7 @@ fn add_cross_file_collisions(
 }
 
 struct SourcedDisplayText<'a> {
-    id: &'a str,
+    id: Option<&'a str>,
     text: &'a str,
     path: String,
     source: Option<&'a str>,
@@ -494,14 +494,13 @@ fn add_cross_file_duplicate_labels(
         if first.source == second.source {
             continue;
         }
-        findings.push(Diagnostic::finding(
-            code,
-            &second.path,
-            &format!(
-                "{kind} `{}` and `{}` have display text that compares the same",
-                first.id, second.id
-            ),
-        ));
+        let message = match (first.id, second.id) {
+            (Some(first), Some(second)) => {
+                format!("{kind} `{first}` and `{second}` have display text that compares the same")
+            }
+            _ => format!("two {kind} have display text that compares the same"),
+        };
+        findings.push(Diagnostic::finding(code, &second.path, &message));
     }
 }
 
@@ -517,7 +516,7 @@ fn collect_entity_field_labels<'a>(
             .label
             .as_deref()
             .map(|text| SourcedDisplayText {
-                id: &field.id,
+                id: Some(&field.id),
                 text,
                 path: format!("{path}.fields[id={}].display.label", field.id),
                 source,
@@ -530,7 +529,7 @@ fn collect_entity_field_labels<'a>(
                 .label
                 .as_deref()
                 .map(|text| SourcedDisplayText {
-                    id: &field.id,
+                    id: Some(&field.id),
                     text,
                     path: format!(
                         "{path}.derived[id={}].fields[id={}].display.label",
@@ -554,7 +553,7 @@ fn collect_extension_field_labels<'a>(
             .label
             .as_deref()
             .map(|text| SourcedDisplayText {
-                id: &field.id,
+                id: Some(&field.id),
                 text,
                 path: format!("{path}.fields[id={}].display.label", field.id),
                 source: Some(source),
@@ -567,7 +566,7 @@ fn collect_extension_field_labels<'a>(
                 .label
                 .as_deref()
                 .map(|text| SourcedDisplayText {
-                    id: &field.id,
+                    id: Some(&field.id),
                     text,
                     path: format!(
                         "{path}.derived[id={}].fields[id={}].display.label",
@@ -576,6 +575,66 @@ fn collect_extension_field_labels<'a>(
                     source: Some(source),
                 })
         }));
+    }
+}
+
+fn collect_action_refusal_labels<'a>(
+    actions: &'a [ActionSource],
+    path: &str,
+    source: Option<&'a str>,
+    labels: &mut Vec<SourcedDisplayText<'a>>,
+) {
+    for action in actions {
+        let crate::contract::ActionPlanSource::Function { refusals, .. } = &action.plan else {
+            continue;
+        };
+        labels.extend(
+            refusals
+                .iter()
+                .enumerate()
+                .map(|(index, refusal)| SourcedDisplayText {
+                    id: None,
+                    text: &refusal.label,
+                    path: format!("{path}[id={}].plan.refusals[{index}].label", action.id),
+                    source,
+                }),
+        );
+    }
+}
+
+fn collect_projection_text<'a>(
+    default_language: &str,
+    id: Option<&'a str>,
+    path: &str,
+    text: &'a ManifestProjectionTextSource,
+    source: Option<&'a str>,
+    labels: &mut BTreeMap<String, Vec<SourcedDisplayText<'a>>>,
+) {
+    match text {
+        ManifestProjectionTextSource::Plain(text) => {
+            labels
+                .entry(default_language.to_owned())
+                .or_default()
+                .push(SourcedDisplayText {
+                    id,
+                    text: text.as_str(),
+                    path: path.to_owned(),
+                    source,
+                });
+        }
+        ManifestProjectionTextSource::Localized(values) => {
+            for (language, text) in values {
+                labels
+                    .entry(language.as_str().to_owned())
+                    .or_default()
+                    .push(SourcedDisplayText {
+                        id,
+                        text: text.as_str(),
+                        path: format!("{path}[language={}]", language.as_str()),
+                        source,
+                    });
+            }
+        }
     }
 }
 
@@ -894,6 +953,7 @@ fn validate_cross_file_local_id_collisions(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_cross_file_duplicate_display_labels(
     project: &RegistryProject,
     modules: &[RegistryModule],
@@ -908,7 +968,7 @@ fn validate_cross_file_duplicate_display_labels(
                 .label
                 .as_deref()
                 .map(|text| SourcedDisplayText {
-                    id: &entity.id,
+                    id: Some(&entity.id),
                     text,
                     path: format!("recordTypes[id={}].display.label", entity.id),
                     source: None,
@@ -924,7 +984,7 @@ fn validate_cross_file_duplicate_display_labels(
                 .label
                 .as_deref()
                 .map(|text| SourcedDisplayText {
-                    id: &action.id,
+                    id: Some(&action.id),
                     text,
                     path: format!("actions[id={}].display.label", action.id),
                     source: None,
@@ -932,6 +992,8 @@ fn validate_cross_file_duplicate_display_labels(
         })
         .collect::<Vec<_>>();
     let mut fields = BTreeMap::<&str, Vec<SourcedDisplayText<'_>>>::new();
+    let mut refusals = Vec::new();
+    collect_action_refusal_labels(&project.actions, "actions", None, &mut refusals);
     for entity in &project.entities {
         collect_entity_field_labels(
             entity,
@@ -951,7 +1013,7 @@ fn validate_cross_file_duplicate_display_labels(
                 .label
                 .as_deref()
                 .map(|text| SourcedDisplayText {
-                    id: &entity.id,
+                    id: Some(&entity.id),
                     text,
                     path: format!(
                         "modules[id={}].recordTypes[id={}].display.label",
@@ -966,7 +1028,7 @@ fn validate_cross_file_duplicate_display_labels(
                 .label
                 .as_deref()
                 .map(|text| SourcedDisplayText {
-                    id: &action.id,
+                    id: Some(&action.id),
                     text,
                     path: format!(
                         "modules[id={}].actions[id={}].display.label",
@@ -975,6 +1037,12 @@ fn validate_cross_file_duplicate_display_labels(
                     source: Some(source),
                 })
         }));
+        collect_action_refusal_labels(
+            &module.actions,
+            &format!("modules[id={}].actions", module.id),
+            Some(source),
+            &mut refusals,
+        );
         for entity in &module.entities {
             collect_entity_field_labels(
                 entity,
@@ -1003,8 +1071,153 @@ fn validate_cross_file_duplicate_display_labels(
         findings,
     );
     add_cross_file_duplicate_labels("breg.action.duplicate-label", "actions", &actions, findings);
+    add_cross_file_duplicate_labels(
+        "breg.action-refusal.duplicate-label",
+        "action refusals",
+        &refusals,
+        findings,
+    );
     for labels in fields.values() {
         add_cross_file_duplicate_labels("breg.field.duplicate-label", "fields", labels, findings);
+    }
+
+    if let Some(recipients) = &project.recipients {
+        let organizations = recipients
+            .organizations
+            .iter()
+            .map(|item| SourcedDisplayText {
+                id: Some(&item.id),
+                text: &item.name,
+                path: format!("recipients.organizations[id={}].name", item.id),
+                source: None,
+            })
+            .collect::<Vec<_>>();
+        let groups = recipients
+            .groups
+            .iter()
+            .map(|item| SourcedDisplayText {
+                id: Some(&item.id),
+                text: &item.name,
+                path: format!("recipients.groups[id={}].name", item.id),
+                source: None,
+            })
+            .collect::<Vec<_>>();
+        add_cross_file_duplicate_labels(
+            "breg.recipient-organization.duplicate-name",
+            "recipient organizations",
+            &organizations,
+            findings,
+        );
+        add_cross_file_duplicate_labels(
+            "breg.recipient-group.duplicate-name",
+            "recipient groups",
+            &groups,
+            findings,
+        );
+    }
+
+    if let Some(projection) = &project.manifest_projection {
+        let default_language = &project.project.default_language;
+        let mut datasets = BTreeMap::new();
+        for item in &projection.datasets {
+            collect_projection_text(
+                default_language,
+                Some(&item.id),
+                &format!("manifestProjection.datasets[id={}].title", item.id),
+                &item.title,
+                None,
+                &mut datasets,
+            );
+        }
+        let mut data_services = BTreeMap::new();
+        for item in &projection.data_services {
+            collect_projection_text(
+                default_language,
+                Some(&item.id),
+                &format!("manifestProjection.dataServices[id={}].title", item.id),
+                &item.title,
+                None,
+                &mut data_services,
+            );
+        }
+        let mut distributions = BTreeMap::new();
+        for item in &projection.distributions {
+            if let Some(title) = &item.title {
+                collect_projection_text(
+                    default_language,
+                    Some(&item.id),
+                    &format!("manifestProjection.distributions[id={}].title", item.id),
+                    title,
+                    None,
+                    &mut distributions,
+                );
+            }
+        }
+        let mut entities = BTreeMap::new();
+        for item in &projection.entities {
+            if let Some(title) = &item.title {
+                collect_projection_text(
+                    default_language,
+                    Some(&item.id),
+                    &format!("manifestProjection.entities[id={}].title", item.id),
+                    title,
+                    None,
+                    &mut entities,
+                );
+            }
+        }
+        for (code, kind, labels) in [
+            (
+                "breg.manifest-dataset.duplicate-title",
+                "manifest datasets",
+                &datasets,
+            ),
+            (
+                "breg.manifest-data-service.duplicate-title",
+                "manifest data services",
+                &data_services,
+            ),
+            (
+                "breg.manifest-distribution.duplicate-title",
+                "manifest distributions",
+                &distributions,
+            ),
+            (
+                "breg.manifest-entity.duplicate-title",
+                "manifest entities",
+                &entities,
+            ),
+        ] {
+            for labels in labels.values() {
+                add_cross_file_duplicate_labels(code, kind, labels, findings);
+            }
+        }
+        for vocabulary in &projection.vocabularies {
+            let mut concepts = BTreeMap::new();
+            for (index, concept) in vocabulary.concepts.iter().enumerate() {
+                if let Some(label) = &concept.label {
+                    collect_projection_text(
+                        default_language,
+                        None,
+                        &format!(
+                            "manifestProjection.vocabularies[id={}].concepts[{index}].label",
+                            vocabulary.id
+                        ),
+                        label,
+                        None,
+                        &mut concepts,
+                    );
+                }
+            }
+            for labels in concepts.values() {
+                add_cross_file_duplicate_labels(
+                    "breg.manifest-vocabulary-concept.duplicate-label",
+                    "manifest vocabulary concepts",
+                    labels,
+                    findings,
+                );
+            }
+        }
     }
 }
 

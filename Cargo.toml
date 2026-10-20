@@ -186,6 +186,8 @@ hickory-resolver = { version = "0.26.1", default-features = false, features = ["
 hex = { version = "0.4" }
 hmac = { version = "0.13" }
 http = { version = "1" }
+icu_casemap = { version = "~2.2.0", default-features = false, features = ["compiled_data"] }
+icu_normalizer = { version = "~2.2.0", default-features = false, features = ["compiled_data"] }
 inquire = { version = "0.9.4" }
 ipnet = { version = "2" }
 # Default features pull an HTTP client for remote $ref resolution and a command
@@ -219,8 +221,6 @@ rcgen = { version = "0.14", default-features = false, features = ["ring", "zeroi
 # features stay off: Unicode tables are wanted, but the code generator and
 # perf extensions are not.
 regex = { version = "1", default-features = false, features = ["std", "unicode"] }
-unicode-casefold = "0.2"
-unicode-normalization = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots"] }
 rmcp = { version = "3.4.1", default-features = false }
 rhai = { version = "=1.26.1", features = ["sync", "serde"] }

@@ -120,6 +120,7 @@ fn read_project(project: &Path, fixtures: bool) -> Result<ProjectReading> {
         &read_input(&records_path)?,
     ) {
         Ok(decoded) => {
+            let integrity = SchedulingRecords::integrity_diagnostics(&decoded);
             match checked {
                 Some(policy) => {
                     let (records, project_findings): (Vec<_>, Vec<_>) = decoded
@@ -137,6 +138,7 @@ fn read_project(project: &Path, fixtures: bool) -> Result<ProjectReading> {
                 }
                 None => report.extend(decoded.document.warnings()),
             }
+            report.extend(Report::new(integrity));
             Some(decoded.value.into_facts())
         }
         Err(refusal) => {
@@ -934,6 +936,57 @@ mod tests {
         assert_eq!(effective["windows"], json!({"count": 0, "ids": []}));
         assert_eq!(effective["holdPolicy"]["ttlMinutes"], 5);
         assert_eq!(effective["holdPolicy"]["maximumPerCaller"], 3);
+    }
+
+    #[test]
+    fn check_refuses_records_id_collisions_at_the_authored_members() {
+        let (_root, project) = initialized("standalone-exact-time");
+        edit(
+            &project,
+            SCHEDULING_RECORDS_FILE,
+            "id: new-york-hall",
+            "id: bangkok_counter",
+        );
+        edit(
+            &project,
+            SCHEDULING_RECORDS_FILE,
+            "resourceId: station-2",
+            "resourceId: station_1",
+        );
+
+        let error = check(&project, false).expect_err("records collisions refuse project check");
+        let report = crate::configuration_report(&error).expect("structured records diagnostics");
+        for (code, path, related) in [
+            (
+                "scheduling.records.location-id-collision",
+                "/locations/1/id",
+                "/locations/0/id",
+            ),
+            (
+                "scheduling.records.pool-member-id-collision",
+                "/pools/0/members/1/resourceId",
+                "/pools/0/members/0/resourceId",
+            ),
+        ] {
+            let diagnostic = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == code)
+                .unwrap_or_else(|| panic!("missing {code}: {report:#?}"));
+            assert_eq!(diagnostic.path, path);
+            assert_eq!(diagnostic.related[0].path, related);
+            assert!(diagnostic
+                .source
+                .as_ref()
+                .is_some_and(|source| source.file.ends_with(SCHEDULING_RECORDS_FILE)));
+            assert!(diagnostic.related[0]
+                .file
+                .ends_with(SCHEDULING_RECORDS_FILE));
+        }
+        assert!(report.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "scheduling.records.unknown-location"
+                && diagnostic.path == "/exceptions/0/location"
+        }));
     }
 
     /// Every file is read and every refusal is reported at its position in

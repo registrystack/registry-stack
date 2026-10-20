@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-use registry_breg::contract::{read_module_yaml, read_project_yaml};
-use registry_breg::{compile_project, CompileProfile};
+use registry_breg::contract::{read_module_yaml, read_project_yaml, ModuleAssetSource};
+use registry_breg::{compile_project, compile_project_with_assets, CompileProfile};
 use serde_json::{json, Value};
 
 fn facility() -> Value {
@@ -149,6 +149,120 @@ fn duplicate_authored_labels_warn_with_normalized_comparison_and_locations() {
     assert_eq!(diagnostic.related.len(), 1);
     assert_eq!(diagnostic.related[0].path, "/recordTypes/0/display/label");
     assert!(diagnostic.related[0].line.is_some());
+}
+
+#[test]
+fn duplicate_presentation_text_warns_in_each_breg_namespace() {
+    let mut source = facility();
+    let refusal = source["actions"][1]["plan"]["refusals"][0].clone();
+    source["actions"][1]["plan"]["refusals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"code":"another-refusal","label":refusal["label"]}));
+    source["recipients"] = json!({
+        "organizations":[
+            {"id":"alpha","name":"Café","contact":"a@example.test","clients":["alpha-client"]},
+            {"id":"beta","name":"CAFE\u{301}","contact":"b@example.test","clients":["beta-client"]}
+        ],
+        "groups":[
+            {"id":"north","name":"Reviewers","members":["alpha"]},
+            {"id":"south","name":"reviewers","members":["beta"]}
+        ]
+    });
+    source["manifestProjection"] = json!({
+        "accessProfile":"facility-reader",
+        "classificationCeiling":"internal",
+        "catalog":{
+            "baseUrl":"https://facility-registry.example.gov",
+            "title":"Facility catalog",
+            "publisher":{"id":"facility-authority","name":"Facility authority"}
+        },
+        "publicService":{"id":"facility-service","title":"Facility registry"},
+        "datasets":[
+            {"id":"first","title":{"en":"Café","fr":"Premier"}},
+            {"id":"second","title":{"en":"CAFE\u{301}","fr":"Deuxième"}},
+            {"id":"third","title":{"fr":"Café"}}
+        ],
+        "dataServices":[
+            {"id":"first-api","title":"Registry API","endpointUrl":"https://example.test/first","servesDatasets":["first"]},
+            {"id":"second-api","title":"registry api","endpointUrl":"https://example.test/second","servesDatasets":["second"]}
+        ],
+        "distributions":[
+            {"id":"first-export","dataset":"first","title":"CSV export"},
+            {"id":"second-export","dataset":"second","title":"csv export"}
+        ],
+        "entities":[
+            {"id":"first-record","title":"Facility record"},
+            {"id":"second-record","title":"facility record"}
+        ],
+        "vocabularies":[{
+            "id":"status",
+            "schemeIri":"https://example.test/status",
+            "concepts":[
+                {"code":"arbitrary code one","label":"Active"},
+                {"code":"arbitrary code two","label":"active"}
+            ]
+        }]
+    });
+
+    let decoded = read_project_yaml("registry.yaml", &bytes(&source)).unwrap();
+    let diagnostics = decoded.document.warnings();
+    for (code, path) in [
+        (
+            "breg.action-refusal.duplicate-label",
+            "/actions/1/plan/refusals/1/label",
+        ),
+        (
+            "breg.recipient-organization.duplicate-name",
+            "/recipients/organizations/1/name",
+        ),
+        (
+            "breg.recipient-group.duplicate-name",
+            "/recipients/groups/1/name",
+        ),
+        (
+            "breg.manifest-dataset.duplicate-title",
+            "/manifestProjection/datasets/1/title/en",
+        ),
+        (
+            "breg.manifest-data-service.duplicate-title",
+            "/manifestProjection/dataServices/1/title",
+        ),
+        (
+            "breg.manifest-distribution.duplicate-title",
+            "/manifestProjection/distributions/1/title",
+        ),
+        (
+            "breg.manifest-entity.duplicate-title",
+            "/manifestProjection/entities/1/title",
+        ),
+        (
+            "breg.manifest-vocabulary-concept.duplicate-label",
+            "/manifestProjection/vocabularies/0/concepts/1/label",
+        ),
+    ] {
+        let diagnostic = diagnostics
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == code && diagnostic.path == path)
+            .unwrap_or_else(|| panic!("expected {code} at {path}"));
+        assert_eq!(diagnostic.related.len(), 1);
+    }
+    assert_eq!(
+        diagnostics
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "breg.manifest-dataset.duplicate-title")
+            .count(),
+        1,
+        "the same text in another language is not a duplicate"
+    );
+    let concept = diagnostics
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.manifest-vocabulary-concept.duplicate-label")
+        .unwrap();
+    assert!(!concept.message.contains("arbitrary code"));
 }
 
 #[test]
@@ -304,6 +418,69 @@ fn compiler_warns_for_duplicate_labels_across_modules_and_extensions() {
     assert!(field.message.contains("name"));
     assert!(field.message.contains("alternate-name"));
     assert!(!field.message.contains("Café"));
+}
+
+#[test]
+fn compiler_warns_for_duplicate_refusal_labels_across_project_and_module() {
+    let mut project_source = facility();
+    project_source["modules"] = json!([{"id":"local-module","version":"0.1.0"}]);
+    let mut permission = project_source["accessProfiles"][4]["permissions"]["actions"][0].clone();
+    permission["action"] = json!("module-correct-address");
+    project_source["accessProfiles"][4]["permissions"]["actions"]
+        .as_array_mut()
+        .unwrap()
+        .push(permission);
+    let project = read_project_yaml("registry.yaml", &bytes(&project_source))
+        .unwrap()
+        .value;
+
+    let mut function = project_source["functions"][0].clone();
+    function["id"] = json!("module-address-plan");
+    let mut action = project_source["actions"][1].clone();
+    action["id"] = json!("module-correct-address");
+    action["plan"]["function"] = json!("module-address-plan");
+    action["display"]["label"] = json!("Module address correction");
+    let module_source = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule",
+        "id":"local-module",
+        "version":"0.1.0",
+        "functions":[function],
+        "actions":[action]
+    });
+    let module = read_module_yaml("module.yaml", &bytes(&module_source))
+        .unwrap()
+        .value;
+    let source =
+        include_bytes!("../../../products/breg/examples/facility/plans/correct-address.rhai");
+    let compiled = compile_project_with_assets(
+        &project,
+        &[module],
+        &[
+            ModuleAssetSource {
+                module: None,
+                path: "plans/correct-address.rhai".to_owned(),
+                bytes: source.to_vec(),
+            },
+            ModuleAssetSource {
+                module: Some("local-module".to_owned()),
+                path: "plans/correct-address.rhai".to_owned(),
+                bytes: source.to_vec(),
+            },
+        ],
+        CompileProfile::Authoring,
+    )
+    .unwrap();
+    let warning = compiled
+        .findings()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.action-refusal.duplicate-label")
+        .expect("refusal labels are compared across project and module files");
+    assert_eq!(
+        warning.path,
+        "modules[id=local-module].actions[id=module-correct-address].plan.refusals[0].label"
+    );
+    assert!(!warning.message.contains("invalid-postal-code"));
 }
 
 #[test]

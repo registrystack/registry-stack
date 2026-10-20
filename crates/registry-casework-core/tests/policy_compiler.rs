@@ -306,6 +306,27 @@ fn captured_schema_bytes_are_the_only_compiler_inputs() {
         &std::collections::BTreeMap::new()
     )
     .is_err());
+    let mut warning_value = value.clone();
+    warning_value["queues"]["north"]["label"] = json!("reviews");
+    let warning_document = serde_json::to_vec(&warning_value).unwrap();
+    let report = CaseworkProject::read_with_schemas(
+        "casework.yaml",
+        &warning_document,
+        &std::collections::BTreeMap::new(),
+    )
+    .expect_err("the absent display schema refuses the project");
+    for code in [
+        "casework.project.duplicate-queue-label",
+        "casework.review-policy.schema-artifact",
+    ] {
+        assert!(
+            report
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == code),
+            "missing {code}: {report:#?}"
+        );
+    }
     let mut changed = captured;
     changed.get_mut("schemas/display.json").unwrap().push(b'\n');
     assert!(CaseworkProject::read_with_schemas("casework.yaml", &document, &changed).is_err());

@@ -680,12 +680,13 @@ pub struct SourceLimits {
 /// Typed reader shared by CLI and unsaved editor buffers.
 pub fn read_project(file: &str, bytes: &[u8]) -> Result<Decoded<EvidenceProject>, Report> {
     let mut decoded = decode_authored::<EvidenceProject>(file, bytes, &PROJECT)?;
+    let integrity = project_integrity_diagnostics(&mut decoded);
     let mut report = findings_report(
         &decoded.document,
         "project",
         validate_project(&decoded.value),
     );
-    report.extend(Report::new(project_integrity_diagnostics(&mut decoded)));
+    report.extend(Report::new(integrity));
     if report.has_errors() {
         return Err(report);
     }

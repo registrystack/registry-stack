@@ -10,6 +10,8 @@ use std::fmt;
 use std::hash::Hash;
 use std::ops::Deref;
 
+use icu_casemap::CaseMapper;
+use icu_normalizer::ComposingNormalizerBorrowed;
 use serde::de::{self, Deserialize, Deserializer, Visitor};
 use serde::{Serialize, Serializer};
 
@@ -18,8 +20,6 @@ use crate::messages::{
     TypeRule, EXPECT_DATA_LITERAL, EXPECT_DIGEST, EXPECT_DISPLAY_TEXT, EXPECT_EXTERNAL_ID,
     EXPECT_LOCAL_ID, EXPECT_URL, TYPE_RULES,
 };
-use unicode_casefold::UnicodeCaseFold;
-use unicode_normalization::UnicodeNormalization;
 
 pub(crate) const DATA_LITERAL_EXPECTED: &str = EXPECT_DATA_LITERAL;
 
@@ -183,15 +183,18 @@ where
 
 /// The comparison key for two display labels.
 ///
-/// Full Unicode case folding is followed by NFC normalization. Characters
-/// retained for multilingual shaping or direction but invisible to a reviewer
-/// do not distinguish two labels.
+/// NFC normalization surrounds full Unicode case folding. Characters retained
+/// for multilingual shaping or direction but invisible to a reviewer do not
+/// distinguish two labels.
 pub fn display_text_comparison_key(text: &str) -> String {
-    text.chars()
+    let visible = text
+        .chars()
         .filter(|character| !is_ignored_display_comparison_character(*character))
-        .case_fold()
-        .nfc()
-        .collect()
+        .collect::<String>();
+    let normalizer = ComposingNormalizerBorrowed::new_nfc();
+    let normalized = normalizer.normalize(&visible);
+    let folded = CaseMapper::new().fold_string(&normalized);
+    normalizer.normalize(&folded).into_owned()
 }
 
 /// Every pair of values that has the same display-text comparison key.
@@ -235,6 +238,24 @@ fn is_refused_display_character(character: char) -> bool {
         character,
         '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}' | '\u{fdd0}'..='\u{fdef}'
     ) || (character as u32) & 0xffff >= 0xfffe
+}
+
+#[cfg(feature = "schema")]
+fn display_text_forbidden_schema_pattern() -> String {
+    let mut pattern = String::from(
+        "[\u{2028}\u{2029}\u{202a}-\u{202e}\u{2066}-\u{2069}\u{feff}\u{fdd0}-\u{fdef}\u{fffe}\u{ffff}]",
+    );
+    // Supplementary noncharacters are literal alternatives rather than a
+    // character-class range. That keeps the pattern valid in both Unicode
+    // scalar regex engines and ECMAScript engines that represent them as a
+    // surrogate pair when no explicit Unicode flag is available.
+    for plane in 1..=16 {
+        for suffix in [0xfffe, 0xffff] {
+            pattern.push('|');
+            pattern.push(char::from_u32((plane << 16) | suffix).expect("a Unicode noncharacter"));
+        }
+    }
+    pattern
 }
 
 fn is_ignored_display_comparison_character(character: char) -> bool {
@@ -796,8 +817,10 @@ mod schema {
         }
 
         fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+            let forbidden = display_text_forbidden_schema_pattern();
             json_schema!({
                 "type": "string",
+                "not": {"pattern": forbidden},
                 "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
             })
         }
@@ -991,6 +1014,27 @@ mod tests {
             duplicate_display_text_pairs(["mixed text", "mixed\u{200f} text"].into_iter()),
             vec![(0, 1)]
         );
+        for pair in [
+            ["\u{1c89}", "\u{1c8a}"],
+            ["\u{a7cb}", "\u{0264}"],
+            ["\u{10d50}", "\u{10d70}"],
+        ] {
+            assert_eq!(
+                duplicate_display_text_pairs(pair.into_iter()),
+                vec![(0, 1)],
+                "current Unicode case pairs compare equal"
+            );
+        }
+        for pair in [
+            ["\u{1fb7}", "\u{03b1}\u{0345}\u{0342}"],
+            ["\u{0391}\u{0345}\u{0300}", "\u{1fba}\u{0345}"],
+        ] {
+            assert_eq!(
+                duplicate_display_text_pairs(pair.into_iter()),
+                vec![(0, 1)],
+                "canonical equivalents compare equal before and after folding"
+            );
+        }
     }
 
     #[test]
