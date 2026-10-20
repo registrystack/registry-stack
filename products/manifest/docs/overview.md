@@ -38,11 +38,11 @@ every other dataset out of both the manifest and the catalogue, relationship edg
   It renders BRegDCAT-AP and CPSV-AP only for a catalogue that lists that profile in
   `catalog.application_profiles`.
 - `publish` writes every format into a directory: catalog JSON, DCAT, SHACL, JSON Schema, form
-  JSON Schema, OGC API Records, ODRL policies, and Evidence offerings always, plus one file for
-  each profile in `catalog.application_profiles`: `cpsv-ap.jsonld` for `cpsv-ap`, and
-  `dcat.<profile>.jsonld` for `dcat-ap` and `bregdcat-ap`. Its `index.json`
-  records the digest of the source manifest and of each file, so an operator can compare or pin a
-  bundle.
+  JSON Schema, OGC API Records, ODRL policies, and Evidence offerings always, plus the files for
+  each profile in `catalog.application_profiles`: `cpsv-ap.jsonld` and its extensionless alias
+  `cpsv-ap` for `cpsv-ap`, and `dcat.<profile>.jsonld` for `dcat-ap` and `bregdcat-ap`. Its
+  `index.json` records the digest of the source manifest and of each file, so an operator can
+  compare or pin a bundle.
   It does not empty the directory first, so publish into a clean one.
 - `validate-profiles` checks profile descriptors and their fixture manifests.
 
