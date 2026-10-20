@@ -232,7 +232,12 @@ fn missing_action_script_identifies_action_and_safe_relative_path() {
     let output = bregctl(&["--format", "json", "check", path(project.path())]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let report = json_stdout(&output);
-    let diagnostic = &report["diagnostics"][0];
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .expect("check returns structured diagnostics")
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.source.planner-asset-missing")
+        .unwrap_or_else(|| panic!("the missing planner asset is reported: {report}"));
     assert_eq!(diagnostic["code"], "breg.source.planner-asset-missing");
     assert_eq!(diagnostic["path"], "/functions/0/source");
     assert_eq!(

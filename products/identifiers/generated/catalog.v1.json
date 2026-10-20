@@ -48,7 +48,7 @@
       "description": "JSON-LD namespace for Registry Manifest terms.",
       "source": {
         "path": "crates/registry-manifest-core/src/lib.rs",
-        "sha256": "1b17271cd3fb0fdec2f4d2e6e2f52cdd62bd4c78c05afb4ee48f2938a68affbc"
+        "sha256": "0b48da1e4defa774784ad826713930f8e867a549399c049ed0a04304405cbc98"
       }
     },
     {
@@ -3907,7 +3907,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "9e303f8a0d24dad6b2b840f16b647278bc933cb66f1f38ae3cc55222719396cc",
+        "sha256": "b41f8b79cc1fb7600764c42fa0f0273e2f22529366763cd31cc80552ccf6b681",
         "mediaType": "application/schema+json"
       }
     },
@@ -3925,7 +3925,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "f7766f4483a2a2593a93e17b7b80eb55a8ed4bff0cfc8d7916db1ac6cd246581",
+        "sha256": "0150f307b9fda9bec2d250328d3c65ee5e713503c53b88677e452c5798a974c7",
         "mediaType": "application/schema+json"
       }
     },
@@ -4105,7 +4105,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
-        "sha256": "a54a5d29464f6de1e0b46ea7ae91a2fd6ff563090f98f7686496ddad45344b7d",
+        "sha256": "18ebd88b881fea2657cb8f72c186e230c403a011d8b76483b50acc74a3510fff",
         "mediaType": "application/schema+json"
       }
     },
@@ -4123,7 +4123,7 @@
       },
       "artifact": {
         "path": "products/casework/contracts/cli/report.schema.json",
-        "sha256": "073149171864d41eae1eff6de29a901ec9adb40bcf4592f53e7920ae86fa0ffc",
+        "sha256": "f19bc4fc9763668a02fbbf5f2e5a887c2e9b9e53e5e735a7aec34a18864e135e",
         "mediaType": "application/schema+json"
       }
     },
@@ -4155,11 +4155,11 @@
       "description": "Registry Coordinator portable project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/authoring.rs",
-        "sha256": "ddc60cd3c06746fdffe4ceaeceb3acfa0db8d38aade5c99fbabc756e13cc01c0"
+        "sha256": "7c769f7ab40aea95649217c896d6391dba7940ff03b5616068917c3eacb64d8c"
       },
       "artifact": {
         "path": "products/coordinator/generated/project/project.schema.json",
-        "sha256": "3538e178fd3b21ed3e8b59c1596dee65d98e216e5a4a6862fb1fd64527cc22d1",
+        "sha256": "a110454da4cb39aaa5158a0666b7f7579585423d73be8513b5136b022ac316fe",
         "mediaType": "application/schema+json"
       }
     },
@@ -4447,7 +4447,7 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/project.schema.json",
-        "sha256": "06939f1bfbecee443635734088f844273489b89974769e5b3e94b1cff314a5d8",
+        "sha256": "3c8a56419f2b6a011463736e94f99c868f78636325dd8d34b3b70c0c693a65f1",
         "mediaType": "application/schema+json"
       }
     },
@@ -4519,7 +4519,7 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/target.schema.json",
-        "sha256": "cbe92a3329351dbdf53f0a63d5f4f9dfc7b8bbcb0947ddf30f1558943d34e188",
+        "sha256": "98a5983770a763c045cd661fb176f5d057e451bcfbde5211273c7b58a5543da3",
         "mediaType": "application/schema+json"
       }
     },
@@ -4573,7 +4573,7 @@
       },
       "artifact": {
         "path": "products/manifest/schemas/metadata.schema.json",
-        "sha256": "fc95f405cbef9537864e6d2d9b54ebe3e3b893fb35ecb7e1f47a5081a94f28ff",
+        "sha256": "b2d2f89dc056e591a4632324028a9de3a87d124ef932b059064ba527af165830",
         "mediaType": "application/schema+json"
       }
     },
@@ -4771,7 +4771,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/fixture/fixture.schema.json",
-        "sha256": "ea3e5db017d1c733bbbc9d5aed6ad5f5e760649379d6ba1a993c48e17e02e3a2",
+        "sha256": "e85a091e8f47fab25632650e86081d585b46ade1a8b096c116ead7550dc39dc5",
         "mediaType": "application/schema+json"
       }
     },
@@ -4789,7 +4789,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/project/project.schema.json",
-        "sha256": "4e357155b17d753e4d15394ab3a0750dc0319a57505aa36719fe54e0f83489f2",
+        "sha256": "cbc34fc5f6fc9cba3fb714a41595bf999fb0d73a45b6bf610f772cd4256deecc",
         "mediaType": "application/schema+json"
       }
     },
@@ -4807,7 +4807,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/records/records.schema.json",
-        "sha256": "1c1030390a47406fe6109ef404c7e1daa8e9903d7b2ad113991e158a2f38e380",
+        "sha256": "1c1299d6ebeaf19120f9b8d76f572e2392368513560e1249d024b61ef2ef9060",
         "mediaType": "application/schema+json"
       }
     },

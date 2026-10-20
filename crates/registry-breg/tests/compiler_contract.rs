@@ -5375,8 +5375,8 @@ fn operation_ids_preserve_distinct_valid_entity_ids_without_collisions() {
 }
 
 #[test]
-fn entity_ids_that_share_one_sql_name_are_refused() {
-    let project = parse_project_json(
+fn separator_equivalent_entity_ids_are_refused_while_reading() {
+    let failure = parse_project_json(
         br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
           "project":{"id":"neutral","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -5396,17 +5396,15 @@ fn entity_ids_that_share_one_sql_name_are_refused() {
           }}]
         }"#,
     )
-    .expect("project parses");
-    let failure = compile_project(&project, &[], CompileProfile::Authoring)
-        .expect_err("a hyphen and an underscore yield one SQL name");
+    .expect_err("separator-equivalent record type identifiers are refused during reading");
 
-    assert!(failure
-        .diagnostics()
-        .iter()
-        .any(
-            |diagnostic| diagnostic.code == "breg.record-type.sql-name-duplicate"
-                && diagnostic.path == "recordTypes[].id"
-        ));
+    let [diagnostic] = failure.diagnostics() else {
+        panic!("one identifier collision is reported: {failure:?}");
+    };
+    assert_eq!(diagnostic.code, "breg.record-type.id-collision");
+    assert_eq!(diagnostic.path, "project.recordTypes[1].id");
+    assert!(diagnostic.message.contains("`case-file`"));
+    assert!(diagnostic.message.contains("`case_file`"));
 }
 
 #[test]
