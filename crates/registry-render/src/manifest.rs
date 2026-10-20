@@ -238,7 +238,6 @@ pub(crate) fn read_manifest(file: &str, bytes: &[u8]) -> Result<ReadManifest, Re
         .with_hook(&mut hook)
         .decode::<ManifestFile>(bytes, &Expect::one(&MANIFEST_FORMAT))?;
     let document = decoded.document;
-    let mut findings = document.warnings();
     let document_ids = decoded
         .value
         .documents
@@ -255,11 +254,11 @@ pub(crate) fn read_manifest(file: &str, bytes: &[u8]) -> Result<ReadManifest, Re
         .iter()
         .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
         .collect::<Vec<_>>();
-    findings.extend(Report::new(local_id_collision_diagnostics(
+    let mut findings = local_id_collision_diagnostics(
         &document,
         "render.bundle.document-id-collision",
         &authored_document_ids,
-    )));
+    );
     for (index, spec) in decoded.value.documents.iter().enumerate() {
         if !is_bundle_path(&spec.entry_file, ".typ") {
             findings.push(error_at(
@@ -284,6 +283,7 @@ pub(crate) fn read_manifest(file: &str, bytes: &[u8]) -> Result<ReadManifest, Re
             }
         }
     }
+    let findings = document.report_with(findings);
     if findings.has_errors() {
         return Err(findings);
     }
@@ -551,6 +551,24 @@ mod tests {
             (diagnostic.related[0].line, diagnostic.related[0].column),
             (Some(5), Some(9))
         );
+    }
+
+    #[test]
+    fn manifest_semantic_reports_are_bounded_per_file() {
+        let mut text = format!("{HEAD}bundleVersion: 1\ndocuments:\n");
+        for index in 0..101 {
+            text.push_str(&format!(
+                "  - id: document-{index}\n    version: 1\n    entryFile: ../outside.typ\n"
+            ));
+        }
+        let report = read_manifest(MANIFEST_FILE, text.as_bytes()).unwrap_err();
+        assert_eq!(report.files_checked(), Some(1));
+        assert_eq!(report.diagnostics().len(), 101);
+        assert_eq!(report.diagnostics()[0].path, "/documents/0/entryFile");
+        let marker = report.diagnostics().last().unwrap();
+        assert_eq!(marker.code, "config.too-many-problems");
+        assert_eq!(marker.severity, Severity::Error);
+        assert_eq!(marker.message, "1 more problem in this file is not shown");
     }
 
     #[test]

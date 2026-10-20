@@ -438,15 +438,15 @@ impl fmt::Display for SchedulingDiagnostic {
     }
 }
 
-/// Every finding about one document, after the document's own warnings, as
-/// the report a check command prints.
+/// Every finding and retained warning about one document, sorted and bounded
+/// as the report a check command prints.
 #[must_use]
 pub fn findings_report(document: &Document, findings: &[SchedulingDiagnostic]) -> Report {
-    let mut report = document.warnings();
-    for finding in findings {
-        report.push(finding.to_diagnostic(document));
-    }
-    report
+    document.report_with(
+        findings
+            .iter()
+            .map(|finding| finding.to_diagnostic(document)),
+    )
 }
 
 #[cfg(test)]
@@ -543,6 +543,47 @@ mod tests {
                 "{reason}"
             );
         }
+    }
+
+    #[test]
+    fn mixed_semantic_reports_share_one_file_budget() {
+        const FORMAT: FormatSpec<'static> = FormatSpec {
+            kind: "Test",
+            envelope: EnvelopeRule::Exempt { reason: "test" },
+            removed_keys: &[],
+        };
+        let mut document = registry_platform_yaml::read_document(
+            "scheduling.yaml",
+            b"offerings:\n  - id: one\n",
+            &Expect::one(&FORMAT),
+        )
+        .unwrap();
+        for _ in 0..120 {
+            let warning = document.diagnostic_at_value(
+                registry_platform_yaml::Severity::Warning,
+                "scheduling.project.duplicate-label",
+                "/offerings/0/id",
+                "a label is shared",
+                "Choose a distinct label.",
+            );
+            document.push_warning(warning);
+        }
+        let report = findings_report(
+            &document,
+            &[SchedulingDiagnostic::new(
+                "/offerings/0/exactTime",
+                PolicyCheckReason::MissingModeField,
+            )],
+        );
+        assert_eq!(report.files_checked(), Some(1));
+        assert_eq!(report.diagnostics().len(), 101);
+        assert!(report.has_errors());
+        let marker = report.diagnostics().last().unwrap();
+        assert_eq!(marker.code, "config.too-many-problems");
+        assert_eq!(
+            marker.message,
+            "21 more problems in this file are not shown"
+        );
     }
 
     #[test]

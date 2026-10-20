@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
-use crate::diagnostics::{findings_report, FindingArea, PolicyCheckReason, SchedulingDiagnostic};
+use crate::diagnostics::{FindingArea, PolicyCheckReason, SchedulingDiagnostic};
 use crate::naming::{
     RETIRED_SCHEDULING_POLICY_API_VERSION, SCHEDULING_POLICY_API_VERSION, SCHEDULING_POLICY_KIND,
 };
@@ -865,8 +865,12 @@ impl SchedulingPolicy {
         let mut decoded = Self::decode(file, bytes)?;
         let integrity = policy_integrity_diagnostics(&mut decoded);
         let findings = decoded.value.check();
-        let mut report = findings_report(&decoded.document, &findings);
-        report.extend(Report::new(integrity));
+        let report = decoded.document.report_with(
+            findings
+                .iter()
+                .map(|finding| finding.to_diagnostic(&decoded.document))
+                .chain(integrity),
+        );
         if report.has_errors() {
             Err(report)
         } else {
@@ -2034,6 +2038,42 @@ holdPolicy:
             1,
             "the reader warning is reported exactly once"
         );
+    }
+
+    #[test]
+    fn project_check_combines_integrity_and_semantic_errors_with_warning_floods() {
+        for collision in [false, true] {
+            let original = "  - id: registry-update\n    label: Registry record update\n";
+            let mut services = original.to_owned();
+            for index in 0..120 {
+                let id = if collision && index == 119 {
+                    "registry_update".to_owned()
+                } else {
+                    format!("service-{index}")
+                };
+                services.push_str(&format!(
+                    "  - id: {id}\n    label: Registry record update\n"
+                ));
+            }
+            let mut authored = MINIMAL_EXACT_TIME_PROJECT.replacen(original, &services, 1);
+            if !collision {
+                authored =
+                    authored.replacen("service: registry-update", "service: missing-service", 1);
+            }
+            let report = SchedulingPolicy::read(AUTHORED_POLICY_FILE, authored.as_bytes())
+                .expect_err("a hidden error still refuses the project");
+            assert_eq!(report.files_checked(), Some(1));
+            assert_eq!(report.diagnostics().len(), 101, "{report:#?}");
+            assert_eq!(report.diagnostics()[0].path, "/services/1/label");
+            assert!(report.has_errors());
+            let marker = report.diagnostics().last().unwrap();
+            assert_eq!(marker.code, "config.too-many-problems");
+            assert_eq!(marker.severity, registry_platform_yaml::Severity::Error);
+            assert_eq!(
+                marker.message,
+                "21 more problems in this file are not shown"
+            );
+        }
     }
 
     #[test]

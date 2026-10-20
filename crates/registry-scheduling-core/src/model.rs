@@ -16,7 +16,7 @@ use registry_platform_yaml::{
     Expect, FormatSpec, Identified, Reader, RemovedKey, Report,
 };
 
-use crate::diagnostics::{findings_report, FindingArea, PolicyCheckReason, SchedulingDiagnostic};
+use crate::diagnostics::{FindingArea, PolicyCheckReason, SchedulingDiagnostic};
 use crate::naming::{SCHEDULING_RECORDS_API_VERSION, SCHEDULING_RECORDS_KIND};
 use crate::policy::{
     valid_hh_mm, valid_iso_date, Channel, PublishedWindow, SchedulingPolicy,
@@ -746,18 +746,16 @@ impl SchedulingRecords {
             .collect();
         // An offering's reference to a window the records do not carry is a
         // finding against the project, which this document cannot place.
-        let mut report = findings_report(
-            &decoded.document,
-            &findings
+        let mut report = decoded.document.report_with(
+            findings
                 .iter()
                 .filter(|finding| finding.area == FindingArea::Records)
-                .cloned()
-                .collect::<Vec<_>>(),
+                .map(|finding| finding.to_diagnostic(&decoded.document))
+                .chain(integrity),
         );
         for finding in project_findings {
             report.push(finding.to_unplaced_diagnostic());
         }
-        report.extend(Report::new(integrity));
         if report.has_errors() {
             Err(report)
         } else {
