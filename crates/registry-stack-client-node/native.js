@@ -1,6 +1,6 @@
 'use strict';
 
-const PACKAGE_VERSION = '0.42.0';
+const PACKAGE_VERSION = '0.43.0';
 const PRODUCTS = new Set(['discovery', 'evidence', 'breg', 'casework', 'messaging', 'scheduling']);
 
 function target() {
