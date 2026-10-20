@@ -94,6 +94,19 @@ test('Coordinator map keys state the bound written beside the shared identifier'
   }
 });
 
+// The reference page prints every entry of `defaults`, so an entry that is not
+// a schema value would announce a default the schema never declares.
+test('Coordinator rows report only the defaults their schemas declare', async () => {
+  const document = await buildCoordinatorConfiguration();
+  for (const contract of document.contracts) {
+    for (const field of contract.fields) {
+      assert.ok(field.defaults.every((value) => typeof value === 'string'), `${contract.id} ${field.key_path}`);
+    }
+  }
+  const runtime = document.contracts.find((contract) => contract.id === 'runtime');
+  assert.deepEqual(runtime.fields.find((field) => field.key_path === 'deployment.stateKeys.*').defaults, []);
+});
+
 test('Coordinator fields mappings state every bound their property names reference through allOf', async () => {
   const document = await buildCoordinatorConfiguration();
   const project = document.contracts.find((contract) => contract.id === 'project');
