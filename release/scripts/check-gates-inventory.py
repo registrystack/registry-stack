@@ -717,6 +717,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
 )
 
 RELEASE_SECURITY_POLICY_PATHS = (
+    ".github/codeql/codeql-config.yml",
     ".github/workflows/codeql.yml",
     ".github/workflows/mirror-buildkit.yml",
     ".github/workflows/docs-pages.yml",
@@ -809,7 +810,20 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "security-events: write",
             "github/codeql-action/init@",
             "queries: security-and-quality",
+            "config-file: ./.github/codeql/codeql-config.yml",
             "github/codeql-action/analyze@",
+        ),
+    ),
+    (
+        "CodeQL ignores only test-only paths",
+        ".github/codeql/codeql-config.yml",
+        (
+            "paths-ignore:",
+            '  - "crates/*/tests/**"',
+            '  - "crates/registry-breg/src/tests/**"',
+            "  - crates/registry-casework/src/task_grants/native_resource.rs",
+            "  - crates/registry-caseworkctl/src/dev/tests.rs",
+            "  - crates/registry-platform-config/src/blocks_tests.rs",
         ),
     ),
     (
