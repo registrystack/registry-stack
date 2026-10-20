@@ -531,6 +531,7 @@ function walk(document, schema, prefix, kind, required, occurrences, state) {
           descriptionDepth: 0,
           conditional: false,
           description: null,
+          defaults: [],
           runtime_validation: null,
           assertionOnly: false,
           fromCondition: false,

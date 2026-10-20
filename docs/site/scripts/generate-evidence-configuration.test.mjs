@@ -526,6 +526,22 @@ test('a map reports the bounds its propertyNames places on each key', () => {
   assert.equal(byPath.get('sources.*').kind, 'map_value');
 });
 
+test('a map key bound declares no schema default', () => {
+  for (const values of [
+    { additionalProperties: { type: 'object' } },
+    { patternProperties: { '^[a-z]+$': { type: 'object' } } },
+  ]) {
+    const fields = collectFields({
+      type: 'object',
+      properties: {
+        sources: { type: 'object', propertyNames: { maxLength: 64 }, ...values },
+      },
+    });
+    const byPath = new Map(fields.map((field) => [field.key_path, field]));
+    assert.deepEqual(byPath.get('sources.*').defaults, [], Object.keys(values)[0]);
+  }
+});
+
 test('propertyNames written as a reference still reports its bounds', () => {
   const fields = collectFields({
     type: 'object',
