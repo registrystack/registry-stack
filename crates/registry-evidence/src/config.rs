@@ -19,9 +19,9 @@ use registry_platform_config::{
     SecretProvidersConfig,
 };
 use registry_platform_yaml::{
-    BoundedU32, BoundedU64, DisplayText, Document, EnvelopeRule, Expect, FormatSpec, Invalid,
-    Reader, Refusal, Related, Report, RetiredApiVersion, ScalarHook, ScalarSite, Severity,
-    UniqueList,
+    local_id_collision_diagnostics, AuthoredId, BoundedU32, BoundedU64, Diagnostic, DisplayText,
+    Document, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, Refusal, Related, Report,
+    RetiredApiVersion, ScalarHook, ScalarSite, Severity, UniqueList,
 };
 use schemars::JsonSchema;
 use serde::de::{self, MapAccess, Visitor};
@@ -1084,6 +1084,10 @@ impl EvidenceConfig {
             .with_hook(&mut hook)
             .decode::<Self>(bytes, &Expect::one(&EVIDENCE_BUNDLE_FORMAT))
             .map_err(|report| ConfigError::Refused(Box::new(name_the_assertion_type(report))))?;
+        let integrity = bundle_integrity_diagnostics(&decoded);
+        if !integrity.is_empty() {
+            return Err(ConfigError::Refused(Box::new(Report::new(integrity))));
+        }
         if let Err(violation) = decoded.value.check_rules() {
             return Err(ConfigError::Refused(Box::new(Report::new(vec![
                 violation.diagnostic(&decoded.document)
@@ -6218,7 +6222,65 @@ fn validate_named_map<T>(
         }
         validate(value).at(at)?;
     }
+    if let Some((_, second)) = registry_platform_yaml::lookalike_local_id_pairs(map.keys())
+        .into_iter()
+        .next()
+    {
+        return invalid("named map identifiers differ only by `-` versus `_`")
+            .at_key(named(pointer, map.0[second].0.as_str()));
+    }
     Ok(())
+}
+
+/// Source-positioned integrity checks over the bundle's top-level named
+/// definition maps. Invalid keys are left to the owning map rule, so only
+/// validated local identifiers can be repeated in these diagnostics.
+fn bundle_integrity_diagnostics(
+    decoded: &registry_platform_yaml::Decoded<EvidenceConfig>,
+) -> Vec<Diagnostic> {
+    fn collisions<T>(
+        document: &Document,
+        code: &str,
+        pointer: &str,
+        values: &OrderedMap<T>,
+    ) -> Vec<Diagnostic> {
+        let owned = values
+            .keys()
+            .filter(|id| registry_platform_yaml::LocalId::new(*id).is_ok())
+            .map(|id| (id.to_owned(), named(pointer, id)))
+            .collect::<Vec<_>>();
+        let entries = owned
+            .iter()
+            .map(|(id, pointer)| AuthoredId::at_key(id, pointer))
+            .collect::<Vec<_>>();
+        local_id_collision_diagnostics(document, code, &entries)
+    }
+
+    let mut diagnostics = collisions(
+        &decoded.document,
+        "evidence.bundle.selector-profile-id-collision",
+        "/selectorProfiles",
+        &decoded.value.selector_profiles,
+    );
+    diagnostics.extend(collisions(
+        &decoded.document,
+        "evidence.bundle.source-id-collision",
+        "/sources",
+        &decoded.value.sources,
+    ));
+    diagnostics.extend(collisions(
+        &decoded.document,
+        "evidence.bundle.source-connection-id-collision",
+        "/sourceConnections",
+        &decoded.value.source_connections,
+    ));
+    diagnostics.extend(collisions(
+        &decoded.document,
+        "evidence.bundle.authority-profile-id-collision",
+        "/authorityProfiles",
+        &decoded.value.authority_profiles,
+    ));
+    diagnostics
 }
 
 /// The pointer of the item `name` inside the map at `pointer`.
@@ -7530,6 +7592,139 @@ mod tests {
             diagnostic.path.ends_with("/requesterTags/1"),
             "{}",
             diagnostic.path
+        );
+    }
+
+    #[test]
+    fn bundle_named_definition_maps_refuse_separator_lookalikes_at_both_keys() {
+        fn baseline() -> EvidenceConfig {
+            EvidenceConfig::parse_yaml(include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+            ))
+            .expect("acceptance configuration parses")
+        }
+
+        fn assert_collision(
+            config: EvidenceConfig,
+            code: &str,
+            first_id: &str,
+            second_id: &str,
+            first_path: &str,
+            second_path: &str,
+        ) {
+            assert!(
+                config.validate().is_err(),
+                "programmatic validation must reject {code}"
+            );
+            let projection = serde_json::to_value(config).expect("configuration serializes");
+            let mut authored = projection.clone();
+            let members = authored
+                .as_object_mut()
+                .expect("bundle projection is an object");
+            members.insert("apiVersion".to_owned(), EVIDENCE_BUNDLE_API_VERSION.into());
+            members.insert("kind".to_owned(), EVIDENCE_BUNDLE_KIND.into());
+            let authored = authored.to_string();
+            let key_column = |id: &str| {
+                authored
+                    .find(&format!("\"{id}\":"))
+                    .expect("the named definition key is authored")
+                    + 1
+            };
+            let ConfigError::Refused(report) = EvidenceConfig::parse_projection(&projection)
+                .expect_err("the bundle reader rejects separator lookalikes")
+            else {
+                panic!("the bundle reader returns a positioned report");
+            };
+            let diagnostic = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == code)
+                .expect("the namespace collision is reported");
+            assert_eq!(diagnostic.path, second_path);
+            assert!(diagnostic.message.contains(first_id));
+            assert!(diagnostic.message.contains(second_id));
+            let source = diagnostic.source.as_ref().expect("primary source");
+            assert_eq!(
+                (source.line, source.column),
+                (Some(1), Some(key_column(second_id)))
+            );
+            assert_eq!(diagnostic.related.len(), 1);
+            assert_eq!(diagnostic.related[0].path, first_path);
+            assert_eq!(
+                (diagnostic.related[0].line, diagnostic.related[0].column),
+                (Some(1), Some(key_column(first_id)))
+            );
+        }
+
+        let mut selectors = baseline();
+        let selector = selectors.selector_profiles.0[0].1.clone();
+        selectors
+            .selector_profiles
+            .insert("person_demographics-v1".to_owned(), selector);
+        assert_collision(
+            selectors,
+            "evidence.bundle.selector-profile-id-collision",
+            "person-demographics-v1",
+            "person_demographics-v1",
+            "/selectorProfiles/person-demographics-v1",
+            "/selectorProfiles/person_demographics-v1",
+        );
+
+        let mut sources = baseline();
+        let source = sources.sources.0[0].1.clone();
+        sources.sources.insert("source_a".to_owned(), source);
+        assert_collision(
+            sources,
+            "evidence.bundle.source-id-collision",
+            "source-a",
+            "source_a",
+            "/sources/source-a",
+            "/sources/source_a",
+        );
+
+        let connection: SourceConnectionConfig = serde_json::from_value(serde_json::json!({
+            "baseUrl": "https://source.example",
+            "authentication": {
+                "type": "oauth2-private-key-jwt",
+                "tokenEndpoint": "https://issuer.example/token",
+                "clientIdRef": "secret:file/client-id",
+                "clientAssertionKeyRef": "secret:file/client-key",
+                "clientAssertionAudience": "https://issuer.example/client-auth",
+                "audience": "https://resource.example",
+                "resource": "https://resource.example/records",
+                "maximumCacheSeconds": 60
+            },
+            "tlsTrustProfile": "private-ca"
+        }))
+        .expect("the complete authentication union parses");
+        let mut connections = baseline();
+        connections
+            .source_connections
+            .insert("source-connection".to_owned(), connection.clone());
+        connections
+            .source_connections
+            .insert("source_connection".to_owned(), connection);
+        assert_collision(
+            connections,
+            "evidence.bundle.source-connection-id-collision",
+            "source-connection",
+            "source_connection",
+            "/sourceConnections/source-connection",
+            "/sourceConnections/source_connection",
+        );
+
+        let mut authorities = baseline();
+        let authority = authorities.authority_profiles.0[0].1.clone();
+        authorities
+            .authority_profiles
+            .insert("statutory_caseworker-v1".to_owned(), authority);
+        assert_collision(
+            authorities,
+            "evidence.bundle.authority-profile-id-collision",
+            "statutory-caseworker-v1",
+            "statutory_caseworker-v1",
+            "/authorityProfiles/statutory-caseworker-v1",
+            "/authorityProfiles/statutory_caseworker-v1",
         );
     }
 

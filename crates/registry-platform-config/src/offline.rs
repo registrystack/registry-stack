@@ -6,7 +6,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Node, NodeValue, Reader, Source};
+use registry_platform_yaml::{
+    escape_pointer_segment, Diagnostic, Node, NodeValue, Reader, Related, Source,
+};
 use serde::de::DeserializeOwned;
 
 use crate::{
@@ -79,6 +81,54 @@ impl<T> RuntimeFileCheck<T> {
             column: position.map(|position| position.column),
         });
         diagnostic
+    }
+
+    /// An error positioned at the mapping key at `pointer`.
+    #[must_use]
+    pub fn error_at_key(
+        &self,
+        artifact: &str,
+        code: &str,
+        pointer: &str,
+        message: impl Into<String>,
+        suggested_action: impl Into<String>,
+    ) -> Diagnostic {
+        let mut diagnostic = Diagnostic::error(code, pointer, message, suggested_action);
+        diagnostic.artifact = Some(artifact.to_owned());
+        let position = self.key_position(pointer);
+        diagnostic.source = Some(Source {
+            file: self.file.clone(),
+            line: position.map(|position| position.line),
+            column: position.map(|position| position.column),
+        });
+        diagnostic
+    }
+
+    /// Attach a related note at another mapping key in this runtime file.
+    pub fn add_related_key(
+        &self,
+        diagnostic: &mut Diagnostic,
+        pointer: &str,
+        message: impl Into<String>,
+    ) {
+        let position = self.key_position(pointer);
+        diagnostic.related.push(Related {
+            file: self.file.clone(),
+            line: position.map(|position| position.line),
+            column: position.map(|position| position.column),
+            path: pointer.to_owned(),
+            message: message.into(),
+        });
+    }
+
+    fn key_position(&self, pointer: &str) -> Option<registry_platform_yaml::Position> {
+        let (parent, key) = pointer.rsplit_once('/')?;
+        let key = key.replace("~1", "/").replace("~0", "~");
+        self.tree
+            .as_ref()?
+            .pointer(parent)?
+            .get(&key)
+            .map(|entry| entry.key_span.start)
     }
 }
 

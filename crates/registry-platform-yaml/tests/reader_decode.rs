@@ -1680,6 +1680,102 @@ fn cfg_diag_5_unknown_keys_past_the_bound_are_counted() {
     assert_eq!(rest.message, "20 more problems in this file are not shown");
 }
 
+#[test]
+fn cfg_diag_5_semantic_warnings_are_sorted_bounded_and_repeatable() {
+    let items = MAXIMUM_DIAGNOSTICS_PER_FILE + 20;
+    let body = format!(
+        "tags:\n{}",
+        (0..items)
+            .map(|index| format!("  - item-{index}\n"))
+            .collect::<String>()
+    );
+    let text = with_envelope(&body);
+    let mut document = Reader::new(FILE)
+        .read(text.as_bytes(), &EXPECT)
+        .expect("the warning fixture is a valid document");
+    for index in (0..items).rev() {
+        let pointer = format!("/tags/{index}");
+        let warning = document.diagnostic_at_value(
+            Severity::Warning,
+            "example.item-label-duplicate",
+            &pointer,
+            "the item label is also used by another item",
+            "Give each item a distinct label.",
+        );
+        document.push_warning(warning);
+    }
+
+    let first = document.warnings();
+    let second = document.warnings();
+    assert_eq!(
+        first, second,
+        "reading warnings does not consume or reorder them"
+    );
+    assert_eq!(first.files_checked(), Some(1));
+    assert_eq!(first.error_count(), 0);
+    assert_eq!(first.warning_count(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+    let diagnostics = first.diagnostics();
+    assert_eq!(diagnostics.len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+    for (index, diagnostic) in diagnostics[..MAXIMUM_DIAGNOSTICS_PER_FILE]
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(diagnostic.code, "example.item-label-duplicate");
+        assert_eq!(diagnostic.path, format!("/tags/{index}"));
+        assert_eq!(at(diagnostic), (index + 4, 5));
+    }
+    let rest = &diagnostics[MAXIMUM_DIAGNOSTICS_PER_FILE];
+    assert_eq!(rest.severity, Severity::Warning);
+    assert_eq!(rest.code, "config.too-many-problems");
+    assert_eq!(rest.path, "");
+    assert_eq!(rest.message, "20 more problems in this file are not shown");
+}
+
+#[test]
+fn cfg_diag_5_warning_overflow_preserves_decode_refusal() {
+    let items = MAXIMUM_DIAGNOSTICS_PER_FILE + 20;
+    for error_first in [true, false] {
+        let tags = (0..items)
+            .map(|index| format!("  - item-{index}\n"))
+            .collect::<String>();
+        let body = if error_first {
+            format!("name: refused\ntags:\n{tags}")
+        } else {
+            format!("tags:\n{tags}name: refused\n")
+        };
+        let text = with_envelope(&body);
+        let mut document = Reader::new(FILE)
+            .read(text.as_bytes(), &EXPECT)
+            .expect("the refusal fixture is a valid document");
+        for index in 0..items {
+            let pointer = format!("/tags/{index}");
+            let warning = document.diagnostic_at_value(
+                Severity::Warning,
+                "example.item-label-duplicate",
+                &pointer,
+                "the item label is also used by another item",
+                "Give each item a distinct label.",
+            );
+            document.push_warning(warning);
+        }
+
+        let report = document
+            .decode_at::<u16>("/name")
+            .expect_err("the invalid integer is refused despite warning overflow");
+        assert!(report.has_errors());
+        assert_eq!(report.diagnostics().len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+        let rest = report.diagnostics().last().expect("the overflow marker");
+        assert_eq!(rest.code, "config.too-many-problems");
+        assert_eq!(rest.message, "21 more problems in this file are not shown");
+        if error_first {
+            assert_eq!(report.diagnostics()[0].code, "config.expected-integer");
+            assert_eq!(rest.severity, Severity::Warning);
+        } else {
+            assert_eq!(rest.severity, Severity::Error);
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct Counts {

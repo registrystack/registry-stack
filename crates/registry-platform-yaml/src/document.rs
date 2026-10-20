@@ -222,11 +222,15 @@ impl Document {
         &self.envelope
     }
 
-    /// Warnings found while reading, such as a deprecated `apiVersion`.
+    /// Warnings found while reading and during product-owned semantic checks,
+    /// sorted and bounded like every other report for this document.
     pub fn warnings(&self) -> Report {
-        let mut report = Report::new(self.warnings.clone());
-        report.set_files_checked(1);
-        report
+        report(
+            &self.file,
+            Some(self.envelope.kind.as_str()),
+            Problems::default(),
+            self.warnings.clone(),
+        )
     }
 
     /// Add a product-owned warning after successful typed decoding.

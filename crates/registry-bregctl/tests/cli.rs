@@ -4825,6 +4825,117 @@ recordTypes:
 }
 
 #[test]
+fn check_positions_implicit_constraint_collisions_across_files() {
+    let seed = parse_project_yaml(
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: constraint-collisions
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://constraint-collisions.example.test
+datasets:
+  - id: records
+recordTypes:
+  - id: item
+    primaryDataset: records
+    route: items
+    mutationMode: mutable
+    fields:
+      - id: code
+        type: string
+        maximumLength: 16
+        classification: internal
+    constraints:
+      - type: unique
+        fields: [code]
+"#,
+    )
+    .unwrap();
+    let compiled = compile_project(&seed, &[], CompileProfile::Authoring).unwrap();
+    let explicit = compiled.entities()["item"]
+        .constraints
+        .keys()
+        .next()
+        .unwrap()
+        .replace('-', "_");
+
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: constraint-collisions
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://constraint-collisions.example.test
+datasets:
+  - id: records
+modules:
+  - id: core
+    version: "1"
+recordTypes:
+  - id: item
+    primaryDataset: records
+    route: items
+    mutationMode: mutable
+    fields:
+      - id: code
+        type: string
+        maximumLength: 16
+        classification: internal
+    constraints:
+      - type: unique
+        fields: [code]
+"#,
+    );
+    let module_directory = project.path().join("modules/core");
+    fs::create_dir_all(&module_directory).unwrap();
+    fs::write(
+        module_directory.join("module.yaml"),
+        format!(
+            r#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: core
+version: "1"
+extendRecordTypes:
+  - recordType: item
+    constraints:
+      - id: {explicit}
+        type: unique
+        fields: [code]
+"#
+        ),
+    )
+    .unwrap();
+
+    let check = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert_eq!(check.status.code(), Some(1), "{check:?}");
+    let report = json_stdout(&check);
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.constraint.id-collision")
+        .unwrap_or_else(|| panic!("missing constraint collision: {report}"));
+    assert_eq!(diagnostic["path"], "/extendRecordTypes/0/constraints/0/id");
+    assert_eq!(
+        diagnostic["source"]["file"],
+        module_directory.join("module.yaml").display().to_string()
+    );
+    assert_eq!(diagnostic["source"]["line"], 8);
+    assert_eq!(diagnostic["source"]["column"], 13);
+    let related = &diagnostic["related"][0];
+    assert_eq!(related["path"], "/recordTypes/0/constraints/0");
+    assert_eq!(
+        related["file"],
+        project.path().join("registry.yaml").display().to_string()
+    );
+    assert_eq!(related["line"], 24);
+    assert_eq!(related["column"], 9);
+    assert_check_diagnostic(diagnostic, Some("BRegModule"));
+}
+
+#[test]
 fn check_positions_both_cross_file_duplicate_label_definitions() {
     let project = TestProject::from_registry_source(
         br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1

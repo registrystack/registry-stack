@@ -2187,6 +2187,57 @@ fn validate_profiles_refuses_the_retired_generator_command_key() {
 }
 
 #[test]
+fn validate_profiles_refuses_unsafe_display_text_with_safe_positioned_output() {
+    let root = temp_dir("profile-display-text");
+    let directory = write_profile(&root, "display", "", "  - path: fixtures/metadata.yaml\n");
+    write_minimal_manifest(
+        &directory.join("fixtures/metadata.yaml"),
+        "profiles:\n  - id: display\n    version: \"1\"\ndatasets: []\n",
+    );
+    let path = directory.join("profile.yaml");
+    let original = fs::read_to_string(&path).unwrap();
+    for (text, accepted) in [
+        ("sensitive-caption\u{202e}reordered", false),
+        ("نام\u{200c}خانوادگی العربية\u{200f}", true),
+    ] {
+        fs::write(
+            &path,
+            original.replace(
+                "  version: \"1\"\n",
+                &format!("  version: \"1\"\n  description: {text}\n"),
+            ),
+        )
+        .unwrap();
+        let output = Command::new(bin())
+            .args(["validate-profiles", "--format", "json"])
+            .arg(&root)
+            .output()
+            .expect("run cli");
+        assert_eq!(output.status.code(), Some(if accepted { 0 } else { 1 }));
+        let report = json_report(&output);
+        assert_eq!(report["ok"], accepted);
+        if !accepted {
+            let diagnostics = report["diagnostics"].as_array().unwrap();
+            assert_eq!(diagnostics.len(), 1);
+            assert_eq!(diagnostics[0]["code"], "config.invalid-value");
+            assert_eq!(diagnostics[0]["path"], "/profile/description");
+            assert_eq!(diagnostics[0]["source"]["line"], 5);
+            assert_eq!(diagnostics[0]["source"]["column"], 16);
+            assert!(!String::from_utf8_lossy(&output.stdout).contains("sensitive-caption"));
+            let human = Command::new(bin())
+                .arg("validate-profiles")
+                .arg(&root)
+                .output()
+                .expect("run cli");
+            assert_eq!(human.status.code(), Some(1));
+            let stderr = String::from_utf8(human.stderr).unwrap();
+            assert!(stderr.contains("/profile/description"), "{stderr}");
+            assert!(!stderr.contains("sensitive-caption"));
+        }
+    }
+}
+
+#[test]
 fn validate_profiles_refuses_a_fixture_path_outside_its_profile() {
     let root = temp_dir("profile-fixture-escape");
     write_profile(&root, "escape", "", "  - path: ../outside.yaml\n");

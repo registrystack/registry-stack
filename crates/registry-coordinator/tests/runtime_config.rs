@@ -1217,6 +1217,108 @@ fn shared_runtime_check_retains_all_independent_positions_without_secret_io() {
 }
 
 #[test]
+fn runtime_definition_maps_refuse_separator_lookalikes_at_both_keys() {
+    fn key_position(text: &str, key: &str) -> (usize, usize) {
+        text.lines()
+            .enumerate()
+            .find_map(|(line, text)| {
+                (text.trim_start() == format!("{key}:")).then(|| {
+                    (
+                        line + 1,
+                        text.find(key).expect("key starts on its source line") + 1,
+                    )
+                })
+            })
+            .expect("authored key exists")
+    }
+
+    let mut document = yaml_value(RUNTIME).unwrap();
+    let connection = document["connections"]["applications"].clone();
+    document["connections"]["casework-main"] = connection.clone();
+    document["connections"]["casework_main"] = connection;
+    document["eventSources"] = json!({
+        "event-source": {
+            "source": "urn:example:coordinator:event-source:one",
+            "signingKeyRef": "secret:file/event-key"
+        },
+        "event_source": {
+            "source": "urn:example:coordinator:event-source:two",
+            "signingKeyRef": "secret:file/event-key"
+        }
+    });
+    let text = serde_norway::to_string(&document).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap().join("runtime.yaml");
+    fs::write(&path, &text).unwrap();
+    let checked = RuntimeConfig::check_file(&path, false);
+    assert!(
+        checked
+            .loaded
+            .as_ref()
+            .expect("integrity findings retain the decoded runtime")
+            .config
+            .validate()
+            .is_err(),
+        "programmatic validation rejects the same collision"
+    );
+
+    for (code, primary, related, first_id, second_id) in [
+        (
+            "coordinator.runtime.connection-id-collision",
+            "/connections/casework_main",
+            "/connections/casework-main",
+            "casework-main",
+            "casework_main",
+        ),
+        (
+            "coordinator.runtime.event-source-id-collision",
+            "/eventSources/event_source",
+            "/eventSources/event-source",
+            "event-source",
+            "event_source",
+        ),
+    ] {
+        let diagnostic = checked
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .expect("the namespace collision is reported");
+        assert_eq!(diagnostic.path, primary);
+        assert!(diagnostic.message.contains(first_id));
+        assert!(diagnostic.message.contains(second_id));
+        let expected = key_position(&text, second_id);
+        let source = diagnostic.source.as_ref().expect("primary source");
+        assert_eq!(source.file, path.display().to_string());
+        assert_eq!((source.line.unwrap(), source.column.unwrap()), expected);
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(diagnostic.related[0].path, related);
+        let expected = key_position(&text, first_id);
+        assert_eq!(
+            (
+                diagnostic.related[0].line.unwrap(),
+                diagnostic.related[0].column.unwrap()
+            ),
+            expected
+        );
+    }
+}
+
+#[test]
+fn runtime_connection_and_event_source_namespaces_remain_distinct() {
+    let mut document = yaml_value(RUNTIME).unwrap();
+    let connection = document["connections"]["applications"].clone();
+    document["connections"]["shared-name"] = connection;
+    document["eventSources"] = json!({
+        "shared_name": {
+            "source": "urn:example:coordinator:event-source:one",
+            "signingKeyRef": "secret:file/event-key"
+        }
+    });
+    load(&serde_norway::to_string(&document).unwrap())
+        .expect("typed runtime namespaces do not collide across kinds");
+}
+
+#[test]
 fn shared_runtime_check_defers_environment_without_reading_secret_references() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().canonicalize().unwrap().join("runtime.yaml");

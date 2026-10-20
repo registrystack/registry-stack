@@ -448,6 +448,42 @@ impl MessagingProject {
     #[must_use]
     pub fn findings(&self) -> Vec<MessagingFinding> {
         let mut findings = Vec::new();
+        add_identifier_collision_findings(
+            &mut findings,
+            FindingReason::ProviderIdCollision,
+            self.providers
+                .iter()
+                .enumerate()
+                .map(|(index, provider)| (provider.id.as_str(), format!("/providers/{index}/id"))),
+        );
+        add_identifier_collision_findings(
+            &mut findings,
+            FindingReason::SenderProfileIdCollision,
+            self.sender_profiles
+                .iter()
+                .enumerate()
+                .map(|(index, profile)| {
+                    (profile.id.as_str(), format!("/senderProfiles/{index}/id"))
+                }),
+        );
+        add_identifier_collision_findings(
+            &mut findings,
+            FindingReason::TemplateIdCollision,
+            self.templates
+                .iter()
+                .enumerate()
+                .map(|(index, template)| (template.id.as_str(), format!("/templates/{index}/id"))),
+        );
+        add_identifier_collision_findings(
+            &mut findings,
+            FindingReason::AccessProfileIdCollision,
+            self.access_profiles
+                .iter()
+                .enumerate()
+                .map(|(index, profile)| {
+                    (profile.id.as_str(), format!("/accessProfiles/{index}/id"))
+                }),
+        );
         for (member, count) in [
             ("/providers", self.providers.len()),
             ("/senderProfiles", self.sender_profiles.len()),
@@ -679,6 +715,19 @@ impl MessagingProject {
     }
 }
 
+fn add_identifier_collision_findings<'a>(
+    findings: &mut Vec<MessagingFinding>,
+    reason: FindingReason,
+    entries: impl IntoIterator<Item = (&'a str, String)>,
+) {
+    let entries = entries.into_iter().collect::<Vec<_>>();
+    for (_, second) in
+        registry_platform_yaml::lookalike_local_id_pairs(entries.iter().map(|(id, _)| *id))
+    {
+        findings.push(MessagingFinding::new(reason, entries[second].1.clone()));
+    }
+}
+
 /// An item spelled like a wildcard, which a list of names reads as one name
 /// (CFG-EMPTY-2).
 fn wildcard_spelled(item: &str) -> bool {
@@ -837,6 +886,80 @@ pub(crate) mod tests {
         assert_eq!(checked.sender_profiles.len(), 2);
         assert_eq!(checked.providers.len(), 2);
         assert_eq!(checked.templates.len(), 2);
+    }
+
+    #[test]
+    fn every_project_definition_namespace_refuses_separator_lookalikes() {
+        let mut value = valid();
+        let mut provider = value["providers"][1].clone();
+        provider["id"] = json!("sms_gateway");
+        value["providers"].as_array_mut().unwrap().push(provider);
+        let mut sender = value["senderProfiles"][1].clone();
+        sender["id"] = json!("notices_sms");
+        value["senderProfiles"].as_array_mut().unwrap().push(sender);
+        let mut template = value["templates"][0].clone();
+        template["id"] = json!("appointment_reminder");
+        template["version"] = json!("2");
+        value["templates"].as_array_mut().unwrap().push(template);
+        let mut access = value["accessProfiles"][0].clone();
+        access["id"] = json!("case_notices");
+        access["requesterClients"] = json!(["second-case-system"]);
+        value["accessProfiles"].as_array_mut().unwrap().push(access);
+
+        let project = project(value);
+        assert!(project.check().is_err());
+        let findings = project.findings();
+        let collisions = findings
+            .iter()
+            .filter(|finding| finding.code().ends_with("-id-collision"))
+            .collect::<Vec<_>>();
+        assert_eq!(collisions.len(), 4, "{collisions:?}");
+        for (finding, code, path) in [
+            (
+                collisions[0],
+                "messaging.project.provider-id-collision",
+                "/providers/2/id",
+            ),
+            (
+                collisions[1],
+                "messaging.project.sender-profile-id-collision",
+                "/senderProfiles/2/id",
+            ),
+            (
+                collisions[2],
+                "messaging.project.template-id-collision",
+                "/templates/2/id",
+            ),
+            (
+                collisions[3],
+                "messaging.project.access-profile-id-collision",
+                "/accessProfiles/1/id",
+            ),
+        ] {
+            assert_eq!(finding.code(), code);
+            assert_eq!(finding.path, path);
+        }
+    }
+
+    #[test]
+    fn exact_template_versions_and_ids_in_distinct_namespaces_remain_permitted() {
+        let mut value = valid();
+        value["providers"][0]["id"] = json!("shared-id");
+        value["senderProfiles"][0]["id"] = json!("shared-id");
+        value["senderProfiles"][0]["provider"] = json!("shared-id");
+        value["templates"][0]["id"] = json!("shared-id");
+        value["templates"][1]["id"] = json!("shared-id");
+        value["accessProfiles"][0]["id"] = json!("shared-id");
+        value["accessProfiles"][0]["senderProfiles"] = json!(["shared-id"]);
+        value["accessProfiles"][0]["templates"] = json!(["shared-id"]);
+        let project = project(value);
+        assert!(project
+            .findings()
+            .iter()
+            .all(|finding| !finding.code().ends_with("-id-collision")));
+        project
+            .check()
+            .expect("distinct namespaces remain independent");
     }
 
     #[test]
