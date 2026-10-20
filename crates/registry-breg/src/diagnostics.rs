@@ -12,6 +12,14 @@ pub enum DiagnosticSeverity {
     Error,
 }
 
+/// Another authored compiler path that explains a diagnostic.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RelatedDiagnostic {
+    pub path: String,
+    pub message: String,
+}
+
 /// A stable, value-free diagnostic addressed to a source field.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -20,6 +28,8 @@ pub struct Diagnostic {
     pub code: String,
     pub path: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related: Vec<RelatedDiagnostic>,
 }
 
 impl Diagnostic {
@@ -29,6 +39,7 @@ impl Diagnostic {
             code: code.to_owned(),
             path: path.into(),
             message: message.to_owned(),
+            related: Vec::new(),
         }
     }
 
@@ -38,7 +49,16 @@ impl Diagnostic {
             code: code.to_owned(),
             path: path.into(),
             message: message.to_owned(),
+            related: Vec::new(),
         }
+    }
+
+    pub(crate) fn with_related(mut self, path: impl Into<String>, message: &str) -> Self {
+        self.related.push(RelatedDiagnostic {
+            path: path.into(),
+            message: message.to_owned(),
+        });
+        self
     }
 }
 
@@ -78,3 +98,24 @@ impl fmt::Display for CompileFailure {
 }
 
 impl std::error::Error for CompileFailure {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn diagnostic_wire_shape_keeps_related_optional() {
+        let legacy = json!({
+            "severity":"error",
+            "code":"breg.test",
+            "path":"recordTypes[id=entry].id",
+            "message":"refused"
+        });
+        let diagnostic: Diagnostic = serde_json::from_value(legacy).unwrap();
+        assert!(diagnostic.related.is_empty());
+
+        let serialized = serde_json::to_value(diagnostic).unwrap();
+        assert!(serialized.get("related").is_none());
+    }
+}

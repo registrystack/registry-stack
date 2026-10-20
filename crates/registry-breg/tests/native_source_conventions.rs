@@ -130,6 +130,60 @@ fn lookalike_local_ids_name_and_locate_both_definitions() {
 }
 
 #[test]
+fn hook_ids_share_one_namespace_within_each_authored_file() {
+    let hook = |id: &str| {
+        json!({
+            "id":id,
+            "phase":"after",
+            "trigger":"created",
+            "projection":[]
+        })
+    };
+    let mut project = facility();
+    project["recordTypes"][0]["hooks"] = json!([hook("notify-user")]);
+    project["recordTypes"][1]["hooks"] = json!([hook("notify_user")]);
+    let report = read_project_yaml("registry.yaml", &bytes(&project)).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.hook.id-collision")
+        .expect("project hooks share one identifier namespace");
+    assert_eq!(diagnostic.path, "/recordTypes/1/hooks/0/id");
+    assert_eq!(diagnostic.related[0].path, "/recordTypes/0/hooks/0/id");
+    assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+    assert!(diagnostic.related[0].line.is_some());
+
+    let module = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule",
+        "id":"local-module",
+        "version":"0.1.0",
+        "recordTypes":[{
+            "id":"entry",
+            "route":"entries",
+            "primaryDataset":"directory",
+            "mutationMode":"mutable",
+            "fields":[],
+            "hooks":[hook("notify-user")]
+        }],
+        "extendRecordTypes":[{
+            "recordType":"entry",
+            "hooks":[hook("notify_user")]
+        }]
+    });
+    let report = read_module_yaml("module.yaml", &bytes(&module)).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.hook.id-collision")
+        .expect("module record and extension hooks share one identifier namespace");
+    assert_eq!(diagnostic.path, "/extendRecordTypes/0/hooks/0/id");
+    assert_eq!(diagnostic.related[0].path, "/recordTypes/0/hooks/0/id");
+    assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+    assert!(diagnostic.related[0].line.is_some());
+}
+
+#[test]
 fn duplicate_authored_labels_warn_with_normalized_comparison_and_locations() {
     let mut source = facility();
     source["recordTypes"][0]["display"]["label"] = json!("Café");
@@ -408,6 +462,15 @@ fn compiler_refuses_lookalike_ids_across_project_and_module_files() {
     );
     assert!(diagnostic.message.contains("directory-entry"));
     assert!(diagnostic.message.contains("directory_entry"));
+    assert_eq!(diagnostic.related.len(), 1);
+    assert_eq!(
+        diagnostic.related[0].path,
+        "recordTypes[id=directory-entry].id"
+    );
+    assert_eq!(
+        diagnostic.related[0].message,
+        "the first identifier is defined here"
+    );
 }
 
 #[test]
@@ -470,6 +533,15 @@ fn compiler_warns_for_duplicate_labels_across_modules_and_extensions() {
     assert!(record.message.contains("directory-entry"));
     assert!(record.message.contains("module-entry"));
     assert!(!record.message.contains("Directory entry"));
+    assert_eq!(record.related.len(), 1);
+    assert_eq!(
+        record.related[0].path,
+        "recordTypes[id=directory-entry].display.label"
+    );
+    assert_eq!(
+        record.related[0].message,
+        "the first display text is defined here"
+    );
 
     let field = compiled
         .findings()
@@ -483,6 +555,11 @@ fn compiler_warns_for_duplicate_labels_across_modules_and_extensions() {
     assert!(field.message.contains("name"));
     assert!(field.message.contains("alternate-name"));
     assert!(!field.message.contains("Café"));
+    assert_eq!(field.related.len(), 1);
+    assert_eq!(
+        field.related[0].path,
+        "recordTypes[id=directory-entry].fields[id=name].display.label"
+    );
 }
 
 #[test]

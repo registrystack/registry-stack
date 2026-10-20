@@ -464,14 +464,17 @@ fn add_cross_file_collisions(
         if first.source == second.source {
             continue;
         }
-        errors.push(Diagnostic::error(
-            code,
-            &second.path,
-            &format!(
-                "local identifiers `{}` and `{}` differ only by `-` versus `_`",
-                first.id, second.id
-            ),
-        ));
+        errors.push(
+            Diagnostic::error(
+                code,
+                &second.path,
+                &format!(
+                    "local identifiers `{}` and `{}` differ only by `-` versus `_`",
+                    first.id, second.id
+                ),
+            )
+            .with_related(&first.path, "the first identifier is defined here"),
+        );
     }
 }
 
@@ -500,7 +503,10 @@ fn add_cross_file_duplicate_labels(
             }
             _ => format!("two {kind} have display text that compares the same"),
         };
-        findings.push(Diagnostic::finding(code, &second.path, &message));
+        findings.push(
+            Diagnostic::finding(code, &second.path, &message)
+                .with_related(&first.path, "the first display text is defined here"),
+        );
     }
 }
 
