@@ -681,13 +681,14 @@ pub struct SourceLimits {
 pub fn read_project(file: &str, bytes: &[u8]) -> Result<Decoded<EvidenceProject>, Report> {
     let mut decoded = decode_authored::<EvidenceProject>(file, bytes, &PROJECT)?;
     let integrity = project_integrity_diagnostics(&mut decoded);
-    let mut report = findings_report(
+    let mut diagnostics = findings_report(
         &decoded.document,
         "project",
         validate_project(&decoded.value),
-    );
-    report.extend(decoded.document.warnings());
-    report.extend(Report::new(integrity));
+    )
+    .into_diagnostics();
+    diagnostics.extend(integrity);
+    let report = decoded.document.report_with(diagnostics);
     if report.has_errors() {
         return Err(report);
     }
