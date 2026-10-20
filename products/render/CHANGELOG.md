@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Label values now use the shared display-text rules and refuse Unicode
+  controls that can invisibly reorder human-readable text while retaining
+  multilingual joiners and direction marks.
+- A bundle now refuses document ids or label keys that differ only by `-`
+  versus `_` in one namespace and reports both authored definitions.
+
 ## 0.42.0 - 2026-10-20
 
 - `registry-render init` prints a first render command that runs as printed
