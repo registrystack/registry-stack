@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
+#[cfg(feature = "runtime")]
+use registry_breg::package::{compiled_registry_change_set, CompiledRegistryChangeCode};
 use registry_breg::{
     compiler::{compile_project_with_assets, CompileProfile},
     contract::{parse_project_yaml, ModuleAssetSource, RegistryProject},
     model::{CompiledActionExecution, CompiledPlanValue, CompiledProposalReview},
-    package::{compiled_registry_change_set, CompiledRegistryChangeCode},
 };
 use std::collections::BTreeSet;
 const MINIMAL: &[u8] = include_bytes!("../../../products/breg/examples/minimal/registry.yaml");
@@ -1159,6 +1160,7 @@ fn authored_action_input_display_survives_source_and_compilation() {
     );
 }
 
+#[cfg(feature = "runtime")]
 #[test]
 fn input_and_refusal_labels_are_presentation_not_frozen_meaning() {
     use serde_json::json;
@@ -1233,6 +1235,7 @@ fn input_and_refusal_labels_are_presentation_not_frozen_meaning() {
     );
 }
 
+#[cfg(feature = "runtime")]
 #[test]
 fn access_profile_display_is_not_an_authority_change() {
     use serde_json::json;
