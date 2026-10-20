@@ -208,14 +208,20 @@ fn project_check_keeps_duplicate_title_warnings_beside_compile_errors() {
     let mut copy = authored["functions"]["identity"].clone();
     copy["title"] = json!("identity function");
     authored["functions"]["identity-copy"] = copy;
+    authored["workflow"]["steps"]["done"] = json!({
+        "type": "call",
+        "operation": "missing-operation",
+        "input": {"type": "input"},
+        "next": "done"
+    });
     let path = root.path().join("workflow.json");
     fs::write(&path, serde_json::to_vec(&authored).unwrap()).unwrap();
 
     let error = authoring::parse_project(&path, fs::read(&path).unwrap())
-        .expect_err("the missing function source refuses compilation");
+        .expect_err("the missing operation refuses compilation");
     for code in [
         "coordinator.project.duplicate-function-title",
-        "coordinator.definition.read",
+        "coordinator.definition.operation",
     ] {
         assert!(
             error

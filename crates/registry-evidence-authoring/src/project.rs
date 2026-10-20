@@ -686,6 +686,7 @@ pub fn read_project(file: &str, bytes: &[u8]) -> Result<Decoded<EvidenceProject>
         "project",
         validate_project(&decoded.value),
     );
+    report.extend(decoded.document.warnings());
     report.extend(Report::new(integrity));
     if report.has_errors() {
         return Err(report);

@@ -866,6 +866,7 @@ impl SchedulingPolicy {
         let integrity = policy_integrity_diagnostics(&mut decoded);
         let findings = decoded.value.check();
         let mut report = findings_report(&decoded.document, &findings);
+        report.extend(decoded.document.warnings());
         report.extend(Report::new(integrity));
         if report.has_errors() {
             Err(report)
@@ -2008,12 +2009,12 @@ holdPolicy:
                 "  - id: registry-update\n    label: Registry record update\n  - id: registry-copy\n    label: registry record update\n",
                 1,
             )
-            .replacen("ttlMinutes: 5", "ttlMinutes: 0", 1);
+            .replacen("service: registry-update", "service: missing-service", 1);
         let report = SchedulingPolicy::read(AUTHORED_POLICY_FILE, authored.as_bytes())
-            .expect_err("the invalid bound refuses the project");
+            .expect_err("the missing service refuses the project");
         for code in [
             "scheduling.project.duplicate-service-label",
-            "scheduling.project.invalid-bound",
+            "scheduling.project.unknown-service",
         ] {
             assert!(
                 report
