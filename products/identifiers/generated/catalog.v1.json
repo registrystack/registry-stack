@@ -48,7 +48,7 @@
       "description": "JSON-LD namespace for Registry Manifest terms.",
       "source": {
         "path": "crates/registry-manifest-core/src/lib.rs",
-        "sha256": "0b48da1e4defa774784ad826713930f8e867a549399c049ed0a04304405cbc98"
+        "sha256": "6fbba7d42280fc661cf5f061728db6a34ff272e7eaaeb3f9eb8c2072db18c613"
       }
     },
     {
@@ -4155,7 +4155,7 @@
       "description": "Registry Coordinator portable project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/authoring.rs",
-        "sha256": "7c769f7ab40aea95649217c896d6391dba7940ff03b5616068917c3eacb64d8c"
+        "sha256": "73b97d8091fa7641a9c6e2dfae1c47874cc4a80d2df3a503f460c999ec579b63"
       },
       "artifact": {
         "path": "products/coordinator/generated/project/project.schema.json",

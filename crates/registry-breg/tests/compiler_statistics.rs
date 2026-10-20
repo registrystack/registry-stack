@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_json, parse_project_yaml, ModuleAssetSource};
+use registry_breg::diagnostics::{CompileFailure, Diagnostic, DiagnosticSeverity};
 #[cfg(feature = "runtime")]
 use registry_breg::package::{
     compiled_registry_change_set, CompiledRegistryChangeClass, CompiledRegistryChangeCode,
@@ -14,6 +15,22 @@ use registry_breg::package::{
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use registry_breg::tooling::{classify_registry_diff, DiffClassification};
 use serde_json::{json, Value};
+
+fn errors(failure: &CompileFailure) -> Vec<&Diagnostic> {
+    failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        .collect()
+}
+
+fn assert_retained_authoring_finding(failure: &CompileFailure) {
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.severity == DiagnosticSeverity::Finding
+            && diagnostic.code == "breg.package.identity-missing"
+            && diagnostic.path == "project.package"
+    }));
+}
 
 fn source() -> Value {
     serde_json::from_value(json!({"datasets":[{"id": "statistics-test"}],
@@ -331,9 +348,11 @@ fn a_dataset_has_one_publisher() {
         &["read-live", "publish", "read-releases"],
     );
     let failure = compile(&value).expect_err("two publishers are refused");
-    let [diagnostic] = failure.diagnostics() else {
+    let errors = errors(&failure);
+    let [diagnostic] = errors.as_slice() else {
         panic!("one diagnostic refuses two publishers: {failure:?}");
     };
+    assert_retained_authoring_finding(&failure);
     assert_eq!(
         diagnostic.code,
         "breg.statistical-dataset.publisher-multiple"
@@ -365,9 +384,11 @@ fn a_profile_that_reads_live_counts_or_publishes_also_holds_read_releases() {
         let mut value = source();
         grant(&mut value, profile, &operations);
         let failure = compile(&value).expect_err("a missing read-releases is refused");
-        let [diagnostic] = failure.diagnostics() else {
+        let errors = errors(&failure);
+        let [diagnostic] = errors.as_slice() else {
             panic!("one diagnostic refuses the missing read-releases: {failure:?}");
         };
+        assert_retained_authoring_finding(&failure);
         assert_eq!(
             diagnostic.code,
             "breg.statistical-dataset.read-releases-required"
@@ -391,13 +412,13 @@ fn read_releases_is_refused_on_a_dataset_no_profile_publishes() {
     let mut value = source();
     grant(&mut value, PUBLISHER, &[]);
     let failure = compile(&value).expect_err("release readers without a publisher are refused");
-    let refused = failure
-        .diagnostics()
+    let refused = errors(&failure)
         .iter()
         .map(|diagnostic| diagnostic.code.as_str())
         .collect::<Vec<_>>();
     assert_eq!(refused, ["breg.statistical-dataset.publisher-missing"]);
-    let message = &failure.diagnostics()[0].message;
+    assert_retained_authoring_finding(&failure);
+    let message = &errors(&failure)[0].message;
     for named in [
         "statistical dataset `records-by-category`",
         "`analyst`",
@@ -427,9 +448,11 @@ fn a_dataset_permission_names_a_declared_dataset() {
     value["accessProfiles"][OTHER_READER]["permissions"] =
         json!({"datasets":[{"dataset":"records-by-region","operations":["read-live"]}]});
     let failure = compile(&value).expect_err("an undeclared dataset is refused");
-    let [diagnostic] = failure.diagnostics() else {
+    let errors = errors(&failure);
+    let [diagnostic] = errors.as_slice() else {
         panic!("one diagnostic refuses the undeclared dataset: {failure:?}");
     };
+    assert_retained_authoring_finding(&failure);
     assert_eq!(
         diagnostic.code,
         "breg.access-profile.permission-dataset-unknown"

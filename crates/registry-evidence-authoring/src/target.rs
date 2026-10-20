@@ -184,7 +184,7 @@ fn map_id_collisions<T>(
         .collect::<Vec<_>>();
     let entries = owned
         .iter()
-        .map(|(id, pointer)| registry_platform_yaml::AuthoredId { id, pointer })
+        .map(|(id, pointer)| registry_platform_yaml::AuthoredId::at_key(id, pointer))
         .collect::<Vec<_>>();
     Report::new(registry_platform_yaml::local_id_collision_diagnostics(
         document, code, &entries,

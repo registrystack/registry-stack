@@ -7283,7 +7283,13 @@ fn validate_optional_non_empty(
     }
 }
 
-fn is_valid_id(value: &str) -> bool {
+/// Whether `value` follows the identifier grammar authored manifests use.
+///
+/// Manifest identifiers intentionally have no length bound. Callers that
+/// classify authored strings before reporting them must use this predicate
+/// rather than the platform `LocalId` type, whose contract is narrower.
+#[must_use]
+pub fn is_valid_manifest_id(value: &str) -> bool {
     !value.is_empty()
         && value.bytes().enumerate().all(|(index, byte)| match byte {
             b'a'..=b'z' => true,
@@ -7293,7 +7299,7 @@ fn is_valid_id(value: &str) -> bool {
 }
 
 fn validate_id(value: &str, path: impl Into<String>, errors: &mut Vec<ValidationError>) {
-    if !is_valid_id(value) {
+    if !is_valid_manifest_id(value) {
         errors.push(ValidationError::new(
             ValidationCondition::InvalidId,
             path,
@@ -7458,7 +7464,7 @@ fn validate_dataset_public_service_id(
     path: impl Into<String>,
     errors: &mut Vec<ValidationError>,
 ) {
-    if is_valid_id(value) || is_well_formed_http_https_iri(value) {
+    if is_valid_manifest_id(value) || is_well_formed_http_https_iri(value) {
         return;
     }
     errors.push(ValidationError::new(

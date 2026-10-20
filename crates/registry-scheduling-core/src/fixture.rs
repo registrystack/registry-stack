@@ -11,8 +11,8 @@
 
 use chrono::{DateTime, Utc};
 use registry_platform_yaml::{
-    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, RemovedKey, Report,
-    RetiredApiVersion,
+    local_id_collision_diagnostics, ApiVersion, AuthoredId, Decoded, Diagnostic, EnvelopeRule,
+    Expect, FormatSpec, Invalid, Reader, RemovedKey, Report, RetiredApiVersion,
 };
 use serde::{de, Deserialize, Deserializer};
 
@@ -23,7 +23,8 @@ use crate::admission::{
 };
 use crate::diagnostics::{findings_report, FindingArea, PolicyCheckReason, SchedulingDiagnostic};
 use crate::model::{
-    AdmissionRequest, LedgerClaim, LedgerKind, LedgerSnapshot, PartyCounts, SchedulingFacts,
+    facts_integrity_diagnostics, AdmissionRequest, LedgerClaim, LedgerKind, LedgerSnapshot,
+    PartyCounts, SchedulingFacts,
 };
 use crate::naming::{
     RETIRED_SCHEDULING_FIXTURE_API_VERSION, SCHEDULING_FIXTURE_API_VERSION, SCHEDULING_FIXTURE_KIND,
@@ -366,6 +367,8 @@ pub enum ReplayError {
     UnknownWindow { case: String, window: String },
     #[error("case name {case} is used more than once; case names identify claims")]
     DuplicateCaseName { case: String },
+    #[error("initial claim id {claim} is used more than once; claims are replaced by id")]
+    DuplicateInitialClaimId { claim: String },
     #[error(
         "case {case} sets rescheduleOf to a claim identifier that no claim in the ledger carries"
     )]
@@ -402,6 +405,53 @@ impl SchedulingFixture {
             .decode::<Self>(bytes, &Expect::one(&SCHEDULING_FIXTURE_FORMAT))
     }
 
+    /// Source-positioned integrity findings for fixture-owned identifier
+    /// namespaces and the embedded scheduling facts.
+    #[must_use]
+    pub fn integrity_diagnostics(decoded: &Decoded<Self>) -> Vec<Diagnostic> {
+        fn collisions(
+            document: &registry_platform_yaml::Document,
+            code: &str,
+            values: &[(String, String)],
+        ) -> Vec<Diagnostic> {
+            let entries = values
+                .iter()
+                .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+                .collect::<Vec<_>>();
+            local_id_collision_diagnostics(document, code, &entries)
+        }
+
+        let mut diagnostics = collisions(
+            &decoded.document,
+            "scheduling.fixture.case-name-collision",
+            &decoded
+                .value
+                .cases
+                .iter()
+                .enumerate()
+                .map(|(index, case)| (case.name.clone(), format!("/cases/{index}/name")))
+                .collect::<Vec<_>>(),
+        );
+        diagnostics.extend(collisions(
+            &decoded.document,
+            "scheduling.fixture.initial-claim-id-collision",
+            &decoded
+                .value
+                .initial
+                .iter()
+                .enumerate()
+                .map(|(index, claim)| (claim.id.clone(), format!("/initial/{index}/id")))
+                .collect::<Vec<_>>(),
+        ));
+        diagnostics.extend(facts_integrity_diagnostics(
+            &decoded.document,
+            &decoded.value.facts,
+            "/facts",
+            "scheduling.fixture",
+        ));
+        diagnostics
+    }
+
     /// Read one fixture and check it against `policy`: every structural
     /// problem, or every finding of [`SchedulingFixture::findings`], each at
     /// its position.
@@ -411,11 +461,14 @@ impl SchedulingFixture {
         policy: &SchedulingPolicy,
     ) -> Result<Decoded<Self>, Report> {
         let decoded = Self::decode(file, bytes)?;
+        let integrity = Self::integrity_diagnostics(&decoded);
         let findings = decoded.value.findings(policy);
-        if findings.is_empty() {
-            Ok(decoded)
+        let mut report = findings_report(&decoded.document, &findings);
+        report.extend(Report::new(integrity));
+        if report.has_errors() {
+            Err(report)
         } else {
-            Err(findings_report(&decoded.document, &findings))
+            Ok(decoded)
         }
     }
 
@@ -448,6 +501,17 @@ impl SchedulingFixture {
                 "/initial".to_owned(),
                 PolicyCheckReason::TooManyEntries,
             ));
+        }
+        for (index, claim) in self.initial.iter().enumerate() {
+            if self.initial[..index]
+                .iter()
+                .any(|earlier| earlier.id == claim.id)
+            {
+                findings.push(fixture(
+                    format!("/initial/{index}/id"),
+                    PolicyCheckReason::DuplicateIdentifier,
+                ));
+            }
         }
         // A replayed claim is identified by its case name, and a reschedule
         // names the claim it replaces. Two cases under one name would answer
@@ -488,6 +552,15 @@ impl SchedulingFixture {
     /// Check that every case fits the policy and the facts before any case
     /// runs, so a broken fixture fails fast instead of half-way through.
     pub fn check(&self, policy: &SchedulingPolicy) -> Result<(), ReplayError> {
+        let mut initial_ids: Vec<&str> = Vec::with_capacity(self.initial.len());
+        for claim in &self.initial {
+            if initial_ids.contains(&claim.id.as_str()) {
+                return Err(ReplayError::DuplicateInitialClaimId {
+                    claim: claim.id.clone(),
+                });
+            }
+            initial_ids.push(&claim.id);
+        }
         // A replayed claim is identified by its case name; see
         // `SchedulingFixture::findings`.
         let mut seen: Vec<&str> = Vec::with_capacity(self.cases.len());
@@ -1094,6 +1167,95 @@ cases:
         assert_eq!(
             fixture.replay(&policy),
             Err(ReplayError::DuplicateCaseName { case: name })
+        );
+    }
+
+    #[test]
+    fn fixture_local_ids_keep_their_authored_namespaces_distinct() {
+        let policy = policy_for_fixture();
+        let lookalikes = EXACT_TIME_FIXTURE
+            .replace(
+                "name: same-key-retry-is-refused",
+                "name: first_caller_takes_the_last_station",
+            )
+            .replace("resourceId: station-2", "resourceId: station_1");
+        let report =
+            SchedulingFixture::read(SCHEDULING_FIXTURE_FILE, lookalikes.as_bytes(), &policy)
+                .expect_err("fixture separator collisions are refused");
+        for (code, path, related, line, column, related_line, related_column) in [
+            (
+                "scheduling.fixture.case-name-collision",
+                "/cases/1/name",
+                "/cases/0/name",
+                30,
+                11,
+                18,
+                11,
+            ),
+            (
+                "scheduling.fixture.pool-member-id-collision",
+                "/facts/pools/0/members/1/resourceId",
+                "/facts/pools/0/members/0/resourceId",
+                15,
+                23,
+                13,
+                23,
+            ),
+        ] {
+            let diagnostic = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == code)
+                .unwrap_or_else(|| panic!("missing {code}: {report:#?}"));
+            assert_eq!(diagnostic.path, path);
+            assert_eq!(diagnostic.related[0].path, related);
+            let source = diagnostic.source.as_ref().expect("primary source");
+            assert_eq!((source.line, source.column), (Some(line), Some(column)));
+            assert_eq!(
+                (diagnostic.related[0].line, diagnostic.related[0].column),
+                (Some(related_line), Some(related_column))
+            );
+        }
+
+        let initial = "initial:\n  - id: prior-claim\n    offering: registry-update-30\n    supplyId: station-1\n    kind: booking\n    start: 2026-10-05T01:00:00Z\n    end: 2026-10-05T01:30:00Z\n    units: 1\n  - id: prior_claim\n    offering: registry-update-30\n    supplyId: station-2\n    kind: booking\n    start: 2026-10-05T01:00:00Z\n    end: 2026-10-05T01:30:00Z\n    units: 1\n";
+        let lookalike_initial =
+            EXACT_TIME_FIXTURE.replace("cases:\n", &format!("{initial}cases:\n"));
+        let report = SchedulingFixture::read(
+            SCHEDULING_FIXTURE_FILE,
+            lookalike_initial.as_bytes(),
+            &policy,
+        )
+        .expect_err("initial claim separator collision is refused");
+        let collision = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "scheduling.fixture.initial-claim-id-collision")
+            .expect("initial claim collision");
+        assert_eq!(collision.path, "/initial/1/id");
+        assert_eq!(collision.related[0].path, "/initial/0/id");
+
+        let duplicate_initial = lookalike_initial.replace("id: prior_claim", "id: prior-claim");
+        let report = SchedulingFixture::read(
+            SCHEDULING_FIXTURE_FILE,
+            duplicate_initial.as_bytes(),
+            &policy,
+        )
+        .expect_err("duplicate initial claims are refused");
+        assert!(report.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "scheduling.fixture.duplicate-identifier"
+                && diagnostic.path == "/initial/1/id"
+        }));
+        let mut fixture =
+            SchedulingFixture::decode(SCHEDULING_FIXTURE_FILE, lookalike_initial.as_bytes())
+                .expect("separator lookalikes still decode")
+                .value;
+        let repeated_id = fixture.initial[0].id.clone();
+        fixture.initial[1].id = repeated_id;
+        assert_eq!(
+            fixture.check(&policy),
+            Err(ReplayError::DuplicateInitialClaimId {
+                claim: "prior-claim".to_owned(),
+            })
         );
     }
 

@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 
 use consent_fixture::{compile, refusal_codes, self_issued_project, source};
 use registry_breg::contract::FieldTypeSource;
+use registry_breg::diagnostics::DiagnosticSeverity;
 use registry_breg::evidence_source::{export_evidence_source, EvidenceSourceOptions};
 use serde_json::{json, Value};
 
@@ -741,24 +742,23 @@ fn the_recipient_claim_binds_only_the_consent_feed() {
     reserved_claims_never_bound_action_grants();
 }
 
-/// Every diagnostic a variant raises, as `(code, path)` pairs, so a test can
-/// show the reserved claim is the only thing wrong with it.
-fn refusals(value: &Value) -> Vec<(String, String)> {
-    let Err(failure) = compile(value) else {
-        panic!("the variant must be refused");
-    };
-    failure
+fn assert_only_reserved_claim_refusal(value: &Value, path: &str) {
+    let failure = compile(value).expect_err("the reserved claim is refused");
+    let refused = failure
         .diagnostics()
         .iter()
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
         .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
-        .collect()
-}
-
-fn assert_only_reserved_claim_refusal(value: &Value, path: &str) {
+        .collect::<Vec<_>>();
     assert_eq!(
-        refusals(value),
+        refused,
         [("breg.consent.feed-claim".to_owned(), path.to_owned())]
     );
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.severity == DiagnosticSeverity::Finding
+            && diagnostic.code == "breg.package.identity-missing"
+            && diagnostic.path == "project.package"
+    }));
 }
 
 /// A profile that looks consent rows up by one field, with the value taken

@@ -154,6 +154,7 @@ fn read_project(project: &Path, fixtures: bool) -> Result<ProjectReading> {
             let relative = path.strip_prefix(project).unwrap_or(&path).to_owned();
             match SchedulingFixture::decode(&path.display().to_string(), &read_input(&path)?) {
                 Ok(decoded) => {
+                    let integrity = SchedulingFixture::integrity_diagnostics(&decoded);
                     report.extend(match checked {
                         Some(policy) => findings_report(
                             &decoded.document,
@@ -161,6 +162,7 @@ fn read_project(project: &Path, fixtures: bool) -> Result<ProjectReading> {
                         ),
                         None => decoded.document.warnings(),
                     });
+                    report.extend(Report::new(integrity));
                     readings.push((relative, decoded.value));
                 }
                 Err(refusal) => report.extend(refusal),
@@ -987,6 +989,63 @@ mod tests {
             diagnostic.code == "scheduling.records.unknown-location"
                 && diagnostic.path == "/exceptions/0/location"
         }));
+    }
+
+    #[test]
+    fn check_refuses_fixture_id_collisions_at_the_authored_values() {
+        let (_root, project) = initialized("standalone-exact-time");
+        let fixture = "fixtures/counter-stations.yaml";
+        edit(
+            &project,
+            fixture,
+            "resourceId: station-2",
+            "resourceId: station_1",
+        );
+        edit(
+            &project,
+            fixture,
+            "name: same-key-retry-is-refused",
+            "name: first_caller_takes_a_station",
+        );
+
+        let error = check(&project, false).expect_err("fixture collisions refuse project check");
+        let report = crate::configuration_report(&error).expect("structured fixture diagnostics");
+        for (code, path, related, line, column, related_line, related_column) in [
+            (
+                "scheduling.fixture.case-name-collision",
+                "/cases/1/name",
+                "/cases/0/name",
+                31,
+                11,
+                18,
+                11,
+            ),
+            (
+                "scheduling.fixture.pool-member-id-collision",
+                "/facts/pools/0/members/1/resourceId",
+                "/facts/pools/0/members/0/resourceId",
+                15,
+                23,
+                13,
+                23,
+            ),
+        ] {
+            let diagnostic = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == code)
+                .unwrap_or_else(|| panic!("missing {code}: {report:#?}"));
+            assert_eq!(diagnostic.path, path);
+            assert_eq!(diagnostic.related[0].path, related);
+            let source = diagnostic.source.as_ref().expect("primary source position");
+            assert!(source.file.ends_with(fixture));
+            assert_eq!((source.line, source.column), (Some(line), Some(column)));
+            assert!(diagnostic.related[0].file.ends_with(fixture));
+            assert_eq!(
+                (diagnostic.related[0].line, diagnostic.related[0].column),
+                (Some(related_line), Some(related_column))
+            );
+        }
     }
 
     /// Every file is read and every refusal is reported at its position in
