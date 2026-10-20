@@ -948,6 +948,67 @@ fn module_digest_can_bind_explicit_sql_assets() {
 }
 
 #[test]
+fn derived_field_display_only_changes_module_digest_when_authored() {
+    let module = |display: Option<Value>| {
+        let mut source = json!({
+            "apiVersion": MODULE_API_VERSION,
+            "kind": MODULE_KIND,
+            "id": "core",
+            "version": "1",
+            "recordTypes": [{
+                "id": "record",
+                "primaryDataset": "test-dataset",
+                "route": "records",
+                "mutationMode": "mutable",
+                "fields": [{
+                    "id": "code",
+                    "type": "string",
+                    "maximumLength": 8,
+                    "classification": "internal"
+                }],
+                "derived": [{
+                    "id": "summary",
+                    "sql": "sql/summary.sql",
+                    "key": "id",
+                    "fields": [{
+                        "id": "score",
+                        "type": "int64",
+                        "classification": "internal"
+                    }]
+                }]
+            }]
+        });
+        if let Some(display) = display {
+            source["recordTypes"][0]["derived"][0]["fields"][0]["display"] = display;
+        }
+        parse_module_json(&serde_json::to_vec(&source).expect("module source serializes"))
+            .expect("module parses")
+    };
+
+    let omitted = module(None);
+    let empty = module(Some(json!({})));
+    let authored = module(Some(json!({
+        "label": "Eligibility score",
+        "description": "Calculated eligibility points."
+    })));
+    let omitted_value = serde_json::to_value(&omitted).expect("module serializes");
+    let authored_value = serde_json::to_value(&authored).expect("module serializes");
+
+    assert!(omitted_value["recordTypes"][0]["derived"][0]["fields"][0]
+        .get("display")
+        .is_none());
+    assert_eq!(module_digest(&omitted), module_digest(&empty));
+    assert_eq!(
+        authored_value["recordTypes"][0]["derived"][0]["fields"][0]["display"],
+        json!({
+            "label": "Eligibility score",
+            "description": "Calculated eligibility points."
+        })
+    );
+    assert_ne!(module_digest(&omitted), module_digest(&authored));
+}
+
+#[test]
 fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
     let source = |batch: &str, operations: &str| {
         format!(
