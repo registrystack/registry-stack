@@ -248,6 +248,10 @@ mod tests {
             checked.report["diagnostics"][0]["path"],
             "/sources/person-record/label"
         );
+        assert_eq!(
+            checked.report["diagnostics"][0]["source"]["file"],
+            project_file.to_str().unwrap()
+        );
 
         let error = check(temporary.path(), None, false, true)
             .expect_err("--deny-warnings refuses the warning");
@@ -256,6 +260,39 @@ mod tests {
             .expect("a structured warning report");
         assert_eq!(report.error_count(), 0);
         assert_eq!(report.warning_count(), 1);
+        assert_eq!(
+            report.diagnostics()[0].source.as_ref().unwrap().file,
+            project_file.to_string_lossy()
+        );
+    }
+    #[test]
+    fn check_reports_project_reader_errors_at_the_authored_file() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/examples/standalone");
+        copy_tree(&source, temporary.path());
+        let project_file = temporary.path().join("evidence.yaml");
+        let authored = fs::read_to_string(&project_file).unwrap().replacen(
+            "id: standalone-evidence",
+            "id: false",
+            1,
+        );
+        fs::write(&project_file, authored).unwrap();
+
+        let error = check(temporary.path(), None, false, false)
+            .expect_err("the malformed project is refused");
+        let report = error
+            .downcast_ref::<Report>()
+            .expect("a structured reader report");
+        let diagnostic = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.expected-string")
+            .expect("the malformed id is diagnosed");
+        assert_eq!(
+            diagnostic.source.as_ref().unwrap().file,
+            project_file.to_string_lossy()
+        );
     }
     #[test]
     fn explain_renders_named_definitions_functions_and_authority() {

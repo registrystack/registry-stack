@@ -135,9 +135,9 @@ pub(crate) fn inspect(root: &Path, target: Option<&Path>, command: &str) -> Resu
     let snapshot = crate::project_snapshot::capture_project(root)?;
     let project_path = snapshot.root().join(project::PROJECT_FILE);
     let project_bytes = authored::read_authored_file(&project_path, "Evidence project")?;
-    let diagnostics = project::read_project(project::PROJECT_FILE, &project_bytes)?
-        .document
-        .warnings();
+    let decoded = project::read_project(project::PROJECT_FILE, &project_bytes)
+        .map_err(|report| authored::project_refusal(report.into(), snapshot.root(), root))?;
+    let diagnostics = authored::rebase(decoded.document.warnings(), root);
     let (project, mut compiled) = compile(snapshot.root())
         .map_err(|error| authored::project_refusal(error, snapshot.root(), root))?;
     for function in &mut compiled.functions {
