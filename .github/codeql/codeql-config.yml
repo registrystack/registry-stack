@@ -1,0 +1,13 @@
+name: Registry Stack CodeQL
+
+# Keep test-only paths out of code scanning results. Each entry holds only code
+# that compiles under cfg(test) or belongs to a test suite: crate integration
+# tests, their fixtures and support modules, and the Python binding tests under
+# crates/*/tests/python. Inline #[cfg(test)] modules inside production files
+# cannot be reached by a path and stay in the analysis.
+paths-ignore:
+  - "crates/*/tests/**"
+  - "crates/registry-breg/src/tests/**"
+  - crates/registry-casework/src/task_grants/native_resource.rs
+  - crates/registry-caseworkctl/src/dev/tests.rs
+  - crates/registry-platform-config/src/blocks_tests.rs
