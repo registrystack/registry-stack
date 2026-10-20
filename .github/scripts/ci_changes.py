@@ -1208,6 +1208,8 @@ def classify(
                 # The release helper validates the workspace versions it locks.
                 "Cargo.lock",
                 "THIRD_PARTY_NOTICES",
+                # The gate inventory pins the CodeQL paths-ignore list.
+                ".github/codeql/codeql-config.yml",
                 "docs/site/src/content/docs/reference/errors.mdx",
             }
             for path in changed

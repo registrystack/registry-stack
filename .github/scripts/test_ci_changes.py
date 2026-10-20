@@ -3150,6 +3150,11 @@ on:
 
         self.assertTrue(outputs["release_tool"])
 
+    def test_codeql_config_selects_the_gate_inventory(self) -> None:
+        outputs = classify(self.workspace, (".github/codeql/codeql-config.yml",))
+
+        self.assertTrue(outputs["release_tool"])
+
     def test_unclassified_root_workflow_fails_closed_to_release_checks(self) -> None:
         for workflow in (
             ".github/workflows/dco.yml",
