@@ -206,6 +206,42 @@ fn duplicate_authored_labels_warn_with_normalized_comparison_and_locations() {
 }
 
 #[test]
+fn action_refusal_labels_are_scoped_to_their_action() {
+    let mut source = facility();
+    let mut independent = source["actions"][1].clone();
+    independent["id"] = json!("independent-correction");
+    independent["display"]["label"] = json!("Independent correction");
+    source["actions"].as_array_mut().unwrap().push(independent);
+
+    let decoded = read_project_yaml("registry.yaml", &bytes(&source)).unwrap();
+    assert!(decoded
+        .document
+        .warnings()
+        .diagnostics()
+        .iter()
+        .all(|warning| warning.code != "breg.action-refusal.duplicate-label"));
+
+    let refusal = source["actions"][1]["plan"]["refusals"][0].clone();
+    source["actions"][1]["plan"]["refusals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"code":"same-action-peer","label":refusal["label"]}));
+    let decoded = read_project_yaml("registry.yaml", &bytes(&source)).unwrap();
+    let report = decoded.document.warnings();
+    let warnings = report
+        .diagnostics()
+        .iter()
+        .filter(|warning| warning.code == "breg.action-refusal.duplicate-label")
+        .collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].path, "/actions/1/plan/refusals/1/label");
+    assert_eq!(
+        warnings[0].related[0].path,
+        "/actions/1/plan/refusals/0/label"
+    );
+}
+
+#[test]
 fn reader_refusals_keep_duplicate_label_warnings_for_projects_and_modules() {
     let mut project = facility();
     project["recordTypes"][0]["display"]["label"] = json!("Café");
@@ -563,7 +599,7 @@ fn compiler_warns_for_duplicate_labels_across_modules_and_extensions() {
 }
 
 #[test]
-fn compiler_warns_for_duplicate_refusal_labels_across_project_and_module() {
+fn compiler_scopes_refusal_labels_by_action_across_project_and_module() {
     let mut project_source = facility();
     project_source["modules"] = json!([{"id":"local-module","version":"0.1.0"}]);
     let mut permission = project_source["accessProfiles"][4]["permissions"]["actions"][0].clone();
@@ -614,16 +650,10 @@ fn compiler_warns_for_duplicate_refusal_labels_across_project_and_module() {
         CompileProfile::Authoring,
     )
     .unwrap();
-    let warning = compiled
+    assert!(compiled
         .findings()
         .iter()
-        .find(|diagnostic| diagnostic.code == "breg.action-refusal.duplicate-label")
-        .expect("refusal labels are compared across project and module files");
-    assert_eq!(
-        warning.path,
-        "modules[id=local-module].actions[id=module-correct-address].plan.refusals[0].label"
-    );
-    assert!(!warning.message.contains("invalid-postal-code"));
+        .all(|diagnostic| diagnostic.code != "breg.action-refusal.duplicate-label"));
 }
 
 #[test]
