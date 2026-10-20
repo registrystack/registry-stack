@@ -212,8 +212,9 @@ retention: payload 7 days, record 90 days, submission receipt 7 days
 ```
 
 The digest must be the one the author gave you. When `package.expectedDigest` names another
-package, `check`, `plan`, `apply`, and `serve` all refuse with
-`error[messaging.package.digest-mismatch]` before reaching a database.
+package, `check`, `plan`, and `apply` refuse with `error[messaging.package.digest-mismatch]`, and
+`serve` with `messaging: package.expectedDigest does not pin the package at package.root`, before
+reaching a database.
 
 {/* Evidence: crates/registry-messagingctl/src/lib.rs, check(); observed with messagingctl
     0.42.0-dev on 2026-10-19, paths replaced. */}
@@ -306,13 +307,18 @@ When an applied operation does not finish, the code says whether anything change
 
 | Code | Exit | Meaning |
 | --- | --- | --- |
-| `message.changed` | 1 | The message changed between the preview and the write. Nothing was applied; run `messages show` and decide again |
-| `audit.unavailable` | 3 | The audit destination refused the request record. Nothing was changed; restore it and retry |
+| `message.changed` | 1 | The message changed between the read and the write. Nothing was applied; run `messages show` and decide again |
+| `audit.unavailable` | 3 | `apply` or a message action found the audit destination refusing its request record. Nothing was changed; restore it and retry |
 | `audit.unconfirmed` | 3 | The change was applied and its audit outcome record could not be written. Do not apply it again; restore the audit destination |
 | `message.outcome-unknown` | 3 | The action may have been applied. Run `messages show` before acting again |
 | `package.outcome-unknown` | 3 | The activation may have been recorded. Run `messagingctl status` before applying again |
 | `retention.outcome-unknown` | 3 | The last batch may have been erased. Preview with the same `--before` to see what is still due |
 | `database.unavailable` | 3 | The database could not be reached or refused the write |
+
+A command that finds the database not yet prepared for this package refuses with
+`messagingctl.activation.not-activated`, `messagingctl.activation.package-not-active`, or
+`messagingctl.activation.grants-stale`, each of which says to run `plan`, then `apply` with the
+migration credential.
 
 ### Settle an unknown outcome
 
@@ -372,6 +378,19 @@ keeps what it erased. A cutoff in the future is refused.
 Each process writes a JSON Lines audit stream to `audit.path`, naming callers and recipients only by
 keyed pseudonyms. It is not signed; ship it to append-only storage if you need tamper evidence.
 
+In file mode, every accepted write is fsynced; stdout mode is best-effort. The active file rotates
+at `audit.rotateBytes`, and sealed files older than `audit.retentionDays` are deleted. An applied
+`messagingctl` operation writes its records to a sibling file beside `audit.path`, named
+`<stem>.messagingctl<ext>` and rotated and retained the same way, or to standard error when the
+runtime audits to stdout, so command stdout stays free for JSON results. The operator who runs
+`messagingctl` therefore needs write access to the audit directory.
+
+A writer that fails stays unhealthy until the process restarts, and `/ready` answers 503 until
+then. If the response record fails after a database commit, the effect still stands: inspect the
+operation's stored result, or follow its retry contract in the code table above, and never assume a
+rollback. Expiry of local segments is not proof that they reached off-host storage; arrange
+shipping before `retentionDays` removes sealed segments.
+
 | Event | Recorded when |
 | --- | --- |
 | `messaging.runtime.started` | The runtime starts, with the package digest, runtime version, and retention in force |
@@ -382,8 +401,15 @@ keyed pseudonyms. It is not signed; ship it to append-only storage if you need t
 | `messaging.dispatch.transition` | The dispatch state changes, naming the worker, a caller, or the operator tool |
 | `messaging.message.settled` | An operator settles an unknown outcome |
 | `messaging.receipt.recorded` | A verified provider callback moves a delivery report |
+| `messaging.message.receipt-read` | A sender reads a retained submission receipt back by its idempotency key |
 | `messaging.retention.erased` | A retention batch erases data |
 | `messaging.template.previewed` | A sender previews a template |
+
+The table lists outcome records. Each audited request writes a request record first:
+`messaging.message.requested`, `messaging.message.settle.requested`, `messaging.receipt.requested`,
+`messaging.retention.requested`, `messaging.template.preview.requested`, or
+`messaging.package.activation.requested`. An operation that stops before its outcome is written
+leaves a record with outcome `unfinished`, under its request event or `messaging.operation`.
 
 With `metricsListener` set, `GET /metrics` on that socket answers Prometheus text:
 
@@ -423,15 +449,16 @@ first exits 2 and the others exit 1:
 | `messaging: MESSAGING_LOG must be one of error, warn, or info` | `MESSAGING_LOG` holds another value |
 | ``messaging: the Messaging package at package.root does not satisfy the shared package envelope: the package at <package.root> does not match its SHA256SUMS; changed: messaging.yaml; rebuild the package with `messagingctl package` and deploy the whole directory`` | A package file was changed in place. Deploy the directory `messagingctl package` wrote, unchanged. A missing directory is reported the same way, as `does not exist or cannot be read` |
 | `messaging: package.expectedDigest does not pin the package at package.root, whose digest is sha256:<digest>; deploy the pinned package or update package.expectedDigest` | The package on disk is not the one `package.expectedDigest` names |
-| `messaging: the Messaging runtime database configuration failed: the Messaging database secret could not be resolved: the secret reference configured at database.runtimeUrlRef could not be resolved: no readable secret of that name exists under the configured provider` | The secret file is missing, or is not a regular file the runtime user owns with mode 0400 or 0600 |
+| `messaging: the Messaging runtime database configuration failed: the Messaging database secret could not be resolved: the secret reference configured at database.runtimeUrlRef could not be resolved: no readable secret of that name exists under the configured provider` | No file of that name exists under `secretProviders.file.root`, or the runtime user cannot read it |
+| `messaging: the Messaging runtime database configuration failed: the Messaging database secret could not be resolved: the secret reference configured at database.runtimeUrlRef could not be resolved: the secret file must be a regular file owned by the runtime user, with mode 0400 or 0600, and exactly one hard link` | The file exists but is a symbolic link, belongs to another user, has another mode, or has a second hard link |
 | `messaging: the Messaging database connection could not be established: Error occurred while creating a new object: error connecting to server` | Nothing answers at the URL's host and port. `error performing TLS handshake` in its place means the server certificate is not trusted; name the CA bundle in `database.trustedRootCertificateRef` |
 | `messaging: the Messaging query failed: db error` | The database has no schema yet. Run `messagingctl plan`, then `apply`, with the migration credential |
 | `messaging: identity.databaseId does not match the database activation ledger` | The runtime file names another deployment's `identity.databaseId`, or its URL reaches another deployment's database |
 | ``messaging: the configured package is not active; run `messagingctl plan --runtime-config FILE` then `messagingctl apply --runtime-config FILE` `` | `package.root` holds a package the ledger has not activated. Run `plan`, then `apply`, then start again |
 | `messaging: the OIDC issuer could not be initialized` | The issuer's discovery document could not be fetched, or a static `jwksSource` document holds no usable key |
 
-{/* Evidence: each row observed with messaging 0.42.0-dev on 2026-10-20 against PostgreSQL 18 over
-    TLS: its standard error, empty standard output, and exit status. crates/registry-messaging/src/main.rs;
+{/* Evidence: each row observed with messaging 0.42.0-dev on 2026-10-20, the database rows against
+    PostgreSQL 18 over TLS: its standard error, empty standard output, and exit status. crates/registry-messaging/src/main.rs;
     crates/registry-messaging/src/runtime.rs, RuntimeError, assemble(), and database_step();
     crates/registry-messaging/src/package.rs; crates/registry-messaging/src/store.rs, StoreError;
     crates/registry-platform-config/src/blocks.rs, describe_secret_failure();
