@@ -105,7 +105,11 @@ fn field(
         .iter()
         .find(|field| field.logical.id == id);
     let required = stored.is_some_and(|field| field.required);
-    let display = entity.fields.get(id).map(|field| &field.display);
+    let display = entity
+        .fields
+        .get(id)
+        .map(|field| &field.display)
+        .or_else(|| entity.derived_fields.get(id).map(|field| &field.display));
     let label = display
         .and_then(|display| display.label.clone())
         .unwrap_or_else(|| humanize(id));

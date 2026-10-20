@@ -4,8 +4,9 @@
 
 - Preserve authored display on access profiles, statistical datasets, record and
   Proposal hooks, and derived fields. Model inspection includes native datasets,
-  all project access-profile labels, field display, and module origins. Labels
-  never select an identity or grant authority.
+  all project access-profile labels, field display, and module origins.
+  Workspace metadata for the caller includes authored labels and descriptions
+  for readable derived fields. Labels never select an identity or grant authority.
 - BREAKING: the model, access, and actions explanation formats advance to
   `v1alpha6`, proposals to `v1alpha2`, and lifecycle to `v1alpha7`. Select the
   matching schemas. Action inputs retain optional authored `display` separately
