@@ -109,7 +109,10 @@ audit:
 
 These rules are not in the tables:
 
-- `package.root`, `audit.path`, and `secretProviders.file.root` are absolute paths.
+- `package.root` is an absolute path with no `.` or `..` segment; `audit.path` and
+  `secretProviders.file.root` are absolute paths.
+- In `manifest.yaml`, each document's `entryFile` and `schemaFile` is relative to the bundle root
+  and contains no `..`.
 - `package.expectedDigest` is optional; when set, serve refuses any other package.
 - `secret:file/<name>` resolves under `secretProviders.file.root`. `secret:env/<NAME>` works only
   when `secretProviders.environment: {}` is declared. A reference to an undeclared provider is
@@ -271,9 +274,6 @@ before retention deletes them.
 Never rename, edit, or truncate the active file while the process runs. The writer then stops, and
 every render fails closed with `audit-failed` until a restart.
 :::
-
-Never rename, edit, or truncate the active audit file while serve runs. The writer stops, and
-every render fails closed until you restart the process.
 
 {/* Evidence: crates/registry-render/src/audit.rs, AUDIT_SCHEMA, RenderAuditEvent and correlation;
     crates/registry-render/src/server.rs, render_route and refuse;
