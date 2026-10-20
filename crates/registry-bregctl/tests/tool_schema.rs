@@ -83,6 +83,29 @@ fn every_committed_example_satisfies_its_generated_schema() {
     }
 }
 
+#[test]
+fn example_scenario_schema_uses_bounded_display_text() {
+    let documents = documents().expect("the tool schemas generate");
+    let schema = compile(&documents["example-scenarios.v1alpha1.schema.json"]);
+    let valid = example("products/breg/examples/minimal/examples/scenarios.json");
+    for accepted in ["שלום\u{200f}".to_owned(), "é".repeat(512)] {
+        let mut changed = valid.clone();
+        changed["scenarios"][0]["description"] = Value::from(accepted);
+        assert!(schema.is_valid(&changed));
+    }
+    for refused in [
+        "unsafe\u{202e}text".to_owned(),
+        "unsafe\u{2028}text".to_owned(),
+        "unsafe\u{fdd0}text".to_owned(),
+        String::new(),
+        "x".repeat(1025),
+    ] {
+        let mut changed = valid.clone();
+        changed["scenarios"][0]["description"] = Value::from(refused);
+        assert!(!schema.is_valid(&changed));
+    }
+}
+
 /// Every committed file under `root` named `name`, outside hidden
 /// directories.
 fn committed(root: &str, name: &str) -> Vec<String> {

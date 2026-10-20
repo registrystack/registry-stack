@@ -321,6 +321,47 @@ fn reviewed_migration_documents_refuse_their_previous_spellings_at_each_key() {
             && diagnostic.suggested_action.contains("`database`")));
 }
 
+#[test]
+fn reviewed_migration_member_ids_refuse_separator_collisions_across_collections() {
+    let previous = compile_variant(Variant::Base);
+    let candidate = compile_variant(Variant::RequiredField);
+    let artifacts = backfill_artifacts("required-field", &previous, &candidate);
+    let descriptor = serde_json::to_value(&artifacts.descriptor).expect("descriptor serializes");
+
+    for (first, second) in [
+        ("/steps/0/id", "/preAssertions/0/id"),
+        ("/steps/0/id", "/postAssertions/0/id"),
+        ("/preAssertions/0/id", "/postAssertions/0/id"),
+    ] {
+        let mut changed = descriptor.clone();
+        *changed.pointer_mut(first).expect("first identifier exists") =
+            serde_json::Value::from("review-state");
+        *changed
+            .pointer_mut(second)
+            .expect("second identifier exists") = serde_json::Value::from("review_state");
+        let report = read_migration_descriptor(
+            "descriptor.json",
+            &serde_json::to_vec_pretty(&changed).unwrap(),
+        )
+        .expect_err("separator-lookalike step and assertion IDs are refused");
+        let diagnostic = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.migration.identifier-collision")
+            .unwrap_or_else(|| panic!("missing identifier collision: {}", report.render_human()));
+        assert_eq!(diagnostic.path, second);
+        let source = diagnostic.source.as_ref().expect("second ID is positioned");
+        assert_eq!(source.file, "descriptor.json");
+        assert!(source.line.is_some());
+        assert!(source.column.is_some());
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(diagnostic.related[0].path, first);
+        assert_eq!(diagnostic.related[0].file, "descriptor.json");
+        assert!(diagnostic.related[0].line.is_some());
+        assert!(diagnostic.related[0].column.is_some());
+    }
+}
+
 /// Every word a descriptor enumerates is written in kebab-case (CFG-NAME-2).
 /// A word in snake_case is refused where it is written, the refusal names
 /// the accepted word, and it never repeats the refused one (CFG-SEC-3).

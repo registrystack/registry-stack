@@ -19,12 +19,13 @@ use pg_query::NodeRef;
 #[cfg(feature = "tooling")]
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_yaml::{
-    ApiVersion, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report,
+    local_id_collision_diagnostics, ApiVersion, AuthoredId, Diagnostic, Document, EnvelopeRule,
+    Expect, FormatSpec, Reader, RemovedKey, Report,
 };
 
 use crate::literal_text::{LiteralText, WRITE_THE_VALUE};
 #[cfg(feature = "tooling")]
-use registry_platform_yaml::{Diagnostic, Document, Severity};
+use registry_platform_yaml::Severity;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(feature = "tooling")]
 use sha2::{Digest, Sha256};
@@ -229,12 +230,17 @@ pub fn read_migration_descriptor(
     file: &str,
     bytes: &[u8],
 ) -> Result<ReviewedMigrationDescriptor, Report> {
-    Reader::new(file)
+    let decoded = Reader::new(file)
         .with_hook(&mut LiteralText {
             remedy: WRITE_THE_VALUE,
         })
-        .decode(bytes, &Expect::one(&MIGRATION_DESCRIPTOR_FORMAT))
-        .map(|decoded| decoded.value)
+        .decode(bytes, &Expect::one(&MIGRATION_DESCRIPTOR_FORMAT))?;
+    let diagnostics = migration_id_collision_diagnostics(&decoded.value, &decoded.document);
+    if diagnostics.is_empty() {
+        Ok(decoded.value)
+    } else {
+        Err(decoded.document.report_with(diagnostics))
+    }
 }
 
 /// Read a migration rehearsal receipt through the shared reader, naming it
@@ -478,6 +484,34 @@ enveloped_document!(
     MIGRATION_DESCRIPTOR_API_VERSION,
     MIGRATION_DESCRIPTOR_KIND
 );
+
+fn migration_id_collision_diagnostics(
+    descriptor: &ReviewedMigrationDescriptor,
+    document: &Document,
+) -> Vec<Diagnostic> {
+    let mut located = descriptor
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| (step.id(), format!("/steps/{index}/id")))
+        .collect::<Vec<_>>();
+    for (member, assertions) in [
+        ("preAssertions", &descriptor.pre_assertions),
+        ("postAssertions", &descriptor.post_assertions),
+    ] {
+        located.extend(
+            assertions
+                .iter()
+                .enumerate()
+                .map(|(index, assertion)| (assertion.id.as_str(), format!("/{member}/{index}/id"))),
+        );
+    }
+    let entries = located
+        .iter()
+        .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+        .collect::<Vec<_>>();
+    local_id_collision_diagnostics(document, "breg.migration.identifier-collision", &entries)
+}
 
 /// The descriptor's schema vocabulary mirrors `descriptor_problems`, while
 /// compiled package changes retain their broader internal classification.
@@ -1097,6 +1131,9 @@ pub(crate) fn validate_reviewed_migration_plan(
             &canonicalize_json(&decoded.document.to_json_value())
                 .map_err(|_| ReviewedMigrationError::Descriptor)?,
         );
+        if !migration_id_collision_diagnostics(&decoded.value, &decoded.document).is_empty() {
+            return Err(ReviewedMigrationError::Descriptor);
+        }
         let descriptor = decoded.value;
         let (module_id, base) = descriptor_base(descriptor_path, &descriptor.id)?;
         referenced_paths.insert(descriptor_path.clone());
@@ -1421,7 +1458,7 @@ pub fn check_migration_descriptor(
     location: Option<&str>,
 ) -> Result<Vec<Diagnostic>, Report> {
     let descriptor: ReviewedMigrationDescriptor = document.decode()?;
-    let mut diagnostics = Vec::new();
+    let mut diagnostics = migration_id_collision_diagnostics(&descriptor, document);
     let base = match location.map(|location| descriptor_base(location, &descriptor.id)) {
         Some(Ok((_, base))) => Some(base),
         Some(Err(_)) => {
