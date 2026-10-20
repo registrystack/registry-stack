@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-use registry_breg::contract::{read_module_yaml, read_project_yaml, ModuleAssetSource};
+use registry_breg::contract::{
+    parse_project_json, read_module_yaml, read_project_yaml, ModuleAssetSource,
+};
 use registry_breg::{compile_project, compile_project_with_assets, CompileProfile};
 use serde_json::{json, Value};
 
@@ -15,6 +17,45 @@ fn facility() -> Value {
 
 fn bytes(source: &Value) -> Vec<u8> {
     serde_norway::to_string(source).unwrap().into_bytes()
+}
+
+fn implicit_unique_constraint_id() -> String {
+    let project = parse_project_json(
+        serde_json::to_vec(&json!({
+            "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind":"BRegProject",
+            "project":{
+                "id":"constraint-collisions",
+                "version":"1",
+                "defaultLanguage":"en",
+                "canonicalBaseIri":"https://example.test"
+            },
+            "datasets":[{"id":"records"}],
+            "recordTypes":[{
+                "id":"item",
+                "primaryDataset":"records",
+                "route":"items",
+                "mutationMode":"mutable",
+                "fields":[{
+                    "id":"code",
+                    "type":"string",
+                    "maximumLength":16,
+                    "classification":"internal"
+                }],
+                "constraints":[{"type":"unique","fields":["code"]}]
+            }]
+        }))
+        .unwrap()
+        .as_slice(),
+    )
+    .unwrap();
+    let compiled = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    compiled.entities()["item"]
+        .constraints
+        .keys()
+        .next()
+        .expect("the implicit constraint has an effective identifier")
+        .clone()
 }
 
 fn refusal(source: &Value, path: &str, code: &str) {
@@ -127,6 +168,61 @@ fn lookalike_local_ids_name_and_locate_both_definitions() {
     assert_eq!(diagnostic.related.len(), 1);
     assert_eq!(diagnostic.related[0].path, "/accessProfiles/1/id");
     assert!(diagnostic.related[0].line.is_some());
+}
+
+#[test]
+fn implicit_constraint_ids_collide_at_the_constraint_list_item() {
+    let explicit = implicit_unique_constraint_id().replace('-', "_");
+    let source = format!(
+        r#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: constraint-collisions
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://example.test
+datasets:
+  - id: records
+recordTypes:
+  - id: item
+    primaryDataset: records
+    route: items
+    mutationMode: mutable
+    fields:
+      - id: code
+        type: string
+        maximumLength: 16
+        classification: internal
+    constraints:
+      - type: unique
+        fields: [code]
+      - id: {explicit}
+        type: unique
+        fields: [code]
+"#
+    );
+
+    let report = read_project_yaml("registry.yaml", source.as_bytes()).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.constraint.id-collision")
+        .unwrap_or_else(|| {
+            panic!(
+                "missing effective constraint collision: {}",
+                report.render_human()
+            )
+        });
+    assert_eq!(diagnostic.path, "/recordTypes/0/constraints/1/id");
+    let site = diagnostic
+        .source
+        .as_ref()
+        .expect("located explicit constraint id");
+    assert_eq!((site.line, site.column), (Some(23), Some(13)));
+    assert_eq!(diagnostic.related.len(), 1);
+    let related = &diagnostic.related[0];
+    assert_eq!(related.path, "/recordTypes/0/constraints/0");
+    assert_eq!((related.line, related.column), (Some(21), Some(9)));
 }
 
 #[test]
