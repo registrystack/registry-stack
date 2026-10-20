@@ -93,3 +93,24 @@ test('Coordinator map keys state the bound written beside the shared identifier'
     assert.ok(!constraints(keyPath).includes('propertyNames.maxLength: 512'), keyPath);
   }
 });
+
+test('Coordinator fields mappings state every bound their property names reference through allOf', async () => {
+  const document = await buildCoordinatorConfiguration();
+  const project = document.contracts.find((contract) => contract.id === 'project');
+  for (const keyPath of [
+    'workflow.eventTriggers.*.input.fields.*',
+    'workflow.steps.*.choose.fields.*',
+    'workflow.steps.*.input.fields.*',
+    'workflow.steps.*.output.fields.*',
+    'workflow.steps.*.waitUntil.fields.*',
+  ]) {
+    const field = project.fields.find((entry) => entry.key_path === keyPath);
+    assert.ok(field, keyPath);
+    assert.deepEqual(field.constraints.flat(), [
+      'propertyNames.maxLength: 512',
+      'propertyNames.minLength: 1',
+      'propertyNames.pattern: ^[A-Za-z][A-Za-z0-9_-]{0,63}$',
+      'propertyNames.pattern: ^[^\\u0000-\\u001F\\u007F-\\u009F]+$',
+    ], keyPath);
+  }
+});

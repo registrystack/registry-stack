@@ -145,18 +145,24 @@ function conjoinedConstraints(nodes, prefix) {
 function propertyNameConstraints(document, schema) {
   const seen = new Set();
   const chain = [];
-  let node = schema;
-  while (node !== null && typeof node === 'object' && !Array.isArray(node)) {
-    chain.push(node, ...(Array.isArray(node.allOf) ? node.allOf : []).filter(isObjectNode));
-    if (!Object.hasOwn(node, '$ref')) {
-      break;
+  // Every node reached binds: the node itself, each `allOf` branch and what
+  // its own `$ref` reaches, and the definition the `$ref` chain ends in. A
+  // reference seen twice ends that chain and keeps what was collected.
+  const collect = (start) => {
+    let node = start;
+    while (isObjectNode(node)) {
+      chain.push(node);
+      for (const branch of Array.isArray(node.allOf) ? node.allOf : []) {
+        collect(branch);
+      }
+      if (!Object.hasOwn(node, '$ref') || seen.has(node.$ref)) {
+        break;
+      }
+      seen.add(node.$ref);
+      node = resolveReference(document, node.$ref);
     }
-    if (seen.has(node.$ref)) {
-      return [];
-    }
-    seen.add(node.$ref);
-    node = resolveReference(document, node.$ref);
-  }
+  };
+  collect(schema);
   return conjoinedConstraints(chain, 'propertyNames.');
 }
 
