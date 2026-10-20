@@ -93,11 +93,46 @@ deployment-wide actions `doctor`, `restore-hold`, `release-restore-hold`, `relea
 `complete-execution-recovery`, and `retain` need `operator: true`. Keep producers and operators in
 separate policies. A run belongs to its starting token's `iss` and `sub`.
 
-A Casework connection with a `completion` block lets Casework wake a waiting run at
-`POST /v1/review-completions` with a bearer token you generate and give Casework too; without it,
-waits rely on result reads every `resultCheckSeconds`. The
-[configuration reference](../../reference/coordinator-configuration/) lists every key and bound,
-and [Configure the deployment](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md#configure-the-deployment) covers each connection type.
+The [configuration reference](../../reference/coordinator-configuration/) lists every key and
+bound, and [Configure the deployment](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md#configure-the-deployment) covers each connection type.
+
+### Let Casework wake waiting runs
+
+A run waiting on a Casework review reads the result every `resultCheckSeconds`, from 60 to 86,400
+and 900 by default. Each read is one request to Casework per waiting run. A `completion` block on
+the Casework connection lets Casework wake the run sooner:
+
+```yaml
+connections:
+  review:
+    type: casework-review-producer
+    producer: coordinator
+    # baseUrl, profile, authorization as for any Casework connection
+    completion:
+      recipientBinding: coordinator-v1
+      bearerTokenRef: secret:file/review-completion-token
+    resultCheckSeconds: 900
+```
+
+- **`producer`** is the producer's key under the Casework project's `trustedProducers`. That
+  entry's own `completion` names a destination and the same `recipientBinding`.
+- **`recipientBinding`** is 1 to 256 visible ASCII characters, without spaces, and must differ
+  between Casework connections; `check` refuses a duplicate.
+- **`bearerTokenRef`** names a token you generate. In the Casework runtime file, give the
+  completion destination its own reference to the same token as `bearerTokenRef`, not `auth`
+  with a custom header, and set its `url` to `https://<coordinator-host>/v1/review-completions`.
+  Casework presents the token as a bearer token and the binding in a `registry-recipient-binding`
+  header; Coordinator refuses a request that lacks either, or whose pair matches no connection,
+  with 401 `access.unauthenticated`.
+
+An event only brings a waiting run's next read forward; it never starts a run. Without a
+`completion` block the route refuses every event, so lower `resultCheckSeconds` when events cannot
+reach Coordinator.
+
+A live run's binding includes `producer` but neither `completion` nor `resultCheckSeconds`. You
+can change either, or rotate the token, while runs wait: write the new token on both sides and
+restart each service. Changing `producer` is a binding change that startup refuses while runs use
+it.
 
 Check the file offline; it reads no credential and contacts no endpoint:
 
@@ -107,8 +142,12 @@ coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml check
 
 {/* Evidence: products/coordinator/DEPLOYMENT.md, Configure the deployment;
     products/coordinator/generated/runtime/runtime.schema.json, namespace, SecretProvidersConfig,
-    EventSourceConfig, PrivateListenerConfig, TlsTermination;
-    crates/registry-coordinator/src/deployment.rs, tls. */}
+    EventSourceConfig, PrivateListenerConfig, TlsTermination, ReviewCompletionConfig,
+    resultCheckSeconds;
+    crates/registry-coordinator/src/deployment.rs, tls;
+    crates/registry-coordinator/src/runtime.rs, valid_recipient_binding, binding_digest_names;
+    crates/registry-coordinator/src/completion.rs, receive_review_completion,
+    RECIPIENT_BINDING_HEADER. */}
 
 ## Apply and start
 
@@ -152,6 +191,40 @@ counts steps waiting for you.
 {/* Evidence: products/coordinator/DEPLOYMENT.md, Apply and start, Check health and run doctor;
     crates/registry-coordinator/src/store.rs, SCHEMA_VERSION;
     crates/registry-coordinator/src/service.rs, SHUTDOWN_GRACE. */}
+
+### Codes you see
+
+Each surface names a refusal in its own vocabulary. The service's standard error carries the raw
+code: `store-unavailable` while the database is unreachable, `deployment.refused` or
+`state-key-custody` when the service stops, and `live-binding-conflict` when startup finds a live
+run's binding changed. `coordinatorctl` prefixes its codes with `coordinator.`, as in
+`coordinator.deployment.refused`, `coordinator.deployment.workflow-unlisted`,
+`coordinator.deployment.workflow-live-runs`, `coordinator.command.state-key-custody`, and
+`coordinator.command.live-binding-conflict`. HTTP answers carry RFC 9457 problem documents; the
+ones an operator acts on are:
+
+| Code | Status | What to do |
+| --- | --- | --- |
+| `service.unavailable` | 503 | The database, audit stream, or token verifier is unavailable. Try again after it recovers. |
+| `audit.response-unavailable` | 503 | The operation may have completed, but its audited result was not released. Inspect the run before repeating it. |
+| `deployment.refused` | 409 | The activation, runtime file, or state key custody check failed. Run `deployment-status`. |
+| `deployment.activation-changed` | 409 | An apply changed the active packages after the service started. Restart it with the runtime file apply used. |
+| `binding.conflict`, `binding.live-conflict` | 409 | The runtime file changed connection settings a run uses. Restore them and restart, or investigate with `--recovery-only`. |
+| `execution.held`, `admission.held` | 409 | The restore hold or the admission hold is in place. |
+| `admission.recovery-only` | 409 | This instance runs with `--recovery-only` and admits no runs. Send starts to the ordinary service. |
+| `restore.hold-required`, `restore.unresolved`, `restore.review-required`, `restore.lease-incompatible` | 409 | A restore step is out of order, or held work still needs review. |
+| `reconcile.unsupported`, `reconcile.refused`, `reconcile.raced`, `retry.refused` | 409 | The held call cannot be reconciled or retried that way, or changed meanwhile. Inspect it again. |
+| `receipt.expired` | 409 | The product no longer holds the original receipt. This is not evidence the command was never sent. |
+| `run.payload-erased` | 409 | Retention erased the run's payloads; it can no longer be retried or reconciled. |
+
+The [API reference](../../reference/apis/registry-coordinator/) lists every code.
+
+{/* Evidence: crates/registry-coordinator/src/problem.rs, ProblemCode::http_status, detail;
+    crates/registry-coordinator/src/authoring.rs, coordinator. code prefix;
+    crates/registry-coordinator/tests/deployment_postgres.rs, coordinator.deployment.refused,
+    coordinator.command.state-key-custody, coordinator.command.live-binding-conflict,
+    coordinator.deployment.workflow-unlisted;
+    products/coordinator/DEPLOYMENT.md, Add, upgrade, roll back and remove a workflow. */}
 
 ## Change the workflows
 
@@ -251,21 +324,30 @@ written under it is erased makes those runs unreadable in the same way.
 
 ## Restore from a backup
 
-A backup can predate an effect a product already accepted, so a restored deployment starts held.
+A backup can predate an effect a product already accepted. Nothing holds a restored database by
+itself: you place the hold, from an instance that cannot execute.
 
-:::danger[Fence the old deployment first]
-Stop or fence the old service and every worker that can reach its database or credentials before
-you start anything on the restored one.
+:::danger[Never start an ordinary worker on a restored database]
+An ordinary `coordinator` resumes dispatch at once and resends prepared commands to products whose
+state has moved on since the backup. First stop or fence the old service and every worker that can
+reach its database or credentials. Start only `coordinator --recovery-only` until you release the
+restore hold.
 :::
 
-1. Restore the database, keys, audit stream, and packages. Start
-   `coordinator --runtime-config <file> --recovery-only` and place the hold with `restore-hold`.
-2. Inspect and `reconcile` every command that may have been sent after the backup. A missing
-   receipt does not prove the command was never received.
-3. When retained evidence establishes the history, attest it with `complete-execution-recovery`.
-4. Release with `release-restore-hold` (refused with `restore.unresolved` while held work is
-   unresolved), then `retry-same` or `cancel` what remains.
-5. Reopen admissions with `release-admission-hold` only once every spent key is established.
+1. Restore the database together with every state key version, the admission key, the audit key
+   and stream, and the exact packages.
+2. Start a maintenance instance with `coordinator --runtime-config <file> --recovery-only`. It
+   serves authenticated recovery operations, admits no runs, takes no events, and never dispatches.
+3. Place the hold with `coordinatorctl restore-hold`. It holds execution and, separately,
+   admissions.
+4. Inspect each held run and `reconcile` every command that may have been sent after the backup. A
+   missing receipt does not prove the command was never received.
+5. When retained evidence establishes the history, attest it with `complete-execution-recovery`.
+6. Record the fencing and reconciliation evidence, then `release-restore-hold`. It is refused with
+   `restore.unresolved` while held work is unresolved.
+7. Stop the recovery-only instance, start the ordinary `coordinator`, and `retry-same` or `cancel`
+   what remains.
+8. Reopen admissions with `release-admission-hold` only once every spent key is established.
 
 Each `--reason` and `--recovery-reference` is the investigation reference, holding no personal
 data:
@@ -288,7 +370,11 @@ disposable databases.
 
 {/* Evidence: products/coordinator/DEPLOYMENT.md, Backup and restore;
     crates/registry-coordinator/src/cli.rs, RestoreHold, CompleteExecutionRecovery,
-    ReleaseRestoreHold, ReleaseAdmissionHold. */}
+    ReleaseRestoreHold, ReleaseAdmissionHold;
+    crates/registry-coordinator/src/service.rs, recovery_only (worker poll skipped,
+    check_event_ingress_keys); crates/registry-coordinator/src/http.rs, recovery_only
+    (admissions refused); crates/registry-coordinator/src/store/recovery.rs, restore_hold and
+    admissions_hold. */}
 
 ## Next
 
