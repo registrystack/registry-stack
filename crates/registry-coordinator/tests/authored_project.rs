@@ -201,6 +201,33 @@ fn project_check_keeps_a_positioned_duplicate_function_title_warning() {
 }
 
 #[test]
+fn project_check_keeps_duplicate_title_warnings_beside_compile_errors() {
+    let root = tempfile::tempdir().unwrap();
+    let mut authored = declare_test_functions(&project());
+    authored["functions"]["identity"]["title"] = json!("Identity function");
+    let mut copy = authored["functions"]["identity"].clone();
+    copy["title"] = json!("identity function");
+    authored["functions"]["identity-copy"] = copy;
+    let path = root.path().join("workflow.json");
+    fs::write(&path, serde_json::to_vec(&authored).unwrap()).unwrap();
+
+    let error = authoring::parse_project(&path, fs::read(&path).unwrap())
+        .expect_err("the missing function source refuses compilation");
+    for code in [
+        "coordinator.project.duplicate-function-title",
+        "coordinator.definition.read",
+    ] {
+        assert!(
+            error
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == code),
+            "missing {code}: {error:#?}"
+        );
+    }
+}
+
+#[test]
 fn project_check_refuses_separator_lookalikes_in_the_function_namespace() {
     let root = tempfile::tempdir().unwrap();
     let mut authored = project();

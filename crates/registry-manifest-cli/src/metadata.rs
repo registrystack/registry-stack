@@ -10,9 +10,10 @@ use registry_manifest_core::{
     LocalizedText, MetadataError, MetadataManifest, MetadataManifestFields, ValidationCondition,
 };
 use registry_platform_yaml::{
-    duplicate_display_text_diagnostics, escape_pointer_segment, local_id_collision_diagnostics,
-    AuthoredDisplayText, AuthoredId, Diagnostic, Document, Expect, Node, NodeValue, Reader, Report,
-    Severity,
+    duplicate_display_text_diagnostics, duplicate_display_text_location_diagnostics,
+    escape_pointer_segment, local_id_collision_diagnostics, AuthoredDisplayText,
+    AuthoredDisplayTextLocation, AuthoredId, Diagnostic, Document, Expect, LocalId, Node,
+    NodeValue, Reader, Report, Severity,
 };
 
 use crate::{contents, Contents, Findings, METADATA_FORMAT, METADATA_SCHEMA_VERSION};
@@ -70,14 +71,13 @@ pub fn read_metadata(file: &str, bytes: &[u8]) -> Result<ReadManifest, Vec<Diagn
         .decode::<MetadataManifestFields>()
         .map_err(Report::into_diagnostics)?;
     let manifest = MetadataManifest::from(fields);
-    if let Err(error) = validate_manifest(&manifest) {
-        let mut diagnostics = document.warnings().into_diagnostics();
-        diagnostics.extend(metadata_error_diagnostics(&document, error));
-        return Err(diagnostics);
-    }
+    let validation = validate_manifest(&manifest);
     let integrity_errors = manifest_integrity_diagnostics(&manifest, &mut document);
-    if !integrity_errors.is_empty() {
+    if validation.is_err() || !integrity_errors.is_empty() {
         let mut diagnostics = document.warnings().into_diagnostics();
+        if let Err(error) = validation {
+            diagnostics.extend(metadata_error_diagnostics(&document, error));
+        }
         diagnostics.extend(integrity_errors);
         return Err(diagnostics);
     }
@@ -114,11 +114,10 @@ fn manifest_integrity_diagnostics(
         let mut by_language = BTreeMap::<String, Vec<(String, String, String)>>::new();
         for (id, text, pointer) in values {
             match text {
-                LocalizedText::Plain(text) => by_language.entry(String::new()).or_default().push((
-                    id.to_owned(),
-                    text.clone(),
-                    pointer,
-                )),
+                LocalizedText::Plain(text) => by_language
+                    .entry("en".to_owned())
+                    .or_default()
+                    .push((id.to_owned(), text.clone(), pointer)),
                 LocalizedText::Localized(texts) => {
                     for (language, text) in texts {
                         by_language.entry(language.clone()).or_default().push((
@@ -157,6 +156,41 @@ fn manifest_integrity_diagnostics(
             .map(|(id, text, pointer)| AuthoredDisplayText { id, text, pointer })
             .collect::<Vec<_>>();
         duplicate_display_text_diagnostics(document, code, kind, &entries)
+    }
+    fn localized_location_warnings<'a>(
+        document: &Document,
+        code: &str,
+        kind: &str,
+        values: impl IntoIterator<Item = (&'a LocalizedText, String)>,
+    ) -> Vec<Diagnostic> {
+        let mut by_language = BTreeMap::<String, Vec<(String, String)>>::new();
+        for (text, pointer) in values {
+            match text {
+                LocalizedText::Plain(text) => by_language
+                    .entry("en".to_owned())
+                    .or_default()
+                    .push((text.clone(), pointer)),
+                LocalizedText::Localized(texts) => {
+                    for (language, text) in texts {
+                        by_language.entry(language.clone()).or_default().push((
+                            text.clone(),
+                            format!("{pointer}/{}", escape_pointer_segment(language)),
+                        ));
+                    }
+                }
+            }
+        }
+        let mut warnings = Vec::new();
+        for entries in by_language.values() {
+            let borrowed = entries
+                .iter()
+                .map(|(text, pointer)| AuthoredDisplayTextLocation { text, pointer })
+                .collect::<Vec<_>>();
+            warnings.extend(duplicate_display_text_location_diagnostics(
+                document, code, kind, &borrowed,
+            ));
+        }
+        warnings
     }
 
     let mut errors = Vec::new();
@@ -270,24 +304,21 @@ fn manifest_integrity_diagnostics(
                 form.sections.iter().map(|item| item.id.as_str()),
             ),
         ));
+        let mut fields = list_ids(
+            &format!("/forms/{index}/fields"),
+            form.fields.iter().map(|item| item.id.as_str()),
+        );
+        for (section_index, section) in form.sections.iter().enumerate() {
+            fields.extend(list_ids(
+                &format!("/forms/{index}/sections/{section_index}/fields"),
+                section.fields.iter().map(|item| item.id.as_str()),
+            ));
+        }
         errors.extend(collisions(
             document,
             "manifest.metadata.form-field-id-collision",
-            &list_ids(
-                &format!("/forms/{index}/fields"),
-                form.fields.iter().map(|item| item.id.as_str()),
-            ),
+            &fields,
         ));
-        for (section_index, section) in form.sections.iter().enumerate() {
-            errors.extend(collisions(
-                document,
-                "manifest.metadata.form-section-field-id-collision",
-                &list_ids(
-                    &format!("/forms/{index}/sections/{section_index}/fields"),
-                    section.fields.iter().map(|item| item.id.as_str()),
-                ),
-            ));
-        }
     }
     for (index, dataset) in manifest.datasets.iter().enumerate() {
         errors.extend(collisions(
@@ -298,12 +329,16 @@ fn manifest_integrity_diagnostics(
                 .iter()
                 .enumerate()
                 .filter_map(|(service_index, service)| {
-                    service.id.as_ref().map(|id| {
-                        (
-                            id.clone(),
-                            format!("/datasets/{index}/public_services/{service_index}/id"),
-                        )
-                    })
+                    service
+                        .id
+                        .as_ref()
+                        .filter(|id| LocalId::new(id.as_str()).is_ok())
+                        .map(|id| {
+                            (
+                                id.clone(),
+                                format!("/datasets/{index}/public_services/{service_index}/id"),
+                            )
+                        })
                 })
                 .collect::<Vec<_>>(),
         ));
@@ -345,15 +380,6 @@ fn manifest_integrity_diagnostics(
                         .collect::<Vec<_>>(),
                 ),
                 (
-                    "manifest.metadata.entity-identifier-id-collision",
-                    "identifiers",
-                    entity
-                        .identifiers
-                        .iter()
-                        .map(|item| item.name.as_str())
-                        .collect(),
-                ),
-                (
                     "manifest.metadata.entity-relationship-id-collision",
                     "relationships",
                     entity
@@ -383,6 +409,7 @@ fn manifest_integrity_diagnostics(
         }
     }
     for (requirement_index, requirement) in manifest.requirements.iter().enumerate() {
+        let total = requirement.evidence_type_lists.len();
         errors.extend(collisions(
             document,
             "manifest.metadata.evidence-type-list-id-collision",
@@ -390,15 +417,20 @@ fn manifest_integrity_diagnostics(
                 .evidence_type_lists
                 .iter()
                 .enumerate()
-                .filter_map(|(list_index, list)| {
-                    list.id.as_ref().map(|id| {
-                        (
-                            id.clone(),
-                            format!(
-                                "/requirements/{requirement_index}/evidence_type_lists/{list_index}/id"
-                            ),
-                        )
-                    })
+                .map(|(list_index, list)| {
+                    let id = list.id.clone().unwrap_or_else(|| {
+                        if total == 1 {
+                            "evidence-type-list".to_owned()
+                        } else {
+                            format!("evidence-type-list-{}", list_index + 1)
+                        }
+                    });
+                    (
+                        id,
+                        format!(
+                            "/requirements/{requirement_index}/evidence_type_lists/{list_index}/id"
+                        ),
+                    )
                 })
                 .collect::<Vec<_>>(),
         ));
@@ -579,6 +611,21 @@ fn manifest_integrity_diagnostics(
         ));
     }
     for (requirement_index, requirement) in manifest.requirements.iter().enumerate() {
+        let total = requirement.evidence_type_lists.len();
+        let ids = requirement
+            .evidence_type_lists
+            .iter()
+            .enumerate()
+            .map(|(index, list)| {
+                list.id.clone().unwrap_or_else(|| {
+                    if total == 1 {
+                        "evidence-type-list".to_owned()
+                    } else {
+                        format!("evidence-type-list-{}", index + 1)
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
         warnings.extend(localized_warnings(
             document,
             "manifest.metadata.duplicate-evidence-type-list-title",
@@ -586,10 +633,11 @@ fn manifest_integrity_diagnostics(
             requirement
                 .evidence_type_lists
                 .iter()
+                .zip(&ids)
                 .enumerate()
-                .filter_map(|(index, item)| {
+                .filter_map(|(index, (item, id))| {
                     Some((
-                        item.id.as_deref()?,
+                        id.as_str(),
                         item.title.as_ref()?,
                         format!(
                             "/requirements/{requirement_index}/evidence_type_lists/{index}/title"
@@ -633,7 +681,7 @@ fn manifest_integrity_diagnostics(
                     )
                 }),
         ));
-        warnings.extend(localized_warnings(
+        warnings.extend(localized_location_warnings(
             document,
             "manifest.metadata.duplicate-dataset-public-service-title",
             "dataset public services",
@@ -641,12 +689,30 @@ fn manifest_integrity_diagnostics(
                 .public_services
                 .iter()
                 .enumerate()
-                .filter_map(|(index, item)| {
-                    Some((
-                        item.id.as_deref()?,
+                .map(|(index, item)| {
+                    (
                         &item.title,
                         format!("/datasets/{dataset_index}/public_services/{index}/title"),
-                    ))
+                    )
+                }),
+        ));
+    }
+    for (codelist_index, codelist) in manifest.codelists.iter().enumerate() {
+        warnings.extend(localized_location_warnings(
+            document,
+            "manifest.metadata.duplicate-codelist-concept-label",
+            "codelist concepts",
+            codelist
+                .concepts
+                .iter()
+                .enumerate()
+                .filter_map(|(index, concept)| {
+                    concept.label.as_ref().map(|label| {
+                        (
+                            label,
+                            format!("/codelists/{codelist_index}/concepts/{index}/label"),
+                        )
+                    })
                 }),
         ));
     }
@@ -668,34 +734,33 @@ fn manifest_integrity_diagnostics(
                     })
                 }),
         ));
-        warnings.extend(localized_warnings(
-            document,
-            "manifest.metadata.duplicate-form-field-label",
-            "form fields",
-            form.fields.iter().enumerate().map(|(index, item)| {
+        let mut fields = form
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
                 (
                     item.id.as_str(),
                     &item.label,
                     format!("/forms/{form_index}/fields/{index}/label"),
                 )
-            }),
-        ));
+            })
+            .collect::<Vec<_>>();
         for (section_index, section) in form.sections.iter().enumerate() {
-            warnings.extend(localized_warnings(
-                document,
-                "manifest.metadata.duplicate-form-section-field-label",
-                "form section fields",
-                section.fields.iter().enumerate().map(|(index, item)| {
-                    (
-                        item.id.as_str(),
-                        &item.label,
-                        format!(
-                            "/forms/{form_index}/sections/{section_index}/fields/{index}/label"
-                        ),
-                    )
-                }),
-            ));
+            fields.extend(section.fields.iter().enumerate().map(|(index, item)| {
+                (
+                    item.id.as_str(),
+                    &item.label,
+                    format!("/forms/{form_index}/sections/{section_index}/fields/{index}/label"),
+                )
+            }));
         }
+        warnings.extend(localized_warnings(
+            document,
+            "manifest.metadata.duplicate-form-field-label",
+            "form fields",
+            fields,
+        ));
     }
     for warning in warnings {
         document.push_warning(warning);
@@ -985,6 +1050,167 @@ mod tests {
         assert_eq!(
             finding.related[0].path,
             "/requirements/0/evidence_type_lists/0/id"
+        );
+    }
+
+    #[test]
+    fn evidence_type_lists_use_their_effective_ids_for_integrity_checks() {
+        let text = format!(
+            "{MINIMAL}requirements:\n  - id: identity\n    title: Identity\n    evidence_type_lists:\n      - evidence_types: [passport]\n      - id: evidence_type_list_1\n        evidence_types: [passport]\nevidence_types:\n  - id: passport\n    title: Passport\n    proves: [identity]\n"
+        );
+        let diagnostics = refused(&text);
+        let collision = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == "manifest.metadata.evidence-type-list-id-collision"
+            })
+            .expect("an implicit list ID shares the authored list namespace");
+        assert_eq!(collision.path, "/requirements/0/evidence_type_lists/1/id");
+        assert_eq!(
+            collision.related[0].path,
+            "/requirements/0/evidence_type_lists/0/id"
+        );
+
+        let text = format!(
+            "{MINIMAL}requirements:\n  - id: identity\n    title: Identity\n    evidence_type_lists:\n      - title: Review\n        evidence_types: [passport]\n      - title: \"R\\u200Beview\"\n        evidence_types: [passport]\nevidence_types:\n  - id: passport\n    title: Passport\n    proves: [identity]\n"
+        );
+        let read = read_metadata("metadata.yaml", text.as_bytes())
+            .unwrap_or_else(|diagnostics| panic!("refused: {diagnostics:#?}"));
+        let warning = read
+            .document
+            .warnings()
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == "manifest.metadata.duplicate-evidence-type-list-title"
+            })
+            .cloned()
+            .expect("implicit list IDs still participate in title checks");
+        assert_eq!(warning.path, "/requirements/0/evidence_type_lists/1/title");
+        assert_eq!(
+            warning.related[0].path,
+            "/requirements/0/evidence_type_lists/0/title"
+        );
+    }
+
+    #[test]
+    fn global_dataset_service_iris_are_not_local_id_separator_collisions() {
+        let text = format!(
+            "{MINIMAL}datasets:\n  - id: people\n    title: People\n    public_services:\n      - id: https://example.test/service-a\n        title: First\n      - id: https://example.test/service_a\n        title: Second\n"
+        );
+        read_metadata("metadata.yaml", text.as_bytes())
+            .unwrap_or_else(|diagnostics| panic!("refused: {diagnostics:#?}"));
+    }
+
+    #[test]
+    fn form_fields_share_one_id_and_label_namespace_across_sections() {
+        let form = "public_services:\n  - id: registry-service\n    title: Registry service\n    description: Registry service description\nforms:\n  - id: intake\n    title: Intake\n    service: registry-service\n    fields:\n      - id: case-number\n        label: Case number\n    sections:\n      - id: details\n        fields:\n          - id: case_number\n            label: Other value\n";
+        let diagnostics = refused(&format!("{MINIMAL}{form}"));
+        let collision = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "manifest.metadata.form-field-id-collision")
+            .expect("top-level and section fields share the form field namespace");
+        assert_eq!(collision.path, "/forms/0/sections/0/fields/0/id");
+        assert_eq!(collision.related[0].path, "/forms/0/fields/0/id");
+
+        let form = form
+            .replace("case_number", "alternate-number")
+            .replace("label: Other value", "label: \"case\\u200f number\"");
+        let read = read_metadata("metadata.yaml", format!("{MINIMAL}{form}").as_bytes())
+            .unwrap_or_else(|diagnostics| panic!("refused: {diagnostics:#?}"));
+        let warning = read
+            .document
+            .warnings()
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "manifest.metadata.duplicate-form-field-label")
+            .cloned()
+            .expect("top-level and section fields share the form label namespace");
+        assert_eq!(warning.path, "/forms/0/sections/0/fields/0/label");
+        assert_eq!(warning.related[0].path, "/forms/0/fields/0/label");
+    }
+
+    #[test]
+    fn codelist_concept_labels_warn_without_echoing_arbitrary_codes() {
+        let text = format!(
+            "{MINIMAL}codelists:\n  - id: status\n    scheme_iri: https://example.test/status\n    concepts:\n      - code: \"first <code>\"\n        label: Active\n      - code: \"second <code>\"\n        label:\n          en: \"A\\u200Bctive\"\n"
+        );
+        let read = read_metadata("metadata.yaml", text.as_bytes())
+            .unwrap_or_else(|diagnostics| panic!("refused: {diagnostics:#?}"));
+        let warning = read
+            .document
+            .warnings()
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == "manifest.metadata.duplicate-codelist-concept-label"
+            })
+            .cloned()
+            .expect("peer concept labels compare within one codelist and language");
+        assert_eq!(warning.path, "/codelists/0/concepts/1/label/en");
+        assert_eq!(warning.related[0].path, "/codelists/0/concepts/0/label");
+        assert!(!warning.message.contains("first <code>"));
+        assert!(!warning.message.contains("second <code>"));
+        assert!(!warning.related[0].message.contains("first <code>"));
+    }
+
+    #[test]
+    fn plain_and_english_localized_titles_share_one_comparison_scope() {
+        let text = format!(
+            "{MINIMAL}datasets:\n  - id: first\n    title: Review\n  - id: second\n    title:\n      en: \"R\\u200Beview\"\n"
+        );
+        let read = read_metadata("metadata.yaml", text.as_bytes())
+            .unwrap_or_else(|diagnostics| panic!("refused: {diagnostics:#?}"));
+        let warning = read
+            .document
+            .warnings()
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "manifest.metadata.duplicate-dataset-title")
+            .cloned()
+            .expect("plain text is the English shorthand for warning comparison");
+        assert_eq!(warning.path, "/datasets/1/title/en");
+        assert_eq!(warning.related[0].path, "/datasets/0/title");
+    }
+
+    #[test]
+    fn duplicate_title_warnings_survive_unrelated_semantic_errors() {
+        let text = format!(
+            "{MINIMAL}datasets:\n  - id: first\n    title: Review\n  - id: second\n    title: \"R\\u200Beview\"\ndistributions:\n  - id: broken\n    dataset: missing\n    download_url: https://example.test/data.json\n"
+        );
+        let diagnostics = refused(&text);
+        for code in [
+            "manifest.metadata.duplicate-dataset-title",
+            "manifest.metadata.unknown-reference",
+        ] {
+            assert!(
+                diagnostics.iter().any(|diagnostic| diagnostic.code == code),
+                "missing {code}: {diagnostics:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn anonymous_dataset_service_titles_still_share_the_peer_scope() {
+        let text = format!(
+            "{MINIMAL}datasets:\n  - id: people\n    title: People\n    public_services:\n      - title: Review\n      - title:\n          en: \"R\\u200Beview\"\n"
+        );
+        let read = read_metadata("metadata.yaml", text.as_bytes())
+            .unwrap_or_else(|diagnostics| panic!("refused: {diagnostics:#?}"));
+        let warning = read
+            .document
+            .warnings()
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == "manifest.metadata.duplicate-dataset-public-service-title"
+            })
+            .cloned()
+            .expect("anonymous peer titles participate in duplicate checks");
+        assert_eq!(warning.path, "/datasets/0/public_services/1/title/en");
+        assert_eq!(
+            warning.related[0].path,
+            "/datasets/0/public_services/0/title"
         );
     }
 

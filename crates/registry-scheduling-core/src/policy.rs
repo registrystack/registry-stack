@@ -863,9 +863,10 @@ impl SchedulingPolicy {
     /// or every finding of [`SchedulingPolicy::check`], each at its position.
     pub fn read(file: &str, bytes: &[u8]) -> Result<Decoded<Self>, Report> {
         let mut decoded = Self::decode(file, bytes)?;
+        let integrity = policy_integrity_diagnostics(&mut decoded);
         let findings = decoded.value.check();
         let mut report = findings_report(&decoded.document, &findings);
-        report.extend(Report::new(policy_integrity_diagnostics(&mut decoded)));
+        report.extend(Report::new(integrity));
         if report.has_errors() {
             Err(report)
         } else {
@@ -1997,6 +1998,31 @@ holdPolicy:
         assert!(finding.message.contains("`registry-update`"));
         assert!(finding.message.contains("`registry-copy`"));
         assert!(!finding.message.contains("Registry record update"));
+    }
+
+    #[test]
+    fn project_check_keeps_duplicate_label_warnings_beside_semantic_errors() {
+        let authored = MINIMAL_EXACT_TIME_PROJECT
+            .replacen(
+                "  - id: registry-update\n    label: Registry record update\n",
+                "  - id: registry-update\n    label: Registry record update\n  - id: registry-copy\n    label: registry record update\n",
+                1,
+            )
+            .replacen("ttlMinutes: 5", "ttlMinutes: 0", 1);
+        let report = SchedulingPolicy::read(AUTHORED_POLICY_FILE, authored.as_bytes())
+            .expect_err("the invalid bound refuses the project");
+        for code in [
+            "scheduling.project.duplicate-service-label",
+            "scheduling.project.invalid-bound",
+        ] {
+            assert!(
+                report
+                    .diagnostics()
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == code),
+                "missing {code}: {report:#?}"
+            );
+        }
     }
 
     #[test]

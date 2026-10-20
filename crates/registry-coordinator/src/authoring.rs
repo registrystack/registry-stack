@@ -701,7 +701,16 @@ pub fn parse_project(path: &Path, bytes: impl AsRef<[u8]>) -> Result<(Workflow, 
         report.extend(Report::new(errors));
         return Err(CoordinatorError::from_report(report));
     }
-    let mut workflow = compile(project, path).map_err(|error| positioned(&document, error))?;
+    let mut workflow = match compile(project, path) {
+        Ok(workflow) => workflow,
+        Err(error) => {
+            let error = positioned(&document, error);
+            let exit = error.exit_code;
+            let mut report = document.warnings();
+            report.extend(error.report());
+            return Err(CoordinatorError::from_report(report).with_exit(exit));
+        }
+    };
     workflow.references = reference_sites(&document);
     Ok((workflow, document))
 }

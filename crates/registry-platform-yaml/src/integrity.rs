@@ -18,6 +18,14 @@ pub struct AuthoredDisplayText<'a> {
     pub pointer: &'a str,
 }
 
+/// Display text whose peer definition has no validated local identifier that
+/// is safe to repeat in a diagnostic.
+#[derive(Clone, Copy, Debug)]
+pub struct AuthoredDisplayTextLocation<'a> {
+    pub text: &'a str,
+    pub pointer: &'a str,
+}
+
 #[must_use]
 pub fn local_id_collision_diagnostics(
     document: &Document,
@@ -75,6 +83,36 @@ pub fn duplicate_display_text_diagnostics(
                 &mut diagnostic,
                 first.pointer,
                 format!("the other {kind} is `{}`", first.id),
+            );
+            diagnostic
+        })
+        .collect()
+}
+
+/// Warn about equal display text without repeating an arbitrary authored key.
+#[must_use]
+pub fn duplicate_display_text_location_diagnostics(
+    document: &Document,
+    code: &str,
+    kind: &str,
+    entries: &[AuthoredDisplayTextLocation<'_>],
+) -> Vec<Diagnostic> {
+    duplicate_display_text_pairs(entries.iter().map(|entry| entry.text))
+        .into_iter()
+        .map(|(first, second)| {
+            let first = entries[first];
+            let second = entries[second];
+            let mut diagnostic = document.diagnostic_at_value(
+                Severity::Warning,
+                code,
+                second.pointer,
+                &format!("two {kind} have display text that compares the same"),
+                "Use display text that lets reviewers distinguish the two definitions.",
+            );
+            document.add_related_value(
+                &mut diagnostic,
+                first.pointer,
+                format!("the other {kind} is here"),
             );
             diagnostic
         })

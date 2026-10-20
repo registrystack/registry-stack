@@ -978,6 +978,29 @@ fn project_check_keeps_a_positioned_duplicate_source_label_warning() {
 }
 
 #[test]
+fn project_check_keeps_duplicate_label_warnings_beside_semantic_errors() {
+    let missing = NORMALIZED_PROJECT.replacen("source: person-record", "source: missing-source", 1);
+    let mut document = yaml_as_json(&missing);
+    document["sources"]["person-record"]["label"] = serde_json::json!("Registry source");
+    document["sources"]["licence-record"]["label"] = serde_json::json!("registry source");
+    let bytes = serde_json::to_vec(&document).expect("the project renders");
+    let report = project::read_project("evidence.json", &bytes)
+        .expect_err("the missing source refuses the project");
+    for code in [
+        "evidence.project.duplicate-source-label",
+        "evidence.project.acquisition-source",
+    ] {
+        assert!(
+            report
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == code),
+            "missing {code}: {report:#?}"
+        );
+    }
+}
+
+#[test]
 fn project_check_refuses_separator_lookalikes_in_the_selector_profile_namespace() {
     let mut document = yaml_as_json(NORMALIZED_PROJECT);
     document["selectorProfiles"]["record_by_id"] =

@@ -5,8 +5,8 @@
 #![cfg(feature = "schema")]
 
 use registry_platform_yaml::{
-    shape_union, tagged_union, BoundedU32, BoundedU64, DataLiteral, Digest, ExternalId, LocalId,
-    ProjectIdentity, UniqueIdList, UniqueList, Url,
+    shape_union, tagged_union, BoundedU32, BoundedU64, DataLiteral, Digest, DisplayText,
+    ExternalId, LocalId, ProjectIdentity, UniqueIdList, UniqueList, Url,
 };
 use schemars::{schema_for, JsonSchema};
 use serde::Deserialize;
@@ -103,6 +103,66 @@ fn cfg_id_1_identifier_and_value_types_state_their_grammar() {
         property(&schema, "value")["type"],
         json!(["null", "boolean", "number", "string"])
     );
+}
+
+#[test]
+fn cfg_val_11_display_text_schema_and_reader_refuse_the_same_characters() {
+    let schema = schema::<DisplayText>();
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .expect("the display text schema compiles");
+    let fixed = [
+        0x2028..=0x2029,
+        0x202a..=0x202e,
+        0x2066..=0x2069,
+        0xfeff..=0xfeff,
+        0xfdd0..=0xfdef,
+        0xfffe..=0xffff,
+    ]
+    .into_iter()
+    .flatten();
+    let supplementary = (1..=16).flat_map(|plane| {
+        [
+            char::from_u32((plane << 16) | 0xfffe).unwrap(),
+            char::from_u32((plane << 16) | 0xffff).unwrap(),
+        ]
+    });
+    for character in fixed
+        .map(|code| char::from_u32(code).unwrap())
+        .chain(supplementary)
+    {
+        let text = format!("before{character}after");
+        assert!(
+            !validator.is_valid(&json!(text)),
+            "schema accepted U+{:04X}",
+            character as u32
+        );
+        assert!(
+            DisplayText::new(text).is_err(),
+            "reader accepted U+{:04X}",
+            character as u32
+        );
+    }
+
+    for text in [
+        "English",
+        "ภาษาไทย",
+        "soft hyphen \u{00ad}text",
+        "zero width space \u{200b}text",
+        "می\u{200c}خواهم",
+        "joiner \u{200d}text",
+        "left-to-right mark \u{200e}text",
+        "العربية \u{200f}Latin",
+        "Mandaic \u{061c}text",
+        "word joiner \u{2060}text",
+        "emoji 😀",
+        "last scalar before a plane noncharacter \u{1fffd}",
+        "last scalar before the final noncharacter \u{10fffd}",
+    ] {
+        assert!(validator.is_valid(&json!(text)), "schema refused {text:?}");
+        assert!(DisplayText::new(text).is_ok(), "reader refused {text:?}");
+    }
 }
 
 #[test]

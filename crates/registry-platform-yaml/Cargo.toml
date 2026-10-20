@@ -18,14 +18,15 @@ name = "reader_schema"
 required-features = ["schema"]
 
 [dependencies]
+icu_casemap.workspace = true
+icu_normalizer.workspace = true
 saphyr-parser.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
-unicode-casefold.workspace = true
-unicode-normalization.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
 regex.workspace = true
 schemars.workspace = true

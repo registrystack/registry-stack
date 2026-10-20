@@ -91,6 +91,31 @@ fn project_check_keeps_a_positioned_duplicate_label_warning() {
 }
 
 #[test]
+fn project_check_keeps_duplicate_label_warnings_beside_semantic_errors() {
+    let changed = STANDALONE
+        .replacen(
+            "  decisions:\n    label: Decisions awaiting review\n",
+            "  decisions:\n    label: Decisions awaiting review\n  decisions-copy:\n    label: decisions awaiting review\n",
+            1,
+        )
+        .replacen("reviewPolicies: [decision]", "reviewPolicies: [missing]", 1);
+    let report = CaseworkProject::read("casework.yaml", changed.as_bytes())
+        .expect_err("the unknown review policy refuses the project");
+    for code in [
+        "casework.project.duplicate-queue-label",
+        "casework.review-producer.unknown-review-policy",
+    ] {
+        assert!(
+            report
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == code),
+            "missing {code}: {report:#?}"
+        );
+    }
+}
+
+#[test]
 fn project_check_refuses_separator_lookalikes_in_the_queue_namespace() {
     let changed = STANDALONE.replacen(
         "  decisions:\n    label: Decisions awaiting review\n",

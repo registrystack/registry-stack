@@ -713,13 +713,20 @@ pub const SCHEDULING_RECORDS_FORMAT: FormatSpec<'static> = FormatSpec {
 pub const SCHEDULING_RECORDS_FILE: &str = "records.yaml";
 
 impl SchedulingRecords {
-    /// Read one records document, refusing what its shape does not carry
-    /// with every position.
+    /// Decode one records document through the shared reader. Product
+    /// adapters call [`Self::integrity_diagnostics`] beside their semantic
+    /// checks so independently computable findings are reported together.
     pub fn decode(file: &str, bytes: &[u8]) -> Result<Decoded<Self>, Report> {
         let mut hook = registry_platform_config::AuthoredExpressions;
         Reader::new(file)
             .with_hook(&mut hook)
             .decode::<Self>(bytes, &Expect::one(&SCHEDULING_RECORDS_FORMAT))
+    }
+
+    /// Source-positioned integrity findings for the record ID namespaces.
+    #[must_use]
+    pub fn integrity_diagnostics(decoded: &Decoded<Self>) -> Vec<Diagnostic> {
+        records_integrity_diagnostics(decoded)
     }
 
     /// Read one records document and check it against `policy`: every
@@ -731,6 +738,7 @@ impl SchedulingRecords {
         policy: &SchedulingPolicy,
     ) -> Result<Decoded<Self>, Report> {
         let decoded = Self::decode(file, bytes)?;
+        let integrity = Self::integrity_diagnostics(&decoded);
         let findings = decoded.value.facts().check(policy);
         let project_findings: Vec<_> = findings
             .iter()
@@ -749,7 +757,7 @@ impl SchedulingRecords {
         for finding in project_findings {
             report.push(finding.to_unplaced_diagnostic());
         }
-        report.extend(Report::new(records_integrity_diagnostics(&decoded)));
+        report.extend(Report::new(integrity));
         if report.has_errors() {
             Err(report)
         } else {

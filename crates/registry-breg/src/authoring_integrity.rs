@@ -4,17 +4,19 @@
 use std::collections::BTreeMap;
 
 use registry_platform_yaml::{
-    duplicate_display_text_diagnostics, local_id_collision_diagnostics, lookalike_local_id_pairs,
-    AuthoredDisplayText, AuthoredId, Decoded,
+    duplicate_display_text_diagnostics, duplicate_display_text_location_diagnostics,
+    local_id_collision_diagnostics, lookalike_local_id_pairs, AuthoredDisplayText,
+    AuthoredDisplayTextLocation, AuthoredId, Decoded,
 };
 
 use crate::contract::{
-    ActionExecutionSource, ActionPlanSource, ActionSource, ConstraintSource, DisplaySource,
-    EntityExtensionSource, EntitySource, FieldTypeSource, RegistryModule, RegistryProject,
+    ActionExecutionSource, ActionPlanSource, ActionSource, ConstraintSource, EntityExtensionSource,
+    EntitySource, FieldTypeSource, ManifestProjectionTextSource, RegistryModule, RegistryProject,
 };
 
 type LocatedId = (String, String);
 type LocatedDisplayText = (String, String, String);
+type LocatedDisplayTextLocation = (String, String);
 
 fn id_entries(values: &[LocatedId]) -> Vec<AuthoredId<'_>> {
     values
@@ -30,6 +32,15 @@ fn display_entries(values: &[LocatedDisplayText]) -> Vec<AuthoredDisplayText<'_>
         .collect()
 }
 
+fn display_location_entries(
+    values: &[LocatedDisplayTextLocation],
+) -> Vec<AuthoredDisplayTextLocation<'_>> {
+    values
+        .iter()
+        .map(|(text, pointer)| AuthoredDisplayTextLocation { text, pointer })
+        .collect()
+}
+
 fn indexed_ids<T>(base: &str, values: &[T], id: impl Fn(&T) -> &str) -> Vec<LocatedId> {
     values
         .iter()
@@ -42,16 +53,16 @@ fn display_labels<T>(
     base: &str,
     values: &[T],
     id: impl Fn(&T) -> &str,
-    display: impl Fn(&T) -> &DisplaySource,
+    label: impl Fn(&T) -> Option<&str>,
 ) -> Vec<LocatedDisplayText> {
     values
         .iter()
         .enumerate()
         .filter_map(|(index, value)| {
-            display(value).label.as_ref().map(|label| {
+            label(value).map(|label| {
                 (
                     id(value).to_owned(),
-                    label.clone(),
+                    label.to_owned(),
                     format!("{base}/{index}/display/label"),
                 )
             })
@@ -59,19 +70,60 @@ fn display_labels<T>(
         .collect()
 }
 
+fn localized_display_texts(
+    default_language: &str,
+    id: Option<&str>,
+    pointer: &str,
+    text: &ManifestProjectionTextSource,
+    identified: &mut BTreeMap<String, Vec<LocatedDisplayText>>,
+    anonymous: &mut BTreeMap<String, Vec<LocatedDisplayTextLocation>>,
+) {
+    let mut add = |language: &str, text: &str, pointer: String| {
+        if let Some(id) = id {
+            identified.entry(language.to_owned()).or_default().push((
+                id.to_owned(),
+                text.to_owned(),
+                pointer,
+            ));
+        } else {
+            anonymous
+                .entry(language.to_owned())
+                .or_default()
+                .push((text.to_owned(), pointer));
+        }
+    };
+    match text {
+        ManifestProjectionTextSource::Plain(text) => {
+            add(default_language, text.as_str(), pointer.to_owned());
+        }
+        ManifestProjectionTextSource::Localized(values) => {
+            for (language, text) in values {
+                add(
+                    language.as_str(),
+                    text.as_str(),
+                    format!(
+                        "{pointer}/{}",
+                        registry_platform_yaml::escape_pointer_segment(language.as_str())
+                    ),
+                );
+            }
+        }
+    }
+}
+
 fn entity_field_display_labels(base: &str, entity: &EntitySource) -> Vec<LocatedDisplayText> {
     let mut values = display_labels(
         &format!("{base}/fields"),
         &entity.fields,
         |field| &field.id,
-        |field| &field.display,
+        |field| field.display.label.as_deref(),
     );
     for (derived_index, derived) in entity.derived.iter().enumerate() {
         values.extend(display_labels(
             &format!("{base}/derived/{derived_index}/fields"),
             &derived.fields,
             |field| &field.id,
-            |field| &field.display,
+            |field| field.display.label.as_deref(),
         ));
     }
     values
@@ -85,14 +137,14 @@ fn extension_field_display_labels(
         &format!("{base}/fields"),
         &extension.fields,
         |field| &field.id,
-        |field| &field.display,
+        |field| field.display.label.as_deref(),
     );
     for (derived_index, derived) in extension.derived.iter().enumerate() {
         values.extend(display_labels(
             &format!("{base}/derived/{derived_index}/fields"),
             &derived.fields,
             |field| &field.id,
-            |field| &field.display,
+            |field| field.display.label.as_deref(),
         ));
     }
     values
@@ -151,6 +203,21 @@ fn add_duplicate_labels(
         code,
         kind,
         &display_entries(values),
+    ));
+}
+
+fn add_duplicate_locations(
+    document: &registry_platform_yaml::Document,
+    warnings: &mut Vec<registry_platform_yaml::Diagnostic>,
+    code: &str,
+    kind: &str,
+    values: &[LocatedDisplayTextLocation],
+) {
+    warnings.extend(duplicate_display_text_location_diagnostics(
+        document,
+        code,
+        kind,
+        &display_location_entries(values),
     ));
 }
 
@@ -644,7 +711,7 @@ pub(crate) fn project_diagnostics(
                 "/datasets",
                 &project.datasets,
                 |item| &item.id,
-                |item| &item.display,
+                |item| item.display.label.as_deref(),
             ),
         ),
         (
@@ -654,7 +721,7 @@ pub(crate) fn project_diagnostics(
                 "/reviewAuthorities",
                 &project.review_authorities,
                 |item| &item.id,
-                |item| &item.display,
+                |item| item.display.label.as_deref(),
             ),
         ),
         (
@@ -664,7 +731,7 @@ pub(crate) fn project_diagnostics(
                 "/recordTypes",
                 &project.entities,
                 |item| &item.id,
-                |item| &item.display,
+                |item| item.display.label.as_deref(),
             ),
         ),
         (
@@ -674,13 +741,14 @@ pub(crate) fn project_diagnostics(
                 "/actions",
                 &project.actions,
                 |item| &item.id,
-                |item| &item.display,
+                |item| item.display.label.as_deref(),
             ),
         ),
     ];
     for (code, kind, values) in &warning_groups {
         add_duplicate_labels(document, &mut warnings, code, kind, values);
     }
+    add_project_display_warnings(document, &mut warnings, project);
     add_nested_display_warnings(
         document,
         &mut warnings,
@@ -693,6 +761,169 @@ pub(crate) fn project_diagnostics(
         decoded.document.push_warning(warning);
     }
     errors
+}
+
+#[allow(clippy::too_many_lines)]
+fn add_project_display_warnings(
+    document: &registry_platform_yaml::Document,
+    warnings: &mut Vec<registry_platform_yaml::Diagnostic>,
+    project: &RegistryProject,
+) {
+    if let Some(recipients) = &project.recipients {
+        for (code, kind, values) in [
+            (
+                "breg.recipient-organization.duplicate-name",
+                "recipient organizations",
+                recipients
+                    .organizations
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        (
+                            item.id.clone(),
+                            item.name.clone(),
+                            format!("/recipients/organizations/{index}/name"),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "breg.recipient-group.duplicate-name",
+                "recipient groups",
+                recipients
+                    .groups
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        (
+                            item.id.clone(),
+                            item.name.clone(),
+                            format!("/recipients/groups/{index}/name"),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+        ] {
+            add_duplicate_labels(document, warnings, code, kind, &values);
+        }
+    }
+
+    let Some(projection) = &project.manifest_projection else {
+        return;
+    };
+    let default_language = &project.project.default_language;
+    for (code, kind, values) in [
+        (
+            "breg.manifest-dataset.duplicate-title",
+            "manifest datasets",
+            projection
+                .datasets
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    (
+                        item.id.as_str(),
+                        format!("/manifestProjection/datasets/{index}/title"),
+                        Some(&item.title),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "breg.manifest-data-service.duplicate-title",
+            "manifest data services",
+            projection
+                .data_services
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    (
+                        item.id.as_str(),
+                        format!("/manifestProjection/dataServices/{index}/title"),
+                        Some(&item.title),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "breg.manifest-distribution.duplicate-title",
+            "manifest distributions",
+            projection
+                .distributions
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    (
+                        item.id.as_str(),
+                        format!("/manifestProjection/distributions/{index}/title"),
+                        item.title.as_ref(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "breg.manifest-entity.duplicate-title",
+            "manifest entities",
+            projection
+                .entities
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    (
+                        item.id.as_str(),
+                        format!("/manifestProjection/entities/{index}/title"),
+                        item.title.as_ref(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ),
+    ] {
+        let mut identified = BTreeMap::new();
+        let mut anonymous = BTreeMap::new();
+        for (id, pointer, text) in values {
+            if let Some(text) = text {
+                localized_display_texts(
+                    default_language,
+                    Some(id),
+                    &pointer,
+                    text,
+                    &mut identified,
+                    &mut anonymous,
+                );
+            }
+        }
+        for values in identified.values() {
+            add_duplicate_labels(document, warnings, code, kind, values);
+        }
+    }
+
+    for (vocabulary_index, vocabulary) in projection.vocabularies.iter().enumerate() {
+        let mut identified = BTreeMap::new();
+        let mut anonymous = BTreeMap::new();
+        for (concept_index, concept) in vocabulary.concepts.iter().enumerate() {
+            if let Some(label) = &concept.label {
+                localized_display_texts(
+                    default_language,
+                    None,
+                    &format!(
+                        "/manifestProjection/vocabularies/{vocabulary_index}/concepts/{concept_index}/label"
+                    ),
+                    label,
+                    &mut identified,
+                    &mut anonymous,
+                );
+            }
+        }
+        for values in anonymous.values() {
+            add_duplicate_locations(
+                document,
+                warnings,
+                "breg.manifest-vocabulary-concept.duplicate-label",
+                "manifest vocabulary concepts",
+                values,
+            );
+        }
+    }
 }
 
 fn add_nested_display_warnings(
@@ -718,7 +949,7 @@ fn add_nested_display_warnings(
             &format!("{action_base}/{action_index}/inputs"),
             &action.inputs,
             |input| &input.id,
-            |input| &input.display,
+            |input| input.display.label.as_deref(),
         );
         add_duplicate_labels(
             document,
@@ -728,6 +959,30 @@ fn add_nested_display_warnings(
             &values,
         );
     }
+    let refusals = actions
+        .iter()
+        .enumerate()
+        .flat_map(|(action_index, action)| match &action.plan {
+            ActionPlanSource::Function { refusals, .. } => refusals
+                .iter()
+                .enumerate()
+                .map(|(refusal_index, refusal)| {
+                    (
+                        refusal.label.clone(),
+                        format!("{action_base}/{action_index}/plan/refusals/{refusal_index}/label"),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            ActionPlanSource::Fixed { .. } => Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    add_duplicate_locations(
+        document,
+        warnings,
+        "breg.action-refusal.duplicate-label",
+        "action refusals",
+        &refusals,
+    );
 }
 
 #[allow(clippy::too_many_lines)]
@@ -798,7 +1053,7 @@ pub(crate) fn module_diagnostics(
                 "/recordTypes",
                 &module.entities,
                 |item| &item.id,
-                |item| &item.display,
+                |item| item.display.label.as_deref(),
             ),
         ),
         (
@@ -808,7 +1063,7 @@ pub(crate) fn module_diagnostics(
                 "/actions",
                 &module.actions,
                 |item| &item.id,
-                |item| &item.display,
+                |item| item.display.label.as_deref(),
             ),
         ),
     ] {

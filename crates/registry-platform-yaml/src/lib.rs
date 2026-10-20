@@ -129,8 +129,8 @@ pub use envelope::{
     VersionStatus,
 };
 pub use integrity::{
-    duplicate_display_text_diagnostics, local_id_collision_diagnostics, AuthoredDisplayText,
-    AuthoredId,
+    duplicate_display_text_diagnostics, duplicate_display_text_location_diagnostics,
+    local_id_collision_diagnostics, AuthoredDisplayText, AuthoredDisplayTextLocation, AuthoredId,
 };
 pub use messages::{CodeInfo, CODES};
 pub use node::{escape_pointer_segment, Entry, Node, NodeValue, Position, ScalarStyle, Span, Text};

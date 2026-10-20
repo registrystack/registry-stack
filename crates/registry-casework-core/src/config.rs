@@ -546,13 +546,16 @@ impl CaseworkProject {
         resolver: impl Fn(&str) -> Result<Vec<u8>, ()>,
     ) -> Result<Decoded<Self>, Report> {
         let mut decoded = Self::decode(file, bytes)?;
+        let integrity = project_integrity_diagnostics(&mut decoded);
         let schema_findings = decoded.value.resolve_display_schemas(resolver);
         if !schema_findings.is_empty() {
-            return Err(findings_report(&decoded.document, &schema_findings));
+            let mut report = findings_report(&decoded.document, &schema_findings);
+            report.extend(Report::new(integrity));
+            return Err(report);
         }
         let findings = decoded.value.findings();
         let mut report = findings_report(&decoded.document, &findings);
-        report.extend(Report::new(project_integrity_diagnostics(&mut decoded)));
+        report.extend(Report::new(integrity));
         if report.has_errors() {
             Err(report)
         } else {
