@@ -90,8 +90,10 @@ holds secret references, never values.
 Key `authentication.policies` by verified client identity. A policy's `workflows` scopes its run
 actions: `start`, `status`, `inspect`, `retry-same`, `cancel`, and `reconcile`. The
 deployment-wide actions `doctor`, `restore-hold`, `release-restore-hold`, `release-admission-hold`,
-`complete-execution-recovery`, and `retain` need `operator: true`. Keep producers and operators in
-separate policies. A run belongs to its starting token's `iss` and `sub`.
+`complete-execution-recovery`, and `retain` need `operator: true`. They act on every workflow at
+once, so a policy that lists only deployment-wide actions omits `workflows`, and the configuration
+check refuses one that sets it. Keep producers and operators in separate policies. A run belongs
+to its starting token's `iss` and `sub`.
 
 The [configuration reference](../../reference/coordinator-configuration/) lists every key and
 bound, and [Configure the deployment](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md#configure-the-deployment) covers each connection type.
