@@ -753,9 +753,9 @@ for slug in "${MESSAGING_TUTORIALS[@]}"; do
 		unset CARGO_TARGET_DIR
 		cd "$reader_dir"
 		MESSAGING_TUTORIAL_SESSION_LOG="$WORK_ROOT/session-$run_name.log" \
-		MESSAGING_TUTORIAL_SESSION_PID_FILE="$SESSION_PID_FILE" \
-		MESSAGING_TUTORIAL_READY_SECONDS="$READY_SECONDS" \
-		PATH="$SHIM_DIR:$PATH" bash "$run_script"
+			MESSAGING_TUTORIAL_SESSION_PID_FILE="$SESSION_PID_FILE" \
+			MESSAGING_TUTORIAL_READY_SECONDS="$READY_SECONDS" \
+			PATH="$SHIM_DIR:$PATH" bash "$run_script"
 	) 2>&1 | tee "$run_log"; then
 		printf 'tutorial %s failed; the transcript ends just before this line\n' \
 			"$slug" >&2
