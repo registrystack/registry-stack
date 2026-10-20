@@ -6,8 +6,9 @@ use std::fmt;
 use std::path::PathBuf;
 
 use registry_platform_yaml::{
-    ApiVersion, BoundedU32, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Identified,
-    LocalId, Reader, RemovedKey, Report, RetiredApiVersion, Severity, UniqueIdList, UniqueList,
+    local_id_collision_diagnostics, ApiVersion, AuthoredId, BoundedU32, Diagnostic, Document,
+    EnvelopeRule, Expect, FormatSpec, Identified, LocalId, Reader, RemovedKey, Report,
+    RetiredApiVersion, Severity, UniqueIdList, UniqueList,
 };
 use serde::{Deserialize, Serialize};
 
@@ -238,6 +239,27 @@ pub(crate) fn read_manifest(file: &str, bytes: &[u8]) -> Result<ReadManifest, Re
         .decode::<ManifestFile>(bytes, &Expect::one(&MANIFEST_FORMAT))?;
     let document = decoded.document;
     let mut findings = document.warnings();
+    let document_ids = decoded
+        .value
+        .documents
+        .iter()
+        .enumerate()
+        .map(|(index, spec)| {
+            (
+                spec.id.as_str().to_owned(),
+                format!("/documents/{index}/id"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let authored_document_ids = document_ids
+        .iter()
+        .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+        .collect::<Vec<_>>();
+    findings.extend(Report::new(local_id_collision_diagnostics(
+        &document,
+        "render.bundle.document-id-collision",
+        &authored_document_ids,
+    )));
     for (index, spec) in decoded.value.documents.iter().enumerate() {
         if !is_bundle_path(&spec.entry_file, ".typ") {
             findings.push(error_at(
@@ -507,6 +529,27 @@ mod tests {
                 "config.duplicate-id".to_owned(),
                 "/documents/1/id".to_owned()
             )]
+        );
+    }
+
+    #[test]
+    fn cfg_id_8_separator_colliding_document_ids_point_to_both_values() {
+        let text = format!(
+            "{HEAD}bundleVersion: 1\ndocuments:\n  - id: receipt-copy\n    version: 1\n    entryFile: templates/receipt.typ\n  - id: receipt_copy\n    version: 1\n    entryFile: templates/copy.typ\n"
+        );
+        let problem = Manifest::parse(text.as_bytes()).expect_err("refused");
+        let diagnostic = &problem.diagnostics[0];
+        let source = diagnostic.source.as_ref().expect("primary source position");
+        assert_eq!(diagnostic.code, "render.bundle.document-id-collision");
+        assert_eq!(diagnostic.path, "/documents/1/id");
+        assert_eq!(source.file, MANIFEST_FILE);
+        assert_eq!((source.line, source.column), (Some(8), Some(9)));
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(diagnostic.related[0].path, "/documents/0/id");
+        assert_eq!(diagnostic.related[0].file, MANIFEST_FILE);
+        assert_eq!(
+            (diagnostic.related[0].line, diagnostic.related[0].column),
+            (Some(5), Some(9))
         );
     }
 

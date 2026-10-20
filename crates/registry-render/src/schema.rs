@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use registry_platform_yaml::LocalId;
+use registry_platform_yaml::{DisplayText, LocalId};
 use schemars::JsonSchema as _;
 use serde_json::{json, Map, Value};
 
@@ -104,13 +104,17 @@ fn install_bundle_constraints(schema: &mut Value) {
 }
 
 /// State in the schema what `read_labels` enforces beyond the types: the
-/// envelope values, and label keys that are local identifiers. The derived
-/// schema inlines the key pattern; the key type is named instead, so the
-/// table reads as a map keyed by `LocalId` like every other keyed map.
+/// envelope values, label keys that are local identifiers, and safe display
+/// text values. The derived schema inlines the key pattern; the key type is
+/// named instead, so the table reads as a map keyed by `LocalId` like every
+/// other keyed map.
 fn install_labels_constraints(schema: &mut Value) -> Result<(), serde_json::Error> {
     set_const(schema, "apiVersion", LABELS_API_VERSION);
     set_const(schema, "kind", LABELS_KIND);
     let local_id = serde_json::to_value(LocalId::json_schema(
+        &mut schemars::SchemaGenerator::default(),
+    ))?;
+    let display_text = serde_json::to_value(DisplayText::json_schema(
         &mut schemars::SchemaGenerator::default(),
     ))?;
     if let Some(labels) = schema
@@ -122,7 +126,10 @@ fn install_labels_constraints(schema: &mut Value) -> Result<(), serde_json::Erro
             "propertyNames".to_owned(),
             json!({"$ref": "#/$defs/LocalId"}),
         );
-        labels.insert("additionalProperties".to_owned(), json!({"type": "string"}));
+        labels.insert(
+            "additionalProperties".to_owned(),
+            json!({"$ref": "#/$defs/DisplayText"}),
+        );
     }
     if let Value::Object(object) = schema {
         object
@@ -130,7 +137,10 @@ fn install_labels_constraints(schema: &mut Value) -> Result<(), serde_json::Erro
             .or_insert_with(|| Value::Object(Map::new()))
             .as_object_mut()
             .expect("$defs is an object")
-            .insert("LocalId".to_owned(), local_id);
+            .extend([
+                ("DisplayText".to_owned(), display_text),
+                ("LocalId".to_owned(), local_id),
+            ]);
     }
     Ok(())
 }
@@ -450,10 +460,12 @@ mod tests {
         let too_long = format!("a{}", "b".repeat(64));
         for (labels, accepted) in [
             (json!({"title": "Receipt", "call-center": "Call us"}), true),
+            (json!({"title": "العربية \u{200f}Latin"}), true),
             (json!({longest: "Text"}), true),
             (json!({too_long: "Text"}), false),
             (json!({"Title": "Receipt"}), false),
             (json!({"count": 3}), false),
+            (json!({"title": "Receipt\u{202e}hidden"}), false),
         ] {
             let document = json!({
                 "apiVersion": LABELS_API_VERSION,

@@ -4,7 +4,8 @@
 use std::collections::BTreeMap;
 
 use registry_platform_yaml::{
-    ApiVersion, Document, EnvelopeRule, Expect, FormatSpec, LocalId, Reader, Report,
+    local_id_collision_diagnostics, ApiVersion, AuthoredId, DisplayText, Document, EnvelopeRule,
+    Expect, FormatSpec, LocalId, Reader, Report,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -37,7 +38,7 @@ pub(crate) struct LabelsFile {
     pub(crate) kind: String,
     /// The text of each label, by key. Every locale of a document defines
     /// the same keys.
-    pub(crate) labels: BTreeMap<LocalId, String>,
+    pub(crate) labels: BTreeMap<LocalId, DisplayText>,
 }
 
 /// A label table the reader accepted: the flat key-to-text map the template
@@ -61,11 +62,30 @@ pub(crate) fn read_labels(file: &str, bytes: &[u8]) -> Result<ReadLabels, Report
         .with_hook(&mut hook)
         .decode::<LabelsFile>(bytes, &Expect::one(&LABELS_FORMAT))
         .map_err(with_table_shape)?;
+    let label_ids = decoded
+        .value
+        .labels
+        .keys()
+        .map(|id| (id.as_str().to_owned(), format!("/labels/{id}")))
+        .collect::<Vec<_>>();
+    let authored_label_ids = label_ids
+        .iter()
+        .map(|(id, pointer)| AuthoredId::at_key(id, pointer))
+        .collect::<Vec<_>>();
+    let mut findings = decoded.document.warnings();
+    findings.extend(Report::new(local_id_collision_diagnostics(
+        &decoded.document,
+        "render.labels.label-id-collision",
+        &authored_label_ids,
+    )));
+    if findings.has_errors() {
+        return Err(findings);
+    }
     let table = decoded
         .value
         .labels
         .into_iter()
-        .map(|(key, text)| (key.into_string(), Value::String(text)))
+        .map(|(key, text)| (key.into_string(), Value::String(text.into_string())))
         .collect::<serde_json::Map<_, _>>();
     Ok(ReadLabels {
         table: Value::Object(table),
@@ -141,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn keys_are_local_identifiers_and_values_are_text() {
+    fn keys_are_local_identifiers_and_values_are_display_text() {
         assert_eq!(
             codes(&format!("{HEAD}labels:\n  Title: Receipt\n")),
             [(
@@ -155,6 +175,45 @@ mod tests {
                 "config.expected-string".to_owned(),
                 "/labels/count".to_owned()
             )]
+        );
+        assert_eq!(
+            codes(&format!("{HEAD}labels:\n  title: Receipt\u{202e}hidden\n")),
+            [(
+                "config.invalid-value".to_owned(),
+                "/labels/title".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn cfg_val_11_refused_display_text_is_located_without_repeating_it() {
+        let text = format!("{HEAD}labels:\n  title: Receipt\u{202e}hidden\n");
+        let report = read_labels("labels/ar.yaml", text.as_bytes()).expect_err("refused");
+        let diagnostic = &report.diagnostics()[0];
+        let source = diagnostic.source.as_ref().expect("source position");
+        assert_eq!(diagnostic.code, "config.invalid-value");
+        assert_eq!(diagnostic.path, "/labels/title");
+        assert_eq!(source.file, "labels/ar.yaml");
+        assert_eq!((source.line, source.column), (Some(4), Some(10)));
+        assert!(!diagnostic.message.contains("hidden"));
+    }
+
+    #[test]
+    fn cfg_id_8_separator_colliding_label_ids_point_to_both_keys() {
+        let text = format!("{HEAD}labels:\n  receipt-copy: Original\n  receipt_copy: Duplicate\n");
+        let report = read_labels("labels/en.yaml", text.as_bytes()).expect_err("refused");
+        let diagnostic = &report.diagnostics()[0];
+        let source = diagnostic.source.as_ref().expect("primary source position");
+        assert_eq!(diagnostic.code, "render.labels.label-id-collision");
+        assert_eq!(diagnostic.path, "/labels/receipt_copy");
+        assert_eq!(source.file, "labels/en.yaml");
+        assert_eq!((source.line, source.column), (Some(5), Some(3)));
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(diagnostic.related[0].path, "/labels/receipt-copy");
+        assert_eq!(diagnostic.related[0].file, "labels/en.yaml");
+        assert_eq!(
+            (diagnostic.related[0].line, diagnostic.related[0].column),
+            (Some(4), Some(3))
         );
     }
 
