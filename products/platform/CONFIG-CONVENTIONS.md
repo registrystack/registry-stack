@@ -353,9 +353,10 @@ characters U+202A to U+202E, bidi isolates U+2066 to U+2069, line and paragraph
 separators U+2028 and U+2029, U+FEFF, and Unicode noncharacters. It accepts
 multilingual shaping and direction characters U+00AD, U+061C, U+200B to
 U+200F, and U+2060. Labels that identify peer definitions are compared after
-removing those accepted invisible characters, applying full Unicode case
-folding, and normalizing to NFC; equivalent labels produce a warning that
-names the definitions, never the label text.
+removing those accepted invisible characters, normalizing to NFC, applying
+full Unicode case folding, and normalizing the folded result to NFC;
+equivalent labels produce a warning that names the definitions, never the
+label text.
 *Why:* labels guide human review but bind no authority. Hidden reordering or
 indistinguishable peer labels can mislead a reviewer even when every stable
 identifier and authorization check remains correct.
