@@ -15,55 +15,55 @@ readonly FAKE_BIN="${TEST_ROOT}/bin"
 readonly COMMAND_LOG="${TEST_ROOT}/commands.log"
 
 cleanup() {
-  find "${TEST_ROOT}" -depth -delete
+	find "${TEST_ROOT}" -depth -delete
 }
 trap cleanup EXIT
 
 fail() {
-  printf 'FAIL: %s\n' "$*" >&2
-  exit 1
+	printf 'FAIL: %s\n' "$*" >&2
+	exit 1
 }
 
 assert_contains() {
-  local expected="$1"
-  local file="$2"
-  if ! grep -Fq -- "${expected}" "${file}"; then
-    printf '%s\n' '--- actual content ---' >&2
-    sed -n '1,160p' "${file}" >&2
-    fail "expected '${expected}' in ${file}"
-  fi
+	local expected="$1"
+	local file="$2"
+	if ! grep -Fq -- "${expected}" "${file}"; then
+		printf '%s\n' '--- actual content ---' >&2
+		sed -n '1,160p' "${file}" >&2
+		fail "expected '${expected}' in ${file}"
+	fi
 }
 
 assert_not_contains() {
-  local unexpected="$1"
-  local file="$2"
-  if grep -Fq -- "${unexpected}" "${file}"; then
-    fail "did not expect '${unexpected}' in ${file}"
-  fi
+	local unexpected="$1"
+	local file="$2"
+	if grep -Fq -- "${unexpected}" "${file}"; then
+		fail "did not expect '${unexpected}' in ${file}"
+	fi
 }
 
 reset_log() {
-  : > "${COMMAND_LOG}"
+	: >"${COMMAND_LOG}"
 }
 
 mkdir -p \
-  "${FAKE_REPO_ROOT}/editors/vscode" \
-  "${FAKE_REPO_ROOT}/editors/zed" \
-  "${FAKE_OPEN_ROOT}" \
-  "${FAKE_BIN}"
+	"${FAKE_REPO_ROOT}/editors/vscode" \
+	"${FAKE_REPO_ROOT}/editors/zed" \
+	"${FAKE_OPEN_ROOT}" \
+	"${FAKE_BIN}"
 FAKE_OPEN_CANONICAL="$(cd -- "${FAKE_OPEN_ROOT}" && pwd -P)"
 readonly FAKE_OPEN_CANONICAL
 
 printf '%s\n' \
-  '[workspace]' \
-  '[workspace.package]' \
-  'version = "0.16.3"' \
-  > "${FAKE_REPO_ROOT}/Cargo.toml"
-printf '{}\n' > "${FAKE_REPO_ROOT}/editors/vscode/package.json"
+	'[workspace]' \
+	'[workspace.package]' \
+	'version = "0.16.3"' \
+	>"${FAKE_REPO_ROOT}/Cargo.toml"
+printf '{}\n' >"${FAKE_REPO_ROOT}/editors/vscode/package.json"
 printf '[package]\nname = "registry-stack-zed"\n' \
-  > "${FAKE_REPO_ROOT}/editors/zed/Cargo.toml"
+	>"${FAKE_REPO_ROOT}/editors/zed/Cargo.toml"
 
-cat > "${FAKE_BIN}/fake-command" <<'EOF'
+cat >"${FAKE_BIN}/fake-command" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -125,7 +125,7 @@ EOF
 chmod +x "${FAKE_BIN}/fake-command"
 
 for command_name in registryctl evidencectl node npm code rustup cargo zed; do
-  ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/${command_name}"
+	ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/${command_name}"
 done
 
 # install.sh shells out to a few real external tools that the fake command
@@ -140,7 +140,7 @@ done
 # an alphabetical sort here would silently reorder that precedence away.
 real_tool_dirs=("$(dirname -- "$(command -v bash)")")
 for real_tool in awk mkdir unzip; do
-  real_tool_dirs+=("$(dirname -- "$(command -v "${real_tool}")")")
+	real_tool_dirs+=("$(dirname -- "$(command -v "${real_tool}")")")
 done
 REAL_TOOLS_PATH="$(printf '%s\n' "${real_tool_dirs[@]}" | awk '!seen[$0]++' | tr '\n' ':')"
 REAL_TOOLS_PATH="${REAL_TOOLS_PATH%:}"
@@ -154,7 +154,7 @@ export REGISTRY_STACK_INSTALLER_REPO_ROOT="${FAKE_REPO_ROOT}"
 reset_log
 vscode_output="${TEST_ROOT}/vscode-output"
 "${INSTALLER}" vscode \
-  --profile 'Registry Stack Test' > "${vscode_output}"
+	--profile 'Registry Stack Test' >"${vscode_output}"
 
 assert_contains 'evidencectl <tooling> <language-server> <--help>' "${COMMAND_LOG}"
 assert_not_contains 'registryctl <' "${COMMAND_LOG}"
@@ -173,8 +173,8 @@ reset_log
 rm -f "${FAKE_BIN}/evidencectl"
 ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/relayctl"
 retired_output="${TEST_ROOT}/retired-output"
-if PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" "${INSTALLER}" vscode > "${retired_output}" 2>&1; then
-  fail 'retired relayctl must not satisfy the language-server host requirement'
+if PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" "${INSTALLER}" vscode >"${retired_output}" 2>&1; then
+	fail 'retired relayctl must not satisfy the language-server host requirement'
 fi
 assert_contains "required external command 'evidencectl' was not found on PATH" "${retired_output}"
 assert_not_contains 'relayctl <' "${COMMAND_LOG}"
@@ -182,33 +182,33 @@ rm -f "${FAKE_BIN}/relayctl"
 ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/evidencectl"
 
 reset_log
-"${INSTALLER}" vscode > /dev/null
+"${INSTALLER}" vscode >/dev/null
 assert_contains "code <--install-extension> <${FAKE_REPO_ROOT}/editors/vscode/registry-stack-dev.vsix> <--force>" "${COMMAND_LOG}"
 assert_not_contains '<--profile>' "${COMMAND_LOG}"
 if [[ -e "${FAKE_REPO_ROOT}/editors/vscode/dist/registry-stack-cli-path" ]]; then
-  fail 'temporary CLI metadata remained after successful packaging'
+	fail 'temporary CLI metadata remained after successful packaging'
 fi
 
 reset_log
 package_failure_output="${TEST_ROOT}/package-failure-output"
 if FAKE_NPM_FAIL_PACKAGE=true "${INSTALLER}" vscode \
-  > "${package_failure_output}" 2>&1; then
-  fail 'VS Code package failure should fail the installer'
+	>"${package_failure_output}" 2>&1; then
+	fail 'VS Code package failure should fail the installer'
 fi
 assert_contains 'VS Code extension packaging failed' "${package_failure_output}"
 if [[ -e "${FAKE_REPO_ROOT}/editors/vscode/dist/registry-stack-cli-path" ]]; then
-  fail 'temporary CLI metadata remained after failed packaging'
+	fail 'temporary CLI metadata remained after failed packaging'
 fi
 
 reset_log
 "${INSTALLER}" vscode \
-  --profile 'Registry Stack Test' \
-  --open "${FAKE_OPEN_ROOT}" > /dev/null
+	--profile 'Registry Stack Test' \
+	--open "${FAKE_OPEN_ROOT}" >/dev/null
 assert_contains "code <--profile> <Registry Stack Test> <--new-window> <${FAKE_OPEN_CANONICAL}>" "${COMMAND_LOG}"
 
 reset_log
 zed_output="${TEST_ROOT}/zed-output"
-"${INSTALLER}" zed > "${zed_output}"
+"${INSTALLER}" zed >"${zed_output}"
 assert_contains 'rustup <target> <add> <wasm32-wasip2>' "${COMMAND_LOG}"
 assert_contains "cargo <check> <--locked> <--target> <wasm32-wasip2> <--manifest-path> <${FAKE_REPO_ROOT}/editors/zed/Cargo.toml>" "${COMMAND_LOG}"
 assert_not_contains 'zed <' "${COMMAND_LOG}"
@@ -217,15 +217,15 @@ assert_contains "Select ${FAKE_REPO_ROOT}/editors/zed" "${zed_output}"
 
 reset_log
 FAKE_WASIP2_INSTALLED=true "${INSTALLER}" zed \
-  --open "${FAKE_OPEN_ROOT}" > /dev/null
+	--open "${FAKE_OPEN_ROOT}" >/dev/null
 assert_not_contains 'rustup <target> <add> <wasm32-wasip2>' "${COMMAND_LOG}"
 assert_contains "zed <${FAKE_OPEN_CANONICAL}>" "${COMMAND_LOG}"
 
 reset_log
 mismatch_output="${TEST_ROOT}/mismatch-output"
 if FAKE_EVIDENCECTL_VERSION=0.10.0 "${INSTALLER}" vscode \
-  > "${mismatch_output}" 2>&1; then
-  fail 'version mismatch should fail'
+	>"${mismatch_output}" 2>&1; then
+	fail 'version mismatch should fail'
 fi
 assert_contains 'this checkout is 0.16.3 but evidencectl is 0.10.0' "${mismatch_output}"
 assert_not_contains 'registryctl <' "${COMMAND_LOG}"
@@ -236,7 +236,7 @@ assert_not_contains 'npm <' "${COMMAND_LOG}"
 reset_log
 development_output="${TEST_ROOT}/development-output"
 FAKE_EVIDENCECTL_VERSION=0.16.3-dev "${INSTALLER}" vscode \
-  > "${development_output}"
+	>"${development_output}"
 assert_contains 'Using evidencectl 0.16.3-dev' "${development_output}"
 assert_not_contains 'registryctl <' "${COMMAND_LOG}"
 assert_contains "npm <--prefix> <${FAKE_REPO_ROOT}/editors/vscode> <ci>" "${COMMAND_LOG}"
@@ -244,11 +244,11 @@ assert_contains "npm <--prefix> <${FAKE_REPO_ROOT}/editors/vscode> <ci>" "${COMM
 reset_log
 development_mismatch_output="${TEST_ROOT}/development-mismatch-output"
 if FAKE_EVIDENCECTL_VERSION=0.10.0-dev "${INSTALLER}" vscode \
-  > "${development_mismatch_output}" 2>&1; then
-  fail 'development build of another version should fail'
+	>"${development_mismatch_output}" 2>&1; then
+	fail 'development build of another version should fail'
 fi
 assert_contains 'this checkout is 0.16.3 but evidencectl is 0.10.0-dev' \
-  "${development_mismatch_output}"
+	"${development_mismatch_output}"
 assert_not_contains 'npm <' "${COMMAND_LOG}"
 
 # The version probe runs evidencectl --version itself, a step distinct from
@@ -259,8 +259,8 @@ assert_not_contains 'npm <' "${COMMAND_LOG}"
 reset_log
 version_probe_exit_output="${TEST_ROOT}/version-probe-exit-output"
 if FAKE_EVIDENCECTL_VERSION_EXIT=7 PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" \
-  "${INSTALLER}" vscode > "${version_probe_exit_output}" 2>&1; then
-  fail 'a CLI whose --version exits nonzero should fail the installer'
+	"${INSTALLER}" vscode >"${version_probe_exit_output}" 2>&1; then
+	fail 'a CLI whose --version exits nonzero should fail the installer'
 fi
 assert_contains 'could not run evidencectl --version' "${version_probe_exit_output}"
 assert_not_contains 'npm <' "${COMMAND_LOG}"
@@ -268,32 +268,32 @@ assert_not_contains 'npm <' "${COMMAND_LOG}"
 reset_log
 version_probe_format_output="${TEST_ROOT}/version-probe-format-output"
 if FAKE_EVIDENCECTL_VERSION_OUTPUT='not a version line' \
-  PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" \
-  "${INSTALLER}" vscode > "${version_probe_format_output}" 2>&1; then
-  fail 'a CLI whose --version output does not match the expected format should fail the installer'
+	PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" \
+	"${INSTALLER}" vscode >"${version_probe_format_output}" 2>&1; then
+	fail 'a CLI whose --version output does not match the expected format should fail the installer'
 fi
 assert_contains 'unexpected evidencectl version output: not a version line' \
-  "${version_probe_format_output}"
+	"${version_probe_format_output}"
 assert_not_contains 'npm <' "${COMMAND_LOG}"
 
 reset_log
 old_node_output="${TEST_ROOT}/old-node-output"
 if FAKE_NODE_VERSION=v23.11.1 "${INSTALLER}" vscode \
-  > "${old_node_output}" 2>&1; then
-  fail 'old Node.js version should fail'
+	>"${old_node_output}" 2>&1; then
+	fail 'old Node.js version should fail'
 fi
 assert_contains 'Node.js 24 or newer is required' "${old_node_output}"
 assert_not_contains 'npm <' "${COMMAND_LOG}"
 
 missing_output="${TEST_ROOT}/missing-output"
 if "${INSTALLER}" vscode --open "${TEST_ROOT}/missing-directory" \
-  > "${missing_output}" 2>&1; then
-  fail 'missing directory passed to --open should fail'
+	>"${missing_output}" 2>&1; then
+	fail 'missing directory passed to --open should fail'
 fi
 assert_contains 'directory to open does not exist' "${missing_output}"
 
 help_output="${TEST_ROOT}/help-output"
-"${INSTALLER}" --help > "${help_output}"
+"${INSTALLER}" --help >"${help_output}"
 assert_contains './editors/install.sh <vscode|zed>' "${help_output}"
 assert_contains '--open <path>' "${help_output}"
 assert_not_contains '--project-dir' "${help_output}"

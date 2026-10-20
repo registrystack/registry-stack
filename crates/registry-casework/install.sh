@@ -77,14 +77,26 @@ build=""
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 	--channel)
-		[ "$#" -ge 2 ] || { echo "--channel needs a value." >&2; exit 2; }
-		[ -z "$channel" ] || { echo "--channel may be supplied only once." >&2; exit 2; }
+		[ "$#" -ge 2 ] || {
+			echo "--channel needs a value." >&2
+			exit 2
+		}
+		[ -z "$channel" ] || {
+			echo "--channel may be supplied only once." >&2
+			exit 2
+		}
 		channel="$2"
 		shift 2
 		;;
 	--build)
-		[ "$#" -ge 2 ] || { echo "--build needs an immutable nightly tag." >&2; exit 2; }
-		[ -z "$build" ] || { echo "--build may be supplied only once." >&2; exit 2; }
+		[ "$#" -ge 2 ] || {
+			echo "--build needs an immutable nightly tag." >&2
+			exit 2
+		}
+		[ -z "$build" ] || {
+			echo "--build may be supplied only once." >&2
+			exit 2
+		}
 		build="$2"
 		shift 2
 		;;
@@ -244,7 +256,7 @@ run_unpinned_installer() {
 	fi
 	expected_base="${tag#v}"
 	expected_base="${expected_base%%-nightly.*}"
-	if [ "$manifest_version" != "${tag#v}" ] || [ "$base_version" != "$expected_base" ] || \
+	if [ "$manifest_version" != "${tag#v}" ] || [ "$base_version" != "$expected_base" ] ||
 		[ "$source_sha" != "${BASH_REMATCH[4]}" ] || [ -z "$created_at" ]; then
 		echo "Refusing internally inconsistent nightly metadata." >&2
 		exit 1
@@ -324,7 +336,7 @@ esac
 # libraries travel together in one checksum-covered archive.
 macos_bundle=0
 if [ "$os_label" = "macos" ]; then
-	IFS=. read -r release_major release_minor release_patch <<<"${version#v}"
+	IFS=. read -r release_major release_minor _ <<<"${version#v}"
 	if ((release_major > 0 || release_minor >= 33)); then
 		macos_bundle=1
 		need tar
@@ -495,7 +507,8 @@ EOF
 validate_macos_bundle() {
 	local binary="$1"
 	local stem="${binary}-${version}-${os_label}-${arch_label}"
-	local archive="$tmpdir/$(asset_name "$binary")"
+	local archive
+	archive="$tmpdir/$(asset_name "$binary")"
 	if ! tar -tzf "$archive" >"$tmpdir/$binary.members" ||
 		! awk -v executable="$stem" '
 			{
