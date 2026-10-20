@@ -369,6 +369,21 @@
       "surface": "record"
     },
     {
+      "actionTargetAuthority": {
+        "enforcement": "runtime_enforced",
+        "hasDirectRecordGrant": true,
+        "recordGrantRelationship": "additional",
+        "uses": [
+          {
+            "operation": "create",
+            "role": "write",
+            "source": {
+              "effect": "entry",
+              "kind": "effect"
+            }
+          }
+        ]
+      },
       "ownerOnly": false,
       "profile": "directory-editor",
       "recordType": "entry",

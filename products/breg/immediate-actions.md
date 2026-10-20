@@ -57,10 +57,18 @@ shows normalization, coordinated creates, and omitted effect slots.
 
 An Action grant uses `permissions.actions`, the Action ID, `operations: [invoke]`,
 explicit target row boundaries, and permitted result effects. It grants no
-ordinary CRUD. Every existing reference target needs current target authority,
-including link-only references and targets chosen by a function. `commitGuards`
-checks required current facts inside the mutation transaction. A Record type's
-`mutationPolicy` still prevents immediate writes to Proposal-required targets.
+ordinary CRUD. Its target row boundaries are runtime-enforced Action authority
+in addition to any ordinary Record grant held by the same profile. Every existing
+reference target needs current target authority, including link-only references
+and targets chosen by a function. `commitGuards` checks required current facts
+inside the mutation transaction. A Record type's `mutationPolicy` still prevents
+immediate writes to Proposal-required targets. `bregctl explain access` reports
+this authority, whether any direct Record grant also exists, and the compiled
+write or existing-target role of each Action target use. The direct-grant flag
+does not compare that grant's operations or row boundaries, and Action target
+authority does not grant ordinary CRUD. For a Proposal Action, a `write` use
+under the Start grant describes an effect the proposal may apply after approval;
+it does not grant the Start caller a direct Record write.
 
 An invocation commits record effects, revisions, history, audit, idempotency
 receipt, and outbox together. A refused effect leaves no partial record or event.

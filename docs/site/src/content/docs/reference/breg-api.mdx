@@ -209,7 +209,7 @@ Every write needs `Content-Type: application/json`, except a patch, which needs
 ```
 
 The response is `201 Created` with the envelope, `ETag`, and `Location`. Missing required fields,
-values outside their type bounds, a reference to a missing target, and a violated `unique`
+values outside their type bounds, a reference to a missing or tombstoned target, and a violated `unique`
 constraint are refused before anything is written.
 
 ### Patch
@@ -227,6 +227,7 @@ followed by the field's `apiName`:
 `If-Match` must carry the `ETag` of the revision you read: a stale value answers
 `412 precondition.failed` and a missing one `428 precondition.required`. The response is the new
 revision's envelope with `data.snapshot`.
+Reference values must name active targets, as on Create.
 
 ### Tombstone
 
@@ -234,6 +235,14 @@ revision's envelope with `data.snapshot`.
 record tombstoned and returns that revision's envelope. The record stays readable through its
 revisions and leaves live collection reads. The route exists only when the Record type sets
 `tombstone: true`.
+
+An active Record that references the target prevents its tombstone, including when you cannot
+read that referencing Record. The response is the generic `409 mutation.conflict`.
+Clear an optional reference, point it at an active replacement, or tombstone its source Record
+before tombstoning the target. Tombstoned Records and retained history keep their reference IDs.
+
+{/* Evidence: crates/registry-breg/src/generated_ddl.rs, record_reference_lifecycle and active-reference;
+    crates/registry-breg/tests/postgres_reference_integrity.rs, active_references_refuse_tombstones_and_preserve_retained_links(). */}
 
 ### Batch
 

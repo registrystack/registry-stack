@@ -21,6 +21,22 @@
   presentation metadata now contributes to the compiled revision and artifact
   bytes.
 
+- Extend `bregctl explain access` with each Action target's runtime-enforced
+  authority, whether the profile also has a direct Record grant, and the
+  compiled write or existing-target role of each use. The report identifies
+  Action target authority as additional to Record grants.
+
+- BREAKING: enforce active reference integrity in PostgreSQL: active Records cannot
+  reference tombstoned targets, and a target cannot be tombstoned while another
+  active Record references it. Tombstoned Records and history retain their
+  reference IDs. Conflicts remain value-free `409 mutation.conflict` responses.
+  Existing deployments must build and apply a successor package against their
+  deployed baseline before switching runtimes. `bregctl plan` checks activation
+  prerequisites but does not validate live rows. Before live maintenance, apply
+  the successor to a representative restored-data copy; repair any active
+  references to tombstoned targets through the current package, refresh the
+  copy, and repeat that validation before production activation.
+
 ## 0.42.0 - 2026-10-20
 
 - Advertise a per-target availability route for immediate Actions with

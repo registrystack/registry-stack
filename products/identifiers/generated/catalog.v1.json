@@ -3651,11 +3651,11 @@
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/AccessExplanation.schema.json",
-        "sha256": "910160122091325876b0a40a1f59c7caecd50b75682d3cec0f2b2b4a3932acc8"
+        "sha256": "4f7557a41597d271d3bb6109d327cda4ece33b794785cc4f5ec1d6bb6391d84f"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/AccessExplanation.schema.json",
-        "sha256": "910160122091325876b0a40a1f59c7caecd50b75682d3cec0f2b2b4a3932acc8",
+        "sha256": "4f7557a41597d271d3bb6109d327cda4ece33b794785cc4f5ec1d6bb6391d84f",
         "mediaType": "application/schema+json"
       }
     },

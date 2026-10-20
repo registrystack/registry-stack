@@ -30,7 +30,7 @@ PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"BREG-V1-{index:02d}" for index in range(1, 45))
 ACCEPTANCE_JOURNEY_IDS = tuple(f"BREG-J{index:02d}" for index in range(1, 25))
-SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 187) if index not in {61, 62})
+SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 188) if index not in {61, 62})
 ACCEPTANCE_FIXTURES = {
     "BREG-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "BREG-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
@@ -156,6 +156,7 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_migration",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_spatial_migration",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_reference_indexes",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_reference_integrity",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_list_page_plans",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_fixture_journeys",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_statistics",

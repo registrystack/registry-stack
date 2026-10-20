@@ -2633,7 +2633,7 @@
       "protocol": "id.registrystack.org/protocols/review/v1"
     }
   ],
-  "revision": "sha256:1a96f324adf78ba35ed214ab0e210a5f035d5b4d10b59642f4fc5a331f573915",
+  "revision": "sha256:65536a4b2c579442303ef0602aab24690766e436c0650f5b49b567b49dc7a50d",
   "statisticalDatasets": [],
   "version": "0.1.0"
 }

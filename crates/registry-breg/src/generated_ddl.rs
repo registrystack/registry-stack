@@ -25,6 +25,7 @@ use crate::physical_names::{
 
 const RECORD_ID_COLUMN: &str = "record_id";
 const GENERATED_TEXT_COLLATION: &str = "pg_catalog.pg_c_utf8";
+pub(crate) const REFERENCE_LIFECYCLE_COLUMN: &str = "record_reference_lifecycle";
 pub(crate) const POSTGIS_EXTENSION_SCHEMA: &str = "registry_spatial_ext";
 pub(crate) const SPATIAL_BBOX_FUNCTION_NAME: &str = "spatial_bbox_geometry";
 
@@ -270,6 +271,37 @@ pub(crate) fn generate_ddl_with_actions(
         });
     }
 
+    // Install every referenced key before any foreign key, including cycles.
+    // The physical-name inventory records these compiler-owned constraints:
+    // a predecessor without them still reconstructs its original schema.
+    for entity in entities.values() {
+        let constraints = &names.entities[&entity.id].constraints;
+        let table = quote_identifier(&entity.physical_table);
+        if constraints
+            .keys()
+            .any(|key| key.starts_with("active-reference:"))
+        {
+            statements.push(DdlStatement {
+                id: format!("entity.{}.reference-lifecycle.column", entity.id),
+                kind: DdlStatementKind::Column,
+                sql: format!(
+                    "ALTER TABLE registry_data.{table} ADD COLUMN {REFERENCE_LIFECYCLE_COLUMN} text COLLATE {GENERATED_TEXT_COLLATION}
+                     GENERATED ALWAYS AS (CASE WHEN record_lifecycle = 'active' THEN 'active'::text ELSE NULL::text END) STORED"
+                ),
+            });
+        }
+        if let Some(name) = constraints.get("active-reference-key:record-lifecycle") {
+            statements.push(DdlStatement {
+                id: format!("entity.{}.reference-lifecycle.key", entity.id),
+                kind: DdlStatementKind::Constraint,
+                sql: format!(
+                    "ALTER TABLE registry_data.{table} ADD CONSTRAINT {} UNIQUE (record_id, record_lifecycle)",
+                    quote_identifier(name)
+                ),
+            });
+        }
+    }
+
     for entity in entities.values() {
         let entity_names = &names.entities[&entity.id];
         if entity.temporal.is_some() {
@@ -310,6 +342,37 @@ pub(crate) fn generate_ddl_with_actions(
                         quote_identifier(&entities[target].physical_table),
                     ),
                 });
+                if let Some(active_name) = entity_names
+                    .constraints
+                    .get(&format!("active-reference:{}", field.id))
+                {
+                    statements.push(DdlStatement {
+                        id: format!("entity.{}.field.{}.active-reference", entity.id, field.id),
+                        kind: DdlStatementKind::Reference,
+                        // MATCH SIMPLE releases the live restriction when the
+                        // source is tombstoned. The original UUID FK above
+                        // still preserves its retained reference. Native FK
+                        // locking and visibility protect concurrent writes
+                        // and references hidden by the caller's RLS policies.
+                        // Initial validation must see every existing source
+                        // and target row. Temporarily exempt their owner from
+                        // FORCE RLS under the ALTER TABLE locks, which exclude
+                        // runtime table access until both settings are restored.
+                        // Failure rolls back this statement's transaction;
+                        // earlier reviewed-plan checkpoints remain committed.
+                        sql: format!(
+                            "ALTER TABLE registry_data.{table} NO FORCE ROW LEVEL SECURITY;\n\
+                             ALTER TABLE registry_data.{target_table} NO FORCE ROW LEVEL SECURITY;\n\
+                             ALTER TABLE registry_data.{table} ADD CONSTRAINT {} FOREIGN KEY ({}, {REFERENCE_LIFECYCLE_COLUMN}) REFERENCES registry_data.{target_table} (record_id, record_lifecycle) MATCH SIMPLE ON UPDATE NO ACTION ON DELETE RESTRICT;\n\
+                             ALTER TABLE registry_data.{table} FORCE ROW LEVEL SECURITY;\n\
+                             ALTER TABLE registry_data.{target_table} FORCE ROW LEVEL SECURITY",
+                            quote_identifier(active_name),
+                            quote_identifier(&field.physical_name),
+                            target_table = quote_identifier(&entities[target].physical_table),
+                            table = quote_identifier(&entity.physical_table),
+                        ),
+                    });
+                }
             }
             if let Some(blind) = field
                 .encryption

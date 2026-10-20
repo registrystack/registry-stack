@@ -191,3 +191,4 @@ traceability:
   # Requester recovery after closure: crates/registry-breg/tests/support/review_go_live.rs::activation_closed_application_remains_readable_and_cancellable and rollback_closed_application_remains_readable_without_reviving_work
   # Fresh automatic Review: crates/registry-breg/tests/support/review_go_live.rs::activation_closed_application_rebases_to_fresh_review_without_reviving_old_job
   - {"id": "BREG-SEC-186", "state": "enforced", "negativeId": "BREG-NEG-186", "negativeTest": {"path": "crates/registry-breg/tests/postgres_immediate_action_requirements.rs", "name": "immediate_action_availability_preserves_disclosure_and_commit_boundaries"}}
+  - {"id": "BREG-SEC-187", "state": "enforced", "negativeId": "BREG-NEG-187", "negativeTest": {"path": "crates/registry-breg/tests/postgres_reference_integrity.rs", "name": "active_references_refuse_tombstones_and_preserve_retained_links"}}

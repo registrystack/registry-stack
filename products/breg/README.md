@@ -147,7 +147,7 @@ configured domain or a compatible additive schema change.
    `REVISION` file.
 4. An operator with the migration database credential runs
    `bregctl plan --runtime-config <file> --package <directory>`, which
-   rehearses the activation and rolls it back, then
+   runs the activation's pre-maintenance checks in rolled-back transactions, then
    `bregctl apply --runtime-config <file> --package <directory>` and
    `bregctl status --runtime-config <file>`. Initial activation
    also requires `--initial`.
@@ -188,12 +188,26 @@ refused as drift, and the activation fails: apply keeps a policy whose
 comment matches, so it does not repair one. A database administrator recovers
 by clearing that policy's comment (`COMMENT ON POLICY name ON table IS NULL`)
 and applying the exact target package again, which replaces the policy with
-its compiled definition. A migration failure after
-maintenance begins leaves the database durably in maintenance and readiness
-fails until an operator resolves the cause and applies the exact target
-package again, or restores the operator's own pre-activation backup and
-starts activation again from there. No command clears a failed maintenance
-state.
+its compiled definition. A migration failure after maintenance begins leaves
+the database durably in maintenance and readiness fails. Inspect it with
+`bregctl status --runtime-config <absolute-file>`. Retry
+`bregctl apply --runtime-config <absolute-file> --package <absolute-target-directory>`
+only with the exact pinned target package and its required `--backup` bindings;
+a reviewed apply resumes its durable checkpoints rather than undoing them.
+Assess a stuck activation without changing it with:
+
+```bash
+bregctl migration reconcile \
+  --runtime-config <absolute-file> \
+  --package <absolute-target-directory> \
+  --operator-reference <reference>
+```
+
+When that assessment reports `completable` or `revertible`, repeat it with
+`--execute` to perform the named safe transition. An `unresolvable` result
+requires restoring the operator's own pre-activation backup and starting again
+from the restored active package. Operators must not edit managed tables to make
+a retry pass.
 
 Authoring and migration authority are deliberately separate. An author or
 coding agent can edit configuration, inspect a diff, and run checks. Those
@@ -283,6 +297,46 @@ an engine that predates reference indexes gains them through an ordinary
 successor package: `bregctl package` classifies each one as a compatible
 additive index and the migration transaction creates it with a plain
 `CREATE INDEX`, which blocks writes to that table until it commits.
+
+## Reference lifecycle
+
+An active Record can reference only an active target Record. Create and patch,
+including batch and import writes, refuse a missing or tombstoned target.
+Tombstoning a target refuses while another active Record references it, even
+when that referencing Record is outside the caller's read permissions.
+These refusals use the generic `409 mutation.conflict` response and disclose
+no referencing Record IDs or values. Action and Proposal target admission
+continues to require its independently granted current authority. A writer
+authorized to submit a known target ID can still infer whether that target is
+lifecycle-eligible from success versus conflict even without target read
+authority. The conflict does not distinguish a missing target from a tombstoned
+one or disclose target fields.
+
+Clear an optional reference, point it at an active replacement, or tombstone
+the referencing Record before tombstoning its target. Tombstoned Records and
+retained history keep their original reference IDs. A self-reference does not
+prevent tombstoning that same Record; active references from other Records do.
+There is no automatic cascade or clearing of references.
+
+Registries activated by an earlier compiler receive the lifecycle constraints
+through a successor package built with the deployed package as
+`--baseline-package`. Use `bregctl plan` to check the activation prerequisites.
+Before live maintenance, apply the successor to a representative restored-data
+copy to validate existing links. If that apply finds an active Record that
+references a tombstoned target, repair its reference or tombstone that Record
+through the current package, refresh the restored-data copy, and repeat the
+validation before activating the successor in production.
+
+Plan a maintenance window for this upgrade. Adding the stored generated
+lifecycle column rewrites each reference source table. Adding the target's
+unique lifecycle key and temporarily changing FORCE RLS on the source and target
+take ACCESS EXCLUSIVE locks. The source and target locks acquired by the FORCE
+changes are held while PostgreSQL validates existing links.
+An additive activation runs its compiler DDL in one transaction, so a validation
+refusal rolls that DDL back. A reviewed activation commits compiler and authored
+steps at durable checkpoints; a later reference validation refusal leaves those
+earlier checkpoints in place and pins maintenance as failed. Follow the exact
+target retry, reconciliation, or backup-restore procedure above.
 
 ## Live derived fields
 

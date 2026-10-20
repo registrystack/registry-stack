@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::event_destination::EventDestinationCompatibilityInventory;
 use crate::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
-use crate::generated_ddl::DdlStatementKind;
+use crate::generated_ddl::{DdlStatementKind, REFERENCE_LIFECYCLE_COLUMN};
 use crate::history_commit::{install_empty_history_baseline, install_history_commit_schema};
 use crate::history_migration::{
     ensure_successor_history_ready as ensure_successor_history_ready_state,
@@ -23,7 +23,8 @@ use crate::history_migration::{
 use crate::history_schema::HistorySchemaDescriptor;
 use crate::history_store::{install_history_schema_store, retain_descriptor};
 use crate::migration_plan::{
-    AffectedRowBounds, ReviewedFieldEncryptionHistory, ReviewedMigrationStepDescriptor,
+    AffectedRowBounds, ReviewedFieldEncryptionHistory, ReviewedMigrationObject,
+    ReviewedMigrationObjectKind, ReviewedMigrationStepDescriptor,
     ValidatedReviewedMigrationAssertion, ValidatedReviewedMigrationPlan,
     ValidatedReviewedMigrationStep,
 };
@@ -797,10 +798,16 @@ impl DedicatedApplyConnection {
             set_force_row_security(&transaction, &tables, true).await?;
             affected
         } else {
+            let tables = live_reference_validation_tables(&transaction, step, objects).await?;
+            // FK validation must inspect retained rows as well as active
+            // rows. Both endpoints need owner visibility, with exclusive
+            // table locks until FORCE RLS is restored or this step rolls back.
+            set_force_row_security(&transaction, &tables, false).await?;
             transaction
                 .batch_execute(&step.sql)
                 .await
                 .map_err(|error| map_reviewed_pattern_error(error, registry, step))?;
+            set_force_row_security(&transaction, &tables, true).await?;
             0
         };
         record_step_complete(&transaction, ledger, ledger_step, affected).await?;
@@ -2690,6 +2697,7 @@ pub(super) fn compiler_statement_runs_after_reviewed_steps(
     statement.kind == DdlStatementKind::View
         || is_spatial_projection_addition(statement)
         || is_deferred_not_null(statement)
+        || is_active_reference_constraint_addition(statement)
 }
 
 /// A column a successor adds for a required field arrives accepting NULL, so
@@ -2710,6 +2718,15 @@ fn is_spatial_projection_addition(statement: &PackageDdlStatement<'_>) -> bool {
         || (statement.kind == DdlStatementKind::Index
             && statement.sql.contains(" USING gist ")
             && statement.sql.contains("\"breg_spgeom_"))
+}
+
+/// The reviewed SQL may retarget or populate a reference before the compiler
+/// installs the corresponding active-row FK. Its source projection and target
+/// key are ordinary pre-step statements; only the FK itself is deferred.
+fn is_active_reference_constraint_addition(statement: &PackageDdlStatement<'_>) -> bool {
+    statement.kind == DdlStatementKind::Reference
+        && statement.sql.contains(" ADD CONSTRAINT ")
+        && statement.sql.contains(REFERENCE_LIFECYCLE_COLUMN)
 }
 
 async fn verify_compiled_prerequisites_for_client(
@@ -2774,6 +2791,54 @@ fn map_reviewed_pattern_error(
             fields.all(|other| other == field).then_some(field)
         });
     map_pattern_database_error(error, field)
+}
+
+pub(crate) async fn live_reference_validation_tables(
+    transaction: &impl GenericClient,
+    step: &ValidatedReviewedMigrationStep,
+    objects: &[ReviewedMigrationObject],
+) -> Result<Vec<String>> {
+    if step.reference_validation_tables.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (sources, constraints): (Vec<_>, Vec<_>) = objects
+        .iter()
+        .filter(|object| {
+            object.kind == ReviewedMigrationObjectKind::Constraint
+                && object
+                    .member_id
+                    .as_deref()
+                    .is_some_and(|member| member.starts_with("reference:"))
+        })
+        .map(|object| (object.table.as_str(), object.physical_name.as_str()))
+        .unzip();
+    // Earlier steps may have retired an old target table or installed an
+    // intermediate FK target. Resolve the current constraint as well as the
+    // checked models/SQL so a separate VALIDATE sees its actual target.
+    let rows = transaction
+        .query(
+            "SELECT relation.relname::text
+               FROM pg_catalog.pg_class relation
+               JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+              WHERE namespace.nspname = 'registry_data'
+                AND (relation.relname::text = ANY($1::text[])
+                     OR relation.oid IN (
+                         SELECT foreign_key.confrelid
+                           FROM pg_catalog.pg_constraint foreign_key
+                           JOIN pg_catalog.pg_class source ON source.oid = foreign_key.conrelid
+                           JOIN pg_catalog.pg_namespace source_namespace
+                             ON source_namespace.oid = source.relnamespace
+                           JOIN unnest($2::text[], $3::text[]) touched(source_table, constraint_name)
+                             ON source.relname = touched.source_table
+                            AND foreign_key.conname = touched.constraint_name
+                          WHERE foreign_key.contype = 'f'
+                            AND source_namespace.nspname = 'registry_data'
+                     ))
+              ORDER BY relation.relname",
+            &[&step.reference_validation_tables, &sources, &constraints],
+        )
+        .await?;
+    Ok(rows.into_iter().map(|row| row.get(0)).collect())
 }
 
 fn step_tables(step: &ValidatedReviewedMigrationStep) -> Result<Vec<String>> {
@@ -3884,7 +3949,7 @@ async fn connect_dedicated(config: &ConnectionConfig) -> Result<(Client, JoinHan
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "postgres-test")]
-    use std::{env, str::FromStr, time::SystemTime};
+    use std::{env, str::FromStr};
 
     use serde_json::json;
     #[cfg(feature = "postgres-test")]
@@ -3892,9 +3957,7 @@ mod tests {
 
     use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::parse_project_json;
-    use crate::migration_plan::{
-        ChunkCursorProtocol, ReviewedMigrationObject, ReviewedMigrationObjectKind,
-    };
+    use crate::migration_plan::ChunkCursorProtocol;
     #[cfg(feature = "postgres-test")]
     use crate::postgres::PoolBounds;
 
@@ -3991,6 +4054,18 @@ mod tests {
             "ALTER TABLE registry_data.\"breg_e_asset\" ALTER COLUMN \"breg_f_batch\" DROP NOT NULL",
             DdlStatementKind::Column,
         )));
+        assert!(compiler_statement_runs_after_reviewed_steps(&statement(
+            "ALTER TABLE registry_data.\"breg_e_asset\" NO FORCE ROW LEVEL SECURITY;\n\
+             ALTER TABLE registry_data.\"breg_e_site\" NO FORCE ROW LEVEL SECURITY;\n\
+             ALTER TABLE registry_data.\"breg_e_asset\" ADD CONSTRAINT \"breg_ar_site\" FOREIGN KEY (\"breg_f_site\", record_reference_lifecycle) REFERENCES registry_data.\"breg_e_site\" (record_id, record_lifecycle) MATCH SIMPLE ON UPDATE NO ACTION ON DELETE RESTRICT;\n\
+             ALTER TABLE registry_data.\"breg_e_asset\" FORCE ROW LEVEL SECURITY;\n\
+             ALTER TABLE registry_data.\"breg_e_site\" FORCE ROW LEVEL SECURITY",
+            DdlStatementKind::Reference,
+        )));
+        assert!(!compiler_statement_runs_after_reviewed_steps(&statement(
+            "ALTER TABLE registry_data.\"breg_e_asset\" DROP CONSTRAINT \"breg_ar_site\"",
+            DdlStatementKind::Reference,
+        )));
     }
 
     #[test]
@@ -4085,6 +4160,7 @@ mod tests {
             },
             sql: String::new(),
             sha256: String::new(),
+            reference_validation_tables: Vec::new(),
         };
 
         let covered = covered_field_encryption_fields(&candidate, Some(&baseline), "case", &step)
@@ -4208,6 +4284,163 @@ mod tests {
     }
 
     #[cfg(feature = "postgres-test")]
+    #[tokio::test]
+    async fn live_reference_validation_resolves_the_current_target_and_skips_retired_tables() {
+        const SOURCE: &str = "breg_e_source";
+        const ACTUAL_TARGET: &str = "breg_e_actual_target";
+        const CANDIDATE_TARGET: &str = "breg_e_candidate_target";
+        const RETIRED_TARGET: &str = "breg_e_retired_target";
+        const RAW_REFERENCE: &str = "breg_r_source_target";
+
+        let database = InterlockTestDatabase::create().await;
+        assert!(
+            !database
+                .admin
+                .query_one(
+                    "SELECT rolbypassrls FROM pg_catalog.pg_roles WHERE rolname = $1",
+                    &[&database.migration_role.as_str()],
+                )
+                .await
+                .expect("migration role attributes read")
+                .get::<_, bool>(0),
+            "the migration owner does not bypass row security"
+        );
+        database
+            .admin
+            .batch_execute(&format!(
+                "CREATE SCHEMA registry_data AUTHORIZATION {}",
+                database.migration_role.quoted(),
+            ))
+            .await
+            .expect("test administrator provisions the migration-owned data schema");
+        let (mut migration, migration_task) =
+            connect_plaintext(database.migration_raw.clone()).await;
+        migration
+            .batch_execute(&format!(
+                "CREATE TABLE registry_data.{source} (
+                     record_id uuid PRIMARY KEY,
+                     target_id uuid NOT NULL
+                 );
+                 CREATE TABLE registry_data.{actual_target} (record_id uuid PRIMARY KEY);
+                 CREATE TABLE registry_data.{candidate_target} (record_id uuid PRIMARY KEY);
+                 INSERT INTO registry_data.{actual_target}
+                     VALUES ('00000000-0000-0000-0000-000000000001');
+                 INSERT INTO registry_data.{source}
+                     VALUES (
+                         '00000000-0000-0000-0000-000000000002',
+                         '00000000-0000-0000-0000-000000000001'
+                     );
+                 ALTER TABLE registry_data.{source}
+                     ADD CONSTRAINT {raw_reference}
+                     FOREIGN KEY (target_id)
+                     REFERENCES registry_data.{actual_target} (record_id)
+                     NOT VALID;
+                 ALTER TABLE registry_data.{source} ENABLE ROW LEVEL SECURITY;
+                 ALTER TABLE registry_data.{source} FORCE ROW LEVEL SECURITY;
+                 ALTER TABLE registry_data.{actual_target} ENABLE ROW LEVEL SECURITY;
+                 ALTER TABLE registry_data.{actual_target} FORCE ROW LEVEL SECURITY;
+                 ALTER TABLE registry_data.{candidate_target} ENABLE ROW LEVEL SECURITY;
+                 ALTER TABLE registry_data.{candidate_target} FORCE ROW LEVEL SECURITY;",
+                source = crate::generated_ddl::quote_identifier(SOURCE),
+                actual_target = crate::generated_ddl::quote_identifier(ACTUAL_TARGET),
+                candidate_target = crate::generated_ddl::quote_identifier(CANDIDATE_TARGET),
+                raw_reference = crate::generated_ddl::quote_identifier(RAW_REFERENCE),
+            ))
+            .await
+            .expect("migration owner installs the current raw reference fixture");
+
+        let object = ReviewedMigrationObject {
+            schema: "registry_data".to_owned(),
+            table: SOURCE.to_owned(),
+            entity_id: "source".to_owned(),
+            kind: ReviewedMigrationObjectKind::Constraint,
+            member_id: Some("reference:target".to_owned()),
+            physical_name: RAW_REFERENCE.to_owned(),
+        };
+        let validate_sql = format!(
+            "ALTER TABLE registry_data.{} VALIDATE CONSTRAINT {}",
+            crate::generated_ddl::quote_identifier(SOURCE),
+            crate::generated_ddl::quote_identifier(RAW_REFERENCE),
+        );
+        let step = ValidatedReviewedMigrationStep {
+            descriptor: ReviewedMigrationStepDescriptor::TransactionalSql {
+                id: "validate-current-reference".to_owned(),
+                sql_path: "validate-current-reference.sql".to_owned(),
+                objects: vec![object.clone()],
+                affected_rows: None,
+            },
+            sql: validate_sql.clone(),
+            sha256: statement_checksum(&validate_sql),
+            reference_validation_tables: vec![
+                SOURCE.to_owned(),
+                CANDIDATE_TARGET.to_owned(),
+                RETIRED_TARGET.to_owned(),
+            ],
+        };
+
+        let transaction = migration
+            .transaction()
+            .await
+            .expect("reference validation transaction starts");
+        let tables = live_reference_validation_tables(&transaction, &step, &[object])
+            .await
+            .expect("current reference validation tables resolve");
+        assert_eq!(tables.len(), 3);
+        assert!(tables.iter().any(|table| table == SOURCE));
+        assert!(tables.iter().any(|table| table == ACTUAL_TARGET));
+        assert!(tables.iter().any(|table| table == CANDIDATE_TARGET));
+        assert!(!tables.iter().any(|table| table == RETIRED_TARGET));
+
+        set_force_row_security(&transaction, &tables, false)
+            .await
+            .expect("validation tables become visible to their owner");
+        transaction
+            .batch_execute(&validate_sql)
+            .await
+            .expect("populated valid rows pass explicit reference validation");
+        set_force_row_security(&transaction, &tables, true)
+            .await
+            .expect("validation restores FORCE ROW LEVEL SECURITY");
+        transaction
+            .commit()
+            .await
+            .expect("validated reference commits");
+
+        assert!(database
+            .admin
+            .query_one(
+                "SELECT convalidated
+                       FROM pg_catalog.pg_constraint
+                      WHERE connamespace = 'registry_data'::regnamespace AND conname = $1",
+                &[&RAW_REFERENCE],
+            )
+            .await
+            .expect("raw reference validation state reads")
+            .get::<_, bool>(0));
+        let forced: Vec<String> = database
+            .admin
+            .query(
+                "SELECT class.relname::text
+                   FROM pg_catalog.pg_class class
+                   JOIN pg_catalog.pg_namespace namespace ON namespace.oid = class.relnamespace
+                  WHERE namespace.nspname = 'registry_data'
+                    AND class.relname = ANY($1::text[])
+                    AND class.relforcerowsecurity
+                  ORDER BY class.relname",
+                &[&tables],
+            )
+            .await
+            .expect("restored row-security state reads")
+            .into_iter()
+            .map(|row| row.get(0))
+            .collect();
+        assert_eq!(forced, tables);
+
+        migration_task.abort();
+        database.cleanup().await;
+    }
+
+    #[cfg(feature = "postgres-test")]
     struct InterlockTestDatabase {
         admin_root: Config,
         admin: Client,
@@ -4225,11 +4458,7 @@ mod tests {
                 .expect("BREG_TEST_DATABASE_URL is required for the real interlock test");
             let admin_root = Config::from_str(&url)
                 .expect("BREG_TEST_DATABASE_URL must be a valid PostgreSQL URL");
-            let nanos = SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system clock is after the Unix epoch")
-                .as_nanos();
-            let suffix = format!("{}_{nanos}", std::process::id());
+            let suffix = format!("{}_{}", std::process::id(), Uuid::new_v4().simple());
             let database = SqlIdentifier::parse(&format!("breg_interlock_{suffix}"))
                 .expect("generated database identifier is valid");
             let migration_role = SqlIdentifier::parse(&format!("breg_il_migration_{suffix}"))
