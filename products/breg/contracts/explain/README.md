@@ -34,8 +34,10 @@ schema.
 Model and Access `v1alpha6` add dataset and access-profile display inventories.
 Model also retains field display and module origins, and adds `authoring.documents`.
 Each document names a project-relative file and lists the RFC 6901 JSON Pointers
-present in the source before defaults or module composition. Paths include
-containers and sequence positions; they contain no authored values. Each document's `bindings` links an `explanationPointer` against this explanation
+present in the source before defaults or module composition. Paths expose
+structure and authored mapping keys, without copying leaf content such as labels
+or configuration values. Documents also identify their kind and module.
+Each document's `bindings` links an `explanationPointer` against this explanation
 to a `sourcePointer` against that source document. These links follow IDs and
 module origins, so they remain correct when compilation reorders arrays or a
 module extends a Record type. The root explanation binds to `/project`.

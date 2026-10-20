@@ -14,7 +14,8 @@
 - Model explanation lists each source document's authored JSON Pointers before
   defaults and module composition. Consumers can distinguish a source member
   from a compiled default after resolving the object's source document and ID.
-  Index and access-profile diagnostics now retain the exact owning item.
+  Index-field, profile read-path, and target-permission diagnostics now retain
+  the exact owning item, including its module extension block.
 - Rebuild governed packages after upgrading. Dataset and access-profile
   presentation metadata now contributes to the compiled revision and artifact
   bytes.
