@@ -9,8 +9,11 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use registry_manifest_core::{EntityManifest, MetadataManifest};
+#[cfg(feature = "schema")]
+use registry_platform_yaml::DisplayText;
 use registry_platform_yaml::{
-    BoundedU32, Diagnostic, Document, Expect, LocalId, Reader, Related, Report, Severity, Url,
+    display_text, optional_display_text, BoundedU32, Diagnostic, Document, Expect, LocalId, Reader,
+    Related, Report, Severity, Url,
 };
 use serde::Deserialize;
 
@@ -74,9 +77,15 @@ pub struct ProfileIdentity {
     pub id: LocalId,
     /// The profile version a claiming manifest lists beside the id.
     pub version: String,
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     pub name: Option<String>,
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     pub upstream_system: Option<String>,
     pub upstream_url: Option<Url>,
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     pub description: Option<String>,
 }
 
@@ -87,6 +96,8 @@ pub struct ProfileIdentity {
 pub struct InputArtifact {
     pub kind: String,
     pub media_type: Option<String>,
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     pub description: Option<String>,
 }
 
@@ -95,6 +106,8 @@ pub struct InputArtifact {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ConceptExpectation {
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     pub name: Option<String>,
     /// The IRI, exactly as a field's `concepts` lists it.
     pub iri: String,
@@ -136,7 +149,11 @@ pub struct CodelistExpectation {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct UnsupportedMapping {
+    #[serde(deserialize_with = "display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "DisplayText"))]
     pub source: String,
+    #[serde(deserialize_with = "display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "DisplayText"))]
     pub reason: String,
 }
 
@@ -148,6 +165,8 @@ pub struct UnsupportedMapping {
 pub struct ConformanceCheck {
     pub id: String,
     pub severity: Option<CheckSeverity>,
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     pub description: Option<String>,
 }
 
@@ -172,6 +191,8 @@ pub struct ProfileFixture {
     pub manifest: Option<bool>,
     /// The outcome the fixture demonstrates. Descriptive.
     pub expect: Option<FixtureExpectation>,
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     pub description: Option<String>,
 }
 

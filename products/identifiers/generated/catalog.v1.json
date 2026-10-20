@@ -4173,7 +4173,7 @@
       "description": "Registry Coordinator runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/runtime.rs",
-        "sha256": "2963cc34d692dccb61a5acfc9e455649f491b005aec59e1941f7853ecae43f57"
+        "sha256": "4b15385708723cc16d62de43382c6879c495c8bcd38c598530f8a76c1ed5a294"
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
@@ -4569,7 +4569,7 @@
       "description": "Registry Manifest metadata manifest and profile descriptor JSON Schema.",
       "source": {
         "path": "crates/registry-manifest-cli/src/schema.rs",
-        "sha256": "93cd355b9b825c0949006e7bce4113ce4112518403807f706bf8ef4d240657ff"
+        "sha256": "4bc86a6c6102725774ac58552b35653c6a92949654e7596675174ab8026a9324"
       },
       "artifact": {
         "path": "products/manifest/schemas/metadata.schema.json",
@@ -4587,11 +4587,11 @@
       "description": "Registry Manifest metadata manifest and profile descriptor JSON Schema.",
       "source": {
         "path": "crates/registry-manifest-cli/src/schema.rs",
-        "sha256": "93cd355b9b825c0949006e7bce4113ce4112518403807f706bf8ef4d240657ff"
+        "sha256": "4bc86a6c6102725774ac58552b35653c6a92949654e7596675174ab8026a9324"
       },
       "artifact": {
         "path": "products/manifest/schemas/profile.schema.json",
-        "sha256": "a94130c4276456fcb5a50d7b73c225762d86c471faed372c08b1343f44644987",
+        "sha256": "f8e367082254b713f8347ccb9055d7ac527ddef43b06b33239f8d81d0ed11012",
         "mediaType": "application/schema+json"
       }
     },

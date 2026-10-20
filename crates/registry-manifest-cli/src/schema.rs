@@ -381,6 +381,70 @@ mod tests {
         }
     }
 
+    #[test]
+    fn profile_display_text_is_judged_alike_by_schema_and_reader() {
+        let validator = validator(PROFILE_SCHEMA_FILE);
+        let descriptor = json!({
+            "schema_version": "registry-manifest-profile/v1",
+            "profile": {
+                "id": "demo", "version": "1", "name": "", "upstream_system": "",
+                "description": ""
+            },
+            "supported_input_artifacts": [{"kind": "metadata_manifest", "description": ""}],
+            "required_concepts": [{"iri": "https://example.test/required", "name": ""}],
+            "optional_concepts": [{"iri": "https://example.test/optional", "name": ""}],
+            "unsupported_mappings": [{"source": "", "reason": ""}],
+            "conformance_checks": [{"id": "demo.check", "description": ""}],
+            "fixtures": [{"path": "fixtures/metadata.yaml", "description": ""}]
+        });
+        for pointer in [
+            "/profile/description",
+            "/profile/name",
+            "/profile/upstream_system",
+            "/supported_input_artifacts/0/description",
+            "/required_concepts/0/name",
+            "/optional_concepts/0/name",
+            "/unsupported_mappings/0/source",
+            "/unsupported_mappings/0/reason",
+            "/conformance_checks/0/description",
+            "/fixtures/0/description",
+        ] {
+            for (text, accepted) in [
+                ("", true),
+                (
+                    "نام\u{200c}خانوادگی العربية\u{200f} soft\u{00ad}hyphen",
+                    true,
+                ),
+                ("sensitive-caption\u{202e}reordered", false),
+                ("sensitive-caption\u{2066}isolated", false),
+                ("sensitive-caption\u{2028}separated", false),
+                ("sensitive-caption\u{feff}hidden", false),
+                ("sensitive-caption\u{fdd0}noncharacter", false),
+                ("sensitive-caption\u{10ffff}noncharacter", false),
+            ] {
+                let mut value = descriptor.clone();
+                *value.pointer_mut(pointer).unwrap() = json!(text);
+                let encoded = serde_json::to_string_pretty(&value).unwrap();
+                let read = Reader::new("profile.yaml").decode::<ProfileDescriptor>(
+                    encoded.as_bytes(),
+                    &registry_platform_yaml::Expect::one(&crate::PROFILE_FORMAT),
+                );
+                assert_eq!(read.is_ok(), accepted, "reader: {pointer}");
+                assert_eq!(validator.is_valid(&value), accepted, "schema: {pointer}");
+                if let Err(report) = read {
+                    assert_eq!(report.error_count(), 1, "{report:?}");
+                    let diagnostic = &report.diagnostics()[0];
+                    assert_eq!(diagnostic.code, "config.invalid-value");
+                    assert_eq!(diagnostic.path, pointer);
+                    let source = diagnostic.source.as_ref().expect("positioned text refusal");
+                    assert_eq!(source.file, "profile.yaml");
+                    assert!(source.line.is_some() && source.column.is_some());
+                    assert!(!report.render_human().contains("sensitive-caption"));
+                }
+            }
+        }
+    }
+
     /// The rules a schema cannot state are left to the check, and the
     /// member's description names them (CFG-SCHEMA-9).
     #[test]
