@@ -342,18 +342,28 @@ fn action_target_authority_distinguishes_writes_from_existing_targets() {
         .uses
         .iter()
         .any(|use_| use_.role == "existing_target" && use_.operation == Operation::Get));
+}
 
-    let mut with_direct_grant = candidate;
-    with_direct_grant["accessProfiles"][0]["permissions"]["records"] =
-        source()["accessProfiles"][0]["permissions"]["records"].clone();
-    let explanation = registry_breg::access::explain_access(&compile(&with_direct_grant));
+#[test]
+fn action_target_authority_reports_read_only_record_grant_existence() {
+    let mut candidate = mixed_action_target_source();
+    let mut read_only_grant = source()["accessProfiles"][0]["permissions"]["records"][0].clone();
+    read_only_grant["operations"] = json!(["get", "list"]);
+    read_only_grant["writableFields"] = json!([]);
+    read_only_grant["rowBoundaries"] = json!("unrestricted");
+    candidate["accessProfiles"][0]["permissions"]["records"] = json!([read_only_grant]);
+
+    let explanation = registry_breg::access::explain_access(&compile(&candidate));
     let authority = explanation
         .row_reach
         .iter()
         .find(|reach| reach.surface == "action_target")
         .and_then(|reach| reach.action_target_authority.as_ref())
         .expect("Action row reach identifies its authority");
-    assert!(authority.has_direct_record_grant);
+    assert!(
+        authority.has_direct_record_grant,
+        "the flag reports grant existence even when the direct grant is read-only"
+    );
 }
 
 #[test]
