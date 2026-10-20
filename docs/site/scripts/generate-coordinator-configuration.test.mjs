@@ -76,3 +76,20 @@ test('the reference page renders every operation column the catalogue generates'
     assert.ok(document.operations.every((row) => column in row), column);
   }
 });
+
+test('Coordinator map keys state the bound written beside the shared identifier', async () => {
+  const document = await buildCoordinatorConfiguration();
+  const runtime = document.contracts.find((contract) => contract.id === 'runtime');
+  const constraints = (keyPath) =>
+    runtime.fields.find((field) => field.key_path === keyPath).constraints.flat();
+  assert.deepEqual(constraints('deployment.stateKeys.*'), [
+    'propertyNames.maxLength: 10',
+    'propertyNames.minLength: 1',
+    'propertyNames.pattern: ^[1-9][0-9]*$',
+    'propertyNames.pattern: ^[^\\u0000-\\u001F\\u007F-\\u009F]+$',
+  ]);
+  for (const keyPath of ['deployment.authentication.policies.*', 'deployment.authentication.assertionIssuers.*']) {
+    assert.ok(constraints(keyPath).includes('propertyNames.maxLength: 128'), keyPath);
+    assert.ok(!constraints(keyPath).includes('propertyNames.maxLength: 512'), keyPath);
+  }
+});

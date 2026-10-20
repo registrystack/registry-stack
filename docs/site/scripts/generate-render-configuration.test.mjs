@@ -27,3 +27,16 @@ test('Render reference carries the keys an author and an operator set', async ()
     assert.ok(keys('runtime').has(path), path);
   }
 });
+
+test('Render listener.bind states the port rule and every host shape, not only the length', async () => {
+  const document = await buildRenderConfiguration();
+  const runtime = document.contracts.find((contract) => contract.id === 'runtime');
+  const bind = runtime.fields.find((field) => field.key_path === 'listener.bind');
+  // One alternative per host shape: IPv4, hexadecimal IPv6, and mixed IPv6.
+  assert.equal(bind.constraints.length, 3);
+  for (const group of bind.constraints) {
+    assert.ok(group.includes('maxLength: 128'), JSON.stringify(group));
+    assert.ok(group.some((constraint) => constraint.startsWith('pattern: :0*(?:[0-9]{1,4}')), JSON.stringify(group));
+    assert.equal(group.filter((constraint) => constraint.startsWith('pattern: ^')).length, 1);
+  }
+});
