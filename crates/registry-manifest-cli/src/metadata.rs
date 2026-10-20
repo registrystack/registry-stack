@@ -315,6 +315,24 @@ fn manifest_integrity_diagnostics(
             &fields,
         ));
     }
+    errors.extend(collisions(
+        document,
+        "manifest.metadata.evidence-offering-id-collision",
+        &manifest
+            .datasets
+            .iter()
+            .enumerate()
+            .flat_map(|(dataset_index, dataset)| {
+                list_ids(
+                    &format!("/datasets/{dataset_index}/evidence_offerings"),
+                    dataset
+                        .evidence_offerings
+                        .iter()
+                        .map(|item| item.id.as_str()),
+                )
+            })
+            .collect::<Vec<_>>(),
+    ));
     for (index, dataset) in manifest.datasets.iter().enumerate() {
         errors.extend(collisions(
             document,
@@ -351,17 +369,6 @@ fn manifest_integrity_diagnostics(
                     )
                 })
                 .collect::<Vec<_>>(),
-        ));
-        errors.extend(collisions(
-            document,
-            "manifest.metadata.evidence-offering-id-collision",
-            &list_ids(
-                &format!("/datasets/{index}/evidence_offerings"),
-                dataset
-                    .evidence_offerings
-                    .iter()
-                    .map(|item| item.id.as_str()),
-            ),
         ));
         for (entity_index, entity) in dataset.entities.iter().enumerate() {
             for (code, member, values) in [
@@ -632,6 +639,28 @@ fn manifest_integrity_diagnostics(
                 }),
         ));
     }
+    warnings.extend(localized_warnings(
+        document,
+        "manifest.metadata.duplicate-evidence-offering-title",
+        "evidence offerings",
+        manifest
+            .datasets
+            .iter()
+            .enumerate()
+            .flat_map(|(dataset_index, dataset)| {
+                dataset
+                    .evidence_offerings
+                    .iter()
+                    .enumerate()
+                    .map(move |(index, item)| {
+                        (
+                            item.id.as_str(),
+                            &item.title,
+                            format!("/datasets/{dataset_index}/evidence_offerings/{index}/title"),
+                        )
+                    })
+            }),
+    ));
     for (dataset_index, dataset) in manifest.datasets.iter().enumerate() {
         warnings.extend(localized_warnings(
             document,
@@ -649,22 +678,6 @@ fn manifest_integrity_diagnostics(
                             format!("/datasets/{dataset_index}/entities/{index}/title"),
                         )
                     })
-                }),
-        ));
-        warnings.extend(localized_warnings(
-            document,
-            "manifest.metadata.duplicate-evidence-offering-title",
-            "evidence offerings",
-            dataset
-                .evidence_offerings
-                .iter()
-                .enumerate()
-                .map(|(index, item)| {
-                    (
-                        item.id.as_str(),
-                        &item.title,
-                        format!("/datasets/{dataset_index}/evidence_offerings/{index}/title"),
-                    )
                 }),
         ));
         warnings.extend(localized_location_warnings(
@@ -1122,6 +1135,65 @@ mod tests {
             finding.related[0].path,
             "/requirements/0/evidence_type_lists/0/id"
         );
+    }
+
+    #[test]
+    fn evidence_offerings_share_global_id_and_title_namespaces_across_datasets() {
+        let text = format!(
+            "{MINIMAL}evidence_types:\n  - id: proof\n    title: Proof\ndatasets:\n  - id: first\n    title: First\n    entities:\n      - name: person\n        fields:\n          - name: id\n            type: string\n    evidence_offerings:\n      - id: eligibility-route\n        title: Eligibility review\n        evidence_type: proof\n        issuing_authority:\n          id: authority\n          name: Authority\n        entity: person\n        lookup_keys: [id]\n        access:\n          kind: custom\n          ruleset: eligible\n  - id: second\n    title: Second\n    entities:\n      - name: person\n        fields:\n          - name: id\n            type: string\n    evidence_offerings:\n      - id: eligibility_route\n        title: \"Eligibility\\u200B review\"\n        evidence_type: proof\n        issuing_authority:\n          id: authority\n          name: Authority\n        entity: person\n        lookup_keys: [id]\n        access:\n          kind: custom\n          ruleset: eligible\n"
+        );
+        let diagnostics = refused(&text);
+
+        let collision = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == "manifest.metadata.evidence-offering-id-collision"
+            })
+            .expect("offerings in different datasets share one ID namespace");
+        assert_eq!(collision.path, "/datasets/1/evidence_offerings/0/id");
+        assert_eq!(
+            collision.related[0].path,
+            "/datasets/0/evidence_offerings/0/id"
+        );
+        assert_eq!(
+            collision
+                .source
+                .as_ref()
+                .map(|source| (source.line, source.column)),
+            Some((Some(39), Some(13)))
+        );
+        assert_eq!(
+            (collision.related[0].line, collision.related[0].column),
+            (Some(20), Some(13))
+        );
+        assert!(collision.message.contains("`eligibility-route`"));
+        assert!(collision.message.contains("`eligibility_route`"));
+
+        let warning = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == "manifest.metadata.duplicate-evidence-offering-title"
+            })
+            .expect("offerings in different datasets share one title namespace");
+        assert_eq!(warning.path, "/datasets/1/evidence_offerings/0/title");
+        assert_eq!(
+            warning.related[0].path,
+            "/datasets/0/evidence_offerings/0/title"
+        );
+        assert_eq!(
+            warning
+                .source
+                .as_ref()
+                .map(|source| (source.line, source.column)),
+            Some((Some(40), Some(16)))
+        );
+        assert_eq!(
+            (warning.related[0].line, warning.related[0].column),
+            (Some(21), Some(16))
+        );
+        assert!(warning.message.contains("`eligibility-route`"));
+        assert!(warning.message.contains("`eligibility_route`"));
+        assert!(!warning.message.contains("Eligibility review"));
     }
 
     #[test]
