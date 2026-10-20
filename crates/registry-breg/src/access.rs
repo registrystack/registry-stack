@@ -693,6 +693,9 @@ pub struct RowReachExplanation {
 pub struct ActionTargetAuthorityExplanation {
     pub enforcement: &'static str,
     pub record_grant_relationship: &'static str,
+    /// Reports only whether the same profile has any direct Record grant for
+    /// this Record type. It does not compare that grant's operations or row
+    /// boundaries, or imply that Action authority grants ordinary CRUD.
     pub has_direct_record_grant: bool,
     pub uses: Vec<ActionTargetUseExplanation>,
 }
@@ -778,8 +781,18 @@ fn row_reach(
                             .filter(|use_| use_.entity_id == target.entity_id)
                             .map(|use_| ActionTargetUseExplanation {
                                 role: match use_.operation {
-                                    Operation::Create | Operation::Patch => "write",
-                                    _ => "existing_target",
+                                    Operation::Create
+                                    | Operation::Patch
+                                    | Operation::Tombstone
+                                    | Operation::Batch
+                                    | Operation::Import => "write",
+                                    Operation::Get
+                                    | Operation::Lookup
+                                    | Operation::List
+                                    | Operation::Revisions
+                                    | Operation::Snapshot
+                                    | Operation::Invoke
+                                    | Operation::Start => "existing_target",
                                 },
                                 operation: use_.operation,
                                 source: use_.source.clone(),
