@@ -97,6 +97,25 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
             )
             self.assertIn(f"go-{GO_VERSION}", cache["with"]["key"])
 
+    def test_native_build_selects_the_installed_toolchain(self) -> None:
+        # Without the override, rustup adds rust-toolchain.toml's rustfmt and
+        # clippy in a second install, which the ubuntu-24.04-arm image refuses
+        # as a file conflict. The build needs neither component.
+        import tomllib
+
+        _, document = workflow("evidence-dev.yml")
+        channel = tomllib.loads(
+            (ROOT / "rust-toolchain.toml").read_text(encoding="utf-8")
+        )["toolchain"]["channel"]
+        job = document["jobs"]["build"]
+        self.assertEqual(job["env"]["RUSTUP_TOOLCHAIN"], channel)
+        native = step_run(
+            document, "build", "Build native Evidence development binaries"
+        )
+        self.assertIn(
+            f"rustup toolchain install {channel} \\\n  --profile minimal", native
+        )
+
     def test_is_manual_main_only_with_one_narrow_publication_job(self) -> None:
         text, document = workflow("evidence-dev.yml")
         trigger = text.split("permissions:", 1)[0]

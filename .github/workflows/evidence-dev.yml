@@ -131,6 +131,11 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     env:
+      # Selects the minimal toolchain installed below, as the clients job
+      # does. Otherwise rustup also installs rust-toolchain.toml's rustfmt
+      # and clippy, which the build does not use and which the arm64 runner
+      # image refuses as a file conflict.
+      RUSTUP_TOOLCHAIN: "1.95.0"
       # Development artifacts are self-contained. aws-lc-fips-sys otherwise
       # defaults to a build-directory dylib on macOS.
       AWS_LC_FIPS_SYS_STATIC: "1"
