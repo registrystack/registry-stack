@@ -115,15 +115,23 @@ connections:
 ```
 
 - **`producer`** is the producer's key under the Casework project's `trustedProducers`. That
-  entry's own `completion` names a destination and the same `recipientBinding`.
+  entry's `completion.destinationId` names a destination, and its `completion.recipientBinding`
+  repeats the binding below.
 - **`recipientBinding`** is 1 to 256 visible ASCII characters, without spaces, and must differ
   between Casework connections; `check` refuses a duplicate.
-- **`bearerTokenRef`** names a token you generate. In the Casework runtime file, give the
-  completion destination its own reference to the same token as `bearerTokenRef`, not `auth`
-  with a custom header, and set its `url` to `https://<coordinator-host>/v1/review-completions`.
+- **`bearerTokenRef`** names a token you generate, of at most 4096 bytes:
+
+  ```sh
+  (umask 077 && openssl rand -hex 32 | tr -d '\n' > /run/registry-coordinator/secrets/review-completion-token)
+  ```
+
+  In the Casework runtime file, `reviewCompletionDestinations.<destinationId>` gives that
+  destination its own reference to the same token as `bearerTokenRef`, not `auth` with a custom
+  header, and `url: https://<coordinator-host>/v1/review-completions`;
+  [Completion destinations](../casework-retention/#completion-destinations) describes those keys.
   Casework presents the token as a bearer token and the binding in a `registry-recipient-binding`
   header; Coordinator refuses a request that lacks either, or whose pair matches no connection,
-  with 401 `access.unauthenticated`.
+  with 401 `authentication.refused`.
 
 An event only brings a waiting run's next read forward; it never starts a run. Without a
 `completion` block the route refuses every event, so lower `resultCheckSeconds` when events cannot

@@ -120,7 +120,7 @@ future calls where it can. Cancellation never reverses an accepted effect or wit
 downstream request on its own; a workflow that wants a withdrawal says so in its `onCancel` path,
 as `reviewed-notice` does.
 
-A restored database is never handed to an ordinary worker first, because a backup can predate
+A restored database must never be handed to an ordinary worker first, because a backup can predate
 effects that products already accepted, and the worker would resend prepared commands to products
 whose state has moved on. The operator starts `coordinator --recovery-only`, which admits and
 dispatches nothing, and places a restore hold with `coordinatorctl restore-hold`. Each unfinished
