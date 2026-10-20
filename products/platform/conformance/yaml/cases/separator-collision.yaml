@@ -1,0 +1,19 @@
+id: separator-collision
+rules: [CFG-ID-8]
+summary: Fixture and scenario case definitions refuse separator-lookalike IDs and locate both authored values.
+appliesTo:
+  formats: [evidence/fixture, coordinator/scenarios]
+mutation:
+  separatorCollision:
+    role: idList
+expect:
+  exit: 1
+  diagnostics:
+    - code: any
+      path: "{pointer}/{index}/id"
+      from: itemId
+      at: {line: 1, column: 1}
+      related:
+        - path: "{pointer}/{firstIndex}/id"
+          from: firstId
+          at: {line: 1, column: 1}

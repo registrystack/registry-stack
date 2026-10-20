@@ -46,6 +46,10 @@ A case file (`cases/<id>.yaml`) has these members:
                 duplicateItem: {role}     the first item of the list at the
                                           `idList` or `set` pointer, copied
                                           after its last item
+                separatorCollision: {role}
+                                          a local-ID definition with a `-`
+                                          or `_`, copied after the list with
+                                          the other separator spelling
                 pathOutside: {role, via}  the file the `relativePath` pointer
                                           names, moved outside the work
                                           directory's project and reached
@@ -87,7 +91,8 @@ A case file (`cases/<id>.yaml`) has these members:
 
 Text in a case expands `{marker}` (the planted value that must never be
 printed), `{repeat:N:text}`, and the values of the mutated site: `{pointer}`,
-`{key}`, `{numberOfUnit}`, for `duplicateItem` the copy's `{index}`, and for
+`{key}`, `{numberOfUnit}`, for list copies the copy's `{index}` and the
+original's `{firstIndex}`, and for
 `unknownKey` the `{mapping}` the key went into.
 
 A role pointer that does not resolve in the example is a harness error that
@@ -188,6 +193,7 @@ OPERATIONS = (
     "retiredApiVersion",
     "spelling",
     "duplicateItem",
+    "separatorCollision",
     "pathOutside",
     "boundaries",
     "unknownKey",
@@ -204,6 +210,7 @@ DEFAULT_FROM = {
     "spelling": "key",
     "retiredApiVersion": "apiVersion",
     "duplicateItem": "item",
+    "separatorCollision": "itemId",
     "pathOutside": "value",
     "boundaries": "value",
     "unknownKey": "key",
@@ -715,14 +722,16 @@ def mutate_spelling(text: str, spec: dict[str, Any], fmt: Format) -> list[Varian
     return [Variant(text, [Site(anchors, site_values(other_pointer))])]
 
 
-def mutate_duplicate_item(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant]:
+def mutate_duplicate_item(
+    text: str, spec: dict[str, Any], fmt: Format, item_index: int = 0
+) -> list[Variant]:
     role, pointer = role_pointer(fmt, spec.get("role"))
     _, node = find(compose(text), pointer)
     if node is None:
         raise missing_pointer(fmt, role, pointer)
     if not isinstance(node, yaml.SequenceNode) or not node.value:
         raise HarnessError(f"{fmt.id}: the {role} member at {pointer} is not a list with an item")
-    first, count = node.value[0], len(node.value)
+    first, count = node.value[item_index], len(node.value)
     if node.flow_style:
         source = text[first.start_mark.index : first.end_mark.index]
         index = node.value[-1].end_mark.index
@@ -738,12 +747,35 @@ def mutate_duplicate_item(text: str, spec: dict[str, Any], fmt: Format) -> list[
         text = text[:index] + copy + text[index:]
     _, node = find(compose(text), pointer)
     assert isinstance(node, yaml.SequenceNode)
-    anchors = {"start": (1, 1), "item": mark(node.value[count].start_mark), "first": mark(node.value[0].start_mark)}
-    for name, item in (("itemId", node.value[count]), ("firstId", node.value[0])):
+    anchors = {"start": (1, 1), "item": mark(node.value[count].start_mark), "first": mark(node.value[item_index].start_mark)}
+    for name, item in (("itemId", node.value[count]), ("firstId", node.value[item_index])):
         _, identifier = child(item, "id")
         if identifier is not None:
             anchors[name] = mark(identifier.start_mark)
-    return [Variant(text, [Site(anchors, dict(site_values(pointer), index=str(count)))])]
+    return [Variant(text, [Site(anchors, dict(site_values(pointer), index=str(count), firstIndex=str(item_index)))])]
+
+
+def mutate_separator_collision(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant]:
+    role, pointer = role_pointer(fmt, spec.get("role"))
+    _, node = find(compose(text), pointer)
+    if node is None:
+        raise missing_pointer(fmt, role, pointer)
+    if not isinstance(node, yaml.SequenceNode) or not node.value:
+        raise HarnessError(f"{fmt.id}: the {role} member at {pointer} is not a list with an item")
+    for index, item in enumerate(node.value):
+        _, identifier = child(item, "id")
+        if not isinstance(identifier, yaml.ScalarNode) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", identifier.value):
+            continue
+        value = identifier.value
+        if "-" not in value and "_" not in value:
+            continue
+        replacement = value.replace("-", "_") if "-" in value else value.replace("_", "-")
+        variant = mutate_duplicate_item(text, spec, fmt, index)[0]
+        _, copied = find(compose(variant.text), f"{pointer}/{variant.sites[0].values['index']}/id")
+        assert isinstance(copied, yaml.ScalarNode)
+        changed, _ = replace_span(variant.text, copied, json.dumps(replacement))
+        return [Variant(changed, variant.sites)]
+    raise NotApplicable(f"the {role} definition list has no local identifier containing a separator")
 
 
 def mutate_path_outside(text: str, spec: dict[str, Any], fmt: Format) -> list[Variant]:
@@ -1030,6 +1062,7 @@ def mutate(text: str, mutation: dict[str, Any] | None, fmt: Format) -> list[Vari
         "retiredApiVersion": mutate_retired,
         "spelling": mutate_spelling,
         "duplicateItem": mutate_duplicate_item,
+        "separatorCollision": mutate_separator_collision,
         "pathOutside": mutate_path_outside,
         "boundaries": mutate_boundaries,
         "unknownKey": mutate_unknown_key,
