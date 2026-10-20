@@ -7,6 +7,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- BREAKING: profile descriptor names, descriptions, and unsupported-mapping explanations
+  now reject prohibited display controls and Unicode noncharacters, with the
+  same rule in the reader and editor schema. Remove the prohibited character
+  from the field named by the diagnostic; supported multilingual shaping and
+  direction marks remain valid.
+
 ## [0.42.0] - 2026-10-20
 
 - No user-visible product changes in this release.

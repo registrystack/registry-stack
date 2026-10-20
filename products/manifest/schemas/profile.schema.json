@@ -68,7 +68,7 @@
           "type": "string"
         },
         "name": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         }
       },
       "required": [
@@ -81,7 +81,7 @@
       "description": "A check the profile names. Descriptive: `validate-profiles` runs the\nexpectations above, not these entries.",
       "properties": {
         "description": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "id": {
           "type": "string"
@@ -94,6 +94,13 @@
         "id"
       ],
       "type": "object"
+    },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "not": {
+        "pattern": "[  ‪-‮⁦-⁩﻿﷐-﷯￾￿]|🿾|🿿|𯿾|𯿿|𿿾|𿿿|񏿾|񏿿|񟿾|񟿿|񯿾|񯿿|񿿾|񿿿|򏿾|򏿿|򟿾|򟿿|򯿾|򯿿|򿿾|򿿿|󏿾|󏿿|󟿾|󟿿|󯿾|󯿿|󿿾|󿿿|􏿾|􏿿"
+      },
+      "type": "string"
     },
     "FixtureExpectation": {
       "description": "The outcome a fixture demonstrates.",
@@ -128,7 +135,7 @@
       "description": "An artifact the profile reads.",
       "properties": {
         "description": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "kind": {
           "type": "string"
@@ -152,7 +159,7 @@
       "description": "A metadata manifest that demonstrates the profile.",
       "properties": {
         "description": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "expect": {
           "$ref": "#/$defs/FixtureExpectation",
@@ -181,17 +188,17 @@
       "description": "The profile a descriptor describes.",
       "properties": {
         "description": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "id": {
           "$ref": "#/$defs/LocalId",
           "description": "The profile id. It names the directory that holds the descriptor, and\na claiming manifest lists it under `profiles`."
         },
         "name": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "upstream_system": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "upstream_url": {
           "$ref": "#/$defs/Url"
@@ -220,10 +227,10 @@
       "description": "Upstream behavior the profile does not map.",
       "properties": {
         "reason": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "source": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         }
       },
       "required": [
