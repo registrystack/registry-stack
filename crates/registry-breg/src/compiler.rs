@@ -627,23 +627,26 @@ fn collect_action_refusal_labels<'a>(
     actions: &'a [ActionSource],
     path: &str,
     source: Option<&'a str>,
-    labels: &mut Vec<SourcedDisplayText<'a>>,
+    labels: &mut BTreeMap<&'a str, Vec<SourcedDisplayText<'a>>>,
 ) {
     for action in actions {
         let crate::contract::ActionPlanSource::Function { refusals, .. } = &action.plan else {
             continue;
         };
-        labels.extend(
-            refusals
-                .iter()
-                .enumerate()
-                .map(|(index, refusal)| SourcedDisplayText {
-                    id: None,
-                    text: &refusal.label,
-                    path: format!("{path}[id={}].plan.refusals[{index}].label", action.id),
-                    source,
-                }),
-        );
+        labels
+            .entry(&action.id)
+            .or_default()
+            .extend(
+                refusals
+                    .iter()
+                    .enumerate()
+                    .map(|(index, refusal)| SourcedDisplayText {
+                        id: None,
+                        text: &refusal.label,
+                        path: format!("{path}[id={}].plan.refusals[{index}].label", action.id),
+                        source,
+                    }),
+            );
     }
 }
 
@@ -1093,7 +1096,7 @@ fn validate_cross_file_duplicate_display_labels(
             }
         }
     }
-    let mut refusals = Vec::new();
+    let mut refusals = BTreeMap::new();
     collect_action_refusal_labels(&project.actions, "actions", None, &mut refusals);
     for entity in &project.entities {
         collect_profile_and_hook_labels(
@@ -1199,12 +1202,14 @@ fn validate_cross_file_duplicate_display_labels(
         findings,
     );
     add_cross_file_duplicate_labels("breg.action.duplicate-label", "actions", &actions, findings);
-    add_cross_file_duplicate_labels(
-        "breg.action-refusal.duplicate-label",
-        "action refusals",
-        &refusals,
-        findings,
-    );
+    for labels in refusals.values() {
+        add_cross_file_duplicate_labels(
+            "breg.action-refusal.duplicate-label",
+            "action refusals",
+            labels,
+            findings,
+        );
+    }
     for labels in fields.values() {
         add_cross_file_duplicate_labels("breg.field.duplicate-label", "fields", labels, findings);
     }

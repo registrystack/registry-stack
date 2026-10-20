@@ -1000,12 +1000,8 @@ fn add_nested_display_warnings(
                 &values,
             );
         }
-    }
-    let refusals = actions
-        .iter()
-        .enumerate()
-        .flat_map(|(action_index, action)| match &action.plan {
-            ActionPlanSource::Function { refusals, .. } => refusals
+        if let ActionPlanSource::Function { refusals, .. } = &action.plan {
+            let values = refusals
                 .iter()
                 .enumerate()
                 .map(|(refusal_index, refusal)| {
@@ -1014,17 +1010,16 @@ fn add_nested_display_warnings(
                         format!("{action_base}/{action_index}/plan/refusals/{refusal_index}/label"),
                     )
                 })
-                .collect::<Vec<_>>(),
-            ActionPlanSource::Fixed { .. } => Vec::new(),
-        })
-        .collect::<Vec<_>>();
-    add_duplicate_locations(
-        document,
-        warnings,
-        "breg.action-refusal.duplicate-label",
-        "action refusals",
-        &refusals,
-    );
+                .collect::<Vec<_>>();
+            add_duplicate_locations(
+                document,
+                warnings,
+                "breg.action-refusal.duplicate-label",
+                "action refusals",
+                &values,
+            );
+        }
+    }
 }
 
 fn add_profile_and_hook_display_warnings(
