@@ -269,6 +269,59 @@ fn lookalike_local_ids_name_and_locate_both_definitions() {
 }
 
 #[test]
+fn fixed_action_effect_collisions_include_implicit_ids_at_the_list_item() {
+    const HEAD: &str = r#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: effect-collisions
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://example.test
+"#;
+    let cases = [
+        (
+            format!(
+                "{HEAD}actions:\n  - id: update-item\n    execution: {{mode: immediate}}\n    plan:\n      type: fixed\n      effects:\n        - target: {{fromInput: item}}\n          operation: patch\n          set: {{name: {{value: first}}}}\n        - id: effect_1\n          target: {{fromInput: item}}\n          operation: patch\n          set: {{name: {{value: second}}}}\n"
+            ),
+            ("/actions/0/plan/effects/1/id", 17, 15),
+            ("/actions/0/plan/effects/0", 14, 11),
+        ),
+        (
+            format!(
+                "{HEAD}actions:\n  - id: create-and-update\n    execution: {{mode: immediate}}\n    plan:\n      type: fixed\n      effects:\n        - id: effect_2\n          target: {{recordType: item}}\n          operation: create\n          set: {{name: {{value: created}}}}\n        - target: {{fromInput: item}}\n          operation: patch\n          set: {{name: {{value: updated}}}}\n"
+            ),
+            ("/actions/0/plan/effects/1", 18, 11),
+            ("/actions/0/plan/effects/0/id", 14, 15),
+        ),
+    ];
+
+    for (source, primary, related) in cases {
+        let report = read_project_yaml("registry.yaml", source.as_bytes()).unwrap_err();
+        let diagnostic = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.action-effect.id-collision")
+            .unwrap_or_else(|| {
+                panic!(
+                    "effective Action effect identifiers are one namespace: {}",
+                    report.render_human()
+                )
+            });
+        let site = diagnostic.source.as_ref().expect("located primary effect");
+        assert_eq!(diagnostic.path, primary.0);
+        assert_eq!(site.file, "registry.yaml");
+        assert_eq!((site.line, site.column), (Some(primary.1), Some(primary.2)));
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(diagnostic.related[0].path, related.0);
+        assert_eq!(diagnostic.related[0].file, "registry.yaml");
+        assert_eq!(
+            (diagnostic.related[0].line, diagnostic.related[0].column),
+            (Some(related.1), Some(related.2))
+        );
+    }
+}
+
+#[test]
 fn hook_ids_share_one_namespace_within_each_authored_file() {
     let hook = |id: &str| {
         json!({
