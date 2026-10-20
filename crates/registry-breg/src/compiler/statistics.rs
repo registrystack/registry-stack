@@ -346,6 +346,7 @@ pub(super) fn compile(
             source.id.to_string(),
             CompiledStatisticalDataset {
                 id: source.id.to_string(),
+                display: source.display.clone(),
                 unit_entity_id: source.unit.clone(),
                 population: source.population.clone(),
                 period,
@@ -521,6 +522,7 @@ fn authentication_profile(
     });
     AccessProfileSource {
         id: profile.id.clone(),
+        display: profile.display.clone(),
         default: profile.default,
         actor_kind: profile.actor_kind,
         requester_clients: profile.requester_clients.clone(),

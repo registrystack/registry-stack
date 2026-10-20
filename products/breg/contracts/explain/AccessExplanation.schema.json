@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha5.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha6.schema.json",
   "title": "AccessExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain access` without `--scenario`. Evaluation-rule strings are pinned. Record grants retain compiled authority with inspection-only explicit row boundaries and allowCount. Routes, actions and rowReach follow the compiled model, except pinned routes.entries[].recordType. claimContract remains opaque except principalClaims and its success/error relationship with claimContractError. Consent and statisticalDatasets are pinned in full.",
   "type": "object",
@@ -22,11 +22,12 @@
     "claimContract",
     "claimContractError",
     "consent",
-    "statisticalDatasets"
+    "statisticalDatasets",
+    "accessProfiles"
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/access-explanation/v1alpha5"
+      "const": "id.registrystack.org/formats/breg/access-explanation/v1alpha6"
     },
     "kind": {
       "const": "BRegAccessExplanation"
@@ -482,7 +483,8 @@
           "readLive",
           "publish",
           "readReleases",
-          "accessProfiles"
+          "accessProfiles",
+          "display"
         ],
         "properties": {
           "dataset": {
@@ -521,6 +523,28 @@
               ],
               "x-registry-passthrough": "Dataset profile authority retained by the compiler; shape follows AccessProfileSource."
             }
+          },
+          "display": {
+            "$ref": "#/$defs/Presentation"
+          }
+        }
+      }
+    },
+    "accessProfiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "display"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "display": {
+            "$ref": "#/$defs/Presentation"
           }
         }
       }
@@ -602,6 +626,33 @@
           "items": {
             "type": "string"
           }
+        }
+      }
+    },
+    "Display": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "titleField": {
+          "type": "string"
+        }
+      }
+    },
+    "Presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
         }
       }
     }

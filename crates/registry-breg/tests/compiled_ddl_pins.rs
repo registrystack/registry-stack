@@ -44,6 +44,8 @@
 //! Problem, likewise move artifact revisions only.
 //! Publishing the field-encryption outage Problem on immediate Action invoke and
 //! availability operations likewise moves Action fixture artifact revisions only.
+//! Retaining native datasets and project access-profile display in the effective
+//! model also moves artifact revisions. SQL and Action fingerprints stay fixed.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
@@ -66,7 +68,7 @@ const FIXTURES: &[Fixture] = &[
         ),
         module: None,
         ddl_sha256: "b29dd51145e008de342526941bada68781b9d8067a8384643ede258e9471c28a",
-        revision: "sha256:6b631862b5b91c26e1159a0a11480678cace8b8d601ed4b11aeca707985bdaa0",
+        revision: "sha256:b6def9a9b118636bc437b47022bfb5883a951e753bb420994c4189ee82446642",
     },
     Fixture {
         name: "asset-registration-actions",
@@ -77,7 +79,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
         ddl_sha256: "19e503d71d515e5a9e2af9c109b91cce856eb041849d9d0208dfeb454365e7ba",
-        revision: "sha256:ab230321e1af201fd82ba755d3ac0d5f4276a8d62b018d5c678650242882bfa6",
+        revision: "sha256:2c86d433ea7c988d183b394f58b0f9f06aff0b32309e8e813c46fdc5335506cd",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -88,7 +90,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
         ddl_sha256: "92c531b3cf49292bcbaa33b663fd2fc2fdd934d0f96635261f0f9d463ef914d8",
-        revision: "sha256:c884fbf1a694ed07de771662e33d46fd29595c720e1583faa0eb9dc4044f75c5",
+        revision: "sha256:cc92b0e50c10015a89330b619e0c872e2dfcf3082a08a53ab4ba4d2c9acf2582",
     },
     Fixture {
         name: "household-contact-actions",
@@ -99,7 +101,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
         ddl_sha256: "6699bf442105e684adbe6ca506cfbbef90700b0298decdd9ec3f7a3a90cf4e67",
-        revision: "sha256:3cfbdf8364797123d5408dad610455b3aa206cb05934d808bfe9098456d5af49",
+        revision: "sha256:aa3070e3c1a91861e6d5411e5261f51c15c13a2a1c020a93ee0a92e42ec86917",
     },
 ];
 

@@ -106,6 +106,167 @@ fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
 }
 
 #[test]
+fn check_places_nested_compiler_diagnostics_at_the_exact_authored_members() {
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/facility");
+    let source = fs::read_to_string(fixture.join("registry.yaml"))
+        .expect("facility source reads")
+        .replace(
+            "- {id: by-operator, fields: [operator]}",
+            "- {id: by-operator, fields: [missing-field]}",
+        )
+        .replace(
+            "- {path: operators, readableFields: [operator-code, status, jurisdiction]}",
+            "- {path: operators, readableFields: [operator-code], filterableFields: [status]}",
+        )
+        .replace(
+            "readableFields: [facility, operator, jurisdiction]\n          filterableFields: [facility, operator]",
+            "readableFields: [facility, jurisdiction]\n          filterableFields: [facility, operator]",
+        );
+    let project = TestProject::from_registry_source(source.as_bytes());
+    fs::create_dir(project.path().join("plans")).expect("plans directory is created");
+    fs::copy(
+        fixture.join("plans/correct-address.rhai"),
+        project.path().join("plans/correct-address.rhai"),
+    )
+    .expect("plan source is copied");
+
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics is an array");
+    for (code, pointer) in [
+        (
+            "breg.index.fields-invalid",
+            "/recordTypes/3/indexes/1/fields",
+        ),
+        (
+            "breg.access-profile.read-path-processing-wider-than-read",
+            "/accessProfiles/1/permissions/records/1/readPaths/0/filterableFields",
+        ),
+        (
+            "breg.access-profile.processing-wider-than-read",
+            "/accessProfiles/1/permissions/records/2/filterableFields",
+        ),
+    ] {
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == code)
+            .unwrap_or_else(|| panic!("{code} is reported: {report:#?}"));
+        assert_check_diagnostic(diagnostic, Some("BRegProject"));
+        assert_eq!(diagnostic["path"], pointer, "{diagnostic:#?}");
+        assert_eq!(
+            diagnostic["source"]["file"],
+            project.path().join("registry.yaml").display().to_string()
+        );
+        assert!(diagnostic["source"]["line"].is_u64(), "{diagnostic:#?}");
+        assert!(diagnostic["source"]["column"].is_u64(), "{diagnostic:#?}");
+        assert!(
+            !diagnostic["message"]
+                .as_str()
+                .expect("message is text")
+                .contains("(in "),
+            "a complete source pointer does not carry an unresolved compiler path: {diagnostic:#?}"
+        );
+    }
+}
+
+#[test]
+fn check_places_record_extension_diagnostics_in_the_exact_module_blocks() {
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: extension-diagnostic-fixture
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://extension-diagnostic-fixture.example.test
+datasets:
+  - id: test-dataset
+modules:
+  - id: core
+    version: "1"
+"#,
+    );
+    let module_directory = project.path().join("modules/core");
+    fs::create_dir_all(&module_directory).expect("module directory is created");
+    fs::write(
+        module_directory.join("module.yaml"),
+        br#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: core
+version: "1"
+recordTypes:
+  - id: record
+    primaryDataset: test-dataset
+    route: records
+    mutationMode: create-only
+    fields:
+      - id: code
+        type: string
+        maximumLength: 64
+        classification: internal
+extendRecordTypes:
+  - recordType: record
+    indexes:
+      - id: by-missing
+        fields: [missing]
+  - recordType: record
+    readPaths:
+      - id: missing-link
+        route: missing-link
+        through: missing-association
+        to: missing-target
+"#,
+    )
+    .expect("module source is written");
+
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics is an array");
+    for (code, pointer, line, column) in [
+        (
+            "breg.index.fields-invalid",
+            "/extendRecordTypes/0/indexes/0/fields",
+            19,
+            17,
+        ),
+        (
+            "breg.read-path.through-unknown",
+            "/extendRecordTypes/1/readPaths/0/through",
+            24,
+            18,
+        ),
+    ] {
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == code)
+            .unwrap_or_else(|| panic!("{code} is reported: {report:#?}"));
+        assert_check_diagnostic(diagnostic, Some("BRegModule"));
+        assert_eq!(diagnostic["path"], pointer, "{diagnostic:#?}");
+        assert_eq!(
+            diagnostic["source"]["file"],
+            module_directory.join("module.yaml").display().to_string()
+        );
+        assert_eq!(diagnostic["source"]["line"], line, "{diagnostic:#?}");
+        assert_eq!(diagnostic["source"]["column"], column, "{diagnostic:#?}");
+        assert!(
+            !diagnostic["message"]
+                .as_str()
+                .expect("message is text")
+                .contains("(in "),
+            "an exact extension pointer does not carry an unresolved compiler path: {diagnostic:#?}"
+        );
+    }
+}
+
+#[test]
 fn explain_access_names_membership_constraints_instead_of_unrestricted_rows() {
     let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/fixtures/organization-membership-access")

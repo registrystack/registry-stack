@@ -8,20 +8,20 @@ own `breg/ctl-report/v1alpha1` version.
 
 | Subject | Format | Current version | Schema |
 |---|---|---|---|
-| `model` | `BRegModelExplanation` | `v1alpha5` | `ModelExplanation.schema.json` |
-| `access` | `BRegAccessExplanation` | `v1alpha5` | `AccessExplanation.schema.json` |
+| `model` | `BRegModelExplanation` | `v1alpha6` | `ModelExplanation.schema.json` |
+| `access` | `BRegAccessExplanation` | `v1alpha6` | `AccessExplanation.schema.json` |
 | `access --scenario` | `BRegAccessPreview` | `v1alpha4` | `AccessPreview.schema.json` |
-| `actions` | `BRegActionsExplanation` | `v1alpha5` | `ActionsExplanation.schema.json` |
-| `proposals` | `BRegProposalsExplanation` | `v1alpha1` | `ProposalsExplanation.schema.json` |
+| `actions` | `BRegActionsExplanation` | `v1alpha6` | `ActionsExplanation.schema.json` |
+| `proposals` | `BRegProposalsExplanation` | `v1alpha2` | `ProposalsExplanation.schema.json` |
 | `routes` | `BRegRoutesExplanation` | `v1alpha6` | `RoutesExplanation.schema.json` |
 | `queries` | `BRegQueriesExplanation` | `v1alpha5` | `QueriesExplanation.schema.json` |
 | `events` | `BRegEventsExplanation` | `v1alpha6` | `EventsExplanation.schema.json` |
-| `lifecycle` | `BRegLifecycleExplanation` | `v1alpha6` | `LifecycleExplanation.schema.json` |
+| `lifecycle` | `BRegLifecycleExplanation` | `v1alpha7` | `LifecycleExplanation.schema.json` |
 
 Each format's identifier is
 `id.registrystack.org/formats/breg/<format>/<version>`, with the format name
 in lowercase kebab-case. For example, the model format is
-`id.registrystack.org/formats/breg/model-explanation/v1alpha5`.
+`id.registrystack.org/formats/breg/model-explanation/v1alpha6`.
 
 `lifecycle` accepts no project and describes the engine-owned Proposal state
 machine. Every other subject requires a project. `proposals` returns the
@@ -30,6 +30,34 @@ execution. The removed `change-requests` subject has no current example or
 schema.
 
 ## Version changes
+
+Model and Access `v1alpha6` add dataset and access-profile display inventories.
+Model also retains field display and module origins, and adds `authoring.documents`.
+Each document names a project-relative file and lists the RFC 6901 JSON Pointers
+present in the source before defaults or module composition. Paths include
+containers and sequence positions; they contain no authored values. Each document's `bindings` links an `explanationPointer` against this explanation
+to a `sourcePointer` against that source document. These links follow IDs and
+module origins, so they remain correct when compilation reorders arrays or a
+module extends a Record type. The root explanation binds to `/project`.
+
+Bindings cover datasets, project access profiles, review authorities, Record
+types, stored and derived fields, record hooks, Actions, inputs, Proposal hooks,
+and statistical datasets. To test authored display, find the object's binding
+and append `/display/label` or `/display/description` to its source pointer, then
+look for that exact path in the same document's `authoredPaths`. Use the same
+approach for an unchanged source member such as a stored field's `required`.
+Absence means the source did not author that member, not that every generated
+member has a default. Compiled names such as `revision`, `canonicalId`, and
+`schema` have no implied source counterpart.
+
+Actions `v1alpha6` and Proposals `v1alpha2` retain optional authored input
+`display` separately from the existing `label`, whose fallback remains `apiName`.
+Display text is presentation metadata and never changes identity, matching, or
+authority. Keep the ID alongside any label in selection and approval interfaces.
+
+Lifecycle `v1alpha7` adds each state's possible `turns`. Submitted work has a conditional
+turn whose ordered rules use the same evaluator as runtime Proposal documents.
+Consumers must select the corresponding new schema for each changed format.
 
 `v1alpha5` names the native model and Proposal contracts. Model inspection
 replaces the old entity/package projection with source-free `recordTypes`,
@@ -49,9 +77,8 @@ a form can distinguish multiline `text` from a bounded `string` and discover a
 reference's target. Its internal shape follows the engine field type contract;
 the JSON value `schema` remains the validation contract for field values.
 
-Consumers of the four unchanged formats above at `v1alpha5` must select that
-schema and use the native fields above. `ProposalsExplanation` starts at
-`v1alpha1`. Event inspection adds the owning hook phase and Proposal transition
+The native formats introduced at `v1alpha5` use the native fields above.
+`ProposalsExplanation` originally started at `v1alpha1`. Event inspection adds the owning hook phase and Proposal transition
 selection. `AccessPreview` retains `v1alpha4` because its pinned shape is unchanged.
 
 `RoutesExplanation` `v1alpha6` adds `availability` to the closed Action route
@@ -100,6 +127,11 @@ root to repository-relative paths before formatting and comparison. All other
 report content remains unchanged. This fixture convention does not change the
 CLI's source addresses.
 
+The additional `authored-display-*-explanation.json` examples use
+`products/breg/fixtures/authoring-display/`. They pin labels and descriptions on
+profiles, native and statistical datasets, fields, inputs, and both hook kinds,
+including an input with no authored display.
+
 Generate the examples from a binary built from the matching checkout. From
 the repository root, with that `bregctl` on `PATH`:
 
@@ -116,6 +148,9 @@ commands = {f'{subject}-explanation': [subject, project] for subject in
             ['model', 'access', 'actions', 'proposals', 'events', 'queries', 'routes']}
 commands['access-preview'] = ['access', preview, '--scenario', f'{preview}/allowed.json']
 commands['lifecycle-explanation'] = ['lifecycle']
+for subject in ['model', 'access', 'actions', 'proposals']:
+    commands[f'authored-display-{subject}-explanation'] = [
+        subject, 'products/breg/fixtures/authoring-display']
 for name, args in commands.items():
     report = json.loads(subprocess.check_output(['bregctl', '--format', 'json', 'explain', *args]))
     assert report['ok'], report

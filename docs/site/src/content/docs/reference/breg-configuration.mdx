@@ -45,6 +45,28 @@ runtime also check cross-field rules and references that no table can show.
 
 <ConfigurationReference contracts={reference.contracts} prefix="server" />
 
+## Authored values and display
+
+Use `bregctl --format json explain model <project>` when a tool needs to distinguish an authored
+value from a compiled default. `authoring.documents` lists the project and each module file,
+with the RFC 6901 JSON Pointers present before defaults and module composition. Each document's `bindings` links an `explanationPointer` in the explanation to a
+`sourcePointer` in that file, including members contributed by module extensions. Find the
+object's binding, append `/display/label` to its source pointer, and check that exact path in
+that document's `authoredPaths`. An absent path means the source omitted the label. The same
+rule applies to unchanged source members such as a stored field's `required`; generated
+fields and other derived output are not necessarily defaults.
+
+`display.label` and `display.description` describe authored objects without changing their
+IDs or permissions. Keep IDs visible alongside labels in selection and approval interfaces.
+Action inputs keep their existing `label` fallback to `apiName`; the separate optional
+`display` member tells you whether display was authored.
+
+{/* Evidence: crates/registry-bregctl/src/check.rs, Authoring and authored_paths();
+    crates/registry-bregctl/src/lib.rs, explain();
+    crates/registry-breg/src/artifacts.rs, inspect_registry() and action_input_metadata();
+    crates/registry-breg/tests/native_inspection_inventory.rs,
+    model_retains_authored_display_without_inventing_input_labels(). */}
+
 ## Indexes
 
 The compiler appends the record id, the last sort key of every list, to each index under

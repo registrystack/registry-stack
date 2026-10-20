@@ -1,0 +1,430 @@
+{
+  "accessProfiles": [
+    {
+      "display": {
+        "description": "Maintains and reads directory entries.",
+        "label": "Directory editor"
+      },
+      "id": "directory-editor"
+    }
+  ],
+  "actions": {
+    "access": [
+      {
+        "actionId": "register-entry",
+        "defaultProfileId": "directory-editor",
+        "operation": "start",
+        "profileIds": [
+          "directory-editor"
+        ],
+        "routeId": "actions.register-entry.start"
+      }
+    ],
+    "actions": [
+      {
+        "apiName": "registerEntry",
+        "bounds": {
+          "maximumFieldMutations": 128,
+          "maximumSnapshotBytes": 2097152,
+          "maximumTargets": 16
+        },
+        "commitGuards": [],
+        "dependencies": {
+          "evidence": []
+        },
+        "display": {
+          "label": "Register entry"
+        },
+        "execution": {
+          "mode": "proposal",
+          "proposal": {
+            "application": {
+              "maximumAttempts": 3,
+              "mode": "automatic"
+            },
+            "attachments": {},
+            "hooks": [
+              {
+                "destinationId": "proposal-events",
+                "display": {
+                  "description": "Announces a submitted entry proposal.",
+                  "label": "Submission notification"
+                },
+                "id": "proposal-submitted",
+                "transitions": [
+                  "submitted"
+                ]
+              }
+            ],
+            "permissions": [
+              {
+                "actorKind": null,
+                "default": true,
+                "operations": [
+                  "get",
+                  "list",
+                  "edit",
+                  "submit",
+                  "cancel"
+                ],
+                "ownership": "caller",
+                "principalClaim": "registry_principal",
+                "profileId": "directory-editor",
+                "readableAttachments": [],
+                "readableContextFields": [],
+                "readableInputs": [
+                  "active",
+                  "code",
+                  "recorded-on"
+                ],
+                "requesterClients": [],
+                "requiredPurposes": [],
+                "requiredScopes": [
+                  "directory:write"
+                ],
+                "targets": [
+                  {
+                    "recordType": "entry",
+                    "rowBoundaries": []
+                  }
+                ],
+                "writableAttachments": []
+              }
+            ],
+            "retention": "retain",
+            "review": {
+              "type": "none"
+            },
+            "reviewContext": null,
+            "systemApplyGrant": {
+              "actionId": "register-entry",
+              "actionRevision": "sha256:50148480ed74a0609df9d7a66a542007522705cfb17b1dd41181721f36f31d75",
+              "revision": "sha256:6c11168bbab0d65e98564c53be6a88b8dc6af79b1ee30e9824c37b1e01c0e49d",
+              "targets": [
+                {
+                  "fields": [
+                    "active",
+                    "code",
+                    "recorded-on"
+                  ],
+                  "operation": "create",
+                  "readFields": [
+                    "active",
+                    "code",
+                    "recorded-on"
+                  ],
+                  "recordType": "entry"
+                }
+              ]
+            }
+          }
+        },
+        "id": "register-entry",
+        "inputs": [
+          {
+            "apiName": "code",
+            "classification": "internal",
+            "description": "The code to give the new entry.",
+            "display": {
+              "description": "The code to give the new entry.",
+              "label": "Entry reference"
+            },
+            "fieldType": {
+              "maximumLength": 80,
+              "minimumLength": 0,
+              "type": "string"
+            },
+            "id": "code",
+            "label": "Entry reference",
+            "nullable": false,
+            "required": true,
+            "schema": {
+              "maxLength": 80,
+              "minLength": 0,
+              "type": "string"
+            }
+          },
+          {
+            "apiName": "active",
+            "classification": "internal",
+            "fieldType": {
+              "type": "boolean"
+            },
+            "id": "active",
+            "label": "active",
+            "nullable": false,
+            "required": true,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "apiName": "recordedOn",
+            "classification": "internal",
+            "fieldType": {
+              "type": "date"
+            },
+            "id": "recorded-on",
+            "label": "recordedOn",
+            "nullable": false,
+            "required": true,
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          }
+        ],
+        "permissions": [
+          {
+            "default": true,
+            "operations": [
+              "start"
+            ],
+            "principalClaim": "registry_principal",
+            "profileId": "directory-editor",
+            "requiredPurposes": [],
+            "requiredScopes": [
+              "directory:write"
+            ],
+            "results": [],
+            "targets": [
+              {
+                "operation": "create",
+                "recordType": "entry",
+                "rowBoundaries": [],
+                "source": {
+                  "effect": "entry",
+                  "kind": "effect"
+                }
+              }
+            ]
+          }
+        ],
+        "plan": {
+          "effects": [
+            {
+              "dependsOn": [],
+              "id": "entry",
+              "mutations": [
+                {
+                  "field": "active",
+                  "kind": "set",
+                  "value": {
+                    "input": "active",
+                    "kind": "from-input"
+                  }
+                },
+                {
+                  "field": "code",
+                  "kind": "set",
+                  "value": {
+                    "input": "code",
+                    "kind": "from-input"
+                  }
+                },
+                {
+                  "field": "recorded-on",
+                  "kind": "set",
+                  "value": {
+                    "input": "recorded-on",
+                    "kind": "from-input"
+                  }
+                }
+              ],
+              "operation": "create",
+              "target": {
+                "binding": {
+                  "kind": "create"
+                },
+                "recordType": "entry"
+              }
+            }
+          ],
+          "order": [
+            "entry"
+          ],
+          "type": "fixed"
+        },
+        "revision": "sha256:50148480ed74a0609df9d7a66a542007522705cfb17b1dd41181721f36f31d75"
+      }
+    ],
+    "routes": [
+      {
+        "accessProfiles": [
+          "directory-editor"
+        ],
+        "actionId": "register-entry",
+        "defaultAccessProfile": "directory-editor",
+        "id": "actions.register-entry.start",
+        "kind": "invoke",
+        "method": "POST",
+        "operation": "start",
+        "path": "/v1/actions/register-entry/proposals"
+      }
+    ]
+  },
+  "apiVersion": "id.registrystack.org/formats/breg/access-explanation/v1alpha6",
+  "claimContract": {
+    "directClaims": {},
+    "principalClaims": [
+      "registry_principal"
+    ],
+    "purposeRequired": false
+  },
+  "claimContractError": null,
+  "consent": null,
+  "evaluation": "configuration inspection only; credentials and record access are not evaluated",
+  "kind": "BRegAccessExplanation",
+  "missingClaims": "missing required direct claims cannot satisfy their row boundary or verified-claim lookup; types and scalar/set shape are listed in claimContract",
+  "profileSelection": "one profile per request; selecting its name never grants authority and profiles are not merged",
+  "purposeMatching": "one allowed purpose must match; a profile that names none accepts every purpose",
+  "recordTypes": [
+    {
+      "classification": "internal",
+      "mutationPolicy": {},
+      "profiles": [
+        {
+          "allowCount": true,
+          "allowDataExport": false,
+          "default": true,
+          "display": {
+            "description": "Maintains and reads directory entries.",
+            "label": "Directory editor"
+          },
+          "filterableFields": [
+            "active",
+            "recorded-on"
+          ],
+          "id": "directory-editor",
+          "operations": [
+            "create",
+            "get",
+            "list"
+          ],
+          "principalClaim": "registry_principal",
+          "readableFields": [
+            "active",
+            "code",
+            "recorded-on"
+          ],
+          "requiredPurposes": [],
+          "requiredScopes": [
+            "directory:write"
+          ],
+          "revisionAccess": false,
+          "rowBoundaries": "unrestricted",
+          "sortableFields": [],
+          "writableFields": [
+            "active",
+            "code",
+            "recorded-on"
+          ]
+        }
+      ],
+      "recordType": "entry",
+      "requirements": null
+    }
+  ],
+  "relationshipMatching": "relationship paths use the root profile row boundaries and the path's target field permissions; target direct profiles do not apply",
+  "routes": {
+    "entries": [
+      {
+        "defaultProfileId": "directory-editor",
+        "operation": "create",
+        "profileIds": [
+          "directory-editor"
+        ],
+        "recordType": "entry",
+        "routeId": "records.entry.create"
+      },
+      {
+        "defaultProfileId": "directory-editor",
+        "operation": "get",
+        "profileIds": [
+          "directory-editor"
+        ],
+        "recordType": "entry",
+        "routeId": "records.entry.get"
+      },
+      {
+        "defaultProfileId": "directory-editor",
+        "operation": "list",
+        "profileIds": [
+          "directory-editor"
+        ],
+        "recordType": "entry",
+        "routeId": "records.entry.list"
+      }
+    ]
+  },
+  "rowMatching": "all claim-bound and current membership row predicates must hold; rowBoundaries written as unrestricted mean no claim-bound row restriction; Proposal caller ownership additionally limits Proposal operations",
+  "rowReach": [
+    {
+      "ownerOnly": false,
+      "profile": "directory-editor",
+      "recordType": "entry",
+      "rowBoundaries": [],
+      "rows": "all",
+      "sourcePath": "recordTypes[id=entry].accessProfiles[id=directory-editor].rowBoundaries",
+      "surface": "record"
+    },
+    {
+      "ownerOnly": false,
+      "profile": "directory-editor",
+      "recordType": "entry",
+      "rowBoundaries": [],
+      "rows": "all",
+      "sourcePath": "actions[id=register-entry].permissions[profile=directory-editor].targets[recordType=entry].rowBoundaries",
+      "surface": "action_target"
+    },
+    {
+      "ownerOnly": true,
+      "profile": "directory-editor",
+      "recordType": "entry",
+      "rowBoundaries": [],
+      "rows": "all",
+      "sourcePath": "actions[id=register-entry].execution.proposal.permissions[profile=directory-editor].targets[recordType=entry].rowBoundaries",
+      "surface": "proposal_target"
+    }
+  ],
+  "scopeMatching": "all required scopes must be present",
+  "statisticalDatasets": [
+    {
+      "accessProfiles": [
+        {
+          "allowDataExport": false,
+          "default": true,
+          "display": {
+            "description": "Maintains and reads directory entries.",
+            "label": "Directory editor"
+          },
+          "filterableFields": [],
+          "id": "directory-editor",
+          "operations": [],
+          "principalClaim": "registry_principal",
+          "readableFields": [],
+          "requiredPurposes": [],
+          "requiredScopes": [
+            "directory:write"
+          ],
+          "revisionAccess": false,
+          "rowBoundaries": [],
+          "sortableFields": [],
+          "writableFields": []
+        }
+      ],
+      "dataset": "entry-counts",
+      "display": {
+        "description": "Counts active entries by recording month.",
+        "label": "Monthly entry counts"
+      },
+      "publish": [
+        "directory-editor"
+      ],
+      "readLive": [],
+      "readReleases": [
+        "directory-editor"
+      ]
+    }
+  ]
+}

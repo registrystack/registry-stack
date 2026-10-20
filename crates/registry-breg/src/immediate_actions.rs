@@ -2078,6 +2078,7 @@ fn validate_permission_access_requirements(
     if let Some(requirements) = &entity.access_requirements {
         let grant_profile = AccessProfileSource {
             id: profile.id.clone(),
+            display: profile.display.clone(),
             default: profile.default,
             actor_kind: profile.actor_kind,
             requester_clients: profile.requester_clients.clone(),

@@ -79,11 +79,13 @@ fn validates(subject: &str, mut value: Value) {
         ),
         _ => unreachable!(),
     };
-    let version = if subject == "events" {
-        "v1alpha6"
-    } else {
-        "v1alpha5"
-    };
+    let version = "v1alpha6";
+    if subject == "model" {
+        // The CLI adds source presence; this test covers the compiler projection.
+        value["authoring"] = json!({"documents":[{
+            "kind":"BRegProject", "file":"registry.yaml", "authoredPaths":[""], "bindings":[]
+        }]});
+    }
     value["apiVersion"] = json!(format!(
         "id.registrystack.org/formats/breg/{subject}-explanation/{version}"
     ));
@@ -150,6 +152,125 @@ fn model_retains_record_policy_shape_read_paths_and_field_classification() {
     with_modules["moduleClosure"] = json!(registry.module_closure());
     validates("model", with_modules);
     validates("access", access);
+}
+
+#[test]
+fn model_retains_authored_display_without_inventing_input_labels() {
+    let mut source = source();
+    let baseline = compile(&source);
+    source["accessProfiles"][1]["display"] =
+        json!({"label":"Facility reader", "description":"Read the facility directory."});
+    source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"no-grants", "principalClaim":"registry_principal",
+            "requiredScopes":"unrestricted", "display":{"label":"Awaiting permission"}
+        }));
+    record_mut(&mut source, "facility")["fields"][1]["display"] =
+        json!({"label":"Facility name", "description":"Name recorded by the registry."});
+    source["actions"][0]["inputs"][1]["display"] = json!({"label":"Operating organisation"});
+    let registry = compile(&source);
+    let model = inspect_registry(&registry);
+    assert_eq!(model["datasets"], source["datasets"]);
+    assert_eq!(
+        definition(&model["accessProfiles"], "facility-reader")["display"],
+        source["accessProfiles"][1]["display"]
+    );
+    assert_eq!(
+        definition(&model["accessProfiles"], "no-grants")["display"]["label"],
+        "Awaiting permission"
+    );
+    let record = definition(&model["recordTypes"], "facility");
+    let field_id = source["recordTypes"][2]["fields"][1]["id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        definition(&record["fields"], field_id)["display"],
+        source["recordTypes"][2]["fields"][1]["display"]
+    );
+    let action = &source["actions"][0];
+    // Action inventory order is an implementation detail; locate the Action by id.
+    let inputs = &definition(&model["actions"], action["id"].as_str().unwrap())["inputs"];
+    let fallback = definition(inputs, action["inputs"][0]["id"].as_str().unwrap());
+    assert_eq!(fallback["label"], fallback["apiName"]);
+    assert!(fallback.get("display").is_none());
+    let authored = definition(inputs, action["inputs"][1]["id"].as_str().unwrap());
+    assert_eq!(authored["display"], action["inputs"][1]["display"]);
+    assert_eq!(authored["label"], "Operating organisation");
+    let access = serde_json::to_value(registry_breg::access::explain_access(&registry)).unwrap();
+    assert_eq!(access["accessProfiles"], model["accessProfiles"]);
+    assert_eq!(
+        registry.routes(),
+        baseline.routes(),
+        "display adds no route or grant"
+    );
+    assert_ne!(
+        registry.revision(),
+        baseline.revision(),
+        "authored display is hash-covered"
+    );
+}
+
+#[test]
+fn omitted_and_empty_profile_display_have_identical_compiled_meaning() {
+    let mut source = source();
+    let omitted = compile(&source);
+    for profile in source["accessProfiles"].as_array_mut().unwrap() {
+        profile["display"] = json!({});
+    }
+    let explicit_empty = compile(&source);
+    assert_eq!(omitted, explicit_empty);
+}
+
+#[test]
+fn profile_dataset_and_hook_displays_refuse_record_title_selection() {
+    let mut source = source();
+    source["statisticalDatasets"] = json!([{
+        "id":"counts", "unit":"facility", "population":"active eq true",
+        "period":{"type":"flow", "field":"date", "granularity":"month", "firstPeriod":"2025-01"},
+        "dimensions":["active"]
+    }]);
+    source["recordTypes"][0]["hooks"] = json!([{
+        "id":"record-observer", "phase":"after", "trigger":"patched", "projection":["name"],
+        "handler":{"type":"url", "destinationId":"record-events"}
+    }]);
+    let proposal = source["actions"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|action| action["execution"]["mode"] == "proposal")
+        .unwrap();
+    proposal["execution"]["proposal"]["hooks"] = json!([{
+        "id":"proposal-observer", "handler":{"type":"url", "destinationId":"proposal-events"}
+    }]);
+    let proposal_index = source["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|action| action["execution"]["mode"] == "proposal")
+        .unwrap();
+    for pointer in [
+        "/accessProfiles/0".to_owned(),
+        "/statisticalDatasets/0".to_owned(),
+        "/recordTypes/0/hooks/0".to_owned(),
+        format!("/actions/{proposal_index}/execution/proposal/hooks/0"),
+    ] {
+        let mut changed = source.clone();
+        changed.pointer_mut(&pointer).unwrap()["display"] = json!({"titleField":"name"});
+        let report = registry_breg::contract::read_project_yaml(
+            "registry.json",
+            &serde_json::to_vec(&changed).unwrap(),
+        )
+        .expect_err("only Record display selects a title field");
+        assert!(
+            report.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code == "config.unknown-key"
+                    && diagnostic.path == format!("{pointer}/display/titleField")
+            }),
+            "{report:?}"
+        );
+    }
 }
 
 #[test]
@@ -287,7 +408,7 @@ fn dataset_inventory_includes_dataset_only_profile_authentication() {
             json!({"id":"active", "type":"boolean", "required":true, "classification":"internal"}),
             json!({"id":"event-date", "type":"date", "required":true, "classification":"internal"}),
         ]);
-    source["statisticalDatasets"] = json!([{"id":"directory-counts", "unit":"directory-entry", "population":"active eq true",
+    source["statisticalDatasets"] = json!([{"id":"directory-counts", "display":{"label":"Directory counts"}, "unit":"directory-entry", "population":"active eq true",
         "period":{"type":"flow", "field":"event-date", "granularity":"month", "firstPeriod":"2025-01"},
         "dimensions":["active"], "disclosure":{"minimumCount":5, "roundingBase":5}}]);
     source["accessProfiles"].as_array_mut().unwrap().extend([
@@ -303,10 +424,12 @@ fn dataset_inventory_includes_dataset_only_profile_authentication() {
     let registry = compile(&source);
     let model = inspect_registry(&registry);
     let dataset = definition(&model["statisticalDatasets"], "directory-counts");
+    assert_eq!(dataset["display"]["label"], "Directory counts");
     assert_eq!(dataset["unitEntityId"], "directory-entry");
     assert_eq!(dataset["dimensions"][0]["field"], "active");
     let access = serde_json::to_value(registry_breg::access::explain_access(&registry)).unwrap();
     let audience = &access["statisticalDatasets"][0];
+    assert_eq!(audience["display"], dataset["display"]);
     let publisher = &access["recordTypes"]
         .as_array()
         .unwrap()
@@ -354,11 +477,11 @@ fn dataset_inventory_includes_dataset_only_profile_authentication() {
 #[test]
 fn event_inspection_uses_owner_hooks_for_phase_and_transitions() {
     let mut source = source();
-    record_mut(&mut source, "facility")["hooks"] = json!([{"id":"facility-patched", "phase":"after", "trigger":"patched",
+    record_mut(&mut source, "facility")["hooks"] = json!([{"id":"facility-patched", "display":{"label":"Facility changed"}, "phase":"after", "trigger":"patched",
         "projection":["address-line"], "when":{"type":"fields", "changed":["address-line"]},
         "handler":{"type":"url", "destinationId":"facility-observer"}}]);
     source["actions"][1]["execution"]["proposal"]["hooks"] = json!([
-        {"id":"proposal-settled", "transitions":["applied","submitted"], "handler":{"type":"url", "destinationId":"proposal-observer"}},
+        {"id":"proposal-settled", "display":{"label":"Proposal update"}, "transitions":["applied","submitted"], "handler":{"type":"url", "destinationId":"proposal-observer"}},
         {"id":"proposal-any", "handler":{"type":"url", "destinationId":"all-transitions"}},
     ]);
     let registry = compile(&source);
@@ -420,6 +543,17 @@ fn event_inspection_uses_owner_hooks_for_phase_and_transitions() {
         ])
     );
     let model = inspect_registry(&registry);
+    assert_eq!(
+        definition(&model["recordTypes"], "facility")["hooks"]["facility-patched"]["display"]
+            ["label"],
+        "Facility changed"
+    );
+    let proposal_hooks =
+        &definition(&model["actions"], "correct-address")["execution"]["proposal"]["hooks"];
+    assert_eq!(
+        definition(proposal_hooks, "proposal-settled")["display"]["label"],
+        "Proposal update"
+    );
     assert_eq!(
         definition(&model["recordTypes"], "facility")["hooks"]["facility-patched"]["when"],
         record["when"]

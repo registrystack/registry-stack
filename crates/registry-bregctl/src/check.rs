@@ -28,6 +28,7 @@ use registry_platform_yaml::{
     MAXIMUM_DOCUMENT_BYTES,
 };
 use serde::Serialize;
+use serde_json::Value;
 
 use super::{
     canonicalize_project_path, capture_resolved_project_source, compile_captured_project,
@@ -198,6 +199,342 @@ struct Documents {
     modules: Vec<(String, Document)>,
 }
 
+/// The authoring documents whose decoded trees produced one explanation.
+///
+/// `authoredPaths` records source presence only. A compiled member absent
+/// from these paths is an engine default only when the explanation contract
+/// documents that member's exact source pointer; compiled and derived members
+/// do not acquire that meaning merely because they are absent here.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct Authoring {
+    documents: Vec<AuthoringDocument>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthoringDocument {
+    kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    module: Option<String>,
+    file: String,
+    authored_paths: Vec<String>,
+    bindings: Vec<AuthoringBinding>,
+}
+
+/// The exact source object that produced one identity-bearing object in the
+/// model explanation. Both pointers use RFC 6901 against their respective
+/// documents; no selector dialect is exposed.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthoringBinding {
+    explanation_pointer: String,
+    source_pointer: String,
+}
+
+impl Documents {
+    fn authoring(&self) -> Authoring {
+        let project = AuthoringDocument {
+            kind: self.project.envelope().kind.clone(),
+            module: None,
+            file: "registry.yaml".to_owned(),
+            authored_paths: authored_paths(self.project.root()),
+            bindings: Vec::new(),
+        };
+        let modules = self.modules.iter().map(|(id, document)| AuthoringDocument {
+            kind: document.envelope().kind.clone(),
+            module: Some(id.clone()),
+            file: format!("modules/{id}/module.yaml"),
+            authored_paths: authored_paths(document.root()),
+            bindings: Vec::new(),
+        });
+        Authoring {
+            documents: std::iter::once(project).chain(modules).collect(),
+        }
+    }
+
+    /// Bind identity-bearing model objects to the exact source objects that
+    /// contributed them. A consumer may append a source-corresponding member
+    /// name such as `/display` to both pointers and consult `authoredPaths`.
+    /// The binding does not imply that every compiled child has a source peer.
+    fn model_authoring(&self, compiled: &CompiledRegistry) -> Authoring {
+        let model = registry_breg::artifacts::inspect_registry(compiled);
+        let mut authoring = self.authoring();
+
+        self.push_binding(
+            &mut authoring,
+            None,
+            String::new(),
+            &[Step::Member("project".to_owned())],
+        );
+        for (explanation_member, source_member) in [
+            ("datasets", "datasets"),
+            ("accessProfiles", "accessProfiles"),
+            ("reviewAuthorities", "reviewAuthorities"),
+            ("statisticalDatasets", "statisticalDatasets"),
+        ] {
+            for (index, item) in items(&model[explanation_member]).enumerate() {
+                let id = item["id"]
+                    .as_str()
+                    .expect("compiled model identity is a string");
+                self.push_binding(
+                    &mut authoring,
+                    None,
+                    format!("/{explanation_member}/{index}"),
+                    &id_item_steps(source_member, id),
+                );
+            }
+        }
+
+        for (record_index, item) in items(&model["recordTypes"]).enumerate() {
+            let record_id = item["id"]
+                .as_str()
+                .expect("compiled Record type identity is a string");
+            let record = compiled
+                .entities()
+                .get(record_id)
+                .expect("explained Record type belongs to the compiled model");
+            let record_module = record.source_module.as_deref();
+            self.push_binding(
+                &mut authoring,
+                record_module,
+                format!("/recordTypes/{record_index}"),
+                &id_item_steps("recordTypes", record_id),
+            );
+
+            for (field_index, field) in items(&item["fields"]).enumerate() {
+                let field_id = field["id"]
+                    .as_str()
+                    .expect("compiled field identity is a string");
+                let (member_module, source_steps) =
+                    if let Some(derivation_id) = field["derivation"].as_str() {
+                        let module = record
+                            .module_origins
+                            .derived_relations
+                            .get(derivation_id)
+                            .map(String::as_str);
+                        let mut steps = id_item_steps("derived", derivation_id);
+                        steps.extend(id_item_steps("fields", field_id));
+                        (module, steps)
+                    } else {
+                        let module = record
+                            .module_origins
+                            .fields
+                            .get(field_id)
+                            .map(String::as_str);
+                        (module, id_item_steps("fields", field_id))
+                    };
+                self.push_record_member_binding(
+                    &mut authoring,
+                    member_module,
+                    record_id,
+                    format!("/recordTypes/{record_index}/fields/{field_index}"),
+                    &source_steps,
+                );
+            }
+
+            for hook_id in item["hooks"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .map(|(id, _)| id)
+            {
+                let module = record.module_origins.hooks.get(hook_id).map(String::as_str);
+                self.push_record_member_binding(
+                    &mut authoring,
+                    module,
+                    record_id,
+                    format!(
+                        "/recordTypes/{record_index}/hooks/{}",
+                        escape_pointer_segment(hook_id)
+                    ),
+                    &id_item_steps("hooks", hook_id),
+                );
+            }
+        }
+
+        for (action_index, item) in items(&model["actions"]).enumerate() {
+            let action_id = item["id"]
+                .as_str()
+                .expect("compiled Action identity is a string");
+            let action = compiled
+                .actions()
+                .actions
+                .iter()
+                .find(|action| action.id == action_id)
+                .expect("explained Action belongs to the compiled model");
+            let module = action.source_module.as_deref();
+            let action_steps = id_item_steps("actions", action_id);
+            self.push_binding(
+                &mut authoring,
+                module,
+                format!("/actions/{action_index}"),
+                &action_steps,
+            );
+            for (input_index, input) in items(&item["inputs"]).enumerate() {
+                let input_id = input["id"]
+                    .as_str()
+                    .expect("compiled Action input identity is a string");
+                let mut source_steps = action_steps.clone();
+                source_steps.extend(id_item_steps("inputs", input_id));
+                self.push_binding(
+                    &mut authoring,
+                    module,
+                    format!("/actions/{action_index}/inputs/{input_index}"),
+                    &source_steps,
+                );
+            }
+            for (hook_index, hook) in items(&item["execution"]["proposal"]["hooks"]).enumerate() {
+                let hook_id = hook["id"]
+                    .as_str()
+                    .expect("compiled Proposal hook identity is a string");
+                let mut source_steps = action_steps.clone();
+                source_steps.extend([
+                    Step::Member("execution".to_owned()),
+                    Step::Member("proposal".to_owned()),
+                ]);
+                source_steps.extend(id_item_steps("hooks", hook_id));
+                self.push_binding(
+                    &mut authoring,
+                    module,
+                    format!("/actions/{action_index}/execution/proposal/hooks/{hook_index}"),
+                    &source_steps,
+                );
+            }
+        }
+        authoring
+    }
+
+    fn push_binding(
+        &self,
+        authoring: &mut Authoring,
+        module: Option<&str>,
+        explanation_pointer: String,
+        source_steps: &[Step],
+    ) {
+        let (document_index, document) = self.document_for_module(module);
+        let resolved = resolve(document.root(), source_steps);
+        assert!(
+            resolved.complete,
+            "compiled model object at {explanation_pointer} resolves to its exact source object"
+        );
+        authoring.documents[document_index]
+            .bindings
+            .push(AuthoringBinding {
+                explanation_pointer,
+                source_pointer: resolved.pointer,
+            });
+    }
+
+    /// Resolve a Record member in its owning document. A module may both
+    /// declare and extend the same Record type, so module identity alone does
+    /// not distinguish the two source locations.
+    fn push_record_member_binding(
+        &self,
+        authoring: &mut Authoring,
+        module: Option<&str>,
+        record_id: &str,
+        explanation_pointer: String,
+        member_steps: &[Step],
+    ) {
+        let (document_index, document) = self.document_for_module(module);
+        let mut candidates = vec![id_item_steps("recordTypes", record_id)];
+        let extension_items =
+            document
+                .root()
+                .get("extendRecordTypes")
+                .and_then(|entry| match &entry.value.value {
+                    NodeValue::Sequence(items) => Some(items),
+                    _ => None,
+                });
+        if let Some(items) = extension_items {
+            for (index, item) in items.iter().enumerate() {
+                if names(item, Some("recordType"), record_id) {
+                    candidates.push(vec![
+                        Step::Member("extendRecordTypes".to_owned()),
+                        Step::Index(index),
+                    ]);
+                }
+            }
+        }
+        let mut matches = candidates.into_iter().filter_map(|mut candidate| {
+            candidate.extend_from_slice(member_steps);
+            let resolved = resolve(document.root(), &candidate);
+            resolved.complete.then_some(resolved)
+        });
+        let resolved = matches.next().unwrap_or_else(|| {
+            panic!(
+                "compiled model Record member at {explanation_pointer} resolves to its exact source object"
+            )
+        });
+        assert!(
+            matches.next().is_none(),
+            "compiled model Record member at {explanation_pointer} has one exact source object"
+        );
+        authoring.documents[document_index]
+            .bindings
+            .push(AuthoringBinding {
+                explanation_pointer,
+                source_pointer: resolved.pointer,
+            });
+    }
+
+    fn document_for_module(&self, module: Option<&str>) -> (usize, &Document) {
+        match module {
+            None => (0, &self.project),
+            Some(module) => self
+                .modules
+                .iter()
+                .enumerate()
+                .find(|(_, (id, _))| id == module)
+                .map(|(index, (_, document))| (index + 1, document))
+                .expect("compiled module origin names a loaded document"),
+        }
+    }
+}
+
+fn items(value: &Value) -> impl Iterator<Item = &Value> {
+    value.as_array().into_iter().flatten()
+}
+
+fn id_item_steps(collection: &str, id: &str) -> Vec<Step> {
+    vec![
+        Step::Member(collection.to_owned()),
+        Step::Select {
+            key: Some("id".to_owned()),
+            value: id.to_owned(),
+        },
+    ]
+}
+
+/// Every node the author wrote, addressed by an exact RFC 6901 pointer in
+/// source order. The empty pointer names the document root; list items are
+/// present as well as their members, so an explicit empty collection remains
+/// distinguishable from an omitted one.
+fn authored_paths(root: &Node) -> Vec<String> {
+    let mut paths = Vec::new();
+    collect_authored_paths(root, String::new(), &mut paths);
+    paths
+}
+
+fn collect_authored_paths(node: &Node, path: String, paths: &mut Vec<String>) {
+    paths.push(path.clone());
+    match &node.value {
+        NodeValue::Mapping(entries) => {
+            for entry in entries {
+                let child = format!("{path}/{}", escape_pointer_segment(&entry.key));
+                collect_authored_paths(&entry.value, child, paths);
+            }
+        }
+        NodeValue::Sequence(items) => {
+            for (index, item) in items.iter().enumerate() {
+                collect_authored_paths(item, format!("{path}/{index}"), paths);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// The compiled registry when the project compiled, so the runtime file can be
 /// held to it.
 fn check_project(
@@ -293,16 +630,30 @@ fn compile_project(
     profile: ProfileArg,
     outcome: &mut Outcome,
 ) -> Option<CompiledRegistry> {
-    let documents = read_documents(project, outcome)?;
+    compile_project_with_documents(project, profile, outcome).map(|(compiled, _)| compiled)
+}
+
+/// Compile the project and keep the exact decoded authoring documents used
+/// to place diagnostics and describe source presence in inspection output.
+fn compile_project_with_documents(
+    project: &Path,
+    profile: ProfileArg,
+    outcome: &mut Outcome,
+) -> Option<(CompiledRegistry, Documents)> {
     let source = match capture_resolved_project_source(project) {
         Ok(source) => source,
         Err(diagnostic) => {
+            // The aggregate reader reports every positioned refusal when
+            // capture stopped at the first invalid source. This fallback
+            // never supplies provenance for a successfully compiled model.
+            let documents = read_documents(project, outcome)?;
             outcome
                 .report
                 .push(place(project, &documents, diagnostic, Severity::Error));
             return None;
         }
     };
+    let documents = read_captured_documents(project, &source, outcome)?;
     // A production check asserts the project is ready to package for
     // deployment, so it also reports the identity a deployable package must
     // not carry.
@@ -327,7 +678,7 @@ fn compile_project(
                     .push(place(project, &documents, finding, severity));
             }
             outcome.revision = Some(compiled.revision().to_owned());
-            Some(compiled)
+            Some((compiled, documents))
         }
         Err(failure) => {
             for refusal in failure.diagnostics {
@@ -352,7 +703,7 @@ fn compile_project(
 pub(super) fn compile_for_inspection(
     project: &Path,
     profile: ProfileArg,
-) -> Result<(CompiledRegistry, Vec<Diagnostic>), super::Refusal> {
+) -> Result<(CompiledRegistry, Vec<Diagnostic>, Authoring), super::Refusal> {
     let selected = canonicalize_project_path(project).map_err(|diagnostic| {
         super::source_failure(
             "explain",
@@ -365,9 +716,10 @@ pub(super) fn compile_for_inspection(
     // A production compile can succeed while `check --production` still
     // refuses the project, as for a deployment identity a package must not
     // carry, so an error in the report refuses inspection too.
-    match compile_project(&selected, profile, &mut outcome) {
-        Some(compiled) if !outcome.report.has_errors() => {
-            Ok((compiled, outcome.report.into_diagnostics()))
+    match compile_project_with_documents(&selected, profile, &mut outcome) {
+        Some((compiled, documents)) if !outcome.report.has_errors() => {
+            let authoring = documents.model_authoring(&compiled);
+            Ok((compiled, outcome.report.into_diagnostics(), authoring))
         }
         _ => Err(super::Refusal::Document(super::DocumentRefusal {
             command: "explain",
@@ -415,6 +767,40 @@ fn severity_of(severity: DiagnosticSeverity) -> Severity {
         DiagnosticSeverity::Error => Severity::Error,
         DiagnosticSeverity::Finding => Severity::Warning,
     }
+}
+
+/// Decode positions and source presence from the exact byte capture compiled
+/// below. Reading the files again could mix an editor's later save with the
+/// captured model and assign the wrong source object to a compiled member.
+fn read_captured_documents(
+    project: &Path,
+    source: &super::CapturedProjectSource,
+    outcome: &mut Outcome,
+) -> Option<Documents> {
+    outcome.files += 1;
+    let project_document = decode(
+        read_project_yaml(
+            &project.join("registry.yaml").display().to_string(),
+            &source.project_bytes,
+        )
+        .map(|decoded| decoded.document),
+        outcome,
+    )?;
+    let mut modules = Vec::with_capacity(source.modules.len());
+    for module in &source.modules {
+        outcome.files += 1;
+        let file = project.join("modules").join(&module.id).join("module.yaml");
+        let document = decode(
+            read_module_yaml(&file.display().to_string(), &module.bytes)
+                .map(|decoded| decoded.document),
+            outcome,
+        )?;
+        modules.push((module.id.clone(), document));
+    }
+    Some(Documents {
+        project: project_document,
+        modules,
+    })
 }
 
 /// Read `registry.yaml` and every authored `module.yaml` through the shared
@@ -867,6 +1253,12 @@ fn place(
         if found.better_than(&best.1) {
             best = (document, found);
         }
+        for alternative in record_extension_alternatives(document, &steps) {
+            let found = resolve(document.root(), &alternative);
+            if found.better_than(&best.1) {
+                best = (document, found);
+            }
+        }
     }
     at_value(best.0, &diagnostic, severity, action, &best.1, path)
 }
@@ -892,6 +1284,42 @@ fn module_target<'d>(documents: &'d Documents, steps: &[Step]) -> Option<(&'d Do
         _ => return None,
     };
     Some((document, resolve(document.root(), rest)))
+}
+
+/// Exact source spellings for a compiler path normalized under
+/// `recordTypes`. A module may declare and extend the same Record type, and it
+/// may use more than one extension block for that type, so every matching
+/// block is a candidate.
+fn record_extension_alternatives(document: &Document, steps: &[Step]) -> Vec<Vec<Step>> {
+    let [Step::Member(records), record, rest @ ..] = steps else {
+        return Vec::new();
+    };
+    if records != "recordTypes" {
+        return Vec::new();
+    }
+    let Some(extensions) = document.root().get("extendRecordTypes") else {
+        return Vec::new();
+    };
+    let NodeValue::Sequence(items) = &extensions.value.value else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| match record {
+            Step::Select { value, .. } => names(item, Some("recordType"), value),
+            Step::Any => true,
+            Step::Index(_) | Step::Member(_) => false,
+        })
+        .map(|(index, _)| {
+            let mut alternative = vec![
+                Step::Member("extendRecordTypes".to_owned()),
+                Step::Index(index),
+            ];
+            alternative.extend_from_slice(rest);
+            alternative
+        })
+        .collect()
 }
 
 /// Other spellings of a path in the project document. The compiler names an
@@ -1154,6 +1582,144 @@ mod tests {
         read_project_yaml("registry.yaml", text.as_bytes())
             .expect("the test project reads")
             .document
+    }
+
+    fn module_document(text: &str) -> Document {
+        read_module_yaml("module.yaml", text.as_bytes())
+            .expect("the test module reads")
+            .document
+    }
+
+    #[test]
+    fn model_provenance_uses_captured_bytes_after_source_files_change() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/fixtures/generic-operator-workflows");
+        let temporary = tempfile::tempdir().expect("temporary project");
+        let project = temporary.path().canonicalize().expect("physical project");
+        let module_file = "modules/record-notes/module.yaml";
+        std::fs::create_dir_all(project.join("modules/record-notes")).unwrap();
+        for relative in ["registry.yaml", module_file] {
+            std::fs::copy(fixture.join(relative), project.join(relative)).unwrap();
+        }
+        let captured = capture_resolved_project_source(&project).expect("capture valid sources");
+
+        let changed_project = String::from_utf8(captured.project_bytes.clone())
+            .unwrap()
+            .replacen(
+                "  id: generic-registry\n",
+                "  id: changed-registry\n  display: {label: Changed registry}\n",
+                1,
+            );
+        let changed_module = String::from_utf8(captured.modules[0].bytes.clone())
+            .unwrap()
+            .replace("id: internal-note", "id: changed-note");
+        std::fs::write(project.join("registry.yaml"), changed_project).unwrap();
+        std::fs::write(project.join(module_file), changed_module).unwrap();
+
+        let mut outcome = Outcome::default();
+        let documents =
+            read_captured_documents(&project, &captured, &mut outcome).expect("captured documents");
+        let compiled = compile_captured_project(&captured, ProfileArg::Authoring, "explain")
+            .unwrap_or_else(|failure| {
+                panic!(
+                    "captured sources compile: {}",
+                    serde_json::to_string(&failure).unwrap()
+                )
+            });
+        let authoring = serde_json::to_value(documents.model_authoring(&compiled)).unwrap();
+        assert_eq!(outcome.files, 2);
+        assert!(!outcome.report.has_errors());
+        assert_eq!(compiled.registry_id(), "generic-registry");
+        assert!(compiled.entities()["record"]
+            .fields
+            .contains_key("internal-note"));
+        assert!(!compiled.entities()["record"]
+            .fields
+            .contains_key("changed-note"));
+        assert!(!authoring["documents"][0]["authoredPaths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|pointer| pointer == "/project/display"));
+        assert!(authoring["documents"][1]["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|binding| binding["sourcePointer"] == "/extendRecordTypes/0/fields/0"));
+    }
+
+    #[test]
+    fn authoring_lists_exact_pointers_for_each_source_document() {
+        let documents = Documents {
+            project: document(
+                "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles: []\n",
+            ),
+            modules: vec![(
+                "base".to_owned(),
+                module_document(
+                    "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: base\nversion: 0.1.0\n",
+                ),
+            )],
+        };
+
+        let authoring = serde_json::to_value(documents.authoring()).expect("authoring serializes");
+        let source_documents = authoring["documents"]
+            .as_array()
+            .expect("documents is an array");
+        assert_eq!(source_documents[0]["kind"], "BRegProject");
+        assert_eq!(source_documents[0]["file"], "registry.yaml");
+        assert!(source_documents[0].get("module").is_none());
+        assert_eq!(
+            source_documents[0]["authoredPaths"],
+            serde_json::json!([
+                "",
+                "/apiVersion",
+                "/kind",
+                "/project",
+                "/project/id",
+                "/project/canonicalBaseIri",
+                "/project/version",
+                "/project/defaultLanguage",
+                "/accessProfiles"
+            ])
+        );
+        assert_eq!(source_documents[1]["kind"], "BRegModule");
+        assert_eq!(source_documents[1]["module"], "base");
+        assert_eq!(source_documents[1]["file"], "modules/base/module.yaml");
+        assert_eq!(
+            source_documents[1]["authoredPaths"],
+            serde_json::json!(["", "/apiVersion", "/kind", "/id", "/version"])
+        );
+    }
+
+    #[test]
+    fn a_same_module_record_extension_resolves_to_the_extension_member() {
+        let documents = Documents {
+            project: document(
+                "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\n",
+            ),
+            modules: vec![(
+                "combined".to_owned(),
+                module_document(
+                    "apiVersion: id.registrystack.org/formats/breg/module/v1alpha1\nkind: BRegModule\nid: combined\nversion: 0.1.0\nrecordTypes:\n  - id: record\n    route: records\n    mutationMode: mutable\n    fields:\n      - {id: base, type: string, maximumLength: 20, classification: internal}\nextendRecordTypes:\n  - recordType: record\n    fields:\n      - {id: extension, type: string, maximumLength: 20, classification: internal}\n",
+                ),
+            )],
+        };
+        let mut authoring = documents.authoring();
+
+        documents.push_record_member_binding(
+            &mut authoring,
+            Some("combined"),
+            "record",
+            "/recordTypes/0/fields/1".to_owned(),
+            &id_item_steps("fields", "extension"),
+        );
+
+        assert_eq!(authoring.documents[1].bindings.len(), 1);
+        assert_eq!(
+            authoring.documents[1].bindings[0].source_pointer,
+            "/extendRecordTypes/0/fields/0"
+        );
     }
 
     #[test]

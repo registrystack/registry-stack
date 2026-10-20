@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Preserve authored display on access profiles, statistical datasets, record and
+  Proposal hooks, and derived fields. Model inspection includes native datasets,
+  all project access-profile labels, field display, and module origins. Labels
+  never select an identity or grant authority.
+- BREAKING: the model, access, and actions explanation formats advance to
+  `v1alpha6`, proposals to `v1alpha2`, and lifecycle to `v1alpha7`. Select the
+  matching schemas. Action inputs retain optional authored `display` separately
+  from the existing `label` fallback. Lifecycle states report their possible `turns`,
+  including the ordered conditions for submitted work, from the runtime rule.
+- Model explanation lists each source document's authored JSON Pointers before
+  defaults and module composition. Consumers can distinguish a source member
+  from a compiled default after resolving the object's source document and ID.
+  Index and access-profile diagnostics now retain the exact owning item.
+- Rebuild governed packages after upgrading. Dataset and access-profile
+  presentation metadata now contributes to the compiled revision and artifact
+  bytes.
+
 ## 0.42.0 - 2026-10-20
 
 - Advertise a per-target availability route for immediate Actions with

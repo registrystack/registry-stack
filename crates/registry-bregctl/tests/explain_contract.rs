@@ -27,11 +27,11 @@ const ACCESS_SCENARIOS: &[(&str, &str)] = &[
 fn envelope(contract: &str) -> (&'static str, &'static str) {
     match contract {
         "ModelExplanation" => (
-            "id.registrystack.org/formats/breg/model-explanation/v1alpha5",
+            "id.registrystack.org/formats/breg/model-explanation/v1alpha6",
             "BRegModelExplanation",
         ),
         "AccessExplanation" => (
-            "id.registrystack.org/formats/breg/access-explanation/v1alpha5",
+            "id.registrystack.org/formats/breg/access-explanation/v1alpha6",
             "BRegAccessExplanation",
         ),
         "AccessPreview" => (
@@ -47,11 +47,11 @@ fn envelope(contract: &str) -> (&'static str, &'static str) {
             "BRegQueriesExplanation",
         ),
         "ActionsExplanation" => (
-            "id.registrystack.org/formats/breg/actions-explanation/v1alpha5",
+            "id.registrystack.org/formats/breg/actions-explanation/v1alpha6",
             "BRegActionsExplanation",
         ),
         "ProposalsExplanation" => (
-            "id.registrystack.org/formats/breg/proposals-explanation/v1alpha1",
+            "id.registrystack.org/formats/breg/proposals-explanation/v1alpha2",
             "BRegProposalsExplanation",
         ),
         "EventsExplanation" => (
@@ -59,7 +59,7 @@ fn envelope(contract: &str) -> (&'static str, &'static str) {
             "BRegEventsExplanation",
         ),
         "LifecycleExplanation" => (
-            "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha6",
+            "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha7",
             "BRegLifecycleExplanation",
         ),
         _ => panic!("unknown contract {contract}"),
@@ -189,12 +189,207 @@ fn explain_lifecycle_report() -> Value {
     report
 }
 
+fn source_binding<'a>(explanation: &'a Value, file: &str, explanation_pointer: &str) -> &'a Value {
+    let document = explanation["authoring"]["documents"]
+        .as_array()
+        .expect("model authoring documents")
+        .iter()
+        .find(|document| document["file"] == file)
+        .unwrap_or_else(|| panic!("missing authoring document {file} in {explanation:#?}"));
+    document["bindings"]
+        .as_array()
+        .expect("model authoring bindings")
+        .iter()
+        .find(|binding| binding["explanationPointer"] == explanation_pointer)
+        .unwrap_or_else(|| {
+            panic!("missing binding for {explanation_pointer} in {file}: {document:#?}")
+        })
+}
+
+fn item_index(items: &Value, id: &str) -> usize {
+    items
+        .as_array()
+        .expect("compiled inventory is an array")
+        .iter()
+        .position(|item| item["id"] == id)
+        .unwrap_or_else(|| panic!("missing compiled item {id}: {items:#?}"))
+}
+
 #[test]
 fn explain_model_matches_contract() {
     for (name, relative) in FIXTURES {
         let explanation = explain("model", &fixture_path(relative));
         assert_matches_contract(name, "ModelExplanation", &explanation);
     }
+}
+
+#[test]
+fn explain_model_lists_authored_source_presence_as_exact_document_pointers() {
+    let explanation = explain("model", &fixture_path("products/breg/examples/minimal"));
+    let documents = explanation["authoring"]["documents"]
+        .as_array()
+        .expect("model explanation lists authoring documents");
+    assert_eq!(documents.len(), 1);
+    assert_eq!(documents[0]["kind"], "BRegProject");
+    assert_eq!(documents[0]["file"], "registry.yaml");
+    assert!(documents[0].get("module").is_none());
+    let authored = documents[0]["authoredPaths"]
+        .as_array()
+        .expect("authoredPaths is an array");
+    let has = |pointer: &str| authored.iter().any(|path| path == pointer);
+    assert!(has(""), "the empty pointer names the source document root");
+    assert!(has("/recordTypes/0/display"));
+    assert!(has("/recordTypes/0/fields/0/required"));
+    assert!(
+        !has("/recordTypes/0/tombstone"),
+        "a compiled default is absent when the source omitted its member"
+    );
+}
+
+#[test]
+fn model_source_bindings_survive_compiled_order_and_module_extensions() {
+    let model = explain(
+        "model",
+        &fixture_path("products/breg/fixtures/generic-operator-workflows"),
+    );
+    assert_eq!(
+        source_binding(&model, "registry.yaml", "")["sourcePointer"],
+        "/project"
+    );
+
+    let record_index = item_index(&model["recordTypes"], "record");
+    assert_ne!(
+        record_index, 1,
+        "the compiled model reorders the second authored Record type"
+    );
+    assert_eq!(
+        source_binding(
+            &model,
+            "registry.yaml",
+            &format!("/recordTypes/{record_index}")
+        )["sourcePointer"],
+        "/recordTypes/1"
+    );
+
+    let field_index = item_index(
+        &model["recordTypes"][record_index]["fields"],
+        "internal-note",
+    );
+    let explanation_pointer = format!("/recordTypes/{record_index}/fields/{field_index}");
+    let binding = source_binding(
+        &model,
+        "modules/record-notes/module.yaml",
+        &explanation_pointer,
+    );
+    assert_eq!(binding["sourcePointer"], "/extendRecordTypes/0/fields/0");
+    let module = model["authoring"]["documents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|document| document["module"] == "record-notes")
+        .unwrap();
+    assert!(module["authoredPaths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|path| path == "/extendRecordTypes/0/fields/0/id"));
+    assert!(!module["authoredPaths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|path| path == "/extendRecordTypes/0/fields/0/display"));
+}
+
+#[test]
+fn model_source_bindings_cover_module_records_actions_inputs_and_record_hooks() {
+    let model = explain(
+        "model",
+        &fixture_path("products/breg/fixtures/facility-registry-actions"),
+    );
+    let module_file = "modules/facility-registry-actions-core/module.yaml";
+    let record_index = item_index(&model["recordTypes"], "facility");
+    assert_eq!(
+        source_binding(&model, module_file, &format!("/recordTypes/{record_index}"))
+            ["sourcePointer"],
+        "/recordTypes/1"
+    );
+    assert_eq!(
+        source_binding(
+            &model,
+            module_file,
+            &format!("/recordTypes/{record_index}/hooks/facility-registered-v1")
+        )["sourcePointer"],
+        "/recordTypes/1/hooks/0"
+    );
+
+    let action_index = item_index(&model["actions"], "register-facility");
+    assert_eq!(
+        source_binding(&model, module_file, &format!("/actions/{action_index}"))["sourcePointer"],
+        "/actions/0"
+    );
+    let input_index = item_index(&model["actions"][action_index]["inputs"], "facility-code");
+    assert_eq!(
+        source_binding(
+            &model,
+            module_file,
+            &format!("/actions/{action_index}/inputs/{input_index}")
+        )["sourcePointer"],
+        "/actions/0/inputs/0"
+    );
+}
+
+#[test]
+fn model_source_bindings_cover_proposal_hooks_and_project_inventories() {
+    let project = tempfile::tempdir().unwrap();
+    let source = std::fs::read_to_string(
+        fixture_path("products/breg/examples/minimal").join("registry.yaml"),
+    )
+    .unwrap()
+    .replacen(
+        "        retention: {mode: retain}\n",
+        "        retention: {mode: retain}\n        hooks:\n          - id: proposal-observer\n            handler: {type: url, destinationId: proposal-events}\n",
+        1,
+    );
+    std::fs::write(project.path().join("registry.yaml"), source).unwrap();
+    let model = explain("model", project.path());
+    let action_index = item_index(&model["actions"], "register-contact");
+    assert_eq!(
+        source_binding(
+            &model,
+            "registry.yaml",
+            &format!("/actions/{action_index}/execution/proposal/hooks/0")
+        )["sourcePointer"],
+        "/actions/1/execution/proposal/hooks/0"
+    );
+    for collection in ["datasets", "accessProfiles"] {
+        for index in 0..model[collection].as_array().unwrap().len() {
+            source_binding(&model, "registry.yaml", &format!("/{collection}/{index}"));
+        }
+    }
+
+    let facility = explain("model", &fixture_path("products/breg/acceptance/facility"));
+    for collection in ["reviewAuthorities", "statisticalDatasets"] {
+        for index in 0..facility[collection].as_array().unwrap().len() {
+            source_binding(
+                &facility,
+                "registry.yaml",
+                &format!("/{collection}/{index}"),
+            );
+        }
+    }
+    let permit_index = item_index(&facility["recordTypes"], "permit");
+    let derived_index = item_index(
+        &facility["recordTypes"][permit_index]["fields"],
+        "expiring-soon",
+    );
+    assert_eq!(
+        source_binding(
+            &facility,
+            "modules/facility-core/module.yaml",
+            &format!("/recordTypes/{permit_index}/fields/{derived_index}")
+        )["sourcePointer"],
+        "/extendRecordTypes/0/derived/0/fields/0"
+    );
 }
 
 #[test]
@@ -807,6 +1002,70 @@ fn registered_examples_match_current_formatter_bytes_and_schemas() {
         assert_eq!(
             bytes, expected,
             "{path:?} differs from current formatter bytes"
+        );
+    }
+}
+
+#[test]
+fn authored_display_examples_pin_every_presentation_surface() {
+    let root = repo_root();
+    let project = fixture_path("products/breg/fixtures/authoring-display");
+    for (subject, contract) in [
+        ("model", "ModelExplanation"),
+        ("access", "AccessExplanation"),
+        ("actions", "ActionsExplanation"),
+        ("proposals", "ProposalsExplanation"),
+    ] {
+        let current = explain(subject, &project);
+        assert_matches_contract("authored display", contract, &current);
+        let path = root.join(format!(
+            "products/breg/examples/formats/explain/authored-display-{subject}-explanation.json"
+        ));
+        let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("{path:?}: {error}"));
+        let mut expected = serde_json::to_vec_pretty(&current).unwrap();
+        expected.push(b'\n');
+        assert_eq!(
+            bytes, expected,
+            "{path:?} differs from current formatter bytes"
+        );
+
+        if subject != "proposals" {
+            assert_eq!(
+                current["accessProfiles"][0]["display"]["label"],
+                "Directory editor"
+            );
+            assert_eq!(
+                current["statisticalDatasets"][0]["display"]["label"],
+                "Monthly entry counts"
+            );
+        }
+        if matches!(subject, "model" | "actions") {
+            assert_eq!(
+                current["datasets"][0]["display"]["label"],
+                "Directory records"
+            );
+            let record = &current["recordTypes"][0];
+            let code = &record["fields"][item_index(&record["fields"], "code")];
+            assert_eq!(code["display"]["label"], "Entry code");
+            assert_eq!(
+                record["hooks"]["entry-created"]["display"]["label"],
+                "Entry notification"
+            );
+        }
+        let actions = if subject == "access" {
+            &current["actions"]["actions"]
+        } else {
+            &current["actions"]
+        };
+        let action = &actions[0];
+        let code = &action["inputs"][item_index(&action["inputs"], "code")];
+        let active = &action["inputs"][item_index(&action["inputs"], "active")];
+        assert_eq!(code["display"]["label"], "Entry reference");
+        assert_eq!(active["label"], active["apiName"]);
+        assert!(active.get("display").is_none());
+        assert_eq!(
+            action["execution"]["proposal"]["hooks"][0]["display"]["label"],
+            "Submission notification"
         );
     }
 }

@@ -2,6 +2,40 @@
   "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
   "command": "explain",
   "explanation": {
+    "accessProfiles": [
+      {
+        "display": {},
+        "id": "operator-editor"
+      },
+      {
+        "display": {},
+        "id": "facility-reader"
+      },
+      {
+        "display": {},
+        "id": "directory-editor"
+      },
+      {
+        "display": {},
+        "id": "facility-registrar"
+      },
+      {
+        "display": {},
+        "id": "facility-correction-author"
+      },
+      {
+        "display": {},
+        "id": "facility-correction-applier"
+      },
+      {
+        "display": {},
+        "id": "proposal-reviewer"
+      },
+      {
+        "display": {},
+        "id": "casework-review-status"
+      }
+    ],
     "actions": [
       {
         "apiName": "correctAddress",
@@ -1034,7 +1068,16 @@
         "revision": "sha256:5b5de70fa9b8f831387fc08e520f16fccd71863f18f3efe8b7999728927910f6"
       }
     ],
-    "apiVersion": "id.registrystack.org/formats/breg/actions-explanation/v1alpha5",
+    "apiVersion": "id.registrystack.org/formats/breg/actions-explanation/v1alpha6",
+    "datasets": [
+      {
+        "display": {
+          "description": "Authoritative facility, operator, assignment, and directory records.",
+          "label": "Facility Registry"
+        },
+        "id": "facility-registry"
+      }
+    ],
     "display": {
       "description": "Facilities, operators, assignments, and an administrative directory.",
       "label": "Facility Registry"
@@ -1068,6 +1111,7 @@
           {
             "apiName": "name",
             "classification": "public",
+            "display": {},
             "fieldType": {
               "maximumLength": 160,
               "minimumLength": 1,
@@ -1085,6 +1129,7 @@
           {
             "apiName": "email",
             "classification": "internal",
+            "display": {},
             "fieldType": {
               "maximumLength": 254,
               "minimumLength": 1,
@@ -1102,6 +1147,7 @@
           {
             "apiName": "jurisdiction",
             "classification": "internal",
+            "display": {},
             "fieldType": {
               "maximumLength": 40,
               "minimumLength": 1,
@@ -1121,6 +1167,7 @@
         "hooks": {},
         "id": "directory-entry",
         "indexes": {},
+        "moduleOrigins": {},
         "mutationMode": "mutable",
         "mutationPolicy": {},
         "primaryDataset": "facility-registry",
@@ -1161,6 +1208,7 @@
           {
             "apiName": "facilityCode",
             "classification": "internal",
+            "display": {},
             "fieldType": {
               "maximumLength": 64,
               "minimumLength": 1,
@@ -1178,6 +1226,7 @@
           {
             "apiName": "name",
             "classification": "internal",
+            "display": {},
             "fieldType": {
               "maximumLength": 200,
               "minimumLength": 1,
@@ -1195,6 +1244,7 @@
           {
             "apiName": "addressLine",
             "classification": "internal",
+            "display": {},
             "fieldType": {
               "maximumLength": 240,
               "minimumLength": 1,
@@ -1212,6 +1262,7 @@
           {
             "apiName": "city",
             "classification": "internal",
+            "display": {},
             "fieldType": {
               "maximumLength": 120,
               "minimumLength": 1,
@@ -1229,6 +1280,7 @@
           {
             "apiName": "postalCode",
             "classification": "internal",
+            "display": {},
             "fieldType": {
               "maximumLength": 24,
               "minimumLength": 1,
@@ -1246,6 +1298,7 @@
           {
             "apiName": "status",
             "classification": "internal",
+            "display": {},
             "fieldType": {
               "type": "vocabulary-code",
               "values": [
@@ -1269,6 +1322,7 @@
           {
             "apiName": "jurisdiction",
             "classification": "internal",
+            "display": {},
             "fieldType": {
               "maximumLength": 40,
               "minimumLength": 1,
@@ -1288,6 +1342,7 @@
         "hooks": {},
         "id": "facility",
         "indexes": {},
+        "moduleOrigins": {},
         "mutationMode": "mutable",
         "mutationPolicy": {
           "patch": "proposal-required"
@@ -1349,6 +1404,7 @@
           {
             "apiName": "facility",
             "classification": "internal",
+            "display": {},
             "fieldType": {
               "onDelete": "restrict",
               "target": "facility",
@@ -1365,6 +1421,7 @@
           {
             "apiName": "operator",
             "classification": "internal",
+            "display": {},
             "fieldType": {
               "onDelete": "restrict",
               "target": "operator",
@@ -1381,6 +1438,7 @@
           {
             "apiName": "jurisdiction",
             "classification": "internal",
+            "display": {},
             "fieldType": {
               "maximumLength": 40,
               "minimumLength": 1,
@@ -1407,6 +1465,7 @@
             "operator"
           ]
         },
+        "moduleOrigins": {},
         "mutationMode": "create-only",
         "mutationPolicy": {},
         "primaryDataset": "facility-registry",
@@ -1468,6 +1527,7 @@
           {
             "apiName": "operatorCode",
             "classification": "internal",
+            "display": {},
             "fieldType": {
               "maximumLength": 64,
               "minimumLength": 1,
@@ -1485,6 +1545,7 @@
           {
             "apiName": "status",
             "classification": "internal",
+            "display": {},
             "fieldType": {
               "type": "vocabulary-code",
               "values": [
@@ -1508,6 +1569,7 @@
           {
             "apiName": "jurisdiction",
             "classification": "internal",
+            "display": {},
             "fieldType": {
               "maximumLength": 40,
               "minimumLength": 1,
@@ -1527,6 +1589,7 @@
         "hooks": {},
         "id": "operator",
         "indexes": {},
+        "moduleOrigins": {},
         "mutationMode": "mutable",
         "mutationPolicy": {},
         "primaryDataset": "facility-registry",
@@ -1562,7 +1625,7 @@
         "protocol": "id.registrystack.org/protocols/review/v1"
       }
     ],
-    "revision": "sha256:90745ef2f9fd26416b74817f82832caea32621ca83f68428a4a6602ca3498dde",
+    "revision": "sha256:1a96f324adf78ba35ed214ab0e210a5f035d5b4d10b59642f4fc5a331f573915",
     "statisticalDatasets": []
   },
   "findings": [
@@ -1583,5 +1646,5 @@
   "kind": "BRegCtlReport",
   "ok": true,
   "profile": "authoring",
-  "revision": "sha256:90745ef2f9fd26416b74817f82832caea32621ca83f68428a4a6602ca3498dde"
+  "revision": "sha256:1a96f324adf78ba35ed214ab0e210a5f035d5b4d10b59642f4fc5a331f573915"
 }

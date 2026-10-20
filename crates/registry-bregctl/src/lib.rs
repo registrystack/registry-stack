@@ -554,6 +554,9 @@ struct GenerateArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(
+    after_long_help = "Model output retains native dataset, access-profile, field, and hook display. Access output includes access-profile and statistical-dataset display. Display labels never grant authority; review a label alongside its ID.\n\nAction inputs keep `label`, which falls back to `apiName`, and include optional authored `display` separately. Model output also includes per-document `authoring` source presence and bindings to compiled objects. Only source-corresponding members can be checked for an authored value or an omitted default; generated members are not automatically defaults.\n\nLifecycle output lists each state's possible `turns` and their conditions from the runtime rule. A turn says whose move the work waits on, not who has permission to act."
+)]
 struct ExplainArgs {
     /// Compiled inventory to explain.
     #[arg(value_name = "SUBJECT", value_enum)]
@@ -1423,13 +1426,21 @@ enum ArtifactSelector {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 enum ExplainSubject {
+    /// Record types, datasets, authored display, and per-document source presence.
     Model,
+    /// Effective permissions and the authored labels of access profiles and datasets.
     Access,
+    /// HTTP routes and their operations.
     Routes,
+    /// Compiled query fields, filters, and ordering.
     Queries,
+    /// Action definitions, including authored input display and fallback labels.
     Actions,
+    /// Proposal Action definitions.
     Proposals,
+    /// Event definitions and hook phases.
     Events,
+    /// Engine-owned Proposal states, transitions, and conditional responsibility.
     Lifecycle,
 }
 
@@ -7532,11 +7543,11 @@ struct ExplainFormat {
 }
 
 const MODEL_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/model-explanation/v1alpha5",
+    api_version: "id.registrystack.org/formats/breg/model-explanation/v1alpha6",
     kind: "BRegModelExplanation",
 };
 const ACCESS_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/access-explanation/v1alpha5",
+    api_version: "id.registrystack.org/formats/breg/access-explanation/v1alpha6",
     kind: "BRegAccessExplanation",
 };
 const ACCESS_PREVIEW: ExplainFormat = ExplainFormat {
@@ -7552,11 +7563,11 @@ const QUERIES_EXPLANATION: ExplainFormat = ExplainFormat {
     kind: "BRegQueriesExplanation",
 };
 const ACTIONS_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/actions-explanation/v1alpha5",
+    api_version: "id.registrystack.org/formats/breg/actions-explanation/v1alpha6",
     kind: "BRegActionsExplanation",
 };
 const PROPOSALS_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/proposals-explanation/v1alpha1",
+    api_version: "id.registrystack.org/formats/breg/proposals-explanation/v1alpha2",
     kind: "BRegProposalsExplanation",
 };
 const EVENTS_EXPLANATION: ExplainFormat = ExplainFormat {
@@ -7564,7 +7575,7 @@ const EVENTS_EXPLANATION: ExplainFormat = ExplainFormat {
     kind: "BRegEventsExplanation",
 };
 const LIFECYCLE_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha6",
+    api_version: "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha7",
     kind: "BRegLifecycleExplanation",
 };
 
@@ -7712,7 +7723,7 @@ fn explain(
             "name the registry project directory to explain; only explain lifecycle runs without one",
         ))
     })?;
-    let (compiled, findings) = check::compile_for_inspection(project_path, profile)?;
+    let (compiled, findings, authoring) = check::compile_for_inspection(project_path, profile)?;
     let scenario = if let Some(path) = scenario_path {
         if !matches!(subject, ExplainSubject::Access) {
             return Err(explain_usage_error(diagnostic(
@@ -7738,7 +7749,7 @@ fn explain(
         None
     };
     let scenario_present = scenario.is_some();
-    let explanation = match subject {
+    let mut explanation = match subject {
         ExplainSubject::Model => explain_model(&compiled),
         ExplainSubject::Access => {
             if let Some(scenario) = scenario {
@@ -7755,6 +7766,15 @@ fn explain(
         ExplainSubject::Lifecycle => unreachable!("lifecycle returns before the project compiles"),
     }
     .map_err(|_| explain_render_error())?;
+    if subject == ExplainSubject::Model {
+        explanation
+            .as_object_mut()
+            .expect("the model explanation serializes as an object")
+            .insert(
+                "authoring".to_owned(),
+                serde_json::to_value(authoring).map_err(|_| explain_render_error())?,
+            );
+    }
     let explanation = explain_envelope(explain_format(subject, scenario_present), explanation);
     Ok(SuccessReport {
         ok: true,

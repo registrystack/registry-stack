@@ -659,7 +659,7 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
         "derived":[{
           "id":"demographics","sql":"sql/household-demographics.sql","key":"id","execution":"live",
           "fields":[
-            {"id":"child-count","type":"int64","classification":"restricted"},
+            {"id":"child-count","type":"int64","classification":"restricted","display":{"label":"Child count","description":"Number of linked children."}},
             {"id":"single-headed","type":"boolean","classification":"restricted"},
             {"id":"registry-derived-key-cardinality","type":"int64","classification":"restricted"}
           ]
@@ -708,6 +708,30 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
     .expect("derived fields and relationship reads compile");
 
     let household = &compiled.entities()["household"];
+    assert_eq!(
+        household.derived_fields["child-count"]
+            .display
+            .label
+            .as_deref(),
+        Some("Child count")
+    );
+    let model = registry_breg::artifacts::inspect_registry(&compiled);
+    let fields = model["recordTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|record| record["id"] == "household")
+        .unwrap()["fields"]
+        .as_array()
+        .unwrap();
+    let derived = fields
+        .iter()
+        .find(|field| field["id"] == "child-count")
+        .unwrap();
+    assert_eq!(
+        derived["display"],
+        serde_json::json!({"label":"Child count","description":"Number of linked children."})
+    );
     assert_eq!(
         household
             .stored_fields
@@ -2972,7 +2996,7 @@ fn an_authored_index_declares_at_most_31_fields() {
         refusals(&failure),
         vec![(
             "breg.index.fields-too-many",
-            "recordTypes[].indexes[].fields"
+            "recordTypes[id=person].indexes[id=wide].fields"
         )]
     );
     assert_eq!(

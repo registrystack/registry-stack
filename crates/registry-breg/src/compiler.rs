@@ -388,12 +388,22 @@ pub fn compile_project_with_assets(
     }
     let ddl = generate_ddl_with_actions(&entities, &physical_names, &action_inventory);
     let manifest_projection = compile_manifest_projection(project, &entities);
+    let access_profile_displays = project
+        .access_profiles
+        .iter()
+        .map(|profile| crate::model::CompiledAccessProfileDisplay {
+            id: profile.id.clone(),
+            display: profile.display.clone(),
+        })
+        .collect::<Vec<_>>();
     let artifacts = generate_artifacts(
         &project.project.id,
         &project.project.version,
         &project.project.default_language,
         &project.project.display,
         &project.review_authorities,
+        &project.datasets,
+        &access_profile_displays,
         manifest_projection.as_ref(),
         &module_order,
         &module_closure,
@@ -426,6 +436,8 @@ pub fn compile_project_with_assets(
         project.project.default_language.clone(),
         project.project.display.clone(),
         project.review_authorities.clone(),
+        project.datasets.clone(),
+        access_profile_displays,
         project.package.clone(),
         manifest_projection,
         module_order,
@@ -2847,6 +2859,7 @@ pub(crate) fn expand_project_access(
             }
             entity.access_profiles.push(AccessProfileSource {
                 id: profile.id.clone(),
+                display: profile.display.clone(),
                 default: profile.default,
                 actor_kind: profile.actor_kind,
                 requester_clients: profile.requester_clients.clone(),
@@ -3984,6 +3997,7 @@ fn validate_indexes(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
         .collect();
     let mut ids = BTreeSet::new();
     for index in &entity.indexes {
+        let index_path = format!("recordTypes[id={}].indexes[id={}]", entity.id, index.id);
         validate_id(&index.id, "recordTypes[].indexes[].id", errors);
         if !ids.insert(index.id.as_str()) {
             errors.push(Diagnostic::error(
@@ -4001,14 +4015,14 @@ fn validate_indexes(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
         {
             errors.push(Diagnostic::error(
                 "breg.index.fields-invalid",
-                "recordTypes[].indexes[].fields",
+                format!("{index_path}.fields"),
                 "an index has an empty, duplicate, or unresolved field set",
             ));
         }
         if index.fields.len() > MAX_AUTHORED_INDEX_FIELDS {
             errors.push(Diagnostic::error(
                 "breg.index.fields-too-many",
-                "recordTypes[].indexes[].fields",
+                format!("{index_path}.fields"),
                 &format!(
                     "an index may declare at most {MAX_AUTHORED_INDEX_FIELDS} fields; the record identifier takes the last of the 32 key columns PostgreSQL allows in an index"
                 ),
@@ -4021,7 +4035,7 @@ fn validate_indexes(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
         }) {
             errors.push(Diagnostic::error(
                 "breg.index.fields-encrypted",
-                "recordTypes[].indexes[].fields",
+                format!("{index_path}.fields"),
                 "an encrypted field cannot back an authored index; declare blind-index lookup on the field instead",
             ));
         }
@@ -4447,9 +4461,14 @@ fn validate_profiles(
         if !access.filterable_fields.is_subset(&access.readable_fields)
             || !access.sortable_fields.is_subset(&access.readable_fields)
         {
+            let member = if !access.filterable_fields.is_subset(&access.readable_fields) {
+                "filterableFields"
+            } else {
+                "sortableFields"
+            };
             errors.push(Diagnostic::error(
                 "breg.access-profile.processing-wider-than-read",
-                "recordTypes[].accessProfiles[]",
+                format!("{profile_path}.{member}"),
                 "filterable and sortable fields must be readable",
             ));
         }
@@ -4822,26 +4841,31 @@ fn validate_read_path_permission_fields(
     }
     let target_stored = stored_field_map(target);
     let target_derived = derived_field_map(target);
+    let grant_path = format!(
+        "recordTypes[id={}].accessProfiles[id={}].readPaths[path={}]",
+        source.id, access.id, grant.path
+    );
     if grant.readable_fields.is_empty() {
         errors.push(Diagnostic::error(
             "breg.access-profile.read-path-readable-fields-empty",
-            "recordTypes[].accessProfiles[].readPaths[].readableFields",
+            format!("{grant_path}.readableFields"),
             "a read-path permission must declare readable fields",
         ));
     }
     if !grant.filterable_fields.is_subset(&grant.readable_fields)
         || !grant.sortable_fields.is_subset(&grant.readable_fields)
     {
+        let member = if !grant.filterable_fields.is_subset(&grant.readable_fields) {
+            "filterableFields"
+        } else {
+            "sortableFields"
+        };
         errors.push(Diagnostic::error(
             "breg.access-profile.read-path-processing-wider-than-read",
-            "recordTypes[].accessProfiles[].readPaths[]",
+            format!("{grant_path}.{member}"),
             "read-path filterable and sortable fields must be readable",
         ));
     }
-    let grant_path = format!(
-        "recordTypes[id={}].accessProfiles[id={}].readPaths[path={}]",
-        source.id, access.id, grant.path
-    );
     for (member, referenced) in [
         ("readableFields", &grant.readable_fields),
         ("filterableFields", &grant.filterable_fields),
@@ -5985,6 +6009,7 @@ fn compile_entities(
                     field.id.clone(),
                     CompiledDerivedField {
                         logical,
+                        display: field.display.clone(),
                         derivation_id: derived.id.clone(),
                     },
                 );

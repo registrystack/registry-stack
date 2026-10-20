@@ -292,6 +292,7 @@ fn access_explanation_states_who_holds_each_dataset_operation() {
         audience(&source()),
         json!([{
             "dataset":"records-by-category",
+            "display":{},
             "readLive":["analyst"],
             "publish":["publisher"],
             "readReleases":["analyst","publisher","reader"]
@@ -306,6 +307,7 @@ fn access_explanation_states_who_holds_each_dataset_operation() {
         audience(&live_only),
         json!([{
             "dataset":"records-by-category",
+            "display":{},
             "readLive":["analyst"],
             "publish":[],
             "readReleases":[]
