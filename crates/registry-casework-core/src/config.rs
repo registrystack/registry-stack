@@ -953,7 +953,7 @@ impl CaseworkProject {
                         api_name: field.clone(),
                         schema: schema.clone(),
                     })
-                    .collect(),
+                    .collect::<Vec<_>>(),
             };
             for stage in &policy.stages {
                 for finding in routing_policy_findings(
@@ -1405,7 +1405,18 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<CaseworkProject>) -> Vec<
     ) -> Vec<Diagnostic> {
         let entries = values
             .iter()
-            .map(|(id, pointer)| AuthoredId { id, pointer })
+            .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+            .collect::<Vec<_>>();
+        local_id_collision_diagnostics(document, code, &entries)
+    }
+    fn key_collisions(
+        document: &registry_platform_yaml::Document,
+        code: &str,
+        values: &[(String, String)],
+    ) -> Vec<Diagnostic> {
+        let entries = values
+            .iter()
+            .map(|(id, pointer)| AuthoredId::at_key(id, pointer))
             .collect::<Vec<_>>();
         local_id_collision_diagnostics(document, code, &entries)
     }
@@ -1482,7 +1493,7 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<CaseworkProject>) -> Vec<
             keyed_ids("/taskTemplates", &project.task_templates),
         ),
     ] {
-        errors.extend(collisions(document, code, &values));
+        errors.extend(key_collisions(document, code, &values));
     }
 
     for policy in &project.review_policies {
@@ -1498,7 +1509,7 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<CaseworkProject>) -> Vec<
                     .iter()
                     .enumerate()
                     .map(|(index, rule)| (rule.id.clone(), format!("{base}/routing/{index}/id")))
-                    .collect(),
+                    .collect::<Vec<_>>(),
             ),
             (
                 "casework.review-policy.stage-id-collision",
@@ -1509,13 +1520,14 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<CaseworkProject>) -> Vec<
                     .map(|(index, stage)| (stage.id.clone(), format!("{base}/stages/{index}/id")))
                     .collect(),
             ),
-            (
-                "casework.review-policy.outcome-id-collision",
-                keyed_ids(&format!("{base}/outcomes"), &policy.outcomes),
-            ),
         ] {
             errors.extend(collisions(document, code, &values));
         }
+        errors.extend(key_collisions(
+            document,
+            "casework.review-policy.outcome-id-collision",
+            &keyed_ids(&format!("{base}/outcomes"), &policy.outcomes),
+        ));
     }
 
     for clock in &project.clocks {
@@ -1526,7 +1538,7 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<CaseworkProject>) -> Vec<
             "/clocks/{}",
             registry_platform_yaml::escape_pointer_segment(clock.id())
         );
-        errors.extend(collisions(
+        errors.extend(key_collisions(
             document,
             "casework.clock.reminder-id-collision",
             &keyed_ids(&format!("{base}/reminders"), reminders),

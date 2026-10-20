@@ -789,6 +789,20 @@ impl SchedulingRecords {
 }
 
 fn records_integrity_diagnostics(decoded: &Decoded<SchedulingRecords>) -> Vec<Diagnostic> {
+    facts_integrity_diagnostics(
+        &decoded.document,
+        &decoded.value.facts(),
+        "",
+        "scheduling.records",
+    )
+}
+
+pub(crate) fn facts_integrity_diagnostics(
+    document: &registry_platform_yaml::Document,
+    facts: &SchedulingFacts,
+    pointer_prefix: &str,
+    code_prefix: &str,
+) -> Vec<Diagnostic> {
     fn collisions(
         document: &registry_platform_yaml::Document,
         code: &str,
@@ -796,7 +810,7 @@ fn records_integrity_diagnostics(decoded: &Decoded<SchedulingRecords>) -> Vec<Di
     ) -> Vec<Diagnostic> {
         let entries = values
             .iter()
-            .map(|(id, pointer)| AuthoredId { id, pointer })
+            .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
             .collect::<Vec<_>>();
         local_id_collision_diagnostics(document, code, &entries)
     }
@@ -808,28 +822,30 @@ fn records_integrity_diagnostics(decoded: &Decoded<SchedulingRecords>) -> Vec<Di
             .collect()
     }
 
-    let records = &decoded.value;
     let mut diagnostics = Vec::new();
     for (code, values) in [
         (
-            "scheduling.records.location-id-collision",
-            list_ids("/locations", &records.locations),
+            format!("{code_prefix}.location-id-collision"),
+            list_ids(&format!("{pointer_prefix}/locations"), &facts.locations),
         ),
         (
-            "scheduling.records.exception-id-collision",
-            list_ids("/exceptions", &records.exceptions),
+            format!("{code_prefix}.exception-id-collision"),
+            list_ids(&format!("{pointer_prefix}/exceptions"), &facts.exceptions),
         ),
     ] {
-        diagnostics.extend(collisions(&decoded.document, code, &values));
+        diagnostics.extend(collisions(document, &code, &values));
     }
-    let mut supplies = list_ids("/pools", &records.pools);
-    supplies.extend(list_ids("/windows", &records.windows));
+    let mut supplies = list_ids(&format!("{pointer_prefix}/pools"), &facts.pools);
+    supplies.extend(list_ids(
+        &format!("{pointer_prefix}/windows"),
+        &facts.windows,
+    ));
     diagnostics.extend(collisions(
-        &decoded.document,
-        "scheduling.records.supply-id-collision",
+        document,
+        &format!("{code_prefix}.supply-id-collision"),
         &supplies,
     ));
-    let resources = records
+    let resources = facts
         .pools
         .iter()
         .enumerate()
@@ -840,17 +856,19 @@ fn records_integrity_diagnostics(decoded: &Decoded<SchedulingRecords>) -> Vec<Di
                 .map(move |(member_index, member)| {
                     (
                         member.resource_id.clone(),
-                        format!("/pools/{pool_index}/members/{member_index}/resourceId"),
+                        format!(
+                            "{pointer_prefix}/pools/{pool_index}/members/{member_index}/resourceId"
+                        ),
                     )
                 })
         })
         .collect::<Vec<_>>();
     diagnostics.extend(collisions(
-        &decoded.document,
-        "scheduling.records.pool-member-id-collision",
+        document,
+        &format!("{code_prefix}.pool-member-id-collision"),
         &resources,
     ));
-    for (window_index, window) in records.windows.iter().enumerate() {
+    for (window_index, window) in facts.windows.iter().enumerate() {
         let values = window
             .subquotas
             .iter()
@@ -858,13 +876,15 @@ fn records_integrity_diagnostics(decoded: &Decoded<SchedulingRecords>) -> Vec<Di
             .map(|(subquota_index, subquota)| {
                 (
                     subquota.id.clone(),
-                    format!("/windows/{window_index}/subquotas/{subquota_index}/id"),
+                    format!(
+                        "{pointer_prefix}/windows/{window_index}/subquotas/{subquota_index}/id"
+                    ),
                 )
             })
             .collect::<Vec<_>>();
         diagnostics.extend(collisions(
-            &decoded.document,
-            "scheduling.records.window-subquota-id-collision",
+            document,
+            &format!("{code_prefix}.window-subquota-id-collision"),
             &values,
         ));
     }

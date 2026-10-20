@@ -702,7 +702,18 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<EvidenceProject>) -> Vec<
     ) -> Vec<Diagnostic> {
         let entries = values
             .iter()
-            .map(|(id, pointer)| AuthoredId { id, pointer })
+            .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+            .collect::<Vec<_>>();
+        local_id_collision_diagnostics(document, code, &entries)
+    }
+    fn key_collisions(
+        document: &registry_platform_yaml::Document,
+        code: &str,
+        values: &[(String, String)],
+    ) -> Vec<Diagnostic> {
+        let entries = values
+            .iter()
+            .map(|(id, pointer)| AuthoredId::at_key(id, pointer))
             .collect::<Vec<_>>();
         local_id_collision_diagnostics(document, code, &entries)
     }
@@ -741,20 +752,6 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<EvidenceProject>) -> Vec<
             map_ids("/selectorProfiles", &project.selector_profiles),
         ),
         (
-            "evidence.project.function-id-collision",
-            project
-                .functions
-                .iter()
-                .enumerate()
-                .map(|(index, function)| {
-                    (
-                        function.id.as_str().to_owned(),
-                        format!("/functions/{index}/id"),
-                    )
-                })
-                .collect(),
-        ),
-        (
             "evidence.project.source-id-collision",
             map_ids("/sources", &project.sources),
         ),
@@ -763,10 +760,25 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<EvidenceProject>) -> Vec<
             map_ids("/assertionDefinitions", &project.assertion_definitions),
         ),
     ] {
-        errors.extend(collisions(document, code, &values));
+        errors.extend(key_collisions(document, code, &values));
     }
+    errors.extend(collisions(
+        document,
+        "evidence.project.function-id-collision",
+        &project
+            .functions
+            .iter()
+            .enumerate()
+            .map(|(index, function)| {
+                (
+                    function.id.as_str().to_owned(),
+                    format!("/functions/{index}/id"),
+                )
+            })
+            .collect::<Vec<_>>(),
+    ));
     for (profile_id, profile) in &project.selector_profiles {
-        errors.extend(collisions(
+        errors.extend(key_collisions(
             document,
             "evidence.project.selector-field-id-collision",
             &map_ids(
@@ -779,7 +791,7 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<EvidenceProject>) -> Vec<
         ));
     }
     for (source_id, source) in &project.sources {
-        errors.extend(collisions(
+        errors.extend(key_collisions(
             document,
             "evidence.project.source-fact-id-collision",
             &map_ids(
@@ -815,7 +827,7 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<EvidenceProject>) -> Vec<
             "/assertionDefinitions/{}",
             registry_platform_yaml::escape_pointer_segment(assertion_id.as_str())
         );
-        errors.extend(collisions(
+        errors.extend(key_collisions(
             document,
             "evidence.project.output-id-collision",
             &map_ids(&format!("{base}/outputs"), &assertion.outputs),

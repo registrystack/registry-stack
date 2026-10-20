@@ -21,7 +21,14 @@ type LocatedDisplayTextLocation = (String, String);
 fn id_entries(values: &[LocatedId]) -> Vec<AuthoredId<'_>> {
     values
         .iter()
-        .map(|(id, pointer)| AuthoredId { id, pointer })
+        .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+        .collect()
+}
+
+fn key_id_entries(values: &[LocatedId]) -> Vec<AuthoredId<'_>> {
+    values
+        .iter()
+        .map(|(id, pointer)| AuthoredId::at_key(id, pointer))
         .collect()
 }
 
@@ -163,6 +170,19 @@ fn add_collisions(
     ));
 }
 
+fn add_key_collisions(
+    document: &registry_platform_yaml::Document,
+    errors: &mut Vec<registry_platform_yaml::Diagnostic>,
+    code: &str,
+    values: &[LocatedId],
+) {
+    errors.extend(local_id_collision_diagnostics(
+        document,
+        code,
+        &key_id_entries(values),
+    ));
+}
+
 fn add_cross_group_collisions(
     document: &registry_platform_yaml::Document,
     errors: &mut Vec<registry_platform_yaml::Diagnostic>,
@@ -178,14 +198,8 @@ fn add_cross_group_collisions(
             continue;
         }
         let pair = [
-            AuthoredId {
-                id: &values[left].0,
-                pointer: &values[left].1,
-            },
-            AuthoredId {
-                id: &values[right].0,
-                pointer: &values[right].1,
-            },
+            AuthoredId::at_value(&values[left].0, &values[left].1),
+            AuthoredId::at_value(&values[right].0, &values[right].1),
         ];
         errors.extend(local_id_collision_diagnostics(document, code, &pair));
     }
@@ -530,10 +544,6 @@ pub(crate) fn project_diagnostics(
             }),
         ),
         (
-            "breg.value-type.id-collision",
-            map_ids("/valueTypes", &project.value_types),
-        ),
-        (
             "breg.function.id-collision",
             indexed_ids("/functions", &project.functions, |item| &item.id),
         ),
@@ -566,6 +576,12 @@ pub(crate) fn project_diagnostics(
     ] {
         add_collisions(document, &mut errors, code, &values);
     }
+    add_key_collisions(
+        document,
+        &mut errors,
+        "breg.value-type.id-collision",
+        &map_ids("/valueTypes", &project.value_types),
+    );
     if let Some(recipients) = &project.recipients {
         let mut values = indexed_ids(
             "/recipients/organizations",
@@ -994,10 +1010,6 @@ pub(crate) fn module_diagnostics(
             indexed_ids("/recordTypes", &module.entities, |item| &item.id),
         ),
         (
-            "breg.value-type.id-collision",
-            map_ids("/valueTypes", &module.value_types),
-        ),
-        (
             "breg.function.id-collision",
             indexed_ids("/functions", &module.functions, |item| &item.id),
         ),
@@ -1008,6 +1020,12 @@ pub(crate) fn module_diagnostics(
     ] {
         add_collisions(document, &mut errors, code, &values);
     }
+    add_key_collisions(
+        document,
+        &mut errors,
+        "breg.value-type.id-collision",
+        &map_ids("/valueTypes", &module.value_types),
+    );
     extension_integrity(
         document,
         &mut errors,

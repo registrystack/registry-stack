@@ -252,6 +252,26 @@ impl Document {
         });
     }
 
+    /// Attach a related note at another mapping key in this document.
+    pub fn add_related_key(
+        &self,
+        diagnostic: &mut Diagnostic,
+        pointer: &str,
+        message: impl Into<String>,
+    ) {
+        let position = self
+            .key_span_of(pointer)
+            .or_else(|| self.span_of(pointer))
+            .map(|span| span.start);
+        diagnostic.related.push(Related {
+            file: self.file.clone(),
+            line: position.map(|position| position.line),
+            column: position.map(|position| position.column),
+            path: pointer.to_owned(),
+            message: message.into(),
+        });
+    }
+
     /// The document as JSON, mapping members in source order.
     pub fn to_json_value(&self) -> serde_json::Value {
         self.root.to_json_value()

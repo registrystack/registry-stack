@@ -2,6 +2,7 @@
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_project_json, Operation};
+use registry_breg::diagnostics::DiagnosticSeverity;
 use registry_breg::model::{
     ActionRouteKind, CompiledActionTargetPermission, CompiledActionTargetUseSource,
     CompiledPlanTargetBinding, CompiledPlanValue,
@@ -812,10 +813,16 @@ fn action_field_and_snapshot_ceilings_refuse_otherwise_valid_plans() {
             failure
                 .diagnostics()
                 .iter()
+                .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
                 .map(|diagnostic| diagnostic.code.as_str())
                 .collect::<Vec<_>>(),
             vec![expected_code]
         );
+        assert!(failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.severity == DiagnosticSeverity::Finding
+                && diagnostic.code == "breg.package.identity-missing"
+                && diagnostic.path == "project.package"
+        }));
     }
 }
 

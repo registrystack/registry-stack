@@ -19,7 +19,7 @@ use registry_breg::contract::{
     PackageIdentitySource, ReferenceDelete, RegistryModule, UniqueWhenPredicate,
     MODULE_API_VERSION, MODULE_KIND,
 };
-use registry_breg::diagnostics::CompileFailure;
+use registry_breg::diagnostics::{CompileFailure, DiagnosticSeverity};
 use registry_breg::generated_ddl::DdlStatementKind;
 use registry_breg::model::{
     CompiledMetadataInventory, CompiledQueryFilterOperator, CompiledQueryKind,
@@ -2245,6 +2245,7 @@ fn manifest_projection_refuses_a_label_for_a_declared_code_no_visible_field_uses
     let refused = failure
         .diagnostics()
         .iter()
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
         .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
         .collect::<Vec<_>>();
     assert_eq!(
@@ -2928,6 +2929,7 @@ fn refusals(failure: &CompileFailure) -> Vec<(&str, &str)> {
     failure
         .diagnostics()
         .iter()
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
         .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
         .collect()
 }
@@ -6404,8 +6406,20 @@ fn duplicate_routes_fail_before_artifact_generation() {
         .expect("duplicate route has a stable diagnostic");
     assert_eq!(diagnostic.path, "recordTypes[].route");
     let rendered = serde_json::to_string(&failure).expect("failure serializes");
+    assert!(!rendered.contains("hidden-route-value"));
+    let rendered = serde_json::to_string(diagnostic).expect("route diagnostic serializes");
     for authored_value in ["hidden-route-value", "first-record", "second-record"] {
         assert!(!rendered.contains(authored_value));
+    }
+    for record_type in ["first-record", "second-record"] {
+        assert!(failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.severity == DiagnosticSeverity::Finding
+                && diagnostic.code == "breg.access.profile-unrestricted-rows"
+                && diagnostic.path
+                    == format!(
+                        "recordTypes[id={record_type}].accessProfiles[id=reader].rowBoundaries"
+                    )
+        }));
     }
 }
 

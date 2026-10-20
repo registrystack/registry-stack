@@ -12,6 +12,7 @@
 
 use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_json, ModuleAssetSource, ACTION_PLAN_ABI_V1};
+use registry_breg::diagnostics::DiagnosticSeverity;
 use registry_breg::model::CompiledPlanFunctionKind;
 use registry_breg::wasm_handler::{MAXIMUM_WASM_MODULE_BYTES, MAX_PACKAGE_WASM_MODULES};
 use serde_json::{json, Value};
@@ -445,11 +446,20 @@ fn an_evidence_declaration_stays_refused_for_wasm_handlers_under_the_feature() {
     assert_eq!(diagnostic.path, "actions[register-person].evidence");
     assert!(diagnostic.message.contains("Rhai"));
     assert_eq!(
-        failure.diagnostics().len(),
+        failure
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+            .count(),
         1,
         "{:?}",
         failure.diagnostics()
     );
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.severity == DiagnosticSeverity::Finding
+            && diagnostic.code == "breg.package.identity-missing"
+            && diagnostic.path == "project.package"
+    }));
 
     // The same declared capability is admitted by an input-bound Rhai plan.
     project["functions"][0] = json!({
