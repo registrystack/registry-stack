@@ -325,13 +325,15 @@ pub fn compile_project_with_assets(
     validate_derived_assets(&sources, &origins.derived, assets, &mut diagnostics);
     validate_hook_assets(&sources, &origins.hooks, assets, &mut diagnostics);
     if !diagnostics.is_empty() {
-        return Err(CompileFailure::from_errors(diagnostics));
+        return Err(CompileFailure::from_errors(diagnostics).with_findings(&findings));
     }
 
-    let (mut entities, physical_names) = compile_entities(&sources, &origins, assets)?;
-    compile_relationships(&mut entities).map_err(CompileFailure::from_errors)?;
-    let statistical_datasets =
-        statistics::compile(project, &entities).map_err(CompileFailure::from_errors)?;
+    let (mut entities, physical_names) = compile_entities(&sources, &origins, assets)
+        .map_err(|failure| failure.with_findings(&findings))?;
+    compile_relationships(&mut entities)
+        .map_err(|errors| CompileFailure::from_errors(errors).with_findings(&findings))?;
+    let statistical_datasets = statistics::compile(project, &entities)
+        .map_err(|errors| CompileFailure::from_errors(errors).with_findings(&findings))?;
     crate::membership::compile(&mut entities);
     let recipients = crate::consent::compile(project, &sources, &mut entities);
     let mut action_inventory = compile_immediate_actions(
@@ -343,17 +345,18 @@ pub fn compile_project_with_assets(
         &project.review_authorities,
         project,
     )
-    .map_err(CompileFailure::from_errors)?;
+    .map_err(|errors| CompileFailure::from_errors(errors).with_findings(&findings))?;
     crate::action_evidence_contracts::compile_evidence(project, assets, &mut action_inventory)
-        .map_err(CompileFailure::from_errors)?;
+        .map_err(|errors| CompileFailure::from_errors(errors).with_findings(&findings))?;
     crate::proposal_hooks::compile_hooks(&action_sources, &mut action_inventory, assets)
-        .map_err(CompileFailure::from_errors)?;
+        .map_err(|errors| CompileFailure::from_errors(errors).with_findings(&findings))?;
     crate::immediate_actions::finalize_action_revisions(&mut action_inventory, &entities);
     findings.extend(crate::access::compiled_access_findings(
         &entities,
         &action_inventory,
     ));
-    let (route_inventory, access_inventory) = compile_routes_and_access(&entities)?;
+    let (route_inventory, access_inventory) =
+        compile_routes_and_access(&entities).map_err(|failure| failure.with_findings(&findings))?;
     let metadata_inventory = compile_metadata_inventory(
         &project.project.id,
         &project.project.version,
@@ -361,14 +364,14 @@ pub fn compile_project_with_assets(
         &route_inventory,
         &access_inventory,
     )
-    .map_err(CompileFailure::from_one)?;
+    .map_err(|error| CompileFailure::from_one(error).with_findings(&findings))?;
     let query_inventory = compile_query_inventory(&entities, &mut diagnostics);
     if profile == CompileProfile::Authoring {
         findings.extend(unindexed_list_findings(&entities));
     }
     let mut event_delivery_inventory =
         compile_event_delivery_inventory(&project.project.id, &entities, &origins.hooks, assets)
-            .map_err(CompileFailure::from_one)?;
+            .map_err(|error| CompileFailure::from_one(error).with_findings(&findings))?;
     for action in &action_inventory.actions {
         if let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution {
             event_delivery_inventory.deliveries.extend(
@@ -384,7 +387,7 @@ pub fn compile_project_with_assets(
         .sort_by(|left, right| left.id.cmp(&right.id));
     validate_manifest_projection(project, &entities, &mut diagnostics);
     if !diagnostics.is_empty() {
-        return Err(CompileFailure::from_errors(diagnostics));
+        return Err(CompileFailure::from_errors(diagnostics).with_findings(&findings));
     }
     let ddl = generate_ddl_with_actions(&entities, &physical_names, &action_inventory);
     let manifest_projection = compile_manifest_projection(project, &entities);
@@ -409,10 +412,10 @@ pub fn compile_project_with_assets(
         &recipients,
         &ddl,
     )
-    .map_err(CompileFailure::from_one)?;
+    .map_err(|error| CompileFailure::from_one(error).with_findings(&findings))?;
     let artifact_bytes = artifacts
         .canonical_inventory_bytes()
-        .map_err(CompileFailure::from_one)?;
+        .map_err(|error| CompileFailure::from_one(error).with_findings(&findings))?;
     let revision_digest = Sha256::digest(artifact_bytes);
     let revision = format!(
         "sha256:{}",

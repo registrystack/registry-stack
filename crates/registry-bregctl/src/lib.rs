@@ -9993,13 +9993,18 @@ fn has_parent_component(path: &Path) -> bool {
 }
 
 fn first_diagnostic(failure: CompileFailure) -> Diagnostic {
-    failure.diagnostics().first().cloned().unwrap_or_else(|| {
-        diagnostic(
-            "breg.source.invalid",
-            "project",
-            "the authoring source is invalid",
-        )
-    })
+    failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        .cloned()
+        .unwrap_or_else(|| {
+            diagnostic(
+                "breg.source.invalid",
+                "project",
+                "the authoring source is invalid",
+            )
+        })
 }
 
 fn remap_derived_diagnostic_path(
