@@ -783,6 +783,9 @@
       },
       "DisplayText": {
         "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+        "not": {
+          "pattern": "[\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff\ufdd0-\ufdef\ufffe\uffff]|\ud83f\udffe|\ud83f\udfff|\ud87f\udffe|\ud87f\udfff|\ud8bf\udffe|\ud8bf\udfff|\ud8ff\udffe|\ud8ff\udfff|\ud93f\udffe|\ud93f\udfff|\ud97f\udffe|\ud97f\udfff|\ud9bf\udffe|\ud9bf\udfff|\ud9ff\udffe|\ud9ff\udfff|\uda3f\udffe|\uda3f\udfff|\uda7f\udffe|\uda7f\udfff|\udabf\udffe|\udabf\udfff|\udaff\udffe|\udaff\udfff|\udb3f\udffe|\udb3f\udfff|\udb7f\udffe|\udb7f\udfff|\udbbf\udffe|\udbbf\udfff|\udbff\udffe|\udbff\udfff"
+        },
         "type": "string"
       },
       "ElapsedDuration": {
