@@ -55,6 +55,10 @@ impl FindingArea {
 pub enum FindingReason {
     /// A declaration list holds more entries than one project may declare.
     TooManyEntries,
+    ProviderIdCollision,
+    SenderProfileIdCollision,
+    TemplateIdCollision,
+    AccessProfileIdCollision,
     UnknownProvider,
     ProviderCannotCarryChannel,
     InvalidEmailSender,
@@ -108,6 +112,10 @@ impl FindingReason {
     pub const fn area(self) -> FindingArea {
         match self {
             Self::TooManyEntries
+            | Self::ProviderIdCollision
+            | Self::SenderProfileIdCollision
+            | Self::TemplateIdCollision
+            | Self::AccessProfileIdCollision
             | Self::UnknownProvider
             | Self::ProviderCannotCarryChannel
             | Self::InvalidEmailSender
@@ -151,6 +159,10 @@ impl FindingReason {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::TooManyEntries => "too-many-entries",
+            Self::ProviderIdCollision => "provider-id-collision",
+            Self::SenderProfileIdCollision => "sender-profile-id-collision",
+            Self::TemplateIdCollision => "template-id-collision",
+            Self::AccessProfileIdCollision => "access-profile-id-collision",
             Self::UnknownProvider => "unknown-provider",
             Self::ProviderCannotCarryChannel => "provider-cannot-carry-channel",
             Self::InvalidEmailSender => "invalid-email-sender",
@@ -202,6 +214,14 @@ impl FindingReason {
         match self {
             Self::TooManyEntries => {
                 "The list holds more than 256 entries, the most one project declares."
+            }
+            Self::ProviderIdCollision => "Two provider identifiers differ only by `-` versus `_`.",
+            Self::SenderProfileIdCollision => {
+                "Two sender profile identifiers differ only by `-` versus `_`."
+            }
+            Self::TemplateIdCollision => "Two template identifiers differ only by `-` versus `_`.",
+            Self::AccessProfileIdCollision => {
+                "Two access profile identifiers differ only by `-` versus `_`."
             }
             Self::UnknownProvider => {
                 "The sender profile names a provider the project does not declare."
@@ -318,6 +338,12 @@ impl FindingReason {
     pub const fn suggested_action(self) -> &'static str {
         match self {
             Self::TooManyEntries => "Remove entries the deployment does not use.",
+            Self::ProviderIdCollision
+            | Self::SenderProfileIdCollision
+            | Self::TemplateIdCollision
+            | Self::AccessProfileIdCollision => {
+                "Rename one identifier so the two definitions remain distinct after separator normalization."
+            }
             Self::UnknownProvider => {
                 "Declare the provider under providers, or name a declared one."
             }
@@ -555,6 +581,10 @@ mod tests {
 
     const ALL_REASONS: &[FindingReason] = &[
         FindingReason::TooManyEntries,
+        FindingReason::ProviderIdCollision,
+        FindingReason::SenderProfileIdCollision,
+        FindingReason::TemplateIdCollision,
+        FindingReason::AccessProfileIdCollision,
         FindingReason::UnknownProvider,
         FindingReason::ProviderCannotCarryChannel,
         FindingReason::InvalidEmailSender,
