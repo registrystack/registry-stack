@@ -446,6 +446,7 @@ type PackageRule = fn(&RuntimeConfig, &LoadedPackage, &mut Vec<RuntimeConfigErro
 /// applies them.
 const FILE_RULES: &[FileRule] = &[
     RuntimeConfig::check_identity,
+    RuntimeConfig::check_identifier_collisions,
     RuntimeConfig::check_package_block,
     RuntimeConfig::check_secret_providers,
     RuntimeConfig::check_audit,
@@ -559,6 +560,23 @@ impl RuntimeConfig {
                 findings.push(RuntimeConfigError::InvalidIdentity);
             }
             Some(_) => {}
+        }
+    }
+
+    fn check_identifier_collisions(&self, findings: &mut Vec<RuntimeConfigError>) {
+        if !registry_platform_yaml::lookalike_local_id_pairs(
+            self.providers.keys().map(String::as_str),
+        )
+        .is_empty()
+        {
+            findings.push(RuntimeConfigError::ProviderIdCollision);
+        }
+        if !registry_platform_yaml::lookalike_local_id_pairs(
+            self.tls_trust_profiles.keys().map(String::as_str),
+        )
+        .is_empty()
+        {
+            findings.push(RuntimeConfigError::TlsTrustProfileIdCollision);
         }
     }
 
@@ -1040,6 +1058,63 @@ impl RuntimeCheck {
     }
 }
 
+fn runtime_identifier_collision_diagnostics(
+    check: &RuntimeFileCheck<RuntimeConfig>,
+    config: &RuntimeConfig,
+) -> Vec<Diagnostic> {
+    fn collisions<T>(
+        check: &RuntimeFileCheck<RuntimeConfig>,
+        code: &str,
+        pointer: &str,
+        entries: &BTreeMap<String, T>,
+    ) -> Vec<Diagnostic> {
+        let ids = entries.keys().map(String::as_str).collect::<Vec<_>>();
+        registry_platform_yaml::lookalike_local_id_pairs(ids.iter().copied())
+            .into_iter()
+            .map(|(first, second)| {
+                let first_pointer = format!(
+                    "{pointer}/{}",
+                    escape_pointer_segment(ids[first])
+                );
+                let second_pointer = format!(
+                    "{pointer}/{}",
+                    escape_pointer_segment(ids[second])
+                );
+                let mut diagnostic = check.error_at_key(
+                    MESSAGING_RUNTIME_KIND,
+                    code,
+                    &second_pointer,
+                    format!(
+                        "local identifiers `{}` and `{}` differ only by `-` versus `_`",
+                        ids[first], ids[second]
+                    ),
+                    "Rename one identifier so the two definitions remain distinct after separator normalization.",
+                );
+                check.add_related_key(
+                    &mut diagnostic,
+                    &first_pointer,
+                    format!("the other definition is `{}`", ids[first]),
+                );
+                diagnostic
+            })
+            .collect()
+    }
+
+    let mut diagnostics = collisions(
+        check,
+        "messaging.runtime.provider-id-collision",
+        "/providers",
+        &config.providers,
+    );
+    diagnostics.extend(collisions(
+        check,
+        "messaging.runtime.tls-trust-profile-id-collision",
+        "/tlsTrustProfiles",
+        &config.tls_trust_profiles,
+    ));
+    diagnostics
+}
+
 /// Check the runtime document at the absolute `path` as `messaging serve`
 /// reads it, with no database, network, or secret material, and report
 /// every rule it breaks. The rules about the package it serves run against
@@ -1085,9 +1160,11 @@ pub fn check_runtime_file(
         diagnostics.extend(
             findings
                 .iter()
+                .filter(|finding| !finding.is_identifier_collision())
                 .filter(|finding| !reads_deferred_value(&check, finding))
                 .map(|finding| positioned(&check, finding)),
         );
+        diagnostics.extend(runtime_identifier_collision_diagnostics(&check, config));
     }
     in_file_order(&mut diagnostics);
     let mut files_checked = 1 + refused_package.files_checked().unwrap_or(0);
@@ -1132,8 +1209,10 @@ pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report>
     let mut diagnostics: Vec<Diagnostic> = config
         .findings(package.as_ref())
         .iter()
+        .filter(|finding| !finding.is_identifier_collision())
         .map(|finding| positioned(&check, finding))
         .collect();
+    diagnostics.extend(runtime_identifier_collision_diagnostics(&check, config));
     in_file_order(&mut diagnostics);
     (!diagnostics.is_empty()).then(|| Report::new(diagnostics))
 }
@@ -1247,6 +1326,10 @@ pub enum RuntimeConfigError {
     MissingIdentity,
     #[error("identity.databaseId must be non-empty, at most 256 bytes, without surrounding whitespace or control characters")]
     InvalidIdentity,
+    #[error("providers contains identifiers that differ only by `-` versus `_`")]
+    ProviderIdCollision,
+    #[error("tlsTrustProfiles contains identifiers that differ only by `-` versus `_`")]
+    TlsTrustProfileIdCollision,
     #[error(transparent)]
     Load(#[from] registry_platform_config::RuntimeConfigError),
     #[error(transparent)]
@@ -1337,6 +1420,13 @@ const BUILD_PACKAGE: &str =
     "Build the package with `messagingctl package PROJECT --output DIRECTORY`, then point package.root at DIRECTORY.";
 
 impl RuntimeConfigError {
+    fn is_identifier_collision(&self) -> bool {
+        matches!(
+            self,
+            Self::ProviderIdCollision | Self::TlsTrustProfileIdCollision
+        )
+    }
+
     /// The JSON Pointer, in the runtime document, of the member this refusal
     /// concerns. A member that is absent is located by the mapping that
     /// lacks it when the refusal is positioned.
@@ -1351,6 +1441,8 @@ impl RuntimeConfigError {
             Self::Block(error) => pointer_to(&error.field().split('.').collect::<Vec<_>>()),
             Self::MissingIdentity => "/identity".to_owned(),
             Self::InvalidIdentity => "/identity/databaseId".to_owned(),
+            Self::ProviderIdCollision => "/providers".to_owned(),
+            Self::TlsTrustProfileIdCollision => "/tlsTrustProfiles".to_owned(),
             Self::InvalidAuditDestination(error) => {
                 pointer_to(&audit_field(error).split('.').collect::<Vec<_>>())
             }
@@ -1391,6 +1483,8 @@ impl RuntimeConfigError {
             Self::Block(error) | Self::BindingSecret { error, .. } => block_finding(error).0,
             Self::MissingIdentity => "messaging.runtime.missing-identity",
             Self::InvalidIdentity => "messaging.runtime.invalid-database-id",
+            Self::ProviderIdCollision => "messaging.runtime.provider-id-collision",
+            Self::TlsTrustProfileIdCollision => "messaging.runtime.tls-trust-profile-id-collision",
             Self::InvalidAuditDestination(_) => "messaging.runtime.invalid-audit",
             Self::RelativeOperatedPath(_) => "messaging.runtime.relative-path",
             Self::InvalidSecretProviders => "messaging.runtime.unusable-secret-providers",
@@ -1437,6 +1531,12 @@ impl RuntimeConfigError {
             }
             Self::InvalidIdentity => {
                 "Write identity.databaseId as at most 256 bytes without surrounding whitespace or control characters."
+            }
+            Self::ProviderIdCollision => {
+                "Rename one provider identifier so the definitions remain distinct after separator normalization."
+            }
+            Self::TlsTrustProfileIdCollision => {
+                "Rename one TLS trust profile identifier so the definitions remain distinct after separator normalization."
             }
             Self::InvalidAuditDestination(error) => audit_action(error),
             Self::RelativeOperatedPath(path) => {
@@ -2796,6 +2896,92 @@ pub(crate) mod tests {
             .iter()
             .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
             .collect()
+    }
+
+    #[test]
+    fn runtime_definition_maps_refuse_separator_lookalikes_at_both_keys() {
+        fn key_position(text: &str, id: &str) -> (usize, usize) {
+            text.lines()
+                .enumerate()
+                .find_map(|(line, text)| {
+                    (text.trim_start() == format!("{id}:")).then(|| {
+                        (
+                            line + 1,
+                            text.find(id).expect("key begins on its source line") + 1,
+                        )
+                    })
+                })
+                .expect("runtime key is authored")
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = runtime_value(root.path());
+        runtime["providers"] = provider_connections();
+        let provider = runtime["providers"]["mail-relay"].clone();
+        runtime["providers"]["mail_relay"] = provider;
+        runtime["tlsTrustProfiles"] = json!({
+            "gateway-ca": {"bundleRef": "secret:file/gateway-ca"},
+            "gateway_ca": {"bundleRef": "secret:file/other-ca"}
+        });
+        let path = write_project(root.path(), &runtime, &package_value());
+        let text = std::fs::read_to_string(&path).unwrap();
+        let check = check_runtime_file(&path, CheckedAgainst::Nothing, true);
+        let collisions = check
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code.ends_with("-id-collision"))
+            .collect::<Vec<_>>();
+        assert_eq!(collisions.len(), 2, "{collisions:?}");
+        for (diagnostic, code, primary, related, first, second) in [
+            (
+                collisions[0],
+                "messaging.runtime.provider-id-collision",
+                "/providers/mail_relay",
+                "/providers/mail-relay",
+                "mail-relay",
+                "mail_relay",
+            ),
+            (
+                collisions[1],
+                "messaging.runtime.tls-trust-profile-id-collision",
+                "/tlsTrustProfiles/gateway_ca",
+                "/tlsTrustProfiles/gateway-ca",
+                "gateway-ca",
+                "gateway_ca",
+            ),
+        ] {
+            assert_eq!(diagnostic.code, code);
+            assert_eq!(diagnostic.path, primary);
+            assert_eq!(diagnostic.related.len(), 1);
+            assert_eq!(diagnostic.related[0].path, related);
+            let source = diagnostic.source.as_ref().expect("primary source");
+            assert_eq!(
+                (source.line.unwrap(), source.column.unwrap()),
+                key_position(&text, second)
+            );
+            assert_eq!(
+                (
+                    diagnostic.related[0].line.unwrap(),
+                    diagnostic.related[0].column.unwrap(),
+                ),
+                key_position(&text, first)
+            );
+        }
+        let config = check.config().expect("decoded runtime is retained");
+        assert!(config
+            .findings(None)
+            .iter()
+            .any(RuntimeConfigError::is_identifier_collision));
+
+        let mut independent = runtime_value(root.path());
+        independent["providers"] = json!({"shared-id": provider_connections()["mail-relay"]});
+        independent["tlsTrustProfiles"] =
+            json!({"shared_id": {"bundleRef": "secret:file/gateway-ca"}});
+        let path = write_project(root.path(), &independent, &package_value());
+        assert!(check_runtime_file(&path, CheckedAgainst::Nothing, true)
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.code.ends_with("-id-collision")));
     }
 
     #[test]
