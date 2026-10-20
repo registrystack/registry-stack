@@ -1,5 +1,12 @@
 {
   "$defs": {
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "not": {
+        "pattern": "[  ‪-‮⁦-⁩﻿﷐-﷯￾￿]|🿾|🿿|𯿾|𯿿|𿿾|𿿿|񏿾|񏿿|񟿾|񟿿|񯿾|񯿿|񿿾|񿿿|򏿾|򏿿|򟿾|򟿿|򯿾|򯿿|򿿾|򿿿|󏿾|󏿿|󟿾|󟿿|󯿾|󯿿|󿿾|󿿿|􏿾|􏿿"
+      },
+      "type": "string"
+    },
     "LocalId": {
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -45,7 +52,16 @@
       "additionalProperties": false,
       "properties": {
         "description": {
-          "type": "string"
+          "allOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string"
+            }
+          ]
         },
         "id": {
           "$ref": "#/$defs/LocalId"

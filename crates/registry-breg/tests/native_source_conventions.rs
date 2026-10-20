@@ -455,6 +455,62 @@ fn reader_refusals_keep_duplicate_label_warnings_for_projects_and_modules() {
 }
 
 #[test]
+fn reader_refusals_sort_and_bound_warnings_with_integrity_errors_once() {
+    let repeated_records = |last_id: &str| {
+        (0..102)
+            .map(|index| {
+                let id = if index == 101 {
+                    last_id.to_owned()
+                } else {
+                    format!("entry-{index}")
+                };
+                json!({
+                    "id":id,
+                    "route":format!("entries-{index}"),
+                    "primaryDataset":"directory",
+                    "mutationMode":"mutable",
+                    "display":{"label":"Repeated entry"},
+                    "fields":[]
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut project = facility();
+    project["recordTypes"] = Value::from(repeated_records("entry_100"));
+    let module = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule",
+        "id":"local-module",
+        "version":"0.1.0",
+        "recordTypes":repeated_records("entry_100")
+    });
+
+    for report in [
+        read_project_yaml("registry.yaml", &bytes(&project)).unwrap_err(),
+        read_module_yaml("module.yaml", &bytes(&module)).unwrap_err(),
+    ] {
+        assert_eq!(report.files_checked(), Some(1));
+        assert_eq!(report.diagnostics().len(), 101);
+        let overflow = report.diagnostics().last().unwrap();
+        assert_eq!(overflow.code, "config.too-many-problems");
+        assert_eq!(
+            overflow.message,
+            "2 more problems in this file are not shown"
+        );
+        assert_eq!(overflow.severity, registry_platform_yaml::Severity::Error);
+        assert!(report.diagnostics()[..100].windows(2).all(|pair| {
+            let site = |diagnostic: &registry_platform_yaml::Diagnostic| {
+                diagnostic
+                    .source
+                    .as_ref()
+                    .map(|source| (source.line, source.column))
+            };
+            site(&pair[0]) <= site(&pair[1])
+        }));
+    }
+}
+
+#[test]
 fn duplicate_presentation_text_warns_in_each_breg_namespace() {
     let mut source = facility();
     source["project"]["defaultLanguage"] = json!("EN");

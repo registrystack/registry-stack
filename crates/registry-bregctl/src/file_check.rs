@@ -281,9 +281,9 @@ fn check(file: &Path, label: &str, against: &Against<'_>) -> Result<Report, Fail
         file,
         against,
     })?;
-    let mut report = document.warnings();
+    let mut diagnostics = Vec::new();
     if matches!(against, Against::ProjectAt(_)) && kind != fixtures::JOURNEYS_KIND {
-        report.push(document.diagnostic_at_value(
+        diagnostics.push(document.diagnostic_at_value(
             Severity::Warning,
             "breg.check.project-unused",
             "",
@@ -291,10 +291,8 @@ fn check(file: &Path, label: &str, against: &Against<'_>) -> Result<Report, Fail
             "Drop PROJECT when checking this file.",
         ));
     }
-    for finding in findings {
-        report.push(finding);
-    }
-    Ok(report)
+    diagnostics.extend(findings);
+    Ok(document.report_with(diagnostics))
 }
 
 /// The text the file writes as its root `kind`, when the shared reader can
