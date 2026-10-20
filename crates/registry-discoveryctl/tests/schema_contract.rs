@@ -303,6 +303,44 @@ fn profile_multibyte_strings_use_json_schema_character_semantics() {
 }
 
 #[test]
+fn current_profile_text_is_stricter_than_the_frozen_historical_schema() {
+    let validator = validator("profile/schema/registry-discovery-v1alpha1.schema.json");
+    for field in ["title", "description"] {
+        let mut document = positive_document("profile");
+        set_pointer(
+            &mut document,
+            &format!("/services/0/{field}"),
+            Value::String("review\u{202e}txt".to_owned()),
+        );
+        assert!(
+            validator.is_valid(&document),
+            "the immutable historical schema must remain unchanged"
+        );
+        assert!(
+            !accepted_by_rust("profile", &document),
+            "the current parser must apply DisplayText to {field}"
+        );
+
+        for text in [
+            "نام\u{200c}خانوادگی",
+            "العربية\u{200f} English",
+            "soft\u{00ad}hyphen",
+        ] {
+            set_pointer(
+                &mut document,
+                &format!("/services/0/{field}"),
+                Value::String(text.to_owned()),
+            );
+            assert!(validator.is_valid(&document), "schema refused {text:?}");
+            assert!(
+                accepted_by_rust("profile", &document),
+                "current parser refused {text:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn profile_endpoint_schema_and_rust_reject_preparser_whitespace_and_controls() {
     let validator = validator("profile/schema/registry-discovery-v1alpha1.schema.json");
     for endpoint in [

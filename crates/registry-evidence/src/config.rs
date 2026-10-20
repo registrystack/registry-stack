@@ -8376,6 +8376,13 @@ mod tests {
                 (" leading".to_owned(), false),
                 ("trailing ".to_owned(), false),
                 ("embedded\u{0007}control".to_owned(), false),
+                ("review\u{202e}txt".to_owned(), false),
+                ("review\u{2028}next".to_owned(), false),
+                ("review\u{fdd0}text".to_owned(), false),
+                ("review\u{10ffff}text".to_owned(), false),
+                ("نام\u{200c}خانوادگی".to_owned(), true),
+                ("العربية\u{200f} English".to_owned(), true),
+                ("soft\u{00ad}hyphen".to_owned(), true),
             ] {
                 let mut config = EvidenceConfig::parse_yaml(fixture)
                     .expect("strict fixture validates before the mutation");
