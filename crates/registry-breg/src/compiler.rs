@@ -516,6 +516,39 @@ fn add_cross_file_duplicate_labels(
     }
 }
 
+fn collect_profile_and_hook_labels<'a>(
+    profiles: &'a [AccessProfileSource],
+    hooks: &'a [crate::contract::HookSource],
+    path: &str,
+    source: Option<&'a str>,
+    profile_labels: &mut Vec<SourcedDisplayText<'a>>,
+    hook_labels: &mut Vec<SourcedDisplayText<'a>>,
+) {
+    profile_labels.extend(profiles.iter().filter_map(|profile| {
+        profile
+            .display
+            .label
+            .as_deref()
+            .map(|text| SourcedDisplayText {
+                id: Some(&profile.id),
+                text,
+                path: format!("{path}.accessProfiles[id={}].display.label", profile.id),
+                source,
+            })
+    }));
+    hook_labels.extend(hooks.iter().filter_map(|hook| {
+        hook.display
+            .label
+            .as_deref()
+            .map(|text| SourcedDisplayText {
+                id: Some(&hook.id),
+                text,
+                path: format!("{path}.hooks[id={}].display.label", hook.id),
+                source,
+            })
+    }));
+}
+
 fn collect_entity_field_labels<'a>(
     entity: &'a EntitySource,
     path: &str,
@@ -1043,9 +1076,34 @@ fn validate_cross_file_duplicate_display_labels(
         })
         .collect::<Vec<_>>();
     let mut fields = BTreeMap::<&str, Vec<SourcedDisplayText<'_>>>::new();
+    let mut profiles = BTreeMap::<&str, Vec<SourcedDisplayText<'_>>>::new();
+    let mut hooks = Vec::new();
+    for profile in &project.access_profiles {
+        if let Some(text) = profile.display.label.as_deref() {
+            for grant in &profile.permissions.entities {
+                profiles
+                    .entry(&grant.entity)
+                    .or_default()
+                    .push(SourcedDisplayText {
+                        id: Some(&profile.id),
+                        text,
+                        path: format!("accessProfiles[id={}].display.label", profile.id),
+                        source: None,
+                    });
+            }
+        }
+    }
     let mut refusals = Vec::new();
     collect_action_refusal_labels(&project.actions, "actions", None, &mut refusals);
     for entity in &project.entities {
+        collect_profile_and_hook_labels(
+            &entity.access_profiles,
+            &entity.hooks,
+            &format!("recordTypes[id={}]", entity.id),
+            None,
+            profiles.entry(&entity.id).or_default(),
+            &mut hooks,
+        );
         collect_entity_field_labels(
             entity,
             &format!("recordTypes[id={}]", entity.id),
@@ -1095,6 +1153,14 @@ fn validate_cross_file_duplicate_display_labels(
             &mut refusals,
         );
         for entity in &module.entities {
+            collect_profile_and_hook_labels(
+                &entity.access_profiles,
+                &entity.hooks,
+                &format!("modules[id={}].recordTypes[id={}]", module.id, entity.id),
+                Some(source),
+                profiles.entry(&entity.id).or_default(),
+                &mut hooks,
+            );
             collect_entity_field_labels(
                 entity,
                 &format!("modules[id={}].recordTypes[id={}]", module.id, entity.id),
@@ -1103,6 +1169,17 @@ fn validate_cross_file_duplicate_display_labels(
             );
         }
         for extension in &module.extend_entities {
+            collect_profile_and_hook_labels(
+                &extension.access_profiles,
+                &extension.hooks,
+                &format!(
+                    "modules[id={}].extendRecordTypes[recordType={}]",
+                    module.id, extension.entity
+                ),
+                Some(source),
+                profiles.entry(&extension.entity).or_default(),
+                &mut hooks,
+            );
             collect_extension_field_labels(
                 extension,
                 &format!(
@@ -1131,6 +1208,20 @@ fn validate_cross_file_duplicate_display_labels(
     for labels in fields.values() {
         add_cross_file_duplicate_labels("breg.field.duplicate-label", "fields", labels, findings);
     }
+    for labels in profiles.values() {
+        add_cross_file_duplicate_labels(
+            "breg.access-profile.duplicate-label",
+            "access profiles",
+            labels,
+            findings,
+        );
+    }
+    add_cross_file_duplicate_labels(
+        "breg.hook.duplicate-label",
+        "record hooks",
+        &hooks,
+        findings,
+    );
 
     if let Some(recipients) = &project.recipients {
         let organizations = recipients

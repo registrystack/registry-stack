@@ -1201,7 +1201,7 @@ fn place(
         if let Some(id) = module_file_id(file) {
             if let Some((_, document)) = documents.modules.iter().find(|(name, _)| name == id) {
                 let steps = parse_steps(rest);
-                let found = resolve(document.root(), &steps);
+                let found = resolve_module_path(document, &steps);
                 return at_value(document, &diagnostic, severity, action, &found, rest);
             }
             return file_level(project.join(file), Some(MODULE_ARTIFACT));
@@ -1249,15 +1249,9 @@ fn place(
         }
     }
     for (_, document) in &documents.modules {
-        let found = resolve(document.root(), &steps);
+        let found = resolve_module_path(document, &steps);
         if found.better_than(&best.1) {
             best = (document, found);
-        }
-        for alternative in record_extension_alternatives(document, &steps) {
-            let found = resolve(document.root(), &alternative);
-            if found.better_than(&best.1) {
-                best = (document, found);
-            }
         }
     }
     at_value(best.0, &diagnostic, severity, action, &best.1, path)
@@ -1283,18 +1277,29 @@ fn module_target<'d>(documents: &'d Documents, steps: &[Step]) -> Option<(&'d Do
         Step::Any if documents.modules.len() == 1 => &documents.modules[0].1,
         _ => return None,
     };
-    Some((document, resolve(document.root(), rest)))
+    Some((document, resolve_module_path(document, rest)))
+}
+
+fn resolve_module_path(document: &Document, steps: &[Step]) -> Resolved {
+    let mut best = resolve(document.root(), steps);
+    for alternative in record_extension_alternatives(document, steps) {
+        let found = resolve(document.root(), &alternative);
+        if found.better_than(&best) {
+            best = found;
+        }
+    }
+    best
 }
 
 /// Exact source spellings for a compiler path normalized under
-/// `recordTypes`. A module may declare and extend the same Record type, and it
-/// may use more than one extension block for that type, so every matching
-/// block is a candidate.
+/// `recordTypes` or explicitly naming `extendRecordTypes`. A module may declare
+/// and extend the same Record type, and it may use more than one extension
+/// block for that type, so every matching block is a candidate.
 fn record_extension_alternatives(document: &Document, steps: &[Step]) -> Vec<Vec<Step>> {
     let [Step::Member(records), record, rest @ ..] = steps else {
         return Vec::new();
     };
-    if records != "recordTypes" {
+    if records != "recordTypes" && records != "extendRecordTypes" {
         return Vec::new();
     }
     let Some(extensions) = document.root().get("extendRecordTypes") else {

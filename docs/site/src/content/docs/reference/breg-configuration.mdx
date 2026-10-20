@@ -60,12 +60,16 @@ fields and other derived output are not necessarily defaults.
 IDs or permissions. Keep IDs visible alongside labels in selection and approval interfaces.
 Action inputs keep their existing `label` fallback to `apiName`; the separate optional
 `display` member tells you whether display was authored.
+`check` warns when two access profiles in the same namespace have equivalent labels,
+naming both IDs. Use `check --deny-warnings` when that warning must block a review.
 
 {/* Evidence: crates/registry-bregctl/src/check.rs, Authoring and authored_paths();
     crates/registry-bregctl/src/lib.rs, explain();
     crates/registry-breg/src/artifacts.rs, inspect_registry() and action_input_metadata();
     crates/registry-breg/tests/native_inspection_inventory.rs,
-    model_retains_authored_display_without_inventing_input_labels(). */}
+    model_retains_authored_display_without_inventing_input_labels();
+    crates/registry-bregctl/tests/cli.rs,
+    duplicate_profile_display_warns_once_and_deny_warnings_refuses_it(). */}
 
 ## Indexes
 

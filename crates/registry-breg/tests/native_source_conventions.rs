@@ -17,6 +17,145 @@ fn bytes(source: &Value) -> Vec<u8> {
     serde_norway::to_string(source).unwrap().into_bytes()
 }
 
+fn authored_display() -> Value {
+    registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/fixtures/authoring-display/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value()
+}
+
+#[test]
+fn presentation_members_use_the_shared_display_text_reader() {
+    for base in [
+        "/accessProfiles/0/display",
+        "/statisticalDatasets/0/display",
+        "/recordTypes/0/hooks/0/display",
+        "/actions/0/execution/proposal/hooks/0/display",
+    ] {
+        for member in ["label", "description"] {
+            let mut source = authored_display();
+            let pointer = format!("{base}/{member}");
+            *source.pointer_mut(&pointer).unwrap() = json!("safe\u{202e}text");
+            refusal(&source, &pointer, "config.invalid-value");
+        }
+    }
+}
+
+#[test]
+fn presentation_duplicates_are_scoped_to_their_own_kind() {
+    let cases = [
+        ("/accessProfiles", "breg.access-profile.duplicate-label"),
+        (
+            "/statisticalDatasets",
+            "breg.statistical-dataset.duplicate-label",
+        ),
+        ("/recordTypes/0/hooks", "breg.hook.duplicate-label"),
+        (
+            "/actions/0/execution/proposal/hooks",
+            "breg.proposal-hook.duplicate-label",
+        ),
+    ];
+    let mut source = authored_display();
+    for (base, _) in cases {
+        source.pointer_mut(base).unwrap()[0]["display"]["label"] = json!("Reviewed label");
+    }
+    let decoded = read_project_yaml("registry.yaml", &bytes(&source)).unwrap();
+    assert_eq!(decoded.document.warnings().warning_count(), 0);
+
+    for (base, code) in cases {
+        let mut duplicate = source.clone();
+        let entries = duplicate.pointer_mut(base).unwrap().as_array_mut().unwrap();
+        let mut second = entries[0].clone();
+        second["id"] = json!("second-definition");
+        second["display"]["label"] = json!("REVIEWED\u{200b} LABEL");
+        entries.push(second);
+        let decoded = read_project_yaml("registry.yaml", &bytes(&duplicate)).unwrap();
+        let report = decoded.document.warnings();
+        let warnings = report.diagnostics();
+        assert_eq!(warnings.len(), 1, "{}", report.render_human());
+        assert_eq!(warnings[0].code, code);
+        assert_eq!(warnings[0].path, format!("{base}/1/display/label"));
+        assert_eq!(
+            warnings[0].related[0].path,
+            format!("{base}/0/display/label")
+        );
+        assert!(warnings[0].message.contains("second-definition"));
+    }
+}
+
+#[test]
+fn profile_and_hook_labels_follow_module_extension_namespaces() {
+    let mut project = authored_display();
+    project["modules"] = json!([{"id":"extension","version":"0.1.0"}]);
+    project["accessProfiles"][0]["display"]["label"] = json!("Reader");
+    project["recordTypes"][0]["hooks"][0]["display"]["label"] = json!("Notification");
+    let profile = |id: &str| {
+        json!({
+            "id":id,"display":{"label":"RE\u{200b}ADER"},
+            "principalClaim":"registry_principal","requiredScopes":["directory:read"],
+            "operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"
+        })
+    };
+    let hook = |id: &str| {
+        json!({
+            "id":id,"display":{"label":"NOTI\u{200b}FICATION"},
+            "phase":"after","trigger":"created","projection":["code"],
+            "handler":{"type":"url","destinationId":"entry-events"}
+        })
+    };
+    let mut module = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule","id":"extension","version":"0.1.0",
+        "extendRecordTypes":[
+            {"recordType":"entry","accessProfiles":[profile("module-reader")],"hooks":[hook("module-notice")]},
+            {"recordType":"entry","accessProfiles":[profile("other-reader")],"hooks":[hook("other-notice")]}
+        ]
+    });
+    let decoded = read_module_yaml("module.yaml", &bytes(&module)).unwrap();
+    let report = decoded.document.warnings();
+    for code in [
+        "breg.access-profile.duplicate-label",
+        "breg.hook.duplicate-label",
+    ] {
+        assert_eq!(
+            report
+                .diagnostics()
+                .iter()
+                .filter(|item| item.code == code)
+                .count(),
+            1
+        );
+    }
+    let project = read_project_yaml("registry.yaml", &bytes(&project))
+        .unwrap()
+        .value;
+    let compiled = compile_project(&project, &[decoded.value], CompileProfile::Authoring).unwrap();
+    for code in [
+        "breg.access-profile.duplicate-label",
+        "breg.hook.duplicate-label",
+    ] {
+        let findings = compiled
+            .findings()
+            .iter()
+            .filter(|item| item.code == code)
+            .collect::<Vec<_>>();
+        assert_eq!(findings.len(), 2, "cross-file pairs only: {findings:?}");
+        assert!(findings.iter().all(|item| item
+            .path
+            .starts_with("modules[id=extension].extendRecordTypes[recordType=entry]")));
+    }
+    module["extendRecordTypes"][0]["accessProfiles"][0]["display"]["label"] =
+        json!("unsafe\u{202e}");
+    let report = read_module_yaml("module.yaml", &bytes(&module)).unwrap_err();
+    assert!(report.diagnostics().iter().any(|item| {
+        item.code == "config.invalid-value"
+            && item.path == "/extendRecordTypes/0/accessProfiles/0/display/label"
+    }));
+}
+
 fn refusal(source: &Value, path: &str, code: &str) {
     let yaml = bytes(source);
     let report = read_project_yaml("registry.yaml", &yaml).unwrap_err();
