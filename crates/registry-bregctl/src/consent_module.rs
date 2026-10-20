@@ -114,6 +114,7 @@ pub(crate) fn add_consent_module(
     })?;
 
     let CapturedProjectSource {
+        project_path: captured_project_path,
         project_bytes: original,
         project_assets,
         mut modules,
@@ -126,6 +127,7 @@ pub(crate) fn add_consent_module(
         assets: Vec::new(),
     });
     let mut candidate = CapturedProjectSource {
+        project_path: captured_project_path,
         project,
         project_bytes: rendered.clone(),
         project_assets,

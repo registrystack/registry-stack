@@ -265,7 +265,10 @@ impl Lines {
         let head = if let [only] = group {
             format!(
                 "{code}{GAP}{}",
-                styled(PATH, &escape_report_text(only.path))
+                styled(
+                    PATH,
+                    &escape_report_text(&shown_site(only.source, only.path))
+                )
             )
         } else {
             format!(
@@ -288,8 +291,36 @@ impl Lines {
                 self.lines.push(format!(
                     "{}{}",
                     " ".repeat(MESSAGE_INDENT + INDENT.len()),
-                    styled(PATH, &escape_report_text(finding.path))
+                    styled(
+                        PATH,
+                        &escape_report_text(&shown_site(finding.source, finding.path))
+                    )
                 ));
+                self.push_related(&finding.related);
+            }
+        } else {
+            self.push_related(&group[0].related);
+        }
+    }
+
+    fn push_related(&mut self, related: &[RelatedFinding<'_>]) {
+        let indent = MESSAGE_INDENT + INDENT.len();
+        let message_indent = indent + INDENT.len();
+        for relation in related {
+            self.lines.push(format!(
+                "{}related{GAP}{}",
+                " ".repeat(indent),
+                styled(
+                    PATH,
+                    &escape_report_text(&shown_site(relation.source, relation.path))
+                )
+            ));
+            for line in wrap(
+                &escape_report_text(relation.message),
+                WRAP_WIDTH - message_indent,
+            ) {
+                self.lines
+                    .push(format!("{}{line}", " ".repeat(message_indent)));
             }
         }
     }
@@ -303,13 +334,50 @@ impl Lines {
 
 /// One finding, borrowed from whichever report carries it.
 ///
-/// The renderer reads the severity, the code, the path, and the sentence, and
-/// nothing else. A report that carries more keeps it for the JSON rendering.
+/// The renderer reads the severity, code, path, sentence, and related compiler
+/// paths. A report that carries more keeps it for the JSON rendering.
 pub(crate) struct Finding<'a> {
     pub(crate) severity: Severity,
     pub(crate) code: &'a str,
     pub(crate) path: &'a str,
     pub(crate) message: &'a str,
+    pub(crate) source: Option<FindingSource<'a>>,
+    pub(crate) related: Vec<RelatedFinding<'a>>,
+}
+
+/// Another compiler path that explains one finding.
+pub(crate) struct RelatedFinding<'a> {
+    pub(crate) path: &'a str,
+    pub(crate) message: &'a str,
+    pub(crate) source: Option<FindingSource<'a>>,
+}
+
+/// An optional exact source position for a tool diagnostic path.
+#[derive(Clone, Copy)]
+pub(crate) struct FindingSource<'a> {
+    pub(crate) file: &'a str,
+    pub(crate) line: Option<usize>,
+    pub(crate) column: Option<usize>,
+}
+
+fn shown_site(source: Option<FindingSource<'_>>, path: &str) -> String {
+    let Some(source) = source else {
+        return path.to_owned();
+    };
+    let mut shown = source.file.to_owned();
+    if let Some(line) = source.line {
+        shown.push(':');
+        shown.push_str(&line.to_string());
+        if let Some(column) = source.column {
+            shown.push(':');
+            shown.push_str(&column.to_string());
+        }
+    }
+    if !path.is_empty() {
+        shown.push(' ');
+        shown.push_str(path);
+    }
+    shown
 }
 
 /// The two severities a bregctl diagnostic carries.
@@ -520,6 +588,8 @@ mod tests {
             code,
             path,
             message,
+            source: None,
+            related: Vec::new(),
         }
     }
 
@@ -610,6 +680,28 @@ mod tests {
                 "0 errors, 1 finding.\n",
             )
         );
+    }
+
+    #[test]
+    fn a_related_compiler_path_is_rendered_below_its_primary_finding() {
+        let mut lines = Lines::new();
+        lines.lead("bregctl generate refused.");
+        let mut diagnostic = finding(
+            Severity::Error,
+            "breg.record-type.id-collision",
+            "modules[id=core].recordTypes[id=case_file].id",
+            "record type identifiers must be distinct after separator normalization",
+        );
+        diagnostic.related.push(RelatedFinding {
+            path: "recordTypes[id=case-file].id",
+            message: "the first identifier is defined here",
+            source: None,
+        });
+        lines.refusal_findings(&[diagnostic]);
+
+        let rendered = plain(&lines.finish());
+        assert!(rendered.contains("related  recordTypes[id=case-file].id"));
+        assert!(rendered.contains("the first identifier is defined here"));
     }
 
     #[test]

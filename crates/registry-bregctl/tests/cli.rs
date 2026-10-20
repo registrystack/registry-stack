@@ -4702,8 +4702,12 @@ recordTypes:
     assert!(!rendered.contains("SQL_VALUE_CANARY"));
     assert!(!rendered.contains("SELECT"));
     let report = json_stdout(&check);
-    let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "breg.derived.sql-invalid");
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.derived.sql-invalid")
+        .unwrap_or_else(|| panic!("missing derived SQL diagnostic: {report}"));
     assert_eq!(diagnostic["path"], "/recordTypes/0/derived/0/sql");
     assert_eq!(
         diagnostic["source"]["file"],
@@ -4822,6 +4826,195 @@ recordTypes:
         "the first display text is defined here"
     );
     assert_check_diagnostic(warning, Some("BRegModule"));
+}
+
+#[test]
+fn check_combines_cross_file_errors_and_reader_warnings_under_the_module_budget() {
+    let mut registry = String::from(
+        r#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: collision-budget-fixture
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://collision-budget-fixture.example.test
+datasets:
+  - id: records
+modules:
+  - id: core
+    version: "1"
+recordTypes:
+"#,
+    );
+    let mut module = String::from(
+        r#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: core
+version: "1"
+recordTypes:
+"#,
+    );
+    for index in 0..101 {
+        registry.push_str(&format!(
+            "  - id: record-{index}\n    primaryDataset: records\n    route: project-record-{index}\n    mutationMode: mutable\n    fields: []\n"
+        ));
+        module.push_str(&format!(
+            "  - id: record_{index}\n    display:\n      label: Review\n    primaryDataset: records\n    route: module-record-{index}\n    mutationMode: mutable\n    fields: []\n"
+        ));
+    }
+
+    let project = TestProject::from_registry_source(registry.as_bytes());
+    let module_directory = project.path().join("modules/core");
+    fs::create_dir_all(&module_directory).unwrap();
+    fs::write(module_directory.join("module.yaml"), module).unwrap();
+
+    let check = bregctl(&["--format", "json", "check", path(project.path())]);
+
+    assert_eq!(check.status.code(), Some(1), "{check:?}");
+    let report = json_stdout(&check);
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    let module_file = module_directory.join("module.yaml").display().to_string();
+    let module_diagnostics = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic["source"]["file"] == module_file)
+        .collect::<Vec<_>>();
+    assert_eq!(module_diagnostics.len(), 101, "{report}");
+    assert!(module_diagnostics[..100]
+        .iter()
+        .any(|diagnostic| diagnostic["code"] == "breg.record-type.id-collision"));
+    assert!(module_diagnostics[..100]
+        .iter()
+        .any(|diagnostic| diagnostic["code"] == "breg.record-type.duplicate-label"));
+    assert!(module_diagnostics[..100].iter().all(|diagnostic| {
+        diagnostic["source"]["file"] == module_directory.join("module.yaml").display().to_string()
+    }));
+    let overflow = module_diagnostics[100];
+    assert_eq!(overflow["code"], "config.too-many-problems");
+    assert_eq!(overflow["severity"], "error");
+    assert_eq!(
+        overflow["source"]["file"],
+        module_directory.join("module.yaml").display().to_string()
+    );
+    assert_eq!(
+        overflow["message"],
+        "101 more problems in this file are not shown"
+    );
+
+    let human = bregctl(&["check", path(project.path())]);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    assert!(
+        String::from_utf8_lossy(&human.stderr).ends_with(" in 2 files\n"),
+        "{}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+}
+
+#[test]
+fn generate_preserves_related_compiler_paths_in_json_and_human_reports() {
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: collision-fixture
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://collision-fixture.example.test
+datasets:
+  - id: records
+modules:
+  - id: core
+    version: "1"
+recordTypes:
+  - id: case-file
+    primaryDataset: records
+    route: case-files
+    mutationMode: mutable
+    fields: []
+"#,
+    );
+    let module_directory = project.path().join("modules/core");
+    fs::create_dir_all(&module_directory).unwrap();
+    fs::write(
+        module_directory.join("module.yaml"),
+        br#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: core
+version: "1"
+recordTypes:
+  - id: case_file
+    primaryDataset: records
+    route: archived-case-files
+    mutationMode: mutable
+    fields: []
+"#,
+    )
+    .unwrap();
+    let output = project.path().join("generated");
+
+    let json = bregctl(&[
+        "--format",
+        "json",
+        "generate",
+        "openapi",
+        path(project.path()),
+        "--output",
+        path(&output),
+    ]);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let report = json_stdout(&json);
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.record-type.id-collision")
+        .unwrap_or_else(|| panic!("missing compiler collision: {report}"));
+    assert_eq!(diagnostic["path"], "/recordTypes/0/id");
+    assert_eq!(
+        diagnostic["source"],
+        json!({
+            "file": module_directory.join("module.yaml").display().to_string(),
+            "line": 6,
+            "column": 9
+        })
+    );
+    assert_eq!(
+        diagnostic["related"],
+        json!([{
+            "file": project.path().join("registry.yaml").display().to_string(),
+            "line": 14,
+            "column": 9,
+            "path": "/recordTypes/0/id",
+            "message": "the first identifier is defined here"
+        }])
+    );
+
+    let human = bregctl(&[
+        "generate",
+        "openapi",
+        path(project.path()),
+        "--output",
+        path(&output),
+    ]);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    let rendered = String::from_utf8_lossy(&human.stderr);
+    assert!(
+        rendered.contains(&format!(
+            "{}:6:9 /recordTypes/0/id",
+            module_directory.join("module.yaml").display()
+        )),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(&format!(
+            "related  {}:14:9 /recordTypes/0/id",
+            project.path().join("registry.yaml").display()
+        )),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("the first identifier is defined here"),
+        "{rendered}"
+    );
 }
 
 #[test]
