@@ -8,6 +8,11 @@ source_repos:
   - registry-manifest
   - registry-evidence
   - registry-casework
+  - registry-scheduling
+  - registry-messaging
+  - registry-coordinator
+  - registry-render
+  - registry-discovery
 last_reviewed: "2026-09-20"
 doc_type: reference
 locale: en
@@ -93,11 +98,11 @@ Product names are always in English, including on future translated pages.
   <dt id="hold">hold</dt>
   <dd>A short-lived claim on Registry Scheduling capacity that expires on its own unless the caller confirms it into an <a href="#appointment">appointment</a>.</dd>
 
-  <dt id="holiday-set">holiday set</dt>
-  <dd>A named list of dates an <a href="#opening">opening</a> excludes.</dd>
-
   <dt id="holder-bound">holder-bound</dt>
   <dd>The Registry Evidence subject binding mode in which the binding derives from the holder key's RFC 7638 thumbprint instead of the audience. Its requirement returns only <a href="#sd-jwt-vc">SD-JWT VC</a>, and the relying party checks the audience at presentation by verifying a key-binding JWT.</dd>
+
+  <dt id="holiday-set">holiday set</dt>
+  <dd>A named list of dates an <a href="#opening">opening</a> excludes.</dd>
 
   <dt id="journey">journey</dt>
   <dd>One scenario in `tests/journeys.yaml` that `bregctl test` replays over HTTP against a throwaway database. A fully successful run writes a <a href="#receipt">receipt</a>. See <a href="../../configure/breg-journeys/">Test with journeys</a>.</dd>

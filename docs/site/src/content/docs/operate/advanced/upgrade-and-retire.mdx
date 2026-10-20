@@ -335,7 +335,7 @@ so a binary that cannot run leaves the installed toolset selected.
     crates/registry-messaging/src/receipts.rs, ReceiptOutcome::Unmatched;
     products/messaging/RUNTIME-CONFIG.md, "Provider callbacks" (a verified callback naming no
     message answers 204);
-    docs/site/src/content/docs/operate/messaging.mdx, "Plan, apply, inspect, and serve";
+    docs/site/src/content/docs/operate/messaging.mdx, "Record and serve the package";
     crates/registry-messaging/src/runtime.rs, shutdown_signal() and Listeners::serve_until();
     products/discovery/CHANGELOG.md, Unreleased (v0.42.0) validateSelectionStructure entry;
     crates/registry-stack-client-py/pyproject.toml, requires-python;
@@ -567,8 +567,8 @@ in this sequence.
 {/* Evidence: crates/registry-evidence/src/config.rs, maximumAssertionValiditySeconds bounds;
     docs/site/src/content/docs/reference/api-stability.mdx, JWKS served by the process;
     products/evidence/OPERATOR-CONTRACT.md, predecessor key retention and audit master retention;
-    docs/site/src/content/docs/operate/messaging.mdx, "Operate messages", "Watch metrics", and
-    "Plan, apply, inspect, and serve"; crates/registry-messagingctl/src/lib.rs, Command,
+    docs/site/src/content/docs/operate/messaging.mdx, "Operate messages", "Watch the journal and metrics", and
+    "Record and serve the package"; crates/registry-messagingctl/src/lib.rs, Command,
     ListArgs, and EraseExpiredArgs; crates/registry-messaging/src/retention.rs, TERMINAL and
     erase_expired(); crates/registry-messaging/src/receipts.rs, ReceiptOutcome;
     crates/registry-messaging/src/audit.rs, principal_pseudonym() and recipient_reference();
