@@ -511,6 +511,10 @@ impl RuntimeConfig {
     /// Check syntax, references and offline values without reading secret material.
     pub fn check_file(path: &Path, substitute: bool) -> RuntimeFileCheck<Self> {
         let mut checked = Self::loader().check_offline::<Self>(path, substitute, stand_in);
+        let integrity = checked.loaded.as_ref().map_or_else(Vec::new, |loaded| {
+            runtime_id_collision_diagnostics(&checked, &loaded.config)
+        });
+        checked.diagnostics.extend(integrity);
         if let Some(loaded) = &checked.loaded {
             for error in loaded.config.findings() {
                 let pointer = pointer(error.field.as_deref().unwrap_or(""));
@@ -533,6 +537,26 @@ impl RuntimeConfig {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if !registry_platform_yaml::lookalike_local_id_pairs(
+            self.connections.keys().map(String::as_str),
+        )
+        .is_empty()
+        {
+            return Err(config_error(
+                "connections",
+                "rename separator-lookalike connection identifiers",
+            ));
+        }
+        if !registry_platform_yaml::lookalike_local_id_pairs(
+            self.event_sources.keys().map(String::as_str),
+        )
+        .is_empty()
+        {
+            return Err(config_error(
+                "eventSources",
+                "rename separator-lookalike event source identifiers",
+            ));
+        }
         match self.findings().into_iter().next() {
             Some(error) => Err(error),
             None => Ok(()),
@@ -971,6 +995,63 @@ impl RuntimeConfig {
         })?;
         Ok(Zeroizing::new(text.to_owned()))
     }
+}
+
+fn runtime_id_collision_diagnostics(
+    checked: &RuntimeFileCheck<RuntimeConfig>,
+    config: &RuntimeConfig,
+) -> Vec<registry_platform_yaml::Diagnostic> {
+    fn collisions<T>(
+        checked: &RuntimeFileCheck<RuntimeConfig>,
+        code: &str,
+        pointer: &str,
+        values: &BTreeMap<String, T>,
+    ) -> Vec<registry_platform_yaml::Diagnostic> {
+        let ids = values.keys().map(String::as_str).collect::<Vec<_>>();
+        registry_platform_yaml::lookalike_local_id_pairs(ids.iter().copied())
+            .into_iter()
+            .map(|(first, second)| {
+                let first_pointer = format!(
+                    "{pointer}/{}",
+                    registry_platform_yaml::escape_pointer_segment(ids[first])
+                );
+                let second_pointer = format!(
+                    "{pointer}/{}",
+                    registry_platform_yaml::escape_pointer_segment(ids[second])
+                );
+                let mut diagnostic = checked.error_at_key(
+                    KIND,
+                    code,
+                    &second_pointer,
+                    format!(
+                        "local identifiers `{}` and `{}` differ only by `-` versus `_`",
+                        ids[first], ids[second]
+                    ),
+                    "Rename one identifier so the two definitions remain distinct after separator normalization.",
+                );
+                checked.add_related_key(
+                    &mut diagnostic,
+                    &first_pointer,
+                    format!("the other definition is `{}`", ids[first]),
+                );
+                diagnostic
+            })
+            .collect()
+    }
+
+    let mut diagnostics = collisions(
+        checked,
+        "coordinator.runtime.connection-id-collision",
+        "/connections",
+        &config.connections,
+    );
+    diagnostics.extend(collisions(
+        checked,
+        "coordinator.runtime.event-source-id-collision",
+        "/eventSources",
+        &config.event_sources,
+    ));
+    diagnostics
 }
 
 fn config_error(field: &str, action: &str) -> CoordinatorError {

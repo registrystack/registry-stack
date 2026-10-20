@@ -43,7 +43,8 @@ use registry_platform_config::{
     VerifiedPackage, REVISION_FILE, SUM_FILE,
 };
 use registry_platform_yaml::{
-    Decoded, Diagnostic, Document, Reader, Report, Severity, Source, MAXIMUM_DOCUMENT_BYTES,
+    local_id_collision_diagnostics, AuthoredId, Decoded, Diagnostic, Document, Reader, Report,
+    Severity, Source, MAXIMUM_DOCUMENT_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -380,9 +381,26 @@ fn load_contents(
         .read_document(PACKAGE_FILE, MESSAGING_PROJECT_KIND, MAXIMUM_MANIFEST_BYTES)?
         .and_then(|bytes| reader.decode(PACKAGE_FILE, &bytes, MessagingProject::decode));
     if let Some(project) = &project {
+        let findings = project.value.findings();
+        let ordinary = findings
+            .into_iter()
+            .filter(|finding| {
+                !matches!(
+                    finding.reason,
+                    FindingReason::ProviderIdCollision
+                        | FindingReason::SenderProfileIdCollision
+                        | FindingReason::TemplateIdCollision
+                        | FindingReason::AccessProfileIdCollision
+                )
+            })
+            .collect::<Vec<_>>();
         reader
             .found
-            .note_findings(PACKAGE_FILE, &project.document, &project.value.findings());
+            .note_findings(PACKAGE_FILE, &project.document, &ordinary);
+        reader.found.note(
+            PACKAGE_FILE,
+            Report::new(project_integrity_diagnostics(project)),
+        );
     }
     let (templates, shipped) = reader.read_templates()?;
     let mut compiled = Vec::new();
@@ -460,6 +478,63 @@ fn load_contents(
         warnings: found.report,
         inputs: reader.inputs,
     })
+}
+
+fn project_integrity_diagnostics(project: &Decoded<MessagingProject>) -> Vec<Diagnostic> {
+    fn collisions<'a>(
+        document: &Document,
+        code: &str,
+        entries: impl IntoIterator<Item = (&'a str, String)>,
+    ) -> Vec<Diagnostic> {
+        let entries = entries.into_iter().collect::<Vec<_>>();
+        let authored = entries
+            .iter()
+            .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+            .collect::<Vec<_>>();
+        local_id_collision_diagnostics(document, code, &authored)
+    }
+
+    let mut diagnostics = collisions(
+        &project.document,
+        "messaging.project.provider-id-collision",
+        project
+            .value
+            .providers
+            .iter()
+            .enumerate()
+            .map(|(index, provider)| (provider.id.as_str(), format!("/providers/{index}/id"))),
+    );
+    diagnostics.extend(collisions(
+        &project.document,
+        "messaging.project.sender-profile-id-collision",
+        project
+            .value
+            .sender_profiles
+            .iter()
+            .enumerate()
+            .map(|(index, profile)| (profile.id.as_str(), format!("/senderProfiles/{index}/id"))),
+    ));
+    diagnostics.extend(collisions(
+        &project.document,
+        "messaging.project.template-id-collision",
+        project
+            .value
+            .templates
+            .iter()
+            .enumerate()
+            .map(|(index, template)| (template.id.as_str(), format!("/templates/{index}/id"))),
+    ));
+    diagnostics.extend(collisions(
+        &project.document,
+        "messaging.project.access-profile-id-collision",
+        project
+            .value
+            .access_profiles
+            .iter()
+            .enumerate()
+            .map(|(index, profile)| (profile.id.as_str(), format!("/accessProfiles/{index}/id"))),
+    ));
+    diagnostics
 }
 
 /// What reading the package's authored files found: every diagnostic, file

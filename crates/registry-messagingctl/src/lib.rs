@@ -2714,6 +2714,72 @@ audit:
     }
 
     #[test]
+    fn check_refuses_separator_lookalike_provider_ids_at_both_authored_locations() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = starter(root.path());
+        let project = directory.join("messaging.yaml");
+        let text = std::fs::read_to_string(&project).unwrap();
+        let text = text.replace(
+            "  - id: sms-gateway\n    type: http\n    idempotentSubmit: true",
+            "  - id: sms-gateway\n    type: http\n    idempotentSubmit: true\n  - id: mail_relay\n    type: smtp",
+        );
+        std::fs::write(&project, &text).unwrap();
+        let position = |id: &str| {
+            text.lines()
+                .enumerate()
+                .find_map(|(line, text)| {
+                    text.strip_prefix("  - id: ")
+                        .filter(|authored| *authored == id)
+                        .map(|_| (line as u64 + 1, 9_u64))
+                })
+                .expect("the provider id is authored")
+        };
+
+        let (exit, report) = json_run(&[
+            OsStr::new("check"),
+            OsStr::new("--project"),
+            directory.as_os_str(),
+        ]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report}");
+        let diagnostic = report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == "messaging.project.provider-id-collision")
+            .expect("the provider collision is reported");
+        assert_eq!(diagnostic["path"], "/providers/2/id");
+        assert_eq!(diagnostic["source"]["file"], project.display().to_string());
+        assert_eq!(
+            (
+                diagnostic["source"]["line"].as_u64().unwrap(),
+                diagnostic["source"]["column"].as_u64().unwrap()
+            ),
+            position("mail_relay")
+        );
+        assert!(diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("mail-relay"));
+        assert!(diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("mail_relay"));
+        assert_eq!(diagnostic["related"].as_array().unwrap().len(), 1);
+        assert_eq!(diagnostic["related"][0]["path"], "/providers/0/id");
+        assert_eq!(
+            diagnostic["related"][0]["file"],
+            project.display().to_string()
+        );
+        assert_eq!(
+            (
+                diagnostic["related"][0]["line"].as_u64().unwrap(),
+                diagnostic["related"][0]["column"].as_u64().unwrap()
+            ),
+            position("mail-relay")
+        );
+    }
+
+    #[test]
     fn check_lists_project_warnings_and_deny_warnings_refuses_them() {
         let root = tempfile::tempdir().unwrap();
         let directory = starter(root.path());
