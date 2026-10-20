@@ -120,11 +120,14 @@ fn manifest_integrity_diagnostics(
                     .push((id.to_owned(), text.clone(), pointer)),
                 LocalizedText::Localized(texts) => {
                     for (language, text) in texts {
-                        by_language.entry(language.clone()).or_default().push((
-                            id.to_owned(),
-                            text.clone(),
-                            format!("{pointer}/{}", escape_pointer_segment(language)),
-                        ));
+                        by_language
+                            .entry(language.to_ascii_lowercase())
+                            .or_default()
+                            .push((
+                                id.to_owned(),
+                                text.clone(),
+                                format!("{pointer}/{}", escape_pointer_segment(language)),
+                            ));
                     }
                 }
             }
@@ -172,10 +175,13 @@ fn manifest_integrity_diagnostics(
                     .push((text.clone(), pointer)),
                 LocalizedText::Localized(texts) => {
                     for (language, text) in texts {
-                        by_language.entry(language.clone()).or_default().push((
-                            text.clone(),
-                            format!("{pointer}/{}", escape_pointer_segment(language)),
-                        ));
+                        by_language
+                            .entry(language.to_ascii_lowercase())
+                            .or_default()
+                            .push((
+                                text.clone(),
+                                format!("{pointer}/{}", escape_pointer_segment(language)),
+                            ));
                     }
                 }
             }
@@ -208,16 +214,6 @@ fn manifest_integrity_diagnostics(
                 "/evaluation_profiles",
                 manifest
                     .evaluation_profiles
-                    .iter()
-                    .map(|item| item.id.as_str()),
-            ),
-        ),
-        (
-            "manifest.metadata.ecosystem-binding-id-collision",
-            list_ids(
-                "/ecosystem_bindings",
-                manifest
-                    .ecosystem_bindings
                     .iter()
                     .map(|item| item.id.as_str()),
             ),
@@ -554,7 +550,7 @@ fn manifest_integrity_diagnostics(
                 )
             }),
     ));
-    warnings.extend(localized_warnings(
+    warnings.extend(localized_location_warnings(
         document,
         "manifest.metadata.duplicate-ecosystem-binding-title",
         "ecosystem bindings",
@@ -563,13 +559,9 @@ fn manifest_integrity_diagnostics(
             .iter()
             .enumerate()
             .filter_map(|(index, item)| {
-                item.title.as_ref().map(|title| {
-                    (
-                        item.id.as_str(),
-                        title,
-                        format!("/ecosystem_bindings/{index}/title"),
-                    )
-                })
+                item.title
+                    .as_ref()
+                    .map(|title| (title, format!("/ecosystem_bindings/{index}/title")))
             }),
     ));
     warnings.extend(localized_warnings(
@@ -1152,6 +1144,71 @@ mod tests {
         assert!(!warning.message.contains("first <code>"));
         assert!(!warning.message.contains("second <code>"));
         assert!(!warning.related[0].message.contains("first <code>"));
+    }
+
+    #[test]
+    fn localized_warning_languages_compare_case_insensitively() {
+        let text = format!(
+            "{MINIMAL}datasets:\n  - id: first\n    title:\n      en: Review\n  - id: second\n    title:\n      EN: \"R\\u200Beview\"\ncodelists:\n  - id: status\n    scheme_iri: https://example.test/status\n    concepts:\n      - code: first\n        label:\n          en: Active\n      - code: second\n        label:\n          EN: \"A\\u200Bctive\"\n"
+        );
+        let read = read_metadata("metadata.yaml", text.as_bytes())
+            .unwrap_or_else(|diagnostics| panic!("refused: {diagnostics:#?}"));
+        let warnings = read.document.warnings();
+
+        let dataset = warnings
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "manifest.metadata.duplicate-dataset-title")
+            .expect("language tag casing does not split a dataset title scope");
+        assert_eq!(dataset.path, "/datasets/1/title/EN");
+        assert_eq!(dataset.related[0].path, "/datasets/0/title/en");
+
+        let concept = warnings
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == "manifest.metadata.duplicate-codelist-concept-label"
+            })
+            .expect("language tag casing does not split a concept label scope");
+        assert_eq!(concept.path, "/codelists/0/concepts/1/label/EN");
+        assert_eq!(concept.related[0].path, "/codelists/0/concepts/0/label/en");
+    }
+
+    #[test]
+    fn ecosystem_binding_integrity_treats_ids_as_opaque_and_redacts_them() {
+        let first_id = "urn:example:confidential-binding-one";
+        let second_id = "urn:example:confidential-binding_one";
+        let text = format!(
+            "{MINIMAL}ecosystem_bindings:\n  - id: {first_id}\n    version: v1\n    profile: demo\n    type: governed-evidence\n    title: Review\n  - id: {second_id}\n    version: v1\n    profile: demo\n    type: governed-evidence\n    title: \"R\\u200Beview\"\n"
+        );
+        let mut hook = registry_platform_config::AuthoredExpressions;
+        let mut document = Reader::new("metadata.yaml")
+            .with_hook(&mut hook)
+            .read(text.as_bytes(), &Expect::one(&METADATA_FORMAT))
+            .expect("the manifest is structurally valid");
+        let fields = document
+            .decode::<MetadataManifestFields>()
+            .expect("the manifest decodes");
+        let manifest = MetadataManifest::from(fields);
+
+        let errors = manifest_integrity_diagnostics(&manifest, &mut document);
+        assert!(errors.is_empty(), "opaque IDs are not a LocalId namespace");
+        let warnings = document.warnings();
+        let warning = warnings
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == "manifest.metadata.duplicate-ecosystem-binding-title"
+            })
+            .expect("peer ecosystem binding titles are still compared");
+        assert_eq!(warning.path, "/ecosystem_bindings/1/title");
+        assert_eq!(warning.related[0].path, "/ecosystem_bindings/0/title");
+        assert!(!warning.message.contains(first_id));
+        assert!(!warning.message.contains(second_id));
+        for related in &warning.related {
+            assert!(!related.message.contains(first_id));
+            assert!(!related.message.contains(second_id));
+        }
     }
 
     #[test]
