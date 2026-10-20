@@ -1629,8 +1629,23 @@ struct ToolDiagnostic {
     path: String,
     message: String,
     suggested_action: SuggestedAction,
-    #[serde(skip)]
-    related: Vec<registry_breg::RelatedDiagnostic>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<registry_platform_yaml::Source>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    related: Vec<ToolRelatedDiagnostic>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolRelatedDiagnostic {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    column: Option<usize>,
+    path: String,
+    message: String,
 }
 
 /// A successful report already identifies these entries as `findings`, so its
@@ -1644,6 +1659,10 @@ struct ToolFinding<'a> {
     path: &'a str,
     message: &'a str,
     suggested_action: SuggestedAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<&'a registry_platform_yaml::Source>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    related: Option<&'a [ToolRelatedDiagnostic]>,
 }
 
 fn serialize_findings<S>(findings: &[ToolDiagnostic], serializer: S) -> Result<S::Ok, S::Error>
@@ -1658,6 +1677,8 @@ where
             path: &finding.path,
             message: &finding.message,
             suggested_action: finding.suggested_action,
+            source: finding.source.as_ref(),
+            related: (!finding.related.is_empty()).then_some(finding.related.as_slice()),
         })
         .collect::<Vec<_>>()
         .serialize(serializer)
@@ -2185,6 +2206,7 @@ struct DiffSuccessReport {
 
 #[derive(Debug)]
 struct CapturedProjectSource {
+    project_path: PathBuf,
     project: RegistryProject,
     project_bytes: Vec<u8>,
     project_assets: Vec<CapturedModuleAssetSource>,
@@ -4882,7 +4904,8 @@ fn data_lifecycle_failure(
 }
 
 fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
-    let candidate = compile(&args.project, ProfileArg::Authoring, "diff")?;
+    let (candidate, candidate_source) =
+        compile_with_source(&args.project, ProfileArg::Authoring, "diff")?;
     let (baseline_registry, baseline_revision, baseline_assurance) =
         match (&args.runtime_config, &args.package) {
             (Some(runtime_path), None) => {
@@ -4927,7 +4950,22 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
             _ => unreachable!("clap enforces exactly one diff baseline selector"),
         };
     let compiled_diff = classify_registry_diff(&baseline_registry, &candidate, &baseline_revision);
-    let mut compiler_findings = candidate.findings().to_vec();
+    let compiler_findings = candidate.findings().to_vec();
+    let positioned = check::place_captured_diagnostics(
+        &candidate_source,
+        compiler_findings
+            .iter()
+            .cloned()
+            .map(|diagnostic| remap_derived_diagnostic_path(diagnostic, &candidate_source))
+            .collect(),
+    )
+    .unwrap_or_default();
+    let mut positioned = compiler_findings
+        .iter()
+        .cloned()
+        .zip(positioned)
+        .collect::<BTreeMap<_, _>>();
+    let mut compiler_findings = compiler_findings;
     compiler_findings.extend(unsupported_diff_findings(&compiled_diff));
     compiler_findings.extend(removed_value_findings(&compiled_diff));
     compiler_findings.sort();
@@ -4948,7 +4986,10 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
                     SuggestedAction::ReviewAuthoringFinding,
                 )
             };
-            tool_diagnostic(diagnostic, artifact, action)
+            match positioned.remove(&diagnostic) {
+                Some(positioned) => positioned_tool_diagnostic(positioned, artifact, action),
+                None => tool_diagnostic(diagnostic, artifact, action),
+            }
         })
         .collect();
     Ok(DiffSuccessReport {
@@ -7780,6 +7821,14 @@ fn compile(
     profile: ProfileArg,
     command: &'static str,
 ) -> Result<registry_breg::CompiledRegistry, FailureReport> {
+    compile_with_source(project_path, profile, command).map(|(compiled, _)| compiled)
+}
+
+fn compile_with_source(
+    project_path: &Path,
+    profile: ProfileArg,
+    command: &'static str,
+) -> Result<(registry_breg::CompiledRegistry, CapturedProjectSource), FailureReport> {
     let source = capture_project_source(project_path).map_err(|diagnostic| {
         source_failure(
             command,
@@ -7788,7 +7837,8 @@ fn compile(
             SuggestedAction::CorrectAuthoringSource,
         )
     })?;
-    compile_captured_project(&source, profile, command)
+    let compiled = compile_captured_project(&source, profile, command)?;
+    Ok((compiled, source))
 }
 
 fn compile_captured_project(
@@ -7796,6 +7846,47 @@ fn compile_captured_project(
     profile: ProfileArg,
     command: &'static str,
 ) -> Result<registry_breg::CompiledRegistry, FailureReport> {
+    compile_captured_registry(source, profile).map_err(|failure| {
+        let diagnostics = failure
+            .diagnostics()
+            .iter()
+            .cloned()
+            .map(|diagnostic| remap_derived_diagnostic_path(diagnostic, source))
+            .collect::<Vec<_>>();
+        let positioned = check::place_captured_diagnostics(source, diagnostics.clone());
+        FailureReport {
+            ok: false,
+            command,
+            diagnostics: match positioned {
+                Some(positioned) => positioned
+                    .into_iter()
+                    .map(|diagnostic| {
+                        positioned_tool_diagnostic(
+                            diagnostic,
+                            DiagnosticArtifact::RegistryProject,
+                            SuggestedAction::CorrectAuthoringSource,
+                        )
+                    })
+                    .collect(),
+                None => diagnostics
+                    .into_iter()
+                    .map(|diagnostic| {
+                        tool_diagnostic(
+                            diagnostic,
+                            DiagnosticArtifact::RegistryProject,
+                            SuggestedAction::CorrectAuthoringSource,
+                        )
+                    })
+                    .collect(),
+            },
+        }
+    })
+}
+
+fn compile_captured_registry(
+    source: &CapturedProjectSource,
+    profile: ProfileArg,
+) -> Result<registry_breg::CompiledRegistry, CompileFailure> {
     let modules = source
         .modules
         .iter()
@@ -7817,24 +7908,7 @@ fn compile_captured_project(
             })
         }))
         .collect::<Vec<_>>();
-    compile_project_with_assets(&source.project, &modules, &assets, profile.into()).map_err(
-        |failure| FailureReport {
-            ok: false,
-            command,
-            diagnostics: failure
-                .diagnostics()
-                .iter()
-                .cloned()
-                .map(|diagnostic| {
-                    tool_diagnostic(
-                        remap_derived_diagnostic_path(diagnostic, source),
-                        DiagnosticArtifact::RegistryProject,
-                        SuggestedAction::CorrectAuthoringSource,
-                    )
-                })
-                .collect(),
-        },
-    )
+    compile_project_with_assets(&source.project, &modules, &assets, profile.into())
 }
 
 /// Refuse project identity that a package for deployment must not carry,
@@ -7847,19 +7921,32 @@ fn refuse_deployment_identity(
     if diagnostics.is_empty() {
         return Ok(());
     }
+    let positioned = check::place_captured_diagnostics(source, diagnostics.clone());
     Err(FailureReport {
         ok: false,
         command,
-        diagnostics: diagnostics
-            .into_iter()
-            .map(|diagnostic| {
-                tool_diagnostic(
-                    diagnostic,
-                    DiagnosticArtifact::RegistryProject,
-                    SuggestedAction::CorrectAuthoringSource,
-                )
-            })
-            .collect(),
+        diagnostics: match positioned {
+            Some(positioned) => positioned
+                .into_iter()
+                .map(|diagnostic| {
+                    positioned_tool_diagnostic(
+                        diagnostic,
+                        DiagnosticArtifact::RegistryProject,
+                        SuggestedAction::CorrectAuthoringSource,
+                    )
+                })
+                .collect(),
+            None => diagnostics
+                .into_iter()
+                .map(|diagnostic| {
+                    tool_diagnostic(
+                        diagnostic,
+                        DiagnosticArtifact::RegistryProject,
+                        SuggestedAction::CorrectAuthoringSource,
+                    )
+                })
+                .collect(),
+        },
     })
 }
 
@@ -7925,6 +8012,7 @@ fn capture_resolved_project_source(
         .collect::<Result<Vec<_>, Diagnostic>>()?;
     ensure_every_lock_has_a_source(&project, &modules)?;
     Ok(CapturedProjectSource {
+        project_path: project_path.to_path_buf(),
         project,
         project_bytes,
         project_assets,
@@ -8015,6 +8103,7 @@ fn capture_project_source_for_lock(
         .collect::<Result<Vec<_>, Diagnostic>>()?;
     ensure_every_lock_has_a_source(&project, &modules)?;
     Ok(CapturedProjectSource {
+        project_path: project_path.to_path_buf(),
         project,
         project_bytes,
         project_assets,
@@ -10067,7 +10156,48 @@ fn tool_diagnostic(
         path: diagnostic.path,
         message: diagnostic.message,
         suggested_action,
-        related: diagnostic.related,
+        source: None,
+        related: diagnostic
+            .related
+            .into_iter()
+            .map(|related| ToolRelatedDiagnostic {
+                file: None,
+                line: None,
+                column: None,
+                path: related.path,
+                message: related.message,
+            })
+            .collect(),
+    }
+}
+
+fn positioned_tool_diagnostic(
+    diagnostic: registry_platform_yaml::Diagnostic,
+    artifact: DiagnosticArtifact,
+    suggested_action: SuggestedAction,
+) -> ToolDiagnostic {
+    ToolDiagnostic {
+        severity: match diagnostic.severity {
+            registry_platform_yaml::Severity::Error => DiagnosticSeverity::Error,
+            registry_platform_yaml::Severity::Warning => DiagnosticSeverity::Finding,
+        },
+        code: diagnostic.code.replace('_', "-"),
+        artifact,
+        path: diagnostic.path,
+        message: diagnostic.message,
+        suggested_action,
+        source: diagnostic.source,
+        related: diagnostic
+            .related
+            .into_iter()
+            .map(|related| ToolRelatedDiagnostic {
+                file: Some(related.file),
+                line: related.line,
+                column: related.column,
+                path: related.path,
+                message: related.message,
+            })
+            .collect(),
     }
 }
 
@@ -10110,6 +10240,16 @@ fn render_report_with_findings(
             code: &diagnostic.code,
             path: &diagnostic.path,
             message: &diagnostic.message,
+            source: None,
+            related: diagnostic
+                .related
+                .iter()
+                .map(|related| report::RelatedFinding {
+                    path: &related.path,
+                    message: &related.message,
+                    source: None,
+                })
+                .collect(),
         })
         .collect::<Vec<_>>();
     lines.findings(&findings);
@@ -10129,6 +10269,27 @@ fn report_findings(diagnostics: &[ToolDiagnostic]) -> Vec<report::Finding<'_>> {
             code: &diagnostic.code,
             path: &diagnostic.path,
             message: &diagnostic.message,
+            source: diagnostic
+                .source
+                .as_ref()
+                .map(|source| report::FindingSource {
+                    file: &source.file,
+                    line: source.line,
+                    column: source.column,
+                }),
+            related: diagnostic
+                .related
+                .iter()
+                .map(|related| report::RelatedFinding {
+                    path: &related.path,
+                    message: &related.message,
+                    source: related.file.as_deref().map(|file| report::FindingSource {
+                        file,
+                        line: related.line,
+                        column: related.column,
+                    }),
+                })
+                .collect(),
         })
         .collect()
 }
@@ -12627,6 +12788,77 @@ mod tests {
             serde_json::to_value(SuggestedAction::CorrectRuntimeConfiguration).unwrap(),
             "correct-runtime-configuration"
         );
+    }
+
+    #[test]
+    fn successful_findings_serialize_source_and_related_locations() {
+        #[derive(Serialize)]
+        struct Findings {
+            #[serde(serialize_with = "serialize_findings")]
+            findings: Vec<ToolDiagnostic>,
+        }
+
+        let findings = Findings {
+            findings: vec![ToolDiagnostic {
+                severity: DiagnosticSeverity::Finding,
+                code: "breg.record-type.id-collision".to_owned(),
+                artifact: DiagnosticArtifact::RegistryProject,
+                path: "/recordTypes/1/id".to_owned(),
+                message: "identifiers collide".to_owned(),
+                suggested_action: SuggestedAction::ReviewAuthoringFinding,
+                source: Some(registry_platform_yaml::Source {
+                    file: "modules/core/module.yaml".to_owned(),
+                    line: Some(6),
+                    column: Some(9),
+                }),
+                related: vec![ToolRelatedDiagnostic {
+                    file: Some("registry.yaml".to_owned()),
+                    line: Some(14),
+                    column: Some(9),
+                    path: "/recordTypes/0/id".to_owned(),
+                    message: "the first identifier is defined here".to_owned(),
+                }],
+            }],
+        };
+
+        let encoded = serde_json::to_value(findings).unwrap();
+        assert_eq!(
+            encoded["findings"][0]["source"],
+            json!({"file":"modules/core/module.yaml","line":6,"column":9})
+        );
+        assert_eq!(
+            encoded["findings"][0]["related"][0],
+            json!({
+                "file":"registry.yaml",
+                "line":14,
+                "column":9,
+                "path":"/recordTypes/0/id",
+                "message":"the first identifier is defined here"
+            })
+        );
+    }
+
+    #[test]
+    fn command_only_findings_render_related_logical_paths_without_source_positions() {
+        let diagnostics = vec![Diagnostic {
+            severity: DiagnosticSeverity::Finding,
+            code: "breg.example".to_owned(),
+            path: "recordTypes[id=record].id".to_owned(),
+            message: "the identifiers compare the same".to_owned(),
+            related: vec![registry_breg::RelatedDiagnostic {
+                path: "recordTypes[id=other].id".to_owned(),
+                message: "the first identifier is defined here".to_owned(),
+            }],
+        }];
+        let mut rendered = Vec::new();
+
+        render_report_with_findings("Checked the command.", &[], &diagnostics, &mut rendered)
+            .unwrap();
+
+        let rendered = String::from_utf8(rendered).unwrap();
+        assert!(rendered.contains("related"));
+        assert!(rendered.contains("recordTypes[id=other].id"));
+        assert!(rendered.contains("the first identifier is defined here"));
     }
 
     #[test]
