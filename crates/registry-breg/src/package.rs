@@ -1098,6 +1098,7 @@ pub(crate) fn statistical_dataset_behavior_eq(
     before == after
 }
 
+#[cfg(feature = "tooling")]
 pub(crate) fn access_profile_behavior_eq(
     before: &crate::contract::AccessProfileSource,
     after: &crate::contract::AccessProfileSource,
