@@ -2524,7 +2524,7 @@ pub struct DerivedFieldSource {
     #[serde(flatten)]
     pub field_type: FieldTypeSource,
     pub classification: Classification,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "crate::model::display_is_empty")]
     pub display: DisplaySource,
 }
 
