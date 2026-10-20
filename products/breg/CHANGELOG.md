@@ -7,14 +7,16 @@
   compiled write or existing-target role of each use. The report identifies
   Action target authority as additional to Record grants.
 
-- Enforce active reference integrity in PostgreSQL: active Records cannot
+- BREAKING: enforce active reference integrity in PostgreSQL: active Records cannot
   reference tombstoned targets, and a target cannot be tombstoned while another
   active Record references it. Tombstoned Records and history retain their
   reference IDs. Conflicts remain value-free `409 mutation.conflict` responses.
   Existing deployments must build and apply a successor package against their
-  deployed baseline before switching runtimes. Rehearsal refuses pre-existing
-  active references to tombstoned targets; repair those references or tombstone
-  their source Records through the current package before retrying.
+  deployed baseline before switching runtimes. `bregctl plan` checks activation
+  prerequisites but does not validate live rows. Before live maintenance, apply
+  the successor to a representative restored-data copy; repair any active
+  references to tombstoned targets through the current package, refresh the
+  copy, and repeat that validation before production activation.
 
 ## 0.42.0 - 2026-10-20
 

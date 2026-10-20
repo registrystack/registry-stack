@@ -925,6 +925,10 @@ pub struct ValidatedReviewedMigrationStep {
     pub descriptor: ReviewedMigrationStepDescriptor,
     pub sql: String,
     pub sha256: String,
+    /// Tables whose owner must see all rows while a modeled reference
+    /// constraint is changed or validated. Derived from the checked SQL and
+    /// prior/candidate models, never supplied by the migration author.
+    pub reference_validation_tables: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1113,7 +1117,8 @@ pub(crate) fn validate_reviewed_migration_plan(
                 Some(path) => {
                     referenced_paths.insert(path.to_owned());
                     let sql = read_sql(files, path)?;
-                    validate_step_sql(step, sql, &descriptor, bindings, &declared_tables)?;
+                    let reference_validation_tables =
+                        validate_step_sql(step, sql, &descriptor, bindings, &declared_tables)?;
                     for object in step.objects() {
                         object_covers.insert(object_cover(object, &descriptor.covers)?);
                     }
@@ -1121,6 +1126,7 @@ pub(crate) fn validate_reviewed_migration_plan(
                         descriptor: step.clone(),
                         sql: sql.to_owned(),
                         sha256: digest(sql.as_bytes()),
+                        reference_validation_tables,
                     });
                 }
                 None => {
@@ -1143,6 +1149,7 @@ pub(crate) fn validate_reviewed_migration_plan(
                         descriptor: step.clone(),
                         sha256: digest(sql.as_bytes()),
                         sql,
+                        reference_validation_tables: Vec::new(),
                     });
                 }
             }
@@ -1842,9 +1849,10 @@ fn validate_step_sql(
     descriptor: &ReviewedMigrationDescriptor,
     bindings: &ReviewedPlanBindings<'_>,
     declared_tables: &BTreeSet<&str>,
-) -> Result<(), ReviewedMigrationError> {
+) -> Result<Vec<String>, ReviewedMigrationError> {
     if let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. } = step {
-        return validate_field_encryption_backfill_step(step, descriptor, bindings);
+        validate_field_encryption_backfill_step(step, descriptor, bindings)?;
+        return Ok(Vec::new());
     }
     let parsed = parse_one(sql)?;
     validate_ast_objects(&parsed, declared_tables, false)?;
@@ -1910,7 +1918,58 @@ fn validate_step_sql(
     if parsed_objects != step.objects() {
         return Err(ReviewedMigrationError::Sql);
     }
-    Ok(())
+    Ok(reference_validation_tables(
+        &parsed,
+        step.objects(),
+        bindings,
+    ))
+}
+
+#[cfg(feature = "tooling")]
+fn reference_validation_tables(
+    parsed: &pg_query::ParseResult,
+    objects: &[ReviewedMigrationObject],
+    bindings: &ReviewedPlanBindings<'_>,
+) -> Vec<String> {
+    let mut tables = BTreeSet::new();
+    for object in objects {
+        if object.kind != ReviewedMigrationObjectKind::Constraint {
+            continue;
+        }
+        let Some(field_id) = object
+            .member_id
+            .as_deref()
+            .and_then(|member| member.strip_prefix("reference:"))
+        else {
+            continue;
+        };
+        tables.insert(object.table.clone());
+        // VALIDATE CONSTRAINT names only its source and constraint, so its
+        // referenced table must come from the models rather than the SQL AST.
+        for entities in [bindings.prior_entities, bindings.candidate_entities] {
+            let Some(field) = entities
+                .get(&object.entity_id)
+                .and_then(|entity| entity.fields.get(field_id))
+            else {
+                continue;
+            };
+            if let crate::contract::FieldTypeSource::Reference { target, .. } = &field.field_type {
+                tables.insert(entities[target].physical_table.clone());
+            }
+        }
+    }
+    if !tables.is_empty() {
+        // An authored ADD may name an intermediate target. Its RangeVar has
+        // already been checked against the declared managed tables.
+        for (node, _, _, _) in parsed.protobuf.nodes() {
+            if let NodeRef::Constraint(constraint) = node {
+                if let Some(target) = &constraint.pktable {
+                    tables.insert(target.relname.clone());
+                }
+            }
+        }
+    }
+    tables.into_iter().collect()
 }
 
 /// The engine-executed backfill is declared, not authored: its objects must

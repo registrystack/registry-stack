@@ -71,6 +71,59 @@ async fn a_pre_integrity_reference_schema_upgrades_once() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pre_integrity_schema_with_an_active_reference_to_an_active_target_upgrades() {
+    let fixture = LegacyReferenceRegistry::activate().await;
+    fixture.insert_consistent_reference().await;
+    let (_successor_root, successor) = fixture.successor();
+
+    apply_package(
+        &fixture.database,
+        &successor,
+        ApplyPrecondition::Successor {
+            current: &fixture.active,
+        },
+        Duration::from_secs(1),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("an active reference to an active target upgrades");
+    assert_eq!(fixture.support_object_count().await, 3);
+    assert!(
+        fixture.source_force_row_security().await,
+        "a successful validation restores source FORCE ROW LEVEL SECURITY"
+    );
+    assert!(
+        fixture.target_force_row_security().await,
+        "a successful validation restores target FORCE ROW LEVEL SECURITY"
+    );
+
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pre_integrity_schema_with_a_populated_self_reference_upgrades() {
+    let fixture = LegacyReferenceRegistry::activate_for_target("asset").await;
+    fixture.insert_consistent_reference().await;
+    let (_successor_root, successor) = fixture.successor();
+
+    apply_package(
+        &fixture.database,
+        &successor,
+        ApplyPrecondition::Successor {
+            current: &fixture.active,
+        },
+        Duration::from_secs(1),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("a populated self-reference upgrades");
+    assert_eq!(fixture.support_object_count().await, 3);
+    assert!(fixture.source_force_row_security().await);
+
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_pre_integrity_schema_with_an_active_reference_to_a_tombstone_refuses_atomically() {
     let fixture = LegacyReferenceRegistry::activate().await;
     fixture.insert_inconsistent_reference().await;
@@ -108,6 +161,10 @@ async fn a_pre_integrity_schema_with_an_active_reference_to_a_tombstone_refuses_
         fixture.source_force_row_security().await,
         "the failed validation restores FORCE ROW LEVEL SECURITY"
     );
+    assert!(
+        fixture.target_force_row_security().await,
+        "the failed validation restores target FORCE ROW LEVEL SECURITY"
+    );
     assert_eq!(
         fixture.recorded_identity().await,
         (
@@ -140,119 +197,48 @@ async fn a_pre_integrity_schema_with_an_active_reference_to_a_tombstone_refuses_
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reviewed_reference_retarget_and_removal_match_fresh_catalogs() {
-    let initial_request = reference_request_for(Some("site"));
-    let initial_registry = prepare_package(initial_request.clone())
-        .expect("initial reference model compiles")
-        .registry()
-        .clone();
-    let initial_fingerprint = fresh_fingerprint(&initial_registry).await;
-    let mut initial_request = initial_request;
-    initial_request
-        .schema_fingerprint
-        .clone_from(&initial_fingerprint);
-    let (initial_root, initial) = publish_and_load(initial_request);
-    let database = TestDatabase::create(1).await;
-    let active_initial = apply_package(
-        &database,
-        &initial,
-        ApplyPrecondition::InitialActivation,
-        Duration::from_secs(1),
-        Duration::from_secs(5),
-    )
-    .await
-    .expect("initial reference package activates");
-
-    let source_names = &initial_registry.physical_names().entities["asset"];
-    let site_names = &initial_registry.physical_names().entities["site"];
-    let active_constraint = source_names.constraints["active-reference:site"].clone();
-    let site_key = site_names.constraints["active-reference-key:record-lifecycle"].clone();
-
-    let retarget_request = reference_request_for(Some("location"));
-    let retarget_registry = prepare_package(retarget_request.clone())
-        .expect("retarget model compiles")
-        .registry()
-        .clone();
-    let retarget_fingerprint = fresh_fingerprint(&retarget_registry).await;
-    let retarget_change_set = compiled_registry_change_set(
-        &initial_registry,
-        &retarget_registry,
-        &active_initial.package_digest,
+    let fixture = ReviewedReferenceRetarget::prepare(ReviewedRetargetRows::Active).await;
+    let active_retarget = fixture
+        .apply()
+        .await
+        .expect("reviewed reference retarget applies");
+    assert_eq!(
+        active_retarget.schema_fingerprint,
+        fixture.retarget_fingerprint
     );
-    let source = &retarget_registry.entities()["asset"];
-    let field = &source.fields["site"];
-    let location_key = retarget_registry.physical_names().entities["location"].constraints
-        ["active-reference-key:record-lifecycle"]
-        .clone();
-    let raw_constraint =
-        &retarget_registry.physical_names().entities["asset"].constraints["reference:site"];
-    let raw_object = ReviewedMigrationObject {
-        schema: "registry_data".to_owned(),
-        table: source.physical_table.clone(),
-        entity_id: "asset".to_owned(),
-        kind: ReviewedMigrationObjectKind::Constraint,
-        member_id: Some("reference:site".to_owned()),
-        physical_name: raw_constraint.clone(),
-    };
-    let retarget_review = reference_review_source(
-        "retarget-reference",
-        CompiledRegistryChangeClass::DestructiveOrIrreversible,
-        &retarget_change_set.changes,
-        &active_initial,
-        &retarget_fingerprint,
-        vec![
-            (
-                "drop-reference",
-                format!(
-                    "ALTER TABLE registry_data.{} DROP CONSTRAINT {}",
-                    source.physical_table, raw_constraint
+    assert_eq!(
+        fixture
+            .database
+            .admin
+            .query_one(
+                &format!(
+                    "SELECT count(*) FROM registry_data.{} WHERE record_id = $1 AND {} = $2",
+                    quote_identifier(&fixture.source_table),
+                    quote_identifier(&fixture.source_field),
                 ),
-                raw_object.clone(),
-            ),
-            (
-                "add-reference",
-                format!(
-                    "ALTER TABLE registry_data.{} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES registry_data.{} (record_id) ON DELETE RESTRICT",
-                    source.physical_table,
-                    raw_constraint,
-                    field.physical_name,
-                    retarget_registry.entities()["location"].physical_table,
-                ),
-                raw_object,
-            ),
-        ],
-        &source.physical_table,
+                &[&fixture.source_id, &fixture.target_id],
+            )
+            .await
+            .expect("retargeted source row reads")
+            .get::<_, i64>(0),
+        1,
+        "the reviewed retarget preserves the populated reference"
     );
-    let mut retarget_request = retarget_request;
-    retarget_request.from_package_digest = Some(active_initial.package_digest.clone());
-    retarget_request
-        .schema_fingerprint
-        .clone_from(&retarget_fingerprint);
-    retarget_request.migration_plan = PackageMigrationPlanInput::ReviewedSuccessor {
-        prior_registry: Box::new(initial_registry.clone()),
-        prior_schema_fingerprint: active_initial.schema_fingerprint.clone(),
-        migrations: vec![retarget_review],
-    };
-    let (retarget_root, retarget) = publish_and_load(retarget_request);
-    let active_retarget = apply_reviewed_package(
-        &database,
-        &retarget,
-        &active_initial,
-        "modules/core/migrations/retarget-reference/backup.json",
-    )
-    .await
-    .expect("reviewed reference retarget applies");
-    assert_eq!(active_retarget.schema_fingerprint, retarget_fingerprint);
     assert_eq!(
         live_reference_support_count(
-            &database,
-            &source.physical_table,
-            &[&active_constraint, &site_key, &location_key]
+            &fixture.database,
+            &fixture.source_table,
+            &[
+                &fixture.active_constraint,
+                &fixture.site_key,
+                &fixture.location_key,
+            ]
         )
         .await,
         3,
         "the source projection and retargeted active FK remain while the old target key retires"
     );
-    assert_startup(&database, &retarget_root, &retarget).await;
+    assert_startup(&fixture.database, &fixture.retarget_root, &fixture.retarget).await;
 
     let removal_request = reference_request_for(None);
     let removal_registry = prepare_package(removal_request.clone())
@@ -261,11 +247,12 @@ async fn reviewed_reference_retarget_and_removal_match_fresh_catalogs() {
         .clone();
     let removal_fingerprint = fresh_fingerprint(&removal_registry).await;
     let removal_change_set = compiled_registry_change_set(
-        &retarget_registry,
+        &fixture.retarget_registry,
         &removal_registry,
         &active_retarget.package_digest,
     );
-    let removed_field = &retarget_registry.entities()["asset"].fields["site"];
+    let source = &fixture.retarget_registry.entities()["asset"];
+    let removed_field = &source.fields["site"];
     let removal_review = reference_review_source(
         "remove-reference",
         CompiledRegistryChangeClass::DestructiveOrIrreversible,
@@ -295,13 +282,13 @@ async fn reviewed_reference_retarget_and_removal_match_fresh_catalogs() {
         .schema_fingerprint
         .clone_from(&removal_fingerprint);
     removal_request.migration_plan = PackageMigrationPlanInput::ReviewedSuccessor {
-        prior_registry: Box::new(retarget_registry.clone()),
+        prior_registry: Box::new(fixture.retarget_registry.clone()),
         prior_schema_fingerprint: active_retarget.schema_fingerprint.clone(),
         migrations: vec![removal_review],
     };
     let (removal_root, removal) = publish_and_load(removal_request);
     let active_removal = apply_reviewed_package(
-        &database,
+        &fixture.database,
         &removal,
         &active_retarget,
         "modules/core/migrations/remove-reference/backup.json",
@@ -311,18 +298,450 @@ async fn reviewed_reference_retarget_and_removal_match_fresh_catalogs() {
     assert_eq!(active_removal.schema_fingerprint, removal_fingerprint);
     assert_eq!(
         live_reference_support_count(
-            &database,
-            &source.physical_table,
-            &[&active_constraint, &site_key, &location_key]
+            &fixture.database,
+            &fixture.source_table,
+            &[
+                &fixture.active_constraint,
+                &fixture.site_key,
+                &fixture.location_key,
+            ]
         )
         .await,
         0,
         "the last reference removal retires its active FK, target key, and source projection"
     );
-    assert_startup(&database, &removal_root, &removal).await;
+    assert_startup(&fixture.database, &removal_root, &removal).await;
 
-    drop(initial_root);
-    database.cleanup().await;
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reviewed_reference_retarget_to_a_tombstone_refuses_after_durable_checkpoints() {
+    let fixture = ReviewedReferenceRetarget::prepare(ReviewedRetargetRows::TombstonedTarget).await;
+
+    let refused = fixture
+        .apply()
+        .await
+        .expect_err("a reviewed retarget to a tombstone refuses the active reference");
+    let MigrationError::StatementFailed(failure) = refused else {
+        panic!("reviewed retarget returned the wrong value-free error: {refused:?}");
+    };
+    assert_eq!(failure.sqlstate.as_deref(), Some("23503"));
+    assert_eq!(
+        failure.table.as_deref(),
+        Some(fixture.source_table.as_str())
+    );
+    assert_eq!(
+        failure.constraint.as_deref(),
+        Some(fixture.active_constraint.as_str())
+    );
+    assert!(fixture.source_force_row_security().await);
+    assert!(fixture.target_force_row_security().await);
+    assert_eq!(
+        fixture.recorded_identity().await,
+        (
+            fixture.active_initial.package_digest.clone(),
+            fixture.active_initial.activation_id.clone(),
+            fixture.active_initial.schema_fingerprint.clone(),
+        ),
+        "the refused reviewed successor retains the prior package identity"
+    );
+    assert!(
+        reference_lifecycle_column_exists(&fixture.database, &fixture.source_table).await,
+        "the reviewed source-column checkpoint remains committed"
+    );
+    assert!(
+        !constraint_exists(&fixture.database, &fixture.site_key).await,
+        "the reviewed old-target-key retirement remains committed"
+    );
+    assert!(
+        constraint_exists(&fixture.database, &fixture.location_key).await,
+        "the reviewed new-target-key checkpoint remains committed"
+    );
+    assert!(
+        !constraint_exists(&fixture.database, &fixture.active_constraint).await,
+        "the refused active FK statement rolls back"
+    );
+    assert_eq!(
+        fixture.raw_reference_target().await,
+        fixture.location_table,
+        "the authored raw-FK retarget remains committed"
+    );
+
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reviewed_reference_retarget_with_retained_reference_to_missing_target_refuses_raw_fk() {
+    let fixture =
+        ReviewedReferenceRetarget::prepare(ReviewedRetargetRows::TombstonedSourceMissingTarget)
+            .await;
+
+    let refused = fixture
+        .apply()
+        .await
+        .expect_err("a retained reference to a missing new target refuses the raw FK retarget");
+    let MigrationError::StatementFailed(failure) = refused else {
+        panic!("reviewed raw-FK retarget returned the wrong value-free error: {refused:?}");
+    };
+    assert_eq!(failure.sqlstate.as_deref(), Some("23503"));
+    assert_eq!(
+        failure.table.as_deref(),
+        Some(fixture.source_table.as_str())
+    );
+    assert_eq!(
+        failure.constraint.as_deref(),
+        Some(fixture.raw_constraint.as_str())
+    );
+    assert!(fixture.source_force_row_security().await);
+    assert!(fixture.target_force_row_security().await);
+    assert_eq!(
+        fixture.recorded_identity().await,
+        (
+            fixture.active_initial.package_digest.clone(),
+            fixture.active_initial.activation_id.clone(),
+            fixture.active_initial.schema_fingerprint.clone(),
+        ),
+        "the refused reviewed successor retains the prior package identity"
+    );
+    assert!(
+        !constraint_exists(&fixture.database, &fixture.raw_constraint).await,
+        "the refused authored raw FK is not checkpointed"
+    );
+
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reviewed_reference_validate_with_retained_reference_to_missing_target_refuses_raw_fk() {
+    let fixture = ReviewedReferenceRetarget::prepare_with_validation(
+        ReviewedRetargetRows::TombstonedSourceMissingTarget,
+        ReviewedRawReferenceValidation::SeparateValidate,
+    )
+    .await;
+
+    let refused = fixture
+        .apply()
+        .await
+        .expect_err("validating a retained reference to a missing new target refuses");
+    let MigrationError::StatementFailed(failure) = refused else {
+        panic!("reviewed raw-FK validation returned the wrong value-free error: {refused:?}");
+    };
+    assert_eq!(failure.sqlstate.as_deref(), Some("23503"));
+    assert_eq!(
+        failure.table.as_deref(),
+        Some(fixture.source_table.as_str())
+    );
+    assert_eq!(
+        failure.constraint.as_deref(),
+        Some(fixture.raw_constraint.as_str())
+    );
+    assert!(fixture.source_force_row_security().await);
+    assert!(fixture.target_force_row_security().await);
+    assert_eq!(
+        fixture.recorded_identity().await,
+        (
+            fixture.active_initial.package_digest.clone(),
+            fixture.active_initial.activation_id.clone(),
+            fixture.active_initial.schema_fingerprint.clone(),
+        ),
+        "the refused reviewed successor retains the prior package identity"
+    );
+    assert_eq!(
+        fixture.raw_reference_validated().await,
+        Some(false),
+        "the checkpointed NOT VALID raw FK remains explicitly unvalidated"
+    );
+
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reviewed_reference_validate_accepts_a_populated_valid_retarget() {
+    let fixture = ReviewedReferenceRetarget::prepare_with_validation(
+        ReviewedRetargetRows::Active,
+        ReviewedRawReferenceValidation::SeparateValidate,
+    )
+    .await;
+
+    let active = fixture
+        .apply()
+        .await
+        .expect("separate raw-FK validation accepts the populated valid retarget");
+    assert_eq!(active.schema_fingerprint, fixture.retarget_fingerprint);
+    assert_eq!(fixture.raw_reference_validated().await, Some(true));
+    assert!(fixture.source_force_row_security().await);
+    assert!(fixture.target_force_row_security().await);
+
+    fixture.finish().await;
+}
+
+enum ReviewedRetargetRows {
+    Active,
+    TombstonedTarget,
+    TombstonedSourceMissingTarget,
+}
+
+enum ReviewedRawReferenceValidation {
+    Direct,
+    SeparateValidate,
+}
+
+struct ReviewedReferenceRetarget {
+    _initial_root: TempRoot,
+    database: TestDatabase,
+    active_initial: ExpectedRegistryIdentity,
+    retarget_registry: registry_breg::model::CompiledRegistry,
+    retarget_fingerprint: String,
+    retarget_root: TempRoot,
+    retarget: registry_breg::package::VerifiedPackage,
+    source_table: String,
+    source_field: String,
+    location_table: String,
+    active_constraint: String,
+    raw_constraint: String,
+    site_key: String,
+    location_key: String,
+    source_id: Uuid,
+    target_id: Uuid,
+}
+
+impl ReviewedReferenceRetarget {
+    async fn prepare(rows: ReviewedRetargetRows) -> Self {
+        Self::prepare_with_validation(rows, ReviewedRawReferenceValidation::Direct).await
+    }
+
+    async fn prepare_with_validation(
+        rows: ReviewedRetargetRows,
+        validation: ReviewedRawReferenceValidation,
+    ) -> Self {
+        let initial_request = reference_request_for(Some("site"));
+        let initial_registry = prepare_package(initial_request.clone())
+            .expect("initial reference model compiles")
+            .registry()
+            .clone();
+        let initial_fingerprint = fresh_fingerprint(&initial_registry).await;
+        let mut initial_request = initial_request;
+        initial_request
+            .schema_fingerprint
+            .clone_from(&initial_fingerprint);
+        let (initial_root, initial) = publish_and_load(initial_request);
+        let database = TestDatabase::create(1).await;
+        let active_initial = apply_package(
+            &database,
+            &initial,
+            ApplyPrecondition::InitialActivation,
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("initial reference package activates");
+
+        let source_names = &initial_registry.physical_names().entities["asset"];
+        let site_names = &initial_registry.physical_names().entities["site"];
+        let location_names = &initial_registry.physical_names().entities["location"];
+        let source_table = source_names.table.clone();
+        let source_field = source_names.fields["site"].clone();
+        let location_table = location_names.table.clone();
+        let active_constraint = source_names.constraints["active-reference:site"].clone();
+        let site_key = site_names.constraints["active-reference-key:record-lifecycle"].clone();
+        let target_id = Uuid::new_v4();
+        let source_id = Uuid::new_v4();
+        let (source_lifecycle, location_insert) = match rows {
+            ReviewedRetargetRows::Active => (
+                "active",
+                format!(
+                    "INSERT INTO registry_data.{}
+                        (record_id, record_lifecycle, active_package_revision)
+                     VALUES ('{target_id}', 'active', 'initial-fixture');",
+                    quote_identifier(&location_table),
+                ),
+            ),
+            ReviewedRetargetRows::TombstonedTarget => (
+                "active",
+                format!(
+                    "INSERT INTO registry_data.{}
+                        (record_id, record_lifecycle, active_package_revision)
+                     VALUES ('{target_id}', 'tombstoned', 'initial-fixture');",
+                    quote_identifier(&location_table),
+                ),
+            ),
+            ReviewedRetargetRows::TombstonedSourceMissingTarget => ("tombstoned", String::new()),
+        };
+        database
+            .admin
+            .batch_execute(&format!(
+                "INSERT INTO registry_data.{site_table}
+                    (record_id, active_package_revision)
+                 VALUES ('{target_id}', 'initial-fixture');
+                 {location_insert}
+                 INSERT INTO registry_data.{source_table}
+                    (record_id, record_lifecycle, active_package_revision, {source_field})
+                 VALUES ('{source_id}', '{source_lifecycle}', 'initial-fixture', '{target_id}')",
+                site_table = quote_identifier(&site_names.table),
+                source_table = quote_identifier(&source_table),
+                source_field = quote_identifier(&source_field),
+            ))
+            .await
+            .expect("populated reference fixture inserts");
+
+        let retarget_request = reference_request_for(Some("location"));
+        let retarget_registry = prepare_package(retarget_request.clone())
+            .expect("retarget model compiles")
+            .registry()
+            .clone();
+        let retarget_fingerprint = fresh_fingerprint(&retarget_registry).await;
+        let retarget_change_set = compiled_registry_change_set(
+            &initial_registry,
+            &retarget_registry,
+            &active_initial.package_digest,
+        );
+        let source = &retarget_registry.entities()["asset"];
+        let field = &source.fields["site"];
+        let location_key = retarget_registry.physical_names().entities["location"].constraints
+            ["active-reference-key:record-lifecycle"]
+            .clone();
+        let raw_constraint = retarget_registry.physical_names().entities["asset"].constraints
+            ["reference:site"]
+            .clone();
+        let raw_object = ReviewedMigrationObject {
+            schema: "registry_data".to_owned(),
+            table: source.physical_table.clone(),
+            entity_id: "asset".to_owned(),
+            kind: ReviewedMigrationObjectKind::Constraint,
+            member_id: Some("reference:site".to_owned()),
+            physical_name: raw_constraint.clone(),
+        };
+        let mut reviewed_steps = vec![(
+            "drop-reference",
+            format!(
+                "ALTER TABLE registry_data.{} DROP CONSTRAINT {}",
+                source.physical_table, raw_constraint
+            ),
+            raw_object.clone(),
+        )];
+        let add_reference_sql = format!(
+            "ALTER TABLE registry_data.{} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES registry_data.{} (record_id) ON DELETE RESTRICT",
+            source.physical_table,
+            raw_constraint,
+            field.physical_name,
+            retarget_registry.entities()["location"].physical_table,
+        );
+        match validation {
+            ReviewedRawReferenceValidation::Direct => {
+                reviewed_steps.push(("add-reference", add_reference_sql, raw_object))
+            }
+            ReviewedRawReferenceValidation::SeparateValidate => {
+                reviewed_steps.push((
+                    "add-reference-not-valid",
+                    format!("{add_reference_sql} NOT VALID"),
+                    raw_object.clone(),
+                ));
+                reviewed_steps.push((
+                    "validate-reference",
+                    format!(
+                        "ALTER TABLE registry_data.{} VALIDATE CONSTRAINT {}",
+                        source.physical_table, raw_constraint
+                    ),
+                    raw_object,
+                ));
+            }
+        }
+        let retarget_review = reference_review_source(
+            "retarget-reference",
+            CompiledRegistryChangeClass::DestructiveOrIrreversible,
+            &retarget_change_set.changes,
+            &active_initial,
+            &retarget_fingerprint,
+            reviewed_steps,
+            &source.physical_table,
+        );
+        let mut retarget_request = retarget_request;
+        retarget_request.from_package_digest = Some(active_initial.package_digest.clone());
+        retarget_request
+            .schema_fingerprint
+            .clone_from(&retarget_fingerprint);
+        retarget_request.migration_plan = PackageMigrationPlanInput::ReviewedSuccessor {
+            prior_registry: Box::new(initial_registry),
+            prior_schema_fingerprint: active_initial.schema_fingerprint.clone(),
+            migrations: vec![retarget_review],
+        };
+        let (retarget_root, retarget) = publish_and_load(retarget_request);
+
+        Self {
+            _initial_root: initial_root,
+            database,
+            active_initial,
+            retarget_registry,
+            retarget_fingerprint,
+            retarget_root,
+            retarget,
+            source_table,
+            source_field,
+            location_table,
+            active_constraint,
+            raw_constraint,
+            site_key,
+            location_key,
+            source_id,
+            target_id,
+        }
+    }
+
+    async fn apply(&self) -> registry_breg::migration::Result<ExpectedRegistryIdentity> {
+        apply_reviewed_package(
+            &self.database,
+            &self.retarget,
+            &self.active_initial,
+            "modules/core/migrations/retarget-reference/backup.json",
+        )
+        .await
+    }
+
+    async fn source_force_row_security(&self) -> bool {
+        table_force_row_security(&self.database, &self.source_table).await
+    }
+
+    async fn target_force_row_security(&self) -> bool {
+        table_force_row_security(&self.database, &self.location_table).await
+    }
+
+    async fn recorded_identity(&self) -> (String, String, String) {
+        recorded_identity(&self.database).await
+    }
+
+    async fn raw_reference_target(&self) -> String {
+        self.database
+            .admin
+            .query_one(
+                "SELECT target.relname
+                   FROM pg_catalog.pg_constraint fk
+                   JOIN pg_catalog.pg_class target ON target.oid = fk.confrelid
+                  WHERE fk.connamespace = 'registry_data'::regnamespace AND fk.conname = $1",
+                &[&self.raw_constraint],
+            )
+            .await
+            .expect("raw reference target reads")
+            .get(0)
+    }
+
+    async fn raw_reference_validated(&self) -> Option<bool> {
+        self.database
+            .admin
+            .query_opt(
+                "SELECT convalidated
+                   FROM pg_catalog.pg_constraint
+                  WHERE connamespace = 'registry_data'::regnamespace AND conname = $1",
+                &[&self.raw_constraint],
+            )
+            .await
+            .expect("raw reference validation state reads")
+            .map(|row| row.get(0))
+    }
+
+    async fn finish(self) {
+        self.database.cleanup().await;
+    }
 }
 
 struct LegacyReferenceRegistry {
@@ -336,11 +755,16 @@ struct LegacyReferenceRegistry {
     source_field: String,
     active_constraint: String,
     target_key: String,
+    reference_target: String,
 }
 
 impl LegacyReferenceRegistry {
     async fn activate() -> Self {
-        let mut request = reference_request();
+        Self::activate_for_target("site").await
+    }
+
+    async fn activate_for_target(reference_target: &str) -> Self {
+        let mut request = reference_request_for(Some(reference_target));
         let registry = prepare_package(request.clone())
             .expect("reference model compiles")
             .registry()
@@ -361,7 +785,7 @@ impl LegacyReferenceRegistry {
         .expect("current reference package activates");
 
         let source_names = &registry.physical_names().entities["asset"];
-        let target_names = &registry.physical_names().entities["site"];
+        let target_names = &registry.physical_names().entities[reference_target];
         let source_table = source_names.table.clone();
         let target_table = target_names.table.clone();
         let source_field = source_names.fields["site"].clone();
@@ -424,11 +848,12 @@ impl LegacyReferenceRegistry {
             source_field,
             active_constraint,
             target_key,
+            reference_target: reference_target.to_owned(),
         }
     }
 
     fn successor(&self) -> (TempRoot, registry_breg::package::VerifiedPackage) {
-        let mut request = reference_request();
+        let mut request = reference_request_for(Some(&self.reference_target));
         request.from_package_digest = Some(self.active.package_digest.clone());
         request
             .schema_fingerprint
@@ -459,6 +884,26 @@ impl LegacyReferenceRegistry {
             .expect("legacy rows allow a live reference to a tombstone");
     }
 
+    async fn insert_consistent_reference(&self) {
+        let target_id = Uuid::new_v4();
+        let source_id = Uuid::new_v4();
+        self.database
+            .admin
+            .batch_execute(&format!(
+                "INSERT INTO registry_data.{target_table}
+                    (record_id, active_package_revision)
+                 VALUES ('{target_id}', 'legacy-fixture');
+                 INSERT INTO registry_data.{source_table}
+                    (record_id, active_package_revision, {source_field})
+                 VALUES ('{source_id}', 'legacy-fixture', '{target_id}')",
+                target_table = quote_identifier(&self.target_table),
+                source_table = quote_identifier(&self.source_table),
+                source_field = quote_identifier(&self.source_field),
+            ))
+            .await
+            .expect("legacy rows allow an active reference to an active target");
+    }
+
     async fn support_object_count(&self) -> i64 {
         self.database
             .admin
@@ -485,33 +930,15 @@ impl LegacyReferenceRegistry {
     }
 
     async fn source_force_row_security(&self) -> bool {
-        self.database
-            .admin
-            .query_one(
-                "SELECT class.relforcerowsecurity
-                   FROM pg_catalog.pg_class class
-                   JOIN pg_catalog.pg_namespace namespace ON namespace.oid = class.relnamespace
-                  WHERE namespace.nspname = 'registry_data' AND class.relname = $1",
-                &[&self.source_table],
-            )
-            .await
-            .expect("source row-security state reads")
-            .get(0)
+        table_force_row_security(&self.database, &self.source_table).await
+    }
+
+    async fn target_force_row_security(&self) -> bool {
+        table_force_row_security(&self.database, &self.target_table).await
     }
 
     async fn recorded_identity(&self) -> (String, String, String) {
-        let row = self
-            .database
-            .admin
-            .query_one(
-                "SELECT active_package_digest, active_activation_id::text, schema_fingerprint
-                   FROM registry_internal.registry_state
-                  WHERE singleton",
-                &[],
-            )
-            .await
-            .expect("active identity reads");
-        (row.get(0), row.get(1), row.get(2))
+        recorded_identity(&self.database).await
     }
 
     async fn finish(self) {
@@ -722,6 +1149,71 @@ async fn apply_reviewed_package(
         .with_destructive_backup_evidence(&evidence),
     )
     .await
+}
+
+async fn table_force_row_security(database: &TestDatabase, table: &str) -> bool {
+    database
+        .admin
+        .query_one(
+            "SELECT class.relforcerowsecurity
+               FROM pg_catalog.pg_class class
+               JOIN pg_catalog.pg_namespace namespace ON namespace.oid = class.relnamespace
+              WHERE namespace.nspname = 'registry_data' AND class.relname = $1",
+            &[&table],
+        )
+        .await
+        .expect("row-security state reads")
+        .get(0)
+}
+
+async fn recorded_identity(database: &TestDatabase) -> (String, String, String) {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT active_package_digest, active_activation_id::text, schema_fingerprint
+               FROM registry_internal.registry_state
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("active identity reads");
+    (row.get(0), row.get(1), row.get(2))
+}
+
+async fn reference_lifecycle_column_exists(database: &TestDatabase, source_table: &str) -> bool {
+    database
+        .admin
+        .query_one(
+            "SELECT EXISTS (
+                SELECT 1
+                  FROM pg_catalog.pg_attribute attribute
+                  JOIN pg_catalog.pg_class class ON class.oid = attribute.attrelid
+                  JOIN pg_catalog.pg_namespace namespace ON namespace.oid = class.relnamespace
+                 WHERE namespace.nspname = 'registry_data'
+                   AND class.relname = $1
+                   AND attribute.attname = 'record_reference_lifecycle'
+                   AND NOT attribute.attisdropped
+            )",
+            &[&source_table],
+        )
+        .await
+        .expect("reference lifecycle column inventory reads")
+        .get(0)
+}
+
+async fn constraint_exists(database: &TestDatabase, constraint: &str) -> bool {
+    database
+        .admin
+        .query_one(
+            "SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_constraint
+                 WHERE connamespace = 'registry_data'::regnamespace AND conname = $1
+            )",
+            &[&constraint],
+        )
+        .await
+        .expect("constraint inventory reads")
+        .get(0)
 }
 
 async fn live_reference_support_count(

@@ -1159,6 +1159,7 @@ mod tests {
             descriptor,
             sql: "UPDATE registry_data.households SET name = name".to_owned(),
             sha256: "abc".to_owned(),
+            reference_validation_tables: Vec::new(),
         }
     }
 
