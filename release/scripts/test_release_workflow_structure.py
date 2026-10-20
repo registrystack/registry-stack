@@ -859,6 +859,25 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         self.assertLess(steps.index(floor_check), upload_index)
 
+    def test_arm64_platform_build_selects_the_installed_toolchain(self) -> None:
+        # Without the override, rustup adds rust-toolchain.toml's rustfmt and
+        # clippy in a second install, which the ubuntu-24.04-arm image refuses
+        # as a file conflict. The build needs neither component.
+        import tomllib
+
+        _, document = workflow("release-candidate.yml")
+        channel = tomllib.loads(
+            (ROOT / "rust-toolchain.toml").read_text(encoding="utf-8")
+        )["toolchain"]["channel"]
+        job = document["jobs"]["build-platforms"]
+        self.assertEqual(job["env"]["RUSTUP_TOOLCHAIN"], channel)
+        native = step_run(
+            document, "build-platforms", "Build native platform payload once"
+        )
+        self.assertIn(
+            f"rustup toolchain install {channel} \\\n  --profile minimal", native
+        )
+
     def test_native_macos_shards_are_exact_source_inputs_to_assembly(self) -> None:
         _, document = workflow("release-candidate.yml")
         shards = document["jobs"]["build-macos-platforms"]
