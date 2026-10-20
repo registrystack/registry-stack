@@ -79,15 +79,15 @@ fn localized_display_texts(
     anonymous: &mut BTreeMap<String, Vec<LocatedDisplayTextLocation>>,
 ) {
     let mut add = |language: &str, text: &str, pointer: String| {
+        let language = language.to_ascii_lowercase();
         if let Some(id) = id {
-            identified.entry(language.to_owned()).or_default().push((
-                id.to_owned(),
-                text.to_owned(),
-                pointer,
-            ));
+            identified
+                .entry(language)
+                .or_default()
+                .push((id.to_owned(), text.to_owned(), pointer));
         } else {
             anonymous
-                .entry(language.to_owned())
+                .entry(language)
                 .or_default()
                 .push((text.to_owned(), pointer));
         }

@@ -218,6 +218,7 @@ fn reader_refusals_keep_duplicate_label_warnings_for_projects_and_modules() {
 #[test]
 fn duplicate_presentation_text_warns_in_each_breg_namespace() {
     let mut source = facility();
+    source["project"]["defaultLanguage"] = json!("EN");
     let refusal = source["actions"][1]["plan"]["refusals"][0].clone();
     source["actions"][1]["plan"]["refusals"]
         .as_array_mut()
@@ -243,7 +244,7 @@ fn duplicate_presentation_text_warns_in_each_breg_namespace() {
         },
         "publicService":{"id":"facility-service","title":"Facility registry"},
         "datasets":[
-            {"id":"first","title":{"en":"Café","fr":"Premier"}},
+            {"id":"first","title":"Café"},
             {"id":"second","title":{"en":"CAFE\u{301}","fr":"Deuxième"}},
             {"id":"third","title":{"fr":"Café"}}
         ],

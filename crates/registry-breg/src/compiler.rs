@@ -613,7 +613,7 @@ fn collect_projection_text<'a>(
     match text {
         ManifestProjectionTextSource::Plain(text) => {
             labels
-                .entry(default_language.to_owned())
+                .entry(default_language.to_ascii_lowercase())
                 .or_default()
                 .push(SourcedDisplayText {
                     id,
@@ -625,7 +625,7 @@ fn collect_projection_text<'a>(
         ManifestProjectionTextSource::Localized(values) => {
             for (language, text) in values {
                 labels
-                    .entry(language.as_str().to_owned())
+                    .entry(language.as_str().to_ascii_lowercase())
                     .or_default()
                     .push(SourcedDisplayText {
                         id,
@@ -635,6 +635,45 @@ fn collect_projection_text<'a>(
                     });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod projection_text_tests {
+    use super::*;
+
+    #[test]
+    fn compiler_groups_projection_language_tags_case_insensitively() {
+        let plain: ManifestProjectionTextSource =
+            serde_json::from_value(serde_json::json!("Café")).expect("plain display text");
+        let localized: ManifestProjectionTextSource =
+            serde_json::from_value(serde_json::json!({"en":"CAFE\u{301}"}))
+                .expect("localized display text");
+        let mut labels = BTreeMap::new();
+        collect_projection_text(
+            "EN",
+            Some("first"),
+            "manifestProjection.datasets[id=first].title",
+            &plain,
+            None,
+            &mut labels,
+        );
+        collect_projection_text(
+            "EN",
+            Some("second"),
+            "manifestProjection.datasets[id=second].title",
+            &localized,
+            None,
+            &mut labels,
+        );
+
+        assert_eq!(labels.len(), 1);
+        let entries = labels.get("en").expect("one normalized language scope");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[1].path,
+            "manifestProjection.datasets[id=second].title[language=en]"
+        );
     }
 }
 
