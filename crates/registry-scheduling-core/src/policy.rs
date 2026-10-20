@@ -1498,7 +1498,7 @@ fn policy_integrity_diagnostics(decoded: &mut Decoded<SchedulingPolicy>) -> Vec<
     ) -> Vec<Diagnostic> {
         let entries = values
             .iter()
-            .map(|(id, pointer)| AuthoredId { id, pointer })
+            .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
             .collect::<Vec<_>>();
         local_id_collision_diagnostics(document, code, &entries)
     }

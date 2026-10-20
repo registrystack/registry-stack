@@ -5,7 +5,7 @@
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_project_json, parse_project_yaml, Operation};
-use registry_breg::diagnostics::CompileFailure;
+use registry_breg::diagnostics::{CompileFailure, DiagnosticSeverity};
 use registry_breg::CompiledRegistry;
 use serde_json::{json, Value};
 
@@ -184,13 +184,32 @@ fn import_refuses_a_profile_without_a_principal_claim() {
     project["accessProfiles"][0]["principalClaim"] = json!("");
     let failure = compile(&project).expect_err("runs are creator-scoped");
     let codes = codes(&failure);
+    let errors = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>();
     assert!(
-        !codes.is_empty()
-            && codes
+        !errors.is_empty()
+            && errors
                 .iter()
-                .all(|code| code == "breg.access-profile.principal-claim-required"),
+                .all(|code| *code == "breg.access-profile.principal-claim-required"),
         "{codes:?}"
     );
+    for (retained, path) in [
+        (
+            "breg.access.profile-unrestricted-rows",
+            "recordTypes[id=enrollment].accessProfiles[id=loader].rowBoundaries",
+        ),
+        ("breg.package.identity-missing", "project.package"),
+    ] {
+        assert!(failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.severity == DiagnosticSeverity::Finding
+                && diagnostic.code == retained
+                && diagnostic.path == path
+        }));
+    }
 }
 
 #[test]

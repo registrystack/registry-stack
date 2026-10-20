@@ -16,6 +16,7 @@ use registry_breg::contract::{
     MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
     MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
 };
+use registry_breg::diagnostics::DiagnosticSeverity;
 use registry_breg::generated_ddl::field_lookup_index_name;
 use registry_breg::{CompileFailure, CompiledRegistry};
 use serde_json::{json, Value};
@@ -52,6 +53,14 @@ fn compile_with_assets(
 ) -> Result<CompiledRegistry, CompileFailure> {
     let project = parse_project_json(&serde_json::to_vec(source).unwrap()).unwrap();
     compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring)
+}
+
+fn assert_retained_authoring_finding(failure: &CompileFailure) {
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.severity == DiagnosticSeverity::Finding
+            && diagnostic.code == "breg.package.identity-missing"
+            && diagnostic.path == "project.package"
+    }));
 }
 
 fn expect_code(source: &Value, code: &str) {
@@ -270,9 +279,14 @@ fn encrypted_field_refuses_pattern_with_a_pinned_diagnostic() {
     let mut source = encrypted_project();
     source["recordTypes"][0]["fields"][1]["pattern"] = json!("^[0-9]{13}$");
     let failure = compile_value(&source).unwrap_err();
-    let diagnostics = failure.diagnostics();
+    assert_retained_authoring_finding(&failure);
+    let diagnostics = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        .collect::<Vec<_>>();
     assert_eq!(diagnostics.len(), 1, "the refusal stays stable and focused");
-    let diagnostic = &diagnostics[0];
+    let diagnostic = diagnostics[0];
     assert_eq!(diagnostic.code, "breg.field.encrypted-pattern-refused");
     assert_eq!(diagnostic.path, "recordTypes[case].fields[secret].pattern");
     assert_eq!(
@@ -395,9 +409,14 @@ fn encrypted_lookup_refuses_structured_values_and_unbounded_normalization() {
     .collect::<Vec<_>>());
     let failure =
         compile_value(&bounded).expect_err("an unbounded normalization pipeline is refused");
-    let diagnostics = failure.diagnostics();
+    assert_retained_authoring_finding(&failure);
+    let diagnostics = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        .collect::<Vec<_>>();
     assert_eq!(diagnostics.len(), 1, "the refusal stays stable and focused");
-    let diagnostic = &diagnostics[0];
+    let diagnostic = diagnostics[0];
     assert_eq!(
         diagnostic.code,
         "breg.field.encrypted-lookup-normalization-too-long"

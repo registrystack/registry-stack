@@ -6,14 +6,15 @@
 use std::{collections::BTreeMap, path::Path};
 
 use registry_manifest_core::{
-    is_runtime_only_key, is_secret_bearing_key, source_manifest_digest, validate_manifest,
-    LocalizedText, MetadataError, MetadataManifest, MetadataManifestFields, ValidationCondition,
+    is_runtime_only_key, is_secret_bearing_key, is_valid_manifest_id, source_manifest_digest,
+    validate_manifest, LocalizedText, MetadataError, MetadataManifest, MetadataManifestFields,
+    ValidationCondition,
 };
 use registry_platform_yaml::{
     duplicate_display_text_diagnostics, duplicate_display_text_location_diagnostics,
     escape_pointer_segment, local_id_collision_diagnostics, AuthoredDisplayText,
-    AuthoredDisplayTextLocation, AuthoredId, Diagnostic, Document, Expect, LocalId, Node,
-    NodeValue, Reader, Report, Severity,
+    AuthoredDisplayTextLocation, AuthoredId, Diagnostic, Document, Expect, Node, NodeValue, Reader,
+    Report, Severity,
 };
 
 use crate::{contents, Contents, Findings, METADATA_FORMAT, METADATA_SCHEMA_VERSION};
@@ -91,7 +92,8 @@ fn manifest_integrity_diagnostics(
     fn collisions(document: &Document, code: &str, values: &[(String, String)]) -> Vec<Diagnostic> {
         let entries = values
             .iter()
-            .map(|(id, pointer)| AuthoredId { id, pointer })
+            .filter(|(id, _)| is_valid_manifest_id(id))
+            .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
             .collect::<Vec<_>>();
         local_id_collision_diagnostics(document, code, &entries)
     }
@@ -328,7 +330,7 @@ fn manifest_integrity_diagnostics(
                     service
                         .id
                         .as_ref()
-                        .filter(|id| LocalId::new(id.as_str()).is_ok())
+                        .filter(|id| is_valid_manifest_id(id))
                         .map(|id| {
                             (
                                 id.clone(),
@@ -414,19 +416,14 @@ fn manifest_integrity_diagnostics(
                 .iter()
                 .enumerate()
                 .map(|(list_index, list)| {
-                    let id = list.id.clone().unwrap_or_else(|| {
-                        if total == 1 {
-                            "evidence-type-list".to_owned()
-                        } else {
-                            format!("evidence-type-list-{}", list_index + 1)
-                        }
-                    });
-                    (
-                        id,
-                        format!(
-                            "/requirements/{requirement_index}/evidence_type_lists/{list_index}/id"
-                        ),
-                    )
+                    let base = format!(
+                        "/requirements/{requirement_index}/evidence_type_lists/{list_index}"
+                    );
+                    match &list.id {
+                        Some(id) => (id.clone(), format!("{base}/id")),
+                        None if total == 1 => ("evidence-type-list".to_owned(), base),
+                        None => (format!("evidence-type-list-{}", list_index + 1), base),
+                    }
                 })
                 .collect::<Vec<_>>(),
         ));
@@ -1060,7 +1057,35 @@ mod tests {
         assert_eq!(collision.path, "/requirements/0/evidence_type_lists/1/id");
         assert_eq!(
             collision.related[0].path,
+            "/requirements/0/evidence_type_lists/0"
+        );
+        let source = collision.source.as_ref().expect("authored ID position");
+        assert_eq!((source.line, source.column), (Some(13), Some(13)));
+        assert_eq!(
+            (collision.related[0].line, collision.related[0].column),
+            (Some(12), Some(9))
+        );
+
+        let reversed = format!(
+            "{MINIMAL}requirements:\n  - id: identity\n    title: Identity\n    evidence_type_lists:\n      - id: evidence_type_list_2\n        evidence_types: [passport]\n      - evidence_types: [passport]\nevidence_types:\n  - id: passport\n    title: Passport\n    proves: [identity]\n"
+        );
+        let diagnostics = refused(&reversed);
+        let collision = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == "manifest.metadata.evidence-type-list-id-collision"
+            })
+            .expect("an implicit ID can be the primary collision site");
+        assert_eq!(collision.path, "/requirements/0/evidence_type_lists/1");
+        assert_eq!(
+            collision.related[0].path,
             "/requirements/0/evidence_type_lists/0/id"
+        );
+        let source = collision.source.as_ref().expect("implicit item position");
+        assert_eq!((source.line, source.column), (Some(14), Some(9)));
+        assert_eq!(
+            (collision.related[0].line, collision.related[0].column),
+            (Some(12), Some(13))
         );
 
         let text = format!(
@@ -1092,6 +1117,37 @@ mod tests {
         );
         read_metadata("metadata.yaml", text.as_bytes())
             .unwrap_or_else(|diagnostics| panic!("refused: {diagnostics:#?}"));
+    }
+
+    #[test]
+    fn manifest_id_collisions_use_the_manifest_grammar_and_redact_invalid_values() {
+        let prefix = "a".repeat(70);
+        let first = format!("{prefix}-tail");
+        let second = format!("{prefix}_tail");
+        let long_ids = format!(
+            "{MINIMAL}authorities:\n  - id: {first}\n    name: First\n  - id: {second}\n    name: Second\n"
+        );
+        let diagnostics = refused(&long_ids);
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "manifest.metadata.authority-id-collision" }));
+        let rendered = serde_json::to_string(&diagnostics).expect("diagnostics serialize");
+        assert!(!rendered.contains(&first), "{rendered}");
+        assert!(!rendered.contains(&second), "{rendered}");
+
+        let invalid = format!(
+            "{MINIMAL}authorities:\n  - id: SECRET-value\n    name: First\n  - id: SECRET_value\n    name: Second\n"
+        );
+        let diagnostics = refused(&invalid);
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "manifest.metadata.invalid-id"));
+        assert!(!diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "manifest.metadata.authority-id-collision" }));
+        let rendered = serde_json::to_string(&diagnostics).expect("diagnostics serialize");
+        assert!(!rendered.contains("SECRET-value"), "{rendered}");
+        assert!(!rendered.contains("SECRET_value"), "{rendered}");
     }
 
     #[test]

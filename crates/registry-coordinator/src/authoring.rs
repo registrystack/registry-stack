@@ -735,7 +735,7 @@ fn project_integrity_diagnostics(
     fn collisions(document: &Document, code: &str, values: &[(String, String)]) -> Vec<Diagnostic> {
         let entries = values
             .iter()
-            .map(|(id, pointer)| AuthoredId { id, pointer })
+            .map(|(id, pointer)| AuthoredId::at_key(id, pointer))
             .collect::<Vec<_>>();
         local_id_collision_diagnostics(document, code, &entries)
     }
