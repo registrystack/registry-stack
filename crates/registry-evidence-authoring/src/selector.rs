@@ -3,7 +3,9 @@ use crate::{
     finding::{FieldPath, Finding},
     project::{self, SelectorProfile},
 };
-use registry_platform_yaml::BoundedU64;
+#[cfg(feature = "schema")]
+use registry_platform_yaml::DisplayText;
+use registry_platform_yaml::{optional_display_text, BoundedU64};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -20,21 +22,51 @@ pub enum Field {
     String {
         minimum_bytes: BoundedU64<1, 8192>,
         maximum_bytes: BoundedU64<1, 8192>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "optional_display_text",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         label: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "optional_display_text",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         description: Option<String>,
     },
     Date {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "optional_display_text",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         label: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "optional_display_text",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         description: Option<String>,
     },
     Uuid {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "optional_display_text",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         label: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "optional_display_text",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         description: Option<String>,
     },
     Integer {
@@ -42,24 +74,54 @@ pub enum Field {
         minimum: i64,
         #[cfg_attr(feature="schema",schemars(range(min = -9_007_199_254_740_991_i64,max = 9_007_199_254_740_991_i64)))]
         maximum: i64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "optional_display_text",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         label: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "optional_display_text",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         description: Option<String>,
     },
     Boolean {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "optional_display_text",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         label: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "optional_display_text",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         description: Option<String>,
     },
     ControlledCode {
         codelist: String,
         codelist_version: String,
         maximum_bytes: BoundedU64<1, 8192>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "optional_display_text",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         label: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "optional_display_text",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         description: Option<String>,
     },
 }
@@ -81,6 +143,17 @@ impl Serialize for Field {
     }
 }
 impl Field {
+    pub fn label(&self) -> Option<&str> {
+        match self {
+            Self::String { label, .. }
+            | Self::Date { label, .. }
+            | Self::Uuid { label, .. }
+            | Self::Integer { label, .. }
+            | Self::Boolean { label, .. }
+            | Self::ControlledCode { label, .. } => label.as_deref(),
+        }
+    }
+
     pub fn codelist(&self) -> Option<(&str, &str)> {
         match self {
             Self::ControlledCode {

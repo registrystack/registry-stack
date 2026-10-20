@@ -15,9 +15,13 @@ use crate::{
     CoordinatorError, Result,
 };
 use registry_platform_config::AuthoredExpressions;
+#[cfg(feature = "schema")]
+use registry_platform_yaml::DisplayText;
 use registry_platform_yaml::{
-    ApiVersion, BoundedU32, Document, EnvelopeRule, Expect, ForeignValue, FormatSpec, Invalid,
-    LocalId, ProjectIdentity, Reader, RemovedKey, Severity,
+    duplicate_display_text_diagnostics, local_id_collision_diagnostics, optional_display_text,
+    ApiVersion, AuthoredDisplayText, AuthoredId, BoundedU32, Diagnostic, Document, EnvelopeRule,
+    Expect, ForeignValue, FormatSpec, Invalid, LocalId, ProjectIdentity, Reader, RemovedKey,
+    Report, Severity,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -56,10 +60,12 @@ pub struct CoordinatorProject {
     /// The shared identity: project.id identifies this Workflow and project.version is a human release label.
     pub project: ProjectIdentity,
     /// An optional human title; it changes neither stable identity nor behavior revision.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     title: Option<String>,
     /// An optional explanation for readers; it has no execution or authorization effect.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     description: Option<String>,
     /// Generated local public product contracts imported at compile time; no runtime discovery occurs.
     #[serde(default)]
@@ -134,10 +140,12 @@ struct AuthoredOperation {
     #[serde(default)]
     completions: BTreeMap<LocalId, AuthoredCompletion>,
     /// An optional human title; it changes neither stable identity nor behavior revision.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     title: Option<String>,
     /// An optional explanation for readers; it has no execution or authorization effect.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     description: Option<String>,
 }
 
@@ -179,10 +187,12 @@ struct AuthoredFunction {
     #[serde(default)]
     limits: NarrowedLimits,
     /// An optional human title; it changes neither stable identity nor behavior revision.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     title: Option<String>,
     /// An optional explanation for readers; it has no execution or authorization effect.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     description: Option<String>,
 }
 
@@ -387,10 +397,12 @@ enum AuthoredStep {
         /// The next Step on the successful completion route.
         next: LocalId,
         /// An optional human title; it changes neither stable identity nor behavior revision.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "optional_display_text")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         title: Option<String>,
         /// An optional explanation for readers; it has no execution or authorization effect.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "optional_display_text")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         description: Option<String>,
     },
     /// Observes one named completion of an earlier accepted call.
@@ -408,10 +420,12 @@ enum AuthoredStep {
         #[serde(default)]
         on_cancel: Option<LocalId>,
         /// An optional human title; it changes neither stable identity nor behavior revision.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "optional_display_text")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         title: Option<String>,
         /// An optional explanation for readers; it has no execution or authorization effect.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "optional_display_text")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         description: Option<String>,
     },
     /// Calls one resolved Operation alias under the current connection authority.
@@ -427,10 +441,12 @@ enum AuthoredStep {
         #[serde(default)]
         on_declared_refusal: Option<LocalId>,
         /// An optional human title; it changes neither stable identity nor behavior revision.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "optional_display_text")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         title: Option<String>,
         /// An optional explanation for readers; it has no execution or authorization effect.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "optional_display_text")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         description: Option<String>,
     },
     /// Selects one explicit graph edge by a typed case label.
@@ -440,10 +456,12 @@ enum AuthoredStep {
         /// Explicit label-to-Step edges; no implicit fall-through exists.
         cases: BTreeMap<LocalId, LocalId>,
         /// An optional human title; it changes neither stable identity nor behavior revision.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "optional_display_text")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         title: Option<String>,
         /// An optional explanation for readers; it has no execution or authorization effect.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "optional_display_text")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         description: Option<String>,
     },
     /// Finishes with one declared typed outcome.
@@ -454,14 +472,28 @@ enum AuthoredStep {
         #[serde(default)]
         output: Option<AuthoredMapping>,
         /// An optional human title; it changes neither stable identity nor behavior revision.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "optional_display_text")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         title: Option<String>,
         /// An optional explanation for readers; it has no execution or authorization effect.
-        #[serde(default)]
+        #[serde(default, deserialize_with = "optional_display_text")]
+        #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
         description: Option<String>,
     },
 }
 registry_platform_yaml::tagged_union!(AuthoredStep);
+
+impl AuthoredStep {
+    fn title(&self) -> Option<&str> {
+        match self {
+            Self::WaitUntil { title, .. }
+            | Self::WaitFor { title, .. }
+            | Self::Call { title, .. }
+            | Self::Choose { title, .. }
+            | Self::Finish { title, .. } => title.as_deref(),
+        }
+    }
+}
 
 /// At most 64 members of a declarative object mapping.
 #[derive(Debug)]
@@ -658,14 +690,196 @@ pub(crate) fn asset_path(root: &Path, asset: &str) -> Result<std::path::PathBuf>
 /// The shared reader preserves field paths and positions before compilation.
 pub fn parse_project(path: &Path, bytes: impl AsRef<[u8]>) -> Result<(Workflow, Document)> {
     let mut expressions = AuthoredExpressions;
-    let document = Reader::new(path.to_string_lossy())
+    let mut document = Reader::new(path.to_string_lossy())
         .with_hook(&mut expressions)
         .read(bytes.as_ref(), &Expect::one(&FORMAT))
         .map_err(CoordinatorError::from_report)?;
     let project: CoordinatorProject = document.decode().map_err(CoordinatorError::from_report)?;
+    let errors = project_integrity_diagnostics(&project, &mut document);
+    if !errors.is_empty() {
+        let mut report = document.warnings();
+        report.extend(Report::new(errors));
+        return Err(CoordinatorError::from_report(report));
+    }
     let mut workflow = compile(project, path).map_err(|error| positioned(&document, error))?;
     workflow.references = reference_sites(&document);
     Ok((workflow, document))
+}
+
+fn project_integrity_diagnostics(
+    project: &CoordinatorProject,
+    document: &mut Document,
+) -> Vec<Diagnostic> {
+    fn map_ids<T>(base: &str, values: &BTreeMap<LocalId, T>) -> Vec<(String, String)> {
+        values
+            .keys()
+            .map(|id| {
+                let id = id.as_str().to_owned();
+                let pointer = format!(
+                    "{base}/{}",
+                    registry_platform_yaml::escape_pointer_segment(&id)
+                );
+                (id, pointer)
+            })
+            .collect()
+    }
+    fn collisions(document: &Document, code: &str, values: &[(String, String)]) -> Vec<Diagnostic> {
+        let entries = values
+            .iter()
+            .map(|(id, pointer)| AuthoredId { id, pointer })
+            .collect::<Vec<_>>();
+        local_id_collision_diagnostics(document, code, &entries)
+    }
+    fn warnings(
+        document: &Document,
+        code: &str,
+        kind: &str,
+        values: &[(String, String, String)],
+    ) -> Vec<Diagnostic> {
+        let entries = values
+            .iter()
+            .map(|(id, text, pointer)| AuthoredDisplayText { id, text, pointer })
+            .collect::<Vec<_>>();
+        duplicate_display_text_diagnostics(document, code, kind, &entries)
+    }
+
+    let mut errors = Vec::new();
+    for (code, values) in [
+        (
+            "coordinator.project.contract-id-collision",
+            map_ids("/contracts", &project.contracts),
+        ),
+        (
+            "coordinator.project.type-id-collision",
+            map_ids("/types", &project.types),
+        ),
+        (
+            "coordinator.project.function-id-collision",
+            map_ids("/functions", &project.functions),
+        ),
+        (
+            "coordinator.project.operation-id-collision",
+            map_ids("/operations", &project.operations),
+        ),
+        (
+            "coordinator.project.event-trigger-id-collision",
+            map_ids("/workflow/eventTriggers", &project.workflow.event_triggers),
+        ),
+        (
+            "coordinator.project.step-id-collision",
+            map_ids("/workflow/steps", &project.workflow.steps),
+        ),
+        (
+            "coordinator.project.outcome-id-collision",
+            map_ids("/workflow/outcomes", &project.workflow.outcomes),
+        ),
+    ] {
+        errors.extend(collisions(document, code, &values));
+    }
+    for (id, operation) in &project.operations {
+        errors.extend(collisions(
+            document,
+            "coordinator.project.completion-id-collision",
+            &map_ids(
+                &format!(
+                    "/operations/{}/completions",
+                    registry_platform_yaml::escape_pointer_segment(id.as_str())
+                ),
+                &operation.completions,
+            ),
+        ));
+    }
+    for (id, function) in &project.functions {
+        errors.extend(collisions(
+            document,
+            "coordinator.project.function-input-id-collision",
+            &map_ids(
+                &format!(
+                    "/functions/{}/inputs",
+                    registry_platform_yaml::escape_pointer_segment(id.as_str())
+                ),
+                &function.inputs,
+            ),
+        ));
+    }
+    for (id, step) in &project.workflow.steps {
+        if let AuthoredStep::Choose { cases, .. } = step {
+            errors.extend(collisions(
+                document,
+                "coordinator.project.choose-case-id-collision",
+                &map_ids(
+                    &format!(
+                        "/workflow/steps/{}/cases",
+                        registry_platform_yaml::escape_pointer_segment(id.as_str())
+                    ),
+                    cases,
+                ),
+            ));
+        }
+    }
+
+    let groups = [
+        (
+            "coordinator.project.duplicate-function-title",
+            "functions",
+            project
+                .functions
+                .iter()
+                .filter_map(|(id, item)| {
+                    item.title.as_ref().map(|title| {
+                        let pointer = format!(
+                            "/functions/{}/title",
+                            registry_platform_yaml::escape_pointer_segment(id.as_str())
+                        );
+                        (id.as_str().to_owned(), title.clone(), pointer)
+                    })
+                })
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "coordinator.project.duplicate-operation-title",
+            "operations",
+            project
+                .operations
+                .iter()
+                .filter_map(|(id, item)| {
+                    item.title.as_ref().map(|title| {
+                        let pointer = format!(
+                            "/operations/{}/title",
+                            registry_platform_yaml::escape_pointer_segment(id.as_str())
+                        );
+                        (id.as_str().to_owned(), title.clone(), pointer)
+                    })
+                })
+                .collect(),
+        ),
+        (
+            "coordinator.project.duplicate-step-title",
+            "workflow steps",
+            project
+                .workflow
+                .steps
+                .iter()
+                .filter_map(|(id, item)| {
+                    item.title().map(|title| {
+                        let pointer = format!(
+                            "/workflow/steps/{}/title",
+                            registry_platform_yaml::escape_pointer_segment(id.as_str())
+                        );
+                        (id.as_str().to_owned(), title.to_owned(), pointer)
+                    })
+                })
+                .collect(),
+        ),
+    ];
+    let mut found_warnings = Vec::new();
+    for (code, kind, values) in &groups {
+        found_warnings.extend(warnings(document, code, kind, values));
+    }
+    for warning in found_warnings {
+        document.push_warning(warning);
+    }
+    errors
 }
 
 fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {

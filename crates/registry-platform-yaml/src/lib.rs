@@ -109,6 +109,7 @@ mod de;
 mod diagnostic;
 mod document;
 mod envelope;
+mod integrity;
 mod messages;
 mod node;
 mod scalar;
@@ -127,13 +128,19 @@ pub use envelope::{
     ApiVersion, Envelope, EnvelopeRule, Expect, FormatSpec, RemovedKey, RetiredApiVersion,
     VersionStatus,
 };
+pub use integrity::{
+    duplicate_display_text_diagnostics, local_id_collision_diagnostics, AuthoredDisplayText,
+    AuthoredId,
+};
 pub use messages::{CodeInfo, CODES};
 pub use node::{escape_pointer_segment, Entry, Node, NodeValue, Position, ScalarStyle, Span, Text};
 pub use secret::{SecretProvider, SecretReference, SECRET_REFERENCE_PATTERN};
 pub use structure::{Refusal, ScalarHook, ScalarSite, MAXIMUM_DEPTH};
 pub use types::{
-    BoundedU32, BoundedU64, DataLiteral, Digest, ExternalId, ForeignValue, Identified, LocalId,
-    ProjectIdentity, UniqueIdList, UniqueList, Url, MAXIMUM_EXTERNAL_ID_CHARS, MAXIMUM_URL_CHARS,
+    display_text, display_text_comparison_key, duplicate_display_text_pairs,
+    lookalike_local_id_pairs, optional_display_text, BoundedU32, BoundedU64, DataLiteral, Digest,
+    DisplayText, ExternalId, ForeignValue, Identified, LocalId, ProjectIdentity, UniqueIdList,
+    UniqueList, Url, MAXIMUM_EXTERNAL_ID_CHARS, MAXIMUM_URL_CHARS,
 };
 #[doc(hidden)]
 pub use union::__private;

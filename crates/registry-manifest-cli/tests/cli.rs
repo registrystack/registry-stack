@@ -101,6 +101,51 @@ fn help_flags_exit_zero_and_print_usage_to_stdout() {
 }
 
 #[test]
+fn validate_reports_duplicate_display_text_and_deny_warnings_refuses_it() {
+    let root = temp_dir("duplicate-display-text");
+    let manifest = root.join("metadata.yaml");
+    write_minimal_manifest(
+        &manifest,
+        "authorities:\n  - id: registry-office\n    name: Registry Office\n  - id: registry-copy\n    name: registry office\n",
+    );
+
+    let output = Command::new(bin())
+        .args(["validate", manifest.to_str().unwrap(), "--format", "json"])
+        .output()
+        .expect("run validate");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["warnings"], 1);
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "manifest.metadata.duplicate-authority-name"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "/authorities/1/name");
+
+    let denied = Command::new(bin())
+        .args([
+            "validate",
+            manifest.to_str().unwrap(),
+            "--format",
+            "json",
+            "--deny-warnings",
+        ])
+        .output()
+        .expect("run validate with deny warnings");
+    assert_eq!(denied.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&denied.stdout).unwrap();
+    assert_eq!(report["status"], "domain-refusal");
+    assert_eq!(report["errors"], 0);
+    assert_eq!(report["warnings"], 1);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn version_reports_the_shared_build_identity() {
     let output = Command::new(bin())
         .arg("--version")

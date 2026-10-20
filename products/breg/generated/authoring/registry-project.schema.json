@@ -379,7 +379,7 @@
           "type": "string"
         },
         "label": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         }
       },
       "required": [
@@ -2032,6 +2032,10 @@
         "classification": {
           "$ref": "#/$defs/Classification"
         },
+        "display": {
+          "$ref": "#/$defs/DisplaySource",
+          "default": {}
+        },
         "id": {
           "$ref": "#/$defs/LocalId"
         }
@@ -2083,16 +2087,20 @@
       "additionalProperties": false,
       "properties": {
         "description": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "label": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "titleField": {
           "type": "string"
         }
       },
       "type": "object"
+    },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "type": "string"
     },
     "EntityPermissionSource": {
       "additionalProperties": false,
@@ -3167,7 +3175,7 @@
           "$ref": "#/$defs/ManifestProjectionTextSource"
         },
         "endpointDescription": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "endpointUrl": {
           "$ref": "#/$defs/Url"
@@ -3229,7 +3237,7 @@
           "type": "string"
         },
         "owner": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "spatialCoverage": {
           "type": "string"
@@ -3411,7 +3419,7 @@
           "type": "string"
         },
         "name": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         }
       },
       "required": [
@@ -3496,11 +3504,11 @@
     "ManifestProjectionTextSource": {
       "anyOf": [
         {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         {
           "additionalProperties": {
-            "type": "string"
+            "$ref": "#/$defs/DisplayText"
           },
           "propertyNames": {
             "$ref": "#/$defs/ExternalId"
@@ -4312,7 +4320,7 @@
           "type": "array"
         },
         "name": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         }
       },
       "required": [
@@ -4339,7 +4347,7 @@
           "$ref": "#/$defs/LocalId"
         },
         "name": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         }
       },
       "required": [

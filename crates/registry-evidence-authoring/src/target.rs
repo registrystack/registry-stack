@@ -134,7 +134,13 @@ pub struct EvidenceTarget {
 }
 
 pub fn read_target(file: &str, bytes: &[u8]) -> Result<Decoded<EvidenceTarget>, Report> {
-    decode_authored::<EvidenceTarget>(file, bytes, &TARGET)
+    let decoded = decode_authored::<EvidenceTarget>(file, bytes, &TARGET)?;
+    let report = target_id_collisions(&decoded);
+    if report.has_errors() {
+        Err(report)
+    } else {
+        Ok(decoded)
+    }
 }
 pub fn read_authority(
     file: &str,
@@ -142,15 +148,73 @@ pub fn read_authority(
     project: &EvidenceProject,
 ) -> Result<Decoded<EvidenceTargetAuthority>, Report> {
     let decoded = decode_authored::<EvidenceTargetAuthority>(file, bytes, &AUTHORITY)?;
-    let report = findings_report(
+    let mut report = findings_report(
         &decoded.document,
         "authority",
         validate_authority(&decoded.value, project),
     );
+    report.extend(map_id_collisions(
+        &decoded.document,
+        "evidence.authority.access-profile-id-collision",
+        "/accessProfiles",
+        &decoded.value.access_profiles,
+    ));
     if report.has_errors() {
         return Err(report);
     }
     Ok(decoded)
+}
+
+fn map_id_collisions<T>(
+    document: &registry_platform_yaml::Document,
+    code: &str,
+    base: &str,
+    values: &BTreeMap<LocalId, T>,
+) -> Report {
+    let owned = values
+        .keys()
+        .map(|id| {
+            let id = id.as_str().to_owned();
+            let pointer = format!(
+                "{base}/{}",
+                registry_platform_yaml::escape_pointer_segment(&id)
+            );
+            (id, pointer)
+        })
+        .collect::<Vec<_>>();
+    let entries = owned
+        .iter()
+        .map(|(id, pointer)| registry_platform_yaml::AuthoredId { id, pointer })
+        .collect::<Vec<_>>();
+    Report::new(registry_platform_yaml::local_id_collision_diagnostics(
+        document, code, &entries,
+    ))
+}
+
+fn target_id_collisions(decoded: &Decoded<EvidenceTarget>) -> Report {
+    let mut report = map_id_collisions(
+        &decoded.document,
+        "evidence.target.connection-id-collision",
+        "/connections",
+        &decoded.value.connections,
+    );
+    if let Some(extracts) = &decoded.value.extracts {
+        report.extend(map_id_collisions(
+            &decoded.document,
+            "evidence.target.extract-id-collision",
+            "/extracts",
+            extracts,
+        ));
+    }
+    if let Some(outbound_tls) = &decoded.value.outbound_tls {
+        report.extend(map_id_collisions(
+            &decoded.document,
+            "evidence.target.trust-profile-id-collision",
+            "/outboundTls/trustProfiles",
+            &outbound_tls.trust_profiles,
+        ));
+    }
+    report
 }
 
 pub fn validate_authority(

@@ -2,7 +2,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_yaml::{
-    ApiVersion, BoundedU64, Decoded, EnvelopeRule, FormatSpec, LocalId, Report, UniqueList,
+    duplicate_display_text_diagnostics, local_id_collision_diagnostics, ApiVersion,
+    AuthoredDisplayText, AuthoredId, BoundedU64, Decoded, Diagnostic, EnvelopeRule, FormatSpec,
+    LocalId, Report, UniqueList,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -34,10 +36,26 @@ pub const PROJECT: FormatSpec<'static> = FormatSpec {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceProject {
     /// Optional presentation label. Stable references use the identifier.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub label: Option<String>,
     /// Human explanation for authors and reviewers; excluded from behavior revisions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub description: Option<String>,
     pub id: LocalId,
     pub selector_profiles: BTreeMap<LocalId, SelectorProfile>,
@@ -84,10 +102,26 @@ pub fn empty_capabilities(value: &UniqueList<AcquisitionCapability>) -> bool {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SelectorProfile {
     /// Optional presentation label. Stable references use the identifier.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub label: Option<String>,
     /// Human explanation for authors and reviewers; excluded from behavior revisions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub description: Option<String>,
     pub maximum_aggregate_bytes: BoundedU64<1, 8192>,
     pub fields: BTreeMap<LocalId, crate::selector::Field>,
@@ -98,10 +132,26 @@ pub struct SelectorProfile {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Function {
     /// Optional presentation label. Stable references use the identifier.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub label: Option<String>,
     /// Human explanation for authors and reviewers; excluded from behavior revisions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub description: Option<String>,
     pub id: LocalId,
     pub interface: FunctionInterface,
@@ -178,11 +228,32 @@ pub struct SourceFunctionRef {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AssertionDefinition {
     /// Optional presentation label. Stable references use the identifier.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub label: Option<String>,
     /// Human explanation for authors and reviewers; excluded from behavior revisions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub description: Option<String>,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub question: String,
     pub semantics: Semantics,
     pub purpose: String,
@@ -425,10 +496,26 @@ pub enum ProjectionDisclosure {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Output {
     /// Optional presentation label. Stable references use the identifier.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub label: Option<String>,
     /// Human explanation for authors and reviewers; excluded from behavior revisions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub description: Option<String>,
     pub concept: String,
     #[serde(rename = "type")]
@@ -477,10 +564,26 @@ pub struct Output {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Source {
     /// Optional presentation label. Stable references use the identifier.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub label: Option<String>,
     /// Human explanation for authors and reviewers; excluded from behavior revisions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub description: Option<String>,
     #[serde(rename = "type")]
     pub source_type: SourceType,
@@ -576,16 +679,288 @@ pub struct SourceLimits {
 
 /// Typed reader shared by CLI and unsaved editor buffers.
 pub fn read_project(file: &str, bytes: &[u8]) -> Result<Decoded<EvidenceProject>, Report> {
-    let decoded = decode_authored::<EvidenceProject>(file, bytes, &PROJECT)?;
-    let report = findings_report(
+    let mut decoded = decode_authored::<EvidenceProject>(file, bytes, &PROJECT)?;
+    let mut report = findings_report(
         &decoded.document,
         "project",
         validate_project(&decoded.value),
     );
+    report.extend(Report::new(project_integrity_diagnostics(&mut decoded)));
     if report.has_errors() {
         return Err(report);
     }
     Ok(decoded)
+}
+
+fn project_integrity_diagnostics(decoded: &mut Decoded<EvidenceProject>) -> Vec<Diagnostic> {
+    fn collisions(
+        document: &registry_platform_yaml::Document,
+        code: &str,
+        values: &[(String, String)],
+    ) -> Vec<Diagnostic> {
+        let entries = values
+            .iter()
+            .map(|(id, pointer)| AuthoredId { id, pointer })
+            .collect::<Vec<_>>();
+        local_id_collision_diagnostics(document, code, &entries)
+    }
+    fn warnings(
+        document: &registry_platform_yaml::Document,
+        code: &str,
+        kind: &str,
+        values: &[(String, String, String)],
+    ) -> Vec<Diagnostic> {
+        let entries = values
+            .iter()
+            .map(|(id, text, pointer)| AuthoredDisplayText { id, text, pointer })
+            .collect::<Vec<_>>();
+        duplicate_display_text_diagnostics(document, code, kind, &entries)
+    }
+    fn map_ids<T>(base: &str, values: &BTreeMap<LocalId, T>) -> Vec<(String, String)> {
+        values
+            .keys()
+            .map(|id| {
+                let id = id.as_str().to_owned();
+                let pointer = format!(
+                    "{base}/{}",
+                    registry_platform_yaml::escape_pointer_segment(&id)
+                );
+                (id, pointer)
+            })
+            .collect()
+    }
+
+    let project = &decoded.value;
+    let document = &decoded.document;
+    let mut errors = Vec::new();
+    for (code, values) in [
+        (
+            "evidence.project.selector-profile-id-collision",
+            map_ids("/selectorProfiles", &project.selector_profiles),
+        ),
+        (
+            "evidence.project.function-id-collision",
+            project
+                .functions
+                .iter()
+                .enumerate()
+                .map(|(index, function)| {
+                    (
+                        function.id.as_str().to_owned(),
+                        format!("/functions/{index}/id"),
+                    )
+                })
+                .collect(),
+        ),
+        (
+            "evidence.project.source-id-collision",
+            map_ids("/sources", &project.sources),
+        ),
+        (
+            "evidence.project.assertion-definition-id-collision",
+            map_ids("/assertionDefinitions", &project.assertion_definitions),
+        ),
+    ] {
+        errors.extend(collisions(document, code, &values));
+    }
+    for (profile_id, profile) in &project.selector_profiles {
+        errors.extend(collisions(
+            document,
+            "evidence.project.selector-field-id-collision",
+            &map_ids(
+                &format!(
+                    "/selectorProfiles/{}/fields",
+                    registry_platform_yaml::escape_pointer_segment(profile_id.as_str())
+                ),
+                &profile.fields,
+            ),
+        ));
+    }
+    for (source_id, source) in &project.sources {
+        errors.extend(collisions(
+            document,
+            "evidence.project.source-fact-id-collision",
+            &map_ids(
+                &format!(
+                    "/sources/{}/facts",
+                    registry_platform_yaml::escape_pointer_segment(source_id.as_str())
+                ),
+                &source.facts,
+            ),
+        ));
+        let roles = source
+            .selectors
+            .iter()
+            .enumerate()
+            .map(|(index, selector)| {
+                (
+                    selector.role.as_str().to_owned(),
+                    format!(
+                        "/sources/{}/selectors/{index}/role",
+                        registry_platform_yaml::escape_pointer_segment(source_id.as_str())
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        errors.extend(collisions(
+            document,
+            "evidence.project.source-selector-role-collision",
+            &roles,
+        ));
+    }
+    for (assertion_id, assertion) in &project.assertion_definitions {
+        let base = format!(
+            "/assertionDefinitions/{}",
+            registry_platform_yaml::escape_pointer_segment(assertion_id.as_str())
+        );
+        errors.extend(collisions(
+            document,
+            "evidence.project.output-id-collision",
+            &map_ids(&format!("{base}/outputs"), &assertion.outputs),
+        ));
+        let roles = assertion
+            .subjects
+            .iter()
+            .enumerate()
+            .map(|(index, subject)| {
+                (
+                    subject.role.as_str().to_owned(),
+                    format!("{base}/subjects/{index}/role"),
+                )
+            })
+            .collect::<Vec<_>>();
+        errors.extend(collisions(
+            document,
+            "evidence.project.subject-role-collision",
+            &roles,
+        ));
+    }
+
+    let mut found_warnings = Vec::new();
+    let top_groups = [
+        (
+            "evidence.project.duplicate-selector-profile-label",
+            "selector profiles",
+            project
+                .selector_profiles
+                .iter()
+                .filter_map(|(id, item)| {
+                    item.label.as_ref().map(|label| {
+                        let pointer = format!(
+                            "/selectorProfiles/{}/label",
+                            registry_platform_yaml::escape_pointer_segment(id.as_str())
+                        );
+                        (id.as_str().to_owned(), label.clone(), pointer)
+                    })
+                })
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "evidence.project.duplicate-function-label",
+            "functions",
+            project
+                .functions
+                .iter()
+                .enumerate()
+                .filter_map(|(index, item)| {
+                    item.label.as_ref().map(|label| {
+                        (
+                            item.id.as_str().to_owned(),
+                            label.clone(),
+                            format!("/functions/{index}/label"),
+                        )
+                    })
+                })
+                .collect(),
+        ),
+        (
+            "evidence.project.duplicate-source-label",
+            "sources",
+            project
+                .sources
+                .iter()
+                .filter_map(|(id, item)| {
+                    item.label.as_ref().map(|label| {
+                        let pointer = format!(
+                            "/sources/{}/label",
+                            registry_platform_yaml::escape_pointer_segment(id.as_str())
+                        );
+                        (id.as_str().to_owned(), label.clone(), pointer)
+                    })
+                })
+                .collect(),
+        ),
+        (
+            "evidence.project.duplicate-assertion-label",
+            "assertion definitions",
+            project
+                .assertion_definitions
+                .iter()
+                .map(|(id, item)| {
+                    let (text, member) = item
+                        .label
+                        .as_ref()
+                        .map_or((&item.question, "question"), |label| (label, "label"));
+                    let pointer = format!(
+                        "/assertionDefinitions/{}/{member}",
+                        registry_platform_yaml::escape_pointer_segment(id.as_str())
+                    );
+                    (id.as_str().to_owned(), text.clone(), pointer)
+                })
+                .collect(),
+        ),
+    ];
+    for (code, kind, values) in &top_groups {
+        found_warnings.extend(warnings(document, code, kind, values));
+    }
+    for (profile_id, profile) in &project.selector_profiles {
+        let values = profile
+            .fields
+            .iter()
+            .filter_map(|(id, field)| {
+                field.label().map(|label| {
+                    let pointer = format!(
+                        "/selectorProfiles/{}/fields/{}/label",
+                        registry_platform_yaml::escape_pointer_segment(profile_id.as_str()),
+                        registry_platform_yaml::escape_pointer_segment(id.as_str())
+                    );
+                    (id.as_str().to_owned(), label.to_owned(), pointer)
+                })
+            })
+            .collect::<Vec<_>>();
+        found_warnings.extend(warnings(
+            document,
+            "evidence.project.duplicate-selector-field-label",
+            "selector fields",
+            &values,
+        ));
+    }
+    for (assertion_id, assertion) in &project.assertion_definitions {
+        let values = assertion
+            .outputs
+            .iter()
+            .filter_map(|(id, output)| {
+                output.label.as_ref().map(|label| {
+                    let pointer = format!(
+                        "/assertionDefinitions/{}/outputs/{}/label",
+                        registry_platform_yaml::escape_pointer_segment(assertion_id.as_str()),
+                        registry_platform_yaml::escape_pointer_segment(id.as_str())
+                    );
+                    (id.as_str().to_owned(), label.clone(), pointer)
+                })
+            })
+            .collect::<Vec<_>>();
+        found_warnings.extend(warnings(
+            document,
+            "evidence.project.duplicate-output-label",
+            "assertion outputs",
+            &values,
+        ));
+    }
+    for warning in found_warnings {
+        decoded.document.push_warning(warning);
+    }
+    errors
 }
 
 pub fn validate_project(project: &EvidenceProject) -> Vec<Finding> {

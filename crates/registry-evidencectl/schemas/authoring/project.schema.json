@@ -101,11 +101,15 @@
           "$ref": "#/$defs/FunctionCall"
         },
         "description": {
-          "description": "Human explanation for authors and reviewers; excluded from behavior revisions.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Human explanation for authors and reviewers; excluded from behavior revisions."
         },
         "disclosureGuard": true,
         "existenceDisclosure": {
@@ -122,11 +126,15 @@
           "$ref": "#/$defs/GrantCeiling"
         },
         "label": {
-          "description": "Optional presentation label. Stable references use the identifier.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional presentation label. Stable references use the identifier."
         },
         "observationTimezone": {
           "default": "UTC",
@@ -147,7 +155,7 @@
           "type": "string"
         },
         "question": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "representations": {
           "items": {
@@ -247,6 +255,10 @@
       ],
       "type": "object"
     },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "type": "string"
+    },
     "FetchMember": {
       "additionalProperties": false,
       "properties": {
@@ -280,15 +292,23 @@
           "additionalProperties": false,
           "properties": {
             "description": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DisplayText"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "label": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DisplayText"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "maximumBytes": {
@@ -319,15 +339,23 @@
           "additionalProperties": false,
           "properties": {
             "description": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DisplayText"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "label": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DisplayText"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "type": {
@@ -344,15 +372,23 @@
           "additionalProperties": false,
           "properties": {
             "description": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DisplayText"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "label": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DisplayText"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "type": {
@@ -369,15 +405,23 @@
           "additionalProperties": false,
           "properties": {
             "description": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DisplayText"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "label": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DisplayText"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "maximum": {
@@ -408,15 +452,23 @@
           "additionalProperties": false,
           "properties": {
             "description": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DisplayText"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "label": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DisplayText"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "type": {
@@ -439,15 +491,23 @@
               "type": "string"
             },
             "description": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DisplayText"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "label": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DisplayText"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "maximumBytes": {
@@ -475,11 +535,15 @@
       "additionalProperties": false,
       "properties": {
         "description": {
-          "description": "Human explanation for authors and reviewers; excluded from behavior revisions.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Human explanation for authors and reviewers; excluded from behavior revisions."
         },
         "id": {
           "$ref": "#/$defs/LocalId"
@@ -488,11 +552,15 @@
           "$ref": "#/$defs/FunctionInterface"
         },
         "label": {
-          "description": "Optional presentation label. Stable references use the identifier.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional presentation label. Stable references use the identifier."
         },
         "source": {
           "type": "string"
@@ -616,18 +684,26 @@
           "type": "string"
         },
         "description": {
-          "description": "Human explanation for authors and reviewers; excluded from behavior revisions.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Human explanation for authors and reviewers; excluded from behavior revisions."
         },
         "label": {
-          "description": "Optional presentation label. Stable references use the identifier.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional presentation label. Stable references use the identifier."
         },
         "maximum": {
           "anyOf": [
@@ -842,11 +918,15 @@
       "additionalProperties": false,
       "properties": {
         "description": {
-          "description": "Human explanation for authors and reviewers; excluded from behavior revisions.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Human explanation for authors and reviewers; excluded from behavior revisions."
         },
         "fields": {
           "additionalProperties": {
@@ -858,11 +938,15 @@
           "type": "object"
         },
         "label": {
-          "description": "Optional presentation label. Stable references use the identifier.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional presentation label. Stable references use the identifier."
         },
         "maximumAggregateBytes": {
           "format": "uint64",
@@ -942,11 +1026,15 @@
           ]
         },
         "description": {
-          "description": "Human explanation for authors and reviewers; excluded from behavior revisions.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Human explanation for authors and reviewers; excluded from behavior revisions."
         },
         "evidence": true,
         "extract": {
@@ -975,11 +1063,15 @@
           "type": "boolean"
         },
         "label": {
-          "description": "Optional presentation label. Stable references use the identifier.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional presentation label. Stable references use the identifier."
         },
         "limits": {
           "$ref": "#/$defs/SourceLimits"
@@ -1200,11 +1292,15 @@
       "type": "object"
     },
     "description": {
-      "description": "Human explanation for authors and reviewers; excluded from behavior revisions.",
-      "type": [
-        "string",
-        "null"
-      ]
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DisplayText"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Human explanation for authors and reviewers; excluded from behavior revisions."
     },
     "functions": {
       "items": {
@@ -1220,11 +1316,15 @@
       "type": "string"
     },
     "label": {
-      "description": "Optional presentation label. Stable references use the identifier.",
-      "type": [
-        "string",
-        "null"
-      ]
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DisplayText"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional presentation label. Stable references use the identifier."
     },
     "maximumHolderBoundBatchSize": {
       "description": "Maximum assertions released together in one holder-bound batch; omission means one.",

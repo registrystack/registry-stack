@@ -191,6 +191,15 @@ impl ClockPolicy {
             Self::Subject { id, .. } | Self::Stage { id, .. } => id,
         }
     }
+
+    pub(crate) fn authored_nested_ids(&self) -> Option<(&[ClockReminder], &[ClockStep])> {
+        match self {
+            Self::Subject { .. } => None,
+            Self::Stage {
+                reminders, steps, ..
+            } => Some((reminders, steps)),
+        }
+    }
 }
 
 /// The instant a subject clock counts from: `anchor: {type: request-accepted}`.
@@ -374,6 +383,11 @@ pub struct ClockStep {
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub because: String,
     pub at: ClockStepInstant,
     pub action: ClockStepAction,

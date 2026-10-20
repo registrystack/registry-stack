@@ -98,12 +98,12 @@ fn read_project(project: &Path, fixtures: bool) -> Result<ProjectReading> {
 
     let policy_path = project.join(AUTHORED_POLICY_FILE);
     files += 1;
-    let policy = match SchedulingPolicy::decode(
+    let policy = match SchedulingPolicy::read(
         &policy_path.display().to_string(),
         &read_input(&policy_path)?,
     ) {
         Ok(decoded) => {
-            report.extend(findings_report(&decoded.document, &decoded.value.check()));
+            report.extend(decoded.document.warnings());
             Some(decoded)
         }
         Err(refusal) => {
@@ -1017,6 +1017,34 @@ mod tests {
             "Remove the key.",
         ));
         assert!(refuses(&report, false));
+    }
+
+    #[test]
+    fn check_reports_duplicate_display_text_and_deny_warnings_refuses_it() {
+        let (_root, project) = initialized("standalone-exact-time");
+        edit(
+            &project,
+            AUTHORED_POLICY_FILE,
+            "  - id: registry-update\n    label: Registry record update\n",
+            "  - id: registry-update\n    label: Registry record update\n  - id: registry-copy\n    label: registry record update\n",
+        );
+        let report = check(&project, false).expect("warnings do not normally refuse check");
+        let warning = report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["code"] == "scheduling.project.duplicate-service-label")
+            .unwrap_or_else(|| panic!("the product check reports the duplicate label: {report}"));
+        assert_eq!(warning["path"], "/services/1/label");
+
+        let error = check(&project, true).expect_err("--deny-warnings refuses the warning");
+        let report = crate::configuration_report(&error).expect("a structured warning report");
+        assert_eq!(report.error_count(), 0);
+        assert_eq!(report.warning_count(), 1);
+        assert_eq!(
+            report.diagnostics()[0].code,
+            "scheduling.project.duplicate-service-label"
+        );
     }
 
     #[test]

@@ -1211,6 +1211,8 @@ pub(crate) struct TypeRule {
 }
 
 pub(crate) const EXPECT_LOCAL_ID: &str = "a local identifier matching `^[a-z][a-z0-9_-]{0,63}$`";
+pub(crate) const EXPECT_DISPLAY_TEXT: &str =
+    "display text without bidirectional embedding, override, or isolate controls, byte-order marks, line or paragraph separators, or Unicode noncharacters";
 pub(crate) const EXPECT_EXTERNAL_ID: &str =
     "a non-empty identifier of at most 512 characters without control characters";
 pub(crate) const EXPECT_DIGEST: &str =
@@ -1220,6 +1222,10 @@ pub(crate) const EXPECT_URL: &str =
 pub(crate) const EXPECT_DATA_LITERAL: &str = "null, a boolean, a number, or text";
 
 pub(crate) const TYPE_RULES: &[TypeRule] = &[
+    TypeRule {
+        expected: EXPECT_DISPLAY_TEXT,
+        action: "Remove hidden reordering controls, byte-order marks, line or paragraph separators, and Unicode noncharacters.",
+    },
     TypeRule {
         expected: EXPECT_LOCAL_ID,
         action: "Use lowercase letters, digits, `_`, and `-`, starting with a letter, at most 64 characters.",

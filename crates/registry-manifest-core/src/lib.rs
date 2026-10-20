@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use oxiri::Iri;
-use registry_platform_yaml::{Identified, UniqueIdList};
+use registry_platform_yaml::{
+    display_text, optional_display_text, DisplayText, Identified, UniqueIdList,
+};
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -729,12 +731,45 @@ pub struct EcosystemBindingManifest {
 /// form keeps its position. Each variant serializes as the form it was
 /// written in.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema), schemars(untagged))]
 pub enum LocalizedText {
     Plain(String),
     Localized(BTreeMap<String, String>),
 }
-registry_platform_yaml::shape_union!(LocalizedText { scalar => Plain, mapping => Localized });
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema), schemars(untagged))]
+enum LocalizedDisplayText {
+    Plain(DisplayText),
+    Localized(BTreeMap<String, DisplayText>),
+}
+registry_platform_yaml::shape_union!(LocalizedDisplayText { scalar => Plain, mapping => Localized });
+
+impl<'de> Deserialize<'de> for LocalizedText {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(match LocalizedDisplayText::deserialize(deserializer)? {
+            LocalizedDisplayText::Plain(text) => Self::Plain(text.into_string()),
+            LocalizedDisplayText::Localized(texts) => Self::Localized(
+                texts
+                    .into_iter()
+                    .map(|(language, text)| (language, text.into_string()))
+                    .collect(),
+            ),
+        })
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for LocalizedText {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "LocalizedText".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        LocalizedDisplayText::json_schema(generator)
+    }
+}
 
 impl Serialize for LocalizedText {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -765,6 +800,8 @@ impl LocalizedText {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PublisherManifest {
+    #[serde(deserialize_with = "display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "DisplayText"))]
     pub name: String,
     #[serde(default)]
     pub iri: Option<String>,
@@ -779,6 +816,8 @@ pub struct AuthorityManifest {
     pub id: String,
     #[serde(default)]
     pub iri: Option<String>,
+    #[serde(deserialize_with = "display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "DisplayText"))]
     pub name: String,
     #[serde(default)]
     pub authority_type: Option<String>,
@@ -841,7 +880,8 @@ pub struct DataServiceManifest {
     pub description: Option<LocalizedText>,
     #[serde(default)]
     pub endpoint_url: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     pub endpoint_description: Option<String>,
     #[serde(default)]
     pub serves_datasets: Vec<String>,
@@ -928,7 +968,8 @@ pub struct FormSectionManifest {
 #[serde(deny_unknown_fields)]
 pub struct FormFieldManifest {
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     pub name: Option<String>,
     pub label: LocalizedText,
     #[serde(default)]
@@ -981,7 +1022,8 @@ pub struct DatasetManifest {
     pub title: LocalizedText,
     #[serde(default)]
     pub description: Option<LocalizedText>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
     pub owner: Option<String>,
     #[serde(default)]
     pub sensitivity: Sensitivity,
@@ -1187,6 +1229,8 @@ pub struct IssuingAuthorityManifest {
     pub id: String,
     #[serde(default)]
     pub iri: Option<String>,
+    #[serde(deserialize_with = "display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "DisplayText"))]
     pub name: String,
     #[serde(default)]
     pub country: Option<String>,
@@ -1228,6 +1272,8 @@ pub struct EvidenceOfferingPolicyManifest {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct EntityManifest {
+    #[serde(deserialize_with = "display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "DisplayText"))]
     pub name: String,
     #[serde(default)]
     pub title: Option<LocalizedText>,
@@ -1247,6 +1293,8 @@ pub struct EntityManifest {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct IdentifierManifest {
+    #[serde(deserialize_with = "display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "DisplayText"))]
     pub name: String,
     pub kind: String,
 }
@@ -1255,6 +1303,8 @@ pub struct IdentifierManifest {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct FieldManifest {
+    #[serde(deserialize_with = "display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "DisplayText"))]
     pub name: String,
     #[serde(rename = "type")]
     pub field_type: FieldType,
@@ -1290,6 +1340,8 @@ pub struct FieldConstraints {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct RelationshipManifest {
+    #[serde(deserialize_with = "display_text")]
+    #[cfg_attr(feature = "schema", schemars(with = "DisplayText"))]
     pub name: String,
     #[serde(default)]
     pub target_entity: Option<String>,

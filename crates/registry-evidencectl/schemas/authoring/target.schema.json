@@ -12,6 +12,10 @@
       "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
     },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "type": "string"
+    },
     "ExternalId": {
       "description": "An identifier another system issues, written exactly as its issuer gives it.",
       "maxLength": 512,
@@ -835,7 +839,7 @@
       "additionalProperties": false,
       "properties": {
         "description": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "endpointUrl": {
           "$ref": "#/$defs/Url"
@@ -862,7 +866,7 @@
           "type": "string"
         },
         "title": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         }
       },
       "required": [

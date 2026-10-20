@@ -581,7 +581,17 @@ pub struct TargetRateLimits {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TargetPublication {
     pub service_id: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub title: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub description: String,
     pub endpoint_url: Url,
     pub jurisdictions: Vec<String>,

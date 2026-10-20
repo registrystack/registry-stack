@@ -347,6 +347,22 @@ conformance corpus (text planted at the registry's `operand` role).
 relative path.** Operator files accept relative paths unless the product gives
 its reason in that description.
 
+**CFG-VAL-11 (MUST). Human-visible authored text uses `DisplayText`.** The
+value is preserved exactly, but it refuses the bidi embedding and override
+characters U+202A to U+202E, bidi isolates U+2066 to U+2069, line and paragraph
+separators U+2028 and U+2029, U+FEFF, and Unicode noncharacters. It accepts
+multilingual shaping and direction characters U+00AD, U+061C, U+200B to
+U+200F, and U+2060. Labels that identify peer definitions are compared after
+removing those accepted invisible characters, applying full Unicode case
+folding, and normalizing to NFC; equivalent labels produce a warning that
+names the definitions, never the label text.
+*Why:* labels guide human review but bind no authority. Hidden reordering or
+indistinguishable peer labels can mislead a reviewer even when every stable
+identifier and authorization check remains correct.
+*Enforced by:* the shared `DisplayText` reader and comparison helpers;
+generated product schemas; product check tests for structured warnings and
+`--deny-warnings`.
+
 ## 4. Names
 
 **CFG-NAME-1 (MUST). Keys are camelCase ASCII**
@@ -494,9 +510,13 @@ variants. Untagged unions follow CFG-SCHEMA-8. The shared command report
 envelope (`ok: true` with `result`, `ok: false` with `error`) is tagged by
 `ok` and needs no `type` member.
 
-**CFG-ID-8 (SHOULD). A check warns when two identifiers in one namespace
-differ only by `-` versus `_`.**
+**CFG-ID-8 (MUST). A check refuses two identifiers in one definition
+namespace that differ only by `-` versus `_`.** The diagnostic names both
+validated local identifiers and relates their exact authored locations. A
+reference collection is not a definition namespace.
 *Why:* both are valid and distinct, and a reader takes them for one.
+*Enforced by:* the shared separator-collision helper and each product's typed
+checks over its explicit definition namespaces.
 
 ## 6. Quantities
 
@@ -945,14 +965,16 @@ Each MUST rule appears once; SHOULD rules are in the last row.
 | Rules | Gate |
 |---|---|
 | CFG-ENV-1, 4; CFG-YAML-2 to 8; CFG-VAL-1 to 3; CFG-EMPTY-1; CFG-SEC-2, 3; CFG-DIAG-1, 2, 5; CFG-CHANGE-2 | reader unit tests named with the rule ID; the conformance corpus; for CFG-ENV-1 also the convention lint (`const` envelope) |
+| CFG-VAL-11 | shared reader and comparison-helper unit tests; generated product schemas; product check tests for structured warnings and `--deny-warnings` |
 | CFG-YAML-1 | `disallowed-methods` in every `clippy.toml` in the repository, with `check-yaml-reader-boundary.sh`; the conformance corpus |
 | CFG-ENV-2, 3, 6; CFG-NAME-1 to 5; CFG-ID-1, 6, 7; CFG-QTY-1 to 4; CFG-VAL-6, 7; CFG-EMPTY-2, 4; CFG-SEC-1; CFG-EMBED-2; CFG-SCHEMA-1, 3 to 6 | `check-config-conventions.py` over the registry and every schema, with the exceptions register as ratchet; for CFG-EMPTY-2 the lint checks the sentinel shape and review classifies each member as granting or restricting; for CFG-SEC-1 also the `SecretReference` parser tests; for CFG-ID-6 also the source lint (set types) and the corpus's duplicated set item; for CFG-QTY-4 also the corpus boundary sweep over the bounds each format's registered schema states |
 | CFG-SCHEMA-8; CFG-CHANGE-1 | source lint over the reader-type closure (`flatten`, `untagged`, `tag`, `alias`, set types); the corpus unknown-key sweep |
 | CFG-SCHEMA-2 | each product's schema drift check, in a job that runs on every pull request touching the product; the convention lint (a format with no generated schema) |
 | CFG-CHECK-1 to 3; CFG-DIAG-3, 4, 6; CFG-ID-4, 5; CFG-VAL-8, 9; CFG-SCHEMA-7 | product CLI tests and the corpus runner; for CFG-ID-4, CFG-ID-5, CFG-VAL-8 and CFG-VAL-9 the cases at the registry's `conformance` roles (dangling reference, duplicate id, escaping path, mistyped operand); for CFG-SCHEMA-7 the runner's `init` mode (the modeline each product's init command writes); for CFG-CHECK-1 also the convention lint (the registry's `check` field) |
+| CFG-ID-8 | shared separator-collision helper tests; product tests enumerating typed definition namespaces and exact related source locations |
 | CFG-CHANGE-5 | the convention lint compares the exceptions register with the base entry by entry (rule, format, location): an added entry outside the growth classes fails, and so does a class change, so deletion is the only other change and a moved entry counts as added; an explicit `--base` without the register fails |
 | CFG-ID-2, 3; CFG-VAL-4, 5; CFG-NAME-7; CFG-EMPTY-3, 6; CFG-EMBED-1; CFG-CHANGE-3, 4 | review citing the rule; CFG-EMPTY-3 also needs a security review note (AGENTS.md) |
-| CFG-ENV-5; CFG-VAL-10; CFG-NAME-6, 8; CFG-ID-8; CFG-EMPTY-5; CFG-SCHEMA-9; CFG-CHECK-4 (SHOULD) | review |
+| CFG-ENV-5; CFG-VAL-10; CFG-NAME-6, 8; CFG-EMPTY-5; CFG-SCHEMA-9; CFG-CHECK-4 (SHOULD) | review |
 
 ## Example
 

@@ -553,10 +553,12 @@ fn entity_label(service: &HttpService, surface: &AuthorizedSurface<'_>) -> Strin
 
 fn text_label(text: &ManifestProjectionTextSource) -> String {
     match text {
-        ManifestProjectionTextSource::Plain(text) => text.clone(),
-        ManifestProjectionTextSource::Localized(labels) => {
-            labels.values().next().cloned().unwrap_or_default()
-        }
+        ManifestProjectionTextSource::Plain(text) => text.as_str().to_owned(),
+        ManifestProjectionTextSource::Localized(labels) => labels
+            .values()
+            .next()
+            .map(|text| text.as_str().to_owned())
+            .unwrap_or_default(),
     }
 }
 

@@ -104,8 +104,8 @@
       "additionalProperties": false,
       "properties": {
         "description": {
-          "description": "An optional explanation for readers; it has no execution or authorization effect.",
-          "type": "string"
+          "$ref": "#/$defs/DisplayText",
+          "description": "An optional explanation for readers; it has no execution or authorization effect."
         },
         "entrypoint": {
           "description": "One public source function taking exactly one named-input object.",
@@ -139,8 +139,8 @@
           "type": "string"
         },
         "title": {
-          "description": "An optional human title; it changes neither stable identity nor behavior revision.",
-          "type": "string"
+          "$ref": "#/$defs/DisplayText",
+          "description": "An optional human title; it changes neither stable identity nor behavior revision."
         }
       },
       "required": [
@@ -288,16 +288,16 @@
           "description": "The logical deployment connection. It grants no authority."
         },
         "description": {
-          "description": "An optional explanation for readers; it has no execution or authorization effect.",
-          "type": "string"
+          "$ref": "#/$defs/DisplayText",
+          "description": "An optional explanation for readers; it has no execution or authorization effect."
         },
         "responseSchema": {
           "$ref": "#/$defs/Schema",
           "description": "An optional typed response specialization for the bounded external GET Operation."
         },
         "title": {
-          "description": "An optional human title; it changes neither stable identity nor behavior revision.",
-          "type": "string"
+          "$ref": "#/$defs/DisplayText",
+          "description": "An optional human title; it changes neither stable identity nor behavior revision."
         },
         "uses": {
           "$ref": "#/$defs/Operation",
@@ -317,16 +317,16 @@
           "description": "Waits until a computed RFC 3339 instant.",
           "properties": {
             "description": {
-              "description": "An optional explanation for readers; it has no execution or authorization effect.",
-              "type": "string"
+              "$ref": "#/$defs/DisplayText",
+              "description": "An optional explanation for readers; it has no execution or authorization effect."
             },
             "next": {
               "$ref": "#/$defs/LocalId",
               "description": "The next Step on the successful completion route."
             },
             "title": {
-              "description": "An optional human title; it changes neither stable identity nor behavior revision.",
-              "type": "string"
+              "$ref": "#/$defs/DisplayText",
+              "description": "An optional human title; it changes neither stable identity nor behavior revision."
             },
             "type": {
               "const": "wait-until",
@@ -353,8 +353,8 @@
               "description": "A preceding accepted call Step and one named Operation completion."
             },
             "description": {
-              "description": "An optional explanation for readers; it has no execution or authorization effect.",
-              "type": "string"
+              "$ref": "#/$defs/DisplayText",
+              "description": "An optional explanation for readers; it has no execution or authorization effect."
             },
             "next": {
               "$ref": "#/$defs/LocalId",
@@ -376,8 +376,8 @@
               "type": "integer"
             },
             "title": {
-              "description": "An optional human title; it changes neither stable identity nor behavior revision.",
-              "type": "string"
+              "$ref": "#/$defs/DisplayText",
+              "description": "An optional human title; it changes neither stable identity nor behavior revision."
             },
             "type": {
               "const": "wait-for",
@@ -397,8 +397,8 @@
           "description": "Calls one resolved Operation alias under the current connection authority.",
           "properties": {
             "description": {
-              "description": "An optional explanation for readers; it has no execution or authorization effect.",
-              "type": "string"
+              "$ref": "#/$defs/DisplayText",
+              "description": "An optional explanation for readers; it has no execution or authorization effect."
             },
             "input": {
               "$ref": "#/$defs/AuthoredMapping",
@@ -417,8 +417,8 @@
               "description": "One local Operation alias declared under operations."
             },
             "title": {
-              "description": "An optional human title; it changes neither stable identity nor behavior revision.",
-              "type": "string"
+              "$ref": "#/$defs/DisplayText",
+              "description": "An optional human title; it changes neither stable identity nor behavior revision."
             },
             "type": {
               "const": "call",
@@ -452,12 +452,12 @@
               "description": "A typed mapping producing one of the declared case labels."
             },
             "description": {
-              "description": "An optional explanation for readers; it has no execution or authorization effect.",
-              "type": "string"
+              "$ref": "#/$defs/DisplayText",
+              "description": "An optional explanation for readers; it has no execution or authorization effect."
             },
             "title": {
-              "description": "An optional human title; it changes neither stable identity nor behavior revision.",
-              "type": "string"
+              "$ref": "#/$defs/DisplayText",
+              "description": "An optional human title; it changes neither stable identity nor behavior revision."
             },
             "type": {
               "const": "choose",
@@ -476,8 +476,8 @@
           "description": "Finishes with one declared typed outcome.",
           "properties": {
             "description": {
-              "description": "An optional explanation for readers; it has no execution or authorization effect.",
-              "type": "string"
+              "$ref": "#/$defs/DisplayText",
+              "description": "An optional explanation for readers; it has no execution or authorization effect."
             },
             "outcome": {
               "$ref": "#/$defs/LocalId",
@@ -488,8 +488,8 @@
               "description": "The declared result schema or mapping; Functions and the host enforce it."
             },
             "title": {
-              "description": "An optional human title; it changes neither stable identity nor behavior revision.",
-              "type": "string"
+              "$ref": "#/$defs/DisplayText",
+              "description": "An optional human title; it changes neither stable identity nor behavior revision."
             },
             "type": {
               "const": "finish",
@@ -572,6 +572,10 @@
       "enum": [
         "breg"
       ],
+      "type": "string"
+    },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
       "type": "string"
     },
     "ExternalId": {
@@ -819,8 +823,8 @@
       "type": "object"
     },
     "description": {
-      "description": "An optional explanation for readers; it has no execution or authorization effect.",
-      "type": "string"
+      "$ref": "#/$defs/DisplayText",
+      "description": "An optional explanation for readers; it has no execution or authorization effect."
     },
     "functions": {
       "additionalProperties": {
@@ -873,8 +877,8 @@
       "unevaluatedProperties": false
     },
     "title": {
-      "description": "An optional human title; it changes neither stable identity nor behavior revision.",
-      "type": "string"
+      "$ref": "#/$defs/DisplayText",
+      "description": "An optional human title; it changes neither stable identity nor behavior revision."
     },
     "types": {
       "additionalProperties": {

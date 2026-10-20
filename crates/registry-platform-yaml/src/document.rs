@@ -17,7 +17,7 @@
 use serde::de::DeserializeOwned;
 
 use crate::de::{Ctx, NodeDe, Place};
-use crate::diagnostic::{Diagnostic, Report, Severity};
+use crate::diagnostic::{Diagnostic, Related, Report, Severity};
 use crate::envelope::{self, Envelope, Expect, RemovedKey};
 use crate::messages::{self, Problem, Problems};
 use crate::node::{escape_pointer_segment, unescape_segment, Node, NodeValue, Position, Span};
@@ -227,6 +227,29 @@ impl Document {
         let mut report = Report::new(self.warnings.clone());
         report.set_files_checked(1);
         report
+    }
+
+    /// Add a product-owned warning after successful typed decoding.
+    pub fn push_warning(&mut self, warning: Diagnostic) {
+        assert_eq!(warning.severity, Severity::Warning);
+        self.warnings.push(warning);
+    }
+
+    /// Attach a related note at another value in this document.
+    pub fn add_related_value(
+        &self,
+        diagnostic: &mut Diagnostic,
+        pointer: &str,
+        message: impl Into<String>,
+    ) {
+        let position = self.span_of(pointer).map(|span| span.start);
+        diagnostic.related.push(Related {
+            file: self.file.clone(),
+            line: position.map(|position| position.line),
+            column: position.map(|position| position.column),
+            path: pointer.to_owned(),
+            message: message.into(),
+        });
     }
 
     /// The document as JSON, mapping members in source order.

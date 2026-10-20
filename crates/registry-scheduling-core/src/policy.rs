@@ -14,8 +14,9 @@
 use chrono::{DateTime, Utc};
 use registry_platform_hooks::{validate_hooks, HookDeclaration, HookHandlerSource, HookPhase};
 use registry_platform_yaml::{
-    ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, Identified, ProjectIdentity, Reader,
-    RemovedKey, Report, RetiredApiVersion,
+    duplicate_display_text_diagnostics, local_id_collision_diagnostics, ApiVersion,
+    AuthoredDisplayText, AuthoredId, Decoded, Diagnostic, EnvelopeRule, Expect, FormatSpec,
+    Identified, ProjectIdentity, Reader, RemovedKey, Report, RetiredApiVersion,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -111,6 +112,11 @@ pub struct ServicePolicy {
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub label: String,
 }
 
@@ -227,6 +233,11 @@ pub struct ReminderOffsetPolicy {
         schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_HORIZON_MINUTES>")
     )]
     pub offset_minutes: u32,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub because: String,
 }
 
@@ -241,11 +252,21 @@ pub struct OfferingPolicy {
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub service: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub label: String,
     pub mode: SchedulingMode,
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub location: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub because: String,
     /// Present exactly when `mode` is `exact-time`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -346,6 +367,11 @@ pub struct OpeningPatternPolicy {
     pub end_time: String,
     pub effective_from: String,
     pub effective_until: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub because: String,
 }
 
@@ -369,6 +395,11 @@ pub struct HolidaySetPolicy {
         schemars(with = "registry_platform_yaml::BoundedU64<1, MAXIMUM_REVISION>")
     )]
     pub revision: u64,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub because: String,
     /// The dates the set closes. A set that closes no date omits the member.
     #[serde(
@@ -445,6 +476,11 @@ pub struct WindowSubquota {
         schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_UNITS>")
     )]
     pub units: u32,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub because: String,
 }
 
@@ -493,6 +529,11 @@ pub struct WindowStaffing {
         schemars(with = "Option<registry_platform_yaml::BoundedU32<1, MAXIMUM_POOL_MEMBERS>>")
     )]
     pub reserved_members: Option<u32>,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub because: String,
 }
 
@@ -542,6 +583,11 @@ pub struct PublishedWindow {
     pub leftover: Option<LeftoverCapacityPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staffing: Option<WindowStaffing>,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub because: String,
 }
 
@@ -570,6 +616,11 @@ pub struct HoldPolicy {
         schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_UNITS>")
     )]
     pub maximum_per_caller: u32,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub because: String,
 }
 
@@ -811,12 +862,14 @@ impl SchedulingPolicy {
     /// Read and check one `scheduling.yaml` file: every structural problem,
     /// or every finding of [`SchedulingPolicy::check`], each at its position.
     pub fn read(file: &str, bytes: &[u8]) -> Result<Decoded<Self>, Report> {
-        let decoded = Self::decode(file, bytes)?;
+        let mut decoded = Self::decode(file, bytes)?;
         let findings = decoded.value.check();
-        if findings.is_empty() {
-            Ok(decoded)
+        let mut report = findings_report(&decoded.document, &findings);
+        report.extend(Report::new(policy_integrity_diagnostics(&mut decoded)));
+        if report.has_errors() {
+            Err(report)
         } else {
-            Err(findings_report(&decoded.document, &findings))
+            Ok(decoded)
         }
     }
 
@@ -1429,6 +1482,110 @@ impl SchedulingPolicy {
     }
 }
 
+fn policy_integrity_diagnostics(decoded: &mut Decoded<SchedulingPolicy>) -> Vec<Diagnostic> {
+    fn ids<T: Identified>(base: &str, values: &[T]) -> Vec<(String, String)> {
+        values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| (value.id().to_owned(), format!("{base}/{index}/id")))
+            .collect()
+    }
+    fn collisions(
+        document: &registry_platform_yaml::Document,
+        code: &str,
+        values: &[(String, String)],
+    ) -> Vec<Diagnostic> {
+        let entries = values
+            .iter()
+            .map(|(id, pointer)| AuthoredId { id, pointer })
+            .collect::<Vec<_>>();
+        local_id_collision_diagnostics(document, code, &entries)
+    }
+    fn warnings(
+        document: &registry_platform_yaml::Document,
+        code: &str,
+        kind: &str,
+        values: &[(String, String, String)],
+    ) -> Vec<Diagnostic> {
+        let entries = values
+            .iter()
+            .map(|(id, text, pointer)| AuthoredDisplayText { id, text, pointer })
+            .collect::<Vec<_>>();
+        duplicate_display_text_diagnostics(document, code, kind, &entries)
+    }
+
+    let project = &decoded.value;
+    let document = &decoded.document;
+    let mut errors = Vec::new();
+    for (code, values) in [
+        (
+            "scheduling.project.service-id-collision",
+            ids("/services", &project.services),
+        ),
+        (
+            "scheduling.project.offering-id-collision",
+            ids("/offerings", &project.offerings),
+        ),
+        (
+            "scheduling.project.holiday-set-id-collision",
+            ids("/holidaySets", &project.holiday_sets),
+        ),
+        (
+            "scheduling.project.opening-id-collision",
+            ids("/openings", &project.openings),
+        ),
+        (
+            "scheduling.project.hook-id-collision",
+            ids("/hooks", &project.hooks),
+        ),
+    ] {
+        errors.extend(collisions(document, code, &values));
+    }
+
+    let groups = [
+        (
+            "scheduling.project.duplicate-service-label",
+            "services",
+            project
+                .services
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    (
+                        item.id.clone(),
+                        item.label.clone(),
+                        format!("/services/{index}/label"),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "scheduling.project.duplicate-offering-label",
+            "offerings",
+            project
+                .offerings
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    (
+                        item.id.clone(),
+                        item.label.clone(),
+                        format!("/offerings/{index}/label"),
+                    )
+                })
+                .collect(),
+        ),
+    ];
+    let mut found_warnings = Vec::new();
+    for (code, kind, values) in &groups {
+        found_warnings.extend(warnings(document, code, kind, values));
+    }
+    for warning in found_warnings {
+        decoded.document.push_warning(warning);
+    }
+    errors
+}
+
 fn check_scheduling_hook(hook: &HookPolicy, path: &str, findings: &mut Vec<SchedulingDiagnostic>) {
     let ObserverHandler::Url { destination_id } = &hook.handler;
     if !valid_hook_destination_id(destination_id) {
@@ -1818,6 +1975,48 @@ holdPolicy:
         SchedulingPolicy::decode(AUTHORED_POLICY_FILE, yaml.as_bytes())
             .unwrap_or_else(|report| panic!("{}", report.render_human()))
             .value
+    }
+
+    #[test]
+    fn project_check_keeps_a_positioned_duplicate_service_label_warning() {
+        let authored = MINIMAL_EXACT_TIME_PROJECT.replacen(
+            "  - id: registry-update\n    label: Registry record update\n",
+            "  - id: registry-update\n    label: Registry record update\n  - id: registry-copy\n    label: registry record update\n",
+            1,
+        );
+        let decoded = SchedulingPolicy::read(AUTHORED_POLICY_FILE, authored.as_bytes())
+            .unwrap_or_else(|report| panic!("{}", report.render_human()));
+        let warnings = decoded.document.warnings();
+        let finding = warnings
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "scheduling.project.duplicate-service-label")
+            .expect("the duplicate label warning survives project decoding");
+        assert_eq!(finding.path, "/services/1/label");
+        assert_eq!(finding.related[0].path, "/services/0/label");
+        assert!(finding.message.contains("`registry-update`"));
+        assert!(finding.message.contains("`registry-copy`"));
+        assert!(!finding.message.contains("Registry record update"));
+    }
+
+    #[test]
+    fn project_check_refuses_separator_lookalikes_in_the_service_namespace() {
+        let authored = MINIMAL_EXACT_TIME_PROJECT.replacen(
+            "  - id: registry-update\n    label: Registry record update\n",
+            "  - id: registry-update\n    label: Registry record update\n  - id: registry_update\n    label: Another service\n",
+            1,
+        );
+        let report = SchedulingPolicy::read(AUTHORED_POLICY_FILE, authored.as_bytes())
+            .expect_err("separator-lookalike definitions must be refused");
+        let finding = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "scheduling.project.service-id-collision")
+            .expect("the service collision has its own finding");
+        assert_eq!(finding.path, "/services/1/id");
+        assert_eq!(finding.related[0].path, "/services/0/id");
+        assert!(finding.message.contains("`registry-update`"));
+        assert!(finding.message.contains("`registry_update`"));
     }
 
     /// The diagnostics a refused project reports, as `pointer code`.

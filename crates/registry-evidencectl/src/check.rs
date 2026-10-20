@@ -186,6 +186,20 @@ pub(crate) fn render_human(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    fn copy_tree(from: &Path, to: &Path) {
+        fs::create_dir_all(to).unwrap();
+        for entry in fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let destination = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&entry.path(), &destination);
+            } else {
+                fs::copy(entry.path(), destination).unwrap();
+            }
+        }
+    }
     #[test]
     fn production_requires_an_explicit_target() {
         assert!(check(Path::new("unused"), None, true, false).is_err());
@@ -202,6 +216,46 @@ mod tests {
         assert!(!refuses_warnings(&clean, true));
         assert!(!refuses_warnings(&warning, false));
         assert!(refuses_warnings(&warning, true));
+    }
+    #[test]
+    fn check_reports_duplicate_display_text_and_deny_warnings_refuses_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/examples/standalone");
+        copy_tree(&source, temporary.path());
+        let project_file = temporary.path().join("evidence.yaml");
+        let authored = fs::read_to_string(&project_file).unwrap().replacen(
+            "  person-record:\n",
+            "  person-record:\n    label: Registry source\n",
+            1,
+        );
+        let authored = authored.replacen(
+            "  licence-record:\n",
+            "  licence-record:\n    label: registry source\n",
+            1,
+        );
+        fs::write(&project_file, authored).unwrap();
+
+        let checked = check(temporary.path(), None, false, false)
+            .expect("warnings do not normally refuse check");
+        assert_eq!(checked.diagnostics.error_count(), 0);
+        assert_eq!(checked.diagnostics.warning_count(), 1);
+        assert_eq!(
+            checked.diagnostics.diagnostics()[0].code,
+            "evidence.project.duplicate-source-label"
+        );
+        assert_eq!(
+            checked.report["diagnostics"][0]["path"],
+            "/sources/person-record/label"
+        );
+
+        let error = check(temporary.path(), None, false, true)
+            .expect_err("--deny-warnings refuses the warning");
+        let report = error
+            .downcast_ref::<Report>()
+            .expect("a structured warning report");
+        assert_eq!(report.error_count(), 0);
+        assert_eq!(report.warning_count(), 1);
     }
     #[test]
     fn explain_renders_named_definitions_functions_and_authority() {

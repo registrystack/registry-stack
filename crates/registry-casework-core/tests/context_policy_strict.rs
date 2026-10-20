@@ -67,3 +67,45 @@ fn canonical_context_modes_keep_their_wire_shape() {
     }))
     .is_err());
 }
+
+#[test]
+fn project_check_keeps_a_positioned_duplicate_label_warning() {
+    let changed = STANDALONE.replacen(
+        "  decisions:\n    label: Decisions awaiting review\n",
+        "  decisions:\n    label: Decisions awaiting review\n  decisions-copy:\n    label: decisions awaiting review\n",
+        1,
+    );
+    let decoded = CaseworkProject::read("casework.yaml", changed.as_bytes())
+        .unwrap_or_else(|report| panic!("{}", report.render_human()));
+    let warnings = decoded.document.warnings();
+    let finding = warnings
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "casework.project.duplicate-queue-label")
+        .expect("the duplicate label warning survives project decoding");
+    assert_eq!(finding.path, "/queues/decisions-copy/label");
+    assert_eq!(finding.related[0].path, "/queues/decisions/label");
+    assert!(finding.message.contains("`decisions`"));
+    assert!(finding.message.contains("`decisions-copy`"));
+    assert!(!finding.message.contains("Decisions awaiting review"));
+}
+
+#[test]
+fn project_check_refuses_separator_lookalikes_in_the_queue_namespace() {
+    let changed = STANDALONE.replacen(
+        "  decisions:\n    label: Decisions awaiting review\n",
+        "  decision-queue:\n    label: First queue\n  decision_queue:\n    label: Second queue\n",
+        1,
+    );
+    let report = CaseworkProject::read("casework.yaml", changed.as_bytes())
+        .expect_err("separator-lookalike definitions must be refused");
+    let finding = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "casework.project.queue-id-collision")
+        .expect("the queue collision has its own finding");
+    assert_eq!(finding.path, "/queues/decision_queue");
+    assert_eq!(finding.related[0].path, "/queues/decision-queue");
+    assert!(finding.message.contains("`decision-queue`"));
+    assert!(finding.message.contains("`decision_queue`"));
+}

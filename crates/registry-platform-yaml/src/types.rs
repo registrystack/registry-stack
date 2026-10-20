@@ -15,9 +15,11 @@ use serde::{Serialize, Serializer};
 
 use crate::de::{Invalid, BOUNDED, BOUNDED_EXPECTING, DATA_LITERAL, FOREIGN_VALUE};
 use crate::messages::{
-    TypeRule, EXPECT_DATA_LITERAL, EXPECT_DIGEST, EXPECT_EXTERNAL_ID, EXPECT_LOCAL_ID, EXPECT_URL,
-    TYPE_RULES,
+    TypeRule, EXPECT_DATA_LITERAL, EXPECT_DIGEST, EXPECT_DISPLAY_TEXT, EXPECT_EXTERNAL_ID,
+    EXPECT_LOCAL_ID, EXPECT_URL, TYPE_RULES,
 };
+use unicode_casefold::UnicodeCaseFold;
+use unicode_normalization::UnicodeNormalization;
 
 pub(crate) const DATA_LITERAL_EXPECTED: &str = EXPECT_DATA_LITERAL;
 
@@ -138,6 +140,109 @@ impl LocalId {
 }
 
 text_newtype!(LocalId);
+
+/// Text shown to a person in an authoring, review, or runtime surface.
+///
+/// The value stays exactly as written, but characters that can invisibly
+/// reorder it, create a line boundary, or do not denote Unicode characters
+/// are refused. Joiners, direction marks, zero-width word separators, and
+/// soft hyphens remain available for multilingual labels (CFG-VAL-11).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DisplayText(String);
+
+impl DisplayText {
+    pub fn new(text: impl Into<String>) -> Result<DisplayText, Invalid> {
+        let text = text.into();
+        if text.chars().any(is_refused_display_character) {
+            Err(rule(EXPECT_DISPLAY_TEXT))
+        } else {
+            Ok(DisplayText(text))
+        }
+    }
+}
+
+text_newtype!(DisplayText);
+
+/// Deserialize [`DisplayText`] into a field that retains `String` storage.
+pub fn display_text<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    DisplayText::deserialize(deserializer).map(DisplayText::into_string)
+}
+
+/// Deserialize optional [`DisplayText`] into a field that retains `String`
+/// storage.
+pub fn optional_display_text<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<DisplayText>::deserialize(deserializer)
+        .map(|value| value.map(DisplayText::into_string))
+}
+
+/// The comparison key for two display labels.
+///
+/// Full Unicode case folding is followed by NFC normalization. Characters
+/// retained for multilingual shaping or direction but invisible to a reviewer
+/// do not distinguish two labels.
+pub fn display_text_comparison_key(text: &str) -> String {
+    text.chars()
+        .filter(|character| !is_ignored_display_comparison_character(*character))
+        .case_fold()
+        .nfc()
+        .collect()
+}
+
+/// Every pair of values that has the same display-text comparison key.
+pub fn duplicate_display_text_pairs<'a>(
+    values: impl IntoIterator<Item = &'a str>,
+) -> Vec<(usize, usize)> {
+    let mut seen = HashMap::<String, usize>::new();
+    let mut pairs = Vec::new();
+    for (index, value) in values.into_iter().enumerate() {
+        let key = display_text_comparison_key(value);
+        if let Some(first) = seen.get(&key) {
+            pairs.push((*first, index));
+        } else {
+            seen.insert(key, index);
+        }
+    }
+    pairs
+}
+
+/// Every pair of local identifiers that differs only by `_` versus `-`.
+pub fn lookalike_local_id_pairs<'a>(
+    values: impl IntoIterator<Item = &'a str>,
+) -> Vec<(usize, usize)> {
+    let mut seen = HashMap::<String, (usize, &str)>::new();
+    let mut pairs = Vec::new();
+    for (index, value) in values.into_iter().enumerate() {
+        let key = value.replace('_', "-");
+        if let Some((first, first_value)) = seen.get(&key) {
+            if *first_value != value {
+                pairs.push((*first, index));
+            }
+        } else {
+            seen.insert(key, (index, value));
+        }
+    }
+    pairs
+}
+
+fn is_refused_display_character(character: char) -> bool {
+    matches!(
+        character,
+        '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}' | '\u{fdd0}'..='\u{fdef}'
+    ) || (character as u32) & 0xffff >= 0xfffe
+}
+
+fn is_ignored_display_comparison_character(character: char) -> bool {
+    matches!(
+        character,
+        '\u{00ad}' | '\u{061c}' | '\u{200b}'..='\u{200f}' | '\u{2060}'
+    )
+}
 
 /// An identifier another system issues (a client id, a claim name, a scope,
 /// a URN), kept exactly as written: 1 to 512 characters, no control
@@ -685,6 +790,19 @@ mod schema {
         }
     }
 
+    impl JsonSchema for DisplayText {
+        fn schema_name() -> Cow<'static, str> {
+            Cow::Borrowed("DisplayText")
+        }
+
+        fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+            json_schema!({
+                "type": "string",
+                "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+            })
+        }
+    }
+
     impl JsonSchema for ExternalId {
         fn schema_name() -> Cow<'static, str> {
             Cow::Borrowed("ExternalId")
@@ -820,6 +938,68 @@ mod tests {
         for bad in ["", "A", "1a", "-a", "a.b", "a b", "é", &"a".repeat(65)] {
             assert!(LocalId::new(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn cfg_val_11_display_text_refuses_hidden_reordering_and_separators() {
+        for refused in [
+            '\u{202a}',
+            '\u{202e}',
+            '\u{2066}',
+            '\u{2069}',
+            '\u{feff}',
+            '\u{fdd0}',
+            '\u{1fffe}',
+            '\u{2028}',
+            '\u{2029}',
+        ] {
+            assert!(
+                DisplayText::new(format!("before{refused}after")).is_err(),
+                "U+{:04X}",
+                refused as u32
+            );
+        }
+    }
+
+    #[test]
+    fn cfg_val_11_display_text_keeps_multilingual_formatting_characters() {
+        for allowed in [
+            '\u{00ad}', '\u{061c}', '\u{200b}', '\u{200c}', '\u{200d}', '\u{200e}', '\u{200f}',
+            '\u{2060}',
+        ] {
+            assert!(
+                DisplayText::new(format!("before{allowed}after")).is_ok(),
+                "U+{:04X}",
+                allowed as u32
+            );
+        }
+        assert!(DisplayText::new("می\u{200c}خواهم").is_ok());
+        assert!(DisplayText::new("العربية \u{200f}Latin").is_ok());
+    }
+
+    #[test]
+    fn duplicate_display_text_uses_full_case_folding_nfc_and_ignorable_characters() {
+        assert_eq!(
+            duplicate_display_text_pairs(["Straße", "STRASSE"].into_iter()),
+            vec![(0, 1)]
+        );
+        assert_eq!(
+            duplicate_display_text_pairs(["Café", "CAFE\u{301}"].into_iter()),
+            vec![(0, 1)]
+        );
+        assert_eq!(
+            duplicate_display_text_pairs(["mixed text", "mixed\u{200f} text"].into_iter()),
+            vec![(0, 1)]
+        );
+    }
+
+    #[test]
+    fn cfg_id_8_lookalike_pairs_stay_within_the_supplied_namespace() {
+        assert_eq!(
+            lookalike_local_id_pairs(["directory-entry", "other", "directory_entry"].into_iter()),
+            vec![(0, 2)]
+        );
+        assert!(lookalike_local_id_pairs(["same", "same"].into_iter()).is_empty());
     }
 
     #[test]

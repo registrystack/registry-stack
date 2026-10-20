@@ -116,9 +116,25 @@ pub struct RegistryProject {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DisplaySource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub label: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_field: Option<String>,
@@ -760,6 +776,11 @@ pub struct RecipientOrganizationSource {
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub name: String,
     pub contact: String,
     pub clients: Vec<String>,
@@ -773,6 +794,11 @@ pub struct RecipientGroupSource {
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub name: String,
     pub members: Vec<String>,
 }
@@ -826,12 +852,12 @@ pub struct ManifestProjectionSource {
 #[cfg_attr(feature = "schema", schemars(untagged))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ManifestProjectionTextSource {
-    Plain(String),
+    Plain(registry_platform_yaml::DisplayText),
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "external_id_map_schema::<String>")
+        schemars(schema_with = "external_id_map_schema::<registry_platform_yaml::DisplayText>")
     )]
-    Localized(BTreeMap<ExternalId, String>),
+    Localized(BTreeMap<ExternalId, registry_platform_yaml::DisplayText>),
 }
 registry_platform_yaml::shape_union!(ManifestProjectionTextSource {
     scalar => Plain,
@@ -897,6 +923,11 @@ pub struct ManifestProjectionPublisherSource {
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iri: Option<String>,
@@ -918,7 +949,15 @@ pub struct ManifestProjectionDatasetSource {
     pub title: ManifestProjectionTextSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<ManifestProjectionTextSource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub owner: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<ManifestProjectionDatasetStatus>,
@@ -959,7 +998,15 @@ pub struct ManifestProjectionDataServiceSource {
     #[serde(deserialize_with = "url_text")]
     #[cfg_attr(feature = "schema", schemars(with = "Url"))]
     pub endpoint_url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
     pub endpoint_description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conforms_to: Option<String>,
@@ -1744,6 +1791,11 @@ pub struct ActionHandlerWriteSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionHandlerRefusalSource {
     pub code: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub label: String,
 }
 
@@ -2472,6 +2524,8 @@ pub struct DerivedFieldSource {
     #[serde(flatten)]
     pub field_type: FieldTypeSource,
     pub classification: Classification,
+    #[serde(default)]
+    pub display: DisplaySource,
 }
 
 impl<'de> Deserialize<'de> for DerivedFieldSource {
@@ -2499,6 +2553,7 @@ impl<'de> Deserialize<'de> for DerivedFieldSource {
             api_name: raw.api_name,
             field_type,
             classification: raw.classification,
+            display: raw.display,
         })
     }
 }
@@ -4648,7 +4703,13 @@ pub const MODULE_FORMAT: FormatSpec<'static> = FormatSpec {
 /// column, and the action that fixes it (CFG-DIAG-1), and none repeats a
 /// value from the file.
 pub fn read_project_yaml(file: &str, bytes: &[u8]) -> Result<Decoded<RegistryProject>, Report> {
-    read_with_value_types(file, bytes, &PROJECT_FORMAT)
+    let mut decoded = read_with_value_types(file, bytes, &PROJECT_FORMAT)?;
+    let errors = crate::authoring_integrity::project_diagnostics(&mut decoded);
+    if errors.is_empty() {
+        Ok(decoded)
+    } else {
+        Err(Report::new(errors))
+    }
 }
 
 fn read_with_value_types<T: DeserializeOwned>(
@@ -4739,7 +4800,13 @@ fn read_with_value_types<T: DeserializeOwned>(
 /// Read an authored module through the shared reader, as
 /// [`read_project_yaml`] reads a project.
 pub fn read_module_yaml(file: &str, bytes: &[u8]) -> Result<Decoded<RegistryModule>, Report> {
-    read_with_value_types(file, bytes, &MODULE_FORMAT)
+    let mut decoded = read_with_value_types(file, bytes, &MODULE_FORMAT)?;
+    let errors = crate::authoring_integrity::module_diagnostics(&mut decoded);
+    if errors.is_empty() {
+        Ok(decoded)
+    } else {
+        Err(Report::new(errors))
+    }
 }
 
 fn read_authored<T: DeserializeOwned>(

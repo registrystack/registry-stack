@@ -52,6 +52,11 @@ pub struct TaskTemplate {
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
     pub version: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub label: String,
     pub eligible_teams: Vec<String>,
     pub eligible_profiles: Vec<String>,

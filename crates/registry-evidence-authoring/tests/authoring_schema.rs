@@ -957,6 +957,46 @@ fn a_missing_source_passes_shape_validation_and_is_diagnosed_at_its_reference() 
 }
 
 #[test]
+fn project_check_keeps_a_positioned_duplicate_source_label_warning() {
+    let mut document = yaml_as_json(NORMALIZED_PROJECT);
+    document["sources"]["person-record"]["label"] = serde_json::json!("Registry source");
+    document["sources"]["licence-record"]["label"] = serde_json::json!("registry source");
+    let bytes = serde_json::to_vec(&document).expect("the project renders");
+    let decoded = project::read_project("evidence.json", &bytes)
+        .unwrap_or_else(|report| panic!("{}", report.render_human()));
+    let warnings = decoded.document.warnings();
+    let finding = warnings
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "evidence.project.duplicate-source-label")
+        .expect("the duplicate label warning survives project decoding");
+    assert_eq!(finding.path, "/sources/person-record/label");
+    assert_eq!(finding.related[0].path, "/sources/licence-record/label");
+    assert!(finding.message.contains("`person-record`"));
+    assert!(finding.message.contains("`licence-record`"));
+    assert!(!finding.message.contains("Registry source"));
+}
+
+#[test]
+fn project_check_refuses_separator_lookalikes_in_the_selector_profile_namespace() {
+    let mut document = yaml_as_json(NORMALIZED_PROJECT);
+    document["selectorProfiles"]["record_by_id"] =
+        document["selectorProfiles"]["record-by-id"].clone();
+    let bytes = serde_json::to_vec(&document).expect("the project renders");
+    let report = project::read_project("evidence.json", &bytes)
+        .expect_err("separator-lookalike definitions must be refused");
+    let finding = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "evidence.project.selector-profile-id-collision")
+        .expect("the selector profile collision has its own finding");
+    assert_eq!(finding.path, "/selectorProfiles/record_by_id");
+    assert_eq!(finding.related[0].path, "/selectorProfiles/record-by-id");
+    assert!(finding.message.contains("`record-by-id`"));
+    assert!(finding.message.contains("`record_by_id`"));
+}
+
+#[test]
 fn a_bad_typed_value_is_rejected_by_schema_and_reader_at_the_authored_field() {
     let document = NORMALIZED_PROJECT.replacen(
         "maximumAggregateBytes: 64",

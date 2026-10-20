@@ -291,11 +291,13 @@ fn project_manifest(
 
 fn localized_text(source: &ManifestProjectionTextSource) -> LocalizedText {
     match source {
-        ManifestProjectionTextSource::Plain(value) => LocalizedText::Plain(value.clone()),
+        ManifestProjectionTextSource::Plain(value) => {
+            LocalizedText::Plain(value.as_str().to_owned())
+        }
         ManifestProjectionTextSource::Localized(values) => LocalizedText::Localized(
             values
                 .iter()
-                .map(|(language, text)| (language.as_str().to_owned(), text.clone()))
+                .map(|(language, text)| (language.as_str().to_owned(), text.as_str().to_owned()))
                 .collect(),
         ),
     }

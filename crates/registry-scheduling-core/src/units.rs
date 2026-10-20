@@ -39,6 +39,11 @@ pub struct UnitBand {
         schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_UNITS>")
     )]
     pub units: u32,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub because: String,
 }
 
@@ -104,6 +109,11 @@ pub enum RequiredUnitsPolicy {
             schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_UNITS>")
         )]
         units: u32,
+        #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::DisplayText")
+        )]
         because: String,
     },
     /// A party costs its recipient count times `per_recipient`.
@@ -114,6 +124,11 @@ pub enum RequiredUnitsPolicy {
             schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_UNITS>")
         )]
         per_recipient: u32,
+        #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::DisplayText")
+        )]
         because: String,
     },
     /// A party costs whatever band its recipient count falls in.
@@ -122,6 +137,11 @@ pub enum RequiredUnitsPolicy {
         #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
         bands: Vec<UnitBand>,
         above_highest_band: AboveHighestBand,
+        #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "registry_platform_yaml::DisplayText")
+        )]
         because: String,
     },
 }

@@ -31,7 +31,7 @@
           "$ref": "#/$defs/ClockStepInstant"
         },
         "because": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "id": {
           "$ref": "#/$defs/LocalId"
@@ -72,6 +72,10 @@
     "Digest": {
       "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
       "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
       "type": "string"
     },
     "ElapsedDuration": {
@@ -454,7 +458,7 @@
       "additionalProperties": false,
       "properties": {
         "because": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "id": {
           "$ref": "#/$defs/LocalId"
@@ -865,7 +869,7 @@
             "type": "string"
           },
           "description": {
-            "type": "string"
+            "$ref": "#/$defs/DisplayText"
           },
           "serviceProfiles": {
             "additionalProperties": false,
@@ -928,7 +932,7 @@
         "additionalProperties": false,
         "properties": {
           "label": {
-            "type": "string"
+            "$ref": "#/$defs/DisplayText"
           }
         },
         "required": [
@@ -962,7 +966,7 @@
               "additionalProperties": false,
               "properties": {
                 "label": {
-                  "type": "string"
+                  "$ref": "#/$defs/DisplayText"
                 },
                 "publicReason": {
                   "$ref": "#/$defs/ReviewPublicReasonRule",
@@ -1120,7 +1124,7 @@
             "description": "Evidence-only requester context signed into the authority assertion.\nOther products derive neither requester admission nor relying-party\naudience from these fields and therefore forbid the block entirely."
           },
           "label": {
-            "type": "string"
+            "$ref": "#/$defs/DisplayText"
           },
           "lifetimeSeconds": {
             "format": "uint64",
@@ -1192,7 +1196,7 @@
         "additionalProperties": false,
         "properties": {
           "label": {
-            "type": "string"
+            "$ref": "#/$defs/DisplayText"
           },
           "memberProfiles": {
             "items": {

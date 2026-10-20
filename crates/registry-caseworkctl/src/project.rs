@@ -266,15 +266,16 @@ pub(crate) fn read_project(project: &Path) -> Result<Decoded<CaseworkProject>> {
 pub(crate) fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
     Ok(CaseworkProject::load(project.join("casework.yaml"))?)
 }
-pub(super) fn check(project: &Path, _production: bool, _deny_warnings: bool) -> Result<Value> {
-    let policy = load_and_check_policy(project)?;
+pub(super) fn check(project: &Path, _production: bool, deny_warnings: bool) -> Result<Value> {
+    let decoded = read_project(project)?;
+    let policy = decoded.value;
+    let mut diagnostics = decoded.document.warnings();
     check_served_capabilities(project, &policy)?;
     let policy_bytes = read_package_input(&project.join("casework.yaml"))?;
     let mut files_checked =
         registry_casework_core::CaseworkProject::schema_references("casework.yaml", &policy_bytes)?
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>();
-    let mut diagnostics = Report::default();
     for (relative, is_state) in [
         ("dev-clients.yaml", false),
         (".casework/dev/state.json", true),
@@ -304,7 +305,7 @@ pub(super) fn check(project: &Path, _production: bool, _deny_warnings: bool) -> 
         files_checked.insert(relative.to_owned());
     }
     check_holiday_sets(project, &mut files_checked, &mut diagnostics)?;
-    if diagnostics.has_errors() {
+    if diagnostics.has_errors() || (deny_warnings && diagnostics.warning_count() > 0) {
         return Err(diagnostics.into());
     }
     let bindings = policy
@@ -888,6 +889,46 @@ pub(super) fn doctor(path: &Path) -> Result<Value> {
     Ok(
         json!({"ok":plan.refusals.is_empty(),"diagnostics":diagnostics,"command":"doctor","runtimeConfig":path,"packageDigest":inputs.package.digest(),"activation":plan,"checks":{"configuration":"ready","package":"ready","database":"ready","audit":"ready"}}),
     )
+}
+
+#[cfg(test)]
+mod display_integrity_tests {
+    use super::*;
+
+    #[test]
+    fn check_reports_duplicate_display_text_and_deny_warnings_refuses_it() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("project");
+        init(&project, "standalone-decision").unwrap();
+        let path = project.join("casework.yaml");
+        let authored = fs::read_to_string(&path).unwrap().replacen(
+            "label: Return for correction",
+            "label: confirm",
+            1,
+        );
+        fs::write(&path, authored).unwrap();
+
+        let report = check(&project, false, false).expect("warnings do not normally refuse check");
+        let warning = report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["code"] == "casework.review-policy.duplicate-outcome-label")
+            .expect("the product check reports the duplicate label");
+        assert_eq!(
+            warning["path"],
+            "/reviewPolicies/decision/outcomes/rejected/label"
+        );
+
+        let error = check(&project, false, true).expect_err("--deny-warnings refuses the warning");
+        let report = crate::configuration_report(&error).expect("a structured warning report");
+        assert_eq!(report.error_count(), 0);
+        assert_eq!(report.warning_count(), 1);
+        assert_eq!(
+            report.diagnostics()[0].code,
+            "casework.review-policy.duplicate-outcome-label"
+        );
+    }
 }
 
 #[cfg(test)]

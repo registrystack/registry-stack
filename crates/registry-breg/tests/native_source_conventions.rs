@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-#[cfg(feature = "schema")]
-use registry_breg::contract::read_module_yaml;
-use registry_breg::contract::read_project_yaml;
+use registry_breg::contract::{read_module_yaml, read_project_yaml};
+use registry_breg::{compile_project, CompileProfile};
 use serde_json::{json, Value};
 
 fn facility() -> Value {
@@ -63,6 +62,248 @@ fn locally_defined_ids_and_type_keys_are_refused_at_their_source() {
     let mut source = facility();
     source["valueTypes"]["Bad Type"] = json!({"type":"string","maximumLength":10});
     refusal(&source, "/valueTypes/Bad Type", "config.invalid-value");
+}
+
+#[test]
+fn display_text_is_refused_at_each_breg_authoring_boundary() {
+    for path in [
+        "/recordTypes/0/display/label",
+        "/actions/1/plan/refusals/0/label",
+    ] {
+        let mut source = facility();
+        *source.pointer_mut(path).unwrap() = json!("safe\u{202e}text");
+        refusal(&source, path, "config.invalid-value");
+    }
+
+    let mut source = facility();
+    source["manifestProjection"] = json!({
+        "accessProfile":"facility-reader",
+        "classificationCeiling":"internal",
+        "catalog":{
+            "baseUrl":"https://facility-registry.example.gov",
+            "title":"safe\u{202e}text",
+            "publisher":{"id":"facility-authority","name":"Facility authority"}
+        },
+        "publicService":{"id":"facility-service","title":"Facility registry"},
+        "datasets":[{"id":"facility-registry","title":"Facility registry"}],
+        "dataServices":[{
+            "id":"facility-api",
+            "title":"Facility API",
+            "endpointUrl":"https://facility-registry.example.gov",
+            "servesDatasets":["facility-registry"]
+        }]
+    });
+    refusal(
+        &source,
+        "/manifestProjection/catalog/title",
+        "config.invalid-value",
+    );
+}
+
+#[test]
+fn lookalike_local_ids_name_and_locate_both_definitions() {
+    let mut source = facility();
+    let mut lookalike = source["accessProfiles"][1].clone();
+    lookalike["id"] = json!("facility_reader");
+    let second_index = source["accessProfiles"].as_array().unwrap().len();
+    source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(lookalike);
+
+    let report = read_project_yaml("registry.yaml", &bytes(&source)).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.access-profile.id-collision")
+        .expect("lookalike access profiles are refused");
+    assert_eq!(
+        diagnostic.path,
+        format!("/accessProfiles/{second_index}/id")
+    );
+    assert!(diagnostic.message.contains("facility-reader"));
+    assert!(diagnostic.message.contains("facility_reader"));
+    assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+    assert_eq!(diagnostic.related.len(), 1);
+    assert_eq!(diagnostic.related[0].path, "/accessProfiles/1/id");
+    assert!(diagnostic.related[0].line.is_some());
+}
+
+#[test]
+fn duplicate_authored_labels_warn_with_normalized_comparison_and_locations() {
+    let mut source = facility();
+    source["recordTypes"][0]["display"]["label"] = json!("Café");
+    source["recordTypes"][1]["display"]["label"] = json!("CA\u{200b}FÉ");
+
+    let decoded = read_project_yaml("registry.yaml", &bytes(&source)).unwrap();
+    let report = decoded.document.warnings();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.record-type.duplicate-label")
+        .expect("equivalent record type labels produce a warning");
+    assert_eq!(diagnostic.path, "/recordTypes/1/display/label");
+    assert!(diagnostic.message.contains("directory-entry"));
+    assert!(diagnostic.message.contains("operator"));
+    assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+    assert_eq!(diagnostic.related.len(), 1);
+    assert_eq!(diagnostic.related[0].path, "/recordTypes/0/display/label");
+    assert!(diagnostic.related[0].line.is_some());
+}
+
+#[test]
+fn module_extensions_share_their_target_record_type_namespaces() {
+    let source = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule",
+        "id":"local-module",
+        "version":"0.1.0",
+        "recordTypes":[{
+            "id":"entry",
+            "route":"entries",
+            "primaryDataset":"directory",
+            "mutationMode":"mutable",
+            "fields":[{
+                "id":"case-number",
+                "type":"string",
+                "maximumLength":40,
+                "classification":"internal"
+            }]
+        }],
+        "extendRecordTypes":[{
+            "recordType":"entry",
+            "fields":[{
+                "id":"case_number",
+                "type":"string",
+                "maximumLength":40,
+                "classification":"internal"
+            }]
+        }]
+    });
+    let report = read_module_yaml("module.yaml", &bytes(&source)).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.field.id-collision")
+        .expect("a module extension shares the target record type's field namespace");
+    assert_eq!(diagnostic.path, "/extendRecordTypes/0/fields/0/id");
+    assert_eq!(diagnostic.related.len(), 1);
+    assert_eq!(diagnostic.related[0].path, "/recordTypes/0/fields/0/id");
+}
+
+#[test]
+fn compiler_refuses_lookalike_ids_across_project_and_module_files() {
+    let project = read_project_yaml("registry.yaml", &bytes(&facility()))
+        .unwrap()
+        .value;
+    let module_source = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule",
+        "id":"local-module",
+        "version":"0.1.0",
+        "recordTypes":[{
+            "id":"directory_entry",
+            "route":"module-directory-entries",
+            "primaryDataset":"facility-registry",
+            "mutationMode":"mutable",
+            "fields":[{
+                "id":"module-code",
+                "type":"string",
+                "maximumLength":40,
+                "classification":"internal"
+            }]
+        }]
+    });
+    let module = read_module_yaml("module.yaml", &bytes(&module_source))
+        .unwrap()
+        .value;
+    let failure = compile_project(&project, &[module], CompileProfile::Authoring).unwrap_err();
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.record-type.id-collision")
+        .expect("the project and module share the record type namespace");
+    assert_eq!(
+        diagnostic.path,
+        "modules[id=local-module].recordTypes[id=directory_entry].id"
+    );
+    assert!(diagnostic.message.contains("directory-entry"));
+    assert!(diagnostic.message.contains("directory_entry"));
+}
+
+#[test]
+fn compiler_warns_for_duplicate_labels_across_modules_and_extensions() {
+    let mut project_source = facility();
+    project_source["modules"] = json!([{"id":"local-module","version":"0.1.0"}]);
+    project_source["functions"] = json!([]);
+    project_source["actions"] = json!([]);
+    project_source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(3);
+    project_source["recordTypes"][0]["fields"][0]["display"] = json!({"label":"Café"});
+    let project = read_project_yaml("registry.yaml", &bytes(&project_source))
+        .unwrap()
+        .value;
+    let module_source = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule",
+        "id":"local-module",
+        "version":"0.1.0",
+        "recordTypes":[{
+            "id":"module-entry",
+            "route":"module-entries",
+            "primaryDataset":"facility-registry",
+            "mutationMode":"mutable",
+            "display":{"label":"directory\u{200b} entry"},
+            "fields":[{
+                "id":"module-code",
+                "type":"string",
+                "maximumLength":40,
+                "classification":"internal"
+            }]
+        }],
+        "extendRecordTypes":[{
+            "recordType":"directory-entry",
+            "fields":[{
+                "id":"alternate-name",
+                "type":"string",
+                "maximumLength":160,
+                "classification":"public",
+                "display":{"label":"CAFE\u{301}"}
+            }]
+        }]
+    });
+    let module = read_module_yaml("module.yaml", &bytes(&module_source))
+        .unwrap()
+        .value;
+    let compiled = compile_project(&project, &[module], CompileProfile::Authoring).unwrap();
+
+    let record = compiled
+        .findings()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.record-type.duplicate-label")
+        .expect("record labels are compared across project and module files");
+    assert_eq!(
+        record.path,
+        "modules[id=local-module].recordTypes[id=module-entry].display.label"
+    );
+    assert!(record.message.contains("directory-entry"));
+    assert!(record.message.contains("module-entry"));
+    assert!(!record.message.contains("Directory entry"));
+
+    let field = compiled
+        .findings()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.field.duplicate-label")
+        .expect("field labels are compared across extensions in another module");
+    assert_eq!(
+        field.path,
+        "modules[id=local-module].extendRecordTypes[recordType=directory-entry].fields[id=alternate-name].display.label"
+    );
+    assert!(field.message.contains("name"));
+    assert!(field.message.contains("alternate-name"));
+    assert!(!field.message.contains("Café"));
 }
 
 #[test]

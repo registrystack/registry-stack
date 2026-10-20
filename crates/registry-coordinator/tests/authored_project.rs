@@ -171,6 +171,70 @@ fn authored_project_converts_to_the_versioned_snapshot_abi() {
 }
 
 #[test]
+fn project_check_keeps_a_positioned_duplicate_function_title_warning() {
+    let root = tempfile::tempdir().unwrap();
+    let mut authored = declare_test_functions(&project());
+    authored["functions"]["identity"]["title"] = json!("Identity function");
+    let mut copy = authored["functions"]["identity"].clone();
+    copy["title"] = json!("identity function");
+    authored["functions"]["identity-copy"] = copy;
+    let bytes = serde_json::to_vec(&authored).unwrap();
+    fs::write(
+        root.path().join("functions.rhai"),
+        "fn identity(__named) { __named.arg0 }",
+    )
+    .unwrap();
+
+    let (_, document) = authoring::parse_project(&root.path().join("workflow.json"), &bytes)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let warnings = document.warnings();
+    let finding = warnings
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "coordinator.project.duplicate-function-title")
+        .expect("the duplicate title warning survives project compilation");
+    assert_eq!(finding.path, "/functions/identity-copy/title");
+    assert_eq!(finding.related[0].path, "/functions/identity/title");
+    assert!(finding.message.contains("`identity`"));
+    assert!(finding.message.contains("`identity-copy`"));
+    assert!(!finding.message.contains("Identity function"));
+}
+
+#[test]
+fn project_check_refuses_separator_lookalikes_in_the_function_namespace() {
+    let root = tempfile::tempdir().unwrap();
+    let mut authored = project();
+    authored["functions"] = json!({
+        "identity-fn": {
+            "runtime": "rhai",
+            "source": "functions.rhai",
+            "entrypoint": "identity",
+            "inputs": {},
+            "output": {}
+        },
+        "identity_fn": {
+            "runtime": "rhai",
+            "source": "functions.rhai",
+            "entrypoint": "identity",
+            "inputs": {},
+            "output": {}
+        }
+    });
+    let bytes = serde_json::to_vec(&authored).unwrap();
+    let error = authoring::parse_project(&root.path().join("workflow.json"), &bytes)
+        .expect_err("separator-lookalike definitions must be refused");
+    let finding = error
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "coordinator.project.function-id-collision")
+        .expect("the function collision has its own finding");
+    assert_eq!(finding.path, "/functions/identity_fn");
+    assert_eq!(finding.related[0].path, "/functions/identity-fn");
+    assert!(finding.message.contains("`identity-fn`"));
+    assert!(finding.message.contains("`identity_fn`"));
+}
+
+#[test]
 fn declared_refusal_edge_is_frozen_in_the_snapshot_and_restores_exactly() {
     let root = tempfile::tempdir().unwrap();
     let project = declared_refusal_project();
