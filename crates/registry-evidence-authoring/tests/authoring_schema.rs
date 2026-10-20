@@ -27,7 +27,7 @@ use registry_evidence_authoring::{
     schema::{documents, PROJECT_SCHEMA_FILE, TARGET_AUTHORITY_SCHEMA_FILE, TARGET_SCHEMA_FILE},
     target,
 };
-use registry_platform_yaml::Reader;
+use registry_platform_yaml::{Reader, Severity, MAXIMUM_DIAGNOSTICS_PER_FILE};
 use serde_json::Value;
 
 /// The envelope every question below is read with. The corpus states only the
@@ -944,6 +944,7 @@ fn a_missing_source_passes_shape_validation_and_is_diagnosed_at_its_reference() 
         "cross-member references are semantic",
     );
     let report = project::read_project("evidence.yaml", document.as_bytes()).unwrap_err();
+    assert_eq!(report.files_checked(), Some(1));
     let diagnostic = report
         .diagnostics()
         .iter()
@@ -986,6 +987,7 @@ fn project_check_keeps_duplicate_label_warnings_beside_semantic_errors() {
     let bytes = serde_json::to_vec(&document).expect("the project renders");
     let report = project::read_project("evidence.json", &bytes)
         .expect_err("the missing source refuses the project");
+    assert_eq!(report.files_checked(), Some(1));
     for code in [
         "evidence.project.duplicate-source-label",
         "evidence.project.acquisition-source",
@@ -1008,6 +1010,7 @@ fn project_check_refuses_separator_lookalikes_in_the_selector_profile_namespace(
     let bytes = serde_json::to_vec(&document).expect("the project renders");
     let report = project::read_project("evidence.json", &bytes)
         .expect_err("separator-lookalike definitions must be refused");
+    assert_eq!(report.files_checked(), Some(1));
     let finding = report
         .diagnostics()
         .iter()
@@ -1017,6 +1020,47 @@ fn project_check_refuses_separator_lookalikes_in_the_selector_profile_namespace(
     assert_eq!(finding.related[0].path, "/selectorProfiles/record-by-id");
     assert!(finding.message.contains("`record-by-id`"));
     assert!(finding.message.contains("`record_by_id`"));
+}
+
+#[test]
+fn project_check_bounds_mixed_semantic_errors_and_duplicate_label_warnings_once() {
+    let mut document = yaml_as_json(NORMALIZED_PROJECT);
+    document["selectorProfiles"]["record-by-id"]["maximumAggregateBytes"] = serde_json::json!(32);
+    let template = document["functions"][0].clone();
+    let functions = document["functions"]
+        .as_array_mut()
+        .expect("the canonical functions are a list");
+    for index in 0..=MAXIMUM_DIAGNOSTICS_PER_FILE {
+        let mut function = template.clone();
+        function["id"] = serde_json::json!(format!("extra-function-{index}"));
+        function["label"] = serde_json::json!("Repeated function label");
+        functions.push(function);
+    }
+
+    let bytes = serde_json::to_vec(&document).expect("the project renders");
+    let report = project::read_project("evidence.json", &bytes)
+        .expect_err("the invalid bounds refuse the project beside capped warnings");
+    assert_eq!(report.files_checked(), Some(1));
+    assert_eq!(report.diagnostics().len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+    assert_eq!(report.warning_count(), MAXIMUM_DIAGNOSTICS_PER_FILE);
+    let semantic_error_is_visible = report.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "evidence.project.selector-field-bounds"
+            && diagnostic.severity == Severity::Error
+    });
+    assert!(report.has_errors());
+    assert!(report
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "evidence.project.duplicate-function-label"));
+    let marker = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "config.too-many-problems")
+        .expect("the per-file overflow is reported");
+    assert_eq!(marker.message, "1 more problem in this file is not shown");
+    if !semantic_error_is_visible {
+        assert_eq!(marker.severity, Severity::Error);
+    }
 }
 
 #[test]

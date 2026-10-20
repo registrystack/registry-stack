@@ -9,7 +9,8 @@
 //! none repeats a value from the file (CFG-SEC-3).
 
 use registry_platform_yaml::{
-    ApiVersion, Document, EnvelopeRule, Expect, FormatSpec, Reader, RemovedKey, Report, Severity,
+    local_id_collision_diagnostics, ApiVersion, AuthoredId, Document, EnvelopeRule, Expect,
+    FormatSpec, Reader, RemovedKey, Report, Severity,
 };
 use serde_json::Value;
 
@@ -84,10 +85,33 @@ pub fn read_fixture(
         .with_hook(&mut hook)
         .read(bytes, &Expect::one(&EVIDENCE_FIXTURE_FORMAT))?;
     let mut value = document.to_json_value();
-    if value.get("coequalAcceptanceDefinition") == Some(&Value::Bool(true)) {
-        document.decode::<shape::CoequalFixture>()?;
+    let case_ids = if value.get("coequalAcceptanceDefinition") == Some(&Value::Bool(true)) {
+        document
+            .decode::<shape::CoequalFixture>()?
+            .cases
+            .iter()
+            .map(|case| case.id.as_str().to_owned())
+            .collect::<Vec<_>>()
     } else {
-        document.decode::<shape::ReferenceFixture>()?;
+        document
+            .decode::<shape::ReferenceFixture>()?
+            .cases
+            .iter()
+            .map(|case| case.id.as_str().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let case_pointers = (0..case_ids.len())
+        .map(|index| format!("/cases/{index}/id"))
+        .collect::<Vec<_>>();
+    let case_ids = case_ids
+        .iter()
+        .zip(&case_pointers)
+        .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+        .collect::<Vec<_>>();
+    let collisions =
+        local_id_collision_diagnostics(&document, "evidence.fixture.case-id-collision", &case_ids);
+    if !collisions.is_empty() {
+        return Err(document.report_with(collisions));
     }
     check_coverage(&document, &value, declared_unresolved, assurance_profile)
         .map_err(|diagnostic| Report::new(vec![*diagnostic]))?;
@@ -731,6 +755,42 @@ mod tests {
         assert_eq!(diagnostic.source.as_ref().unwrap().line, Some(6));
         assert_eq!(diagnostic.related[0].path, "/cases/0/id");
         assert_eq!(diagnostic.related[0].line, Some(5));
+    }
+
+    #[test]
+    fn separator_colliding_fixture_ids_keep_both_shared_source_locations() {
+        for (marker, first_line, second_line) in
+            [("", 5, 6), ("coequalAcceptanceDefinition: true\n", 6, 7)]
+        {
+            let text = format!(
+                "{HEADER}syntheticOnly: true\n{marker}cases:\n  - id: source-failure\n  - id: source_failure\n"
+            );
+            let report = read_fixture(
+                "fixtures/cases.yaml",
+                text.as_bytes(),
+                false,
+                AssuranceProfile::Local,
+            )
+            .expect_err("separator-lookalike case IDs must be refused");
+            assert_eq!(report.files_checked(), Some(1));
+            let diagnostic = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == "evidence.fixture.case-id-collision")
+                .expect("the fixture collision has its own diagnostic");
+            assert_eq!(diagnostic.path, "/cases/1/id");
+            assert_eq!(diagnostic.related[0].path, "/cases/0/id");
+            let source = diagnostic.source.as_ref().expect("second ID is positioned");
+            assert_eq!(source.file, "fixtures/cases.yaml");
+            assert_eq!((source.line, source.column), (Some(second_line), Some(9)));
+            assert_eq!(diagnostic.related[0].file, "fixtures/cases.yaml");
+            assert_eq!(
+                (diagnostic.related[0].line, diagnostic.related[0].column),
+                (Some(first_line), Some(9))
+            );
+            assert!(diagnostic.message.contains("`source-failure`"));
+            assert!(diagnostic.message.contains("`source_failure`"));
+        }
     }
     #[test]
     fn retired_fixture_controls_name_the_replacement_without_touching_payload_keys() {
