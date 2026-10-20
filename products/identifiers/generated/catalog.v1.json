@@ -3705,11 +3705,11 @@
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/ActionsExplanation.schema.json",
-        "sha256": "85c66b7ebca122e36a6f1d535695bcfef810da39d111eff276530efc90540e3f"
+        "sha256": "b519a0321f4da6dad7e578bacc32cc02af395f959ea8bc60e06089dbc267e6f2"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/ActionsExplanation.schema.json",
-        "sha256": "85c66b7ebca122e36a6f1d535695bcfef810da39d111eff276530efc90540e3f",
+        "sha256": "b519a0321f4da6dad7e578bacc32cc02af395f959ea8bc60e06089dbc267e6f2",
         "mediaType": "application/schema+json"
       }
     },
@@ -3867,11 +3867,11 @@
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "86a8f87b31aefc76d8d3bc0b18871139aa5d244c5e057ac014e834a95e3b58b2"
+        "sha256": "2786376fa2511102b84de8d63f3affaa1fe0f7b239fb344f4e42abd828f4d0cb"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "86a8f87b31aefc76d8d3bc0b18871139aa5d244c5e057ac014e834a95e3b58b2",
+        "sha256": "2786376fa2511102b84de8d63f3affaa1fe0f7b239fb344f4e42abd828f4d0cb",
         "mediaType": "application/schema+json"
       }
     },

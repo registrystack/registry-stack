@@ -184,5 +184,5 @@ pub use contract::{
     parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml, RegistryModule,
     RegistryProject,
 };
-pub use diagnostics::{CompileFailure, Diagnostic, DiagnosticSeverity};
+pub use diagnostics::{CompileFailure, Diagnostic, DiagnosticSeverity, RelatedDiagnostic};
 pub use model::CompiledRegistry;
