@@ -410,7 +410,16 @@ class PerEntryAddressingTests(unittest.TestCase):
             self.assertTrue(checker.write_all(self.root))
             self.assertFalse(checker.write_all(self.root))
 
-    def test_a_json_schema_is_read_by_the_same_loader(self):
+    def test_a_json_schema_preserves_noncharacters_in_regex_patterns(self):
+        self.write(
+            "elsewhere/second.schema.json",
+            '{"type": "object", "properties": {"beta": '
+            '{"type": "string", "not": {"pattern": "[\ufffe\uffff]"}}}}\n',
+        )
+        schema = checker.load_schema(self.root / "elsewhere/second.schema.json")
+        self.assertEqual(
+            schema["properties"]["beta"]["not"]["pattern"], "[\ufffe\uffff]"
+        )
         with mock.patch.object(checker, "CONTRACTS", self.contracts):
             checker.write_all(self.root)
         self.assertIn("beta", self.read("two/CONFIG.md"))
