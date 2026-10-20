@@ -30,10 +30,11 @@ use registry_platform_yaml::{
 use serde::Serialize;
 
 use super::{
-    canonicalize_project_path, capture_resolved_project_source, compile_captured_project,
+    canonicalize_project_path, capture_resolved_project_source, compile_captured_registry,
     ensure_source_entry_identity, file_check, has_parent_component, inspect_package_integrity,
-    path_diagnostic, read_module_directory_names, write_ctl_report, OutputFormat, ProfileArg,
-    SafeDir, SafeEntry, SafePathError, DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT,
+    path_diagnostic, read_module_directory_names, remap_derived_diagnostic_path, write_ctl_report,
+    OutputFormat, ProfileArg, SafeDir, SafeEntry, SafePathError, DOMAIN_REFUSAL_EXIT,
+    OPERATIONAL_FAILURE_EXIT,
 };
 
 /// The registered kind of `registry.yaml`, named as the `artifact` of a
@@ -198,6 +199,44 @@ struct Documents {
     modules: Vec<(String, Document)>,
 }
 
+impl Documents {
+    /// Combine every compiler diagnostic with the retained warnings of the
+    /// authored file that owns its primary source, then apply the shared
+    /// per-file ordering and diagnostic budget once.
+    fn extend_report(&self, outcome: &mut Outcome, diagnostics: Vec<Diagnostic>) {
+        let mut project_diagnostics = Vec::new();
+        let mut module_diagnostics = self.modules.iter().map(|_| Vec::new()).collect::<Vec<_>>();
+        let mut other_diagnostics = Vec::new();
+        for diagnostic in diagnostics {
+            let owner = diagnostic.source.as_ref().and_then(|source| {
+                if self.project.file() == source.file {
+                    return Some(None);
+                }
+                self.modules
+                    .iter()
+                    .position(|(_, document)| document.file() == source.file)
+                    .map(Some)
+            });
+            match owner {
+                Some(Some(index)) => module_diagnostics[index].push(diagnostic),
+                Some(None) => project_diagnostics.push(diagnostic),
+                None => other_diagnostics.push(diagnostic),
+            }
+        }
+        outcome
+            .report
+            .extend(self.project.report_with(project_diagnostics));
+        for ((_, document), diagnostics) in self.modules.iter().zip(module_diagnostics) {
+            outcome.report.extend(document.report_with(diagnostics));
+        }
+        outcome.report.extend(Report::new(other_diagnostics));
+    }
+
+    fn extend_warnings(&self, outcome: &mut Outcome) {
+        self.extend_report(outcome, Vec::new());
+    }
+}
+
 /// The compiled registry when the project compiled, so the runtime file can be
 /// held to it.
 fn check_project(
@@ -293,27 +332,40 @@ fn compile_project(
     profile: ProfileArg,
     outcome: &mut Outcome,
 ) -> Option<CompiledRegistry> {
-    let documents = read_documents(project, outcome)?;
+    compile_project_with_documents(project, profile, outcome).map(|(compiled, _)| compiled)
+}
+
+/// Compile the project and keep the exact decoded documents used to place
+/// compiler diagnostics.
+fn compile_project_with_documents(
+    project: &Path,
+    profile: ProfileArg,
+    outcome: &mut Outcome,
+) -> Option<(CompiledRegistry, Documents)> {
     let source = match capture_resolved_project_source(project) {
         Ok(source) => source,
         Err(diagnostic) => {
+            // The aggregate reader reports every positioned refusal when
+            // capture stopped at the first invalid source. Successful
+            // compilation uses only documents decoded from the captured bytes.
+            let documents = read_documents(project, outcome)?;
             outcome
                 .report
                 .push(place(project, &documents, diagnostic, Severity::Error));
             return None;
         }
     };
+    let documents = read_captured_documents(project, &source, outcome)?;
+    let mut diagnostics = Vec::new();
     // A production check asserts the project is ready to package for
     // deployment, so it also reports the identity a deployable package must
     // not carry.
     if profile == ProfileArg::Production {
         for refusal in registry_breg::compiler::deployment_diagnostics(&source.project) {
-            outcome
-                .report
-                .push(place(project, &documents, refusal, Severity::Error));
+            diagnostics.push(place(project, &documents, refusal, Severity::Error));
         }
     }
-    match compile_captured_project(&source, profile, "check") {
+    match compile_captured_registry(&source, profile) {
         Ok(compiled) => {
             for finding in compiled
                 .findings()
@@ -322,27 +374,19 @@ fn compile_project(
                 .chain(unverified_patterns(&compiled))
             {
                 let severity = severity_of(finding.severity);
-                outcome
-                    .report
-                    .push(place(project, &documents, finding, severity));
+                diagnostics.push(place(project, &documents, finding, severity));
             }
+            documents.extend_report(outcome, diagnostics);
             outcome.revision = Some(compiled.revision().to_owned());
-            Some(compiled)
+            Some((compiled, documents))
         }
         Err(failure) => {
-            for refusal in failure.diagnostics {
-                let diagnostic = registry_breg::Diagnostic {
-                    severity: refusal.severity,
-                    code: refusal.code,
-                    path: refusal.path,
-                    message: refusal.message,
-                    related: refusal.related,
-                };
+            for diagnostic in failure.diagnostics().iter().cloned() {
+                let diagnostic = remap_derived_diagnostic_path(diagnostic, &source);
                 let severity = severity_of(diagnostic.severity);
-                outcome
-                    .report
-                    .push(place(project, &documents, diagnostic, severity));
+                diagnostics.push(place(project, &documents, diagnostic, severity));
             }
+            documents.extend_report(outcome, diagnostics);
             None
         }
     }
@@ -417,6 +461,48 @@ fn severity_of(severity: DiagnosticSeverity) -> Severity {
         DiagnosticSeverity::Error => Severity::Error,
         DiagnosticSeverity::Finding => Severity::Warning,
     }
+}
+
+/// Decode positions and source presence from the exact byte capture compiled
+/// below. Reading the files again could mix an editor's later save with the
+/// captured model and assign the wrong source object to a compiled member.
+fn read_captured_documents(
+    project: &Path,
+    source: &super::CapturedProjectSource,
+    outcome: &mut Outcome,
+) -> Option<Documents> {
+    outcome.files += 1;
+    let project_document = match read_project_yaml(
+        &project.join("registry.yaml").display().to_string(),
+        &source.project_bytes,
+    ) {
+        Ok(decoded) => decoded.document,
+        Err(report) => {
+            outcome.report.extend(report);
+            return None;
+        }
+    };
+    let mut modules = Vec::with_capacity(source.modules.len());
+    for module in &source.modules {
+        outcome.files += 1;
+        let file = project.join("modules").join(&module.id).join("module.yaml");
+        match read_module_yaml(&file.display().to_string(), &module.bytes) {
+            Ok(decoded) => modules.push((module.id.clone(), decoded.document)),
+            Err(report) => {
+                let documents = Documents {
+                    project: project_document,
+                    modules,
+                };
+                documents.extend_warnings(outcome);
+                outcome.report.extend(report);
+                return None;
+            }
+        }
+    }
+    Some(Documents {
+        project: project_document,
+        modules,
+    })
 }
 
 /// Read `registry.yaml` and every authored `module.yaml` through the shared
@@ -773,6 +859,41 @@ fn package_action(error: &PackageError) -> &'static str {
 
 // ---------------------------------------------------------------------------
 // Placing a compiler diagnostic in the document it names
+
+/// Place diagnostics from one captured source snapshot at their exact authored
+/// files and values. The fallback keeps the compiler's logical path if a
+/// future reader change makes the already accepted captured bytes undecodable.
+pub(crate) fn place_captured_diagnostics(
+    source: &super::CapturedProjectSource,
+    diagnostics: Vec<registry_breg::Diagnostic>,
+) -> Option<Vec<Diagnostic>> {
+    let project_file = source.project_path.join("registry.yaml");
+    let project = read_project_yaml(&project_file.display().to_string(), &source.project_bytes)
+        .ok()
+        .map(|decoded| decoded.document)?;
+    let mut modules = Vec::with_capacity(source.modules.len());
+    for module in &source.modules {
+        let file = source
+            .project_path
+            .join("modules")
+            .join(&module.id)
+            .join("module.yaml");
+        let document = read_module_yaml(&file.display().to_string(), &module.bytes)
+            .ok()
+            .map(|decoded| decoded.document)?;
+        modules.push((module.id.clone(), document));
+    }
+    let documents = Documents { project, modules };
+    Some(
+        diagnostics
+            .into_iter()
+            .map(|diagnostic| {
+                let severity = severity_of(diagnostic.severity);
+                place(&source.project_path, &documents, diagnostic, severity)
+            })
+            .collect(),
+    )
+}
 
 /// The compiler's diagnostic as a shared one, placed at the document, JSON
 /// pointer, line, and column its path names.
