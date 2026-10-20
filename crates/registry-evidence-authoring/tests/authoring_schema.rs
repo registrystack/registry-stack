@@ -569,10 +569,7 @@ fn authority_report_sorts_and_bounds_semantic_and_collision_errors_once() {
         .expect_err("semantic and separator-collision errors must refuse together");
     assert_eq!(report.files_checked(), Some(1));
     assert_eq!(report.diagnostics().len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
-    assert_eq!(
-        report.diagnostics()[0].code,
-        "evidence.authority.project"
-    );
+    assert_eq!(report.diagnostics()[0].code, "evidence.authority.project");
     assert_eq!(report.diagnostics()[0].path, "/project");
     let semantic_source = report.diagnostics()[0]
         .source
