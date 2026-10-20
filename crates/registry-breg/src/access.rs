@@ -12,7 +12,9 @@ use crate::contract::{
     Operation, ProjectAccessProfileSource, RegistryProject, RowBoundarySource,
 };
 use crate::diagnostics::Diagnostic;
-use crate::model::{CompiledActionInventory, CompiledEntity, CompiledRegistry};
+use crate::model::{
+    CompiledActionInventory, CompiledActionTargetUseSource, CompiledEntity, CompiledRegistry,
+};
 
 fn profile_path(entity: &str, profile: &str) -> String {
     format!("recordTypes[id={entity}].accessProfiles[id={profile}]")
@@ -680,6 +682,27 @@ pub struct RowReachExplanation {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub membership_boundaries: Vec<MembershipBoundarySource>,
     pub owner_only: bool,
+    /// Action target authority is enforced only while the named Action runs.
+    /// It is an additional grant and never becomes ordinary Record CRUD.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_target_authority: Option<ActionTargetAuthorityExplanation>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionTargetAuthorityExplanation {
+    pub enforcement: &'static str,
+    pub record_grant_relationship: &'static str,
+    pub has_direct_record_grant: bool,
+    pub uses: Vec<ActionTargetUseExplanation>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionTargetUseExplanation {
+    pub role: &'static str,
+    pub operation: Operation,
+    pub source: CompiledActionTargetUseSource,
 }
 
 fn row_reach(
@@ -693,7 +716,8 @@ fn row_reach(
                    surface,
                    boundaries: &[RowBoundarySource],
                    memberships: &[MembershipBoundarySource],
-                   owner| {
+                   owner,
+                   action_target_authority| {
         reach.push(RowReachExplanation {
             entity: entity.to_owned(),
             profile: profile.to_owned(),
@@ -708,6 +732,7 @@ fn row_reach(
             row_boundaries: boundaries.to_vec(),
             membership_boundaries: memberships.to_vec(),
             owner_only: owner,
+            action_target_authority,
         });
     };
     for entity in entities.values() {
@@ -721,6 +746,7 @@ fn row_reach(
                 &profile.row_boundaries,
                 &profile.membership_boundaries,
                 false,
+                None,
             );
         }
     }
@@ -738,6 +764,28 @@ fn row_reach(
                     &target.row_boundaries,
                     &[],
                     false,
+                    Some(ActionTargetAuthorityExplanation {
+                        enforcement: "runtime_enforced",
+                        record_grant_relationship: "additional",
+                        has_direct_record_grant: entities
+                            .get(&target.entity_id)
+                            .is_some_and(|entity| {
+                                entity.access_profiles.contains_key(&grant.profile_id)
+                            }),
+                        uses: grant
+                            .targets
+                            .iter()
+                            .filter(|use_| use_.entity_id == target.entity_id)
+                            .map(|use_| ActionTargetUseExplanation {
+                                role: match use_.operation {
+                                    Operation::Create | Operation::Patch => "write",
+                                    _ => "existing_target",
+                                },
+                                operation: use_.operation,
+                                source: use_.source.clone(),
+                            })
+                            .collect(),
+                    }),
                 );
             }
         }
@@ -755,6 +803,7 @@ fn row_reach(
                         &target.row_boundaries,
                         &[],
                         grant.ownership == Some(crate::contract::ProposalOwnership::Caller),
+                        None,
                     );
                 }
             }

@@ -1726,6 +1726,29 @@
       "surface": "record"
     },
     {
+      "actionTargetAuthority": {
+        "enforcement": "runtime_enforced",
+        "hasDirectRecordGrant": false,
+        "recordGrantRelationship": "additional",
+        "uses": [
+          {
+            "operation": "patch",
+            "role": "write",
+            "source": {
+              "input": "facility",
+              "kind": "input"
+            }
+          },
+          {
+            "operation": "get",
+            "role": "existing_target",
+            "source": {
+              "input": "facility",
+              "kind": "input"
+            }
+          }
+        ]
+      },
       "ownerOnly": false,
       "profile": "facility-correction-author",
       "recordType": "facility",
@@ -1786,6 +1809,29 @@
       "surface": "proposal_target"
     },
     {
+      "actionTargetAuthority": {
+        "enforcement": "runtime_enforced",
+        "hasDirectRecordGrant": false,
+        "recordGrantRelationship": "additional",
+        "uses": [
+          {
+            "operation": "patch",
+            "role": "write",
+            "source": {
+              "input": "facility",
+              "kind": "input"
+            }
+          },
+          {
+            "operation": "get",
+            "role": "existing_target",
+            "source": {
+              "input": "facility",
+              "kind": "input"
+            }
+          }
+        ]
+      },
       "ownerOnly": false,
       "profile": "facility-correction-author",
       "recordType": "facility",
@@ -1831,6 +1877,21 @@
       "surface": "proposal_target"
     },
     {
+      "actionTargetAuthority": {
+        "enforcement": "runtime_enforced",
+        "hasDirectRecordGrant": false,
+        "recordGrantRelationship": "additional",
+        "uses": [
+          {
+            "operation": "create",
+            "role": "write",
+            "source": {
+              "effect": "facility",
+              "kind": "effect"
+            }
+          }
+        ]
+      },
       "ownerOnly": false,
       "profile": "facility-registrar",
       "recordType": "facility",
@@ -1846,6 +1907,21 @@
       "surface": "action_target"
     },
     {
+      "actionTargetAuthority": {
+        "enforcement": "runtime_enforced",
+        "hasDirectRecordGrant": false,
+        "recordGrantRelationship": "additional",
+        "uses": [
+          {
+            "operation": "create",
+            "role": "write",
+            "source": {
+              "effect": "assignment",
+              "kind": "effect"
+            }
+          }
+        ]
+      },
       "ownerOnly": false,
       "profile": "facility-registrar",
       "recordType": "facility-assignment",
@@ -1861,6 +1937,21 @@
       "surface": "action_target"
     },
     {
+      "actionTargetAuthority": {
+        "enforcement": "runtime_enforced",
+        "hasDirectRecordGrant": false,
+        "recordGrantRelationship": "additional",
+        "uses": [
+          {
+            "operation": "get",
+            "role": "existing_target",
+            "source": {
+              "input": "operator",
+              "kind": "input"
+            }
+          }
+        ]
+      },
       "ownerOnly": false,
       "profile": "facility-registrar",
       "recordType": "operator",

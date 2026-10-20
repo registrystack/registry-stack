@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Extend `bregctl explain access` with each Action target's runtime-enforced
+  authority, whether the profile also has a direct Record grant, and the
+  compiled write or existing-target role of each use. The report identifies
+  Action target authority as additional to Record grants.
+
 - Enforce active reference integrity in PostgreSQL: active Records cannot
   reference tombstoned targets, and a target cannot be tombstoned while another
   active Record references it. Tombstoned Records and history retain their

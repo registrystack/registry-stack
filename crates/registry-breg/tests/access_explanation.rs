@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use registry_breg::{compile_project, parse_project_json, CompileProfile};
+use registry_breg::{
+    compile_project, compile_project_with_assets,
+    contract::{ModuleAssetSource, Operation},
+    parse_project_json, CompileProfile,
+};
 use serde_json::{json, Value};
 
 fn source() -> Value {
@@ -47,6 +51,84 @@ fn repeated_action_target_source() -> Value {
         }]}
     }]);
     candidate
+}
+
+fn mixed_action_target_source() -> Value {
+    let mut candidate = source();
+    candidate["recordTypes"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"related", "type":"reference", "target":"entry",
+            "classification":"internal"
+        }));
+    candidate["actions"] = json!([{"execution":{"mode":"immediate"},
+        "id":"create-and-patch-entry",
+        "inputs":[
+            {"id":"existing", "type":"reference", "target":"entry", "required":true, "classification":"internal"},
+            {"id":"linked", "type":"reference", "target":"entry", "required":true, "classification":"internal"},
+            {"id":"create-district", "type":"string", "maximumLength":32, "required":true, "classification":"internal"},
+            {"id":"patch-district", "type":"string", "maximumLength":32, "required":true, "classification":"internal"}
+        ],
+        "plan":{"type":"fixed","effects":[
+            {"id":"created", "target":{"recordType":"entry"}, "operation":"create", "set":{
+                "district":{"fromInput":"create-district"}, "related":{"fromInput":"linked"}
+            }},
+            {"id":"updated", "target":{"fromInput":"existing"}, "operation":"patch", "set":{
+                "district":{"fromInput":"patch-district"}
+            }}
+        ]}
+    }]);
+    candidate["accessProfiles"] = json!([{
+        "id":"clerk", "default":true, "principalClaim":"registry_principal",
+        "requiredScopes":["entry:edit"],
+        "permissions":{"actions":[{
+            "action":"create-and-patch-entry", "operations":["invoke"],
+            "targets":[{"recordType":"entry", "rowBoundaries":[{"field":"district", "claim":"districts", "operator":"in"}]}],
+            "results":["created", "updated"]
+        }]}
+    }]);
+    candidate
+}
+
+fn function_action_target_source() -> Value {
+    let mut candidate = source();
+    candidate["functions"] = json!([{
+        "id":"create-entry-plan", "runtime":"rhai", "source":"plans/create-entry.rhai",
+        "entrypoint":"plan", "abi":"registry.action-plan/v1"
+    }]);
+    candidate["actions"] = json!([{"execution":{"mode":"immediate"},
+        "id":"create-entry",
+        "inputs":[{"id":"district", "type":"string", "maximumLength":32, "required":true, "classification":"internal"}],
+        "plan":{"type":"function", "function":"create-entry-plan", "inputs":["district"], "writes":[{
+            "id":"entry", "target":{"recordType":"entry"}, "operation":"create", "fields":["district"]
+        }]}
+    }]);
+    candidate["accessProfiles"] = json!([{
+        "id":"clerk", "default":true, "principalClaim":"registry_principal",
+        "requiredScopes":["entry:edit"],
+        "permissions":{"actions":[{
+            "action":"create-entry", "operations":["invoke"],
+            "targets":[{"recordType":"entry", "rowBoundaries":[{"field":"district", "claim":"districts", "operator":"in"}]}],
+            "results":["entry"]
+        }]}
+    }]);
+    candidate
+}
+
+fn compile_function_action(source: &Value) -> registry_breg::CompiledRegistry {
+    compile_project_with_assets(
+        &parse_project_json(&serde_json::to_vec(source).unwrap()).unwrap(),
+        &[],
+        &[ModuleAssetSource {
+            module: None,
+            path: "plans/create-entry.rhai".to_owned(),
+            bytes: br#"fn plan(ctx) { #{effects:[#{id:"entry",set:#{district:ctx.inputs.district}}]} }"#
+                .to_vec(),
+        }],
+        CompileProfile::Authoring,
+    )
+    .unwrap()
 }
 
 fn membership_source() -> Value {
@@ -202,6 +284,18 @@ fn discriminated_action_targets_keep_one_entity_authority_lock() {
         "row reach describes the entity lock once"
     );
     assert_eq!(action_reach[0].entity, "entry");
+    let authority = action_reach[0]
+        .action_target_authority
+        .as_ref()
+        .expect("Action row reach identifies its authority");
+    assert_eq!(authority.enforcement, "runtime_enforced");
+    assert_eq!(authority.record_grant_relationship, "additional");
+    assert!(!authority.has_direct_record_grant);
+    assert_eq!(authority.uses.len(), 2);
+    assert!(authority
+        .uses
+        .iter()
+        .all(|use_| use_.role == "write" && use_.operation == Operation::Create));
 
     let claim_uses = &explanation
         .claim_contract
@@ -217,6 +311,69 @@ fn discriminated_action_targets_keep_one_entity_authority_lock() {
         1,
         "authority inventory describes the entity lock once"
     );
+}
+
+#[test]
+fn action_target_authority_distinguishes_writes_from_existing_targets() {
+    let candidate = mixed_action_target_source();
+    let explanation = registry_breg::access::explain_access(&compile(&candidate));
+    let action_reach = explanation
+        .row_reach
+        .iter()
+        .filter(|reach| reach.surface == "action_target")
+        .collect::<Vec<_>>();
+    assert_eq!(action_reach.len(), 1, "one entity has one authority lock");
+    let authority = action_reach[0]
+        .action_target_authority
+        .as_ref()
+        .expect("Action row reach identifies its authority");
+    assert_eq!(authority.enforcement, "runtime_enforced");
+    assert_eq!(authority.record_grant_relationship, "additional");
+    assert!(!authority.has_direct_record_grant);
+    assert!(authority
+        .uses
+        .iter()
+        .any(|use_| use_.role == "write" && use_.operation == Operation::Create));
+    assert!(authority
+        .uses
+        .iter()
+        .any(|use_| use_.role == "write" && use_.operation == Operation::Patch));
+    assert!(authority
+        .uses
+        .iter()
+        .any(|use_| use_.role == "existing_target" && use_.operation == Operation::Get));
+
+    let mut with_direct_grant = candidate;
+    with_direct_grant["accessProfiles"][0]["permissions"]["records"] =
+        source()["accessProfiles"][0]["permissions"]["records"].clone();
+    let explanation = registry_breg::access::explain_access(&compile(&with_direct_grant));
+    let authority = explanation
+        .row_reach
+        .iter()
+        .find(|reach| reach.surface == "action_target")
+        .and_then(|reach| reach.action_target_authority.as_ref())
+        .expect("Action row reach identifies its authority");
+    assert!(authority.has_direct_record_grant);
+}
+
+#[test]
+fn function_action_target_authority_uses_the_compiled_write_ceiling() {
+    let registry = compile_function_action(&function_action_target_source());
+    let explanation = registry_breg::access::explain_access(&registry);
+    let authority = explanation
+        .row_reach
+        .iter()
+        .find(|reach| reach.surface == "action_target")
+        .and_then(|reach| reach.action_target_authority.as_ref())
+        .expect("Function Action row reach identifies its authority");
+    assert_eq!(authority.uses.len(), 1);
+    assert_eq!(authority.uses[0].role, "write");
+    assert_eq!(authority.uses[0].operation, Operation::Create);
+    assert!(matches!(
+        authority.uses[0].source,
+        registry_breg::model::CompiledActionTargetUseSource::Effect { ref effect }
+            if effect == "entry"
+    ));
 }
 
 #[test]
