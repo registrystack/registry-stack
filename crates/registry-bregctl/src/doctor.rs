@@ -357,6 +357,7 @@ fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
         code: code.to_owned(),
         path: path.to_owned(),
         message: message.to_owned(),
+        related: Vec::new(),
     }
 }
 

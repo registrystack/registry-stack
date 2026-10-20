@@ -1629,6 +1629,8 @@ struct ToolDiagnostic {
     path: String,
     message: String,
     suggested_action: SuggestedAction,
+    #[serde(skip)]
+    related: Vec<registry_breg::RelatedDiagnostic>,
 }
 
 /// A successful report already identifies these entries as `findings`, so its
@@ -5088,6 +5090,7 @@ fn baseline_fingerprint_drift_finding(drift: &BaselineFingerprintDrift) -> Diagn
              candidate fingerprint; apply checks the live database before it migrates",
             drift.measured, drift.signed
         ),
+        related: Vec::new(),
     }
 }
 
@@ -6932,6 +6935,7 @@ fn unsupported_diff_findings(diff: &CompiledRegistryDiff) -> Vec<Diagnostic> {
             code: "diff.classification.unsupported".to_owned(),
             path: diff_change_path(&change.change),
             message: "the compiled change cannot be classified more precisely".to_owned(),
+            related: Vec::new(),
         })
         .collect()
 }
@@ -6960,6 +6964,7 @@ fn removed_value_findings(diff: &CompiledRegistryDiff) -> Vec<Diagnostic> {
                       revision snapshot recorded before the change; only `bregctl history erase` \
                       removes them, one record's revisions at a time"
                 .to_owned(),
+            related: Vec::new(),
         })
         .collect()
 }
@@ -10057,6 +10062,7 @@ fn tool_diagnostic(
         path: diagnostic.path,
         message: diagnostic.message,
         suggested_action,
+        related: diagnostic.related,
     }
 }
 
@@ -10066,6 +10072,7 @@ fn diagnostic(code: &str, path: &str, message: &str) -> Diagnostic {
         code: code.to_owned(),
         path: path.to_owned(),
         message: message.to_owned(),
+        related: Vec::new(),
     }
 }
 

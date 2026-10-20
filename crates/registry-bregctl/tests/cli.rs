@@ -4423,6 +4423,156 @@ recordTypes:
 }
 
 #[test]
+fn check_positions_both_cross_file_id_collision_definitions() {
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: collision-fixture
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://collision-fixture.example.test
+datasets:
+  - id: collision-fixture
+modules:
+  - id: core
+    version: "1"
+recordTypes:
+  - id: case-file
+    primaryDataset: collision-fixture
+    route: case-files
+    mutationMode: mutable
+    fields: []
+"#,
+    );
+    let module_directory = project.path().join("modules/core");
+    fs::create_dir_all(&module_directory).expect("module directory creates");
+    fs::write(
+        module_directory.join("module.yaml"),
+        br#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: core
+version: "1"
+recordTypes:
+  - id: case_file
+    primaryDataset: collision-fixture
+    route: archived-case-files
+    mutationMode: mutable
+    fields: []
+"#,
+    )
+    .expect("module fixture writes");
+
+    let check = bregctl(&["--format", "json", "check", path(project.path())]);
+
+    assert_eq!(check.status.code(), Some(1), "{check:?}");
+    let report = json_stdout(&check);
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.record-type.id-collision")
+        .unwrap_or_else(|| panic!("missing cross-file collision: {report}"));
+    assert_eq!(diagnostic["path"], "/recordTypes/0/id");
+    assert_eq!(
+        diagnostic["source"]["file"],
+        module_directory.join("module.yaml").display().to_string()
+    );
+    assert_eq!(diagnostic["source"]["line"], 6);
+    assert_eq!(diagnostic["source"]["column"], 9);
+    assert_eq!(diagnostic["related"].as_array().unwrap().len(), 1);
+    let related = &diagnostic["related"][0];
+    assert_eq!(related["path"], "/recordTypes/0/id");
+    assert_eq!(
+        related["file"],
+        project.path().join("registry.yaml").display().to_string()
+    );
+    assert_eq!(related["line"], 14);
+    assert_eq!(related["column"], 9);
+    assert_eq!(related["message"], "the first identifier is defined here");
+    assert_check_diagnostic(diagnostic, Some("BRegModule"));
+}
+
+#[test]
+fn check_positions_both_cross_file_duplicate_label_definitions() {
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: duplicate-label-fixture
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://duplicate-label-fixture.example.test
+datasets:
+  - id: duplicate-label-fixture
+modules:
+  - id: core
+    version: "1"
+recordTypes:
+  - id: project-entry
+    display:
+      label: Review
+    primaryDataset: duplicate-label-fixture
+    route: project-entries
+    mutationMode: mutable
+    fields: []
+"#,
+    );
+    let module_directory = project.path().join("modules/core");
+    fs::create_dir_all(&module_directory).expect("module directory creates");
+    fs::write(
+        module_directory.join("module.yaml"),
+        format!(
+            r#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: core
+version: "1"
+recordTypes:
+  - id: module-entry
+    display:
+      label: R{}eview
+    primaryDataset: duplicate-label-fixture
+    route: module-entries
+    mutationMode: mutable
+    fields: []
+"#,
+            '\u{200b}'
+        ),
+    )
+    .expect("module fixture writes");
+
+    let check = bregctl(&["--format", "json", "check", path(project.path())]);
+
+    assert!(check.status.success(), "{check:?}");
+    let report = json_stdout(&check);
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.record-type.duplicate-label")
+        .unwrap_or_else(|| panic!("missing cross-file duplicate-label warning: {report}"));
+    assert_eq!(diagnostic["path"], "/recordTypes/0/display/label");
+    assert_eq!(diagnostic["severity"], "warning");
+    assert_eq!(
+        diagnostic["source"]["file"],
+        module_directory.join("module.yaml").display().to_string()
+    );
+    assert_eq!(diagnostic["source"]["line"], 8);
+    assert_eq!(diagnostic["source"]["column"], 14);
+    assert_eq!(diagnostic["related"].as_array().unwrap().len(), 1);
+    let related = &diagnostic["related"][0];
+    assert_eq!(related["path"], "/recordTypes/0/display/label");
+    assert_eq!(
+        related["file"],
+        project.path().join("registry.yaml").display().to_string()
+    );
+    assert_eq!(related["line"], 16);
+    assert_eq!(related["column"], 14);
+    assert_eq!(related["message"], "the first display text is defined here");
+    assert_check_diagnostic(diagnostic, Some("BRegModule"));
+}
+
+#[test]
 fn explain_events_is_empty_for_outbox_only_and_deterministic_for_webhooks() {
     let no_events = TestProject::asset_fixture();
     let empty = bregctl(&[

@@ -24,8 +24,8 @@ use registry_breg::package::PackageError;
 use registry_breg::runtime_config::check_runtime_config;
 use registry_breg::{CompiledRegistry, DiagnosticSeverity};
 use registry_platform_yaml::{
-    escape_pointer_segment, Diagnostic, Document, Node, NodeValue, Report, Severity, Source,
-    MAXIMUM_DOCUMENT_BYTES,
+    escape_pointer_segment, Diagnostic, Document, Node, NodeValue, Related, Report, Severity,
+    Source, MAXIMUM_DOCUMENT_BYTES,
 };
 use serde::Serialize;
 
@@ -336,6 +336,7 @@ fn compile_project(
                     code: refusal.code,
                     path: refusal.path,
                     message: refusal.message,
+                    related: refusal.related,
                 };
                 let severity = severity_of(diagnostic.severity);
                 outcome
@@ -404,6 +405,7 @@ fn unverified_patterns(compiled: &CompiledRegistry) -> Vec<registry_breg::Diagno
                     code: "breg.field.pattern-unverified-offline".to_owned(),
                     path: format!("recordTypes[{}].fields[{}].pattern", entity.id, field.id),
                     message: "Offline check validates pattern structure and bounds only. Run bregctl test against disposable PostgreSQL to verify native pattern syntax and storage behavior.".to_owned(),
+                    related: Vec::new(),
                 })
             })
         })
@@ -775,6 +777,37 @@ fn package_action(error: &PackageError) -> &'static str {
 /// The compiler's diagnostic as a shared one, placed at the document, JSON
 /// pointer, line, and column its path names.
 fn place(
+    project: &Path,
+    documents: &Documents,
+    diagnostic: registry_breg::Diagnostic,
+    severity: Severity,
+) -> Diagnostic {
+    let related = diagnostic.related.clone();
+    let diagnostic_severity = diagnostic.severity;
+    let mut placed = place_primary(project, documents, diagnostic, severity);
+    for relation in related {
+        let related_diagnostic = registry_breg::Diagnostic {
+            severity: diagnostic_severity,
+            code: placed.code.clone(),
+            path: relation.path,
+            message: relation.message.clone(),
+            related: Vec::new(),
+        };
+        let related_placed = place_primary(project, documents, related_diagnostic, severity);
+        if let Some(source) = related_placed.source {
+            placed.related.push(Related {
+                file: source.file,
+                line: source.line,
+                column: source.column,
+                path: related_placed.path,
+                message: relation.message,
+            });
+        }
+    }
+    placed
+}
+
+fn place_primary(
     project: &Path,
     documents: &Documents,
     diagnostic: registry_breg::Diagnostic,
