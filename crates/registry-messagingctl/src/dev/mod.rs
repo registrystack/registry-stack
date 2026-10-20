@@ -36,7 +36,7 @@ use registry_messaging::package::{
     load_package, load_project, package_inputs, write_package_inputs, LoadedPackage,
 };
 use registry_messaging::runtime::{apply_activation, operational_log_level, serve_from_path};
-use registry_messaging_core::READY_PATH;
+use registry_messaging_core::{ProviderKind, READY_PATH};
 use registry_platform_yaml::{Diagnostic, Report, Severity, Source};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -730,6 +730,12 @@ fn run_session(
         .await?;
         let token = read_secret(&root, "gateway-token")?;
         let (gateway_address, _counts) = gateway::start(gateway::GatewaySettings {
+            providers: loaded
+                .package
+                .providers()
+                .filter(|provider| provider.kind == ProviderKind::Http)
+                .map(|provider| provider.id.clone())
+                .collect(),
             token: Zeroizing::new(String::from_utf8_lossy(&token).into_owned()),
             callback_key: read_secret(&root, "gateway-callback-key")?,
             runtime_origin: format!("http://127.0.0.1:{}", args.port),

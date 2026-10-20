@@ -11,7 +11,7 @@
 //!
 //! The gateway reads no field of a send and logs nothing a send carries.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -35,6 +35,9 @@ const REMEMBERED_KEYS: usize = 100_000;
 const CALLBACK_ATTEMPTS: u32 = 5;
 
 pub(super) struct GatewaySettings {
+    /// The `http` provider ids the session connects to the gateway; a send
+    /// under any other path segment is refused.
+    pub providers: BTreeSet<String>,
     pub token: Zeroizing<String>,
     pub callback_key: Zeroizing<Vec<u8>>,
     /// The runtime's origin, such as `http://127.0.0.1:8107`.
@@ -107,6 +110,13 @@ async fn send(
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error": {"reason": "unauthorized"}})),
+        )
+            .into_response();
+    }
+    if !gateway.settings.providers.contains(&provider) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": {"reason": "unknown-provider"}})),
         )
             .into_response();
     }
@@ -227,6 +237,7 @@ mod tests {
 
     async fn gateway(origin: String) -> (String, Arc<GatewayCounts>) {
         let (address, counts) = start(GatewaySettings {
+            providers: BTreeSet::from(["sms-gateway".to_owned()]),
             token: Zeroizing::new("gateway-token".to_owned()),
             callback_key: Zeroizing::new(b"callback-key".to_vec()),
             runtime_origin: origin,
@@ -295,6 +306,38 @@ mod tests {
                 .await
                 .is_err(),
             "a repeat is reported once"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_send_under_a_provider_the_session_does_not_configure_is_refused_and_never_reported()
+    {
+        let (origin, mut received) = runtime_stub().await;
+        let (url, counts) = gateway(origin).await;
+        let client = reqwest::Client::new();
+        for provider in ["..%2Fadmin", "a%2Fb", "sms-gateway%3Fx", "other"] {
+            let url = url.replacen("sms-gateway", provider, 1);
+            let response = client
+                .post(&url)
+                .bearer_auth("gateway-token")
+                .body("{}")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                reqwest::StatusCode::NOT_FOUND,
+                "{provider}"
+            );
+            let body: serde_json::Value = response.json().await.unwrap();
+            assert_eq!(body, json!({"error": {"reason": "unknown-provider"}}));
+        }
+        assert_eq!(counts.accepted.load(Ordering::Relaxed), 0);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), received.recv())
+                .await
+                .is_err(),
+            "no report reaches the runtime"
         );
     }
 
