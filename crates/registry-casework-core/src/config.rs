@@ -10,9 +10,7 @@ use registry_platform_yaml::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::finding::{
-    findings_report, ConfigFinding, Findings, IDENTIFIER_ACTION, IDENTIFIER_MESSAGE,
-};
+use crate::finding::{ConfigFinding, Findings, IDENTIFIER_ACTION, IDENTIFIER_MESSAGE};
 use crate::CaseworkRole;
 use crate::ReviewPolicy;
 use crate::MAXIMUM_RECEIPT_RETENTION_DAYS;
@@ -549,13 +547,20 @@ impl CaseworkProject {
         let integrity = project_integrity_diagnostics(&mut decoded);
         let schema_findings = decoded.value.resolve_display_schemas(resolver);
         if !schema_findings.is_empty() {
-            let mut report = findings_report(&decoded.document, &schema_findings);
-            report.extend(Report::new(integrity));
-            return Err(report);
+            return Err(decoded.document.report_with(
+                schema_findings
+                    .iter()
+                    .map(|finding| finding.to_diagnostic(&decoded.document))
+                    .chain(integrity),
+            ));
         }
         let findings = decoded.value.findings();
-        let mut report = findings_report(&decoded.document, &findings);
-        report.extend(Report::new(integrity));
+        let report = decoded.document.report_with(
+            findings
+                .iter()
+                .map(|finding| finding.to_diagnostic(&decoded.document))
+                .chain(integrity),
+        );
         if report.has_errors() {
             Err(report)
         } else {

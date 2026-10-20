@@ -799,6 +799,16 @@ impl RuntimeConfig {
         }
     }
 
+    fn check_identifier_collisions(&self, findings: &mut Vec<RuntimeConfigError>) {
+        if !registry_platform_yaml::lookalike_local_id_pairs(
+            self.destinations.hooks.keys().map(String::as_str),
+        )
+        .is_empty()
+        {
+            findings.push(RuntimeConfigError::HookDestinationIdCollision);
+        }
+    }
+
     fn check_package_block(&self, findings: &mut Vec<RuntimeConfigError>) {
         if let Err(error) = self.package.check() {
             findings.push(error.into());
@@ -1113,6 +1123,7 @@ type PolicyRule = fn(&RuntimeConfig, &SchedulingPolicy, &mut Vec<RuntimeConfigEr
 const FILE_RULES: &[FileRule] = &[
     RuntimeConfig::check_envelope,
     RuntimeConfig::check_identity,
+    RuntimeConfig::check_identifier_collisions,
     RuntimeConfig::check_package_block,
     RuntimeConfig::check_secret_providers,
     RuntimeConfig::check_audit,
@@ -1209,6 +1220,47 @@ pub struct RuntimeCheck {
     pub unavailable: bool,
 }
 
+fn runtime_identifier_collision_diagnostics(
+    check: &RuntimeFileCheck<RuntimeConfig>,
+    config: &RuntimeConfig,
+) -> Vec<Diagnostic> {
+    let ids = config
+        .destinations
+        .hooks
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    registry_platform_yaml::lookalike_local_id_pairs(ids.iter().copied())
+        .into_iter()
+        .map(|(first, second)| {
+            let first_pointer = format!(
+                "/destinations/hooks/{}",
+                escape_pointer_segment(ids[first])
+            );
+            let second_pointer = format!(
+                "/destinations/hooks/{}",
+                escape_pointer_segment(ids[second])
+            );
+            let mut diagnostic = check.error_at_key(
+                SCHEDULING_RUNTIME_KIND,
+                "scheduling.runtime.hook-destination-id-collision",
+                &second_pointer,
+                format!(
+                    "local identifiers `{}` and `{}` differ only by `-` versus `_`",
+                    ids[first], ids[second]
+                ),
+                "Rename one hook destination identifier so the definitions remain distinct after separator normalization.",
+            );
+            check.add_related_key(
+                &mut diagnostic,
+                &first_pointer,
+                format!("the other definition is `{}`", ids[first]),
+            );
+            diagnostic
+        })
+        .collect()
+}
+
 /// Check the runtime file at the absolute `path` as `scheduling` reads it,
 /// with no package, database, network, or secret material, and report every
 /// rule it breaks. The rules about the policy the file binds run against
@@ -1233,9 +1285,14 @@ pub fn check_runtime(
                 .config
                 .findings(policy)
                 .iter()
+                .filter(|finding| !finding.is_identifier_collision())
                 .filter(|finding| !reads_deferred_value(&check, finding))
                 .map(|finding| positioned(&check, finding)),
         );
+        diagnostics.extend(runtime_identifier_collision_diagnostics(
+            &check,
+            &loaded.config,
+        ));
     }
     in_file_order(&mut diagnostics);
     RuntimeCheck {
@@ -1266,8 +1323,10 @@ pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report>
     let mut diagnostics: Vec<Diagnostic> = config
         .findings(policy.as_ref().map(|loaded| &loaded.policy))
         .iter()
+        .filter(|finding| !finding.is_identifier_collision())
         .map(|finding| positioned(&check, finding))
         .collect();
+    diagnostics.extend(runtime_identifier_collision_diagnostics(&check, config));
     in_file_order(&mut diagnostics);
     (!diagnostics.is_empty()).then(|| Report::new(diagnostics))
 }
@@ -1397,6 +1456,8 @@ pub enum RuntimeConfigError {
         "identity.databaseId must be non-empty, at most 256 bytes, without surrounding whitespace or control characters"
     )]
     InvalidDatabaseId,
+    #[error("destinations.hooks contains identifiers that differ only by `-` versus `_`")]
+    HookDestinationIdCollision,
     #[error("the operated runtime path {0} must be absolute")]
     RelativeOperatedPath(&'static str),
     /// The packaged policy's own report: every rule it breaks, each at its
@@ -1462,6 +1523,10 @@ const REBUILD_PACKAGE: &str =
     "Rebuild the package with `schedulingctl package`, then point package.root at it.";
 
 impl RuntimeConfigError {
+    fn is_identifier_collision(&self) -> bool {
+        matches!(self, Self::HookDestinationIdCollision)
+    }
+
     fn invalid_destination_url(segments: &[&str]) -> Self {
         Self::InvalidDestinationUrl {
             path: segments.join("."),
@@ -1482,6 +1547,7 @@ impl RuntimeConfigError {
             Self::InvalidApiVersion => "apiVersion",
             Self::InvalidKind => "kind",
             Self::MissingIdentity | Self::InvalidDatabaseId => "identity.databaseId",
+            Self::HookDestinationIdCollision => "destinations.hooks",
             Self::RelativeOperatedPath(path) => path,
             Self::InvalidOidcClaim { path, .. } => path,
             Self::InvalidDestinationUrl { path, .. } => path,
@@ -1532,6 +1598,7 @@ impl RuntimeConfigError {
             Self::InvalidKind => "scheduling.runtime.wrong-kind",
             Self::MissingIdentity => "scheduling.runtime.missing-identity",
             Self::InvalidDatabaseId => "scheduling.runtime.invalid-database-id",
+            Self::HookDestinationIdCollision => "scheduling.runtime.hook-destination-id-collision",
             Self::RelativeOperatedPath(_) => "scheduling.runtime.relative-path",
             Self::Policy(_) => "scheduling.package.invalid-project",
             Self::PolicyUnreadable => "scheduling.package.unreadable-project",
@@ -1569,6 +1636,9 @@ impl RuntimeConfigError {
             }
             Self::InvalidDatabaseId => {
                 "Write identity.databaseId as at most 256 bytes without surrounding whitespace or control characters."
+            }
+            Self::HookDestinationIdCollision => {
+                "Rename one hook destination identifier so the definitions remain distinct after separator normalization."
             }
             Self::RelativeOperatedPath(path) => {
                 return format!("Write {path} as an absolute path.");
@@ -3676,6 +3746,85 @@ holdPolicy:
                 );
             }
         }
+    }
+
+    #[test]
+    fn hook_destination_ids_refuse_separator_lookalikes_at_both_keys() {
+        fn key_position(text: &str, id: &str) -> (usize, usize) {
+            text.lines()
+                .enumerate()
+                .find_map(|(line, text)| {
+                    (text.trim_start() == format!("{id}:")).then(|| {
+                        (
+                            line + 1,
+                            text.find(id).expect("key begins on its source line") + 1,
+                        )
+                    })
+                })
+                .expect("runtime key is authored")
+        }
+
+        let root = canonical_tempdir();
+        let mut document = operator_value(&root.path().join("package"), "development-loopback");
+        document["destinations"]["hooks"] = serde_json::json!({
+            "reminder-hook": {
+                "url": "https://events.example.test/scheduling",
+                "hmacSha256KeyRef": "secret:file/reminder-hook"
+            },
+            "reminder_hook": {
+                "url": "https://events.example.test/scheduling",
+                "hmacSha256KeyRef": "secret:file/other-hook"
+            }
+        });
+        let config = parse_runtime(&document).expect("typed runtime remains available");
+        assert!(config
+            .findings(None)
+            .iter()
+            .any(RuntimeConfigError::is_identifier_collision));
+        let path = write_operator(root.path(), document);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let check = check_runtime(&path, None, false);
+        let collisions = check
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code.ends_with("-id-collision"))
+            .collect::<Vec<_>>();
+        assert_eq!(collisions.len(), 1, "{collisions:?}");
+        let diagnostic = collisions[0];
+        assert_eq!(
+            diagnostic.code,
+            "scheduling.runtime.hook-destination-id-collision"
+        );
+        assert_eq!(diagnostic.path, "/destinations/hooks/reminder_hook");
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(
+            diagnostic.related[0].path,
+            "/destinations/hooks/reminder-hook"
+        );
+        let source = diagnostic.source.as_ref().expect("primary source");
+        assert_eq!(
+            (source.line.unwrap(), source.column.unwrap()),
+            key_position(&text, "reminder_hook")
+        );
+        assert_eq!(
+            (
+                diagnostic.related[0].line.unwrap(),
+                diagnostic.related[0].column.unwrap(),
+            ),
+            key_position(&text, "reminder-hook")
+        );
+        let mut independent = operator_value(&root.path().join("package"), "development-loopback");
+        independent["destinations"]["hooks"] = serde_json::json!({
+            "reminder-hook": {
+                "url": "https://events.example.test/scheduling",
+                "hmacSha256KeyRef": "secret:file/reminder-hook"
+            }
+        });
+        let path = write_operator(root.path(), independent);
+        assert!(check_runtime(&path, None, false)
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.code.ends_with("-id-collision")));
     }
 
     #[test]

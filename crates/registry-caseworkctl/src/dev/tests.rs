@@ -291,6 +291,146 @@ fn client_ids_are_local_identifiers() {
 }
 
 #[test]
+fn definition_namespaces_refuse_separator_lookalikes_at_both_locations() {
+    fn position(text: &str, id: &str) -> (usize, usize) {
+        text.lines()
+            .enumerate()
+            .find_map(|(line, text)| text.find(id).map(|column| (line + 1, column + 1)))
+            .expect("identifier is authored")
+    }
+
+    let text = format!(
+        "{CLIENTS_ENVELOPE}{}",
+        r#"clients:
+  - id: staff-client
+    accessProfile: staff
+    scopes: [casework:staff]
+directory:
+  - team: decisions-team
+    queue: decisions
+    staff: [staff-client]
+  - team: decisions_team
+    queue: corrections
+    staff: [staff-client]
+integrations:
+  resource: urn:example:local-review
+  contextProviders:
+    source-main:
+      baseUrl: http://127.0.0.1:8080
+      statusProfile: review-status
+      tokenEndpoint: http://127.0.0.1:8093/oauth2/token
+      clientIdRef: secret:file/reader-id
+      clientAssertionKeyRef: secret:file/reader-key
+    source_main:
+      baseUrl: http://127.0.0.1:8081
+      statusProfile: review-status
+      tokenEndpoint: http://127.0.0.1:8093/oauth2/token
+      clientIdRef: secret:file/other-id
+      clientAssertionKeyRef: secret:file/other-key
+  secretFiles:
+    signing-key: /tmp/signing-key
+    signing_key: /tmp/other-key
+  serviceClients:
+    - id: staff_client
+      scopes: [records:get]
+    - id: browser-client
+      scopes: [records:get]
+  browserClients: [browser_client]
+"#
+    );
+    let report = config::read("dev-clients.yaml", text.as_bytes()).unwrap_err();
+    let collisions = report
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code.ends_with("-id-collision"))
+        .collect::<Vec<_>>();
+    assert_eq!(collisions.len(), 5, "{report:#?}");
+    for (code, primary, related, primary_id, related_id) in [
+        (
+            "casework.dev-clients.client-id-collision",
+            "/integrations/serviceClients/0/id",
+            "/clients/0/id",
+            "staff_client",
+            "staff-client",
+        ),
+        (
+            "casework.dev-clients.client-id-collision",
+            "/integrations/browserClients/0",
+            "/integrations/serviceClients/1/id",
+            "browser_client",
+            "browser-client",
+        ),
+        (
+            "casework.dev-clients.team-id-collision",
+            "/directory/1/team",
+            "/directory/0/team",
+            "decisions_team",
+            "decisions-team",
+        ),
+        (
+            "casework.dev-clients.context-provider-id-collision",
+            "/integrations/contextProviders/source_main",
+            "/integrations/contextProviders/source-main",
+            "source_main",
+            "source-main",
+        ),
+        (
+            "casework.dev-clients.secret-file-id-collision",
+            "/integrations/secretFiles/signing_key",
+            "/integrations/secretFiles/signing-key",
+            "signing_key",
+            "signing-key",
+        ),
+    ] {
+        let diagnostic = collisions
+            .iter()
+            .find(|diagnostic| diagnostic.code == code && diagnostic.path == primary)
+            .unwrap_or_else(|| panic!("missing {code} at {primary}: {collisions:?}"));
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(diagnostic.related[0].path, related);
+        let source = diagnostic.source.as_ref().expect("primary source");
+        assert_eq!(
+            (source.line.unwrap(), source.column.unwrap()),
+            position(&text, primary_id),
+            "{diagnostic:?}"
+        );
+        assert_eq!(
+            (
+                diagnostic.related[0].line.unwrap(),
+                diagnostic.related[0].column.unwrap(),
+            ),
+            position(&text, related_id),
+            "{diagnostic:?}"
+        );
+    }
+
+    let independent = format!(
+        "{CLIENTS_ENVELOPE}{}",
+        r#"clients:
+  - id: shared-id
+    accessProfile: staff
+    scopes: [casework:staff]
+directory:
+  - team: shared_id
+    queue: decisions
+    staff: [shared-id]
+integrations:
+  resource: urn:example:local-review
+  contextProviders:
+    shared-id:
+      baseUrl: http://127.0.0.1:8080
+      statusProfile: review-status
+      tokenEndpoint: http://127.0.0.1:8093/oauth2/token
+      clientIdRef: secret:file/reader-id
+      clientAssertionKeyRef: secret:file/reader-key
+  secretFiles:
+    shared_id: /tmp/signing-key
+"#
+    );
+    accepted(independent.as_bytes());
+}
+
+#[test]
 fn integrations_read_identifiers_and_urls_through_shared_types() {
     let integrations = |rest: &str| {
         one_staff(&format!(

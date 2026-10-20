@@ -11,8 +11,9 @@ use crate::{
 use chrono::{DateTime, Utc};
 use registry_platform_config::AuthoredExpressions;
 use registry_platform_yaml::{
-    ApiVersion, BoundedU32, Diagnostic, Document, EnvelopeRule, Expect, ForeignValue, FormatSpec,
-    Identified, Invalid, LocalId, Reader, Severity, UniqueIdList, UniqueList,
+    local_id_collision_diagnostics, ApiVersion, AuthoredId, BoundedU32, Diagnostic, Document,
+    EnvelopeRule, Expect, ForeignValue, FormatSpec, Identified, Invalid, LocalId, Reader, Severity,
+    UniqueIdList, UniqueList,
 };
 use registry_review_protocol::{ReviewRequestAccepted, ReviewResult};
 use serde::{Deserialize, Serialize};
@@ -454,7 +455,21 @@ fn decode_document(source: &[u8], file: &str) -> Result<(ScenarioDocument, Docum
 
 impl CoordinatorScenarios {
     fn into_document(self, document: &Document) -> Result<ScenarioDocument> {
-        let mut findings = Vec::new();
+        let pointers = self
+            .cases
+            .iter()
+            .enumerate()
+            .map(|(index, case)| (case.id.as_str(), format!("/cases/{index}/id")))
+            .collect::<Vec<_>>();
+        let entries = pointers
+            .iter()
+            .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+            .collect::<Vec<_>>();
+        let mut findings = local_id_collision_diagnostics(
+            document,
+            "coordinator.scenarios.case-id-collision",
+            &entries,
+        );
         let mut bound = |pointer: &str, valid: bool, message: &str| {
             if !valid {
                 findings.push(document.diagnostic_at_value(
@@ -604,7 +619,9 @@ impl CoordinatorScenarios {
             });
         }
         if !findings.is_empty() {
-            return Err(CoordinatorError::from_diagnostics(&findings));
+            return Err(CoordinatorError::from_report(
+                document.report_with(findings),
+            ));
         }
         Ok(ScenarioDocument { cases })
     }

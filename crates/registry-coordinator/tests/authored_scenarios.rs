@@ -221,6 +221,34 @@ fn authored_scenarios_refuse_aliases_duplicates_and_position_semantic_bounds() {
         .any(|finding| finding.code == "config.duplicate-id" && finding.path == "/cases/1/id"));
 }
 
+#[test]
+fn authored_scenario_case_ids_refuse_separator_collisions_at_both_values() {
+    let text = source("{type: receipt-expired}", "");
+    let second = text
+        .split("cases:\n")
+        .nth(1)
+        .unwrap()
+        .replace("one-case", "one_case");
+    let error = scenarios::decode(&format!("{text}{second}"), "scenarios.yaml")
+        .err()
+        .expect("separator-lookalike case IDs must refuse");
+    let diagnostic = error
+        .diagnostics
+        .iter()
+        .find(|finding| finding.code == "coordinator.scenarios.case-id-collision")
+        .unwrap_or_else(|| panic!("missing case collision: {error}"));
+    assert_eq!(diagnostic.path, "/cases/1/id");
+    let source = diagnostic.source.as_ref().expect("second ID is positioned");
+    assert_eq!(source.file, "scenarios.yaml");
+    assert!(source.line.is_some());
+    assert!(source.column.is_some());
+    assert_eq!(diagnostic.related.len(), 1);
+    assert_eq!(diagnostic.related[0].path, "/cases/0/id");
+    assert_eq!(diagnostic.related[0].file, "scenarios.yaml");
+    assert!(diagnostic.related[0].line.is_some());
+    assert!(diagnostic.related[0].column.is_some());
+}
+
 #[cfg(feature = "schema")]
 #[test]
 fn scenario_schema_keeps_foreign_payloads_and_closed_tagged_forms() {

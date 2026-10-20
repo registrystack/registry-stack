@@ -17,7 +17,10 @@ use registry_evidence_authoring::{
     formats::{decode_authored, envelope_lines, MOCK_PLAN, MOCK_PLAN_API_VERSION, MOCK_PLAN_KIND},
     valid_local_identifier,
 };
-use registry_platform_yaml::Report;
+use registry_platform_yaml::{
+    local_id_collision_diagnostics, lookalike_local_id_pairs, AuthoredId, Diagnostic, Document,
+    Report,
+};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
@@ -215,7 +218,11 @@ pub(super) fn parse_plan(file: &str, bytes: &[u8]) -> Result<MockPlan> {
 /// Parse a plan and keep the warnings the reader reported on it.
 pub(super) fn parse_plan_reporting(file: &str, bytes: &[u8]) -> Result<(MockPlan, Report)> {
     let decoded = decode_authored::<MockPlan>(file, bytes, &MOCK_PLAN)?;
-    validate_plan(&decoded.value)?;
+    validate_plan_structure(&decoded.value)?;
+    let collisions = case_name_collision_diagnostics(&decoded.document, &decoded.value);
+    if !collisions.is_empty() {
+        return Err(decoded.document.report_with(collisions).into());
+    }
     Ok((decoded.value, decoded.document.warnings()))
 }
 
@@ -237,6 +244,16 @@ pub(super) fn render_plan(plan: &MockPlan) -> Result<Vec<u8>> {
 
 /// Validate the closed V1 structure without reading any referenced artifact.
 pub(super) fn validate_plan(plan: &MockPlan) -> Result<()> {
+    validate_plan_structure(plan)?;
+    if plan.operations.iter().any(|operation| {
+        !lookalike_local_id_pairs(operation.cases.iter().map(|case| case.name.as_str())).is_empty()
+    }) {
+        bail!("an operation contains case names that differ only by `-` versus `_`");
+    }
+    Ok(())
+}
+
+fn validate_plan_structure(plan: &MockPlan) -> Result<()> {
     validate_config_reference(&plan.openapi, "openapi")?;
     if let Some(generation) = &plan.generation {
         if generation.contract != GENERATOR_CONTRACT {
@@ -305,6 +322,33 @@ pub(super) fn validate_plan(plan: &MockPlan) -> Result<()> {
         bail!("mock plan exceeds its total case limit");
     }
     Ok(())
+}
+
+fn case_name_collision_diagnostics(document: &Document, plan: &MockPlan) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for (operation_index, operation) in plan.operations.iter().enumerate() {
+        let names = operation
+            .cases
+            .iter()
+            .enumerate()
+            .map(|(case_index, case)| {
+                (
+                    case.name.as_str(),
+                    format!("/operations/{operation_index}/cases/{case_index}/name"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let authored = names
+            .iter()
+            .map(|(name, pointer)| AuthoredId::at_value(name, pointer))
+            .collect::<Vec<_>>();
+        diagnostics.extend(local_id_collision_diagnostics(
+            document,
+            "evidence.mock-plan.case-id-collision",
+            &authored,
+        ));
+    }
+    diagnostics
 }
 
 fn validate_operation(operation: &PlanOperation, index: usize) -> Result<()> {
@@ -621,6 +665,78 @@ mod tests {
         second.body = "cases/get-people/second.json".to_owned();
         duplicate_route.operations[0].cases.push(second);
         assert!(validate_plan(&duplicate_route).is_err());
+    }
+
+    #[test]
+    fn operation_case_names_refuse_separator_collisions_at_both_values() {
+        let mut collision = plan();
+        collision.operations[0].cases[0].name = "record-found".to_owned();
+        let mut second = collision.operations[0].cases[0].clone();
+        second.name = "record_found".to_owned();
+        second.body = "cases/get-people/second.json".to_owned();
+        second
+            .request
+            .path_parameters
+            .insert("person_id".to_owned(), json!("person-456"));
+        collision.operations[0].cases.push(second);
+
+        assert!(validate_plan(&collision).is_err());
+        let mut rendered = envelope_lines(MOCK_PLAN_API_VERSION, MOCK_PLAN_KIND);
+        rendered.push_str(&crate::authored::to_indented_yaml(&collision).expect("render shape"));
+        let error = parse_plan_reporting("mocks/source.yaml", rendered.as_bytes())
+            .expect_err("separator-lookalike case names must be refused");
+        let report = crate::authored::report_in(&error).expect("a positioned reader report");
+        assert_eq!(report.files_checked(), Some(1));
+        let diagnostic = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "evidence.mock-plan.case-id-collision")
+            .expect("the mock case collision has its own diagnostic");
+        assert_eq!(diagnostic.path, "/operations/0/cases/1/name");
+        assert_eq!(diagnostic.related[0].path, "/operations/0/cases/0/name");
+        let position = |value: &str| {
+            rendered
+                .lines()
+                .enumerate()
+                .find_map(|(line_index, line)| {
+                    line.find(value)
+                        .map(|column_index| (line_index + 1, column_index + 1))
+                })
+                .expect("the case name is written")
+        };
+        let source = diagnostic
+            .source
+            .as_ref()
+            .expect("second name is positioned");
+        assert_eq!(source.file, "mocks/source.yaml");
+        assert_eq!((source.line, source.column), {
+            let (line, column) = position("record_found");
+            (Some(line), Some(column))
+        });
+        let (line, column) = position("record-found");
+        assert_eq!(diagnostic.related[0].file, "mocks/source.yaml");
+        assert_eq!(
+            (diagnostic.related[0].line, diagnostic.related[0].column),
+            (Some(line), Some(column))
+        );
+        assert!(diagnostic.message.contains("`record-found`"));
+        assert!(diagnostic.message.contains("`record_found`"));
+    }
+
+    #[test]
+    fn separator_lookalikes_in_different_operation_case_names_are_allowed() {
+        let mut separate = plan();
+        separate.operations[0].cases[0].name = "record-found".to_owned();
+        let mut second_operation = separate.operations[0].clone();
+        second_operation.path = "/archived-people/{person_id}".to_owned();
+        second_operation.cases[0].name = "record_found".to_owned();
+        second_operation.cases[0].body = "cases/get-people/archived.json".to_owned();
+        separate.operations.push(second_operation);
+
+        validate_plan(&separate).expect("case names belong to their individual operation");
+        let rendered = render_plan(&separate).expect("the separate operation scopes render");
+        parse_plan_reporting("mocks/source.yaml", &rendered)
+            .expect("the positioned reader keeps operation case namespaces separate");
     }
 
     #[test]

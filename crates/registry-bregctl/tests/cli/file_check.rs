@@ -38,6 +38,68 @@ fn codes(report: &Value) -> Vec<&str> {
         .collect()
 }
 
+#[test]
+fn semantic_file_findings_share_the_reader_report_budget() {
+    let scratch = scratch();
+    let file = scratch.path().join("scenarios.json");
+    let step_ids = (0..100)
+        .map(|value| {
+            let separators = format!("{value:07b}")
+                .chars()
+                .map(|bit| if bit == '0' { '-' } else { '_' })
+                .collect::<Vec<_>>();
+            let mut id = String::from("x");
+            for separator in separators {
+                id.push(separator);
+                id.push('x');
+            }
+            id
+        })
+        .collect::<Vec<_>>();
+    let steps = step_ids
+        .into_iter()
+        .map(|id| {
+            json!({
+                "id":id,
+                "operation":"get",
+                "recordType":"entry",
+                "client":"reader",
+                "accessProfile":"reader",
+                "record":"entry"
+            })
+        })
+        .collect::<Vec<_>>();
+    fs::write(
+        &file,
+        serde_json::to_vec_pretty(&json!({
+            "apiVersion":"id.registrystack.org/formats/breg/example-scenarios/v1alpha1",
+            "kind":"BRegExampleScenarios",
+            "scenarios":[{
+                "id":"read",
+                "description":"",
+                "input":"../outside.json",
+                "steps":steps
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = check_file(&file, &["--format", "json"]);
+    let report = json_report(&output);
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 101);
+    assert_eq!(
+        diagnostics.last().unwrap()["code"],
+        "config.too-many-problems"
+    );
+    assert_eq!(
+        diagnostics.last().unwrap()["message"],
+        "1 more problem in this file is not shown"
+    );
+}
+
 /// A scratch directory under the test's working directory, removed on drop.
 fn scratch() -> TestProject {
     TestProject::from_registry_source(b"")

@@ -290,6 +290,34 @@ class MutationTest(unittest.TestCase):
         self.assertEqual(variant.sites[0].anchors["item"], (6, 5))
         self.assertEqual(variant.sites[0].anchors["firstId"], (3, 9))
 
+    def test_cfg_id_8_separator_collision_preserves_existing_definitions(self) -> None:
+        for text in (
+            "items:\n  - id: plain\n  - id: source-failure\n    result: refused\nother: 1\n",
+            'items: [{id: plain}, {id: "source_failure", result: refused}]\n',
+        ):
+            fmt = demo_format(roles={"idList": "/items"})
+            variant = one(runner.mutate(text, {"separatorCollision": {"role": "idList"}}, fmt))
+            before, after = yaml.safe_load(text), yaml.safe_load(variant.text)
+            self.assertEqual(after["items"][:-1], before["items"])
+            first, copied = after["items"][1], after["items"][-1]
+            self.assertNotEqual(first["id"], copied["id"])
+            self.assertEqual(first["id"].replace("_", "-"), copied["id"].replace("_", "-"))
+            self.assertEqual(copied["result"], "refused")
+            site = variant.sites[0]
+            self.assertEqual(site.values["firstIndex"], "1")
+            self.assertEqual(site.values["index"], "2")
+            tree = runner.compose(variant.text)
+            for anchor, index in (("firstId", 1), ("itemId", 2)):
+                _, node = runner.find(tree, f"/items/{index}/id")
+                self.assertEqual(site.anchors[anchor], runner.mark(node.start_mark))
+
+    def test_cfg_id_8_separator_collision_needs_a_local_id_with_a_separator(self) -> None:
+        for identifier in ("plain", "urn:example:external-id"):
+            text = f"items: [{{id: '{identifier}'}}]\n"
+            fmt = demo_format(roles={"idList": "/items"})
+            with self.assertRaises(runner.NotApplicable):
+                runner.mutate(text, {"separatorCollision": {"role": "idList"}}, fmt)
+
     def test_cfg_id_6_duplicate_item_in_a_block_set(self) -> None:
         text = "scopes:\n  - read\n  - write\n"
         fmt = demo_format(roles={"set": "/scopes"})
@@ -1826,6 +1854,15 @@ class CommittedCorpusTest(unittest.TestCase):
         for case in self.cases:
             self.assertTrue(case.rules, case.id)
             self.assertLessEqual(set(case.rules), known, case.id)
+
+    def test_cfg_id_8_case_reaches_both_committed_definition_lists(self) -> None:
+        case = next(case for case in self.cases if case.id == "separator-collision")
+        self.assertEqual(set(case.applies_to["formats"]), {"evidence/fixture", "coordinator/scenarios"})
+        for fmt in self.registry:
+            if fmt.id in case.applies_to["formats"]:
+                text = (ROOT / fmt.example).read_text(encoding="utf-8")
+                variant = one(runner.mutate(text, case.mutation, fmt))
+                self.assertEqual(len(runner.resolve_expected(case.expect, case.operation, variant, "cases.yaml")), 1)
 
     def test_brief_reader_rules_each_have_a_case(self) -> None:
         ids = {case.id for case in self.cases}

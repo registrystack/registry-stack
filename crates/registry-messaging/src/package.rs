@@ -380,6 +380,7 @@ fn load_contents(
     let project = reader
         .read_document(PACKAGE_FILE, MESSAGING_PROJECT_KIND, MAXIMUM_MANIFEST_BYTES)?
         .and_then(|bytes| reader.decode(PACKAGE_FILE, &bytes, MessagingProject::decode));
+    let mut project_diagnostics = Vec::new();
     if let Some(project) = &project {
         let findings = project.value.findings();
         let ordinary = findings
@@ -394,13 +395,18 @@ fn load_contents(
                 )
             })
             .collect::<Vec<_>>();
-        reader
-            .found
-            .note_findings(PACKAGE_FILE, &project.document, &ordinary);
-        reader.found.note(
-            PACKAGE_FILE,
-            Report::new(project_integrity_diagnostics(project)),
+        project_diagnostics.extend(
+            ordinary
+                .iter()
+                .map(|finding| finding.to_diagnostic(&project.document)),
         );
+        project_diagnostics.extend(project_integrity_diagnostics(project));
+        if project_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error)
+        {
+            reader.found.reserve_refusal(PACKAGE_FILE);
+        }
     }
     let (templates, shipped) = reader.read_templates()?;
     let mut compiled = Vec::new();
@@ -438,10 +444,15 @@ fn load_contents(
     };
     if let Some(project) = &project {
         let missing = project.value.missing_templates(&shipped);
-        for finding in &missing {
-            let placed = finding.to_diagnostic(&project.document);
-            reader.found.note(PACKAGE_FILE, Report::new(vec![placed]));
-        }
+        project_diagnostics.extend(
+            missing
+                .iter()
+                .map(|finding| finding.to_diagnostic(&project.document)),
+        );
+        reader.found.note(
+            PACKAGE_FILE,
+            project.document.report_with(project_diagnostics),
+        );
     }
     let mut found = std::mem::take(&mut reader.found);
     found.report.set_files_checked(reader.files.len());
@@ -546,9 +557,15 @@ struct Found {
 }
 
 impl Found {
-    fn note(&mut self, file: &str, report: Report) {
-        if self.refused.is_none() && report.has_errors() {
+    fn reserve_refusal(&mut self, file: &str) {
+        if self.refused.is_none() {
             self.refused = Some(file.to_owned());
+        }
+    }
+
+    fn note(&mut self, file: &str, report: Report) {
+        if report.has_errors() {
+            self.reserve_refusal(file);
         }
         self.report.extend(report);
     }
@@ -556,13 +573,20 @@ impl Found {
     /// Note the document's warnings and every finding placed in it, each
     /// under the file it names: `path` itself, or a file beside it.
     fn note_findings(&mut self, path: &str, document: &Document, findings: &[MessagingFinding]) {
-        self.note(path, document.warnings());
         let directory = path.rsplit_once('/').map_or("", |(directory, _)| directory);
+        let same_file = findings
+            .iter()
+            .filter(|finding| finding.file.is_none())
+            .map(|finding| finding.to_diagnostic(document));
+        self.note(path, document.report_with(same_file));
         for finding in findings {
-            let file = match &finding.file {
-                Some(file) if directory.is_empty() => file.clone(),
-                Some(file) => format!("{directory}/{file}"),
-                None => path.to_owned(),
+            let Some(relative) = &finding.file else {
+                continue;
+            };
+            let file = if directory.is_empty() {
+                relative.clone()
+            } else {
+                format!("{directory}/{relative}")
             };
             self.note(&file, Report::new(vec![finding.to_diagnostic(document)]));
         }
@@ -1748,6 +1772,62 @@ pub(crate) mod tests {
                 ("messaging.project.missing-template", PACKAGE_FILE),
             ]
         );
+    }
+
+    #[test]
+    fn project_integrity_and_late_package_findings_share_one_report() {
+        let root = starter_copy();
+        let manifest_path = root.path().join(PACKAGE_FILE);
+        let manifest = std::fs::read_to_string(&manifest_path).unwrap().replace(
+            "  - id: sms-gateway\n    type: http\n    idempotentSubmit: true\n",
+            "  - id: sms-gateway\n    type: http\n    idempotentSubmit: true\n  - id: sms_gateway\n    type: smtp\n",
+        );
+        std::fs::write(&manifest_path, manifest).unwrap();
+        std::fs::remove_dir_all(root.path().join("templates/appointment-reminder-sms")).unwrap();
+
+        let codes = refused_codes(root.path());
+        for code in [
+            "messaging.project.provider-id-collision",
+            "messaging.project.missing-template",
+        ] {
+            assert!(
+                codes
+                    .iter()
+                    .any(|(found, file, _)| found == code && file == PACKAGE_FILE),
+                "missing {code}: {codes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_early_project_refusal_stays_decisive_when_a_companion_file_is_also_refused() {
+        let root = starter_copy();
+        let manifest_path = root.path().join(PACKAGE_FILE);
+        let manifest = std::fs::read_to_string(&manifest_path).unwrap().replace(
+            "  - id: sms-gateway\n    type: http\n    idempotentSubmit: true\n",
+            "  - id: sms-gateway\n    type: http\n    idempotentSubmit: true\n  - id: sms_gateway\n    type: smtp\n",
+        );
+        std::fs::write(&manifest_path, manifest).unwrap();
+        let template_path = root.path().join(REMINDER).join(TEMPLATE_FILE);
+        let template = std::fs::read_to_string(&template_path)
+            .unwrap()
+            .replace("kind: MessagingTemplate", "kind: OtherTemplate");
+        std::fs::write(&template_path, template).unwrap();
+
+        let error = refusal(root.path());
+        assert_eq!(error.path(), "package.root/messaging.yaml");
+        let report = error.report().expect("the package refusal has diagnostics");
+        assert!(report
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "messaging.project.provider-id-collision"));
+        assert!(report.diagnostics().iter().any(|diagnostic| {
+            diagnostic.source.as_ref().is_some_and(|source| {
+                source
+                    .file
+                    .ends_with(&format!("{REMINDER}/{TEMPLATE_FILE}"))
+            })
+        }));
     }
 
     #[test]

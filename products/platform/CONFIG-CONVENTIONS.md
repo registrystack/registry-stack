@@ -517,7 +517,8 @@ validated local identifiers and relates their exact authored locations. A
 reference collection is not a definition namespace.
 *Why:* both are valid and distinct, and a reader takes them for one.
 *Enforced by:* the shared separator-collision helper and each product's typed
-checks over its explicit definition namespaces.
+checks over its explicit definition namespaces; the conformance corpus's
+fixture and scenario case-definition collisions.
 
 ## 6. Quantities
 
@@ -972,7 +973,7 @@ Each MUST rule appears once; SHOULD rules are in the last row.
 | CFG-SCHEMA-8; CFG-CHANGE-1 | source lint over the reader-type closure (`flatten`, `untagged`, `tag`, `alias`, set types); the corpus unknown-key sweep |
 | CFG-SCHEMA-2 | each product's schema drift check, in a job that runs on every pull request touching the product; the convention lint (a format with no generated schema) |
 | CFG-CHECK-1 to 3; CFG-DIAG-3, 4, 6; CFG-ID-4, 5; CFG-VAL-8, 9; CFG-SCHEMA-7 | product CLI tests and the corpus runner; for CFG-ID-4, CFG-ID-5, CFG-VAL-8 and CFG-VAL-9 the cases at the registry's `conformance` roles (dangling reference, duplicate id, escaping path, mistyped operand); for CFG-SCHEMA-7 the runner's `init` mode (the modeline each product's init command writes); for CFG-CHECK-1 also the convention lint (the registry's `check` field) |
-| CFG-ID-8 | shared separator-collision helper tests; product tests enumerating typed definition namespaces and exact related source locations |
+| CFG-ID-8 | shared separator-collision helper tests; product tests enumerating typed definition namespaces and exact related source locations; the corpus's fixture and scenario case-definition collisions |
 | CFG-CHANGE-5 | the convention lint compares the exceptions register with the base entry by entry (rule, format, location): an added entry outside the growth classes fails, and so does a class change, so deletion is the only other change and a moved entry counts as added; an explicit `--base` without the register fails |
 | CFG-ID-2, 3; CFG-VAL-4, 5; CFG-NAME-7; CFG-EMPTY-3, 6; CFG-EMBED-1; CFG-CHANGE-3, 4 | review citing the rule; CFG-EMPTY-3 also needs a security review note (AGENTS.md) |
 | CFG-ENV-5; CFG-VAL-10; CFG-NAME-6, 8; CFG-EMPTY-5; CFG-SCHEMA-9; CFG-CHECK-4 (SHOULD) | review |

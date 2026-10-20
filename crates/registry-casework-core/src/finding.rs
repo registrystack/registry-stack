@@ -141,11 +141,11 @@ fn place(
 /// Every finding of one document, as the report a check command prints.
 #[must_use]
 pub fn findings_report(document: &Document, findings: &[ConfigFinding]) -> Report {
-    let mut report = document.warnings();
-    for finding in findings {
-        report.push(finding.to_diagnostic(document));
-    }
-    report
+    document.report_with(
+        findings
+            .iter()
+            .map(|finding| finding.to_diagnostic(document)),
+    )
 }
 
 /// Collects every finding of one check, in the order the check finds them.
@@ -203,5 +203,56 @@ impl Findings {
 
     pub(crate) fn into_vec(self) -> Vec<ConfigFinding> {
         self.items
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use registry_platform_yaml::{
+        read_document, EnvelopeRule, Expect, FormatSpec, MAXIMUM_DIAGNOSTICS_PER_FILE,
+    };
+
+    use super::*;
+
+    const TEST_FORMAT: FormatSpec<'static> = FormatSpec {
+        kind: "CaseworkProject",
+        envelope: EnvelopeRule::Exempt { reason: "test" },
+        removed_keys: &[],
+    };
+
+    #[test]
+    fn warnings_and_semantic_findings_share_one_report_budget() {
+        let mut document = read_document(
+            "casework.yaml",
+            b"name: refused\n",
+            &Expect::one(&TEST_FORMAT),
+        )
+        .expect("the test document reads");
+        for _ in 0..MAXIMUM_DIAGNOSTICS_PER_FILE + 20 {
+            let warning = document.diagnostic_at_value(
+                Severity::Warning,
+                "casework.project.duplicate-label",
+                "/name",
+                "another definition uses this label",
+                "Give each definition a distinct label.",
+            );
+            document.push_warning(warning);
+        }
+
+        let report = findings_report(
+            &document,
+            &[ConfigFinding::new(
+                "casework.project.refused-name",
+                "/name",
+                "the name does not satisfy the project rule",
+                "Choose an allowed name.",
+            )],
+        );
+        assert!(report.has_errors());
+        assert_eq!(report.files_checked(), Some(1));
+        assert_eq!(report.diagnostics().len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+        let rest = report.diagnostics().last().expect("bounded summary");
+        assert_eq!(rest.code, "config.too-many-problems");
+        assert_eq!(rest.message, "21 more problems in this file are not shown");
     }
 }

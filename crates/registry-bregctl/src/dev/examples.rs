@@ -8,8 +8,9 @@ use clap::{Args, Subcommand};
 use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE};
 use registry_breg_client::*;
 use registry_platform_yaml::{
-    ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Identified, LocalId,
-    Reader, RemovedKey, Report, Severity, UniqueIdList,
+    display_text, local_id_collision_diagnostics, ApiVersion, AuthoredId, Diagnostic, Document,
+    EnvelopeRule, Expect, FormatSpec, Identified, LocalId, Reader, RemovedKey, Report, Severity,
+    UniqueIdList,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
@@ -158,10 +159,27 @@ struct Scenario {
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     id: String,
+    #[serde(deserialize_with = "display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "scenario_description_schema")
+    )]
     description: String,
     input: String,
     steps: UniqueIdList<Step>,
 }
+
+#[cfg(feature = "schema")]
+fn scenario_description_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let display_text = generator.subschema_for::<registry_platform_yaml::DisplayText>();
+    schemars::json_schema!({
+        "allOf": [
+            display_text,
+            {"type": "string", "minLength": 1, "maxLength": 1024}
+        ]
+    })
+}
+
 impl Identified for Scenario {
     fn id(&self) -> &str {
         &self.id
@@ -414,9 +432,7 @@ fn catalogue(project: &Path) -> Result<(Catalogue, Vec<u8>)> {
         .map_err(CatalogueRefused)?;
     let problems = catalogue_problems(&decoded.value, &decoded.document);
     if !problems.is_empty() {
-        let mut report = Report::new(problems);
-        report.set_files_checked(1);
-        return Err(CatalogueRefused(report).into());
+        return Err(CatalogueRefused(decoded.document.report_with(problems)).into());
     }
     Ok((decoded.value, bytes))
 }
@@ -431,7 +447,43 @@ pub(crate) fn check(document: &Document) -> std::result::Result<Vec<Diagnostic>,
 /// The checks the reader's types cannot express, each reported at the
 /// member it concerns (CFG-DIAG-1). Messages name members, never values.
 fn catalogue_problems(catalogue: &Catalogue, document: &Document) -> Vec<Diagnostic> {
-    let mut problems = Vec::new();
+    let scenario_pointers = catalogue
+        .scenarios
+        .iter()
+        .enumerate()
+        .map(|(index, scenario)| (scenario.id.as_str(), format!("/scenarios/{index}/id")))
+        .collect::<Vec<_>>();
+    let scenario_ids = scenario_pointers
+        .iter()
+        .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+        .collect::<Vec<_>>();
+    let mut problems = local_id_collision_diagnostics(
+        document,
+        "breg.examples.scenario-id-collision",
+        &scenario_ids,
+    );
+    for (index, scenario) in catalogue.scenarios.iter().enumerate() {
+        let step_pointers = scenario
+            .steps
+            .iter()
+            .enumerate()
+            .map(|(step_index, step)| {
+                (
+                    step.id.as_str(),
+                    format!("/scenarios/{index}/steps/{step_index}/id"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let step_ids = step_pointers
+            .iter()
+            .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+            .collect::<Vec<_>>();
+        problems.extend(local_id_collision_diagnostics(
+            document,
+            "breg.examples.step-id-collision",
+            &step_ids,
+        ));
+    }
     let mut refuse = |pointer: &str, code: &str, message: &str, action: &str| {
         problems.push(document.diagnostic_at_value(
             Severity::Error,
@@ -2075,6 +2127,96 @@ mod tests {
             "{}",
             report.render_human()
         );
+    }
+
+    #[test]
+    fn catalogue_descriptions_use_display_text_without_changing_length_bounds() {
+        let step = json!({"id":"read","operation":"get","recordType":"entry","client":"reader",
+            "accessProfile":"reader","record":"entry"});
+        let catalogue_value = |description: String| {
+            json!({
+                "apiVersion":API_VERSION,"kind":KIND,"scenarios":[{
+                    "id":"read","description":description,"input":"examples/input.json",
+                    "steps":[step.clone()]
+                }]
+            })
+        };
+        for refused in ['\u{202e}', '\u{2028}', '\u{fdd0}'] {
+            let report = catalogue_refusal(&catalogue_value(format!("unsafe{refused}text")));
+            let diagnostic = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.path == "/scenarios/0/description")
+                .unwrap_or_else(|| {
+                    panic!("missing description refusal: {}", report.render_human())
+                });
+            assert_eq!(diagnostic.code, "config.invalid-value");
+            assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+        }
+        for refused in ["x".repeat(1025), "é".repeat(513)] {
+            let report = catalogue_refusal(&catalogue_value(refused));
+            assert!(report.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code == "breg.examples.description-length"
+                    && diagnostic.path == "/scenarios/0/description"
+            }));
+        }
+        for accepted in ["שלום\u{200f}".to_owned(), "é".repeat(512)] {
+            let temp = tempfile::tempdir().unwrap();
+            fs::create_dir(temp.path().join("examples")).unwrap();
+            fs::write(
+                temp.path().join(CATALOGUE_FILE),
+                serde_json::to_vec_pretty(&catalogue_value(accepted)).unwrap(),
+            )
+            .unwrap();
+            catalogue(&temp.path().canonicalize().unwrap())
+                .expect("multilingual DisplayText at the byte limit is accepted");
+        }
+    }
+
+    #[test]
+    fn catalogue_ids_refuse_separator_collisions_in_each_definition_namespace() {
+        let step = || {
+            json!({"id":"read-record","operation":"get","recordType":"entry",
+            "client":"reader","accessProfile":"reader","record":"entry"})
+        };
+        let scenario = |id: &str, steps: Vec<Value>| {
+            json!({
+                "id":id,"description":"Read a record","input":"examples/input.json","steps":steps
+            })
+        };
+
+        let report = catalogue_refusal(&json!({
+            "apiVersion":API_VERSION,"kind":KIND,"scenarios":[
+                scenario("read-one", vec![step()]),
+                scenario("read_one", vec![step()])
+            ]
+        }));
+        let diagnostic = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.examples.scenario-id-collision")
+            .unwrap_or_else(|| panic!("missing scenario collision: {}", report.render_human()));
+        assert_eq!(diagnostic.path, "/scenarios/1/id");
+        assert_eq!(diagnostic.related[0].path, "/scenarios/0/id");
+        assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+        assert!(diagnostic.related[0].line.is_some());
+
+        let mut second_step = step();
+        second_step["id"] = json!("read_record");
+        let report = catalogue_refusal(&json!({
+            "apiVersion":API_VERSION,"kind":KIND,"scenarios":[
+                scenario("read", vec![step(), second_step])
+            ]
+        }));
+        let diagnostic = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.examples.step-id-collision")
+            .unwrap_or_else(|| panic!("missing step collision: {}", report.render_human()));
+        assert_eq!(diagnostic.path, "/scenarios/0/steps/1/id");
+        assert_eq!(diagnostic.related[0].path, "/scenarios/0/steps/0/id");
+        assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+        assert!(diagnostic.related[0].line.is_some());
     }
 
     #[test]

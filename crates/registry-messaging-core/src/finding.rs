@@ -564,18 +564,20 @@ impl MessagingFinding {
 /// The document's own warnings and every finding, placed in it.
 #[must_use]
 pub fn findings_report(document: &Document, findings: &[MessagingFinding]) -> Report {
-    let mut report = document.warnings();
-    for finding in findings {
-        report.push(finding.to_diagnostic(document));
-    }
-    report
+    document.report_with(
+        findings
+            .iter()
+            .map(|finding| finding.to_diagnostic(document)),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
-    use registry_platform_yaml::{read_document, EnvelopeRule, Expect, FormatSpec};
+    use registry_platform_yaml::{
+        read_document, EnvelopeRule, Expect, FormatSpec, MAXIMUM_DIAGNOSTICS_PER_FILE,
+    };
 
     use super::*;
 
@@ -718,5 +720,33 @@ mod tests {
         );
         assert!(!report.has_errors());
         assert_eq!(report.warning_count(), 1);
+    }
+
+    #[test]
+    fn document_warnings_and_findings_share_one_report_budget() {
+        let mut document = document("accessProfiles: []\n");
+        for _ in 0..MAXIMUM_DIAGNOSTICS_PER_FILE + 20 {
+            let warning = document.diagnostic_at_value(
+                Severity::Warning,
+                "messaging.project.duplicate-label",
+                "/accessProfiles",
+                "another definition uses this label",
+                "Give each definition a distinct label.",
+            );
+            document.push_warning(warning);
+        }
+        let report = findings_report(
+            &document,
+            &[MessagingFinding::new(
+                FindingReason::TooManyEntries,
+                "/accessProfiles",
+            )],
+        );
+        assert!(report.has_errors());
+        assert_eq!(report.files_checked(), Some(1));
+        assert_eq!(report.diagnostics().len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+        let rest = report.diagnostics().last().expect("bounded summary");
+        assert_eq!(rest.code, "config.too-many-problems");
+        assert_eq!(rest.message, "21 more problems in this file are not shown");
     }
 }

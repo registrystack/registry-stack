@@ -64,9 +64,7 @@ pub fn read_metadata(file: &str, bytes: &[u8]) -> Result<ReadManifest, Vec<Diagn
         refused_keys(&document, document.root(), "", &mut refused);
     }
     if !refused.is_empty() {
-        let mut diagnostics = document.warnings().into_diagnostics();
-        diagnostics.extend(refused);
-        return Err(diagnostics);
+        return Err(document.report_with(refused).into_diagnostics());
     }
     let fields = document
         .decode::<MetadataManifestFields>()
@@ -75,12 +73,11 @@ pub fn read_metadata(file: &str, bytes: &[u8]) -> Result<ReadManifest, Vec<Diagn
     let validation = validate_manifest(&manifest);
     let integrity_errors = manifest_integrity_diagnostics(&manifest, &mut document);
     if validation.is_err() || !integrity_errors.is_empty() {
-        let mut diagnostics = document.warnings().into_diagnostics();
+        let mut diagnostics = integrity_errors;
         if let Err(error) = validation {
             diagnostics.extend(metadata_error_diagnostics(&document, error));
         }
-        diagnostics.extend(integrity_errors);
-        return Err(diagnostics);
+        return Err(document.report_with(diagnostics).into_diagnostics());
     }
     Ok(ReadManifest { manifest, document })
 }
@@ -1008,6 +1005,25 @@ mod tests {
         assert_eq!(finding.related[0].path, "/authorities/0/id");
         assert!(finding.message.contains("`registry-office`"));
         assert!(finding.message.contains("`registry_office`"));
+    }
+
+    #[test]
+    fn metadata_mixed_semantic_diagnostics_share_one_file_budget() {
+        let mut text = format!("{MINIMAL}authorities:\n");
+        for index in 0..120 {
+            text.push_str(&format!("  - id: office-{index}\n    name: Review\n"));
+        }
+        text.push_str("  - id: office_0\n    name: Review\n");
+        let diagnostics = refused(&text);
+        assert_eq!(diagnostics.len(), 101);
+        assert_eq!(diagnostics[0].path, "/authorities/1/name");
+        let marker = diagnostics.last().unwrap();
+        assert_eq!(marker.code, "config.too-many-problems");
+        assert_eq!(marker.severity, Severity::Error);
+        assert_eq!(
+            marker.message,
+            "21 more problems in this file are not shown"
+        );
     }
 
     #[test]
