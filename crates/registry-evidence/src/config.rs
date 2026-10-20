@@ -19,8 +19,9 @@ use registry_platform_config::{
     SecretProvidersConfig,
 };
 use registry_platform_yaml::{
-    BoundedU32, BoundedU64, Document, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, Refusal,
-    Related, Report, RetiredApiVersion, ScalarHook, ScalarSite, Severity, UniqueList,
+    BoundedU32, BoundedU64, DisplayText, Document, EnvelopeRule, Expect, FormatSpec, Invalid,
+    Reader, Refusal, Related, Report, RetiredApiVersion, ScalarHook, ScalarSite, Severity,
+    UniqueList,
 };
 use schemars::JsonSchema;
 use serde::de::{self, MapAccess, Visitor};
@@ -5689,7 +5690,11 @@ impl StageInputs {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequirementConfig {
     /// Human-facing presentation, excluded from the behavior revision.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub question: Option<String>,
     /// Package ceiling for every target grant serving this definition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5789,6 +5794,12 @@ impl RequirementConfig {
         }
         if let Some(question) = &self.question {
             validate_len(question.len(), 1, 2048, "definition question")?;
+            if DisplayText::new(question.as_str()).is_err() {
+                return Err(ConfigError::InvalidField(
+                    "display text contains a prohibited character",
+                    "definition question",
+                ));
+            }
         }
         if let Some(ceiling) = &self.grant_ceiling {
             ceiling.validate()?;
@@ -8416,6 +8427,91 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn requirement_question_matches_display_text_runtime_and_schema_constraints() {
+        let validator = bundle_contract_validator();
+        let fixture = include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        );
+        let mut omitted = bundle_contract_instance(fixture);
+        omitted["requirements"][0]
+            .as_object_mut()
+            .expect("requirement is an object")
+            .remove("question");
+        let omitted_yaml = serde_norway::to_string(&omitted).expect("bundle encodes as YAML");
+        EvidenceConfig::parse_yaml(omitted_yaml.as_bytes())
+            .expect("the optional question remains optional");
+        assert!(validator.is_valid(&omitted));
+
+        for (value, accepted) in [
+            ("?".to_owned(), true),
+            ("x".repeat(2048), true),
+            (String::new(), false),
+            ("x".repeat(2049), false),
+            ("review\u{202e}txt?".to_owned(), false),
+            ("review\u{2028}next?".to_owned(), false),
+            ("review\u{fdd0}text?".to_owned(), false),
+            ("review\u{10ffff}text?".to_owned(), false),
+            ("نام\u{200c}خانوادگی؟".to_owned(), true),
+            ("العربية\u{200f} English?".to_owned(), true),
+            ("soft\u{00ad}hyphen?".to_owned(), true),
+        ] {
+            let mut config = EvidenceConfig::parse_yaml(fixture)
+                .expect("strict fixture validates before the mutation");
+            config.requirements[0].question = Some(value.clone());
+            assert_eq!(
+                config.validate().is_ok(),
+                accepted,
+                "programmatic runtime validation for {value:?}"
+            );
+
+            let mut instance = bundle_contract_instance(fixture);
+            instance["requirements"][0]["question"] = serde_json::json!(value);
+            let encoded = serde_norway::to_string(&instance).expect("bundle encodes as YAML");
+            assert_eq!(
+                EvidenceConfig::parse_yaml(encoded.as_bytes()).is_ok(),
+                accepted,
+                "runtime reader parity for the requirement question"
+            );
+            assert_eq!(
+                validator.is_valid(&instance),
+                accepted,
+                "published schema parity for the requirement question"
+            );
+        }
+
+        let mut config = EvidenceConfig::parse_yaml(fixture).expect("strict fixture validates");
+        config.requirements[0].question = Some("SECRET-question\u{202e}concealed".to_owned());
+        let error = config
+            .validate()
+            .expect_err("the forbidden question character is refused");
+        assert_eq!(
+            error,
+            ConfigError::InvalidField(
+                "display text contains a prohibited character",
+                "definition question"
+            )
+        );
+        assert!(!error.to_string().contains("SECRET-question"));
+        assert!(!error.fault().to_string().contains("SECRET-question"));
+
+        let mut instance = bundle_contract_instance(fixture);
+        instance["requirements"][0]["question"] =
+            serde_json::json!("SECRET-question\u{202e}concealed");
+        let encoded = serde_norway::to_string(&instance).expect("bundle encodes as YAML");
+        let error = EvidenceConfig::parse_yaml(encoded.as_bytes())
+            .expect_err("the reader refuses the forbidden question character");
+        let report = error.report().expect("the reader returns a safe report");
+        assert_eq!(report.error_count(), 1);
+        let diagnostic = &report.diagnostics()[0];
+        assert_eq!(diagnostic.code, "config.invalid-value");
+        assert_eq!(diagnostic.path, "/requirements/0/question");
+        let source = diagnostic.source.as_ref().expect("placed reader refusal");
+        assert!(source.line.is_some());
+        assert!(source.column.is_some());
+        assert!(!report.render_human().contains("SECRET-question"));
     }
 
     #[test]
