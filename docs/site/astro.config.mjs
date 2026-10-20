@@ -383,6 +383,7 @@ export default defineConfig({
     '/start/': internalRedirect('/'),
     '/start/see-it-live/': internalRedirect('/'),
     '/explanation/publishing-pipeline/': internalRedirect('/products/registry-manifest/'),
+    '/explanation/publishing-pipeline.md': internalRedirect('/products/registry-manifest/'),
     // Retired product choosers. The homepage chooses between the products, so
     // both the second chooser and the one that outlived it land there.
     '/start/quickstart/': internalRedirect('/'),
