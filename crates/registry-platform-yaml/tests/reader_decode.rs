@@ -1732,6 +1732,63 @@ fn cfg_diag_5_semantic_warnings_are_sorted_bounded_and_repeatable() {
 }
 
 #[test]
+fn cfg_diag_5_semantic_errors_and_warnings_share_one_file_budget() {
+    let items = MAXIMUM_DIAGNOSTICS_PER_FILE + 20;
+    for error_first in [true, false] {
+        let tags = (0..items)
+            .map(|index| format!("  - item-{index}\n"))
+            .collect::<String>();
+        let body = if error_first {
+            format!("name: refused\ntags:\n{tags}")
+        } else {
+            format!("tags:\n{tags}name: refused\n")
+        };
+        let text = with_envelope(&body);
+        let mut document = Reader::new(FILE).read(text.as_bytes(), &EXPECT).unwrap();
+        for index in (0..items).rev() {
+            document.push_warning(document.diagnostic_at_value(
+                Severity::Warning,
+                "example.item-label-duplicate",
+                &format!("/tags/{index}"),
+                "the item label is also used by another item",
+                "Give each item a distinct label.",
+            ));
+        }
+        let error = document.diagnostic_at_value(
+            Severity::Error,
+            "example.name-refused",
+            "/name",
+            "the name does not satisfy the product rule",
+            "Choose an allowed name.",
+        );
+        let report = document.report_with([error.clone()]);
+        assert_eq!(report, document.report_with([error]));
+        assert_eq!(report.files_checked(), Some(1));
+        assert!(report.has_errors());
+        assert_eq!(report.diagnostics().len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+        let rest = report.diagnostics().last().unwrap();
+        assert_eq!(rest.code, "config.too-many-problems");
+        assert_eq!(rest.message, "21 more problems in this file are not shown");
+        if error_first {
+            assert_eq!(report.diagnostics()[0].code, "example.name-refused");
+            assert_eq!(rest.severity, Severity::Warning);
+        } else {
+            assert_eq!(report.diagnostics()[0].path, "/tags/0");
+            assert_eq!(rest.severity, Severity::Error);
+        }
+        let warnings = document.warnings();
+        assert!(
+            !warnings.has_errors(),
+            "reporting does not mutate the document"
+        );
+        assert_eq!(
+            warnings.diagnostics().last().unwrap().message,
+            "20 more problems in this file are not shown"
+        );
+    }
+}
+
+#[test]
 fn cfg_diag_5_warning_overflow_preserves_decode_refusal() {
     let items = MAXIMUM_DIAGNOSTICS_PER_FILE + 20;
     for error_first in [true, false] {

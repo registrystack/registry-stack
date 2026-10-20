@@ -64,6 +64,7 @@ The public surface:
 | `Document::decode::<T>()`, `decode_at::<T>(pointer)` | Decode the whole document or one member, with paths from the root. |
 | `Document::span_of(pointer)`, `key_span_of(pointer)` | Positions for a product's own semantic checks. |
 | `Document::diagnostic_at_value(..)`, `diagnostic_at_key(..)` | A product diagnostic placed by pointer. |
+| `Document::report_with(diagnostics)` | Combine same-file semantic diagnostics with retained warnings, sorted and capped with one checked file. Pass additional diagnostics, not a previously capped report. |
 | `Document::to_json_value()` | The checked tree as JSON, for pointer-based checks and digests. |
 | `FormatSpec`, `EnvelopeRule`, `ApiVersion`, `RetiredApiVersion`, `RemovedKey`, `Expect` | What a read accepts. `Expect::new` takes several formats for a command that dispatches on `kind`. |
 | `Diagnostic`, `Report`, `Severity`, `Source`, `Related` | The one diagnostic shape (CFG-DIAG-1), JSON and human rendering. |

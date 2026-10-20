@@ -225,11 +225,22 @@ impl Document {
     /// Warnings found while reading and during product-owned semantic checks,
     /// sorted and bounded like every other report for this document.
     pub fn warnings(&self) -> Report {
+        self.report_with(std::iter::empty())
+    }
+
+    /// Combine this document's retained warnings with its product-owned
+    /// semantic diagnostics, sorted and bounded as one checked file.
+    ///
+    /// Supply only the additional diagnostics for this file, not a previously
+    /// rendered or capped report. The document's warnings are included once.
+    pub fn report_with(&self, diagnostics: impl IntoIterator<Item = Diagnostic>) -> Report {
+        let mut combined = self.warnings.clone();
+        combined.extend(diagnostics);
         report(
             &self.file,
             Some(self.envelope.kind.as_str()),
             Problems::default(),
-            self.warnings.clone(),
+            combined,
         )
     }
 
@@ -490,14 +501,14 @@ fn report(
     file: &str,
     artifact: Option<&str>,
     problems: Problems,
-    warnings: Vec<Diagnostic>,
+    additional: Vec<Diagnostic>,
 ) -> Report {
     let (kept, counted, counted_an_error) = problems.into_parts();
     let mut diagnostics: Vec<Diagnostic> = kept
         .into_iter()
         .map(|problem| problem.into_diagnostic(file, artifact))
         .collect();
-    diagnostics.extend(warnings);
+    diagnostics.extend(additional);
     let mut report = Report::new(diagnostics);
     report.sort_by_position();
     let hidden = report.split_off(MAXIMUM_DIAGNOSTICS_PER_FILE);
