@@ -142,7 +142,9 @@ async fn real_postgres_reference_and_temporal_races_leave_no_dangling_or_overlap
         .await
         .expect("installed reference deletion behavior is visible")
         .get(0);
-    assert_eq!(restrict_references, 2);
+    // Each reference carries its retained UUID key and its active-reference
+    // lifecycle key, both ON DELETE RESTRICT.
+    assert_eq!(restrict_references, 4);
     let child_table = quoted(&child.physical_table);
     let child_parent = quoted(&child.fields["parent"].physical_name);
     let (observer, observer_task) = database.connect_migration().await;
