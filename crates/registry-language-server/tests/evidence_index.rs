@@ -183,6 +183,7 @@ fn a_shared_named_derivation_resolves_each_calling_definition_output() {
         .value;
     let mut value = serde_json::to_value(project).unwrap();
     let mut other = value["assertionDefinitions"]["active-status"].clone();
+    other["question"] = serde_json::json!("Does the person meet the other status requirement?");
     other["semantics"]["requirement"] = serde_json::json!("urn:example:requirement:other");
     value["assertionDefinitions"]["other-status"] = other;
     value["apiVersion"] =
