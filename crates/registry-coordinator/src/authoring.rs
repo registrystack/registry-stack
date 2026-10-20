@@ -21,7 +21,7 @@ use registry_platform_yaml::{
     duplicate_display_text_diagnostics, local_id_collision_diagnostics, optional_display_text,
     ApiVersion, AuthoredDisplayText, AuthoredId, BoundedU32, Diagnostic, Document, EnvelopeRule,
     Expect, ForeignValue, FormatSpec, Invalid, LocalId, ProjectIdentity, Reader, RemovedKey,
-    Report, Severity,
+    Severity,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -697,17 +697,14 @@ pub fn parse_project(path: &Path, bytes: impl AsRef<[u8]>) -> Result<(Workflow, 
     let project: CoordinatorProject = document.decode().map_err(CoordinatorError::from_report)?;
     let errors = project_integrity_diagnostics(&project, &mut document);
     if !errors.is_empty() {
-        let mut report = document.warnings();
-        report.extend(Report::new(errors));
-        return Err(CoordinatorError::from_report(report));
+        return Err(CoordinatorError::from_report(document.report_with(errors)));
     }
     let mut workflow = match compile(project, path) {
         Ok(workflow) => workflow,
         Err(error) => {
             let error = positioned(&document, error);
             let exit = error.exit_code;
-            let mut report = document.warnings();
-            report.extend(error.report());
+            let report = document.report_with(error.report().into_diagnostics());
             return Err(CoordinatorError::from_report(report).with_exit(exit));
         }
     };

@@ -21,7 +21,7 @@ use registry_platform_calendar::CalendarEvaluationError;
 use crate::admission::{
     evaluate_exact_time_admission, evaluate_window_admission, ExactTimeContext, WindowContext,
 };
-use crate::diagnostics::{findings_report, FindingArea, PolicyCheckReason, SchedulingDiagnostic};
+use crate::diagnostics::{FindingArea, PolicyCheckReason, SchedulingDiagnostic};
 use crate::model::{
     facts_integrity_diagnostics, AdmissionRequest, LedgerClaim, LedgerKind, LedgerSnapshot,
     PartyCounts, SchedulingFacts,
@@ -463,8 +463,12 @@ impl SchedulingFixture {
         let decoded = Self::decode(file, bytes)?;
         let integrity = Self::integrity_diagnostics(&decoded);
         let findings = decoded.value.findings(policy);
-        let mut report = findings_report(&decoded.document, &findings);
-        report.extend(Report::new(integrity));
+        let report = decoded.document.report_with(
+            findings
+                .iter()
+                .map(|finding| finding.to_diagnostic(&decoded.document))
+                .chain(integrity),
+        );
         if report.has_errors() {
             Err(report)
         } else {

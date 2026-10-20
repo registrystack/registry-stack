@@ -21,9 +21,9 @@ use registry_scheduling::config::{
     PACKAGE_COMMAND,
 };
 use registry_scheduling_core::{
-    findings_report, CaseStatus, FindingArea, FixtureExpectation, ReplayError, SchedulingFacts,
-    SchedulingFixture, SchedulingPolicy, SchedulingRecords, AUTHORED_POLICY_FILE,
-    SCHEDULING_FIXTURE_KIND, SCHEDULING_RECORDS_FILE,
+    CaseStatus, FindingArea, FixtureExpectation, ReplayError, SchedulingFacts, SchedulingFixture,
+    SchedulingPolicy, SchedulingRecords, AUTHORED_POLICY_FILE, SCHEDULING_FIXTURE_KIND,
+    SCHEDULING_RECORDS_FILE,
 };
 use serde_json::{json, Value};
 
@@ -102,16 +102,14 @@ fn read_project(project: &Path, fixtures: bool) -> Result<ProjectReading> {
         &policy_path.display().to_string(),
         &read_input(&policy_path)?,
     ) {
-        Ok(decoded) => {
-            report.extend(decoded.document.warnings());
-            Some(decoded)
-        }
+        Ok(decoded) => Some(decoded),
         Err(refusal) => {
             report.extend(refusal);
             None
         }
     };
     let checked = policy.as_ref().filter(|_| !report.has_errors());
+    let mut policy_diagnostics = Vec::new();
 
     let records_path = project.join(SCHEDULING_RECORDS_FILE);
     files += 1;
@@ -120,25 +118,26 @@ fn read_project(project: &Path, fixtures: bool) -> Result<ProjectReading> {
         &read_input(&records_path)?,
     ) {
         Ok(decoded) => {
-            let integrity = SchedulingRecords::integrity_diagnostics(&decoded);
-            match checked {
-                Some(policy) => {
-                    let (records, project_findings): (Vec<_>, Vec<_>) = decoded
-                        .value
-                        .facts()
-                        .check(&policy.value)
-                        .into_iter()
-                        .partition(|finding| finding.area == FindingArea::Records);
-                    report.extend(findings_report(&decoded.document, &records));
-                    // An offering's reference to a window the records do not
-                    // carry is a finding against the project file.
-                    for finding in project_findings {
-                        report.push(finding.to_diagnostic(&policy.document));
-                    }
+            let mut diagnostics = SchedulingRecords::integrity_diagnostics(&decoded);
+            if let Some(policy) = checked {
+                let (records, project_findings): (Vec<_>, Vec<_>) = decoded
+                    .value
+                    .facts()
+                    .check(&policy.value)
+                    .into_iter()
+                    .partition(|finding| finding.area == FindingArea::Records);
+                diagnostics.extend(
+                    records
+                        .iter()
+                        .map(|finding| finding.to_diagnostic(&decoded.document)),
+                );
+                // An offering's reference to a window the records do not
+                // carry is a finding against the project file.
+                for finding in project_findings {
+                    policy_diagnostics.push(finding.to_diagnostic(&policy.document));
                 }
-                None => report.extend(decoded.document.warnings()),
             }
-            report.extend(Report::new(integrity));
+            report.extend(decoded.document.report_with(diagnostics));
             Some(decoded.value.into_facts())
         }
         Err(refusal) => {
@@ -146,6 +145,11 @@ fn read_project(project: &Path, fixtures: bool) -> Result<ProjectReading> {
             None
         }
     };
+    if let Some(policy) = checked {
+        let mut policy_report = policy.document.report_with(policy_diagnostics);
+        policy_report.extend(report);
+        report = policy_report;
+    }
 
     let mut readings = Vec::new();
     if fixtures {
@@ -154,15 +158,17 @@ fn read_project(project: &Path, fixtures: bool) -> Result<ProjectReading> {
             let relative = path.strip_prefix(project).unwrap_or(&path).to_owned();
             match SchedulingFixture::decode(&path.display().to_string(), &read_input(&path)?) {
                 Ok(decoded) => {
-                    let integrity = SchedulingFixture::integrity_diagnostics(&decoded);
-                    report.extend(match checked {
-                        Some(policy) => findings_report(
-                            &decoded.document,
-                            &decoded.value.findings(&policy.value),
-                        ),
-                        None => decoded.document.warnings(),
-                    });
-                    report.extend(Report::new(integrity));
+                    let mut diagnostics = SchedulingFixture::integrity_diagnostics(&decoded);
+                    if let Some(policy) = checked {
+                        diagnostics.extend(
+                            decoded
+                                .value
+                                .findings(&policy.value)
+                                .iter()
+                                .map(|finding| finding.to_diagnostic(&decoded.document)),
+                        );
+                    }
+                    report.extend(decoded.document.report_with(diagnostics));
                     readings.push((relative, decoded.value));
                 }
                 Err(refusal) => report.extend(refusal),
@@ -1157,6 +1163,54 @@ mod tests {
             report.diagnostics()[0].code,
             "scheduling.project.duplicate-service-label"
         );
+    }
+
+    #[test]
+    fn project_warning_flood_and_later_record_findings_share_the_policy_budget() {
+        let (_root, project) = initialized("standalone-arrival-window");
+        let original = "  - id: household-day\n    label: Household registration day\n";
+        let mut services = original.to_owned();
+        for index in 0..120 {
+            services.push_str(&format!(
+                "  - id: service-{index}\n    label: Household registration day\n"
+            ));
+        }
+        edit(&project, AUTHORED_POLICY_FILE, original, &services);
+        edit(
+            &project,
+            AUTHORED_POLICY_FILE,
+            "window: household-morning-window",
+            "window: missing-window",
+        );
+        let report = read_project(&project, false).unwrap().report;
+        assert_eq!(report.files_checked(), Some(2));
+        let (policy_findings, record_findings): (Vec<_>, Vec<_>) =
+            report.diagnostics().iter().partition(|diagnostic| {
+                diagnostic
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| source.file.ends_with(AUTHORED_POLICY_FILE))
+            });
+        assert_eq!(policy_findings.len(), 101);
+        assert_eq!(policy_findings[0].path, "/services/1/label");
+        assert!(report.has_errors());
+        let marker = policy_findings.last().unwrap();
+        assert_eq!(marker.code, "config.too-many-problems");
+        assert_eq!(marker.severity, registry_platform_yaml::Severity::Error);
+        assert_eq!(
+            marker.message,
+            "21 more problems in this file are not shown"
+        );
+        assert_eq!(record_findings.len(), 1);
+        assert_eq!(
+            record_findings[0].code,
+            "scheduling.records.wrong-mode-field"
+        );
+        assert_eq!(record_findings[0].path, "/windows/0/offering");
+        assert!(record_findings[0]
+            .source
+            .as_ref()
+            .is_some_and(|source| source.file.ends_with(SCHEDULING_RECORDS_FILE)));
     }
 
     #[test]

@@ -72,12 +72,11 @@ pub(crate) fn read_labels(file: &str, bytes: &[u8]) -> Result<ReadLabels, Report
         .iter()
         .map(|(id, pointer)| AuthoredId::at_key(id, pointer))
         .collect::<Vec<_>>();
-    let mut findings = decoded.document.warnings();
-    findings.extend(Report::new(local_id_collision_diagnostics(
+    let findings = decoded.document.report_with(local_id_collision_diagnostics(
         &decoded.document,
         "render.labels.label-id-collision",
         &authored_label_ids,
-    )));
+    ));
     if findings.has_errors() {
         return Err(findings);
     }
@@ -126,6 +125,24 @@ mod tests {
             .into_iter()
             .map(|diagnostic| (diagnostic.code, diagnostic.path))
             .collect()
+    }
+
+    #[test]
+    fn label_collision_reports_are_bounded_per_file() {
+        let mut text = format!("{HEAD}labels:\n");
+        for index in 0..101 {
+            text.push_str(&format!(
+                "  label-{index}: First\n  label_{index}: Second\n"
+            ));
+        }
+        let report = read_labels("labels/en.yaml", text.as_bytes()).unwrap_err();
+        assert_eq!(report.files_checked(), Some(1));
+        assert_eq!(report.diagnostics().len(), 101);
+        assert_eq!(report.diagnostics()[0].path, "/labels/label_0");
+        let marker = report.diagnostics().last().unwrap();
+        assert_eq!(marker.code, "config.too-many-problems");
+        assert_eq!(marker.severity, registry_platform_yaml::Severity::Error);
+        assert_eq!(marker.message, "1 more problem in this file is not shown");
     }
 
     #[test]

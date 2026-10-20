@@ -764,6 +764,51 @@ fn a_finish_naming_an_undeclared_outcome_is_reported_at_its_step() {
 }
 
 #[test]
+fn authored_semantic_errors_and_warnings_share_one_file_budget() {
+    for collision in [true, false] {
+        let mut workflow = authored_value();
+        let steps = workflow["workflow"]["steps"].as_object_mut().unwrap();
+        for index in 0..121 {
+            let id = if collision && index == 120 {
+                "step_000".to_owned()
+            } else {
+                format!("step-{index:03}")
+            };
+            steps.insert(
+                id,
+                json!({
+                    "type": "finish", "outcome": "no-current-permission", "title": "Review"
+                }),
+            );
+        }
+        if !collision {
+            workflow["workflow"]["steps"]["notify"]["operation"] = json!("missing-operation");
+        }
+        let Err(error) = registry_coordinator::authoring::parse_project(
+            Path::new("workflow.yaml"),
+            serde_json::to_vec_pretty(&workflow).unwrap(),
+        ) else {
+            panic!("the authored error must refuse the project: collision={collision}");
+        };
+        assert_eq!(
+            error.diagnostics.len(),
+            101,
+            "collision={collision}: {error:?}"
+        );
+        assert!(error
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == registry_platform_yaml::Severity::Error));
+        let marker = error.diagnostics.last().unwrap();
+        assert_eq!(marker.code, "config.too-many-problems");
+        assert_eq!(
+            marker.message,
+            "21 more problems in this file are not shown"
+        );
+    }
+}
+
+#[test]
 fn check_reports_every_independent_error_in_one_run() {
     let mut workflow = authored_value();
     workflow["workflow"]["start"] = json!("begin");
