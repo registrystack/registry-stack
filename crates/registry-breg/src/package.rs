@@ -49,9 +49,9 @@ use crate::migration_plan::{
 };
 use crate::model::CompiledStatisticalDataset;
 use crate::model::{
-    CompiledAccessInventory, CompiledActionInventory, CompiledEntity, CompiledQueryInventory,
-    CompiledQueryOperation, CompiledQueryTemporalValueKind, CompiledRecipients,
-    CompiledRouteInventory, REFERENCE_INDEX_PREFIX,
+    CompiledAccessInventory, CompiledAction, CompiledActionExecution, CompiledActionInventory,
+    CompiledEntity, CompiledQueryInventory, CompiledQueryOperation, CompiledQueryTemporalValueKind,
+    CompiledRecipients, CompiledRouteInventory, REFERENCE_INDEX_PREFIX,
 };
 use crate::physical_names::PhysicalNameInventory;
 use crate::CompiledRegistry;
@@ -1052,7 +1052,7 @@ fn compare_statistical_datasets(
                     Some(id),
                 ),
             ),
-            Some(after) if before != after => push_change(
+            Some(after) if !statistical_dataset_behavior_eq(before, after) => push_change(
                 changes,
                 CompiledRegistryChangeClass::AccessOrDisclosureChange,
                 CompiledRegistryChangeCode::StatisticalDatasetChanged,
@@ -1079,6 +1079,34 @@ fn compare_statistical_datasets(
             );
         }
     }
+}
+
+pub(crate) fn statistical_dataset_behavior_eq(
+    before: &CompiledStatisticalDataset,
+    after: &CompiledStatisticalDataset,
+) -> bool {
+    let mut before = before.clone();
+    before.display = Default::default();
+    for profile in before.access_profiles.values_mut() {
+        profile.display = Default::default();
+    }
+    let mut after = after.clone();
+    after.display = Default::default();
+    for profile in after.access_profiles.values_mut() {
+        profile.display = Default::default();
+    }
+    before == after
+}
+
+pub(crate) fn access_profile_behavior_eq(
+    before: &crate::contract::AccessProfileSource,
+    after: &crate::contract::AccessProfileSource,
+) -> bool {
+    let mut before = before.clone();
+    before.display = Default::default();
+    let mut after = after.clone();
+    after.display = Default::default();
+    before == after
 }
 
 impl CompiledRegistryChangeCode {
@@ -1277,10 +1305,28 @@ fn compare_entities(
                 changes,
             );
         }
+        let previous_access_profiles = previous_entity
+            .access_profiles
+            .iter()
+            .map(|(id, profile)| {
+                let mut profile = profile.clone();
+                profile.display = Default::default();
+                (id.clone(), profile)
+            })
+            .collect();
+        let candidate_access_profiles = candidate_entity
+            .access_profiles
+            .iter()
+            .map(|(id, profile)| {
+                let mut profile = profile.clone();
+                profile.display = Default::default();
+                (id.clone(), profile)
+            })
+            .collect();
         compare_map(
             entity_id,
-            &previous_entity.access_profiles,
-            &candidate_entity.access_profiles,
+            &previous_access_profiles,
+            &candidate_access_profiles,
             CompiledRegistryChangeTargetKind::AccessProfile,
             CompiledRegistryChangeCode::AccessProfileAdded,
             CompiledRegistryChangeCode::AccessProfileRemoved,
@@ -1290,10 +1336,28 @@ fn compare_entities(
             CompiledRegistryChangeClass::AccessOrDisclosureChange,
             changes,
         );
+        let previous_hooks = previous_entity
+            .hooks
+            .iter()
+            .map(|(id, hook)| {
+                let mut hook = hook.clone();
+                hook.display = Default::default();
+                (id.clone(), hook)
+            })
+            .collect();
+        let candidate_hooks = candidate_entity
+            .hooks
+            .iter()
+            .map(|(id, hook)| {
+                let mut hook = hook.clone();
+                hook.display = Default::default();
+                (id.clone(), hook)
+            })
+            .collect();
         compare_map(
             entity_id,
-            &previous_entity.hooks,
-            &candidate_entity.hooks,
+            &previous_hooks,
+            &candidate_hooks,
             CompiledRegistryChangeTargetKind::Event,
             CompiledRegistryChangeCode::EventAdded,
             CompiledRegistryChangeCode::EventRemoved,
@@ -1686,10 +1750,7 @@ fn compare_actions(
         .collect::<BTreeMap<_, _>>();
     for (id, before) in &previous_actions {
         let (class, code) = match candidate_actions.get(id) {
-            Some(after)
-                if serde_json::to_value(before).expect("compiled Action serializes")
-                    == serde_json::to_value(after).expect("compiled Action serializes") =>
-            {
+            Some(after) if action_behavior_value(before) == action_behavior_value(after) => {
                 continue;
             }
             Some(_) => (
@@ -1718,6 +1779,25 @@ fn compare_actions(
             );
         }
     }
+}
+
+fn action_behavior_value(action: &CompiledAction) -> Value {
+    let mut action = action.clone();
+    action.display = Default::default();
+    for input in &mut action.inputs {
+        input.display = Default::default();
+    }
+    if let Some(handler) = &mut action.handler {
+        for label in handler.refusals.values_mut() {
+            label.clear();
+        }
+    }
+    if let CompiledActionExecution::Proposal { proposal } = &mut action.execution {
+        for hook in &mut proposal.hooks {
+            hook.display = Default::default();
+        }
+    }
+    serde_json::to_value(action).expect("compiled Action serializes")
 }
 
 /// Recipients are project-level runtime configuration: they change no DDL, so
