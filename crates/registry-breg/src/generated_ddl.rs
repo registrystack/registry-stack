@@ -354,17 +354,21 @@ pub(crate) fn generate_ddl_with_actions(
                         // still preserves its retained reference. Native FK
                         // locking and visibility protect concurrent writes
                         // and references hidden by the caller's RLS policies.
-                        // Initial validation must also see every existing
-                        // source row. Temporarily exempt its owner from FORCE
-                        // RLS under the ALTER TABLE lock; ordinary runtime
-                        // roles retain RLS, and failure rolls the change back.
+                        // Initial validation must see every existing source
+                        // and target row. Temporarily exempt their owner from
+                        // FORCE RLS under the ALTER TABLE locks, which exclude
+                        // runtime table access until both settings are restored.
+                        // Failure rolls back this statement's transaction;
+                        // earlier reviewed-plan checkpoints remain committed.
                         sql: format!(
                             "ALTER TABLE registry_data.{table} NO FORCE ROW LEVEL SECURITY;\n\
-                             ALTER TABLE registry_data.{table} ADD CONSTRAINT {} FOREIGN KEY ({}, {REFERENCE_LIFECYCLE_COLUMN}) REFERENCES registry_data.{} (record_id, record_lifecycle) MATCH SIMPLE ON UPDATE NO ACTION ON DELETE RESTRICT;\n\
-                             ALTER TABLE registry_data.{table} FORCE ROW LEVEL SECURITY",
+                             ALTER TABLE registry_data.{target_table} NO FORCE ROW LEVEL SECURITY;\n\
+                             ALTER TABLE registry_data.{table} ADD CONSTRAINT {} FOREIGN KEY ({}, {REFERENCE_LIFECYCLE_COLUMN}) REFERENCES registry_data.{target_table} (record_id, record_lifecycle) MATCH SIMPLE ON UPDATE NO ACTION ON DELETE RESTRICT;\n\
+                             ALTER TABLE registry_data.{table} FORCE ROW LEVEL SECURITY;\n\
+                             ALTER TABLE registry_data.{target_table} FORCE ROW LEVEL SECURITY",
                             quote_identifier(active_name),
                             quote_identifier(&field.physical_name),
-                            quote_identifier(&entities[target].physical_table),
+                            target_table = quote_identifier(&entities[target].physical_table),
                             table = quote_identifier(&entity.physical_table),
                         ),
                     });

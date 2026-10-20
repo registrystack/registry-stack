@@ -20,12 +20,16 @@ ALTER TABLE registry_data."breg_e_facility_assignment_4204e7def2a858e1" ADD COLU
 ALTER TABLE registry_data."breg_e_operator_81bd5233dc15cfc8" ADD CONSTRAINT "breg_rk_operator_1dd7541ac167e817" UNIQUE (record_id, record_lifecycle);
 ALTER TABLE registry_data."breg_e_facility_assignment_4204e7def2a858e1" ADD CONSTRAINT "breg_r_facility_assignment_facility_395a42a8ee07d1c8" FOREIGN KEY ("breg_f_facility_assignment_facility_7e20b6ef1c1e3c53") REFERENCES registry_data."breg_e_facility_675cdbdae206c49c" (record_id) ON DELETE RESTRICT;
 ALTER TABLE registry_data."breg_e_facility_assignment_4204e7def2a858e1" NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE registry_data."breg_e_facility_675cdbdae206c49c" NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE registry_data."breg_e_facility_assignment_4204e7def2a858e1" ADD CONSTRAINT "breg_ar_facility_assignment_facility_a0769507dc779efd" FOREIGN KEY ("breg_f_facility_assignment_facility_7e20b6ef1c1e3c53", record_reference_lifecycle) REFERENCES registry_data."breg_e_facility_675cdbdae206c49c" (record_id, record_lifecycle) MATCH SIMPLE ON UPDATE NO ACTION ON DELETE RESTRICT;
 ALTER TABLE registry_data."breg_e_facility_assignment_4204e7def2a858e1" FORCE ROW LEVEL SECURITY;
+ALTER TABLE registry_data."breg_e_facility_675cdbdae206c49c" FORCE ROW LEVEL SECURITY;
 ALTER TABLE registry_data."breg_e_facility_assignment_4204e7def2a858e1" ADD CONSTRAINT "breg_r_facility_assignment_operator_77d7314e67a83fc3" FOREIGN KEY ("breg_f_facility_assignment_operator_a1c886577b591b54") REFERENCES registry_data."breg_e_operator_81bd5233dc15cfc8" (record_id) ON DELETE RESTRICT;
 ALTER TABLE registry_data."breg_e_facility_assignment_4204e7def2a858e1" NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE registry_data."breg_e_operator_81bd5233dc15cfc8" NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE registry_data."breg_e_facility_assignment_4204e7def2a858e1" ADD CONSTRAINT "breg_ar_facility_assignment_operator_07b723ba3f193078" FOREIGN KEY ("breg_f_facility_assignment_operator_a1c886577b591b54", record_reference_lifecycle) REFERENCES registry_data."breg_e_operator_81bd5233dc15cfc8" (record_id, record_lifecycle) MATCH SIMPLE ON UPDATE NO ACTION ON DELETE RESTRICT;
 ALTER TABLE registry_data."breg_e_facility_assignment_4204e7def2a858e1" FORCE ROW LEVEL SECURITY;
+ALTER TABLE registry_data."breg_e_operator_81bd5233dc15cfc8" FORCE ROW LEVEL SECURITY;
 CREATE INDEX "breg_i_facility_assignment_by_facility_50c129597b44ca5e" ON registry_data."breg_e_facility_assignment_4204e7def2a858e1" ("breg_f_facility_assignment_facility_7e20b6ef1c1e3c53", record_id);
 CREATE INDEX "breg_i_facility_assignment_by_operator_4dd9f29e7dd262f7" ON registry_data."breg_e_facility_assignment_4204e7def2a858e1" ("breg_f_facility_assignment_operator_a1c886577b591b54", record_id);
 ALTER TABLE registry_data."breg_e_directory_entry_7749c98ffacfd2fa" ENABLE ROW LEVEL SECURITY;

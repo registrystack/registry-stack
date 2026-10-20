@@ -28,7 +28,8 @@ use super::{
     failure::PostgresFailure,
     interlock::{
         compiler_statement_runs_after_reviewed_steps, drop_managed_read_view_set,
-        set_force_row_security, set_local_migration_timeouts, PackageDdlStatement,
+        live_reference_validation_tables, set_force_row_security, set_local_migration_timeouts,
+        PackageDdlStatement,
     },
     migration_ledger::statement_checksum,
     schema::{
@@ -548,7 +549,16 @@ async fn rehearse_reviewed_steps(
                             .await
                             .map_err(|_| MigrationRehearsalError::Database)?;
                     } else {
+                        let tables = live_reference_validation_tables(transaction, step, objects)
+                            .await
+                            .map_err(|_| MigrationRehearsalError::Database)?;
+                        set_force_row_security(transaction, &tables, false)
+                            .await
+                            .map_err(|_| MigrationRehearsalError::Database)?;
                         transaction.batch_execute(&step.sql).await.map_err(failed)?;
+                        set_force_row_security(transaction, &tables, true)
+                            .await
+                            .map_err(|_| MigrationRehearsalError::Database)?;
                     }
                 }
                 ReviewedMigrationStepDescriptor::ChunkedBackfill { .. } => {
