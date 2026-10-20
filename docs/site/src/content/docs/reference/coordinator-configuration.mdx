@@ -35,7 +35,17 @@ JSON Schema is not the acceptance path: a document these schemas accept still ha
 completion references no schema can express
 ([Author a Coordinator workflow](../../configure/coordinator/)).
 
+Three rules in `runtime.yaml` are written as exclusions the tables do not show. A policy under
+`deployment.authentication.policies` whose actions are all deployment-wide (`doctor`,
+`restore-hold`, `release-restore-hold`, `release-admission-hold`, `complete-execution-recovery`,
+and `retain`) omits `workflows`, and every other policy sets it. On a `type: scheduling`
+connection, `observationAuthorization` is required when `authorization.taskAuthority` is set and
+omitted otherwise. On a `type: external-http` connection, `authorization.taskAuthority` is
+refused. The project and scenarios schemas carry no such rule.
+
 {/* Evidence: docs/site/scripts/generate-coordinator-configuration.mjs, CONTRACTS;
+    products/coordinator/generated/runtime/runtime.schema.json, ClientPolicy.allOf and
+    ConnectionConfig.oneOf for the three not rules;
     crates/registry-coordinator/src/authoring.rs, CoordinatorProject;
     crates/registry-coordinator/src/runtime.rs, RuntimeConfig;
     crates/registry-coordinator/src/scenarios.rs, CoordinatorScenarios;
