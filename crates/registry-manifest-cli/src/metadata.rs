@@ -992,6 +992,72 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_authority_names_redact_ids_outside_the_repeat_safe_grammar() {
+        let prefix = "a".repeat(70);
+        let first = format!("{prefix}-first");
+        let second = format!("{prefix}-second");
+        let text = format!(
+            "{MINIMAL}authorities:\n  - id: {first}\n    name: Registry Office\n  - id: {second}\n    name: registry office\n"
+        );
+        let read = read_metadata("metadata.yaml", text.as_bytes())
+            .unwrap_or_else(|diagnostics| panic!("refused: {diagnostics:#?}"));
+        let report = read.document.warnings();
+        let warning = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "manifest.metadata.duplicate-authority-name")
+            .expect("the duplicate authority warning survives metadata checking");
+        assert_eq!(warning.path, "/authorities/1/name");
+        assert_eq!(warning.related[0].path, "/authorities/0/name");
+        assert_eq!(
+            warning
+                .source
+                .as_ref()
+                .map(|source| (source.line, source.column)),
+            Some((Some(12), Some(11)))
+        );
+        assert_eq!(
+            (warning.related[0].line, warning.related[0].column),
+            (Some(10), Some(11))
+        );
+        let json = report.to_json_value().to_string();
+        let human = report.render_human();
+        for id in [&first, &second] {
+            assert!(!json.contains(id), "{json}");
+            assert!(!human.contains(id), "{human}");
+        }
+
+        let invalid = format!(
+            "{MINIMAL}authorities:\n  - id: SECRET-first\n    name: Registry Office\n  - id: SECRET-second\n    name: registry office\n"
+        );
+        let report = Report::new(refused(&invalid));
+        let warning = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "manifest.metadata.duplicate-authority-name")
+            .expect("the invalid IDs do not suppress the duplicate authority warning");
+        assert_eq!(warning.path, "/authorities/1/name");
+        assert_eq!(warning.related[0].path, "/authorities/0/name");
+        assert_eq!(
+            warning
+                .source
+                .as_ref()
+                .map(|source| (source.line, source.column)),
+            Some((Some(12), Some(11)))
+        );
+        assert_eq!(
+            (warning.related[0].line, warning.related[0].column),
+            (Some(10), Some(11))
+        );
+        let json = report.to_json_value().to_string();
+        let human = report.render_human();
+        assert!(!json.contains("SECRET-first"), "{json}");
+        assert!(!json.contains("SECRET-second"), "{json}");
+        assert!(!human.contains("SECRET-first"), "{human}");
+        assert!(!human.contains("SECRET-second"), "{human}");
+    }
+
+    #[test]
     fn metadata_check_refuses_separator_lookalikes_in_the_authority_namespace() {
         let text = format!(
             "{MINIMAL}authorities:\n  - id: registry-office\n    name: First office\n  - id: registry_office\n    name: Second office\n"

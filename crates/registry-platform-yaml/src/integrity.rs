@@ -66,8 +66,7 @@ pub fn local_id_collision_diagnostics(
         .map(|(first, second)| {
             let first = entries[first];
             let second = entries[second];
-            let repeat_ids =
-                LocalId::new(first.id).is_ok() && LocalId::new(second.id).is_ok();
+            let repeat_ids = repeat_safe_local_ids(first.id, second.id);
             let message = if repeat_ids {
                 format!(
                     "local identifiers `{}` and `{}` differ only by `-` versus `_`",
@@ -111,6 +110,10 @@ pub fn local_id_collision_diagnostics(
         .collect()
 }
 
+fn repeat_safe_local_ids(first: &str, second: &str) -> bool {
+    LocalId::new(first).is_ok() && LocalId::new(second).is_ok()
+}
+
 #[must_use]
 pub fn duplicate_display_text_diagnostics(
     document: &Document,
@@ -123,21 +126,28 @@ pub fn duplicate_display_text_diagnostics(
         .map(|(first, second)| {
             let first = entries[first];
             let second = entries[second];
+            let repeat_ids = repeat_safe_local_ids(first.id, second.id);
+            let message = if repeat_ids {
+                format!(
+                    "{kind} `{}` and `{}` have display text that compares the same",
+                    first.id, second.id
+                )
+            } else {
+                format!("two {kind} have display text that compares the same")
+            };
             let mut diagnostic = document.diagnostic_at_value(
                 Severity::Warning,
                 code,
                 second.pointer,
-                &format!(
-                    "{kind} `{}` and `{}` have display text that compares the same",
-                    first.id, second.id
-                ),
+                &message,
                 "Use display text that lets reviewers distinguish the two definitions.",
             );
-            document.add_related_value(
-                &mut diagnostic,
-                first.pointer,
-                format!("the other {kind} is `{}`", first.id),
-            );
+            let related = if repeat_ids {
+                format!("the other {kind} is `{}`", first.id)
+            } else {
+                format!("the other {kind} is here")
+            };
+            document.add_related_value(&mut diagnostic, first.pointer, related);
             diagnostic
         })
         .collect()
@@ -265,5 +275,106 @@ mod tests {
         assert!(!rendered.contains(&second_id), "{rendered}");
         assert_eq!(diagnostics[0].path, "/items/1/id");
         assert_eq!(diagnostics[0].related[0].path, "/items/0/id");
+    }
+
+    #[test]
+    fn duplicate_display_text_names_repeat_safe_ids() {
+        let document = Reader::new("integrity.yaml")
+            .read(
+                b"apiVersion: example.test/integrity/v1\nkind: IntegrityTest\nitems:\n  - id: first-id\n    label: Review\n  - id: second-id\n    label: Review\n",
+                &Expect::one(&FORMAT),
+            )
+            .expect("test document reads");
+        let entries = [
+            AuthoredDisplayText {
+                id: "first-id",
+                text: "Review",
+                pointer: "/items/0/label",
+            },
+            AuthoredDisplayText {
+                id: "second-id",
+                text: "Review",
+                pointer: "/items/1/label",
+            },
+        ];
+
+        let diagnostics = duplicate_display_text_diagnostics(
+            &document,
+            "test.duplicate-label",
+            "items",
+            &entries,
+        );
+        assert_eq!(diagnostics.len(), 1);
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.path, "/items/1/label");
+        assert_eq!(diagnostic.related[0].path, "/items/0/label");
+        assert!(diagnostic.message.contains("`first-id`"));
+        assert!(diagnostic.message.contains("`second-id`"));
+        assert!(diagnostic.related[0].message.contains("`first-id`"));
+    }
+
+    #[test]
+    fn duplicate_display_text_redacts_ids_outside_the_repeat_safe_grammar() {
+        let unsafe_first = format!("{}-first", "a".repeat(64));
+        let unsafe_second = format!("{}_second", "a".repeat(64));
+        let cases = [
+            (unsafe_first.as_str(), unsafe_second.as_str()),
+            (unsafe_first.as_str(), "second-id"),
+            ("first-id", unsafe_second.as_str()),
+        ];
+
+        for (first_id, second_id) in cases {
+            let source = format!(
+                "apiVersion: example.test/integrity/v1\nkind: IntegrityTest\nitems:\n  - id: {first_id}\n    label: Review\n  - id: {second_id}\n    label: Review\n"
+            );
+            let document = Reader::new("integrity.yaml")
+                .read(source.as_bytes(), &Expect::one(&FORMAT))
+                .expect("test document reads");
+            let entries = [
+                AuthoredDisplayText {
+                    id: first_id,
+                    text: "Review",
+                    pointer: "/items/0/label",
+                },
+                AuthoredDisplayText {
+                    id: second_id,
+                    text: "Review",
+                    pointer: "/items/1/label",
+                },
+            ];
+
+            let report = document.report_with(duplicate_display_text_diagnostics(
+                &document,
+                "test.duplicate-label",
+                "items",
+                &entries,
+            ));
+            assert_eq!(report.diagnostics().len(), 1);
+            let diagnostic = &report.diagnostics()[0];
+            assert_eq!(diagnostic.path, "/items/1/label");
+            assert_eq!(diagnostic.related[0].path, "/items/0/label");
+            assert_eq!(
+                diagnostic
+                    .source
+                    .as_ref()
+                    .map(|source| (source.line, source.column)),
+                Some((Some(7), Some(12)))
+            );
+            assert_eq!(
+                (diagnostic.related[0].line, diagnostic.related[0].column),
+                (Some(5), Some(12))
+            );
+            assert_eq!(
+                diagnostic.message,
+                "two items have display text that compares the same"
+            );
+            assert_eq!(diagnostic.related[0].message, "the other items is here");
+            let json = report.to_json_value().to_string();
+            let human = report.render_human();
+            for id in [first_id, second_id] {
+                assert!(!json.contains(id), "{json}");
+                assert!(!human.contains(id), "{human}");
+            }
+        }
     }
 }
