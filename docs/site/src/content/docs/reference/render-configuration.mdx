@@ -32,6 +32,10 @@ check`, because rules across files, such as a label key the template reads, are 
 tables. [Configuration files](../configuration-files/) describes the YAML rules and environment
 substitution that apply when serve reads `runtime.yaml`.
 
+Two rules are written as exclusions the tables do not show: each document's `entryFile` and
+`schemaFile` is relative to the bundle root and contains no `..`, and `package.root` has no `.` or
+`..` segment.
+
 {/* Evidence: crates/registry-render/src/manifest.rs, Manifest;
     crates/registry-render/src/labels.rs;
     crates/registry-render/src/runtime.rs, RenderRuntime;
