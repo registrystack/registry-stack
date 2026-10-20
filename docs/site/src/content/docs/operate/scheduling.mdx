@@ -22,7 +22,8 @@ step runs `schedulingctl` or `scheduling` against one runtime file.
   connection and refuses one it cannot protect.
 - An OpenID Connect issuer whose access tokens carry the read scope and, for bookings, the
   [task grant](../../reference/glossary/#task-grant) another system issues.
-- A directory of secret files owned by the runtime user, each with mode 0400 or 0600.
+- A directory of secret files owned by the runtime user, each with mode 0400 or 0600 and
+  written without a trailing newline.
 - A TLS edge in front of the listener. Scheduling serves plain HTTP on a private address and
   refuses a public one.
 
@@ -93,14 +94,14 @@ REVOKE ALL ON DATABASE scheduling FROM PUBLIC;
 GRANT CONNECT ON DATABASE scheduling TO scheduling_migration, scheduling_runtime;
 ALTER SCHEMA public OWNER TO scheduling_migration;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
-GRANT USAGE ON SCHEMA public TO scheduling_runtime;
-ALTER DEFAULT PRIVILEGES FOR ROLE scheduling_migration IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO scheduling_runtime;
 ```
 
-The schema holds tables and indexes only, so the runtime role needs no sequence privileges. The
-runtime requires TLS on its database connection and refuses one it cannot verify;
-`database.trustedRootCertificateRef` names the CA bundle when a private CA fronts PostgreSQL.
+Grant the runtime role nothing yourself. `apply` grants it exactly what serving needs: usage on
+the schema, read and write on the Scheduling tables, usage and select on the outbox identity
+sequence, and read on the activation ledgers. It reissues the grants on every run, so a table a
+later migration adds is covered. The runtime requires TLS on its database connection and refuses
+one it cannot verify; `database.trustedRootCertificateRef` names the CA bundle when a private CA
+fronts PostgreSQL.
 
 {/* Evidence: crates/registry-scheduling/migrations/0100_scheduling.sql;
     crates/registry-schedulingctl/src/activation.rs, RoleMode;
@@ -120,7 +121,9 @@ runtime requires TLS on its database connection and refuses one it cannot verify
 - `listener`: `bind`, plus `tlsTermination: operator-controlled-upstream` behind your TLS edge.
   `development-loopback` is refused on any address but loopback.
 - `secretProviders.file.root` and the `*Ref` keys: secret references such as
-  `secret:file/runtime-database-url`, resolved under that root.
+  `secret:file/runtime-database-url`, resolved under that root. Write each file with
+  `printf '%s'`: a trailing newline is part of the value, and a URL file that ends in one makes
+  `serve` exit 3 with `FATAL: database "scheduling\n" does not exist`.
 - `database.runtimeUrlRef` and `database.migrationUrlRef`: two PostgreSQL URLs. Give them
   different roles. With one role for both, the serving credential could rewrite the activation
   record, and `apply`, `status`, and `serve` say so.
@@ -283,14 +286,15 @@ bookings end or move them first. Any earlier package can be applied again as a n
 ## Retention
 
 The runtime runs its own retention sweep. Three keys under `retention` each default to seven
-days, a placeholder rather than a recommendation:
+days, a placeholder rather than a recommendation. Each is the longest the data is kept; the sweep
+erases it once the period has passed:
 
 - `receiptRetentionDays`: how long an idempotency receipt lasts. A retry after that is refused
   with `idempotency.expired`.
 - `claimOwnerRetentionDays`: how long after an appointment ends, or a hold lapses, the caller's
   issuer and subject stay on it.
 - `hookPayloadRetentionDays`: how long a hook event's payload is kept, for retries while it is
-  undelivered and for inspection once it is dead-lettered; after that the payload is erased.
+  undelivered and for inspection, through the database, once it is dead-lettered.
 
 `audit.retentionDays` (default 90) removes rotated audit files.
 
