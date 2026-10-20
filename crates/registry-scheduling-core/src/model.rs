@@ -816,38 +816,40 @@ fn records_integrity_diagnostics(decoded: &Decoded<SchedulingRecords>) -> Vec<Di
             list_ids("/locations", &records.locations),
         ),
         (
-            "scheduling.records.pool-id-collision",
-            list_ids("/pools", &records.pools),
-        ),
-        (
-            "scheduling.records.window-id-collision",
-            list_ids("/windows", &records.windows),
-        ),
-        (
             "scheduling.records.exception-id-collision",
             list_ids("/exceptions", &records.exceptions),
         ),
     ] {
         diagnostics.extend(collisions(&decoded.document, code, &values));
     }
-    for (pool_index, pool) in records.pools.iter().enumerate() {
-        let values = pool
-            .members
-            .iter()
-            .enumerate()
-            .map(|(member_index, member)| {
-                (
-                    member.resource_id.clone(),
-                    format!("/pools/{pool_index}/members/{member_index}/resourceId"),
-                )
-            })
-            .collect::<Vec<_>>();
-        diagnostics.extend(collisions(
-            &decoded.document,
-            "scheduling.records.pool-member-id-collision",
-            &values,
-        ));
-    }
+    let mut supplies = list_ids("/pools", &records.pools);
+    supplies.extend(list_ids("/windows", &records.windows));
+    diagnostics.extend(collisions(
+        &decoded.document,
+        "scheduling.records.supply-id-collision",
+        &supplies,
+    ));
+    let resources = records
+        .pools
+        .iter()
+        .enumerate()
+        .flat_map(|(pool_index, pool)| {
+            pool.members
+                .iter()
+                .enumerate()
+                .map(move |(member_index, member)| {
+                    (
+                        member.resource_id.clone(),
+                        format!("/pools/{pool_index}/members/{member_index}/resourceId"),
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    diagnostics.extend(collisions(
+        &decoded.document,
+        "scheduling.records.pool-member-id-collision",
+        &resources,
+    ));
     for (window_index, window) in records.windows.iter().enumerate() {
         let values = window
             .subquotas
@@ -1462,6 +1464,43 @@ holdPolicy:
                 .into_facts();
         assert_eq!(facts.pools[0].members.len(), 1);
         assert_eq!(facts.exceptions[0].id, "training");
+    }
+
+    #[test]
+    fn records_integrity_uses_the_supply_and_global_resource_namespaces() {
+        let yaml = format!(
+            "{RECORDS_HEAD}pools:\n  - id: service-pool\n    members:\n      - resourceId: station-1\n        available: true\n  - id: reserve-pool\n    members:\n      - resourceId: station_1\n        available: true\nwindows:\n  - id: service_pool\n    revision: 1\n    offering: missing-arrival-offering\n    location: north-counter\n    start: 2026-10-10T01:00:00Z\n    end: 2026-10-10T02:00:00Z\n    units: 1\n    unitsPolicy:\n      type: fixed\n      units: 1\n      because: One party uses one unit.\n    because: A published test window.\n"
+        );
+        let report =
+            SchedulingRecords::read(SCHEDULING_RECORDS_FILE, yaml.as_bytes(), &records_policy())
+                .expect_err("separator lookalikes in either real namespace are refused");
+
+        for (code, path, related, first, second) in [
+            (
+                "scheduling.records.supply-id-collision",
+                "/windows/0/id",
+                "/pools/0/id",
+                "service-pool",
+                "service_pool",
+            ),
+            (
+                "scheduling.records.pool-member-id-collision",
+                "/pools/1/members/0/resourceId",
+                "/pools/0/members/0/resourceId",
+                "station-1",
+                "station_1",
+            ),
+        ] {
+            let diagnostic = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == code)
+                .unwrap_or_else(|| panic!("missing {code}: {report:#?}"));
+            assert_eq!(diagnostic.path, path);
+            assert_eq!(diagnostic.related[0].path, related);
+            assert!(diagnostic.message.contains(first));
+            assert!(diagnostic.message.contains(second));
+        }
     }
 
     #[test]

@@ -2021,4 +2021,59 @@ mod tests {
         assert_eq!(diagnostic["source"]["line"], 5);
         assert!(!report.to_string().contains("Asia/Nowhere"), "{report}");
     }
+
+    #[test]
+    fn records_apply_refuses_cross_collection_id_collisions_before_database() {
+        let (root, project) = initialized("standalone-exact-time");
+        let config_path = runtime_config(root.path(), &project);
+        let records_path = root.path().join("records.yaml");
+        std::fs::write(
+            &records_path,
+            "apiVersion: id.registrystack.org/formats/scheduling/records/v1alpha1\n\
+             kind: SchedulingRecords\n\
+             locations:\n  - id: bangkok-counter\n    timezone: Asia/Bangkok\n\
+             pools:\n  - id: service-pool\n    members:\n      - resourceId: station-1\n        available: true\n\
+             \x20 - id: reserve-pool\n    members:\n      - resourceId: station_1\n        available: true\n\
+             windows:\n  - id: service_pool\n    revision: 1\n    offering: missing-arrival-offering\n\
+             \x20   location: bangkok-counter\n    start: 2026-10-10T01:00:00Z\n\
+             \x20   end: 2026-10-10T02:00:00Z\n    units: 1\n    unitsPolicy:\n\
+             \x20     type: fixed\n      units: 1\n      because: One party uses one unit.\n\
+             \x20   because: A published test window.\n",
+        )
+        .unwrap();
+        let (exit, report, stderr) = run_json(&[
+            "records",
+            "apply",
+            "--runtime-config",
+            config_path.to_str().unwrap(),
+            records_path.to_str().unwrap(),
+        ]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stderr.is_empty());
+        assert_eq!(report["command"], "records apply");
+        assert_eq!(report["status"], "domain-refusal");
+
+        for (code, path, related) in [
+            (
+                "scheduling.records.supply-id-collision",
+                "/windows/0/id",
+                "/pools/0/id",
+            ),
+            (
+                "scheduling.records.pool-member-id-collision",
+                "/pools/1/members/0/resourceId",
+                "/pools/0/members/0/resourceId",
+            ),
+        ] {
+            let diagnostic = report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|diagnostic| diagnostic["code"] == code)
+                .unwrap_or_else(|| panic!("missing {code}: {report}"));
+            assert_eq!(diagnostic["path"], path);
+            assert_eq!(diagnostic["related"][0]["path"], related);
+            assert_eq!(diagnostic["source"]["file"], records_path.to_str().unwrap());
+        }
+    }
 }
