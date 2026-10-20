@@ -521,6 +521,109 @@ fn canonical_project_target_and_authority_satisfy_schema_and_reader() {
 }
 
 #[test]
+fn target_collision_report_counts_the_file_and_points_to_both_authored_keys() {
+    let document = NORMALIZED_TARGET.replacen(
+        "secretProviders:",
+        "  synthetic_register:\n    origin: http://127.0.0.1:8081\n    authentication:\n      type: bearer\n      tokenRef: secret:file/synthetic-source-token\nsecretProviders:",
+        1,
+    );
+    let report = target::read_target("local-target.yaml", document.as_bytes())
+        .expect_err("separator-lookalike connection IDs must be refused");
+
+    assert_eq!(report.files_checked(), Some(1));
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "evidence.target.connection-id-collision")
+        .expect("the connection collision is reported");
+    assert_eq!(diagnostic.path, "/connections/synthetic_register");
+    let source = diagnostic.source.as_ref().expect("primary source position");
+    assert_eq!((source.line, source.column), (Some(39), Some(3)));
+    assert_eq!(diagnostic.related.len(), 1);
+    assert_eq!(
+        diagnostic.related[0].path,
+        "/connections/synthetic-register"
+    );
+    assert_eq!(
+        (diagnostic.related[0].line, diagnostic.related[0].column),
+        (Some(34), Some(3))
+    );
+}
+
+#[test]
+fn authority_report_sorts_and_bounds_semantic_and_collision_errors_once() {
+    let project = project::read_project("evidence.yaml", NORMALIZED_PROJECT.as_bytes())
+        .expect("the canonical project reads")
+        .value;
+    let (prefix, profile_body) = NORMALIZED_AUTHORITY
+        .split_once("  standalone-service:\n")
+        .expect("the canonical authority has one profile");
+    let prefix = prefix.replace("project: standalone-evidence", "project: other-project");
+    let mut document = prefix.clone();
+    for index in 0..=MAXIMUM_DIAGNOSTICS_PER_FILE {
+        document.push_str(&format!("  profile-{index:03}:\n{profile_body}"));
+        document.push_str(&format!("  profile_{index:03}:\n{profile_body}"));
+    }
+
+    let report = target::read_authority("dev-authority.yaml", document.as_bytes(), &project)
+        .expect_err("semantic and separator-collision errors must refuse together");
+    assert_eq!(report.files_checked(), Some(1));
+    assert_eq!(report.diagnostics().len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+    assert_eq!(
+        report.diagnostics()[0].code,
+        "evidence.authority.project"
+    );
+    assert_eq!(report.diagnostics()[0].path, "/project");
+    let semantic_source = report.diagnostics()[0]
+        .source
+        .as_ref()
+        .expect("semantic source position");
+    assert_eq!(
+        (semantic_source.line, semantic_source.column),
+        (Some(4), Some(10))
+    );
+
+    let first_collision = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "evidence.authority.access-profile-id-collision")
+        .expect("a positioned collision remains visible");
+    assert_eq!(first_collision.path, "/accessProfiles/profile_000");
+    assert_eq!(
+        first_collision.related[0].path,
+        "/accessProfiles/profile-000"
+    );
+    let first_profile_line = prefix.lines().count() + 1;
+    let second_profile_line = first_profile_line + profile_body.lines().count() + 1;
+    let collision_source = first_collision
+        .source
+        .as_ref()
+        .expect("collision source position");
+    assert_eq!(
+        (collision_source.line, collision_source.column),
+        (Some(second_profile_line), Some(3))
+    );
+    assert_eq!(
+        (
+            first_collision.related[0].line,
+            first_collision.related[0].column
+        ),
+        (Some(first_profile_line), Some(3))
+    );
+
+    let overflow = report
+        .diagnostics()
+        .last()
+        .expect("the report has its overflow marker");
+    assert_eq!(overflow.code, "config.too-many-problems");
+    assert_eq!(
+        overflow.message,
+        "2 more problems in this file are not shown"
+    );
+    assert_eq!(overflow.severity, Severity::Error);
+}
+
+#[test]
 fn target_service_requires_the_runtime_public_origin() {
     let mut document = yaml_as_json(NORMALIZED_TARGET);
     document["service"]

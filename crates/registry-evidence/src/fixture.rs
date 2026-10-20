@@ -114,7 +114,7 @@ pub fn read_fixture(
         return Err(document.report_with(collisions));
     }
     check_coverage(&document, &value, declared_unresolved, assurance_profile)
-        .map_err(|diagnostic| Report::new(vec![*diagnostic]))?;
+        .map_err(|diagnostic| document.report_with([*diagnostic]))?;
     if let Some(body) = value.as_object_mut() {
         body.remove("apiVersion");
         body.remove("kind");
@@ -494,6 +494,7 @@ mod tests {
         ] {
             let report = read_fixture("fixtures/cases.yaml", text.as_bytes(), false, profile)
                 .expect_err("strict profiles require complete coverage");
+            assert_eq!(report.files_checked(), Some(1));
             assert_eq!(
                 report.diagnostics()[0].code,
                 "evidence.fixture.incomplete-coverage"
@@ -541,6 +542,7 @@ mod tests {
                 AssuranceProfile::Local,
             )
             .expect_err("local coverage changes no structural boundary");
+            assert_eq!(report.files_checked(), Some(1));
             assert_eq!(report.diagnostics()[0].code, code);
             assert!(!report.render_human().contains(CANARY));
         }

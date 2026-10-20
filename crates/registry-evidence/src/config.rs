@@ -1086,12 +1086,16 @@ impl EvidenceConfig {
             .map_err(|report| ConfigError::Refused(Box::new(name_the_assertion_type(report))))?;
         let integrity = bundle_integrity_diagnostics(&decoded);
         if !integrity.is_empty() {
-            return Err(ConfigError::Refused(Box::new(Report::new(integrity))));
+            return Err(ConfigError::Refused(Box::new(
+                decoded.document.report_with(integrity),
+            )));
         }
         if let Err(violation) = decoded.value.check_rules() {
-            return Err(ConfigError::Refused(Box::new(Report::new(vec![
-                violation.diagnostic(&decoded.document)
-            ]))));
+            return Err(ConfigError::Refused(Box::new(
+                decoded
+                    .document
+                    .report_with([violation.diagnostic(&decoded.document)]),
+            )));
         }
         if decoded.value.project.is_some() && !decoded.value.authority_profiles.is_empty() {
             return invalid(
@@ -7635,6 +7639,7 @@ mod tests {
             else {
                 panic!("the bundle reader returns a positioned report");
             };
+            assert_eq!(report.files_checked(), Some(1));
             let diagnostic = report
                 .diagnostics()
                 .iter()
@@ -7726,6 +7731,68 @@ mod tests {
             "/authorityProfiles/statutory-caseworker-v1",
             "/authorityProfiles/statutory_caseworker-v1",
         );
+    }
+
+    #[test]
+    fn bundle_integrity_report_bounds_a_collision_flood_once() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("acceptance configuration parses");
+        let selector = config.selector_profiles.0[0].1.clone();
+        for index in 0..=registry_platform_yaml::MAXIMUM_DIAGNOSTICS_PER_FILE {
+            config
+                .selector_profiles
+                .insert(format!("overflow-{index:03}-selector"), selector.clone());
+            config
+                .selector_profiles
+                .insert(format!("overflow_{index:03}_selector"), selector.clone());
+        }
+        let projection = serde_json::to_value(config).expect("configuration serializes");
+        let ConfigError::Refused(report) = EvidenceConfig::parse_projection(&projection)
+            .expect_err("the bundle reader bounds integrity diagnostics")
+        else {
+            panic!("the bundle reader returns a positioned report");
+        };
+        assert_eq!(report.files_checked(), Some(1));
+        assert_eq!(
+            report.diagnostics().len(),
+            registry_platform_yaml::MAXIMUM_DIAGNOSTICS_PER_FILE + 1
+        );
+        let overflow = report
+            .diagnostics()
+            .last()
+            .expect("the report has its overflow marker");
+        assert_eq!(overflow.code, "config.too-many-problems");
+        assert_eq!(overflow.message, "1 more problem in this file is not shown");
+        assert_eq!(overflow.severity, Severity::Error);
+    }
+
+    #[test]
+    fn bundle_rule_refusal_counts_its_authored_file() {
+        let document = String::from_utf8(
+            include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+            )
+            .to_vec(),
+        )
+        .expect("acceptance configuration is UTF-8")
+        .replace(
+            "providerId: urn:example:fixture:provider:evidence",
+            "providerId: relative-provider",
+        );
+        let ConfigError::Refused(report) = EvidenceConfig::parse_yaml(document.as_bytes())
+            .expect_err("the bundle rule refuses a relative provider identifier")
+        else {
+            panic!("the bundle rule returns a positioned report");
+        };
+        assert_eq!(report.files_checked(), Some(1));
+        assert_eq!(report.diagnostics().len(), 1);
+        assert_eq!(
+            report.diagnostics()[0].code,
+            "evidence.bundle.invalid-service"
+        );
+        assert_eq!(report.diagnostics()[0].path, "/service/providerId");
     }
 
     #[test]

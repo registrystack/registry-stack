@@ -7,7 +7,7 @@ use crate::{
     },
 };
 use registry_platform_yaml::{
-    ApiVersion, Decoded, EnvelopeRule, FormatSpec, LocalId, Report, UniqueList,
+    ApiVersion, Decoded, Diagnostic, EnvelopeRule, FormatSpec, LocalId, Report, UniqueList,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -135,7 +135,9 @@ pub struct EvidenceTarget {
 
 pub fn read_target(file: &str, bytes: &[u8]) -> Result<Decoded<EvidenceTarget>, Report> {
     let decoded = decode_authored::<EvidenceTarget>(file, bytes, &TARGET)?;
-    let report = target_id_collisions(&decoded);
+    let report = decoded
+        .document
+        .report_with(target_id_collision_diagnostics(&decoded));
     if report.has_errors() {
         Err(report)
     } else {
@@ -148,29 +150,31 @@ pub fn read_authority(
     project: &EvidenceProject,
 ) -> Result<Decoded<EvidenceTargetAuthority>, Report> {
     let decoded = decode_authored::<EvidenceTargetAuthority>(file, bytes, &AUTHORITY)?;
-    let mut report = findings_report(
+    let mut diagnostics = findings_report(
         &decoded.document,
         "authority",
         validate_authority(&decoded.value, project),
-    );
-    report.extend(map_id_collisions(
+    )
+    .into_diagnostics();
+    diagnostics.extend(map_id_collision_diagnostics(
         &decoded.document,
         "evidence.authority.access-profile-id-collision",
         "/accessProfiles",
         &decoded.value.access_profiles,
     ));
+    let report = decoded.document.report_with(diagnostics);
     if report.has_errors() {
         return Err(report);
     }
     Ok(decoded)
 }
 
-fn map_id_collisions<T>(
+fn map_id_collision_diagnostics<T>(
     document: &registry_platform_yaml::Document,
     code: &str,
     base: &str,
     values: &BTreeMap<LocalId, T>,
-) -> Report {
+) -> Vec<Diagnostic> {
     let owned = values
         .keys()
         .map(|id| {
@@ -186,20 +190,18 @@ fn map_id_collisions<T>(
         .iter()
         .map(|(id, pointer)| registry_platform_yaml::AuthoredId::at_key(id, pointer))
         .collect::<Vec<_>>();
-    Report::new(registry_platform_yaml::local_id_collision_diagnostics(
-        document, code, &entries,
-    ))
+    registry_platform_yaml::local_id_collision_diagnostics(document, code, &entries)
 }
 
-fn target_id_collisions(decoded: &Decoded<EvidenceTarget>) -> Report {
-    let mut report = map_id_collisions(
+fn target_id_collision_diagnostics(decoded: &Decoded<EvidenceTarget>) -> Vec<Diagnostic> {
+    let mut diagnostics = map_id_collision_diagnostics(
         &decoded.document,
         "evidence.target.connection-id-collision",
         "/connections",
         &decoded.value.connections,
     );
     if let Some(extracts) = &decoded.value.extracts {
-        report.extend(map_id_collisions(
+        diagnostics.extend(map_id_collision_diagnostics(
             &decoded.document,
             "evidence.target.extract-id-collision",
             "/extracts",
@@ -207,14 +209,14 @@ fn target_id_collisions(decoded: &Decoded<EvidenceTarget>) -> Report {
         ));
     }
     if let Some(outbound_tls) = &decoded.value.outbound_tls {
-        report.extend(map_id_collisions(
+        diagnostics.extend(map_id_collision_diagnostics(
             &decoded.document,
             "evidence.target.trust-profile-id-collision",
             "/outboundTls/trustProfiles",
             &outbound_tls.trust_profiles,
         ));
     }
-    report
+    diagnostics
 }
 
 pub fn validate_authority(
