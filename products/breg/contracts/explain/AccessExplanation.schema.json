@@ -153,7 +153,7 @@
     },
     "rowReach": {
       "type": "array",
-      "description": "Passthrough of the compiled model's row-reach explanation; shape follows RowReachExplanation and is outside this contract version.",
+      "description": "Passthrough of the compiled model's row-reach explanation. Action target entries identify their runtime-enforced authority as additional to ordinary Record grants, state whether a direct Record grant exists, and retain their compiled uses. Shape follows RowReachExplanation and is outside this contract version.",
       "items": {
         "type": "object",
         "x-registry-passthrough": "bregctl writes each row-reach explanation as the engine holds it; its shape follows RowReachExplanation and is outside this contract version."
