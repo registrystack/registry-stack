@@ -32,15 +32,17 @@ The installer puts `scheduling` and `schedulingctl` in `~/.local/bin`. The runti
 for Linux amd64 only; on Linux arm64 and macOS arm64 the installer installs `schedulingctl` alone.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registry-scheduling/install.sh | bash
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/scheduling-install.sh | bash
 schedulingctl --version
 ```
 
-It checks every downloaded asset against the release's `SHA256SUMS` but does not prove where the
-release came from. For that, follow the release verification guide for your tag, then rerun the
-installer with `SCHEDULING_ASSET_DIR` set to the verified directory. `SCHEDULING_VERSION` pins a
-tag, such as the one of the
-[latest release](https://github.com/registrystack/registry-stack/releases/latest).
+That installer is published with the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest) and installs that
+release; to install another one, fetch the installer from that release's assets, because a published
+installer refuses a different `SCHEDULING_VERSION`. It checks every downloaded asset against the
+release's `SHA256SUMS` but does not prove where the release came from. For that, follow the release
+verification guide for the tag, then rerun the installer with `SCHEDULING_ASSET_DIR` set to the
+verified directory.
 
 The runtime is also published as the image `ghcr.io/registrystack/scheduling:<tag>`. Deploy it by
 the digest the release manifest names, not by the tag. The image runs `/usr/local/bin/scheduling`
@@ -60,12 +62,49 @@ docker run --rm \
   apply --runtime-config /etc/registry-scheduling/runtime.yaml --operator-reference CHG-1234
 ```
 
-`apply` needs the migration credential and writes its own audit file beside `audit.path`. Mount
-the migration credential only for `apply`, and keep it out of the serving container.
+`apply` needs the migration credential and writes its own audit file beside `audit.path`, and
+`records apply` connects with the same credential. Mount the migration credential only for those
+two commands, and keep it out of the serving container.
 
-{/* Evidence: crates/registry-scheduling/install.sh, usage() and the platform case;
-    release/docker/Dockerfile.scheduling; release/scripts/release_candidate.py;
-    crates/registry-schedulingctl/src/activation.rs, module comment and apply_audited(). */}
+{/* Evidence: crates/registry-scheduling/install.sh, usage(), default_version, and the platform
+    case; release/docker/Dockerfile.scheduling; crates/registry-schedulingctl/src/activation.rs,
+    module comment and apply_audited(); crates/registry-schedulingctl/src/records.rs,
+    connect_migration(). */}
+
+## Provision PostgreSQL
+
+Create the roles and the database, then hand the schema to the migration role:
+
+```sql
+CREATE ROLE scheduling_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS;
+CREATE ROLE scheduling_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS;
+CREATE DATABASE scheduling;
+```
+
+Set each role's password with `\password scheduling_migration` and `\password scheduling_runtime`
+in `psql`, which prompts for it instead of taking it in a statement.
+
+In the `scheduling` database:
+
+```sql
+REVOKE ALL ON DATABASE scheduling FROM PUBLIC;
+GRANT CONNECT ON DATABASE scheduling TO scheduling_migration, scheduling_runtime;
+ALTER SCHEMA public OWNER TO scheduling_migration;
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA public TO scheduling_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE scheduling_migration IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO scheduling_runtime;
+```
+
+The schema holds tables and indexes only, so the runtime role needs no sequence privileges. The
+runtime requires TLS on its database connection and refuses one it cannot verify;
+`database.trustedRootCertificateRef` names the CA bundle when a private CA fronts PostgreSQL.
+
+{/* Evidence: crates/registry-scheduling/migrations/0100_scheduling.sql;
+    crates/registry-schedulingctl/src/activation.rs, RoleMode;
+    products/scheduling/examples/standalone-exact-time/runtime.example.yaml, database. */}
 
 ## Write the runtime file
 
@@ -250,7 +289,8 @@ days, a placeholder rather than a recommendation:
   with `idempotency.expired`.
 - `claimOwnerRetentionDays`: how long after an appointment ends, or a hold lapses, the caller's
   issuer and subject stay on it.
-- `hookPayloadRetentionDays`: how long an undelivered hook event is retried.
+- `hookPayloadRetentionDays`: how long a hook event's payload is kept, for retries while it is
+  undelivered and for inspection once it is dead-lettered; after that the payload is erased.
 
 `audit.retentionDays` (default 90) removes rotated audit files.
 

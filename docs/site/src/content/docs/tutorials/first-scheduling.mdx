@@ -31,16 +31,16 @@ database, no token issuer, no network.
 ## Install schedulingctl
 
 [`schedulingctl`](../../reference/cli/schedulingctl/) is the authoring and operator tool for
-Registry Scheduling. The installer resolves the latest numbered release, checks each download
-against the release's `SHA256SUMS`, and puts the binaries in `~/.local/bin`; keep that directory on
-your `PATH`. On Linux amd64 it also installs the `scheduling` runtime, which this tutorial does
+Registry Scheduling. The installer published with the latest release installs that release,
+checks each download against the release's `SHA256SUMS`, and puts the binaries in `~/.local/bin`;
+keep that directory on your `PATH`. On Linux amd64 it also installs the `scheduling` runtime, which this tutorial does
 not use.
 
-{/* Evidence: crates/registry-scheduling/install.sh, SCHEDULING_INSTALL_DIR and the platform
-    note in usage(); release/NIGHTLY.md, the source installer table. */}
+{/* Evidence: crates/registry-scheduling/install.sh, default_version, SCHEDULING_INSTALL_DIR,
+    and the platform note in usage(); release v0.42.0 assets. */}
 
 ```sh test-skip="downloads a release; the gate uses binaries built from this checkout"
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registry-scheduling/install.sh | bash
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/scheduling-install.sh | bash
 ```
 
 ```sh
