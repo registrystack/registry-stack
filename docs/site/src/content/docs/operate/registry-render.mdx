@@ -13,9 +13,9 @@ standards_referenced: []
 
 import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
 
-You have a package built with `registry-render package` and callers that need PDFs. At the end of
-this page one `registry-render serve` process serves that package on a private address behind
-your TLS proxy, under API-key authentication, with an audit file you ship to append-only storage.
+You have a package built with `registry-render package` and callers that need PDFs. When you are
+done, one `registry-render serve` process serves that package on a private address behind your
+TLS proxy, under API-key authentication, with an audit file you ship to append-only storage.
 [Render your first document](../../tutorials/first-render-document/) builds a package.
 
 Registry Render is pre-1.0 and an
@@ -212,11 +212,13 @@ Give each replica its own audit path.
 
 ## Answer callers
 
-Callers POST one JSON body to `/v1/render/<document-type>` with the API key:
+Callers POST one JSON body to `/v1/render/<document-type>` with the API key. Keep the key off the
+command line: write the header to a file only the caller reads, as
+[the tutorial](../../tutorials/first-render-document/) does, and pass the file.
 
 ```sh
 curl -s -X POST http://127.0.0.1:8080/v1/render/<document-type> \
-  -H "Authorization: Bearer <api-key>" \
+  -H @auth.header \
   -H "Content-Type: application/json" \
   -d '{"issuedAt":"<issuance-time>","data":<document-data>}' \
   -o document.pdf -D headers.txt
@@ -264,6 +266,11 @@ When the active file would pass `rotateBytes`, it is renamed to `<path>.<sequenc
 opens. At startup and at each rotation, sealed files older than `retentionDays` are deleted. The
 file is not chained or signed, so ship sealed files, or the `stdout` stream, to append-only storage
 before retention deletes them.
+
+:::danger
+Never rename, edit, or truncate the active file while the process runs. The writer then stops, and
+every render fails closed with `audit-failed` until a restart.
+:::
 
 Never rename, edit, or truncate the active audit file while serve runs. The writer stops, and
 every render fails closed until you restart the process.
