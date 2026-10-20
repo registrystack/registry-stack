@@ -2941,6 +2941,8 @@ $defs:
         type: string
         minLength: 1
         maxLength: 2048
+        not:
+          pattern: '[\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff\ufdd0-\ufdef\ufffe\uffff]|🿾|🿿|𯿾|𯿿|𿿾|𿿿|񏿾|񏿿|񟿾|񟿿|񯿾|񯿿|񿿾|񿿿|򏿾|򏿿|򟿾|򟿿|򯿾|򯿿|򿿾|򿿿|󏿾|󏿿|󟿾|󟿿|󯿾|󯿿|󿿾|󿿿|􏿾|􏿿'
       grantCeiling:
         description: >-
           Package-owned authority, actor, value-origin and audience ceilings. The definition's
