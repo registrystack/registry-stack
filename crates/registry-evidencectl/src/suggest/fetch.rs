@@ -25,6 +25,7 @@
 use std::{io::Read, path::PathBuf, time::Duration};
 
 use anyhow::{bail, Context, Result};
+use ureq::ResponseExt;
 use url::{Host, Url};
 
 use super::types::SpecSource;
@@ -158,23 +159,25 @@ fn safe_url_refusal(
 /// a response that never declares a length cannot talk this into buffering
 /// whatever the server feels like sending.
 pub fn get(url: &Url, max_bytes: u64) -> Result<String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
-        .redirects(MAX_REDIRECTS)
+    let config = ureq::Agent::config_builder()
+        .proxy(None)
+        .timeout_connect(Some(CONNECT_TIMEOUT))
+        .timeout_global(Some(REQUEST_TIMEOUT))
+        .max_redirects(MAX_REDIRECTS)
         .user_agent(concat!("evidencectl/", env!("CARGO_PKG_VERSION")))
         .build();
+    let agent: ureq::Agent = config.into();
 
     let response = match agent
         .get(url.as_str())
-        .set(
+        .header(
             "Accept",
             "application/yaml, application/json, text/yaml, */*",
         )
         .call()
     {
         Ok(response) => response,
-        Err(ureq::Error::Status(status, _)) => {
+        Err(ureq::Error::StatusCode(status)) => {
             return Err(crate::SafeCliFailure {
                 operational: true,
                 code: "evidence.openapi.http-status".to_owned(),
@@ -189,7 +192,7 @@ pub fn get(url: &Url, max_bytes: u64) -> Result<String> {
         Err(error) => return Err(error).with_context(|| format!("fetching {url}")),
     };
 
-    let landed = response.get_url().to_owned();
+    let landed = response.get_uri().to_string();
     if landed != url.as_str() {
         check_url(&landed)
             .with_context(|| format!("{url} redirected to a URL that is not read"))?;
@@ -197,6 +200,7 @@ pub fn get(url: &Url, max_bytes: u64) -> Result<String> {
 
     let mut body = Vec::new();
     response
+        .into_body()
         .into_reader()
         .take(max_bytes.saturating_add(1))
         .read_to_end(&mut body)
