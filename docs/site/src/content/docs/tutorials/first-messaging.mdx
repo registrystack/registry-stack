@@ -144,13 +144,17 @@ HTTP 202
 ```
 
 `202` means Messaging accepted and queued the message. The mock gateway takes it, then posts a
-signed delivery report back. Give it a few seconds and read the message:
+signed delivery report back. Read the message until the report has arrived, for up to ten seconds:
 
 ```sh
 sms_id="$(jq -r .id tutorial-work/sms.json)"
-sleep 3
-curl --silent --show-error --header @"$header" "$api/v1/messages/$sms_id" |
-  jq '{status, dispatch, report, to}'
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  curl --silent --show-error --header @"$header" "$api/v1/messages/$sms_id" \
+    --output tutorial-work/sms-status.json
+  if [ "$(jq -r .report tutorial-work/sms-status.json)" = "delivered" ]; then break; fi
+  sleep 1
+done
+jq '{status, dispatch, report, to}' tutorial-work/sms-status.json
 ```
 
 ```json
@@ -186,9 +190,13 @@ curl --silent --show-error \
   --output tutorial-work/email.json --write-out 'HTTP %{http_code}\n' \
   "$api/v1/messages"
 email_id="$(jq -r .id tutorial-work/email.json)"
-sleep 3
-curl --silent --show-error --header @"$header" "$api/v1/messages/$email_id" |
-  jq '{status, dispatch, report, correlationId}'
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  curl --silent --show-error --header @"$header" "$api/v1/messages/$email_id" \
+    --output tutorial-work/email-status.json
+  if [ "$(jq -r .dispatch tutorial-work/email-status.json)" = "submitted" ]; then break; fi
+  sleep 1
+done
+jq '{status, dispatch, report, correlationId}' tutorial-work/email-status.json
 ```
 
 ```json

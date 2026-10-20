@@ -228,8 +228,9 @@ load_spec() {
 			"stop-session"
 		)
 		# The submissions use curl --write-out and no --fail-with-body, and
-		# the polls give up quietly after ten tries, so the fences exit zero
-		# even if Messaging refuses the send or the report never arrives.
+		# the status polls give up quietly after ten one-second tries, so the
+		# fences exit zero even if Messaging refuses the send or the report
+		# never arrives.
 		SPEC_ASSERTS=(
 			"HTTP 202"
 			'"status": "delivered"'
