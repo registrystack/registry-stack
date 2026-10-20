@@ -493,7 +493,12 @@ fn migration_id_collision_diagnostics(
         .steps
         .iter()
         .enumerate()
-        .map(|(index, step)| (step.id(), format!("/steps/{index}/id")))
+        .map(|(index, step)| {
+            (
+                registry_platform_yaml::Identified::id(step),
+                format!("/steps/{index}/id"),
+            )
+        })
         .collect::<Vec<_>>();
     for (member, assertions) in [
         ("preAssertions", &descriptor.pre_assertions),
