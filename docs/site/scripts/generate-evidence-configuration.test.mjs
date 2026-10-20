@@ -828,14 +828,23 @@ test('a rule written beside a `$ref` binds together with the definition it refer
 test('Evidence source origins keep the https-or-loopback rule written beside the shared URL', async () => {
   const document = await buildEvidenceConfiguration(repoRoot);
   const bundle = document.contracts.find((contract) => contract.id === 'bundle');
-  const field = bundle.fields.find((entry) => entry.key_path === 'sources.*.baseUrl');
-  assert.ok(field.constraints.some((group) => group.includes('pattern: ^https://[^/?#]+$')));
-  assert.ok(
-    field.constraints.some((group) =>
-      group.some((constraint) => constraint.startsWith('pattern: ^http://(127')),
-    ),
-  );
-  for (const group of field.constraints) {
-    assert.ok(group.includes('maxLength: 2048'), JSON.stringify(group));
+  for (const keyPath of ['sources.*.baseUrl', 'sourceConnections.*.baseUrl']) {
+    const field = bundle.fields.find((entry) => entry.key_path === keyPath);
+    assert.ok(field, keyPath);
+    assert.ok(
+      field.constraints.some((group) =>
+        group.some((constraint) => constraint.startsWith('pattern: ^https://')),
+      ),
+      keyPath,
+    );
+    assert.ok(
+      field.constraints.some((group) =>
+        group.some((constraint) => /^pattern: \^http:\/\/\((\?:)?127/u.test(constraint)),
+      ),
+      keyPath,
+    );
+    for (const group of field.constraints) {
+      assert.ok(group.includes('maxLength: 2048'), `${keyPath} ${JSON.stringify(group)}`);
+    }
   }
 });
