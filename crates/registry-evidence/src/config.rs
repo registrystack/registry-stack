@@ -1084,17 +1084,13 @@ impl EvidenceConfig {
             .with_hook(&mut hook)
             .decode::<Self>(bytes, &Expect::one(&EVIDENCE_BUNDLE_FORMAT))
             .map_err(|report| ConfigError::Refused(Box::new(name_the_assertion_type(report))))?;
-        let integrity = bundle_integrity_diagnostics(&decoded);
-        if !integrity.is_empty() {
-            return Err(ConfigError::Refused(Box::new(
-                decoded.document.report_with(integrity),
-            )));
+        let mut diagnostics = bundle_integrity_diagnostics(&decoded);
+        if let Err(violation) = decoded.value.check_rules_after_integrity() {
+            diagnostics.push(violation.diagnostic(&decoded.document));
         }
-        if let Err(violation) = decoded.value.check_rules() {
+        if !diagnostics.is_empty() {
             return Err(ConfigError::Refused(Box::new(
-                decoded
-                    .document
-                    .report_with([violation.diagnostic(&decoded.document)]),
+                decoded.document.report_with(diagnostics),
             )));
         }
         if decoded.value.project.is_some() && !decoded.value.authority_profiles.is_empty() {
@@ -1126,6 +1122,19 @@ impl EvidenceConfig {
     /// The first rule this decoded bundle breaks, with the member it
     /// concerns, in the order startup checks them.
     pub(crate) fn check_rules(&self) -> Result<(), Violation> {
+        self.check_rules_with_named_map_collisions(true)
+    }
+
+    /// Check rules after the authored document's positioned integrity pass has
+    /// already reported top-level named-map separator collisions.
+    fn check_rules_after_integrity(&self) -> Result<(), Violation> {
+        self.check_rules_with_named_map_collisions(false)
+    }
+
+    fn check_rules_with_named_map_collisions(
+        &self,
+        check_named_map_collisions: bool,
+    ) -> Result<(), Violation> {
         validate_uri(&self.service.provider_id).at("/service/providerId")?;
         validate_uri(&self.service.trust_domain).at("/service/trustDomain")?;
         validate_public_origin(&self.service.public_origin, self.assurance_profile)
@@ -1162,16 +1171,23 @@ impl EvidenceConfig {
             1,
             128,
             "/selectorProfiles",
+            check_named_map_collisions,
             |profile| profile.validate(),
         )?;
-        validate_named_map(&self.sources, 1, 128, "/sources", |source| {
-            source.validate(self.assurance_profile)
-        })?;
+        validate_named_map(
+            &self.sources,
+            1,
+            128,
+            "/sources",
+            check_named_map_collisions,
+            |source| source.validate(self.assurance_profile),
+        )?;
         validate_named_map(
             &self.source_connections,
             0,
             128,
             "/sourceConnections",
+            check_named_map_collisions,
             |connection| connection.validate(self.assurance_profile),
         )?;
         for (source_id, source) in self.sources.iter() {
@@ -1194,6 +1210,7 @@ impl EvidenceConfig {
             usize::from(self.project.is_none()),
             128,
             "/authorityProfiles",
+            check_named_map_collisions,
             |profile| profile.validate(),
         )?;
         let task_grant_profiles = self
@@ -6216,6 +6233,7 @@ fn validate_named_map<T>(
     minimum: usize,
     maximum: usize,
     pointer: &str,
+    check_separator_collisions: bool,
     validate: impl Fn(&T) -> Result<(), ConfigError>,
 ) -> Result<(), Violation> {
     validate_len(map.len(), minimum, maximum, "named configuration map").at(pointer)?;
@@ -6226,12 +6244,14 @@ fn validate_named_map<T>(
         }
         validate(value).at(at)?;
     }
-    if let Some((_, second)) = registry_platform_yaml::lookalike_local_id_pairs(map.keys())
-        .into_iter()
-        .next()
-    {
-        return invalid("named map identifiers differ only by `-` versus `_`")
-            .at_key(named(pointer, map.0[second].0.as_str()));
+    if check_separator_collisions {
+        if let Some((_, second)) = registry_platform_yaml::lookalike_local_id_pairs(map.keys())
+            .into_iter()
+            .next()
+        {
+            return invalid("named map identifiers differ only by `-` versus `_`")
+                .at_key(named(pointer, map.0[second].0.as_str()));
+        }
     }
     Ok(())
 }
@@ -7640,6 +7660,19 @@ mod tests {
                 panic!("the bundle reader returns a positioned report");
             };
             assert_eq!(report.files_checked(), Some(1));
+            assert_eq!(
+                report
+                    .diagnostics()
+                    .iter()
+                    .filter(|diagnostic| diagnostic.code == code)
+                    .count(),
+                1
+            );
+            assert!(!report.diagnostics().iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .contains("named map identifiers differ only by")
+            }));
             let diagnostic = report
                 .diagnostics()
                 .iter()
@@ -7734,6 +7767,38 @@ mod tests {
     }
 
     #[test]
+    fn bundle_reader_reports_collisions_beside_the_first_independent_rule_violation() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("acceptance configuration parses");
+        let source = config.sources.0[0].1.clone();
+        config.sources.insert("source_a".to_owned(), source);
+        config.service.provider_id = "relative-provider".to_owned();
+        let projection = serde_json::to_value(config).expect("configuration serializes");
+
+        let ConfigError::Refused(report) = EvidenceConfig::parse_projection(&projection)
+            .expect_err("the bundle reader reports both independent refusals")
+        else {
+            panic!("the bundle reader returns a positioned report");
+        };
+        assert_eq!(report.files_checked(), Some(1));
+        assert_eq!(report.diagnostics().len(), 2);
+        assert_eq!(
+            report.diagnostics()[0].code,
+            "evidence.bundle.invalid-service"
+        );
+        assert_eq!(report.diagnostics()[0].path, "/service/providerId");
+        assert_eq!(
+            report.diagnostics()[1].code,
+            "evidence.bundle.source-id-collision"
+        );
+        assert_eq!(report.diagnostics()[1].path, "/sources/source_a");
+        assert_eq!(report.diagnostics()[1].related.len(), 1);
+        assert_eq!(report.diagnostics()[1].related[0].path, "/sources/source-a");
+    }
+
+    #[test]
     fn bundle_integrity_report_bounds_a_collision_flood_once() {
         let mut config = EvidenceConfig::parse_yaml(include_bytes!(
             "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
@@ -7764,8 +7829,15 @@ mod tests {
             .last()
             .expect("the report has its overflow marker");
         assert_eq!(overflow.code, "config.too-many-problems");
-        assert_eq!(overflow.message, "1 more problem in this file is not shown");
+        assert_eq!(
+            overflow.message,
+            "2 more problems in this file are not shown"
+        );
         assert_eq!(overflow.severity, Severity::Error);
+        assert!(report.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "evidence.bundle.invalid-selector-profile"
+                && diagnostic.path == "/selectorProfiles"
+        }));
     }
 
     #[test]
