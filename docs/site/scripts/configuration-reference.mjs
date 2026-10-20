@@ -112,30 +112,55 @@ function containsConstraints(schema, keyPath) {
   return [`contains: ${fixed.map(describeValue).join(' | ')}`];
 }
 
+const UPPER_BOUNDS = new Set(['exclusiveMaximum', 'maxItems', 'maxLength', 'maxProperties', 'maximum']);
+const LOWER_BOUNDS = new Set(['exclusiveMinimum', 'minItems', 'minLength', 'minProperties', 'minimum']);
+
+// The bounds a conjunction of nodes places on one value. Every node applies,
+// so of two lengths the shorter one is the bound a value must satisfy, and of
+// two patterns both are.
+function conjoinedConstraints(nodes, prefix) {
+  const constraints = [];
+  for (const keyword of CONSTRAINT_KEYWORDS) {
+    const values = nodes.filter((node) => Object.hasOwn(node, keyword)).map((node) => node[keyword]);
+    if (values.length === 0) {
+      continue;
+    }
+    // Bounds are compared, not converted: a contract parsed with big integers
+    // keeps them.
+    const stated = UPPER_BOUNDS.has(keyword)
+      ? [values.reduce((least, value) => (value < least ? value : least))]
+      : LOWER_BOUNDS.has(keyword)
+        ? [values.reduce((most, value) => (value > most ? value : most))]
+        : values;
+    constraints.push(...new Set(stated.map((value) => `${prefix}${keyword}: ${describeValue(value)}`)));
+  }
+  return constraints.sort();
+}
+
 // Bounds a map places on the key a deployment writes. These contracts state
-// them as a reference to the shared identifier definition, so reading the
-// `propertyNames` node itself would report nothing.
+// them as a reference to the shared identifier definition, narrowed by a
+// shorter length or a stricter pattern written beside the reference, so every
+// node of the chain binds, not only the `propertyNames` node or the definition
+// it ends in.
 function propertyNameConstraints(document, schema) {
   const seen = new Set();
+  const chain = [];
   let node = schema;
-  while (node !== null && typeof node === 'object' && Object.hasOwn(node, '$ref')) {
+  while (node !== null && typeof node === 'object' && !Array.isArray(node)) {
+    chain.push(node, ...(Array.isArray(node.allOf) ? node.allOf : []).filter(isObjectNode));
+    if (!Object.hasOwn(node, '$ref')) {
+      break;
+    }
     if (seen.has(node.$ref)) {
       return [];
     }
     seen.add(node.$ref);
     node = resolveReference(document, node.$ref);
   }
-  if (node === null || typeof node !== 'object' || Array.isArray(node)) {
-    return [];
-  }
-  const conjuncts = Array.isArray(node.allOf) ? node.allOf : [];
-  return [
-    ...new Set([
-      ...constraintsOf(node, 'propertyNames.'),
-      ...conjuncts.flatMap((branch) => constraintsOf(branch ?? {}, 'propertyNames.')),
-    ]),
-  ].sort();
+  return conjoinedConstraints(chain, 'propertyNames.');
 }
+
+const isObjectNode = (node) => node !== null && typeof node === 'object' && !Array.isArray(node);
 
 // A branch's fixed discriminator gives readers a stable name for the meaning
 // that branch contributes. This is intentionally narrower than general schema
@@ -322,16 +347,16 @@ function walk(document, schema, prefix, kind, required, occurrences, state) {
     const reference = schema.$ref;
     // A recursive definition contributes its shape once. Re-entering it would
     // not terminate and shows the reader no key they have not already seen.
-    if (state.referenceStack.has(reference)) {
-      return;
+    if (!state.referenceStack.has(reference)) {
+      walk(document, resolveReference(document, reference), prefix, kind, required, occurrences, {
+        ...state,
+        referenceStack: new Set([...state.referenceStack, reference]),
+        scope: reference,
+        descriptionDepth: state.descriptionDepth + 1,
+      });
     }
-    walk(document, resolveReference(document, reference), prefix, kind, required, occurrences, {
-      ...state,
-      referenceStack: new Set([...state.referenceStack, reference]),
-      scope: reference,
-      descriptionDepth: state.descriptionDepth + 1,
-    });
-    return;
+    // A combinator written beside the reference narrows the definition rather
+    // than replacing it, so the walk goes on into the siblings below.
   }
 
   if (Array.isArray(schema.allOf)) {
@@ -616,9 +641,21 @@ function constraintAlternatives(occurrences) {
     return only.length > 0 ? [only] : [];
   }
 
-  const groups = [...byVariant.values()].map((constraints) =>
-    uniqueSorted([...shared, ...constraints]),
-  );
+  // An alternative chosen inside another one is taken together with it, so it
+  // carries the enclosing alternative's bounds, and the enclosing alternative
+  // is then stated only through the ones chosen inside it.
+  const keys = [...byVariant.keys()];
+  const encloses = (outer, inner) => inner.startsWith(`${outer}>`);
+  const groups = keys
+    .filter((key) => !keys.some((other) => encloses(key, other)))
+    .map((key) =>
+      uniqueSorted([
+        ...shared,
+        ...keys
+          .filter((other) => other === key || encloses(other, key))
+          .flatMap((other) => byVariant.get(other)),
+      ]),
+    );
   // An alternative that adds no bound is kept, because dropping it would make
   // another alternative's bounds read as though they held under every
   // alternative. Alternatives that land on the same bounds are one group.

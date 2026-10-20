@@ -782,3 +782,60 @@ test('generating writes the reference where the page reads it', async () => {
     await rm(scratch, { recursive: true, force: true });
   }
 });
+
+test('a rule written beside a `$ref` binds together with the definition it refers to', () => {
+  // Contracts narrow a shared definition in place: a socket address is the
+  // shared string plus a port rule plus one of several host shapes, and a map
+  // key is the shared identifier plus a shorter length and a stricter pattern.
+  // Reading only the definition, or only the last node of the chain, publishes
+  // the loose bound and hides the one the runtime enforces.
+  const fields = collectFields({
+    type: 'object',
+    properties: {
+      bind: {
+        $ref: '#/$defs/Bind',
+        allOf: [{ pattern: ':[0-9]+$' }, { anyOf: [{ pattern: '^127\\.' }, { pattern: '^\\[' }] }],
+      },
+      keys: {
+        type: 'object',
+        propertyNames: { $ref: '#/$defs/Id', maxLength: 10, pattern: '^[1-9][0-9]*$' },
+        additionalProperties: { type: 'string' },
+      },
+    },
+    $defs: {
+      Bind: { type: 'string', minLength: 1, maxLength: 128 },
+      Id: { type: 'string', minLength: 1, maxLength: 512, pattern: '^[^\\u0000]+$' },
+    },
+  });
+  const byPath = new Map(fields.map((field) => [field.key_path, field]));
+  assert.equal(byPath.get('bind').type, 'string');
+  assert.deepEqual(byPath.get('bind').constraints, [
+    ['maxLength: 128', 'minLength: 1', 'pattern: :[0-9]+$', 'pattern: ^127\\.'],
+    ['maxLength: 128', 'minLength: 1', 'pattern: :[0-9]+$', 'pattern: ^\\['],
+  ]);
+  // Both lengths apply, so the shorter one is the bound a key must satisfy;
+  // both patterns apply, so both are stated.
+  assert.deepEqual(byPath.get('keys.*').constraints, [
+    [
+      'propertyNames.maxLength: 10',
+      'propertyNames.minLength: 1',
+      'propertyNames.pattern: ^[1-9][0-9]*$',
+      'propertyNames.pattern: ^[^\\u0000]+$',
+    ],
+  ]);
+});
+
+test('Evidence source origins keep the https-or-loopback rule written beside the shared URL', async () => {
+  const document = await buildEvidenceConfiguration(repoRoot);
+  const bundle = document.contracts.find((contract) => contract.id === 'bundle');
+  const field = bundle.fields.find((entry) => entry.key_path === 'sources.*.baseUrl');
+  assert.ok(field.constraints.some((group) => group.includes('pattern: ^https://[^/?#]+$')));
+  assert.ok(
+    field.constraints.some((group) =>
+      group.some((constraint) => constraint.startsWith('pattern: ^http://(127')),
+    ),
+  );
+  for (const group of field.constraints) {
+    assert.ok(group.includes('maxLength: 2048'), JSON.stringify(group));
+  }
+});
