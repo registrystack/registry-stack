@@ -266,6 +266,135 @@ mod tests {
         );
     }
     #[test]
+    fn check_preserves_duplicate_display_warning_when_function_compilation_fails() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/examples/standalone");
+        copy_tree(&source, temporary.path());
+        let project_file = temporary.path().join("evidence.yaml");
+        let authored = fs::read_to_string(&project_file)
+            .unwrap()
+            .replacen(
+                "  person-record:\n",
+                "  person-record:\n    label: Registry source\n",
+                1,
+            )
+            .replacen(
+                "  licence-record:\n",
+                "  licence-record:\n    label: registry source\n",
+                1,
+            );
+        fs::write(&project_file, authored).unwrap();
+        fs::write(
+            temporary.path().join("functions/extract-person.rhai"),
+            "fn extract(",
+        )
+        .unwrap();
+
+        let error = check(temporary.path(), None, false, false)
+            .expect_err("the Function error refuses a project that also warns");
+        let report = error
+            .downcast_ref::<Report>()
+            .expect("a structured mixed report");
+        assert_eq!(report.error_count(), 1);
+        assert_eq!(report.warning_count(), 1);
+
+        let compilation = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "evidence.project.function-compile")
+            .expect("the Function compilation error is retained");
+        assert_eq!(compilation.path, "/functions/0");
+        let compilation_source = compilation.source.as_ref().expect("placed error");
+        assert_eq!(compilation_source.file, project_file.to_string_lossy());
+        assert_eq!(
+            (compilation_source.line, compilation_source.column),
+            (Some(13), Some(3))
+        );
+
+        let warning = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "evidence.project.duplicate-source-label")
+            .expect("the duplicate display warning is retained");
+        assert_eq!(warning.path, "/sources/person-record/label");
+        let warning_source = warning.source.as_ref().expect("placed warning");
+        assert_eq!(warning_source.file, project_file.to_string_lossy());
+        assert!(warning_source.line.is_some());
+        assert!(warning_source.column.is_some());
+    }
+    #[test]
+    fn check_preserves_duplicate_display_warning_when_function_asset_is_missing() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/examples/standalone");
+        copy_tree(&source, temporary.path());
+        let project_file = temporary.path().join("evidence.yaml");
+        let authored = fs::read_to_string(&project_file)
+            .unwrap()
+            .replacen(
+                "  person-record:\n",
+                "  person-record:\n    label: Registry source\n",
+                1,
+            )
+            .replacen(
+                "  licence-record:\n",
+                "  licence-record:\n    label: registry source\n",
+                1,
+            );
+        fs::write(&project_file, authored).unwrap();
+        fs::remove_file(temporary.path().join("functions/extract-person.rhai")).unwrap();
+
+        let error = check(temporary.path(), None, false, false)
+            .expect_err("the absent Function asset prevents inspection");
+        let report = error
+            .downcast_ref::<Report>()
+            .expect("the asset refusal keeps a structured mixed report");
+        assert_eq!(report.error_count(), 1);
+        assert_eq!(report.warning_count(), 1);
+
+        let asset = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "evidence.project.asset-path")
+            .expect("the missing asset is refused");
+        assert_eq!(asset.path, "/functions/0/source");
+        let asset_source = asset.source.as_ref().expect("placed asset refusal");
+        assert_eq!(asset_source.file, project_file.to_string_lossy());
+        assert_eq!(
+            (asset_source.line, asset_source.column),
+            (Some(15), Some(11))
+        );
+
+        let warning = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "evidence.project.duplicate-source-label")
+            .expect("the duplicate display warning is retained");
+        assert_eq!(warning.code, "evidence.project.duplicate-source-label");
+        assert_eq!(warning.path, "/sources/person-record/label");
+        let source = warning.source.as_ref().expect("placed warning");
+        assert_eq!(source.file, project_file.to_string_lossy());
+        assert!(source.line.is_some());
+        assert!(source.column.is_some());
+
+        let refused = refused_check_report(temporary.path(), None, report);
+        assert_eq!(refused["diagnostics"].as_array().unwrap().len(), 2);
+        let json = serde_json::to_string(&refused).unwrap();
+        assert!(json.contains("evidence.project.asset-path"));
+        assert!(json.contains("evidence.project.duplicate-source-label"));
+        assert!(!json.contains("Registry source"));
+        assert!(!json.contains("registry source"));
+
+        let mut human = Vec::new();
+        render_human(&refused, report, &mut human).unwrap();
+        let human = String::from_utf8(human).unwrap();
+        assert!(human.contains("evidence.project.asset-path"));
+        assert!(human.contains("evidence.project.duplicate-source-label"));
+        assert!(!human.contains("Registry source"));
+        assert!(!human.contains("registry source"));
+    }
+    #[test]
     fn check_reports_project_reader_errors_at_the_authored_file() {
         let temporary = tempfile::tempdir().unwrap();
         let source = Path::new(env!("CARGO_MANIFEST_DIR"))

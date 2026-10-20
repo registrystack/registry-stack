@@ -33,7 +33,9 @@ Rules worth internalizing:
 
 - **`labels` is bundle-owned content** — one label table per
   `labels/<locale>.yaml` (`kind: RenderLabels`), whose `labels` map of key
-  to text the template receives flat; the manifest lists the locales in
+  to text the template receives flat. Label values use the shared display-text
+  rules: multilingual joiners and direction marks remain valid, while controls
+  that can invisibly reorder text are refused. The manifest lists the locales in
   `labels: [...]`. The template receives every declared table, so a bilingual document consumes
   both. A key present in one locale and missing from another is a `registry-render
   check` error, not a runtime surprise; a key no locale declares is a

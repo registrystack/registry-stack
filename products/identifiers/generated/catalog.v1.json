@@ -4713,7 +4713,7 @@
       "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-render/src/schema.rs",
-        "sha256": "7928ac30b4f5442dd4cb89632ff23a35bba1b27d4df882955ee284e841f4b7e9"
+        "sha256": "47dcb8f1ab50319c0eb31c888ea7bc9e608167ced277c493b19e2518f6a8a202"
       },
       "artifact": {
         "path": "products/render/schemas/bundle.schema.json",
@@ -4731,11 +4731,11 @@
       "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-render/src/schema.rs",
-        "sha256": "7928ac30b4f5442dd4cb89632ff23a35bba1b27d4df882955ee284e841f4b7e9"
+        "sha256": "47dcb8f1ab50319c0eb31c888ea7bc9e608167ced277c493b19e2518f6a8a202"
       },
       "artifact": {
         "path": "products/render/schemas/labels.schema.json",
-        "sha256": "1f7517cc73cc2c0cb0c626cc2f716f638d333d4d9db7ebe7eaef0c4046a191b8",
+        "sha256": "f511f546980251198954678790b986a5aa2cb4f037bd463f20531b8c9736d28b",
         "mediaType": "application/schema+json"
       }
     },
@@ -4749,7 +4749,7 @@
       "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-render/src/schema.rs",
-        "sha256": "7928ac30b4f5442dd4cb89632ff23a35bba1b27d4df882955ee284e841f4b7e9"
+        "sha256": "47dcb8f1ab50319c0eb31c888ea7bc9e608167ced277c493b19e2518f6a8a202"
       },
       "artifact": {
         "path": "products/render/schemas/runtime.schema.json",
