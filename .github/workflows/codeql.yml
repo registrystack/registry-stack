@@ -1,9 +1,9 @@
 name: CodeQL
 
-# Static analysis (SAST) for the monorepo. The Rust analyzer runs buildless
-# (build-mode none) beside the interpreted languages in the docs site, node
-# bindings, and Python sidecars, so every language in the tree is covered and
-# the OpenSSF Scorecard SAST check reflects real analysis.
+# Static analysis (SAST) for Rust, JavaScript/TypeScript, and Python. The Rust
+# analyzer runs buildless (build-mode none) beside the interpreted languages in
+# the docs site, node bindings, and Python sidecars. CodeQL has no shell
+# analyzer, so the repository's shell scripts are outside this workflow.
 
 on:
   push:
