@@ -26,6 +26,7 @@ After changing a schema, rewrite the blocks and review the diff:
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import NamedTuple
@@ -115,7 +116,12 @@ def repository_root() -> Path:
 
 
 def load_schema(path: Path) -> object:
-    """Read one schema document. JSON is YAML, so one loader reads both forms."""
+    """Read one schema document using its file format."""
+    if path.suffix == ".json":
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ContractError(f"{path} does not parse: {exc}") from exc
     try:
         import yaml
     except ModuleNotFoundError as exc:  # pragma: no cover - depends on the host
