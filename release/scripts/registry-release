@@ -30,6 +30,10 @@ ROOT = Path(__file__).resolve().parents[2]
 RELEASE_MANIFEST_DIR = ROOT / "release" / "manifests"
 DOCSETS_PATH = ROOT / "docs" / "site" / "src" / "data" / "docsets.yaml"
 ARCHIVE_LOCK_SCHEMA = "registry-docs.archive-lock.v1"
+# Maps each docset product to the manifest artifact that ships it, and names
+# the first release docset held to that map. It sits beside docsets.yaml.
+DOCSET_RELEASE_ARTIFACTS_NAME = "docset-release-artifacts.yaml"
+UNRELEASED_PRODUCT_VERSION = "main source (unreleased)"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 SEMVER_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
@@ -727,9 +731,11 @@ def validate_docsets(
     errors: list[str] = []
     if archive_lock_path is None:
         archive_lock_path = docsets_path.with_name("archive-lock.yaml")
+    release_artifacts_path = docsets_path.with_name(DOCSET_RELEASE_ARTIFACTS_NAME)
     try:
         docsets_data = load_yaml(docsets_path)
         archive_lock = load_yaml(archive_lock_path)
+        release_artifacts = load_yaml(release_artifacts_path)
         manifests = [
             load_yaml(path)
             for path in sorted(manifest_dir.glob("registry-stack-*.yaml"))
@@ -809,6 +815,19 @@ def validate_docsets(
                     f"archive-lock.yaml {docset_id}.{field} must be 64 lowercase hex characters"
                 )
 
+    product_artifacts = (
+        release_artifacts.get("products") if isinstance(release_artifacts, dict) else None
+    )
+    applies_from = docset_tag_version(
+        release_artifacts.get("applies_from") if isinstance(release_artifacts, dict) else None
+    )
+    if not isinstance(product_artifacts, dict) or applies_from is None:
+        errors.append(
+            f"{DOCSET_RELEASE_ARTIFACTS_NAME} must declare a release tag "
+            "applies_from and a products map"
+        )
+        product_artifacts = {}
+
     manifests_by_tag: dict[str, dict] = {}
     for manifest in manifests:
         if not isinstance(manifest, dict) or not isinstance(manifest.get("stack"), dict):
@@ -861,6 +880,15 @@ def validate_docsets(
             "source_ref",
             stack.get("source_tag", expected_version),
         )
+        # From applies_from on, a product the manifest does not ship carries
+        # the unreleased label at the docset's ref. Earlier docsets are frozen
+        # as published.
+        held_to_shipped_products = (
+            applies_from is not None
+            and (docset_tag_version(docset_id) or (-1, -1, -1)) >= applies_from
+        )
+        artifacts = manifest.get("artifacts")
+        shipped = set(artifacts) if isinstance(artifacts, dict) else set()
         for name, product in sorted(products.items()):
             if name in external:
                 continue
@@ -871,6 +899,23 @@ def validate_docsets(
                     f"docset {docset_id} product {name} ref {actual_ref!r} "
                     f"does not match release manifest ref {expected_source_ref!r}"
                 )
+            if held_to_shipped_products:
+                artifact = product_artifacts.get(name)
+                if not isinstance(artifact, str) or not artifact:
+                    errors.append(
+                        f"docset {docset_id} product {name} names no release "
+                        f"artifact in {DOCSET_RELEASE_ARTIFACTS_NAME}"
+                    )
+                    continue
+                if artifact not in shipped:
+                    if actual_version != UNRELEASED_PRODUCT_VERSION:
+                        errors.append(
+                            f"docset {docset_id} product {name} version "
+                            f"{actual_version!r} must be "
+                            f"{UNRELEASED_PRODUCT_VERSION!r} because release "
+                            f"manifest {docset_id} ships no {artifact} artifact"
+                        )
+                    continue
             if actual_version != expected_version:
                 errors.append(
                     f"docset {docset_id} product {name} version {actual_version!r} "

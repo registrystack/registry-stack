@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import YAML from 'yaml';
 import { docEntryAppliesToDocset } from './docsets.mjs';
+import { loadReleaseArtifacts, releaseProductVersion } from './docset-release-products.mjs';
 
 function parse(source, name) {
   const document = YAML.parseDocument(source);
@@ -58,12 +59,13 @@ export async function prepareReleaseDocsMetadata({
   }
   const docsetsPath = resolve(siteRoot, 'src/data/docsets.yaml');
   const repoDocsPath = resolve(siteRoot, 'src/data/repo-docs.yaml');
-  const [docsetsSource, repoDocsSource, lockSource] = await Promise.all([
+  const [docsetsSource, repoDocsSource, lockSource, releaseArtifacts] = await Promise.all([
     readFile(docsetsPath, 'utf8'), readFile(repoDocsPath, 'utf8'),
     readFile(resolve(siteRoot, 'src/data/archive-lock.yaml'), 'utf8').catch((error) => {
       if (error.code === 'ENOENT') return 'archives: {}';
       throw error;
     }),
+    loadReleaseArtifacts(siteRoot),
   ]);
   const docsetsDocument = parse(docsetsSource, docsetsPath);
   const repoDocsDocument = parse(repoDocsSource, repoDocsPath);
@@ -72,9 +74,13 @@ export async function prepareReleaseDocsMetadata({
   if (!current?.products || current.status !== 'current') throw new Error('current docset must declare its products');
   const products = {};
   const sourceRef = manifest.stack.source_ref ?? docsetId;
+  // A product the manifest does not ship keeps the latest docset's
+  // unreleased label, pinned to this docset's ref.
   for (const productId of Object.keys(current.products)) {
     if (Object.hasOwn(manifest.external, productId)) continue;
-    products[productId] = { version: docsetId, ref: sourceRef };
+    products[productId] = {
+      version: releaseProductVersion(productId, docsetId, manifest, releaseArtifacts), ref: sourceRef,
+    };
   }
   for (const [productId, external] of Object.entries(manifest.external)) {
     if (!external?.ref) throw new Error(`external product ${productId} must declare ref`);

@@ -474,7 +474,11 @@ Use the intended candidate documentation date for `--date`. It supplies the
 candidate's `published_at` field, not a human review date. The command derives
 product pins from the current docset and selected manifest, adds missing
 candidate metadata, and snapshots each applicable mirrored page's current
-standards and review metadata. It preserves the development and released
+standards and review metadata. A product whose release artifact, named in
+`docs/site/src/data/docset-release-artifacts.yaml`, the manifest does not ship
+keeps the `main source (unreleased)` label at the candidate's ref, so an
+archived docset never presents unreleased documentation as released; promotion
+keeps these labels. It preserves the development and released
 selectors and every historical record; the released selector moves only after
 publication, in [Promote the published documentation](#promote-the-published-documentation).
 Conflicting existing candidate metadata

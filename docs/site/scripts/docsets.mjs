@@ -2,16 +2,19 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import YAML from 'yaml';
 import { publishedArchiveLimit } from '../src/lib/docset-retention.mjs';
+import { UNRELEASED_PRODUCT_VERSION } from './docset-release-products.mjs';
 
 const docsetIdPattern = /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/;
 const shaPattern = /^[0-9a-f]{40}$/;
 const releaseTagPattern =
   /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 
+// A release docset labels a product its manifest does not ship
+// `main source (unreleased)` at the same ref as the products it ships.
 function isCanonicalReleaseSourceProduct(docset, product) {
   return (
     releaseTagPattern.test(docset.id) &&
-    product?.version === docset.id &&
+    (product?.version === docset.id || product?.version === UNRELEASED_PRODUCT_VERSION) &&
     product.ref === docset.id
   );
 }

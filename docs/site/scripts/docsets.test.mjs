@@ -171,6 +171,28 @@ test('validateDocsets accepts the exact canonical tag for versioned source recor
   }
 });
 
+test('validateDocsets accepts an unshipped candidate product at the canonical tag', () => {
+  const manifest = validDocsets();
+  manifest.docsets.push({
+    id: 'v1.2.3',
+    label: 'v1.2.3',
+    path: '/v/1.2.3/',
+    status: 'archived',
+    availability: 'candidate',
+    source: 'registry-stack-v1.2.3',
+    published_at: '2026-08-01',
+    description: 'Release source record.',
+    products: {
+      'registry-relay': { version: 'v1.2.3', ref: 'v1.2.3' },
+      'registry-coordinator': { version: 'main source (unreleased)', ref: 'v1.2.3' },
+    },
+  });
+  assert.doesNotThrow(() => validateDocsets(manifest));
+
+  manifest.docsets[2].products['registry-coordinator'].ref = 'HEAD';
+  assert.throws(() => validateDocsets(manifest), /registry-coordinator\.ref must be a full 40-character SHA/);
+});
+
 test('validateDocsets rejects arbitrary tags for archived candidate products', () => {
   for (const ref of ['v1.2.4', 'v01.2.3', 'candidate-v1.2.3']) {
     const manifest = validDocsets();
@@ -285,6 +307,19 @@ test('applyDocsetRefs keeps the checked-out monorepo for an exact pre-tag candid
   assert.equal(repos.repos['registry-relay'].docs[0].src, 'docs/README.md');
   assert.equal(
     usesCheckedOutCandidate(candidate, candidate.products['registry-relay']),
+    true,
+  );
+});
+
+test('an unshipped candidate product uses the checked-out candidate source', () => {
+  const candidate = {
+    ...validDocsets().docsets[1],
+    id: 'v1.2.3',
+    availability: 'candidate',
+    repo_docs_source: 'monorepo',
+  };
+  assert.equal(
+    usesCheckedOutCandidate(candidate, { version: 'main source (unreleased)', ref: 'v1.2.3' }),
     true,
   );
 });
