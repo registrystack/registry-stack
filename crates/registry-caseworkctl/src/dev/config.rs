@@ -10,8 +10,9 @@ use registry_casework_core::{
     CaseworkRole, ConfigFinding,
 };
 use registry_platform_yaml::{
-    escape_pointer_segment, ApiVersion, Decoded, EnvelopeRule, Expect, FormatSpec, LocalId, Reader,
-    Refusal, RemovedKey, Report, ScalarHook, ScalarSite,
+    escape_pointer_segment, local_id_collision_diagnostics, ApiVersion, AuthoredId, Decoded,
+    Diagnostic, EnvelopeRule, Expect, FormatSpec, LocalId, Reader, Refusal, RemovedKey, Report,
+    ScalarHook, ScalarSite,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -129,11 +130,108 @@ pub(crate) fn read(file: &str, bytes: &[u8]) -> Result<Decoded<Clients>, Report>
         .with_hook(&mut hook)
         .decode::<Clients>(bytes, &Expect::one(&DEV_CLIENTS_FORMAT))?;
     let found = findings(&decoded.value);
-    if found.is_empty() {
+    let integrity = identifier_collision_diagnostics(&decoded);
+    if found.is_empty() && integrity.is_empty() {
         Ok(decoded)
     } else {
-        Err(findings_report(&decoded.document, &found))
+        Err(decoded.document.report_with(
+            found
+                .iter()
+                .map(|finding| finding.to_diagnostic(&decoded.document))
+                .chain(integrity),
+        ))
     }
+}
+
+fn identifier_collision_diagnostics(decoded: &Decoded<Clients>) -> Vec<Diagnostic> {
+    fn value_collisions(
+        decoded: &Decoded<Clients>,
+        code: &str,
+        values: impl IntoIterator<Item = (String, String)>,
+    ) -> Vec<Diagnostic> {
+        let values = values
+            .into_iter()
+            .filter(|(id, _)| LocalId::new(id).is_ok())
+            .collect::<Vec<_>>();
+        let authored = values
+            .iter()
+            .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+            .collect::<Vec<_>>();
+        local_id_collision_diagnostics(&decoded.document, code, &authored)
+    }
+
+    fn key_collisions<T>(
+        decoded: &Decoded<Clients>,
+        code: &str,
+        pointer: &str,
+        values: &BTreeMap<String, T>,
+    ) -> Vec<Diagnostic> {
+        let owned = values
+            .keys()
+            .filter(|id| LocalId::new(*id).is_ok())
+            .map(|id| (id.to_owned(), member(pointer, id)))
+            .collect::<Vec<_>>();
+        let authored = owned
+            .iter()
+            .map(|(id, pointer)| AuthoredId::at_key(id, pointer))
+            .collect::<Vec<_>>();
+        local_id_collision_diagnostics(&decoded.document, code, &authored)
+    }
+
+    let mut client_ids = decoded
+        .value
+        .clients
+        .iter()
+        .enumerate()
+        .map(|(index, client)| (client.id.clone(), format!("/clients/{index}/id")))
+        .collect::<Vec<_>>();
+    if let Some(integrations) = &decoded.value.integrations {
+        client_ids.extend(integrations.service_clients.iter().enumerate().map(
+            |(index, client)| {
+                (
+                    client.id.clone(),
+                    format!("/integrations/serviceClients/{index}/id"),
+                )
+            },
+        ));
+        client_ids.extend(
+            integrations
+                .browser_clients
+                .iter()
+                .enumerate()
+                .map(|(index, id)| (id.clone(), format!("/integrations/browserClients/{index}"))),
+        );
+    }
+    let mut diagnostics = value_collisions(
+        decoded,
+        "casework.dev-clients.client-id-collision",
+        client_ids,
+    );
+    diagnostics.extend(value_collisions(
+        decoded,
+        "casework.dev-clients.team-id-collision",
+        decoded
+            .value
+            .directory
+            .iter()
+            .enumerate()
+            .map(|(index, team)| (team.team.clone(), format!("/directory/{index}/team"))),
+    ));
+    if let Some(integrations) = &decoded.value.integrations {
+        diagnostics.extend(key_collisions(
+            decoded,
+            "casework.dev-clients.context-provider-id-collision",
+            "/integrations/contextProviders",
+            &integrations.context_providers,
+        ));
+        diagnostics.extend(key_collisions(
+            decoded,
+            "casework.dev-clients.secret-file-id-collision",
+            "/integrations/secretFiles",
+            &integrations.secret_files,
+        ));
+    }
+    diagnostics
 }
 
 /// Read a clients file and check it against the authored project: every

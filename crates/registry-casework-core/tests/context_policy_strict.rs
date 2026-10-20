@@ -128,7 +128,7 @@ fn project_check_keeps_duplicate_label_warnings_beside_semantic_errors() {
 fn project_check_refuses_separator_lookalikes_in_the_queue_namespace() {
     let changed = STANDALONE.replacen(
         "  decisions:\n    label: Decisions awaiting review\n",
-        "  decision-queue:\n    label: First queue\n  decision_queue:\n    label: Second queue\n",
+        "  decision-queue:\n    label: Review queue\n  decision_queue:\n    label: review queue\n",
         1,
     );
     let report = CaseworkProject::read("casework.yaml", changed.as_bytes())
@@ -142,4 +142,11 @@ fn project_check_refuses_separator_lookalikes_in_the_queue_namespace() {
     assert_eq!(finding.related[0].path, "/queues/decision-queue");
     assert!(finding.message.contains("`decision-queue`"));
     assert!(finding.message.contains("`decision_queue`"));
+    let warning = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "casework.project.duplicate-queue-label")
+        .expect("the label warning survives the integrity error");
+    assert_eq!(warning.path, "/queues/decision_queue/label");
+    assert_eq!(warning.related[0].path, "/queues/decision-queue/label");
 }

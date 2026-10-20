@@ -978,6 +978,16 @@ impl RuntimeConfig {
         }
     }
 
+    fn check_identifier_collisions(&self, findings: &mut Vec<RuntimeConfigError>) {
+        if !registry_platform_yaml::lookalike_local_id_pairs(
+            self.context_providers.keys().map(String::as_str),
+        )
+        .is_empty()
+        {
+            findings.push(RuntimeConfigError::ContextProviderIdCollision);
+        }
+    }
+
     fn check_package_block(&self, findings: &mut Vec<RuntimeConfigError>) {
         if let Err(error) = self.package.shared().check() {
             findings.push(error.into());
@@ -1506,6 +1516,7 @@ type ProjectRule = fn(&RuntimeConfig, &CaseworkProject, &mut Vec<RuntimeConfigEr
 const FILE_RULES: &[FileRule] = &[
     RuntimeConfig::check_envelope,
     RuntimeConfig::check_identity,
+    RuntimeConfig::check_identifier_collisions,
     RuntimeConfig::check_package_block,
     RuntimeConfig::check_secret_providers,
     RuntimeConfig::check_audit,
@@ -1584,6 +1595,46 @@ pub struct RuntimeCheck {
     pub unavailable: bool,
 }
 
+fn runtime_identifier_collision_diagnostics(
+    check: &RuntimeFileCheck<RuntimeConfig>,
+    config: &RuntimeConfig,
+) -> Vec<Diagnostic> {
+    let ids = config
+        .context_providers
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    registry_platform_yaml::lookalike_local_id_pairs(ids.iter().copied())
+        .into_iter()
+        .map(|(first, second)| {
+            let first_pointer = format!(
+                "/contextProviders/{}",
+                escape_pointer_segment(ids[first])
+            );
+            let second_pointer = format!(
+                "/contextProviders/{}",
+                escape_pointer_segment(ids[second])
+            );
+            let mut diagnostic = check.error_at_key(
+                RUNTIME_CONFIG_KIND,
+                "casework.runtime.context-provider-id-collision",
+                &second_pointer,
+                format!(
+                    "local identifiers `{}` and `{}` differ only by `-` versus `_`",
+                    ids[first], ids[second]
+                ),
+                "Rename one context provider identifier so the definitions remain distinct after separator normalization.",
+            );
+            check.add_related_key(
+                &mut diagnostic,
+                &first_pointer,
+                format!("the other definition is `{}`", ids[first]),
+            );
+            diagnostic
+        })
+        .collect()
+}
+
 /// Check the runtime file at the absolute `path` as `casework serve` reads
 /// it, with no package, database, network, or secret material, and report
 /// every rule it breaks. The rules about the project the file binds run
@@ -1608,9 +1659,14 @@ pub fn check_runtime(
                 .config
                 .findings(project)
                 .iter()
+                .filter(|finding| !finding.is_identifier_collision())
                 .filter(|finding| !reads_deferred_value(&check, finding))
                 .map(|finding| positioned(&check, finding)),
         );
+        diagnostics.extend(runtime_identifier_collision_diagnostics(
+            &check,
+            &loaded.config,
+        ));
     }
     in_file_order(&mut diagnostics);
     RuntimeCheck {
@@ -1637,8 +1693,10 @@ pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report>
     let mut diagnostics: Vec<Diagnostic> = config
         .findings(package.as_ref().map(LoadedCaseworkPackage::project))
         .iter()
+        .filter(|finding| !finding.is_identifier_collision())
         .map(|finding| positioned(&check, finding))
         .collect();
+    diagnostics.extend(runtime_identifier_collision_diagnostics(&check, config));
     in_file_order(&mut diagnostics);
     (!diagnostics.is_empty()).then(|| Report::new(diagnostics))
 }
@@ -1990,6 +2048,91 @@ mod tests {
     }
 
     #[test]
+    fn context_provider_ids_refuse_separator_lookalikes_at_both_keys() {
+        fn key_position(text: &str, id: &str) -> (usize, usize) {
+            text.lines()
+                .enumerate()
+                .find_map(|(line, text)| {
+                    (text.trim_start() == format!("{id}:")).then(|| {
+                        (
+                            line + 1,
+                            text.find(id).expect("key begins on its source line") + 1,
+                        )
+                    })
+                })
+                .expect("runtime key is authored")
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["contextProviders"] = json!({
+            "registry-main": {
+                "baseUrl": "https://registry.example.test",
+                "statusProfile": "review-status",
+                "tokenEndpoint": "https://identity.example.test/token",
+                "clientIdRef": "secret:file/client-id",
+                "clientAssertionKeyRef": "secret:file/client-key"
+            },
+            "registry_main": {
+                "baseUrl": "https://registry.example.test",
+                "statusProfile": "review-status",
+                "tokenEndpoint": "https://identity.example.test/token",
+                "clientIdRef": "secret:file/other-id",
+                "clientAssertionKeyRef": "secret:file/other-key"
+            }
+        });
+        let config = read_operator(&value, directory.path());
+        assert!(config
+            .findings(None)
+            .iter()
+            .any(RuntimeConfigError::is_identifier_collision));
+        let path = write_operator(&value, directory.path());
+        let text = std::fs::read_to_string(&path).unwrap();
+        let check = check_runtime(&path, None, false);
+        let collisions = check
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code.ends_with("-id-collision"))
+            .collect::<Vec<_>>();
+        assert_eq!(collisions.len(), 1, "{collisions:?}");
+        let diagnostic = collisions[0];
+        assert_eq!(
+            diagnostic.code,
+            "casework.runtime.context-provider-id-collision"
+        );
+        assert_eq!(diagnostic.path, "/contextProviders/registry_main");
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(
+            diagnostic.related[0].path,
+            "/contextProviders/registry-main"
+        );
+        let source = diagnostic.source.as_ref().expect("primary source");
+        assert_eq!(
+            (source.line.unwrap(), source.column.unwrap()),
+            key_position(&text, "registry_main")
+        );
+        assert_eq!(
+            (
+                diagnostic.related[0].line.unwrap(),
+                diagnostic.related[0].column.unwrap(),
+            ),
+            key_position(&text, "registry-main")
+        );
+        value["contextProviders"]
+            .as_object_mut()
+            .unwrap()
+            .remove("registry_main");
+        value["reviewCompletionDestinations"] = json!({
+            "registry_main": {"url": "https://completion.example.test/reviews"}
+        });
+        let path = write_operator(&value, directory.path());
+        assert!(check_runtime(&path, None, false)
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.code.ends_with("-id-collision")));
+    }
+
+    #[test]
     fn environment_expressions_substitute_values_but_never_secret_references() {
         let temp =
             tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
@@ -2157,6 +2300,8 @@ pub enum RuntimeConfigError {
         "identity.databaseId must be non-empty, at most 256 bytes, without surrounding whitespace or control characters"
     )]
     InvalidDatabaseId,
+    #[error("contextProviders contains identifiers that differ only by `-` versus `_`")]
+    ContextProviderIdCollision,
     #[error("the operated runtime path {0} must be absolute")]
     RelativeOperatedPath(&'static str),
     #[error("the Casework project is invalid")]
@@ -2247,6 +2392,10 @@ const REBUILD_PACKAGE: &str =
     "Rebuild the package with `caseworkctl package`, then point package.root at it.";
 
 impl RuntimeConfigError {
+    fn is_identifier_collision(&self) -> bool {
+        matches!(self, Self::ContextProviderIdCollision)
+    }
+
     /// The dotted member path of a refusal that carries no pointer of its
     /// own; [`Self::pointer`] is the location every caller reads.
     fn member(&self) -> &str {
@@ -2255,6 +2404,7 @@ impl RuntimeConfigError {
             Self::InvalidApiVersion => "apiVersion",
             Self::InvalidKind => "kind",
             Self::InvalidDatabaseId => "identity.databaseId",
+            Self::ContextProviderIdCollision => "contextProviders",
             Self::RelativeOperatedPath(path) => path,
             Self::InvalidOidcClaim { path, .. } => path,
             Self::PrincipalClaimConflict => "authentication.oidc.humanIdentity.claim",
@@ -2319,6 +2469,7 @@ impl RuntimeConfigError {
             Self::InvalidKind => "casework.runtime.wrong-kind",
             Self::MissingIdentity => "casework.runtime.missing-identity",
             Self::InvalidDatabaseId => "casework.runtime.invalid-database-id",
+            Self::ContextProviderIdCollision => "casework.runtime.context-provider-id-collision",
             Self::RelativeOperatedPath(_) => "casework.runtime.relative-path",
             Self::Project(_) => "casework.package.invalid-project",
             Self::PolicyUnreadable => "casework.package.unreadable-project",
@@ -2367,6 +2518,9 @@ impl RuntimeConfigError {
             }
             Self::InvalidDatabaseId => {
                 "Write identity.databaseId as at most 256 bytes without surrounding whitespace or control characters."
+            }
+            Self::ContextProviderIdCollision => {
+                "Rename one context provider identifier so the definitions remain distinct after separator normalization."
             }
             Self::RelativeOperatedPath(path) => {
                 return format!("Write {path} as an absolute path.");
