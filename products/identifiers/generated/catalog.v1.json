@@ -3781,7 +3781,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/example-scenarios.v1alpha1.schema.json",
-        "sha256": "6cf55caa1d39f0b653e96a84dae76d14148f6e56a411d14a1e9b458ee2c74432",
+        "sha256": "ea3e859161f961767bc44b463a025feefc17662dd31fa7ba4c67f71b0188f1bc",
         "mediaType": "application/schema+json"
       }
     },
@@ -4155,7 +4155,7 @@
       "description": "Registry Coordinator portable project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/authoring.rs",
-        "sha256": "73b97d8091fa7641a9c6e2dfae1c47874cc4a80d2df3a503f460c999ec579b63"
+        "sha256": "3202cbf1a6109ae79bba5a362fe0e3d2039136f09291f206247093e59bb615f9"
       },
       "artifact": {
         "path": "products/coordinator/generated/project/project.schema.json",
@@ -4191,7 +4191,7 @@
       "description": "Registry Coordinator deterministic scenario authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/scenarios.rs",
-        "sha256": "6bc5a10d20dcc4dddbc5bca003e550aeb866955b2d6898d74cc5f4d3811a4887"
+        "sha256": "3f183ed2753706aa38dd2e6146a3a0c4f867de86c67a602c1bb407aa910924bd"
       },
       "artifact": {
         "path": "products/coordinator/generated/scenarios/scenarios.schema.json",
