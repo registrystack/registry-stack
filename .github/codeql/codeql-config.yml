@@ -5,9 +5,12 @@ name: Registry Stack CodeQL
 # tests, their fixtures and support modules, and the Python binding tests under
 # crates/*/tests/python. Inline #[cfg(test)] modules inside production files
 # cannot be reached by a path and stay in the analysis.
+# release/scripts/check-gates-inventory.py pins every line that is not blank or
+# a comment; change CODEQL_CONFIG_CONTENT there in the same commit.
 paths-ignore:
   - "crates/*/tests/**"
   - "crates/registry-breg/src/tests/**"
+  - crates/registry-casework/src/task_grants/dev_session_logs.rs
   - crates/registry-casework/src/task_grants/native_resource.rs
   - crates/registry-caseworkctl/src/dev/tests.rs
   - crates/registry-platform-config/src/blocks_tests.rs

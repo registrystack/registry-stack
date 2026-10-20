@@ -815,18 +815,6 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ),
     ),
     (
-        "CodeQL ignores only test-only paths",
-        ".github/codeql/codeql-config.yml",
-        (
-            "paths-ignore:",
-            '  - "crates/*/tests/**"',
-            '  - "crates/registry-breg/src/tests/**"',
-            "  - crates/registry-casework/src/task_grants/native_resource.rs",
-            "  - crates/registry-caseworkctl/src/dev/tests.rs",
-            "  - crates/registry-platform-config/src/blocks_tests.rs",
-        ),
-    ),
-    (
         "Scheduled and manual security assurance sweep",
         ".github/workflows/nightly-security.yml",
         (
@@ -1573,6 +1561,37 @@ def shell_loop_targets(job: str) -> tuple[str, ...]:
     return targets
 
 
+# Every line of the CodeQL config that is not blank or a comment. Any added
+# key (another ignored path, a query filter, a path allowlist) narrows what
+# code scanning reports, so the whole content is pinned, not only the entries.
+CODEQL_CONFIG_CONTENT = (
+    "name: Registry Stack CodeQL",
+    "paths-ignore:",
+    '  - "crates/*/tests/**"',
+    '  - "crates/registry-breg/src/tests/**"',
+    "  - crates/registry-casework/src/task_grants/dev_session_logs.rs",
+    "  - crates/registry-casework/src/task_grants/native_resource.rs",
+    "  - crates/registry-caseworkctl/src/dev/tests.rs",
+    "  - crates/registry-platform-config/src/blocks_tests.rs",
+)
+
+
+def codeql_config_violations(config: str | None) -> list[str]:
+    """Require the CodeQL config to ignore exactly the pinned test-only paths."""
+
+    gate = "CodeQL ignores only test-only paths"
+    if config is None:
+        return [gate]
+    content = tuple(
+        line.rstrip()
+        for line in config.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+    if content != CODEQL_CONFIG_CONTENT:
+        return [gate]
+    return []
+
+
 def nightly_security_sweep_violations(workflow: str | None) -> list[str]:
     """Require every scheduled/manual security sweep to run its full roster."""
 
@@ -2034,6 +2053,9 @@ def main() -> int:
         )
     )
     policy_violations.extend(
+        codeql_config_violations(policy_texts.get(".github/codeql/codeql-config.yml"))
+    )
+    policy_violations.extend(
         candidate_build_isolation_violations(
             policy_texts.get(".github/workflows/release-candidate.yml")
         )
@@ -2090,7 +2112,7 @@ def main() -> int:
         + len(ORDERED_RELEASE_SECURITY_GATES)
         + len(FORBIDDEN_RELEASE_SECURITY_GATES)
         + len(REQUIRED_SECURITY_WORKFLOW_SELECTIONS)
-        + 7  # Structural permission, sweep, isolation, retention, rebuild, and destination gates.
+        + 8  # Structural permission, sweep, CodeQL config, isolation, retention, rebuild, and destination gates.
     )
     print(
         f"gate inventory check passed for {declared_gate_count} gates; "

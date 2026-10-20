@@ -266,6 +266,36 @@ class GateInventoryTest(unittest.TestCase):
             self.module.nightly_security_sweep_violations(None),
         )
 
+    def test_real_codeql_config_ignores_only_the_pinned_test_paths(self) -> None:
+        config = (ROOT / ".github" / "codeql" / "codeql-config.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual([], self.module.codeql_config_violations(config))
+
+    def test_codeql_config_cannot_widen_or_lose_an_exclusion(self) -> None:
+        gate = ["CodeQL ignores only test-only paths"]
+        config = (ROOT / ".github" / "codeql" / "codeql-config.yml").read_text(
+            encoding="utf-8"
+        )
+        mutations = {
+            "added production path": config + '  - "crates/registry-breg/src/**"\n',
+            "removed entry": config.replace(
+                "  - crates/registry-caseworkctl/src/dev/tests.rs\n", "", 1
+            ),
+            "query filter": config + "query-filters:\n  - exclude:\n      id: rust/x\n",
+            "path allowlist": config + "paths:\n  - docs\n",
+        }
+        for mutation, text in mutations.items():
+            with self.subTest(mutation=mutation):
+                self.assertEqual(gate, self.module.codeql_config_violations(text))
+        self.assertEqual(gate, self.module.codeql_config_violations(None))
+        self.assertEqual(
+            [],
+            self.module.codeql_config_violations(
+                config.replace("# Keep test-only", "# Reworded: keep test-only", 1)
+            ),
+        )
+
     def test_each_release_security_marker_is_fail_closed(self) -> None:
         policy_texts = self.module.policy_file_texts(
             ROOT,
