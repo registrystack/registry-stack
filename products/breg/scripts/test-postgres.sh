@@ -66,6 +66,7 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_history_rebaseline \
     --test postgres_workspace_metadata \
     --test postgres_mutation \
+    --test postgres_reference_integrity \
     --test postgres_immediate_action_requirements \
     --test postgres_consent_access \
     --test postgres_membership_access \

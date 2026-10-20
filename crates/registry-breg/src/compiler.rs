@@ -5067,6 +5067,14 @@ fn compile_entities(
     let mut builder = PhysicalNameBuilder::new();
     let mut entities = BTreeMap::new();
     let mut inventory = BTreeMap::new();
+    let reference_targets = sources
+        .values()
+        .flat_map(|source| &source.fields)
+        .filter_map(|field| match &field.field_type {
+            FieldTypeSource::Reference { target, .. } => Some(target.as_str()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     let asset_lookup = assets
         .iter()
         .map(|asset| ((asset.module.clone(), asset.path.clone()), asset))
@@ -5250,6 +5258,14 @@ fn compile_entities(
             .collect();
         let mut constraints = BTreeMap::new();
         let mut constraint_names = BTreeMap::new();
+        if reference_targets.contains(source.id.as_str()) {
+            constraint_names.insert(
+                "active-reference-key:record-lifecycle".to_owned(),
+                builder
+                    .derive("rk", &source.id, "recordTypes[].fields[].target")
+                    .map_err(CompileFailure::from_one)?,
+            );
+        }
         for constraint in &source.constraints {
             let id = derived_constraint_id(constraint);
             let physical = builder
@@ -5279,6 +5295,16 @@ fn compile_entities(
                     )
                     .map_err(CompileFailure::from_one)?;
                 constraint_names.insert(id, physical);
+                constraint_names.insert(
+                    format!("active-reference:{}", field.id),
+                    builder
+                        .derive(
+                            "ar",
+                            &format!("{}.{}", source.id, field.id),
+                            "recordTypes[].fields[].target",
+                        )
+                        .map_err(CompileFailure::from_one)?,
+                );
             }
         }
         let mut indexes = BTreeMap::new();

@@ -20,6 +20,10 @@ mod derived_upgrade_tests;
 #[path = "postgres_package/compiler_upgrade.rs"]
 mod compiler_upgrade_tests;
 
+#[cfg(feature = "tooling")]
+#[path = "postgres_package/reference_upgrade.rs"]
+mod reference_upgrade_tests;
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
