@@ -211,7 +211,7 @@ and a restart.
 The runtime file is the whole runtime configuration: the listener, the package root and pin, the
 limits, and the log level. It holds no origin, mapping, credential, or trust setting. Discovery
 serves plain HTTP without authentication on whatever address `listener.bind` names, the example
-being `127.0.0.1:8080`, so terminate TLS in front of it. Keep both paths absolute and free of
+being `127.0.0.1:38080`, so terminate TLS in front of it. Keep both paths absolute and free of
 symbolic links.
 
 {/* Evidence: crates/registry-discovery/src/startup.rs, load_runtime(),
@@ -225,7 +225,7 @@ symbolic links.
 | --- | --- | --- | --- |
 | Provider | Its public description | Its endpoint, profile, or Evidence types change | Publishing the new bytes at the approved URL |
 | Operator | `origins.yaml`, mappings, `runtime.yaml`, the deployed package | An origin or mapping changes, or a provider republishes | Check, package into a new directory, pin, restart |
-| Application | Its saved selections and its own Evidence trust | A revision or `originContentDigest` it saved changes | Re-deciding trust, then calling the provider directly |
+| Application | Its saved selections and its own Evidence trust | A saved selection's service, endpoint, roles, jurisdictions, capability, mapping, or origin changes; a new revision or `originContentDigest` alone does not | Re-deciding trust, then calling the provider directly |
 
 Discovery never trusts a provider for the application: [How Registry Discovery
 works](../../explanation/discovery-as-an-index/) explains that boundary.
