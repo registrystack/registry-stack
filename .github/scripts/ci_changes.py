@@ -571,6 +571,7 @@ DOCS_ARCHIVE_INPUTS = frozenset(
         "docs/site/scripts/check-llms.mjs",
         "docs/site/scripts/check-seo.mjs",
         "docs/site/scripts/configuration-reference.mjs",
+        "docs/site/scripts/docset-release-products.mjs",
         "docs/site/scripts/docsets.mjs",
         "docs/site/scripts/generate-breg-configuration.mjs",
         "docs/site/scripts/generate-casework-configuration.mjs",
