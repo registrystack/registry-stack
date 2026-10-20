@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::event_destination::EventDestinationCompatibilityInventory;
 use crate::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
-use crate::generated_ddl::DdlStatementKind;
+use crate::generated_ddl::{DdlStatementKind, REFERENCE_LIFECYCLE_COLUMN};
 use crate::history_commit::{install_empty_history_baseline, install_history_commit_schema};
 use crate::history_migration::{
     ensure_successor_history_ready as ensure_successor_history_ready_state,
@@ -2690,6 +2690,7 @@ pub(super) fn compiler_statement_runs_after_reviewed_steps(
     statement.kind == DdlStatementKind::View
         || is_spatial_projection_addition(statement)
         || is_deferred_not_null(statement)
+        || is_active_reference_constraint_addition(statement)
 }
 
 /// A column a successor adds for a required field arrives accepting NULL, so
@@ -2710,6 +2711,15 @@ fn is_spatial_projection_addition(statement: &PackageDdlStatement<'_>) -> bool {
         || (statement.kind == DdlStatementKind::Index
             && statement.sql.contains(" USING gist ")
             && statement.sql.contains("\"breg_spgeom_"))
+}
+
+/// The reviewed SQL may retarget or populate a reference before the compiler
+/// installs the corresponding active-row FK. Its source projection and target
+/// key are ordinary pre-step statements; only the FK itself is deferred.
+fn is_active_reference_constraint_addition(statement: &PackageDdlStatement<'_>) -> bool {
+    statement.kind == DdlStatementKind::Reference
+        && statement.sql.contains(" ADD CONSTRAINT ")
+        && statement.sql.contains(REFERENCE_LIFECYCLE_COLUMN)
 }
 
 async fn verify_compiled_prerequisites_for_client(
@@ -3990,6 +4000,16 @@ mod tests {
         assert!(!compiler_statement_runs_after_reviewed_steps(&statement(
             "ALTER TABLE registry_data.\"breg_e_asset\" ALTER COLUMN \"breg_f_batch\" DROP NOT NULL",
             DdlStatementKind::Column,
+        )));
+        assert!(compiler_statement_runs_after_reviewed_steps(&statement(
+            "ALTER TABLE registry_data.\"breg_e_asset\" NO FORCE ROW LEVEL SECURITY;\n\
+             ALTER TABLE registry_data.\"breg_e_asset\" ADD CONSTRAINT \"breg_ar_site\" FOREIGN KEY (\"breg_f_site\", record_reference_lifecycle) REFERENCES registry_data.\"breg_e_site\" (record_id, record_lifecycle) MATCH SIMPLE ON UPDATE NO ACTION ON DELETE RESTRICT;\n\
+             ALTER TABLE registry_data.\"breg_e_asset\" FORCE ROW LEVEL SECURITY",
+            DdlStatementKind::Reference,
+        )));
+        assert!(!compiler_statement_runs_after_reviewed_steps(&statement(
+            "ALTER TABLE registry_data.\"breg_e_asset\" DROP CONSTRAINT \"breg_ar_site\"",
+            DdlStatementKind::Reference,
         )));
     }
 

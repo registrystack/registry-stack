@@ -2016,6 +2016,10 @@ fn additive_migration_plan(
         .map(|statement| statement.id.clone())
         .collect::<BTreeSet<_>>();
     let mut removed_dependency_statements = policy_drops;
+    let (active_reference_drops, active_reference_additions) =
+        active_reference_support_delta(previous, candidate, &previous_ddl);
+    removed_dependency_statements.extend(active_reference_drops);
+    new_statement_ids.extend(active_reference_additions);
     let previous_probe_functions = previous_ddl
         .statements
         .iter()
@@ -2437,6 +2441,115 @@ fn statement_sql<'a>(ddl: &'a DdlInventory, id: &str) -> Option<&'a str> {
         .iter()
         .find(|statement| statement.id == id)
         .map(|statement| statement.sql.as_str())
+}
+
+const ACTIVE_REFERENCE_CONSTRAINT_PREFIX: &str = "active-reference:";
+const ACTIVE_REFERENCE_KEY: &str = "active-reference-key:record-lifecycle";
+
+/// Plan the compiler-owned half of live reference enforcement independently
+/// from authored reference changes. The predecessor's physical-name inventory
+/// is the version marker: packages compiled before this support have no marker
+/// and therefore reconstruct their exact original DDL.
+fn active_reference_support_delta(
+    previous: &CompiledRegistryMigrationBaseline,
+    candidate: &CompiledRegistry,
+    previous_ddl: &DdlInventory,
+) -> (Vec<DdlStatement>, BTreeSet<String>) {
+    let candidate_ddl = candidate.ddl();
+    let mut drops = Vec::new();
+
+    // Retire every changed or removed live-reference FK before its target key
+    // or its source projection. This also covers a reviewed reference retarget.
+    for (entity_id, names) in &previous.physical_names.entities {
+        for (constraint_id, constraint_name) in &names.constraints {
+            let Some(field_id) = constraint_id.strip_prefix(ACTIVE_REFERENCE_CONSTRAINT_PREFIX)
+            else {
+                continue;
+            };
+            let statement_id = format!("entity.{entity_id}.field.{field_id}.active-reference");
+            if ddl_statement(previous_ddl, &statement_id)
+                == ddl_statement(candidate_ddl, &statement_id)
+            {
+                continue;
+            }
+            drops.push(DdlStatement {
+                id: format!("{statement_id}.drop"),
+                kind: DdlStatementKind::Reference,
+                sql: format!(
+                    "ALTER TABLE registry_data.{} DROP CONSTRAINT {}",
+                    quote_identifier(&names.table),
+                    quote_identifier(constraint_name)
+                ),
+            });
+        }
+    }
+
+    // A target key may be retired only after every predecessor FK that could
+    // depend on it has been removed.
+    for (entity_id, names) in &previous.physical_names.entities {
+        let Some(constraint_name) = names.constraints.get(ACTIVE_REFERENCE_KEY) else {
+            continue;
+        };
+        let statement_id = format!("entity.{entity_id}.reference-lifecycle.key");
+        if ddl_statement(previous_ddl, &statement_id) == ddl_statement(candidate_ddl, &statement_id)
+        {
+            continue;
+        }
+        drops.push(DdlStatement {
+            id: format!("{statement_id}.drop"),
+            kind: DdlStatementKind::Constraint,
+            sql: format!(
+                "ALTER TABLE registry_data.{} DROP CONSTRAINT {}",
+                quote_identifier(&names.table),
+                quote_identifier(constraint_name)
+            ),
+        });
+    }
+
+    // One generated projection serves every reference field on an entity, so
+    // remove it only when the candidate no longer carries the same statement.
+    for (entity_id, names) in &previous.physical_names.entities {
+        if !names
+            .constraints
+            .keys()
+            .any(|key| key.starts_with(ACTIVE_REFERENCE_CONSTRAINT_PREFIX))
+        {
+            continue;
+        }
+        let statement_id = format!("entity.{entity_id}.reference-lifecycle.column");
+        if ddl_statement(previous_ddl, &statement_id) == ddl_statement(candidate_ddl, &statement_id)
+        {
+            continue;
+        }
+        drops.push(DdlStatement {
+            id: format!("{statement_id}.drop"),
+            kind: DdlStatementKind::Column,
+            sql: format!(
+                "ALTER TABLE registry_data.{} DROP COLUMN {}",
+                quote_identifier(&names.table),
+                quote_identifier(crate::generated_ddl::REFERENCE_LIFECYCLE_COLUMN)
+            ),
+        });
+    }
+
+    let additions = candidate_ddl
+        .statements
+        .iter()
+        .filter(|statement| is_active_reference_support_statement(&statement.id))
+        .filter(|statement| ddl_statement(previous_ddl, &statement.id) != Some(*statement))
+        .map(|statement| statement.id.clone())
+        .collect();
+    (drops, additions)
+}
+
+fn ddl_statement<'a>(ddl: &'a DdlInventory, id: &str) -> Option<&'a DdlStatement> {
+    ddl.statements.iter().find(|statement| statement.id == id)
+}
+
+fn is_active_reference_support_statement(id: &str) -> bool {
+    id.ends_with(".reference-lifecycle.column")
+        || id.ends_with(".reference-lifecycle.key")
+        || id.ends_with(".active-reference")
 }
 
 /// Name prefixes of the generated per-row probe helpers, membership and

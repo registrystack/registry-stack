@@ -44,6 +44,9 @@
 //! Problem, likewise move artifact revisions only.
 //! Publishing the field-encryption outage Problem on immediate Action invoke and
 //! availability operations likewise moves Action fixture artifact revisions only.
+//! Active-reference lifecycle columns, keys, and foreign keys deliberately move
+//! these fixtures' SQL digests and artifact revisions. Their authored Action
+//! contracts and definition fingerprints remain unchanged.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
@@ -65,8 +68,8 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/organization-membership-access/registry.yaml"
         ),
         module: None,
-        ddl_sha256: "b29dd51145e008de342526941bada68781b9d8067a8384643ede258e9471c28a",
-        revision: "sha256:6b631862b5b91c26e1159a0a11480678cace8b8d601ed4b11aeca707985bdaa0",
+        ddl_sha256: "e63e83e842a623bc1acdc0f91a1992cb79f51ddc02d580482787193508307ec0",
+        revision: "sha256:7c1f8480faa114d02d4ee775f22c1fcb4c6b18ffa163fc5dea0e518d02335e4a",
     },
     Fixture {
         name: "asset-registration-actions",
@@ -76,8 +79,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
-        ddl_sha256: "19e503d71d515e5a9e2af9c109b91cce856eb041849d9d0208dfeb454365e7ba",
-        revision: "sha256:ab230321e1af201fd82ba755d3ac0d5f4276a8d62b018d5c678650242882bfa6",
+        ddl_sha256: "74b4d081d2343c63e385a19c42fedf91b240250a8d118033c96b5ab4076e36fc",
+        revision: "sha256:f0511f2902aadc4853e10c9db53b96c66eed56f83c82210ad6dc87afab9c0a26",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -87,8 +90,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
-        ddl_sha256: "92c531b3cf49292bcbaa33b663fd2fc2fdd934d0f96635261f0f9d463ef914d8",
-        revision: "sha256:c884fbf1a694ed07de771662e33d46fd29595c720e1583faa0eb9dc4044f75c5",
+        ddl_sha256: "f64beb69aa4cf10e9cc9205ac3d824a68b971f13232b28a298f011e0f83f456b",
+        revision: "sha256:e8a70a759c6edbf059dc801edb1756ac58ccd9670a39bd9a8bd0a9556c4c13c7",
     },
     Fixture {
         name: "household-contact-actions",
@@ -98,8 +101,8 @@ const FIXTURES: &[Fixture] = &[
         module: Some(include_bytes!(
             "../../../products/breg/fixtures/household-contact-actions/modules/household-contact-actions-core/module.yaml"
         )),
-        ddl_sha256: "6699bf442105e684adbe6ca506cfbbef90700b0298decdd9ec3f7a3a90cf4e67",
-        revision: "sha256:3cfbdf8364797123d5408dad610455b3aa206cb05934d808bfe9098456d5af49",
+        ddl_sha256: "5ddb4bc4c91ca1ddc226fe5a1a3abc70fdd119da6ccd5392f570cdfe281fc60a",
+        revision: "sha256:10490040d1a0f946385ffaaccd0466950d431b47e3ba6e468c4e2e0c81b4eccf",
     },
 ];
 

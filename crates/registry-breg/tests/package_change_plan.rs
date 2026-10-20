@@ -451,7 +451,13 @@ fn new_entity_plan_uses_complete_candidate_ddl_in_dependency_order() {
         .ddl()
         .statements
         .iter()
-        .filter(|statement| statement.id.starts_with("entity.placement."))
+        .filter(|statement| {
+            statement.id.starts_with("entity.placement.")
+                || matches!(
+                    statement.id.as_str(),
+                    "entity.asset.reference-lifecycle.key" | "entity.site.reference-lifecycle.key"
+                )
+        })
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(plan.statements, expected);
@@ -463,6 +469,11 @@ fn new_entity_plan_uses_complete_candidate_ddl_in_dependency_order() {
         .statements
         .iter()
         .any(|statement| statement.id == "entity.placement.field.asset.reference"));
+    for target in ["asset", "site"] {
+        assert!(plan.statements.iter().any(|statement| {
+            statement.id == format!("entity.{target}.reference-lifecycle.key")
+        }));
+    }
     assert!(plan
         .statements
         .iter()
@@ -500,7 +511,10 @@ fn new_reference_constraint_and_index_are_supported_additive_statements() {
         ids,
         vec![
             "entity.asset.field.site.column",
+            "entity.asset.reference-lifecycle.column",
+            "entity.site.reference-lifecycle.key",
             "entity.asset.field.site.reference",
+            "entity.asset.field.site.active-reference",
             "entity.asset.constraint.code-unique",
             "entity.asset.index.code-idx",
             "entity.asset.index.reference:site",
@@ -1185,6 +1199,61 @@ fn unchanged_rebuild_over_a_baseline_with_this_compilers_generated_ddl_digest_pl
 }
 
 #[test]
+fn unchanged_rebuild_over_a_pre_integrity_baseline_adds_live_reference_support_once() {
+    let previous = compile_variant(Variant::ReferenceConstraintIndex);
+    let mut earlier_compiler =
+        registry_breg::package::CompiledRegistryMigrationBaseline::from_compiled(
+            PRIOR_REVISION,
+            &previous,
+        );
+    for names in earlier_compiler.physical_names.entities.values_mut() {
+        names.constraints.retain(|key, _| {
+            !key.starts_with("active-reference:") && key != "active-reference-key:record-lifecycle"
+        });
+    }
+    earlier_compiler.generated_ddl_sha256 = None;
+
+    let plan = unchanged_rebuild_plan(&earlier_compiler);
+    let support_ids = plan
+        .statements
+        .iter()
+        .filter(|statement| {
+            statement.id.ends_with(".reference-lifecycle.column")
+                || statement.id.ends_with(".reference-lifecycle.key")
+                || statement.id.ends_with(".active-reference")
+        })
+        .map(|statement| statement.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        support_ids,
+        [
+            "entity.asset.reference-lifecycle.column",
+            "entity.site.reference-lifecycle.key",
+            "entity.asset.field.site.active-reference",
+        ]
+    );
+    for id in support_ids {
+        assert_eq!(
+            plan.statements
+                .iter()
+                .filter(|statement| statement.id == id)
+                .count(),
+            1,
+            "{id} is emitted exactly once"
+        );
+    }
+
+    let installed = registry_breg::package::CompiledRegistryMigrationBaseline::from_compiled(
+        PRIOR_REVISION,
+        &previous,
+    );
+    assert!(
+        unchanged_rebuild_plan(&installed).statements.is_empty(),
+        "a successor compiled after installing the support is a no-op"
+    );
+}
+
+#[test]
 fn model_change_over_a_baseline_without_the_generated_ddl_digest_carries_the_refresh_too() {
     let previous_source = source_for_variant(Variant::ReferenceConstraintIndex);
     let previous = compile_source(&previous_source);
@@ -1729,6 +1798,22 @@ fn reference_target_change_can_be_reviewed_through_compiler_owned_fk_constraint(
     assert_eq!(
         reviewed.manifest().migration_plan.reviewed_descriptors,
         ["modules/core/migrations/reference-target/descriptor.json"]
+    );
+    assert_eq!(
+        reviewed
+            .manifest()
+            .migration_plan
+            .statements
+            .iter()
+            .map(|statement| statement.id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "entity.asset.field.home-site.active-reference.drop",
+            "entity.site.reference-lifecycle.key.drop",
+            "entity.location.reference-lifecycle.key",
+            "entity.asset.field.home-site.active-reference",
+        ],
+        "the old live FK and target key retire before the reviewed retarget, and the candidate FK is installed afterward"
     );
 }
 

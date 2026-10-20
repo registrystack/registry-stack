@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Enforce active reference integrity in PostgreSQL: active Records cannot
+  reference tombstoned targets, and a target cannot be tombstoned while another
+  active Record references it. Tombstoned Records and history retain their
+  reference IDs. Conflicts remain value-free `409 mutation.conflict` responses.
+  Existing deployments must build and apply a successor package against their
+  deployed baseline before switching runtimes. Rehearsal refuses pre-existing
+  active references to tombstoned targets; repair those references or tombstone
+  their source Records through the current package before retrying.
+
 ## 0.42.0 - 2026-10-20
 
 - Advertise a per-target availability route for immediate Actions with

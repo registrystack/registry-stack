@@ -284,6 +284,29 @@ successor package: `bregctl package` classifies each one as a compatible
 additive index and the migration transaction creates it with a plain
 `CREATE INDEX`, which blocks writes to that table until it commits.
 
+## Reference lifecycle
+
+An active Record can reference only an active target Record. Create and patch,
+including batch and import writes, refuse a missing or tombstoned target.
+Tombstoning a target refuses while another active Record references it, even
+when that referencing Record is outside the caller's read permissions.
+These refusals use the generic `409 mutation.conflict` response and disclose
+no referencing Record IDs or values. Action and Proposal target admission
+continues to require its independently granted current authority.
+
+Clear an optional reference, point it at an active replacement, or tombstone
+the referencing Record before tombstoning its target. Tombstoned Records and
+retained history keep their original reference IDs. A self-reference does not
+prevent tombstoning that same Record; active references from other Records do.
+There is no automatic cascade or clearing of references.
+
+Registries activated by an earlier compiler receive the lifecycle constraints
+through a successor package built with the deployed package as
+`--baseline-package`. Rehearse with `bregctl plan` before applying the successor
+and switching the runtime. The upgrade validates existing rows; if an active
+Record already references a tombstoned target, repair its reference or tombstone
+that Record through the current package, then repeat the rehearsal.
+
 ## Live derived fields
 
 A derived relation is a reviewed SQL asset, compiled into a read-only,
