@@ -1225,7 +1225,7 @@ fn compile_effects(
     let mut effect_ids = BTreeSet::new();
     let mut create_targets = BTreeMap::new();
     for (index, effect) in action.effects().iter().enumerate() {
-        let id = effect_id(effect, index);
+        let id = effective_action_effect_id(effect, index);
         validate_id(&id, "actions[].plan.effects[].id", errors);
         if !effect_ids.insert(id.clone()) {
             errors.push(Diagnostic::error(
@@ -1252,7 +1252,7 @@ fn compile_effects(
     let mut writes = BTreeMap::new();
     let mut target_uses = BTreeMap::<(String, String, Operation), CompiledActionTargetUse>::new();
     for (index, effect) in action.effects().iter().enumerate() {
-        let id = effect_id(effect, index);
+        let id = effective_action_effect_id(effect, index);
         let Some(target) =
             compile_target(inputs, entities, &id, effect, action.is_proposal(), errors)
         else {
@@ -2348,7 +2348,7 @@ fn compatible_field_types(source: &FieldTypeSource, target: &FieldTypeSource) ->
     }
 }
 
-fn effect_id(effect: &ActionEffectSource, index: usize) -> String {
+pub(crate) fn effective_action_effect_id(effect: &ActionEffectSource, index: usize) -> String {
     effect
         .id
         .clone()

@@ -487,6 +487,26 @@ fn household_contact_action_compiles_routes_effects_and_authority() {
 }
 
 #[test]
+fn create_effects_still_require_an_explicit_identifier() {
+    let mut source: serde_json::Value =
+        serde_json::from_str(&household_contact_project("")).unwrap();
+    source["actions"][0]["plan"]["effects"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("id");
+
+    let failure = compile_json(&serde_json::to_vec(&source).unwrap())
+        .expect_err("an implicit create effect identifier is refused");
+    assert!(
+        failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "breg.action.effect-create-id-required"
+                && diagnostic.path == "actions[register-household-contact].plan.effects[].id"
+        }),
+        "{failure:?}"
+    );
+}
+
+#[test]
 fn action_grants_refuse_request_metadata_projection_overrides() {
     let mut source: serde_json::Value =
         serde_json::from_str(&household_contact_project("")).unwrap();

@@ -13,6 +13,7 @@ use crate::contract::{
     ActionExecutionSource, ActionPlanSource, ActionSource, ConstraintSource, EntityExtensionSource,
     EntitySource, FieldTypeSource, ManifestProjectionTextSource, RegistryModule, RegistryProject,
 };
+use crate::immediate_actions::effective_action_effect_id;
 
 type LocatedId = (String, String);
 type LocatedDisplayText = (String, String, String);
@@ -477,11 +478,13 @@ fn action_integrity(
         let values = effects
             .iter()
             .enumerate()
-            .filter_map(|(index, effect)| {
-                effect
-                    .id
-                    .as_ref()
-                    .map(|id| (id.clone(), format!("{base}/plan/effects/{index}/id")))
+            .map(|(index, effect)| {
+                let pointer = if effect.id.is_some() {
+                    format!("{base}/plan/effects/{index}/id")
+                } else {
+                    format!("{base}/plan/effects/{index}")
+                };
+                (effective_action_effect_id(effect, index), pointer)
             })
             .collect::<Vec<_>>();
         add_collisions(document, errors, "breg.action-effect.id-collision", &values);
