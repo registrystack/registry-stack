@@ -136,8 +136,9 @@ fn read_project(project: &Path, fixtures: bool) -> Result<ProjectReading> {
                         report.push(finding.to_diagnostic(&policy.document));
                     }
                 }
-                None => report.extend(decoded.document.warnings()),
+                None => {}
             }
+            report.extend(decoded.document.warnings());
             report.extend(Report::new(integrity));
             Some(decoded.value.into_facts())
         }
