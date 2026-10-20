@@ -1920,8 +1920,7 @@
           "$ref": "#/$defs/Classification"
         },
         "display": {
-          "$ref": "#/$defs/DisplaySource",
-          "default": {}
+          "$ref": "#/$defs/DisplaySource"
         },
         "id": {
           "$ref": "#/$defs/LocalId"
