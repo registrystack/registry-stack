@@ -35,7 +35,9 @@ every other dataset out of both the manifest and the catalogue, relationship edg
   and fix.
 - `render` writes one format to standard output: catalog JSON, DCAT or BRegDCAT-AP, CPSV-AP,
   SHACL, JSON Schema, form JSON Schema, OGC API Records, ODRL policies, or Evidence offerings.
-- `publish` renders the formats the manifest declares into a directory, with an `index.json` that
+- `publish` writes every format into a directory: catalog JSON, DCAT, SHACL, JSON Schema, form
+  JSON Schema, OGC API Records, ODRL policies, and Evidence offerings always, plus CPSV-AP and a
+  `dcat.<profile>.jsonld` for each profile in `catalog.application_profiles`. Its `index.json`
   records the digest of the source manifest and of each file, so an operator can compare or pin a
   bundle.
   It does not empty the directory first, so publish into a clean one.
