@@ -12,14 +12,22 @@ index, query API, and clients implement the Evidence-only subset and refuse a
 Relay service. An operator with a mixed index must remove Relay origins and
 rebuild the complete package before upgrading.
 
-For the current Evidence subset, the schema describes the closed object shape. The Rust profile crate adds
-the requirements JSON Schema cannot express here: duplicate-key refusal,
-strict lexicographic collection ordering, URI shape, local-test endpoint
-restriction, fixed upper bounds, product-kind capability closure, and a
-centrally derived `bindingId` over the service identity, kind, endpoint,
-conformance set, and exact capability tuple. Each independently searchable
-capability binding is a separate Data Service node. `serviceId` remains the
-native service identity shared by those nodes.
+For the current Evidence subset, the schema describes the frozen historical
+closed object shape. The Rust profile crate additionally applies the shared
+`DisplayText` rule to `title` and `description`: it refuses bidirectional
+embedding, override, and isolate controls, line and paragraph separators,
+U+FEFF, and Unicode noncharacters while accepting the multilingual shaping and
+direction characters U+00AD, U+061C, U+200B to U+200F, and U+2060. The
+historical schema predates this runtime safety restriction, so schema acceptance
+alone does not establish acceptance by the current parser.
+
+The Rust profile crate also adds requirements this JSON Schema does not express
+here: duplicate-key refusal, strict lexicographic collection ordering, URI
+shape, local-test endpoint restriction, fixed upper bounds, product-kind
+capability closure, and a centrally derived `bindingId` over the service
+identity, kind, endpoint, conformance set, and exact capability tuple. Each
+independently searchable capability binding is a separate Data Service node.
+`serviceId` remains the native service identity shared by those nodes.
 
 `../shapes/registry-discovery-v1alpha1.shacl.ttl` is the pinned offline SHACL
 subset. `../../scripts/validate_profile_rdf.py --check` uses the local context
