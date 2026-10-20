@@ -225,7 +225,7 @@ symbolic links.
 | --- | --- | --- | --- |
 | Provider | Its public description | Its endpoint, profile, or Evidence types change | Publishing the new bytes at the approved URL |
 | Operator | `origins.yaml`, mappings, `runtime.yaml`, the deployed package | An origin or mapping changes, or a provider republishes | Check, package into a new directory, pin, restart |
-| Application | Its saved selections and its own Evidence trust | A saved selection's service, endpoint, roles, jurisdictions, capability, mapping, or origin changes; a new revision or `originContentDigest` alone does not | Re-deciding trust, then calling the provider directly |
+| Application | Its saved selections and its own Evidence trust | A saved selection's service, endpoint, roles, jurisdictions, capability, mapping, or origin changes; a new catalog revision or `originContentDigest` alone does not | Re-deciding trust, then calling the provider directly |
 
 Discovery never trusts a provider for the application: [How Registry Discovery
 works](../../explanation/discovery-as-an-index/) explains that boundary.
