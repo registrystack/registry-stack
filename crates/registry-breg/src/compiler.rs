@@ -451,7 +451,7 @@ pub fn compile_project_with_assets(
 }
 
 struct SourcedLocalId<'a> {
-    id: &'a str,
+    id: String,
     path: String,
     source: Option<&'a str>,
 }
@@ -461,7 +461,7 @@ fn add_cross_file_collisions(
     values: &[SourcedLocalId<'_>],
     errors: &mut Vec<Diagnostic>,
 ) {
-    for (first, second) in lookalike_local_id_pairs(values.iter().map(|value| value.id)) {
+    for (first, second) in lookalike_local_id_pairs(values.iter().map(|value| value.id.as_str())) {
         let first = &values[first];
         let second = &values[second];
         if first.source == second.source {
@@ -710,20 +710,20 @@ fn collect_entity_local_ids<'a>(
     namespaces
         .fields
         .extend(entity.fields.iter().map(|field| SourcedLocalId {
-            id: &field.id,
+            id: field.id.clone(),
             path: format!("{path}.fields[id={}].id", field.id),
             source,
         }));
     for derived in &entity.derived {
         namespaces.derived.push(SourcedLocalId {
-            id: &derived.id,
+            id: derived.id.clone(),
             path: format!("{path}.derived[id={}].id", derived.id),
             source,
         });
         namespaces
             .fields
             .extend(derived.fields.iter().map(|field| SourcedLocalId {
-                id: &field.id,
+                id: field.id.clone(),
                 path: format!(
                     "{path}.derived[id={}].fields[id={}].id",
                     derived.id, field.id
@@ -731,28 +731,34 @@ fn collect_entity_local_ids<'a>(
                 source,
             }));
     }
-    namespaces.constraints.extend(
-        entity
-            .constraints
-            .iter()
-            .filter_map(ConstraintSource::explicit_id)
-            .map(|id| SourcedLocalId {
-                id,
-                path: format!("{path}.constraints[id={id}].id"),
-                source,
-            }),
-    );
+    namespaces
+        .constraints
+        .extend(
+            entity
+                .constraints
+                .iter()
+                .enumerate()
+                .map(|(index, constraint)| {
+                    let id = derived_constraint_id(constraint);
+                    let path = if constraint.explicit_id().is_some() {
+                        format!("{path}.constraints[id={id}].id")
+                    } else {
+                        format!("{path}.constraints[{index}]")
+                    };
+                    SourcedLocalId { id, path, source }
+                }),
+        );
     namespaces
         .indexes
         .extend(entity.indexes.iter().map(|index| SourcedLocalId {
-            id: &index.id,
+            id: index.id.clone(),
             path: format!("{path}.indexes[id={}].id", index.id),
             source,
         }));
     namespaces
         .profiles
         .extend(entity.access_profiles.iter().map(|profile| SourcedLocalId {
-            id: &profile.id,
+            id: profile.id.clone(),
             path: format!("{path}.accessProfiles[id={}].id", profile.id),
             source,
         }));
@@ -761,7 +767,7 @@ fn collect_entity_local_ids<'a>(
             .selector_profiles
             .iter()
             .map(|selector| SourcedLocalId {
-                id: &selector.id,
+                id: selector.id.clone(),
                 path: format!("{path}.selectorProfiles[id={}].id", selector.id),
                 source,
             }),
@@ -769,12 +775,12 @@ fn collect_entity_local_ids<'a>(
     namespaces
         .read_paths
         .extend(entity.read_paths.iter().map(|read_path| SourcedLocalId {
-            id: &read_path.id,
+            id: read_path.id.clone(),
             path: format!("{path}.readPaths[id={}].id", read_path.id),
             source,
         }));
     hooks.extend(entity.hooks.iter().map(|hook| SourcedLocalId {
-        id: &hook.id,
+        id: hook.id.clone(),
         path: format!("{path}.hooks[id={}].id", hook.id),
         source,
     }));
@@ -790,20 +796,20 @@ fn collect_extension_local_ids<'a>(
     namespaces
         .fields
         .extend(extension.fields.iter().map(|field| SourcedLocalId {
-            id: &field.id,
+            id: field.id.clone(),
             path: format!("{path}.fields[id={}].id", field.id),
             source: Some(source),
         }));
     for derived in &extension.derived {
         namespaces.derived.push(SourcedLocalId {
-            id: &derived.id,
+            id: derived.id.clone(),
             path: format!("{path}.derived[id={}].id", derived.id),
             source: Some(source),
         });
         namespaces
             .fields
             .extend(derived.fields.iter().map(|field| SourcedLocalId {
-                id: &field.id,
+                id: field.id.clone(),
                 path: format!(
                     "{path}.derived[id={}].fields[id={}].id",
                     derived.id, field.id
@@ -811,21 +817,31 @@ fn collect_extension_local_ids<'a>(
                 source: Some(source),
             }));
     }
-    namespaces.constraints.extend(
-        extension
-            .constraints
-            .iter()
-            .filter_map(ConstraintSource::explicit_id)
-            .map(|id| SourcedLocalId {
-                id,
-                path: format!("{path}.constraints[id={id}].id"),
-                source: Some(source),
-            }),
-    );
+    namespaces
+        .constraints
+        .extend(
+            extension
+                .constraints
+                .iter()
+                .enumerate()
+                .map(|(index, constraint)| {
+                    let id = derived_constraint_id(constraint);
+                    let path = if constraint.explicit_id().is_some() {
+                        format!("{path}.constraints[id={id}].id")
+                    } else {
+                        format!("{path}.constraints[{index}]")
+                    };
+                    SourcedLocalId {
+                        id,
+                        path,
+                        source: Some(source),
+                    }
+                }),
+        );
     namespaces
         .indexes
         .extend(extension.indexes.iter().map(|index| SourcedLocalId {
-            id: &index.id,
+            id: index.id.clone(),
             path: format!("{path}.indexes[id={}].id", index.id),
             source: Some(source),
         }));
@@ -834,7 +850,7 @@ fn collect_extension_local_ids<'a>(
             .access_profiles
             .iter()
             .map(|profile| SourcedLocalId {
-                id: &profile.id,
+                id: profile.id.clone(),
                 path: format!("{path}.accessProfiles[id={}].id", profile.id),
                 source: Some(source),
             }),
@@ -846,7 +862,7 @@ fn collect_extension_local_ids<'a>(
                 .selector_profiles
                 .iter()
                 .map(|selector| SourcedLocalId {
-                    id: &selector.id,
+                    id: selector.id.clone(),
                     path: format!("{path}.selectorProfiles[id={}].id", selector.id),
                     source: Some(source),
                 }),
@@ -854,12 +870,12 @@ fn collect_extension_local_ids<'a>(
     namespaces
         .read_paths
         .extend(extension.read_paths.iter().map(|read_path| SourcedLocalId {
-            id: &read_path.id,
+            id: read_path.id.clone(),
             path: format!("{path}.readPaths[id={}].id", read_path.id),
             source: Some(source),
         }));
     hooks.extend(extension.hooks.iter().map(|hook| SourcedLocalId {
-        id: &hook.id,
+        id: hook.id.clone(),
         path: format!("{path}.hooks[id={}].id", hook.id),
         source: Some(source),
     }));
@@ -876,7 +892,7 @@ fn validate_cross_file_local_id_collisions(
         .iter()
         .enumerate()
         .map(|(index, module)| SourcedLocalId {
-            id: &module.id,
+            id: module.id.clone(),
             path: format!("project.modules[{index}].id"),
             source: None,
         })
@@ -885,7 +901,7 @@ fn validate_cross_file_local_id_collisions(
         .entities
         .iter()
         .map(|entity| SourcedLocalId {
-            id: &entity.id,
+            id: entity.id.clone(),
             path: format!("recordTypes[id={}].id", entity.id),
             source: None,
         })
@@ -894,7 +910,7 @@ fn validate_cross_file_local_id_collisions(
         .actions
         .iter()
         .map(|action| SourcedLocalId {
-            id: &action.id,
+            id: action.id.clone(),
             path: format!("actions[id={}].id", action.id),
             source: None,
         })
@@ -903,7 +919,7 @@ fn validate_cross_file_local_id_collisions(
         .functions
         .iter()
         .map(|function| SourcedLocalId {
-            id: &function.id,
+            id: function.id.clone(),
             path: format!("functions[id={}].id", function.id),
             source: None,
         })
@@ -926,7 +942,7 @@ fn validate_cross_file_local_id_collisions(
                 .or_default()
                 .profiles
                 .push(SourcedLocalId {
-                    id: &profile.id,
+                    id: profile.id.clone(),
                     path: format!("accessProfiles[{profile_index}].id"),
                     source: None,
                 });
@@ -938,22 +954,22 @@ fn validate_cross_file_local_id_collisions(
     for module in ordered_modules {
         let source = module.id.as_str();
         module_ids.push(SourcedLocalId {
-            id: &module.id,
+            id: module.id.clone(),
             path: format!("modules[id={}].id", module.id),
             source: Some(source),
         });
         records.extend(module.entities.iter().map(|entity| SourcedLocalId {
-            id: &entity.id,
+            id: entity.id.clone(),
             path: format!("modules[id={}].recordTypes[id={}].id", module.id, entity.id),
             source: Some(source),
         }));
         actions.extend(module.actions.iter().map(|action| SourcedLocalId {
-            id: &action.id,
+            id: action.id.clone(),
             path: format!("modules[id={}].actions[id={}].id", module.id, action.id),
             source: Some(source),
         }));
         functions.extend(module.functions.iter().map(|function| SourcedLocalId {
-            id: &function.id,
+            id: function.id.clone(),
             path: format!("modules[id={}].functions[id={}].id", module.id, function.id),
             source: Some(source),
         }));
@@ -7260,7 +7276,7 @@ pub(crate) fn operation_id(operation: Operation) -> &'static str {
     }
 }
 
-fn derived_constraint_id(constraint: &ConstraintSource) -> String {
+pub(crate) fn derived_constraint_id(constraint: &ConstraintSource) -> String {
     if let Some(id) = constraint.explicit_id() {
         return id.to_owned();
     }

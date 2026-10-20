@@ -9,6 +9,7 @@ use registry_platform_yaml::{
     AuthoredDisplayTextLocation, AuthoredId, Decoded,
 };
 
+use crate::compiler::derived_constraint_id;
 use crate::contract::{
     ActionExecutionSource, ActionPlanSource, ActionSource, ConstraintSource, EntityExtensionSource,
     EntitySource, FieldTypeSource, ManifestProjectionTextSource, RegistryModule, RegistryProject,
@@ -255,10 +256,13 @@ fn constraint_ids(base: &str, values: &[ConstraintSource]) -> Vec<LocatedId> {
     values
         .iter()
         .enumerate()
-        .filter_map(|(index, value)| {
-            value
-                .explicit_id()
-                .map(|id| (id.to_owned(), format!("{base}/{index}/id")))
+        .map(|(index, value)| {
+            let pointer = if value.explicit_id().is_some() {
+                format!("{base}/{index}/id")
+            } else {
+                format!("{base}/{index}")
+            };
+            (derived_constraint_id(value), pointer)
         })
         .collect()
 }
