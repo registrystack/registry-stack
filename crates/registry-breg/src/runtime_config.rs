@@ -210,11 +210,11 @@ const REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "rename fieldEncryption.provider.kind to fieldEncryption.provider.type, and write the value localFile as local-file",
     },
     RemovedKey {
-        path: "attachmentStorage.endpoint",
+        path: "attachmentStorage[type=s3].endpoint",
         replacement: "rename attachmentStorage.endpoint to attachmentStorage.url; the value stays as it is",
     },
     RemovedKey {
-        path: "attachmentVerification.endpoint",
+        path: "attachmentVerification[type=http].endpoint",
         replacement: "rename attachmentVerification.endpoint to attachmentVerification.url; the value stays as it is",
     },
     RemovedKey {

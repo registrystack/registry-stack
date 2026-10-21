@@ -44,7 +44,10 @@ pub struct RetiredApiVersion<'a> {
 }
 
 /// A key a format removed or renamed (CFG-CHANGE-2). `pointer` is an RFC 6901
-/// pointer in which a `*` segment matches any key or list index.
+/// pointer in which a `*` segment matches any key or list index, and a
+/// `name[tag=value]` segment matches the member `name` only when that member
+/// is a mapping whose `tag` is `value`, so a key renamed in one variant of a
+/// tagged union is not named as renamed in the others.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RemovedKey<'a> {
     pub pointer: &'a str,
