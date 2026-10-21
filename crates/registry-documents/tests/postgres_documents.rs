@@ -2838,6 +2838,70 @@ async fn a_job_armed_before_a_pause_erases_nothing() {
     );
 }
 
+/// The erasure status counts the versions awaiting their grace, the ones
+/// past it and not yet erased, and the dead-lettered erasure jobs.
+#[tokio::test]
+async fn the_erasure_status_counts_grace_due_and_dead_lettered() {
+    use registry_documents::config::Erasure;
+    use registry_documents::erasure::{erasure_status, ErasureStatus};
+
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let mut documents = Vec::new();
+    for seed in 92..95 {
+        let (document, _) = ready(&prepared, &api, &pdf(500, seed)).await;
+        assert_eq!(api.erase(CITIZEN, &document).await.status, 200);
+        documents.push(document);
+    }
+    deployment
+        .execute(&format!(
+            "UPDATE documents_versions
+                SET erasure_requested_at = erasure_requested_at - interval '2 days',
+                    erasure_due_at = now() - interval '1 second'
+              WHERE document_id IN ('{}', '{}');
+             INSERT INTO documents_erasure_jobs
+                 (version_id, part, generation, state, attempt, next_attempt_at)
+             SELECT version_id, '{}', 1, 'pending', 0, now() FROM documents_versions
+              WHERE document_id = '{}'",
+            documents[1],
+            documents[2],
+            registry_documents::erasure::JOB_PART,
+            documents[2],
+        ))
+        .await;
+    let config = RuntimeConfig::load(&deployment.runtime).unwrap();
+    let secrets = Arc::new(config.secret_resolver().unwrap());
+    let store = PostgresStore::connect_runtime(&config.database, &secrets).unwrap();
+    assert_eq!(
+        erasure_status(&store, Erasure::Paused).await.unwrap(),
+        ErasureStatus {
+            erasure: Erasure::Paused,
+            awaiting_grace: 1,
+            due: 2,
+            dead_lettered: 0,
+        }
+    );
+    // The third version's job spent its attempts.
+    deployment
+        .execute(&format!(
+            "UPDATE documents_erasure_jobs
+                SET state = 'dead-lettered', attempt = {}, next_attempt_at = NULL,
+                    dead_lettered_at = now()",
+            registry_documents::erasure::MAXIMUM_ATTEMPTS
+        ))
+        .await;
+    assert_eq!(
+        erasure_status(&store, Erasure::Active).await.unwrap(),
+        ErasureStatus {
+            erasure: Erasure::Active,
+            awaiting_grace: 1,
+            due: 2,
+            dead_lettered: 1,
+        }
+    );
+}
+
 /// The grant clock and the custody clock are distinct: a grant that
 /// expires or is revoked stops releasing and erases nothing in custody.
 #[tokio::test]

@@ -465,6 +465,14 @@ does not honour, and store an object while answering 503. The unit tests in
 standing and the erasure retry window. `contracts/security-test-traceability.yaml`
 names each test.
 
+### Owed in this pull request
+
+The `documentsctl` erasure status report, over
+`registry_documents::erasure::erasure_status` (its counts are proven by
+`the_erasure_status_counts_grace_due_and_dead_lettered`), lands in the
+same pull request as the sweep. It is not a residual risk to carry past
+the merge.
+
 ### Residual risk
 
 - "Erased" means the Store can no longer serve the bytes. PostgreSQL keeps
@@ -484,8 +492,6 @@ names each test.
   and erasure paused.
 - Replaying a dead-lettered erasure job is owed by WP7; until then a
   version whose erasure dead-lettered stays pending and unservable.
-- `documentsctl` does not yet report the erasure status; the runtime crate
-  exposes `registry_documents::erasure::erasure_status` for it.
 - The Rust client has no method for the erasure route yet.
 - A paused deployment keeps due bytes for as long as it stays paused, and
   orphan S3 objects accumulate meanwhile.
