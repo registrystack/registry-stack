@@ -11,8 +11,8 @@ schemas, problem vocabulary, tooling, CI gates, and release hold-out exist.
 Custody, PostgreSQL and S3 storage, upload with digest and length checks,
 content verification on dispatch, document grants, and release of a verified
 version are implemented and served behind OAuth access-token verification,
-with removal from custody and erasure by a cleanup sweep. Hooks arrive in a
-later change.
+with removal from custody and erasure by a cleanup sweep, and document events
+are delivered to after-commit URL observers.
 
 ## Routes
 
@@ -282,6 +282,52 @@ The times are indicative only: the machine was contended and the database
 ran in a VM. An authoritative run on a dedicated host is still owed before
 the times are quoted for sizing.
 
+## Events and observers
+
+A project may declare `hooks`: after-commit URL observers of three event
+families. Each hook names a trigger, the fields it projects, and a
+destination id; the runtime configuration binds that id under
+`destinations.hooks` to a URL and an HMAC signing key. The project file
+never carries an endpoint or a secret.
+
+| Trigger | Emitted when | Fields a hook may project |
+|---|---|---|
+| `document-version.ready` | A verdict makes a version ready that was not ready, including a version approved again after a verifier binding change suspended it. | `documentId`, `versionId`, `versionDigest`, `policyId`, `policyVersion`, `actorKind` |
+| `document-version.rejected` | A verdict rejects a version. | the same six |
+| `document-grant.changed` | A grant is issued or revoked. | the same six, plus `grantId` and `change` (`issued` or `revoked`) |
+
+`actorKind` is `service` or `human`: the kind of caller that reserved the
+version, or that issued or revoked the grant. No event carries content, a
+label, a media type, a name, a subject, or anything else about the person a
+document describes.
+
+An event is captured in the same transaction as the transition it reports,
+so a rolled-back verdict or grant change reports nothing, and a capture that
+cannot be written fails the transition. A repeated verdict, an issue replayed
+under its `Idempotency-Key`, and a repeated revocation report nothing.
+Delivery runs after commit: each attempt is a signed Version 1 hook envelope
+whose `source` is `urn:registrystack:documents:<project id>`, whose `type`
+is the hook id, and whose `dataschema` names the family's published schema
+under `generated/events/`. A failed attempt is retried with backoff from 30
+seconds to an hour until the destination's `maximumAttempts` are spent, then
+dead-lettered; delivery never delays or undoes a transition. An observer may
+not answer with a proposal: every proposal is refused and recorded as
+`documents.hook.proposal-unsupported`, and nothing in the Store changes.
+
+Hooks accept only `phase: after` and a `url` handler. A Rhai or Wasm handler,
+a `when` condition, a `principal`, and any other phase are refused when the
+project is read.
+
+A grant reaching its expiry emits nothing: it is not a transition anyone
+performs, and the observer already holds the expiry from the grant's terms.
+Erasure emits nothing yet; erasure events belong with the erasure work.
+
+Hooks are part of the package. Adding, removing, or changing a hook changes
+the package digest, so run `documentsctl package` and `documentsctl apply`
+before restarting; `serve` refuses a package that is not the active one.
+Rebinding a destination's URL, key, timeout, or attempt budget in the runtime
+configuration only needs a restart.
+
 ## Generated files
 
 Everything under `generated/` is reproduced by its generator and never
@@ -292,6 +338,8 @@ cargo run -p registry-documents --features schema --example runtime-schema -- \
   --output products/documents/generated/runtime
 cargo run -p registry-documents --features schema --example project-schema -- \
   --output products/documents/generated/project
+cargo run -p registry-documents --features schema --example event-schemas -- \
+  --output products/documents/generated/events
 cargo run -p registry-documents --features schema --example openapi -- \
   --output products/documents/generated
 ```
