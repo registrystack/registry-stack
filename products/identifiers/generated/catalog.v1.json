@@ -48,7 +48,7 @@
       "description": "JSON-LD namespace for Registry Manifest terms.",
       "source": {
         "path": "crates/registry-manifest-core/src/lib.rs",
-        "sha256": "6fbba7d42280fc661cf5f061728db6a34ff272e7eaaeb3f9eb8c2072db18c613"
+        "sha256": "58759dbaca49d8646761158fc71aab4afada27423aebc0c3d9568a1a6f2f05c1"
       }
     },
     {
@@ -3925,7 +3925,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "ffe88c3a277537ffaedac6793653655e63486a885c0083638ce192f2abd95c24",
+        "sha256": "fd86c63841d4ef2cef9315fecce858e427d295bbd2c45bee8f603ce9f37aa387",
         "mediaType": "application/schema+json"
       }
     },
@@ -4569,11 +4569,11 @@
       "description": "Registry Manifest metadata manifest and profile descriptor JSON Schema.",
       "source": {
         "path": "crates/registry-manifest-cli/src/schema.rs",
-        "sha256": "4bc86a6c6102725774ac58552b35653c6a92949654e7596675174ab8026a9324"
+        "sha256": "19d037ee50b143b70576b4ce50808883e0ccb831373f72d42beed770a67d8eae"
       },
       "artifact": {
         "path": "products/manifest/schemas/metadata.schema.json",
-        "sha256": "b2d2f89dc056e591a4632324028a9de3a87d124ef932b059064ba527af165830",
+        "sha256": "63a205c50ddd5ab0565fd56e02213f8061613f057d8759ad0af3c8adc4d38d11",
         "mediaType": "application/schema+json"
       }
     },
@@ -4587,7 +4587,7 @@
       "description": "Registry Manifest metadata manifest and profile descriptor JSON Schema.",
       "source": {
         "path": "crates/registry-manifest-cli/src/schema.rs",
-        "sha256": "4bc86a6c6102725774ac58552b35653c6a92949654e7596675174ab8026a9324"
+        "sha256": "19d037ee50b143b70576b4ce50808883e0ccb831373f72d42beed770a67d8eae"
       },
       "artifact": {
         "path": "products/manifest/schemas/profile.schema.json",
