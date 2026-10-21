@@ -185,11 +185,7 @@ async fn prepare_with(
             source,
         })?;
     let audit = open_audit(&config, &secrets).await?;
-    let database_id = config
-        .identity
-        .as_ref()
-        .map(|identity| identity.database_id.as_str().to_owned())
-        .ok_or(RuntimeError::Arguments)?;
+    let database_id = database_id(&config)?;
     let ceiling = config.storage.maximum_document_bytes();
     let storage = Arc::new(
         ContentStorage::activate(&config.storage, &database_id, Arc::clone(&secrets))
@@ -247,6 +243,16 @@ async fn prepare_with(
         dispatcher,
         transport,
     })
+}
+
+/// The logical database id the runtime document names. A document without
+/// one is refused with the findings that name the missing key.
+fn database_id(config: &RuntimeConfig) -> Result<String, RuntimeError> {
+    config
+        .identity
+        .as_ref()
+        .map(|identity| identity.database_id.as_str().to_owned())
+        .ok_or_else(|| RuntimeError::Config(RuntimeConfigError::Refused(config.findings())))
 }
 
 /// Open the audit journal the runtime document names, keyed by its audit
@@ -448,6 +454,36 @@ mod tests {
             ])
             .unwrap();
         assert_eq!(matches.subcommand_name(), Some("serve"));
+    }
+
+    /// A document without `identity.databaseId` is a configuration
+    /// refusal that names the missing key, never an argument error.
+    #[test]
+    fn a_missing_database_id_is_a_configuration_refusal() {
+        let mut config = RuntimeConfig::loader()
+            .parse_str::<RuntimeConfig>(crate::config::tests::STARTER_RUNTIME, |_| None)
+            .unwrap()
+            .config;
+        assert_eq!(
+            database_id(&config).unwrap(),
+            "registry-documents-production"
+        );
+        config.identity = None;
+        let error = database_id(&config).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                RuntimeError::Config(RuntimeConfigError::Refused(findings))
+                    if findings.iter().any(|finding| finding.code == "documents.runtime.missing-identity")
+            ),
+            "{error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("identity.databaseId is required"),
+            "{error}"
+        );
     }
 
     #[test]
