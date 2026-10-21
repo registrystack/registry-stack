@@ -17,7 +17,9 @@ use axum::extract::{OriginalUri, State};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
+use registry_documents::content::StorageError;
 use registry_documents::runtime::{prepare, Prepared, RuntimeError};
+use registry_platform_objectstore::ObjectStoreError;
 use registry_documents_core::ProblemCode;
 use serde_json::json;
 use support::{pdf, reservation, Api, Deployment, DATABASE_STORAGE};
@@ -31,6 +33,7 @@ const NORMAL: usize = 0;
 const UNAVAILABLE: usize = 1;
 const CORRUPT: usize = 2;
 const PUT_FAILS: usize = 3;
+const VERSIONED: usize = 4;
 const APPROVE: usize = 0;
 const REJECT: usize = 1;
 
@@ -38,6 +41,7 @@ const REJECT: usize = 1;
 struct Objects {
     bytes: tokio::sync::Mutex<BTreeMap<String, Vec<u8>>>,
     puts: AtomicUsize,
+    probes: AtomicUsize,
     mode: AtomicUsize,
     verifier_mode: AtomicUsize,
     verified: tokio::sync::Mutex<Vec<(String, Vec<u8>)>>,
@@ -75,6 +79,14 @@ async fn object_request(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     if uri.query().is_some() {
+        state.probes.fetch_add(1, Ordering::SeqCst);
+        if mode == VERSIONED {
+            return (
+                StatusCode::OK,
+                "<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>",
+            )
+                .into_response();
+        }
         return (
             StatusCode::OK,
             "<VersioningConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"/>",
@@ -288,29 +300,21 @@ async fn a_failed_object_write_keeps_the_staged_row_and_finalizes_nothing() {
         &api.reserve(APP, "citizen-delivery", CITIZEN, &content, PDF)
             .await,
     );
-    // An object store that does not answer at all refuses before staging.
-    fixture.state.mode.store(UNAVAILABLE, Ordering::SeqCst);
-    api.put(APP, &path, PDF, Body::from(content.clone()))
-        .await
-        .assert_problem(ProblemCode::ServiceUnavailable);
-    assert_eq!(
-        fixture
-            .count("SELECT count(*) FROM documents_staged_objects")
-            .await,
-        0
-    );
-
-    fixture.state.mode.store(PUT_FAILS, Ordering::SeqCst);
-    api.put(APP, &path, PDF, Body::from(content.clone()))
-        .await
-        .assert_problem(ProblemCode::ServiceUnavailable);
-    assert_eq!(
-        fixture
-            .count("SELECT count(*) FROM documents_staged_objects WHERE NOT committed")
-            .await,
-        1,
-        "the attempt stays findable for the sweep"
-    );
+    // An object store that does not answer at all, and one that refuses
+    // the write, each leave the attempt's staged row findable for the sweep.
+    for (mode, staged) in [(UNAVAILABLE, 1), (PUT_FAILS, 2)] {
+        fixture.state.mode.store(mode, Ordering::SeqCst);
+        api.put(APP, &path, PDF, Body::from(content.clone()))
+            .await
+            .assert_problem(ProblemCode::ServiceUnavailable);
+        assert_eq!(
+            fixture
+                .count("SELECT count(*) FROM documents_staged_objects WHERE NOT committed")
+                .await,
+            staged,
+            "the attempt stays findable for the sweep"
+        );
+    }
     let state: String = fixture
         .deployment
         .scalar("SELECT upload_state FROM documents_versions")
@@ -327,7 +331,7 @@ async fn a_failed_object_write_keeps_the_staged_row_and_finalizes_nothing() {
         fixture
             .count("SELECT count(DISTINCT object_id) FROM documents_staged_objects")
             .await,
-        2
+        3
     );
     assert_eq!(
         fixture
@@ -352,5 +356,46 @@ async fn switching_storage_after_the_first_s3_write_is_refused_at_startup() {
     assert!(
         matches!(error, RuntimeError::StorageBindingChanged),
         "{error}"
+    );
+}
+
+/// S3 storage is activated once, at startup: an upload probes bucket
+/// versioning only through the write's own check, and verification and
+/// release read without probing or activating again.
+#[tokio::test]
+async fn s3_storage_is_activated_once_at_startup() {
+    let fixture = Fixture::new().await;
+    let (prepared, api) = fixture.start().await;
+    let probes = || fixture.state.probes.load(Ordering::SeqCst);
+    assert_eq!(probes(), 1, "startup probes the bucket once");
+
+    let (document, version) = upload(&api, &pdf(600, 28)).await;
+    assert_eq!(probes(), 2, "the write probes once before it writes");
+    assert_eq!(prepared.verify_due().await, 1);
+    assert_eq!(api.download(APP, &document, &version).await.status, 200);
+    assert_eq!(probes(), 2, "verification and release never probe");
+}
+
+/// A bucket that has ever enabled versioning is refused before anything is
+/// served, so no upload can reach it.
+#[tokio::test]
+async fn a_versioned_bucket_is_refused_at_startup() {
+    let fixture = Fixture::new().await;
+    fixture.state.mode.store(VERSIONED, Ordering::SeqCst);
+    let error = prepare(&fixture.deployment.runtime)
+        .await
+        .expect_err("startup is refused");
+    assert!(
+        matches!(
+            error,
+            RuntimeError::Storage(StorageError::Object(ObjectStoreError::VersionedBucket))
+        ),
+        "{error}"
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM documents_storage_binding")
+            .await,
+        0
     );
 }

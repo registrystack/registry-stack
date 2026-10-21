@@ -126,10 +126,10 @@ pub enum ContentStorage {
         binding: String,
     },
     S3 {
-        settings: Box<S3Settings>,
-        resolver: Arc<SecretResolver>,
+        /// The store activated once at startup, from which every object's
+        /// own scope is derived without resolving or probing again.
+        deployment: Arc<S3ObjectStore>,
         database_id: String,
-        ceiling: u64,
         binding: String,
     },
 }
@@ -164,10 +164,8 @@ impl ContentStorage {
                     .await?;
                 Ok(Self::S3 {
                     binding: deployment.binding_digest().to_owned(),
-                    settings: Box::new(settings),
-                    resolver,
+                    deployment: Arc::new(deployment),
                     database_id: database_id.to_owned(),
-                    ceiling,
                 })
             }
         }
@@ -192,23 +190,17 @@ impl ContentStorage {
 
     /// The store of one object. Every object is its own scope, so its key
     /// is server-chosen and opaque, and two versions never share an object
-    /// even when their content is identical.
+    /// even when their content is identical. The scope is derived from the
+    /// store activated at startup, so no credential is resolved and no
+    /// bucket probe is sent here.
     pub async fn object(&self, object_id: Uuid) -> Result<S3ObjectStore, StorageError> {
         match self {
             Self::Database { .. } => Err(StorageError::Binding),
             Self::S3 {
-                settings,
-                resolver,
+                deployment,
                 database_id,
-                ceiling,
                 ..
-            } => Ok(settings
-                .activate(
-                    s3_namespace(*ceiling),
-                    &format!("{database_id}/{object_id}"),
-                    resolver,
-                )
-                .await?),
+            } => Ok(deployment.scoped(&format!("{database_id}/{object_id}"))?),
         }
     }
 
