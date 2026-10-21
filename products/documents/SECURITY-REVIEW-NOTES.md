@@ -159,9 +159,8 @@ against a loopback fake object store and verifier. The rows in
 
 ### Residual risk
 
-- Upload expiry, erasure of expired reservations, and the sweep of S3
-  objects a failed or losing attempt left behind are owed by WP5. Until then
-  such objects and rows stay in place.
+- Upload expiry and the sweep of S3 objects a failed or losing attempt left
+  behind are covered under "Retention, removal, and erasure" below.
 - During a verifier rollout, an older instance may still finalize a version
   under its binding after a newer instance swept. That version can be
   approved and released under the older binding by a worker that holds it,
@@ -315,8 +314,9 @@ each test.
   to describe the bytes, can mislead its user; the Store makes no claim
   about it.
 - A document whose policy the deployed package no longer declares is shown
-  to nobody, custodian included, and each such access logs a warning; it
-  stays in custody until erasure (WP5).
+  to nobody, custodian included, and each such access logs a warning. Its
+  custodian cannot remove it either (DOCUMENTS-DEC-26); it stays in custody
+  until the policy is declared again.
 
 ## Activation and dead-letter replay (2026-10-22)
 
@@ -377,3 +377,89 @@ names each test under DOCUMENTS-SEC-34 to DOCUMENTS-SEC-36.
   repeated verifier load, not disclosure.
 - The companion journal lives on the host the operator command runs on;
   collect it with the runtime's journal.
+
+## Retention, removal, and erasure
+
+### Threat
+
+A removed document is still released through a grant, a download, or a
+late verdict; someone other than its custodian removes it; a grant expiry
+silently erases bytes the custodian still holds; a sweep reports a version
+erased while the bytes are still servable, erases twice, or strands a
+version half done after a crash; a paused deployment erases anyway; erasure
+cascades into the grant, verification, or custody records an investigation
+needs; an S3 object an abandoned upload left behind stays forever.
+
+### Enforcement and defaults
+
+`crates/registry-documents/src/service/erasure.rs`, `erasure.rs`,
+`runtime.rs`, `verification.rs`, `service/grants.rs`, and
+`migrations/0100_documents.sql` enforce, with the invariant rows
+DOCUMENTS-SEC-37 to DOCUMENTS-SEC-46 and the decisions DOCUMENTS-DEC-19 to
+DOCUMENTS-DEC-26:
+
+- Only the custodian may remove a document, through
+  `POST /documents/{documentId}/erasure`; every other caller with standing
+  gets 403 and every caller without it 404. A repeat answers the same view
+  and moves nothing.
+- The removal request is one transaction: the version becomes erasure
+  pending and suspended, every active grant on the document is revoked, and
+  pending verification is cancelled. Grant issue holds the version row and
+  refuses an erasing version; download needs a releasable version, which
+  the database refuses for a version under removal; and a verdict that
+  arrives later records nothing. Nothing releases the version once the
+  request commits.
+- Grant expiry and revocation erase nothing. The grace is frozen at the
+  request from the policy's `cleanupGraceHours`; changing the policy later
+  moves no due time.
+- The sweep arms one erasure job per due version on
+  `registry-platform-dispatch` and records `erased` only in the transaction
+  that deletes the content row (PostgreSQL) or after every committed S3
+  object answered 404 to a read following its delete. An unconfirmed delete
+  leaves the version pending and the job retries for about seven days, then
+  dead-letters and is not re-armed.
+- A job lease, `FOR UPDATE SKIP LOCKED` batches, and conditional updates
+  (`WHERE erasure_state = 'pending'`) make a crash mid-batch resume without
+  erasing twice or stranding a version.
+- `cleanup.erasure: paused` stops the erasure worker, the arming, and the
+  orphan sweep; serving, removal requests, and upload expiry continue.
+- Upload expiry runs on every pass: a reservation whose transfer deadline
+  lapsed is expired and takes no more bytes. On S3, an uncommitted object
+  older than the longest transfer deadline plus ten minutes is deleted, and
+  its staging row with it, so the sweep never races a live upload.
+- Every foreign key in the schema is `ON DELETE RESTRICT`, with the choice
+  stated beside it. Erasure deletes bytes and keeps documents, versions,
+  grants, verification history, and idempotency receipts. One CHECK holds
+  the erasure state and its timestamps together, another refuses a
+  releasable version under removal, and every nullable comparison in a
+  CHECK is guarded with `IS NOT NULL`.
+- Removal requests, erasure outcomes, upload expiry, and orphan erasure are
+  audited with `begin` before the change and `finish` after it.
+
+### Tests
+
+`crates/registry-documents/tests/postgres_documents.rs` and
+`crates/registry-documents/tests/postgres_s3.rs` under the `postgres-test`
+feature; the S3 suite's fake store can fail a delete, accept a delete it
+does not honour, and store an object while answering 503. The unit tests in
+`registry-documents-core/src/access.rs` and `src/erasure.rs` cover removal
+standing and the erasure retry window. `contracts/security-test-traceability.yaml`
+names each test.
+
+### Residual risk
+
+- "Erased" means the Store can no longer serve the bytes. PostgreSQL keeps
+  them in dead tuples until vacuum reclaims the space; backups, replicas'
+  WAL archives, and S3 bucket versioning or replication outside the Store's
+  key keep them for as long as the operator retains those copies.
+- Restore caveat: erasure requests and erasures newer than a backup are
+  lost on restore unless the audit file is restored too and its requests
+  are repeated. The restore drill in `README.md` runs with serving stopped
+  and erasure paused.
+- Replaying a dead-lettered erasure job is owed by WP7; until then a
+  version whose erasure dead-lettered stays pending and unservable.
+- `documentsctl` does not yet report the erasure status; the runtime crate
+  exposes `registry_documents::erasure::erasure_status` for it.
+- The Rust client has no method for the erasure route yet.
+- A paused deployment keeps due bytes for as long as it stays paused, and
+  orphan S3 objects accumulate meanwhile.
