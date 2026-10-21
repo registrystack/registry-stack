@@ -776,3 +776,19 @@ invariants:
     negativeTest:
       path: crates/registry-documents/tests/postgres_documents.rs
       name: no_delete_cascades_through_custody_records
+  - id: DOCUMENTS-SEC-47
+    state: enforced
+    threat: >-
+      A relying caller acts on content that is not the version it asked for,
+      because a store, a proxy, or the service answered a download with bytes
+      other than the ones the version recorded.
+    enforcementPoint: >-
+      The Rust client buffers a download within its configured bound, computes
+      its SHA-256 digest, and compares it with the digest the caller passes from
+      the version view before it returns anything.
+    refusal: >-
+      Return a protocol failure naming the content digest and hand the caller
+      no byte of the answer.
+    negativeTest:
+      path: crates/registry-documents-client/tests/document_routes.rs
+      name: a_download_whose_digest_disagrees_hands_the_caller_nothing
