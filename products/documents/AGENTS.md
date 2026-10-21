@@ -11,9 +11,10 @@ names. It owns its custody records, document grants, stored bytes, content
 verification state, and audit journal. Why a document exists, who it concerns,
 and whether a recipient is entitled to it stay with the owning system.
 
-The product is a bootstrap skeleton held out of releases. The runtime reads
-and checks its whole configuration, confirms its database answers, and serves
-only `GET /health`. Do not add a document route without the authorization,
+The product is held out of releases. The document routes (reserve, upload,
+read, download) are compiled only into test builds, behind a synthetic actor;
+the served runtime answers only `GET /health` until authentication lands. Do
+not serve a document route without the authorization,
 verification, and audit rules that govern it and the invariant rows in
 `contracts/` that prove them.
 

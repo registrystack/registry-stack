@@ -35,8 +35,9 @@ provider.
 
 ## Keys
 
-The runtime reads and checks every key below. In this skeleton it acts only on
-`listener`, `database`, and `secretProviders`; the other blocks are checked so
+The runtime reads and checks every key below. It acts on `identity`,
+`package`, `listener`, `secretProviders`, `database`, `audit`, `storage`, and
+`contentVerification`; the other blocks are checked so
 a deployment written now keeps its meaning when the behaviour behind them
 arrives.
 
@@ -54,7 +55,7 @@ arrives.
 | `database.testOnlyPlaintext` | Accepted only by builds with the `postgres-test` feature; an operator build refuses it. |
 | `authentication.oidc` | The shared OIDC issuer block (`issuer`, `audience`, `jwksSource`), `allowedClients`, and `scopeClaim` (default `scope`). `allowedClients` must list clients; `unrestricted` is refused. |
 | `audit` | `destination` (`file`, the default, or `stdout`), `path` for a file journal, and `hashKeyRef`. |
-| `storage` | `type: database` with `maximumDocumentBytes`, the deployment ceiling on one document version, at most one gibibyte. A document policy may only set a lower ceiling. |
+| `storage` | `type: database`, or `type: s3` with the shared object storage keys (`url`, `bucket`, `region`, `pathStyle`, `accessKeyIdRef`, `secretAccessKeyRef`, `caBundleRef`, `attemptTimeoutMilliseconds`). `maximumDocumentBytes` is the deployment ceiling on one document version: 16 MiB when omitted, at most 16 MiB for `database` and 64 MiB for `s3`. Startup refuses a package whose policy asks for more. The storage binding is pinned at the first upload, and a later start under another backend, bucket, or scope is refused. |
 | `contentVerification` | `type: http` with `url`, `authorizationRef`, `policyId`, and `attemptTimeoutMilliseconds` (100 to 60000). `type: disabled` is accepted only beside `tlsTermination: development-loopback`. |
 | `cleanup.erasure` | `active` or `paused`. Expired and revoked document grants stop releasing bytes regardless. |
 | `destinations.hooks` | Hook destinations by id: `url`, `hmacSha256KeyRef`, `attemptTimeoutMilliseconds` (100 to 60000), and `maximumAttempts` (1 to 32). A plaintext URL is refused outside development. |
@@ -67,7 +68,20 @@ retention schedule approves the deployed values.
 ## Startup
 
 `serve` reads and checks the whole document and stops, naming every finding,
-before it opens a connection or binds a socket. It then connects with the
-runtime credential and runs one trivial query; a database that refuses the
-connection stops the runtime. Only then does it bind the listener and serve
-`GET /health`.
+before it opens a connection or binds a socket. It then, in order:
+
+1. reads the package at `package.root`, verifies it, and refuses a digest
+   other than `package.expectedDigest` when one is pinned;
+2. connects with the runtime credential and refuses a database that does not
+   carry exactly this release's schema (serving never applies the schema;
+   there is no operator command for it yet);
+3. opens the audit journal;
+4. activates content storage and refuses a storage binding other than the
+   one pinned at the first upload;
+5. activates the content verifier, then suspends and re-queues every
+   finalized version verified or queued under another verifier binding;
+6. binds the listener, serves `GET /health`, and runs the content
+   verification worker until shutdown.
+
+The served runtime answers only `GET /health` until authentication lands;
+the document routes are compiled only into test builds.
