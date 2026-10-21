@@ -176,6 +176,9 @@ entries:
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_database_recorded_for_another_deployment_is_refused}
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: apply_is_idempotent_for_one_package_and_records_a_changed_one}
       - {path: crates/registry-documentsctl/tests/postgres_cli.rs, name: apply_refuses_a_package_that_is_not_the_pinned_one}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: serve_refuses_a_runtime_role_that_gained_authority_over_the_schema}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: serve_refuses_a_runtime_role_that_lost_a_grant}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: serve_refuses_an_activated_database_with_a_newer_schema_version}
   - id: DOCUMENTS-SEC-36
     tests:
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_refuses_an_unknown_version_and_an_unactivated_database}

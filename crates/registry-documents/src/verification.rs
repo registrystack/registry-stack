@@ -171,6 +171,12 @@ impl From<tokio_postgres::Error> for ReplayError {
 
 /// The oldest `limit` dead-lettered jobs under each version's current
 /// verifier binding. It reads and changes nothing else.
+///
+/// A job under a binding the version no longer carries is not the one a
+/// replay reaches; the startup sweep gave the version another. The query
+/// drops it before the limit by deriving each version's current part in
+/// SQL exactly as [`job_part`] does: the SHA-256 of the domain, then each
+/// part prefixed with its length as an eight-byte big-endian integer.
 pub async fn dead_letters(
     store: &PostgresStore,
     limit: u16,
@@ -179,34 +185,33 @@ pub async fn dead_letters(
     let client = store.client().await?;
     let rows = client
         .query(
-            "SELECT j.version_id, j.part, j.generation, j.attempt,
-                    to_char(j.dead_lettered_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'),
-                    v.verification_binding_digest
+            "SELECT j.version_id, j.generation, j.attempt,
+                    to_char(j.dead_lettered_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')
                FROM documents_verification_jobs j
                JOIN documents_versions v ON v.version_id = j.version_id
               WHERE j.state = 'dead-lettered'
+                AND v.verification_binding_digest IS NOT NULL
+                AND j.part = 'sha256:' || encode(sha256(
+                        $2::bytea
+                        || int8send(16) || uuid_send(j.version_id)
+                        || int8send(octet_length(v.verification_binding_digest))
+                        || convert_to(v.verification_binding_digest, 'UTF8')
+                    ), 'hex')
               ORDER BY j.dead_lettered_at, j.version_id
               LIMIT $1",
-            &[&limit],
+            &[&limit, &JOB_DOMAIN],
         )
         .await?;
-    let mut letters = Vec::with_capacity(rows.len());
-    for row in rows {
-        let version_id: Uuid = row.try_get(0)?;
-        let part: String = row.try_get(1)?;
-        let binding: Option<String> = row.try_get(5)?;
-        // A job under a binding the version no longer carries is not the
-        // one a replay reaches; the startup sweep gave the version another.
-        if binding.is_some_and(|binding| job_part(version_id, &binding) == part) {
-            letters.push(DeadLetter {
-                version_id,
-                generation: row.try_get(2)?,
-                attempt: row.try_get(3)?,
-                dead_lettered_at: row.try_get(4)?,
-            });
-        }
-    }
-    Ok(letters)
+    rows.iter()
+        .map(|row| {
+            Ok(DeadLetter {
+                version_id: row.try_get(0)?,
+                generation: row.try_get(1)?,
+                attempt: row.try_get(2)?,
+                dead_lettered_at: row.try_get(3)?,
+            })
+        })
+        .collect()
 }
 
 /// Return the dead-lettered job of `version_id` under its current verifier

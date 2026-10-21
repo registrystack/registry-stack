@@ -22,7 +22,7 @@ use registry_documents::runtime::{
     activation_plan, activation_status, apply_activation, dead_lettered_verifications, prepare,
     prepare_with_verifier, replay_verification, Prepared, RuntimeError,
 };
-use registry_documents::store::PostgresStore;
+use registry_documents::store::{PostgresStore, StoreError};
 use registry_documents::verification::{
     replay, ReplayError, ReplayFailure, ReplayRefusal, VerificationStore, MAXIMUM_ATTEMPTS,
 };
@@ -344,8 +344,9 @@ async fn invalid_operator_references_are_refused_before_anything_is_written() {
 }
 
 /// A login role with no authority over the deployment's schema, and the
-/// URL that reaches the schema as it.
-async fn limited_role(deployment: &Deployment) -> String {
+/// URL that reaches the schema as it. Roles are cluster-wide, so each test
+/// names its own and drops it with [`drop_role`] before it ends.
+async fn limited_role(deployment: &Deployment) -> (String, String) {
     let role = format!("p1doc_runtime_{}", Uuid::new_v4().simple());
     deployment
         .admin
@@ -359,42 +360,78 @@ async fn limited_role(deployment: &Deployment) -> String {
     url.set_password(Some("documents-test")).unwrap();
     url.query_pairs_mut()
         .append_pair("options", &format!("-csearch_path={}", deployment.schema));
-    url.to_string()
+    (role, url.to_string())
+}
+
+/// Drop `role` and every privilege it was granted in this database.
+async fn drop_role(deployment: &Deployment, role: &str) {
+    deployment
+        .admin
+        .batch_execute(&format!("DROP OWNED BY {role}; DROP ROLE {role}"))
+        .await
+        .unwrap();
+}
+
+/// The URL that reaches the deployment's schema as the migration role.
+fn migration_url(deployment: &Deployment) -> String {
+    let base = database_url();
+    let separator = if base.contains('?') { '&' } else { '?' };
+    format!(
+        "{base}{separator}options=-csearch_path%3D{}",
+        deployment.schema
+    )
+}
+
+/// A deployment whose runtime role is split from its migration role by
+/// apply, and the runtime role's name.
+async fn split_deployment() -> (Deployment, String) {
+    let mut deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    let (role, limited) = limited_role(&deployment).await;
+    deployment.secret("runtime-database-url", &limited);
+    deployment.secret("migration-database-url", &migration_url(&deployment));
+    let applied = apply_activation(&config(&deployment), &ApplyRequest::default())
+        .await
+        .expect("the migration credential applies");
+    assert_eq!(applied.activation.role_mode, RoleMode::Split);
+    prepare(&deployment.runtime)
+        .await
+        .expect("the runtime role serves the activated database");
+    (deployment, role)
 }
 
 #[tokio::test]
 async fn apply_requires_the_migration_credential() {
     let mut deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
-    let limited = limited_role(&deployment).await;
+    let (role, limited) = limited_role(&deployment).await;
     deployment.secret("runtime-database-url", &limited);
 
     // The runtime credential cannot apply the schema: with it named as the
-    // migration credential too, apply fails and records nothing.
+    // migration credential too, apply fails and records nothing. The role
+    // has no authority over the schema, so PostgreSQL finds no schema on
+    // its search path to create the first table in.
     deployment.secret("migration-database-url", &limited);
     let error = apply_activation(&config(&deployment), &ApplyRequest::default())
         .await
         .expect_err("the runtime credential cannot apply");
     assert!(
         matches!(
-            error,
-            RuntimeError::Activation(ActivationError::Store(_))
-                | RuntimeError::Activation(ActivationError::Refused(_))
+            &error,
+            RuntimeError::Activation(ActivationError::Store(StoreError::Query(query)))
+                if query.code() == Some(&tokio_postgres::error::SqlState::INVALID_SCHEMA_NAME)
         ),
         "{error}"
     );
     assert_eq!(relations(&deployment).await, 0);
+    // The journal answers the failed apply rather than leaving its request
+    // open.
+    let journal = std::fs::read_to_string(deployment.path().join("audit.documentsctl.ndjson"))
+        .expect("a documentsctl companion audit journal");
+    assert!(journal.contains("\"outcome\":\"failed\""), "{journal}");
+    assert!(!journal.contains("\"outcome\":\"unfinished\""), "{journal}");
 
     // With the migration credential, apply splits the roles: the runtime
     // role is granted exactly what serving needs, and serve starts.
-    let scoped = {
-        let base = database_url();
-        let separator = if base.contains('?') { '&' } else { '?' };
-        format!(
-            "{base}{separator}options=-csearch_path%3D{}",
-            deployment.schema
-        )
-    };
-    deployment.secret("migration-database-url", &scoped);
+    deployment.secret("migration-database-url", &migration_url(&deployment));
     let applied = apply_activation(&config(&deployment), &ApplyRequest::default())
         .await
         .expect("the migration credential applies");
@@ -406,6 +443,73 @@ async fn apply_requires_the_migration_credential() {
     prepare(&deployment.runtime)
         .await
         .expect("the runtime role serves the activated database");
+    drop_role(&deployment, &role).await;
+}
+
+#[tokio::test]
+async fn serve_refuses_a_runtime_role_that_gained_authority_over_the_schema() {
+    let (deployment, role) = split_deployment().await;
+    deployment
+        .execute(&format!(
+            "GRANT CREATE ON SCHEMA {} TO {role}",
+            deployment.schema
+        ))
+        .await;
+    let error = prepare(&deployment.runtime)
+        .await
+        .expect_err("a runtime role with schema authority is refused");
+    assert!(
+        matches!(
+            error,
+            RuntimeError::Activation(ActivationError::RoleModeWeakened)
+        ),
+        "{error}"
+    );
+    drop_role(&deployment, &role).await;
+}
+
+#[tokio::test]
+async fn serve_refuses_a_runtime_role_that_lost_a_grant() {
+    let (deployment, role) = split_deployment().await;
+    deployment
+        .execute(&format!("REVOKE SELECT ON documents_versions FROM {role}"))
+        .await;
+    let error = prepare(&deployment.runtime)
+        .await
+        .expect_err("a runtime role missing a grant is refused");
+    assert!(
+        matches!(
+            error,
+            RuntimeError::Activation(ActivationError::GrantsStale)
+        ),
+        "{error}"
+    );
+    drop_role(&deployment, &role).await;
+}
+
+/// DOCUMENTS-DEC-17: the ledger is read first, so an activated database
+/// whose schema has moved past this release is refused as a schema
+/// mismatch, never as unactivated.
+#[tokio::test]
+async fn serve_refuses_an_activated_database_with_a_newer_schema_version() {
+    let deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    deployment.migrate().await;
+    deployment
+        .execute(
+            "INSERT INTO documents_schema_migrations(version, applied_at)
+             SELECT max(version) + 1, now() FROM documents_schema_migrations",
+        )
+        .await;
+    let error = prepare(&deployment.runtime)
+        .await
+        .expect_err("a newer schema version is refused");
+    assert!(
+        matches!(
+            error,
+            RuntimeError::Activation(ActivationError::Store(StoreError::SchemaVersion))
+        ),
+        "{error}"
+    );
 }
 
 async fn start(deployment: &Deployment, verifier: &Arc<FakeVerifier>) -> (Prepared, Api) {
@@ -697,4 +801,30 @@ async fn replay_fails_closed_on_an_unwritable_audit_journal() {
         .expect_err("replay refuses an unwritable audit journal");
     assert!(matches!(error, RuntimeError::AuditJournal(_)), "{error}");
     assert_eq!(job(&deployment).await, ("dead-lettered".to_owned(), 1));
+}
+
+#[tokio::test]
+async fn the_dead_letter_listing_skips_jobs_under_a_former_binding_before_its_limit() {
+    let deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    deployment.migrate().await;
+    let verifier = FakeVerifier::new("binding-a", UNAVAILABLE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let version = dead_lettered(&deployment, &prepared, &api).await;
+    // An older dead letter under a binding the version no longer carries.
+    deployment
+        .execute(
+            "CREATE TEMPORARY TABLE former AS SELECT * FROM documents_verification_jobs;
+             UPDATE former SET part = 'sha256:former-binding',
+                               dead_lettered_at = dead_lettered_at - interval '1 hour';
+             INSERT INTO documents_verification_jobs SELECT * FROM former;
+             DROP TABLE former;",
+        )
+        .await;
+
+    let listed = dead_lettered_verifications(&config(&deployment), 1)
+        .await
+        .expect("the dead letters list");
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0].version_id, version);
+    assert_eq!(listed[0].generation, 1);
 }

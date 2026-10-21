@@ -178,31 +178,7 @@ impl PostgresStore {
     /// a schema version mismatch, not as a query failure.
     pub async fn ready(&self) -> Result<(), StoreError> {
         let client = self.client().await?;
-        let ledger: bool = client
-            .query_one(
-                "SELECT to_regclass('documents_schema_migrations') IS NOT NULL",
-                &[],
-            )
-            .await?
-            .get(0);
-        if !ledger {
-            return Err(StoreError::SchemaVersion);
-        }
-        let applied = client
-            .query(
-                "SELECT version FROM documents_schema_migrations ORDER BY version",
-                &[],
-            )
-            .await?
-            .into_iter()
-            .map(|row| row.try_get::<_, i64>(0))
-            .collect::<Result<Vec<_>, _>>()?;
-        let expected = MIGRATIONS.iter().map(|(version, _)| *version);
-        if applied.iter().copied().eq(expected) {
-            Ok(())
-        } else {
-            Err(StoreError::SchemaVersion)
-        }
+        schema_ready(&client).await
     }
 
     /// Whether the database answers a query over the runtime connection.
@@ -298,6 +274,37 @@ fn tls_connector(
         tokio_postgres_rustls::MakeRustlsConnect::with_native_certs()
             .map(|value| value.0)
             .map_err(|_| StoreError::Configuration)
+    }
+}
+
+/// Whether `client`'s database carries exactly the schema versions this
+/// runtime expects. A database with no schema ledger is refused as a schema
+/// version mismatch, not as a query failure.
+pub(crate) async fn schema_ready(client: &tokio_postgres::Client) -> Result<(), StoreError> {
+    let ledger: bool = client
+        .query_one(
+            "SELECT to_regclass('documents_schema_migrations') IS NOT NULL",
+            &[],
+        )
+        .await?
+        .get(0);
+    if !ledger {
+        return Err(StoreError::SchemaVersion);
+    }
+    let applied = client
+        .query(
+            "SELECT version FROM documents_schema_migrations ORDER BY version",
+            &[],
+        )
+        .await?
+        .into_iter()
+        .map(|row| row.try_get::<_, i64>(0))
+        .collect::<Result<Vec<_>, _>>()?;
+    let expected = MIGRATIONS.iter().map(|(version, _)| *version);
+    if applied.iter().copied().eq(expected) {
+        Ok(())
+    } else {
+        Err(StoreError::SchemaVersion)
     }
 }
 
