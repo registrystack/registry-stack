@@ -2,24 +2,40 @@
 
 //! The HTTP surface.
 //!
-//! The runtime answers `/health` and refuses every other request with a
-//! problem from the closed vocabulary. Every response carries the request's
-//! trace and `Cache-Control: no-store`.
-//!
-//! The document routes are assembled by `document_router`, which exists
-//! only in test builds: the production listener serves no document route
-//! until it verifies the caller's token.
+//! The runtime answers `/health` without a credential and the document
+//! routes only after it verifies the caller's bearer token and resolves it
+//! to one access profile. Every other request is refused with a problem
+//! from the closed vocabulary. Every response carries the request's trace
+//! and `Cache-Control: no-store`; a credential refusal carries
+//! `WWW-Authenticate: Bearer`.
 
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
-use axum::http::StatusCode;
+use std::sync::Arc;
+
+use axum::body::{Body, Bytes};
+use axum::extract::{Path, Query, State};
+use axum::http::header::{
+    AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, LOCATION,
+    RETRY_AFTER, WWW_AUTHENTICATE,
+};
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
-use registry_documents_core::{type_uri, ProblemCode, HEALTH_PATH};
+use registry_documents_core::{
+    type_uri, Caller, IssueGrantRequest, ProblemCode, ReserveDocumentRequest, HEALTH_PATH,
+};
+use registry_platform_authcommon::parse_bearer_token;
 use registry_platform_httpsec::{
     request_body_limit_default, security_headers, CspBuilder, ProblemBody, TraceContext,
 };
+
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+use uuid::Uuid;
+
+use crate::auth::{AuthenticationError, DocumentsAuthenticator};
+use crate::service::{DocumentService, PageRequest};
 
 tokio::task_local! {
     static REQUEST_TRACE: TraceContext;
@@ -36,11 +52,19 @@ pub const DOCUMENT_PATH: &str = "/documents/{documentId}";
 pub const DOCUMENT_CONTENT_PATH: &str = "/documents/{documentId}/versions/{versionId}/content";
 /// The route an upload's content is sent to.
 pub const UPLOAD_CONTENT_PATH: &str = "/uploads/{uploadId}/content";
+/// The route that issues and lists the grants of one document.
+pub const DOCUMENT_GRANTS_PATH: &str = "/documents/{documentId}/grants";
+/// The route that lists the grants naming the caller.
+pub const GRANTS_PATH: &str = "/document-grants";
+/// The route that revokes one grant.
+pub const GRANT_PATH: &str = "/document-grants/{grantId}";
+/// The route that lists the policies the caller may place documents under.
+pub const POLICIES_PATH: &str = "/document-policies";
 
-/// The production surface: `/health` only.
-pub fn router() -> Router {
-    finish(Router::new().route(HEALTH_PATH, get(health)), Router::new())
-}
+/// The header a creating request names its idempotency key in.
+pub const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
+/// The longest idempotency key accepted.
+pub const MAXIMUM_IDEMPOTENCY_KEY_BYTES: usize = 128;
 
 /// Apply the shared fallbacks and boundary layers. `limited` routes take
 /// the default request body limit; `unlimited` routes bound their own body.
@@ -133,6 +157,14 @@ pub(crate) fn problem_response(problem: ProblemCode) -> Response {
     )
         .into_response();
     trace.apply(response.headers_mut());
+    if status == StatusCode::UNAUTHORIZED {
+        response.headers_mut().insert(
+            WWW_AUTHENTICATE,
+            "Bearer"
+                .parse()
+                .expect("the bearer challenge is a valid header value"),
+        );
+    }
     if status == StatusCode::SERVICE_UNAVAILABLE {
         response.headers_mut().insert(
             RETRY_AFTER,
@@ -143,171 +175,302 @@ pub(crate) fn problem_response(problem: ProblemCode) -> Response {
     response
 }
 
-#[cfg(any(test, feature = "postgres-test"))]
-pub use documents::document_router;
+/// What the document routes act with: the operations and the
+/// authenticator every route resolves its caller through first.
+#[derive(Clone, Debug)]
+pub struct DocumentRoutes {
+    pub service: Arc<DocumentService>,
+    pub authenticator: Arc<DocumentsAuthenticator>,
+}
 
-/// The document routes, served only by test builds through a synthetic
-/// actor source.
-#[cfg(any(test, feature = "postgres-test"))]
-mod documents {
-    use std::sync::Arc;
-
-    use axum::body::Body;
-    use axum::extract::{Path, State};
-    use axum::http::header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, LOCATION};
-    use axum::http::{HeaderMap, StatusCode};
-    use axum::response::{IntoResponse, Response};
-    use axum::routing::{get, post, put};
-    use axum::{Json, Router};
-    use registry_documents_core::{ProblemCode, ReserveDocumentRequest, HEALTH_PATH};
-    use uuid::Uuid;
-
-    use super::{
-        finish, health, problem_response, DOCUMENTS_PATH, DOCUMENT_CONTENT_PATH, DOCUMENT_PATH,
-        UPLOAD_CONTENT_PATH,
-    };
-    use crate::actor::{Actor, ActorSource};
-    use crate::service::DocumentService;
-
-    #[derive(Clone)]
-    struct DocumentState {
-        service: Arc<DocumentService>,
-        actors: Arc<dyn ActorSource>,
+impl DocumentRoutes {
+    /// The verified caller, before anything else of the request is read.
+    /// A missing or refused credential is `authentication.refused`; a token
+    /// that resolves to no access profile is `profile.not-authorized`.
+    async fn caller(&self, headers: &HeaderMap) -> Result<Caller, ProblemCode> {
+        let token = headers
+            .get(AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| parse_bearer_token(value).ok())
+            .ok_or(ProblemCode::AuthenticationRefused)?;
+        self.authenticator
+            .authenticate(token)
+            .await
+            .map_err(|error| match error {
+                AuthenticationError::Refused | AuthenticationError::Claims => {
+                    ProblemCode::AuthenticationRefused
+                }
+                AuthenticationError::Profile => ProblemCode::ProfileNotAuthorized,
+                AuthenticationError::Unavailable => {
+                    tracing::warn!("the token verifier could not answer; the request was refused");
+                    ProblemCode::ServiceUnavailable
+                }
+            })
     }
+}
 
-    impl DocumentState {
-        /// The caller, or `request.not-found` so an unauthenticated caller
-        /// learns nothing about which documents exist.
-        fn actor(&self, headers: &HeaderMap) -> Result<Actor, ProblemCode> {
-            self.actors
-                .actor(headers)
-                .ok_or(ProblemCode::RequestNotFound)
+/// The served surface: `/health` and the document routes.
+pub fn router(routes: DocumentRoutes) -> Router {
+    let limited = Router::new()
+        .route(HEALTH_PATH, get(health))
+        .route(DOCUMENTS_PATH, post(reserve).get(list_documents))
+        .route(DOCUMENT_PATH, get(read))
+        .route(DOCUMENT_CONTENT_PATH, get(download))
+        .route(DOCUMENT_GRANTS_PATH, post(issue_grant).get(document_grants))
+        .route(GRANTS_PATH, get(received_grants))
+        .route(GRANT_PATH, delete(revoke_grant))
+        .route(POLICIES_PATH, get(policies))
+        .with_state(routes.clone());
+    let unlimited = Router::new()
+        .route(UPLOAD_CONTENT_PATH, put(upload))
+        .with_state(routes);
+    finish(limited, unlimited)
+}
+
+fn identifier(text: &str) -> Result<Uuid, ProblemCode> {
+    Uuid::parse_str(text).map_err(|_| ProblemCode::ResourceNotFound)
+}
+
+fn answer(result: Result<Response, ProblemCode>) -> Response {
+    result.unwrap_or_else(problem_response)
+}
+
+/// The idempotency key a creating request carries: present, bounded, and
+/// graphical, so it can never smuggle a header-breaking byte.
+fn idempotency_key(headers: &HeaderMap) -> Result<&str, ProblemCode> {
+    headers
+        .get(IDEMPOTENCY_KEY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= MAXIMUM_IDEMPOTENCY_KEY_BYTES
+                && value.bytes().all(|byte| byte.is_ascii_graphic())
+        })
+        .ok_or(ProblemCode::RequestInvalid)
+}
+
+/// A JSON request body, read only after the caller is verified. A body
+/// that is not JSON is `request.invalid`; JSON of the wrong shape is
+/// `request.unprocessable`.
+fn json_body<T: DeserializeOwned>(headers: &HeaderMap, body: &[u8]) -> Result<T, ProblemCode> {
+    let is_json = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .is_some_and(|value| value.eq_ignore_ascii_case("application/json"));
+    if !is_json {
+        return Err(ProblemCode::RequestUnsupportedMediaType);
+    }
+    serde_json::from_slice(body).map_err(|error| match error.classify() {
+        serde_json::error::Category::Data => ProblemCode::RequestUnprocessable,
+        _ => ProblemCode::RequestInvalid,
+    })
+}
+
+/// The query of a list route: an optional cursor and page size, and
+/// nothing else.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PageQuery {
+    cursor: Option<String>,
+    limit: Option<String>,
+}
+
+fn page(uri: &Uri) -> Result<PageRequest, ProblemCode> {
+    let Query(query) = Query::<PageQuery>::try_from_uri(uri).map_err(|_| ProblemCode::RequestInvalid)?;
+    PageRequest::parse(query.cursor.as_deref(), query.limit.as_deref())
+}
+
+async fn reserve(State(routes): State<DocumentRoutes>, headers: HeaderMap, body: Bytes) -> Response {
+    answer(
+        async {
+            let caller = routes.caller(&headers).await?;
+            let key = idempotency_key(&headers)?;
+            let request: ReserveDocumentRequest = json_body(&headers, &body)?;
+            let view = routes.service.reserve(&caller, key, &request).await?;
+            let location = format!("{DOCUMENTS_PATH}/{}", view.document.id);
+            Ok((StatusCode::CREATED, [(LOCATION, location)], Json(view)).into_response())
         }
-    }
+        .await,
+    )
+}
 
-    fn identifier(text: &str) -> Result<Uuid, ProblemCode> {
-        Uuid::parse_str(text).map_err(|_| ProblemCode::RequestNotFound)
-    }
+async fn list_documents(State(routes): State<DocumentRoutes>, headers: HeaderMap, uri: Uri) -> Response {
+    answer(
+        async {
+            let caller = routes.caller(&headers).await?;
+            let page = page(&uri)?;
+            Ok(Json(routes.service.list(&caller, &page).await?).into_response())
+        }
+        .await,
+    )
+}
 
-    fn answer(result: Result<Response, ProblemCode>) -> Response {
-        result.unwrap_or_else(problem_response)
-    }
+async fn read(
+    State(routes): State<DocumentRoutes>,
+    headers: HeaderMap,
+    Path(document_id): Path<String>,
+) -> Response {
+    answer(
+        async {
+            let caller = routes.caller(&headers).await?;
+            let view = routes.service.read(&caller, identifier(&document_id)?).await?;
+            Ok(Json(view).into_response())
+        }
+        .await,
+    )
+}
 
-    /// The health route and the document routes, acting for the callers
-    /// `actors` names.
-    pub fn document_router(service: Arc<DocumentService>, actors: Arc<dyn ActorSource>) -> Router {
-        let state = DocumentState { service, actors };
-        let limited = Router::new()
-            .route(HEALTH_PATH, get(health))
-            .route(DOCUMENTS_PATH, post(reserve))
-            .route(DOCUMENT_PATH, get(read))
-            .route(DOCUMENT_CONTENT_PATH, get(download))
-            .with_state(state.clone());
-        let unlimited = Router::new()
-            .route(UPLOAD_CONTENT_PATH, put(upload))
-            .with_state(state);
-        finish(limited, unlimited)
-    }
-
-    async fn reserve(
-        State(state): State<DocumentState>,
-        headers: HeaderMap,
-        Json(request): Json<ReserveDocumentRequest>,
-    ) -> Response {
-        answer(
-            async {
-                let actor = state.actor(&headers)?;
-                let view = state.service.reserve(&actor, &request).await?;
-                let location = format!("{DOCUMENTS_PATH}/{}", view.document.id);
-                Ok((StatusCode::CREATED, [(LOCATION, location)], Json(view)).into_response())
-            }
-            .await,
-        )
-    }
-
-    async fn read(
-        State(state): State<DocumentState>,
-        headers: HeaderMap,
-        Path(document_id): Path<String>,
-    ) -> Response {
-        answer(
-            async {
-                let actor = state.actor(&headers)?;
-                let view = state
-                    .service
-                    .read(&actor, identifier(&document_id)?)
-                    .await?;
-                Ok(Json(view).into_response())
-            }
-            .await,
-        )
-    }
-
-    async fn upload(
-        State(state): State<DocumentState>,
-        headers: HeaderMap,
-        Path(upload_id): Path<String>,
-        body: Body,
-    ) -> Response {
-        answer(
-            async {
-                let actor = state.actor(&headers)?;
-                let upload_id = identifier(&upload_id)?;
-                let content_type = headers
-                    .get(CONTENT_TYPE)
-                    .and_then(|value| value.to_str().ok());
-                let content_length = headers
-                    .get(CONTENT_LENGTH)
-                    .map(|value| {
-                        value
-                            .to_str()
-                            .ok()
-                            .and_then(|text| text.parse::<u64>().ok())
-                            .ok_or(ProblemCode::RequestInvalid)
-                    })
-                    .transpose()?;
-                let view = state
-                    .service
-                    .put_content(
-                        &actor,
-                        upload_id,
-                        content_type,
-                        content_length,
-                        body.into_data_stream(),
-                    )
-                    .await?;
-                Ok(Json(view).into_response())
-            }
-            .await,
-        )
-    }
-
-    async fn download(
-        State(state): State<DocumentState>,
-        headers: HeaderMap,
-        Path((document_id, version_id)): Path<(String, String)>,
-    ) -> Response {
-        answer(
-            async {
-                let actor = state.actor(&headers)?;
-                let content = state
-                    .service
-                    .download(&actor, identifier(&document_id)?, identifier(&version_id)?)
-                    .await?;
-                Ok((
-                    StatusCode::OK,
-                    [
-                        (CONTENT_TYPE, content.media_type),
-                        (CONTENT_LENGTH, content.bytes.len().to_string()),
-                        (CONTENT_DISPOSITION, "attachment".to_owned()),
-                    ],
-                    content.bytes,
+async fn upload(
+    State(routes): State<DocumentRoutes>,
+    headers: HeaderMap,
+    Path(upload_id): Path<String>,
+    body: Body,
+) -> Response {
+    answer(
+        async {
+            let caller = routes.caller(&headers).await?;
+            let upload_id = identifier(&upload_id)?;
+            let content_type = headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok());
+            let content_length = headers
+                .get(CONTENT_LENGTH)
+                .map(|value| {
+                    value
+                        .to_str()
+                        .ok()
+                        .and_then(|text| text.parse::<u64>().ok())
+                        .ok_or(ProblemCode::RequestInvalid)
+                })
+                .transpose()?;
+            let outcome = routes
+                .service
+                .put_content(
+                    &caller,
+                    upload_id,
+                    content_type,
+                    content_length,
+                    body.into_data_stream(),
                 )
-                    .into_response())
-            }
-            .await,
-        )
-    }
+                .await?;
+            Ok(Json(outcome.into_view()).into_response())
+        }
+        .await,
+    )
+}
+
+async fn download(
+    State(routes): State<DocumentRoutes>,
+    headers: HeaderMap,
+    Path((document_id, version_id)): Path<(String, String)>,
+) -> Response {
+    answer(
+        async {
+            let caller = routes.caller(&headers).await?;
+            let content = routes
+                .service
+                .download(&caller, identifier(&document_id)?, identifier(&version_id)?)
+                .await?;
+            Ok((
+                StatusCode::OK,
+                [
+                    (CONTENT_TYPE, content.media_type),
+                    (CONTENT_LENGTH, content.length.to_string()),
+                    (CONTENT_DISPOSITION, "attachment".to_owned()),
+                ],
+                Body::from_stream(content.body),
+            )
+                .into_response())
+        }
+        .await,
+    )
+}
+
+async fn issue_grant(
+    State(routes): State<DocumentRoutes>,
+    headers: HeaderMap,
+    Path(document_id): Path<String>,
+    body: Bytes,
+) -> Response {
+    answer(
+        async {
+            let caller = routes.caller(&headers).await?;
+            let document_id = identifier(&document_id)?;
+            let key = idempotency_key(&headers)?;
+            let request: IssueGrantRequest = json_body(&headers, &body)?;
+            let view = routes
+                .service
+                .issue_grant(&caller, key, document_id, &request)
+                .await?;
+            let location = format!("{GRANTS_PATH}/{}", view.id);
+            Ok((StatusCode::CREATED, [(LOCATION, location)], Json(view)).into_response())
+        }
+        .await,
+    )
+}
+
+async fn document_grants(
+    State(routes): State<DocumentRoutes>,
+    headers: HeaderMap,
+    Path(document_id): Path<String>,
+    uri: Uri,
+) -> Response {
+    answer(
+        async {
+            let caller = routes.caller(&headers).await?;
+            let document_id = identifier(&document_id)?;
+            let page = page(&uri)?;
+            Ok(Json(
+                routes
+                    .service
+                    .document_grants(&caller, document_id, &page)
+                    .await?,
+            )
+            .into_response())
+        }
+        .await,
+    )
+}
+
+async fn received_grants(State(routes): State<DocumentRoutes>, headers: HeaderMap, uri: Uri) -> Response {
+    answer(
+        async {
+            let caller = routes.caller(&headers).await?;
+            let page = page(&uri)?;
+            Ok(Json(routes.service.received_grants(&caller, &page).await?).into_response())
+        }
+        .await,
+    )
+}
+
+async fn revoke_grant(
+    State(routes): State<DocumentRoutes>,
+    headers: HeaderMap,
+    Path(grant_id): Path<String>,
+) -> Response {
+    answer(
+        async {
+            let caller = routes.caller(&headers).await?;
+            let view = routes
+                .service
+                .revoke_grant(&caller, identifier(&grant_id)?)
+                .await?;
+            Ok(Json(view).into_response())
+        }
+        .await,
+    )
+}
+
+async fn policies(State(routes): State<DocumentRoutes>, headers: HeaderMap) -> Response {
+    answer(
+        async {
+            let caller = routes.caller(&headers).await?;
+            Ok(Json(routes.service.placeable_policies(&caller)).into_response())
+        }
+        .await,
+    )
 }
 
 #[cfg(test)]
@@ -318,8 +481,14 @@ mod tests {
     use registry_documents_core::ProblemDocument;
     use tower::ServiceExt as _;
 
+    /// The boundary layers over `/health` alone: what every route shares,
+    /// without a database behind it.
+    fn shell() -> Router {
+        finish(Router::new().route(HEALTH_PATH, get(health)), Router::new())
+    }
+
     async fn call(method: &str, uri: &str, body: Body) -> Response {
-        router()
+        shell()
             .oneshot(
                 Request::builder()
                     .method(method)
@@ -357,26 +526,9 @@ mod tests {
 
     #[tokio::test]
     async fn every_other_route_is_not_found() {
-        for path in ["/", "/documents", "/ready", "/metrics", "/health/extra"] {
+        for path in ["/", "/ready", "/metrics", "/health/extra"] {
             expect_problem(
                 call("GET", path, Body::empty()).await,
-                ProblemCode::RequestNotFound,
-            )
-            .await;
-        }
-    }
-
-    #[tokio::test]
-    async fn the_served_router_carries_no_document_route() {
-        let id = "00000000-0000-4000-8000-000000000000";
-        for (method, uri) in [
-            ("POST", DOCUMENTS_PATH.to_owned()),
-            ("GET", format!("/documents/{id}")),
-            ("GET", format!("/documents/{id}/versions/{id}/content")),
-            ("PUT", format!("/uploads/{id}/content")),
-        ] {
-            expect_problem(
-                call(method, &uri, Body::from("%PDF")).await,
                 ProblemCode::RequestNotFound,
             )
             .await;
@@ -394,10 +546,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_trace_is_echoed_on_a_refusal() {
-        let response = router()
+        let response = shell()
             .oneshot(
                 Request::builder()
-                    .uri("/documents")
+                    .uri("/unknown")
                     .header(
                         "traceparent",
                         "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
@@ -433,6 +585,77 @@ mod tests {
             assert_eq!(
                 response.headers().get(CONTENT_TYPE).unwrap(),
                 "application/problem+json"
+            );
+        }
+    }
+
+    #[test]
+    fn a_credential_refusal_carries_the_bearer_challenge() {
+        let response = problem_response(ProblemCode::AuthenticationRefused);
+        assert_eq!(response.headers().get(WWW_AUTHENTICATE).unwrap(), "Bearer");
+        let response = problem_response(ProblemCode::ProfileNotAuthorized);
+        assert!(response.headers().get(WWW_AUTHENTICATE).is_none());
+    }
+
+    #[test]
+    fn the_idempotency_key_is_present_bounded_and_graphical() {
+        let with = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(IDEMPOTENCY_KEY_HEADER, value.parse().unwrap());
+            headers
+        };
+        assert_eq!(
+            idempotency_key(&HeaderMap::new()),
+            Err(ProblemCode::RequestInvalid)
+        );
+        for refused in ["", "a key with spaces", &"k".repeat(129)] {
+            assert_eq!(
+                idempotency_key(&with(refused)),
+                Err(ProblemCode::RequestInvalid),
+                "{refused}"
+            );
+        }
+        assert_eq!(idempotency_key(&with(&"k".repeat(128))), Ok("k".repeat(128).as_str()));
+    }
+
+    #[test]
+    fn a_json_body_is_parsed_only_as_json() {
+        let json = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(CONTENT_TYPE, value.parse().unwrap());
+            headers
+        };
+        let parsed: Result<serde_json::Value, _> =
+            json_body(&json("application/json; charset=utf-8"), b"{}");
+        assert!(parsed.is_ok());
+        assert_eq!(
+            json_body::<serde_json::Value>(&json("text/plain"), b"{}").unwrap_err(),
+            ProblemCode::RequestUnsupportedMediaType
+        );
+        assert_eq!(
+            json_body::<serde_json::Value>(&HeaderMap::new(), b"{}").unwrap_err(),
+            ProblemCode::RequestUnsupportedMediaType
+        );
+        assert_eq!(
+            json_body::<serde_json::Value>(&json("application/json"), b"{").unwrap_err(),
+            ProblemCode::RequestInvalid
+        );
+        assert_eq!(
+            json_body::<IssueGrantRequest>(&json("application/json"), b"{\"versionId\": 1}")
+                .unwrap_err(),
+            ProblemCode::RequestUnprocessable
+        );
+    }
+
+    #[test]
+    fn a_page_query_names_only_a_cursor_and_a_limit() {
+        assert!(page(&"/documents".parse().unwrap()).is_ok());
+        assert_eq!(page(&"/documents?limit=10".parse().unwrap()).unwrap().limit, 10);
+        for refused in ["/documents?limit=0", "/documents?other=1", "/documents?cursor=zz"] {
+            assert_eq!(
+                page(&refused.parse().unwrap()).unwrap_err(),
+                ProblemCode::RequestInvalid,
+                "{refused}"
             );
         }
     }

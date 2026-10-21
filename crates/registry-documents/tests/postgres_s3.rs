@@ -22,10 +22,8 @@ use registry_documents::runtime::{prepare, Prepared, RuntimeError};
 use registry_documents_core::ProblemCode;
 use registry_platform_objectstore::ObjectStoreError;
 use serde_json::json;
-use support::{pdf, reservation, Api, Deployment, DATABASE_STORAGE};
+use support::{pdf, reservation, Api, Deployment, APP, CITIZEN, DATABASE_STORAGE};
 
-const APP: &str = "custodian-app";
-const CITIZEN: &str = "citizen-1";
 const PDF: &str = "application/pdf";
 
 /// What the fake object store and verifier do on the next request.
@@ -173,7 +171,7 @@ impl Fixture {
 
 async fn upload(api: &Api, content: &[u8]) -> (String, String) {
     let (document, version, path) = reservation(
-        &api.reserve(APP, "citizen-delivery", CITIZEN, content, PDF)
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, content, PDF)
             .await,
     );
     let put = api.put(APP, &path, PDF, Body::from(content.to_vec())).await;
@@ -194,7 +192,7 @@ async fn s3_content_is_staged_verified_over_http_and_released() {
     let (key, stored) = objects.iter().next().unwrap();
     assert_eq!(stored, &content);
     assert!(key.starts_with("/synthetic-documents/"), "{key}");
-    assert!(!key.contains(CITIZEN) && !key.contains(&document), "{key}");
+    assert!(!key.contains(CITIZEN.subject) && !key.contains(&document), "{key}");
     assert_eq!(
         fixture
             .count("SELECT count(*) FROM documents_staged_objects WHERE committed")
@@ -213,7 +211,7 @@ async fn s3_content_is_staged_verified_over_http_and_released() {
         .await;
     assert_eq!(pinned, "s3");
 
-    api.download(APP, &document, &version)
+    api.download(CITIZEN, &document, &version)
         .await
         .assert_problem(ProblemCode::DocumentVersionNotReleasable);
     assert_eq!(prepared.verify_due().await, 1);
@@ -248,10 +246,10 @@ async fn an_s3_object_that_no_longer_matches_is_never_released() {
     let (prepared, api) = fixture.start().await;
     let (document, version) = upload(&api, &pdf(900, 23)).await;
     prepared.verify_due().await;
-    assert_eq!(api.download(APP, &document, &version).await.status, 200);
+    assert_eq!(api.download(CITIZEN, &document, &version).await.status, 200);
 
     fixture.state.mode.store(CORRUPT, Ordering::SeqCst);
-    api.download(APP, &document, &version)
+    api.download(CITIZEN, &document, &version)
         .await
         .assert_problem(ProblemCode::ServiceUnavailable);
     let refused = fixture
@@ -275,7 +273,7 @@ async fn an_http_verifier_rejection_or_outage_never_releases() {
         api.read(APP, &rejected).await.json()["version"]["status"],
         "rejected"
     );
-    api.download(APP, &rejected, &rejected_version)
+    api.download(CITIZEN, &rejected, &rejected_version)
         .await
         .assert_problem(ProblemCode::DocumentVersionNotReleasable);
 
@@ -286,7 +284,7 @@ async fn an_http_verifier_rejection_or_outage_never_releases() {
         api.read(APP, &waiting).await.json()["version"]["status"],
         "pending"
     );
-    api.download(APP, &waiting, &waiting_version)
+    api.download(CITIZEN, &waiting, &waiting_version)
         .await
         .assert_problem(ProblemCode::DocumentVersionNotReleasable);
 }
@@ -297,7 +295,7 @@ async fn a_failed_object_write_keeps_the_staged_row_and_finalizes_nothing() {
     let (_prepared, api) = fixture.start().await;
     let content = pdf(400, 26);
     let (_, _, path) = reservation(
-        &api.reserve(APP, "citizen-delivery", CITIZEN, &content, PDF)
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &content, PDF)
             .await,
     );
     // An object store that does not answer at all, and one that refuses
@@ -372,7 +370,7 @@ async fn s3_storage_is_activated_once_at_startup() {
     let (document, version) = upload(&api, &pdf(600, 28)).await;
     assert_eq!(probes(), 2, "the write probes once before it writes");
     assert_eq!(prepared.verify_due().await, 1);
-    assert_eq!(api.download(APP, &document, &version).await.status, 200);
+    assert_eq!(api.download(CITIZEN, &document, &version).await.status, 200);
     assert_eq!(probes(), 2, "verification and release never probe");
 }
 
