@@ -22,8 +22,8 @@ use tokio_postgres::Row;
 use uuid::Uuid;
 
 use super::{
-    key_digest, next_cursor, record_key, replay, request_digest, timestamp, unavailable, Cursor,
-    DocumentService, PageRequest, Record, Replay,
+    checked, key_digest, next_cursor, record_key, replay, request_digest, timestamp, unavailable,
+    Cursor, DocumentService, PageRequest, Record, Replay,
 };
 use crate::audit::{GRANT_ISSUE_EVENT, GRANT_REVOKE_EVENT};
 
@@ -161,6 +161,7 @@ impl DocumentService {
         request: &IssueGrantRequest,
     ) -> Result<DocumentGrantView, ProblemCode> {
         let reference = self.actor_reference(caller)?;
+        let version_id = Uuid::parse_str(&request.version_id).ok();
         let audit = self
             .begin(
                 GRANT_ISSUE_EVENT,
@@ -169,11 +170,13 @@ impl DocumentService {
                     "actor": reference,
                     "profile": caller.profile_id,
                     "documentId": document_id.to_string(),
-                    "versionId": request.version_id,
+                    "versionId": checked(version_id),
                 }),
             )
             .await?;
-        let result = self.issue_inner(caller, key, document_id, request).await;
+        let result = self
+            .issue_inner(caller, key, document_id, version_id, request)
+            .await;
         let success = match &result {
             Ok(view) => json!({
                 "event": GRANT_ISSUE_EVENT,
@@ -192,11 +195,11 @@ impl DocumentService {
         caller: &Caller,
         key: &str,
         document_id: Uuid,
+        version_id: Option<Uuid>,
         request: &IssueGrantRequest,
     ) -> Result<DocumentGrantView, ProblemCode> {
         let record = self.grantable(caller, document_id, true).await?;
-        let version_id = Uuid::parse_str(&request.version_id)
-            .ok()
+        let version_id = version_id
             .filter(|id| *id == record.version_id)
             .ok_or(ProblemCode::ResourceNotFound)?;
         if record
