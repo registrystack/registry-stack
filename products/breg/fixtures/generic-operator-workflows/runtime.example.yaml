@@ -83,4 +83,5 @@ cursor:
 # no others: activation refuses a missing binding and an extra one alike. This
 # project declares no event, so the map is empty. A destination's URL, shared
 # HMAC key, and retry ceilings live only here, never in the project.
-eventDestinations: {}
+destinations:
+  hooks: {}

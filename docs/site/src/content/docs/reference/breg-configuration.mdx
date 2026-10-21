@@ -29,7 +29,7 @@ a project, start from [Author a registry project](../../configure/breg/); to dep
 
 ## How to read the tables
 
-`fields[]` is an array item; `eventDestinations.*` is a map entry whose name you choose. A required
+`fields[]` is an array item; `destinations.hooks.*` is a map entry whose name you choose. A required
 key inside an optional object is required only when that object is present. Constraints joined
 by `or` are alternatives. `Not specified` does not mean any value is accepted: the compiler and the
 runtime also check cross-field rules and references that no table can show.

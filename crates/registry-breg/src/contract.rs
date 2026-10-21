@@ -3865,7 +3865,7 @@ pub struct HookSource {
     /// Declared field identifiers to include in `values`. System event metadata is included separately.
     pub projection: UniqueSet<String>,
     /// Governed, destination-neutral delivery. `destinationId` is a key in
-    /// runtime `eventDestinations`; the project carries no URL or secret, and
+    /// runtime `destinations.hooks`; the project carries no URL or secret, and
     /// deployment configuration may tighten the bounds it binds but cannot
     /// supply or widen this authority. Production compilation requires it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

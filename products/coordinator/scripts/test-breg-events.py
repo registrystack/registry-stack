@@ -153,8 +153,8 @@ def write_source(journey, key_root, proxy_url, paths):
     native.private(owner / "registry.yaml", project)
     clients = json.loads((owner / "dev-clients.yaml").read_text())
     clients["secretProviders"] = {"file": {"root": str(key_root)}}
-    clients["eventDestinations"] = {trigger: {"origin": proxy_url, "path": paths[trigger],
-        "hmacSha256KeyRef": "secret:file/event-key"} for trigger in ("created", "patched")}
+    clients["destinations"] = {"hooks": {trigger: {"origin": proxy_url, "path": paths[trigger],
+        "hmacSha256KeyRef": "secret:file/event-key"} for trigger in ("created", "patched")}}
     native.private(owner / "dev-clients.yaml", clients)
     return owner
 

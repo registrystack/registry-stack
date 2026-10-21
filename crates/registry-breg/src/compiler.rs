@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_hooks::HOOK_HANDLER_ABI_V1;
+use registry_platform_hooks::{HookCapabilities, HookUse, HOOK_HANDLER_ABI_V1};
 use registry_platform_yaml::{duplicate_display_text_pairs, lookalike_local_id_pairs, DisplayText};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -5216,6 +5216,18 @@ fn validate_read_path_permission_fields(
     }
 }
 
+/// The parts of the shared hook declaration the Base Registry Engine runs:
+/// every handler kind, `when` conditions, and proposal principals.
+pub(crate) const HOOK_CAPABILITIES: HookCapabilities = HookCapabilities::ALL;
+
+/// Refuses one declared hook that uses a part of the shared declaration
+/// outside [`HOOK_CAPABILITIES`], with the one shared capability diagnostic.
+pub(crate) fn check_hook_capabilities(hook: HookUse<'_>, path: &str, errors: &mut Vec<Diagnostic>) {
+    if let Err(error) = HOOK_CAPABILITIES.check(hook) {
+        errors.push(Diagnostic::error(error.code(), path, &error.to_string()));
+    }
+}
+
 fn validate_hooks(
     registry_id: &str,
     entity: &EntitySource,
@@ -5229,8 +5241,19 @@ fn validate_hooks(
         .map(|field| (field.id.as_str(), field))
         .collect();
     let mut ids = BTreeSet::new();
-    for hook in &entity.hooks {
+    for (index, hook) in entity.hooks.iter().enumerate() {
         validate_id(&hook.id, "recordTypes[].hooks[].id", errors);
+        check_hook_capabilities(
+            HookUse {
+                index,
+                id: &hook.id,
+                handler: hook.handler.as_ref().map(HookHandlerSource::kind),
+                when: hook.when.is_some(),
+                principal: hook.principal.is_some(),
+            },
+            "recordTypes[].hooks[]",
+            errors,
+        );
         if !ids.insert(hook.id.as_str()) {
             errors.push(Diagnostic::error(
                 "breg.event.id-duplicate",
@@ -5476,7 +5499,9 @@ fn validate_hook_module_structure(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
 fn validate_hook_module_structure(_bytes: &[u8], _errors: &mut Vec<Diagnostic>) {}
 
 pub(crate) fn validate_hook_script_asset(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
-    if bytes.is_empty() || bytes.len() > crate::rhai_planner::MAXIMUM_SOURCE_BYTES {
+    if bytes.is_empty()
+        || bytes.len() > registry_platform_hooks::executor::RHAI_HOOK_MAX_SOURCE_BYTES
+    {
         errors.push(Diagnostic::error(
             "breg.hook.handler-source-bound",
             "recordTypes[].hooks[].handler.script",
@@ -5492,14 +5517,16 @@ pub(crate) fn validate_hook_script_asset(bytes: &[u8], errors: &mut Vec<Diagnost
         ));
         return;
     };
-    if let Err(error) = crate::rhai_planner::compile_entrypoint_detailed(script, "handle") {
-        use crate::rhai_planner::EntrypointCompileError;
+    // A hook program runs on the bare platform engine under the shared hook
+    // profile, so admission compiles it the same way the executor does.
+    if let Err(error) = registry_platform_hooks::executor::compile_rhai_hook(script) {
+        use registry_platform_script::rhai::RhaiCompileError;
         let (code, message) = match error {
-            EntrypointCompileError::SourceBound => (
+            RhaiCompileError::SourceBound => (
                 "breg.hook.handler-source-bound",
                 "the handler source exceeds its fixed byte bound".to_owned(),
             ),
-            EntrypointCompileError::Parse(position) => {
+            RhaiCompileError::Parse(position) => {
                 let location = match (position.line(), position.position()) {
                     (Some(line), Some(column)) => format!(" at line {line}, column {column}"),
                     (Some(line), None) => format!(" at line {line}"),
@@ -5510,7 +5537,7 @@ pub(crate) fn validate_hook_script_asset(bytes: &[u8], errors: &mut Vec<Diagnost
                     format!("correct the Rhai syntax or unsupported construct{location}"),
                 )
             }
-            EntrypointCompileError::Entrypoint => (
+            RhaiCompileError::Entrypoint => (
                 "breg.hook.handler-entrypoint",
                 "declare exactly one public fn handle(ctx) entry point and do not overload functions"
                     .to_owned(),
@@ -5788,7 +5815,7 @@ pub(crate) fn maximum_envelope_wrapper_bytes(
     )?;
     // `id` is a quoted UUID.
     total = total.checked_add(38)?;
-    // `source` is the quoted deployment URN `crate::webhook::delivery_source`
+    // `source` is the quoted deployment URN `crate::hooks::delivery_source`
     // builds. Its package id is this registry's id; its instance id is the
     // runtime configuration's `identity.instanceId`, recorded in registry
     // state by `bregctl apply`, which the configuration loader holds to the
@@ -6178,16 +6205,12 @@ pub(crate) fn webhook_retry_delays(
     maximum_ms: u32,
     maximum_attempts: u8,
 ) -> Vec<u32> {
-    let mut delay = initial_ms;
-    (1..maximum_attempts)
-        .map(|_| {
-            let current = delay;
-            delay = delay
-                .saturating_mul(u32::from(WEBHOOK_BACKOFF_MULTIPLIER))
-                .min(maximum_ms);
-            current
-        })
-        .collect()
+    registry_platform_hooks::exponential_retry_delays_ms(
+        initial_ms,
+        maximum_ms,
+        u32::from(WEBHOOK_BACKOFF_MULTIPLIER),
+        maximum_attempts,
+    )
 }
 
 /// Projects one entity's slice out of a whole-project `(entity_id, item_id) ->

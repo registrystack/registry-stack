@@ -9,11 +9,11 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use registry_breg::contract::{Crs84BboxSource, EventTrigger, FieldTypeSource};
-use registry_breg::model::CompiledRegistry;
-use registry_breg::webhook::{
-    WebhookDeliveryStatus, WebhookDeliveryStatusKind, WebhookDrainReport, WebhookOperatorError,
-    WebhookOperatorService, MAX_WEBHOOK_STATUS_RESULTS,
+use registry_breg::hooks::{
+    HookDeliveryStatus, HookDeliveryStatusKind, HookDrainReport, HookOperatorError,
+    HookOperatorService, MAX_HOOK_STATUS_RESULTS,
 };
+use registry_breg::model::CompiledRegistry;
 use registry_platform_config::PackageDigestMismatch;
 use registry_platform_hooks::{Causation, EnvelopeLimits, EventSubject, HookEnvelope};
 use serde::Serialize;
@@ -252,7 +252,7 @@ pub(crate) fn list(
     let runtime = operator_runtime()?;
     list_with(runtime_config, limit, |runtime_config, limit| {
         runtime.block_on(async {
-            let service = WebhookOperatorService::from_runtime_config(runtime_config).await?;
+            let service = HookOperatorService::from_runtime_config(runtime_config).await?;
             service.list(limit).await
         })
     })
@@ -261,9 +261,9 @@ pub(crate) fn list(
 fn list_with(
     runtime_config: &Path,
     limit: u16,
-    operation: impl FnOnce(&Path, u16) -> Result<Vec<WebhookDeliveryStatus>, WebhookOperatorError>,
+    operation: impl FnOnce(&Path, u16) -> Result<Vec<HookDeliveryStatus>, HookOperatorError>,
 ) -> Result<WebhookListOutcome, WebhookLifecycleError> {
-    if !runtime_config.is_absolute() || limit == 0 || limit > MAX_WEBHOOK_STATUS_RESULTS {
+    if !runtime_config.is_absolute() || limit == 0 || limit > MAX_HOOK_STATUS_RESULTS {
         return Err(WebhookLifecycleError::Operator);
     }
     let deliveries = operation(runtime_config, limit).map_err(operator_failure)?;
@@ -276,7 +276,7 @@ pub(crate) fn drain(
     runtime_config: &Path,
     max_attempts: u16,
     timeout_seconds: u16,
-) -> Result<WebhookDrainReport, WebhookLifecycleError> {
+) -> Result<HookDrainReport, WebhookLifecycleError> {
     if !runtime_config.is_absolute()
         || !(1..=1000).contains(&max_attempts)
         || !(1..=300).contains(&timeout_seconds)
@@ -284,7 +284,7 @@ pub(crate) fn drain(
         return Err(WebhookLifecycleError::Operator);
     }
     operator_runtime()?
-        .block_on(WebhookOperatorService::drain_local(
+        .block_on(HookOperatorService::drain_local(
             runtime_config,
             max_attempts,
             std::time::Duration::from_secs(u64::from(timeout_seconds)),
@@ -306,7 +306,7 @@ pub(crate) fn replay(
         expected_generation,
         |runtime_config, event_id, delivery_id, expected_generation| {
             runtime.block_on(async {
-                let service = WebhookOperatorService::from_runtime_config(runtime_config).await?;
+                let service = HookOperatorService::from_runtime_config(runtime_config).await?;
                 service
                     .replay(event_id, delivery_id, expected_generation)
                     .await
@@ -320,7 +320,7 @@ fn replay_with(
     event_id: &str,
     delivery_id: &str,
     expected_generation: i64,
-    operation: impl FnOnce(&Path, Uuid, &str, i64) -> Result<i64, WebhookOperatorError>,
+    operation: impl FnOnce(&Path, Uuid, &str, i64) -> Result<i64, HookOperatorError>,
 ) -> Result<WebhookReplayOutcome, WebhookLifecycleError> {
     if !runtime_config.is_absolute()
         || delivery_id.is_empty()
@@ -353,7 +353,7 @@ pub(crate) fn discard(
         expected_generation,
         |runtime_config, event_id, delivery_id, expected_generation| {
             runtime.block_on(async {
-                let service = WebhookOperatorService::from_runtime_config(runtime_config).await?;
+                let service = HookOperatorService::from_runtime_config(runtime_config).await?;
                 service
                     .discard(event_id, delivery_id, expected_generation)
                     .await
@@ -367,7 +367,7 @@ fn discard_with(
     event_id: &str,
     delivery_id: &str,
     expected_generation: i64,
-    operation: impl FnOnce(&Path, Uuid, &str, i64) -> Result<i64, WebhookOperatorError>,
+    operation: impl FnOnce(&Path, Uuid, &str, i64) -> Result<i64, HookOperatorError>,
 ) -> Result<WebhookDiscardOutcome, WebhookLifecycleError> {
     if !runtime_config.is_absolute()
         || delivery_id.is_empty()
@@ -389,12 +389,12 @@ fn discard_with(
 
 /// A package pin mismatch keeps both digests; every other operator failure
 /// stays the one value-free refusal.
-fn operator_failure(error: WebhookOperatorError) -> WebhookLifecycleError {
+fn operator_failure(error: HookOperatorError) -> WebhookLifecycleError {
     match error {
-        WebhookOperatorError::PackagePinMismatch(mismatch) => {
+        HookOperatorError::PackagePinMismatch(mismatch) => {
             WebhookLifecycleError::PackagePinMismatch(mismatch)
         }
-        WebhookOperatorError::Unavailable => WebhookLifecycleError::Operator,
+        HookOperatorError::Unavailable => WebhookLifecycleError::Operator,
     }
 }
 
@@ -405,12 +405,12 @@ fn operator_runtime() -> Result<tokio::runtime::Runtime, WebhookLifecycleError> 
         .map_err(|_| WebhookLifecycleError::Operator)
 }
 
-fn list_item(status: WebhookDeliveryStatus) -> WebhookListItem {
+fn list_item(status: HookDeliveryStatus) -> WebhookListItem {
     let state = match status.state {
-        WebhookDeliveryStatusKind::Pending => "pending",
-        WebhookDeliveryStatusKind::Leased => "leased",
-        WebhookDeliveryStatusKind::DeadLettered => "dead-lettered",
-        WebhookDeliveryStatusKind::Expired => "expired",
+        HookDeliveryStatusKind::Pending => "pending",
+        HookDeliveryStatusKind::Leased => "leased",
+        HookDeliveryStatusKind::DeadLettered => "dead-lettered",
+        HookDeliveryStatusKind::Expired => "expired",
     };
     // This product-owned diagnostic contains activation identities only.
     // Other proposal summaries may contain handler-authored text and are
@@ -664,7 +664,7 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
-    use registry_breg::webhook::WebhookDeliveryFailureReason;
+    use registry_breg::hooks::HookDeliveryFailureReason;
 
     #[test]
     fn structured_sample_synthesis_is_deterministic_and_uses_required_typed_properties() {
@@ -703,15 +703,15 @@ mod tests {
                 called.set(true);
                 assert_eq!(runtime_config, Path::new("/operator/runtime.yaml"));
                 assert_eq!(limit, 17);
-                Ok::<_, WebhookOperatorError>(vec![WebhookDeliveryStatus {
+                Ok::<_, HookOperatorError>(vec![HookDeliveryStatus {
                     event_id,
                     compiled_delivery_id: "record.record-created-v1.webhook".to_owned(),
                     generation: 2,
-                    state: WebhookDeliveryStatusKind::DeadLettered,
+                    state: HookDeliveryStatusKind::DeadLettered,
                     attempt: 3,
                     payload_available: true,
                     payload_expires_at: "2026-01-02T00:00:00Z".to_owned(),
-                    dead_letter_reason: Some(WebhookDeliveryFailureReason::AlwaysDeniedAddress),
+                    dead_letter_reason: Some(HookDeliveryFailureReason::AlwaysDeniedAddress),
                     binding_active: true,
                     discard_eligible: true,
                     replay_eligible: true,
@@ -735,11 +735,11 @@ mod tests {
 
     #[test]
     fn operator_list_exposes_activation_refusal_but_omits_other_summaries() {
-        let mut status = WebhookDeliveryStatus {
+        let mut status = HookDeliveryStatus {
             event_id: Uuid::parse_str(SAMPLE_EVENT_ID).unwrap(),
             compiled_delivery_id: "record.created".to_owned(),
             generation: 1,
-            state: WebhookDeliveryStatusKind::DeadLettered,
+            state: HookDeliveryStatusKind::DeadLettered,
             attempt: 1,
             payload_available: true,
             payload_expires_at: "2026-01-02T00:00:00Z".to_owned(),
@@ -776,7 +776,7 @@ mod tests {
                 assert_eq!(event_id.to_string(), SAMPLE_EVENT_ID);
                 assert_eq!(delivery_id, "record.record-created-v1.webhook");
                 assert_eq!(expected_generation, 7);
-                Ok::<_, WebhookOperatorError>(8)
+                Ok::<_, HookOperatorError>(8)
             },
         )
         .expect("delegated replay succeeds");
@@ -799,7 +799,7 @@ mod tests {
                 assert_eq!(event_id.to_string(), SAMPLE_EVENT_ID);
                 assert_eq!(delivery_id, "record.record-created-v1.webhook");
                 assert_eq!(expected_generation, 7);
-                Ok::<_, WebhookOperatorError>(8)
+                Ok::<_, HookOperatorError>(8)
             },
         )
         .expect("delegated discard succeeds");
@@ -841,7 +841,7 @@ mod tests {
                     generation,
                     |_, _, _, _| {
                         called.set(true);
-                        Ok::<_, WebhookOperatorError>(2)
+                        Ok::<_, HookOperatorError>(2)
                     },
                 ),
                 Err(WebhookLifecycleError::Operator)
@@ -859,7 +859,7 @@ mod tests {
                 1,
                 |_, _, _, _| {
                     called.set(true);
-                    Ok::<_, WebhookOperatorError>(2)
+                    Ok::<_, HookOperatorError>(2)
                 },
             ),
             Err(WebhookLifecycleError::Operator)

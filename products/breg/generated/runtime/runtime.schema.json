@@ -659,6 +659,24 @@
       ],
       "type": "object"
     },
+    "RawDestinationsConfig": {
+      "additionalProperties": false,
+      "description": "Outbound destination bindings, grouped by what sends to them.",
+      "properties": {
+        "hooks": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RawEventDestinationConfig"
+          },
+          "description": "URL hook destinations, keyed by the identifier a reviewed hook names.",
+          "maxProperties": 128,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "RawEventDestinationConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1486,15 +1504,9 @@
     "database": {
       "$ref": "#/$defs/RawRegistryDatabase"
     },
-    "eventDestinations": {
-      "additionalProperties": {
-        "$ref": "#/$defs/RawEventDestinationConfig"
-      },
-      "maxProperties": 128,
-      "propertyNames": {
-        "$ref": "#/$defs/LocalId"
-      },
-      "type": "object"
+    "destinations": {
+      "$ref": "#/$defs/RawDestinationsConfig",
+      "description": "Outbound destination bindings. Absent by default, which binds no\ndestination."
     },
     "evidenceProviders": {
       "additionalProperties": {

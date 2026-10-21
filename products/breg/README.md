@@ -261,7 +261,7 @@ retention boundaries, see [Corrections and historical queries](HISTORY.md).
 For the opt-in log that lets a record subject see named reads of that record,
 including retention, intermediary attribution, and delayed disclosure, see
 [Subject-facing access logs](ACCESS-LOG.md).
-See [Events and webhooks](EVENTS-AND-WEBHOOKS.md) for committed record and Proposal events.
+See [Events and hooks](EVENTS-AND-WEBHOOKS.md) for committed record and Proposal events.
 
 [Point queries and QGIS](SPATIAL-QUERIES.md) describes GeoJSON output and
 explicitly granted PostGIS-backed bbox queries. The spatial quickstart uses

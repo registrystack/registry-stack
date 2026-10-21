@@ -290,7 +290,7 @@ seed:
     assert!(std::net::TcpStream::connect(receiver_address).is_ok());
     let runtime_file = dev.join("runtime.yaml");
     let configuration: Value = serde_norway::from_slice(&fs::read(&runtime_file).unwrap()).unwrap();
-    let destinations = configuration["eventDestinations"].as_object().unwrap();
+    let destinations = configuration["destinations"]["hooks"].as_object().unwrap();
     assert_eq!(destinations.len(), 2);
     for destination in ["receiver-a", "receiver-b"] {
         assert_eq!(
