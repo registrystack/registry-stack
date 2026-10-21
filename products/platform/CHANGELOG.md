@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- BREAKING: `registry-platform-hooks` holds the hook adapter every product
+  wrote for itself and the local handler executor. Behind `postgres`: the
+  signing URL destination, the pooled connection, the audit entry builder
+  parameterised by the product's audit schema and `<product>.hook-delivery`
+  event, the retry schedule, and the identity preflight that reads the
+  `registry-platform-activation` record. Behind the new `rhai` and `wasm`
+  features: `LocalHookProgram`, `LocalHookHandlers`, and the Rhai and WASM
+  engines, built on the bare `registry-platform-script` engine. A product
+  states the declaration parts it executes as a `HookCapabilities` set and
+  every refusal outside it is `hook.capability.unsupported`. Migration for a
+  crate consumer: enable `rhai` or `wasm` to run local programs, pass a
+  capability set where hook declarations are loaded, and implement
+  `DeliverySeams::verify_transaction` with `verify_active_package` or an
+  equivalent check; the receiving-side names Coordinator uses
+  (`eventSources`, `workflow.eventTriggers`) are unchanged.
 - `registry-platform-objectstore` is a new crate holding the S3-compatible
   object storage adapter and the HTTP content verifier transport the Base
   Registry Engine used for attachments. A product supplies its own key prefix
