@@ -279,7 +279,7 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `apply.audit.incomplete` | Activation committed, but the audit trail is incomplete. | Repair the audit path and directory permissions; run `bregctl status` to see the active package. Do not apply again. |
 | `apply.migration.statement-failed` | PostgreSQL refused a statement; the SQLSTATE is named. | Fix the cause and retry, or run `migration reconcile`. |
 | `apply.migration.failed` | The apply failed mid-maintenance. | Retry the same target, or run `migration reconcile`. |
-| `apply.event-destinations.refused` | Destinations and bindings do not match. | Compare `eventDestinations` with `bregctl explain events`. |
+| `apply.event-destinations.refused` | Destinations and bindings do not match. | Compare `destinations.hooks` with `bregctl explain events`. |
 | `startup.event-destinations.refused` | A destination binding was refused. | Check the key file, the origin, and `allowedPrivateCidrs`. |
 | `startup.webhook.retained-bindings` | Pending deliveries need a removed binding. | Restore it until `webhook list` shows them drained. |
 | `startup.instance-id.pending-deliveries` | Pending deliveries carry the previous `identity.instanceId`. | Restore it until they drain. |

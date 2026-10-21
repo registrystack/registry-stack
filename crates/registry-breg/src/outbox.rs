@@ -20,10 +20,10 @@ use crate::contract::{
     WebhookAuthenticationProfile, WebhookDeadLetterMode,
 };
 use crate::event_destination::ActivatedEventDestinationRegistry;
+use crate::hooks::DELIVERY_SCHEMA;
 use crate::model::{
     CompiledEntity, CompiledEventDelivery, CompiledField, CompiledWebhookDeliveryMode,
 };
-use crate::webhook::DELIVERY_SCHEMA;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum OutboxError {
@@ -754,7 +754,7 @@ mod tests {
         const REGISTRY_ID: &str = "widest-registry-identifier";
         const ENTITY_ID: &str = "widest-entity-identifier";
         const EVENT_ID: &str = "widest-event-identifier";
-        let source = crate::webhook::delivery_source(
+        let source = crate::hooks::delivery_source(
             REGISTRY_ID,
             &"i".repeat(crate::compiler::MAX_BUILD_ID_BYTES as usize),
         );
@@ -820,7 +820,7 @@ mod tests {
         for escaped in ['"', '\\', '\n', '\r', '\t'] {
             assert!(!crate::package::valid_build_id(&format!("a{escaped}")));
         }
-        let source = crate::webhook::delivery_source("widest-registry-identifier", &widest);
+        let source = crate::hooks::delivery_source("widest-registry-identifier", &widest);
         let serialized = serde_json::to_string(&source).expect("serialized source");
         assert_eq!(serialized.len(), 2 + source.len());
     }

@@ -18,7 +18,7 @@ pub(crate) const CHECKED_DEPENDENCIES: [&str; 10] = [
     "audit",
     "cursor",
     "authentication.oidc",
-    "eventDestinations",
+    "destinations.hooks",
     "reviewBindings",
     "authentication",
     "fieldEncryption",
@@ -167,7 +167,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         };
         return diagnostic(
             "startup.webhook.retained-bindings",
-            "eventDestinations",
+            "destinations.hooks",
             &format!(
                 "{retained_deliveries} retained webhook {noun} a superseded destination or local-handler binding; run `bregctl webhook list` to identify rows where bindingActive is false, then either restore each exact binding until its work drains or explicitly discard each delivery with its current generation; stop the runtime before discarding pending work, and retry an active lease only after it expires"
             ),
@@ -295,7 +295,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         ),
         StartupError::EventDestinations => (
             "startup.event-destinations.refused",
-            "eventDestinations",
+            "destinations.hooks",
             "the event destination bindings were refused",
         ),
         StartupError::RetainedWebhookBindings { .. } => {
@@ -508,7 +508,7 @@ mod tests {
             retained_deliveries: 2,
         });
         assert_eq!(diagnostic.code, "startup.webhook.retained-bindings");
-        assert_eq!(diagnostic.path, "eventDestinations");
+        assert_eq!(diagnostic.path, "destinations.hooks");
         for detail in [
             "2 retained webhook deliveries require",
             "bregctl webhook list",
@@ -660,7 +660,7 @@ mod tests {
             (
                 StartupError::EventDestinations,
                 "startup.event-destinations.refused",
-                "eventDestinations",
+                "destinations.hooks",
             ),
             (
                 StartupError::FieldEncryption,
@@ -877,7 +877,7 @@ mod tests {
             (
                 RuntimeConfigError::InvalidEventDestination,
                 "breg.runtime.invalid-event-destination",
-                "/eventDestinations",
+                "/destinations/hooks",
             ),
             (
                 RuntimeConfigError::InvalidFieldEncryption,

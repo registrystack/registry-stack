@@ -821,8 +821,8 @@ fn expected_background_task_stop_code(
     stop: BackgroundTaskStop,
 ) -> &'static str {
     match (task, stop) {
-        (BackgroundTask::WebhookWorker, BackgroundTaskStop::Panicked) => "webhook.worker.panicked",
-        (BackgroundTask::WebhookWorker, BackgroundTaskStop::Returned) => "webhook.worker.returned",
+        (BackgroundTask::HookWorker, BackgroundTaskStop::Panicked) => "webhook.worker.panicked",
+        (BackgroundTask::HookWorker, BackgroundTaskStop::Returned) => "webhook.worker.returned",
         (BackgroundTask::AttachmentVerificationWorker, BackgroundTaskStop::Panicked) => {
             "attachment_verification.worker.panicked"
         }
@@ -1643,7 +1643,8 @@ audit:
 cursor:
   secretRef: secret:file/cursor-key
   maximumAgeSeconds: 300
-eventDestinations: {{}}
+destinations:
+  hooks: {{}}
 operationalTimeouts:
   httpRequestMilliseconds: 10000
   shutdownGraceMilliseconds: 30000
@@ -1660,11 +1661,11 @@ operationalTimeouts:
 #[tokio::test]
 async fn serve_returns_after_graceful_shutdown_signal() {
     use axum::routing::get;
+    use registry_breg::hooks::HookWorkerLifecycleProbe;
     use registry_breg::startup::{serve_until_shutdown, PreparedServer};
-    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
 
     let app = axum::Router::new().route("/healthz", get(|| async { "ok" }));
-    let probe = WebhookWorkerLifecycleProbe::new(false);
+    let probe = HookWorkerLifecycleProbe::new(false);
     let prepared = PreparedServer::from_parts_with_webhook_worker_for_test(
         "127.0.0.1:0".parse().expect("ephemeral bind parses"),
         app,
@@ -1688,8 +1689,8 @@ async fn serve_returns_after_graceful_shutdown_signal() {
 #[tokio::test]
 async fn shutdown_signal_failure_still_stops_and_joins_the_bound_server() {
     use axum::routing::get;
+    use registry_breg::hooks::HookWorkerLifecycleProbe;
     use registry_breg::startup::{serve_until_shutdown, PreparedServer, StartupError};
-    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
     use tokio::net::TcpListener;
 
     let reservation = TcpListener::bind("127.0.0.1:0")
@@ -1700,7 +1701,7 @@ async fn shutdown_signal_failure_still_stops_and_joins_the_bound_server() {
         .expect("ephemeral listener address reads");
     drop(reservation);
     let app = axum::Router::new().route("/healthz", get(|| async { "ok" }));
-    let probe = WebhookWorkerLifecycleProbe::new(false);
+    let probe = HookWorkerLifecycleProbe::new(false);
     let prepared = PreparedServer::from_parts_with_webhook_worker_for_test(
         bind,
         app,
@@ -1728,8 +1729,8 @@ async fn shutdown_signal_failure_still_stops_and_joins_the_bound_server() {
 #[tokio::test]
 async fn listener_bind_failure_never_starts_or_detaches_the_webhook_worker() {
     use axum::routing::get;
+    use registry_breg::hooks::HookWorkerLifecycleProbe;
     use registry_breg::startup::{serve_until_shutdown, PreparedServer, StartupError};
-    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
     use tokio::net::TcpListener;
 
     let occupied = TcpListener::bind("127.0.0.1:0")
@@ -1737,7 +1738,7 @@ async fn listener_bind_failure_never_starts_or_detaches_the_webhook_worker() {
         .expect("occupied listener binds");
     let bind = occupied.local_addr().expect("occupied address reads");
     let app = axum::Router::new().route("/healthz", get(|| async { "ok" }));
-    let probe = WebhookWorkerLifecycleProbe::new(false);
+    let probe = HookWorkerLifecycleProbe::new(false);
     let prepared = PreparedServer::from_parts_with_webhook_worker_for_test(
         bind,
         app,
@@ -1758,8 +1759,8 @@ async fn listener_bind_failure_never_starts_or_detaches_the_webhook_worker() {
 #[tokio::test]
 async fn shutdown_timeout_aborts_and_joins_the_webhook_worker_before_returning() {
     use axum::routing::get;
+    use registry_breg::hooks::HookWorkerLifecycleProbe;
     use registry_breg::startup::{serve_until_shutdown, PreparedServer, StartupError};
-    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
     use tokio::net::TcpListener;
 
     let reservation = TcpListener::bind("127.0.0.1:0")
@@ -1770,7 +1771,7 @@ async fn shutdown_timeout_aborts_and_joins_the_webhook_worker_before_returning()
         .expect("ephemeral listener address reads");
     drop(reservation);
     let app = axum::Router::new().route("/healthz", get(|| async { "ok" }));
-    let probe = WebhookWorkerLifecycleProbe::new(true);
+    let probe = HookWorkerLifecycleProbe::new(true);
     let prepared = PreparedServer::from_parts_with_webhook_worker_for_test(
         bind,
         app,
@@ -1795,7 +1796,7 @@ async fn shutdown_timeout_aborts_and_joins_the_webhook_worker_before_returning()
 /// serve returned plus the operational records it emitted.
 #[cfg(feature = "postgres-test")]
 async fn serve_with_self_stopping_worker(
-    probe: &registry_breg::webhook::WebhookWorkerLifecycleProbe,
+    probe: &registry_breg::hooks::HookWorkerLifecycleProbe,
 ) -> (
     registry_breg::startup::Result<()>,
     Vec<Value>,
@@ -1865,10 +1866,10 @@ fn background_task_stop_codes(records: &[Value]) -> Vec<String> {
 #[cfg(feature = "postgres-test")]
 #[tokio::test(flavor = "current_thread")]
 async fn a_panicking_background_task_stops_serve_with_a_distinct_error() {
-    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
+    use registry_breg::hooks::HookWorkerLifecycleProbe;
 
     let _capture_guard = TRACING_CAPTURE.lock().await;
-    let probe = WebhookWorkerLifecycleProbe::panicking();
+    let probe = HookWorkerLifecycleProbe::panicking();
     let (result, records, bind) = serve_with_self_stopping_worker(&probe).await;
 
     assert_eq!(result, Err(StartupError::BackgroundTaskStopped));
@@ -1901,10 +1902,10 @@ async fn a_panicking_background_task_stops_serve_with_a_distinct_error() {
 #[cfg(feature = "postgres-test")]
 #[tokio::test(flavor = "current_thread")]
 async fn an_early_returning_background_task_stops_serve_with_a_distinct_error() {
-    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
+    use registry_breg::hooks::HookWorkerLifecycleProbe;
 
     let _capture_guard = TRACING_CAPTURE.lock().await;
-    let probe = WebhookWorkerLifecycleProbe::returning();
+    let probe = HookWorkerLifecycleProbe::returning();
     let (result, records, bind) = serve_with_self_stopping_worker(&probe).await;
 
     assert_eq!(result, Err(StartupError::BackgroundTaskStopped));
@@ -1924,11 +1925,11 @@ async fn an_early_returning_background_task_stops_serve_with_a_distinct_error() 
 #[tokio::test(flavor = "current_thread")]
 async fn a_requested_shutdown_reports_no_background_task_stop() {
     use axum::routing::get;
+    use registry_breg::hooks::HookWorkerLifecycleProbe;
     use registry_breg::startup::{serve_until_shutdown, PreparedServer};
-    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
 
     let _capture_guard = TRACING_CAPTURE.lock().await;
-    let probe = WebhookWorkerLifecycleProbe::new(false);
+    let probe = HookWorkerLifecycleProbe::new(false);
     let prepared = PreparedServer::from_parts_with_webhook_worker_for_test(
         "127.0.0.1:0".parse().expect("ephemeral bind parses"),
         axum::Router::new().route("/healthz", get(|| async { "ok" })),

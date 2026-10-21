@@ -1,53 +1,42 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Base Registry Engine's adoption of the platform delivery core.
+//! Base Registry Engine's hooks: its side of the platform delivery core.
 //!
-//! The at-least-once delivery worker lives in `registry-platform-hooks`
-//! behind the delivery seams. This module supplies those seams with Base
-//! Registry Engine's side: the runtime pool, the deployment-identity
-//! preflight, the webhook audit journal, the operational vocabulary, and the
-//! activated destinations. The worker's claim, lease, retry, dead-letter,
-//! expiry, and operator behavior moved with this adoption, and the signed
-//! bytes on the wire are unchanged: the same signing scheme signs the same
-//! field values with the same key material, and the idempotency domain and
-//! delivery source identity are passed through unchanged.
-//!
-//! The public surface is re-exported under the names `bregctl` and the
-//! PostgreSQL integration tests already use.
+//! `registry-platform-hooks` owns the at-least-once delivery worker, the
+//! signing URL destination, the pooled connection seam, the audit record
+//! shape, and the local hook program executor. This module supplies the
+//! seams only Base Registry Engine can: the runtime pool, the
+//! deployment-identity preflight, the keyed hook audit references, the
+//! operational vocabulary, the activated destinations, the local programs the
+//! running package holds, and proposal application with its completion
+//! barrier. The signed bytes on the wire are produced by the shared URL
+//! destination from the same field values and key material, and the
+//! idempotency domain and delivery source identity are passed through
+//! unchanged.
 
-use std::ops::{Deref, DerefMut};
 use std::path::Path;
 #[cfg(feature = "postgres-test")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
 use registry_platform_hooks::delivery::{
-    DeliveryAuditDisposition, DeliveryAuditOutcome, DeliveryAuditPhase, DeliveryAuditRecord,
-    DeliveryConfig, DeliveryConnection, DeliveryError, DeliveryOperationalEvent, DeliverySeams,
-    DeliveryService, DeliverySignatureFields, DeliverySignatureRefused, DeliveryTransitionCode,
-    DeliveryWorker, DestinationAnswer, HandlerRunFailure, HookDestination, HookHandlerBinding,
-    ProposalApplication, ProposalOutcome, ProposalReceiptRecovery,
+    DeliveryAuditRecord, DeliveryConfig, DeliveryConnection, DeliveryError,
+    DeliveryOperationalEvent, DeliverySeams, DeliveryService, DeliveryTransitionCode,
+    DeliveryWorker, HookHandlerBinding, PooledConnection, ProposalApplication, ProposalOutcome,
+    ProposalReceiptRecovery, SharedUrlDestination,
 };
-use registry_platform_hooks::{
-    BoundedText, ErrorCategory, MAX_OUTPUT_BYTES, MAX_REFUSAL_SUMMARY_BYTES,
-};
-use registry_platform_httputil::destination::{
-    DestinationRequestError, DestinationResponseError, DestinationSendError, EventDeliveryHeaders,
-    EventDestinationRequest,
-};
+use registry_platform_hooks::executor::{LocalHookHandler, LocalHookHandlers, LocalHookProgram};
+#[cfg(feature = "wasm")]
+use registry_platform_hooks::executor::{WasmHookBudgets, WasmHookRuntime, WasmHookRuntimeError};
+use registry_platform_hooks::{BoundedText, MAX_REFUSAL_SUMMARY_BYTES};
 use tokio::sync::watch;
 use tokio_postgres::Transaction;
 use uuid::Uuid;
 
-use crate::audit::{
-    webhook_entry, RegistryAudit, WebhookAudit, WebhookAuditDisposition, WebhookAuditOutcome,
-    WebhookAuditPhase,
-};
-use crate::event_destination::{ActivatedEventDestination, ActivatedEventDestinationRegistry};
+use crate::audit::{hook_entry, RegistryAudit};
+use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::field_encryption::FieldEncryptionService;
-use crate::hook_handler::{BregHookHandler, HookHandlerRegistry};
 use crate::idempotency::IdempotencyPolicy;
 use crate::model::CompiledRegistry;
 use crate::mutation::{HookChangeApplication, HookChangeOutcome, MutationTransaction};
@@ -57,11 +46,10 @@ use crate::runtime_config::load_runtime_config;
 use crate::startup::{OperationalEvent, WebhookStateTransitionCode};
 
 pub use registry_platform_hooks::delivery::{
-    DeliveryError as WebhookDeliveryError, DeliveryFailureReason as WebhookDeliveryFailureReason,
-    DeliveryOutcome as WebhookWorkOutcome, DeliveryStatus as WebhookDeliveryStatus,
-    DeliveryStatusKind as WebhookDeliveryStatusKind,
-    RetainedBindingError as WebhookRetainedBindingError,
-    MAX_DELIVERY_STATUS_RESULTS as MAX_WEBHOOK_STATUS_RESULTS,
+    DeliveryError as HookDeliveryError, DeliveryFailureReason as HookDeliveryFailureReason,
+    DeliveryOutcome as HookWorkOutcome, DeliveryStatus as HookDeliveryStatus,
+    DeliveryStatusKind as HookDeliveryStatusKind, RetainedBindingError as HookRetainedBindingError,
+    MAX_DELIVERY_STATUS_RESULTS as MAX_HOOK_STATUS_RESULTS,
 };
 
 const IDEMPOTENCY_DOMAIN: &[u8] = b"breg-webhook-idempotency-v1";
@@ -74,13 +62,93 @@ pub(crate) const DELIVERY_SCHEMA: &str = "registry_internal";
 pub(crate) fn delivery_source(package_id: &str, instance_id: &str) -> String {
     format!("urn:registrystack:registry:{package_id}:instance:{instance_id}")
 }
+
+/// Every local hook program the running package holds, admitted by the
+/// shared executor under `package_revision`.
+///
+/// A program whose recorded identity digest does not cover its own bytes, or
+/// that speaks another handler ABI, is left out, so a delivery row bound to it
+/// resolves no handler and is refused as a binding mismatch rather than run.
+/// WASM programs need a hook runtime attached with
+/// [`LocalHookHandlers::with_wasm_runtime`] before one can run.
+#[must_use]
+pub fn local_hook_handlers(
+    compiled: &CompiledRegistry,
+    package_revision: &str,
+) -> LocalHookHandlers {
+    let mut handlers = LocalHookHandlers::new(package_revision);
+    for delivery in &compiled.event_deliveries().deliveries {
+        let Some(handler) = delivery.handler.as_ref() else {
+            continue;
+        };
+        if let Ok(program) = LocalHookProgram::new(
+            handler.kind.shared(),
+            &handler.abi,
+            &handler.digest,
+            handler.bytes.clone(),
+            Duration::from_millis(u64::from(delivery.attempt_timeout_ms)),
+            delivery.maximum_attempts,
+        ) {
+            handlers.insert(&delivery.id, program);
+        }
+    }
+    handlers
+}
+
+/// The hook-owned WASM runtime, under the operator's configured module and
+/// guest memory budgets and backend. It is separate from the action handler
+/// runtime and its module cache: hook programs and action handlers never
+/// share prepared modules.
+///
+/// # Errors
+///
+/// [`WasmHookRuntimeError`] when the engine or its epoch ticker cannot start.
+#[cfg(feature = "wasm")]
+pub fn hook_wasm_runtime(
+    config: &crate::runtime_config::WasmExecutionConfig,
+) -> Result<Arc<WasmHookRuntime>, WasmHookRuntimeError> {
+    start_hook_wasm_runtime(
+        WasmHookBudgets {
+            max_module_bytes: config.max_module_bytes() as usize,
+            max_guest_memory_bytes: config.max_guest_memory_bytes() as usize,
+        },
+        config.backend(),
+    )
+}
+
+/// The hook-owned WASM runtime under the default module and guest memory
+/// budgets and backend, for an embedder that assembles the delivery path
+/// without a runtime configuration file.
+///
+/// # Errors
+///
+/// [`WasmHookRuntimeError`] when the engine or its epoch ticker cannot start.
+#[cfg(feature = "wasm")]
+pub fn default_hook_wasm_runtime() -> Result<Arc<WasmHookRuntime>, WasmHookRuntimeError> {
+    start_hook_wasm_runtime(
+        WasmHookBudgets {
+            max_module_bytes: crate::wasm_handler::DEFAULT_WASM_MODULE_BYTES,
+            max_guest_memory_bytes: crate::wasm_handler::DEFAULT_WASM_GUEST_MEMORY_BYTES,
+        },
+        crate::wasm_handler::WasmExecutionBackend::default(),
+    )
+}
+
+#[cfg(feature = "wasm")]
+fn start_hook_wasm_runtime(
+    budgets: WasmHookBudgets,
+    backend: crate::wasm_handler::WasmExecutionBackend,
+) -> Result<Arc<WasmHookRuntime>, WasmHookRuntimeError> {
+    WasmHookRuntime::new(budgets, crate::wasm_handler::execution_backend(backend)).map(Arc::new)
+}
+
 const _: () = assert!(
     crate::compiler::MAX_WEBHOOK_PAYLOAD_BYTES as usize
         == registry_platform_crypto::delivery_signature::MAX_BODY_BYTES
 );
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum WebhookOperatorError {
+pub enum HookOperatorError {
     /// The package at `package.root` is not the one the runtime file's
     /// `package.expectedDigest` pins. Both digests are package identities,
     /// not secrets, so the refusal names them.
@@ -97,14 +165,12 @@ pub enum WebhookOperatorError {
 /// remains available when retained rows name a superseded binding; replay
 /// still checks the exact captured binding itself. The CLI therefore owns no
 /// SQL, retry transition, or signing behavior.
-pub struct WebhookOperatorService {
-    delivery: WebhookDeliveryService,
-    #[cfg(feature = "wasm")]
-    _wasm_runtime: Option<crate::wasm_runtime::ConfiguredWasmRuntime>,
+pub struct HookOperatorService {
+    delivery: HookDeliveryService,
 }
 
-impl WebhookOperatorService {
-    pub async fn from_runtime_config(path: &Path) -> Result<Self, WebhookOperatorError> {
+impl HookOperatorService {
+    pub async fn from_runtime_config(path: &Path) -> Result<Self, HookOperatorError> {
         Self::from_runtime_config_with_execution(path, false).await
     }
 
@@ -113,38 +179,37 @@ impl WebhookOperatorService {
         path: &Path,
         max_attempts: u16,
         timeout: Duration,
-    ) -> Result<WebhookDrainReport, WebhookOperatorError> {
-        validate_drain_budget(max_attempts, timeout)
-            .map_err(|_| WebhookOperatorError::Unavailable)?;
+    ) -> Result<HookDrainReport, HookOperatorError> {
+        validate_drain_budget(max_attempts, timeout).map_err(|_| HookOperatorError::Unavailable)?;
         let service = Self::from_runtime_config_with_execution(path, true).await?;
         service
             .delivery
             .drain_local(max_attempts, timeout)
             .await
-            .map_err(|_| WebhookOperatorError::Unavailable)
+            .map_err(|_| HookOperatorError::Unavailable)
     }
 
     async fn from_runtime_config_with_execution(
         path: &Path,
         execute_local_hooks: bool,
-    ) -> Result<Self, WebhookOperatorError> {
-        let config = load_runtime_config(path).map_err(|_| WebhookOperatorError::Unavailable)?;
+    ) -> Result<Self, HookOperatorError> {
+        let config = load_runtime_config(path).map_err(|_| HookOperatorError::Unavailable)?;
         let package = config.load_active_package().map_err(|error| match error {
             PackageError::ExpectedDigestMismatch(mismatch) => {
-                WebhookOperatorError::PackagePinMismatch(mismatch)
+                HookOperatorError::PackagePinMismatch(mismatch)
             }
-            _ => WebhookOperatorError::Unavailable,
+            _ => HookOperatorError::Unavailable,
         })?;
         let connection = config
             .runtime_database_connection_config()
-            .map_err(|_| WebhookOperatorError::Unavailable)?;
+            .map_err(|_| HookOperatorError::Unavailable)?;
         let pool = connection
             .build_pool()
-            .map_err(|_| WebhookOperatorError::Unavailable)?;
+            .map_err(|_| HookOperatorError::Unavailable)?;
         let mut client = pool
             .get()
             .await
-            .map_err(|_| WebhookOperatorError::Unavailable)?;
+            .map_err(|_| HookOperatorError::Unavailable)?;
         let startup = crate::startup::prepare_loaded_startup(
             package,
             config.identity().database_id(),
@@ -153,20 +218,20 @@ impl WebhookOperatorService {
             config.database().roles().runtime(),
         )
         .await
-        .map_err(|_| WebhookOperatorError::Unavailable)?;
+        .map_err(|_| HookOperatorError::Unavailable)?;
         drop(client);
         let destinations = Arc::new(
             config
                 .activate_event_destinations(startup.package().registry())
-                .map_err(|_| WebhookOperatorError::Unavailable)?,
+                .map_err(|_| HookOperatorError::Unavailable)?,
         );
         let audit = RegistryAudit::open_companion(&config)
             .await
-            .map_err(|_| WebhookOperatorError::Unavailable)?;
-        let handlers = Arc::new(HookHandlerRegistry::new(
+            .map_err(|_| HookOperatorError::Unavailable)?;
+        let handlers = local_hook_handlers(
             startup.package().registry(),
             &startup.expected_identity().activation_id,
-        ));
+        );
         // Inspection and explicit recovery need no executable handler or
         // encryption key. A drain does, and uses the same active bindings
         // and custody checks as the serving mutation path.
@@ -181,21 +246,21 @@ impl WebhookOperatorService {
             let provider = config
                 .field_encryption()
                 .provider()
-                .ok_or(WebhookOperatorError::Unavailable)?;
+                .ok_or(HookOperatorError::Unavailable)?;
             if matches!(
                 provider,
                 crate::field_encryption::FieldEncryptionProvider::LocalFile { .. }
             ) && config.identity().database_initialization_environment() != "local"
             {
-                return Err(WebhookOperatorError::Unavailable);
+                return Err(HookOperatorError::Unavailable);
             }
             let secrets = config
                 .secret_resolver()
-                .map_err(|_| WebhookOperatorError::Unavailable)?;
+                .map_err(|_| HookOperatorError::Unavailable)?;
             let client = pool
                 .get()
                 .await
-                .map_err(|_| WebhookOperatorError::Unavailable)?;
+                .map_err(|_| HookOperatorError::Unavailable)?;
             Some(Arc::new(
                 FieldEncryptionService::open_existing(
                     provider,
@@ -204,24 +269,27 @@ impl WebhookOperatorService {
                     &**client,
                 )
                 .await
-                .map_err(|_| WebhookOperatorError::Unavailable)?,
+                .map_err(|_| HookOperatorError::Unavailable)?,
             ))
         } else {
             None
         };
+        // A drain runs WASM programs on its own hook runtime under the
+        // operator budgets and backend; inspection and recovery run none.
         #[cfg(feature = "wasm")]
-        let wasm_runtime = if execute_local_hooks {
-            Some(
-                crate::wasm_runtime::install_configured(*config.wasm_execution())
-                    .map_err(|_| WebhookOperatorError::Unavailable)?,
+        let handlers = if execute_local_hooks {
+            handlers.with_wasm_runtime(
+                hook_wasm_runtime(config.wasm_execution())
+                    .map_err(|_| HookOperatorError::Unavailable)?,
             )
         } else {
-            None
+            handlers
         };
+        let handlers = Arc::new(handlers);
         let idempotency = config
             .idempotency_policy()
-            .map_err(|_| WebhookOperatorError::Unavailable)?;
-        let delivery = WebhookDeliveryService::new_with_runtime_bindings(
+            .map_err(|_| HookOperatorError::Unavailable)?;
+        let delivery = HookDeliveryService::new_with_runtime_bindings(
             pool,
             destinations,
             handlers,
@@ -234,21 +302,14 @@ impl WebhookOperatorService {
             field_encryption,
             idempotency,
         );
-        Ok(Self {
-            delivery,
-            #[cfg(feature = "wasm")]
-            _wasm_runtime: wasm_runtime,
-        })
+        Ok(Self { delivery })
     }
 
-    pub async fn list(
-        &self,
-        limit: u16,
-    ) -> Result<Vec<WebhookDeliveryStatus>, WebhookOperatorError> {
+    pub async fn list(&self, limit: u16) -> Result<Vec<HookDeliveryStatus>, HookOperatorError> {
         self.delivery
             .list(limit)
             .await
-            .map_err(|_| WebhookOperatorError::Unavailable)
+            .map_err(|_| HookOperatorError::Unavailable)
     }
 
     pub async fn replay(
@@ -256,11 +317,11 @@ impl WebhookOperatorService {
         event_id: Uuid,
         compiled_delivery_id: &str,
         expected_generation: i64,
-    ) -> Result<i64, WebhookOperatorError> {
+    ) -> Result<i64, HookOperatorError> {
         self.delivery
             .replay(event_id, compiled_delivery_id, expected_generation)
             .await
-            .map_err(|_| WebhookOperatorError::Unavailable)
+            .map_err(|_| HookOperatorError::Unavailable)
     }
 
     pub async fn discard(
@@ -268,11 +329,11 @@ impl WebhookOperatorService {
         event_id: Uuid,
         compiled_delivery_id: &str,
         expected_generation: i64,
-    ) -> Result<i64, WebhookOperatorError> {
+    ) -> Result<i64, HookOperatorError> {
         self.delivery
             .discard(event_id, compiled_delivery_id, expected_generation)
             .await
-            .map_err(|_| WebhookOperatorError::Unavailable)
+            .map_err(|_| HookOperatorError::Unavailable)
     }
 }
 
@@ -283,7 +344,7 @@ impl WebhookOperatorService {
 struct BregDeliverySeams {
     pool: RuntimePool,
     destinations: Arc<ActivatedEventDestinationRegistry>,
-    handlers: Arc<HookHandlerRegistry>,
+    handlers: Arc<LocalHookHandlers>,
     registry: Arc<CompiledRegistry>,
     expected: ExpectedRegistryIdentity,
     instance_id: String,
@@ -523,8 +584,8 @@ impl BregDeliverySeams {
 
 #[async_trait::async_trait]
 impl DeliverySeams for BregDeliverySeams {
-    type Destination = DestinationBinding;
-    type Handler = BregHookHandler;
+    type Destination = SharedUrlDestination;
+    type Handler = LocalHookHandler;
 
     fn proposal_replay_allowed(&self, code: Option<&str>) -> bool {
         code != Some("hook.proposal.package_unavailable")
@@ -668,7 +729,7 @@ impl DeliverySeams for BregDeliverySeams {
             .get()
             .await
             .map_err(|_| DeliveryError::Unavailable)?;
-        Ok(Box::new(PooledClient(client)))
+        Ok(PooledConnection::boxed(client))
     }
 
     async fn verify_transaction(&self, transaction: &Transaction<'_>) -> Result<(), DeliveryError> {
@@ -696,7 +757,7 @@ impl DeliverySeams for BregDeliverySeams {
     fn destination(&self, logical_destination_id: &str) -> Option<Self::Destination> {
         self.destinations
             .lookup_shared(logical_destination_id)
-            .map(DestinationBinding)
+            .map(SharedUrlDestination)
     }
 
     fn handler(&self, binding: HookHandlerBinding<'_>) -> Option<Self::Handler> {
@@ -709,20 +770,8 @@ impl DeliverySeams for BregDeliverySeams {
     /// outcome only after the transition commits, so an entry never stands
     /// for a transition that rolled back.
     async fn record_audit(&self, record: DeliveryAuditRecord<'_>) -> Result<(), DeliveryError> {
-        let entry = webhook_entry(
-            self.audit.profile(),
-            WebhookAudit {
-                event_id: record.event_id,
-                compiled_delivery_id: record.compiled_delivery_id,
-                package_revision: record.package_revision,
-                generation: record.generation,
-                attempt: record.attempt,
-                phase: audit_phase(record.phase),
-                outcome: audit_outcome(record.outcome),
-                disposition: audit_disposition(record.disposition),
-            },
-        )
-        .map_err(|_| DeliveryError::Unavailable)?;
+        let entry =
+            hook_entry(self.audit.profile(), &record).map_err(|_| DeliveryError::Unavailable)?;
         self.audit
             .append(entry)
             .await
@@ -819,132 +868,6 @@ impl Drop for HookChangeLock {
     }
 }
 
-/// One pooled runtime client framed for the delivery worker's connection
-/// seam. The pool receives the client back when this wrapper is dropped.
-struct PooledClient(deadpool_postgres::Client);
-
-impl Deref for PooledClient {
-    type Target = tokio_postgres::Client;
-
-    fn deref(&self) -> &tokio_postgres::Client {
-        &self.0
-    }
-}
-
-impl DerefMut for PooledClient {
-    fn deref_mut(&mut self) -> &mut tokio_postgres::Client {
-        &mut self.0
-    }
-}
-
-/// One activated delivery destination, handed to the worker as the neutral
-/// destination seam.
-#[derive(Clone)]
-struct DestinationBinding(Arc<ActivatedEventDestination>);
-
-#[async_trait::async_trait]
-impl HookDestination for DestinationBinding {
-    fn binding_digest(&self) -> &str {
-        self.0.binding_digest()
-    }
-
-    fn attempt_timeout(&self) -> Duration {
-        self.0.attempt_timeout()
-    }
-
-    fn maximum_attempts(&self) -> u8 {
-        self.0.maximum_attempts()
-    }
-
-    fn sign_delivery(
-        &self,
-        fields: DeliverySignatureFields<'_>,
-    ) -> Result<String, DeliverySignatureRefused> {
-        let DeliverySignatureFields {
-            id,
-            source,
-            event_type,
-            time,
-            data_schema,
-            generation,
-            attempt,
-            delivery_time,
-            idempotency_key,
-            body,
-        } = fields;
-        self.0
-            .with_hmac_sha256_key(|key| {
-                sign_v1(
-                    key,
-                    SignatureFields {
-                        id,
-                        source,
-                        event_type,
-                        time,
-                        data_schema,
-                        generation,
-                        attempt,
-                        delivery_time,
-                        method: "POST",
-                        request_target: self.0.request_target(),
-                        content_type: "application/json",
-                        idempotency_key,
-                        body,
-                    },
-                )
-            })
-            .map_err(|_| DeliverySignatureRefused)
-    }
-
-    fn render_delivery(
-        &self,
-        headers: EventDeliveryHeaders<'_>,
-        body: Vec<u8>,
-    ) -> Result<EventDestinationRequest, DestinationRequestError> {
-        self.0.request_template().render_event(headers, body)
-    }
-
-    async fn send_delivery(
-        &self,
-        request: EventDestinationRequest,
-        remaining: Duration,
-    ) -> Result<DestinationAnswer, DestinationSendError> {
-        let response = self.0.policy().send(request, remaining).await?;
-        let status = response.status().as_u16();
-        if !response.status().is_success() {
-            return Ok(DestinationAnswer::NonSuccess { status });
-        }
-        // A remote hook handler answers in its response body, so the body is
-        // read under the handler output ceiling rather than discarded. A body
-        // that cannot be taken is classified with the same table a local run
-        // is classified by, never reported as a successful delivery.
-        match response.read_bounded(MAX_OUTPUT_BYTES).await {
-            Ok(body) => Ok(DestinationAnswer::Delivered {
-                body: body.to_event_answer(),
-            }),
-            Err(error) => Ok(DestinationAnswer::AnswerRefused(HandlerRunFailure {
-                category: answer_read_category(error),
-            })),
-        }
-    }
-}
-
-/// Why a 2xx response body could not be taken as the handler's answer, in the
-/// shared hook taxonomy: over the ceiling is a resource refusal, past the
-/// attempt deadline is a deadline, and a read that broke mid-body is the
-/// destination becoming unreachable part-way. `BodyLimitTooHigh` cannot arise
-/// because the ceiling passed above is the handler output ceiling, which the
-/// platform response bound already exceeds.
-fn answer_read_category(error: DestinationResponseError) -> ErrorCategory {
-    match error {
-        DestinationResponseError::BodyTooLarge | DestinationResponseError::BodyLimitTooHigh => {
-            ErrorCategory::Resource
-        }
-        DestinationResponseError::DeadlineExceeded => ErrorCategory::Deadline,
-        DestinationResponseError::BodyReadFailed => ErrorCategory::Unavailable,
-    }
-}
-
 /// A product-authored refusal code, static and well inside the code bound.
 fn proposal_code(code: &'static str) -> registry_platform_hooks::delivery::ProposalCode {
     BoundedText::new(code.to_owned()).expect("a static proposal code fits the code bound")
@@ -963,67 +886,6 @@ fn proposal_summary(summary: String) -> registry_platform_hooks::delivery::Propo
         summary.truncate(end);
     }
     BoundedText::new(summary).expect("a non-empty trimmed summary fits the summary bound")
-}
-
-fn audit_phase(phase: DeliveryAuditPhase) -> WebhookAuditPhase {
-    match phase {
-        DeliveryAuditPhase::Attempt => WebhookAuditPhase::Attempt,
-        DeliveryAuditPhase::Terminal => WebhookAuditPhase::Terminal,
-        DeliveryAuditPhase::Replay => WebhookAuditPhase::Replay,
-        DeliveryAuditPhase::Discard => WebhookAuditPhase::Discard,
-    }
-}
-
-fn audit_outcome(outcome: DeliveryAuditOutcome) -> WebhookAuditOutcome {
-    match outcome {
-        DeliveryAuditOutcome::AttemptStarted => WebhookAuditOutcome::AttemptStarted,
-        DeliveryAuditOutcome::Delivered => WebhookAuditOutcome::Delivered,
-        DeliveryAuditOutcome::HttpNonSuccess => WebhookAuditOutcome::HttpNonSuccess,
-        DeliveryAuditOutcome::DestinationTimeout => WebhookAuditOutcome::DestinationTimeout,
-        DeliveryAuditOutcome::DestinationResolutionRefused => {
-            WebhookAuditOutcome::DestinationResolutionRefused
-        }
-        DeliveryAuditOutcome::DestinationTransportUnavailable => {
-            WebhookAuditOutcome::DestinationTransportUnavailable
-        }
-        DeliveryAuditOutcome::DestinationPolicyRefused => {
-            WebhookAuditOutcome::DestinationPolicyRefused
-        }
-        DeliveryAuditOutcome::DestinationBindingRefused => {
-            WebhookAuditOutcome::DestinationBindingRefused
-        }
-        DeliveryAuditOutcome::PayloadRefused => WebhookAuditOutcome::PayloadRefused,
-        DeliveryAuditOutcome::PayloadExpired => WebhookAuditOutcome::PayloadExpired,
-        DeliveryAuditOutcome::WorkerInterrupted => WebhookAuditOutcome::WorkerInterrupted,
-        DeliveryAuditOutcome::ReplayRequested => WebhookAuditOutcome::ReplayRequested,
-        DeliveryAuditOutcome::ReplayCommitted => WebhookAuditOutcome::ReplayCommitted,
-        DeliveryAuditOutcome::ReplayRefused => WebhookAuditOutcome::ReplayRefused,
-        DeliveryAuditOutcome::ReplayUnfinished => WebhookAuditOutcome::ReplayUnfinished,
-        DeliveryAuditOutcome::DiscardRequested => WebhookAuditOutcome::DiscardRequested,
-        DeliveryAuditOutcome::DiscardCommitted => WebhookAuditOutcome::DiscardCommitted,
-        DeliveryAuditOutcome::DiscardRefused => WebhookAuditOutcome::DiscardRefused,
-        DeliveryAuditOutcome::DiscardUnfinished => WebhookAuditOutcome::DiscardUnfinished,
-        DeliveryAuditOutcome::HandlerBindingRefused => WebhookAuditOutcome::HandlerBindingRefused,
-        DeliveryAuditOutcome::HandlerDeadline => WebhookAuditOutcome::HandlerDeadline,
-        DeliveryAuditOutcome::HandlerResource => WebhookAuditOutcome::HandlerResource,
-        DeliveryAuditOutcome::HandlerExecution => WebhookAuditOutcome::HandlerExecution,
-        DeliveryAuditOutcome::HandlerSource => WebhookAuditOutcome::HandlerSource,
-        DeliveryAuditOutcome::HandlerUnavailable => WebhookAuditOutcome::HandlerUnavailable,
-    }
-}
-
-fn audit_disposition(disposition: DeliveryAuditDisposition) -> WebhookAuditDisposition {
-    match disposition {
-        DeliveryAuditDisposition::Leased => WebhookAuditDisposition::Leased,
-        DeliveryAuditDisposition::Delivered => WebhookAuditDisposition::Delivered,
-        DeliveryAuditDisposition::RetryPending => WebhookAuditDisposition::RetryPending,
-        DeliveryAuditDisposition::DeadLettered => WebhookAuditDisposition::DeadLettered,
-        DeliveryAuditDisposition::Expired => WebhookAuditDisposition::Expired,
-        DeliveryAuditDisposition::ReplayPending => WebhookAuditDisposition::ReplayPending,
-        DeliveryAuditDisposition::DiscardPending => WebhookAuditDisposition::DiscardPending,
-        DeliveryAuditDisposition::Discarded => WebhookAuditDisposition::Discarded,
-        DeliveryAuditDisposition::Unknown => WebhookAuditDisposition::Unknown,
-    }
 }
 
 fn transition_code(code: DeliveryTransitionCode) -> WebhookStateTransitionCode {
@@ -1047,7 +909,7 @@ fn transition_code(code: DeliveryTransitionCode) -> WebhookStateTransitionCode {
 /// Why a bounded local drain stopped starting attempts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum WebhookDrainStopReason {
+pub enum HookDrainStopReason {
     Idle,
     AttemptBudget,
     TimeBudget,
@@ -1056,21 +918,21 @@ pub enum WebhookDrainStopReason {
 /// Value-free result of a bounded attempt to settle local hooks.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WebhookDrainReport {
+pub struct HookDrainReport {
     pub activation_id: String,
     pub completed_attempts: u16,
     pub delivered: u16,
     pub retry_scheduled: u16,
     pub dead_lettered: u16,
-    pub stop_reason: WebhookDrainStopReason,
+    pub stop_reason: HookDrainStopReason,
     pub remaining: crate::postgres::RetainedLocalHookDeliveries,
 }
 
-fn validate_drain_budget(max_attempts: u16, timeout: Duration) -> Result<(), WebhookDeliveryError> {
+fn validate_drain_budget(max_attempts: u16, timeout: Duration) -> Result<(), HookDeliveryError> {
     if !(1..=1000).contains(&max_attempts)
         || !(Duration::from_secs(1)..=Duration::from_secs(300)).contains(&timeout)
     {
-        return Err(WebhookDeliveryError::Unavailable);
+        return Err(HookDeliveryError::Unavailable);
     }
     Ok(())
 }
@@ -1078,13 +940,13 @@ fn validate_drain_budget(max_attempts: u16, timeout: Duration) -> Result<(), Web
 /// Base Registry Engine's delivery service: the platform delivery worker
 /// bound to Base Registry Engine's seams and constants.
 #[derive(Clone)]
-pub struct WebhookDeliveryService {
+pub struct HookDeliveryService {
     delivery: DeliveryService<BregDeliverySeams>,
     seams: BregDeliverySeams,
     last_success: Arc<crate::metrics::LastSuccess>,
 }
 
-impl WebhookDeliveryService {
+impl HookDeliveryService {
     /// Pause after proposal classification releases its locks, before the
     /// shared dispatcher starts finalization. Only the test build has this seam.
     #[cfg(feature = "postgres-test")]
@@ -1118,7 +980,7 @@ impl WebhookDeliveryService {
     pub fn new(
         pool: RuntimePool,
         destinations: Arc<ActivatedEventDestinationRegistry>,
-        handlers: Arc<HookHandlerRegistry>,
+        handlers: Arc<LocalHookHandlers>,
         registry: Arc<CompiledRegistry>,
         expected: ExpectedRegistryIdentity,
         instance_id: &str,
@@ -1147,7 +1009,7 @@ impl WebhookDeliveryService {
     pub fn new_with_field_encryption(
         pool: RuntimePool,
         destinations: Arc<ActivatedEventDestinationRegistry>,
-        handlers: Arc<HookHandlerRegistry>,
+        handlers: Arc<LocalHookHandlers>,
         registry: Arc<CompiledRegistry>,
         expected: ExpectedRegistryIdentity,
         instance_id: &str,
@@ -1179,7 +1041,7 @@ impl WebhookDeliveryService {
     pub fn new_with_runtime_bindings(
         pool: RuntimePool,
         destinations: Arc<ActivatedEventDestinationRegistry>,
-        handlers: Arc<HookHandlerRegistry>,
+        handlers: Arc<LocalHookHandlers>,
         registry: Arc<CompiledRegistry>,
         expected: ExpectedRegistryIdentity,
         instance_id: &str,
@@ -1231,7 +1093,7 @@ impl WebhookDeliveryService {
     /// destination policy execution. Delivery is therefore explicitly
     /// at-least-once when a process stops after network I/O and before CAS
     /// finalization.
-    pub async fn deliver_once(&self) -> Result<WebhookWorkOutcome, WebhookDeliveryError> {
+    pub async fn deliver_once(&self) -> Result<HookWorkOutcome, HookDeliveryError> {
         self.delivery.deliver_once().await
     }
 
@@ -1242,37 +1104,37 @@ impl WebhookDeliveryService {
         &self,
         max_attempts: u16,
         timeout: Duration,
-    ) -> Result<WebhookDrainReport, WebhookDeliveryError> {
+    ) -> Result<HookDrainReport, HookDeliveryError> {
         validate_drain_budget(max_attempts, timeout)?;
         let deadline = tokio::time::Instant::now() + timeout;
         let local = self
             .delivery
             .local_only_for_package(&self.seams.expected.activation_id, deadline)?;
-        let mut report = WebhookDrainReport {
+        let mut report = HookDrainReport {
             activation_id: self.seams.expected.activation_id.clone(),
             completed_attempts: 0,
             delivered: 0,
             retry_scheduled: 0,
             dead_lettered: 0,
-            stop_reason: WebhookDrainStopReason::AttemptBudget,
+            stop_reason: HookDrainStopReason::AttemptBudget,
             remaining: crate::postgres::RetainedLocalHookDeliveries::default(),
         };
         for _ in 0..max_attempts {
             let outcome = match tokio::time::timeout_at(deadline, local.deliver_once()).await {
                 Ok(result) => result?,
                 Err(_) => {
-                    report.stop_reason = WebhookDrainStopReason::TimeBudget;
+                    report.stop_reason = HookDrainStopReason::TimeBudget;
                     break;
                 }
             };
             match outcome {
-                WebhookWorkOutcome::Idle => {
-                    report.stop_reason = WebhookDrainStopReason::Idle;
+                HookWorkOutcome::Idle => {
+                    report.stop_reason = HookDrainStopReason::Idle;
                     break;
                 }
-                WebhookWorkOutcome::Delivered => report.delivered += 1,
-                WebhookWorkOutcome::RetryScheduled => report.retry_scheduled += 1,
-                WebhookWorkOutcome::DeadLettered => report.dead_lettered += 1,
+                HookWorkOutcome::Delivered => report.delivered += 1,
+                HookWorkOutcome::RetryScheduled => report.retry_scheduled += 1,
+                HookWorkOutcome::DeadLettered => report.dead_lettered += 1,
             }
             report.completed_attempts += 1;
         }
@@ -1281,33 +1143,30 @@ impl WebhookDeliveryService {
             .pool
             .get()
             .await
-            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+            .map_err(|_| HookDeliveryError::Unavailable)?;
         let transaction = client
             .transaction()
             .await
-            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+            .map_err(|_| HookDeliveryError::Unavailable)?;
         self.seams.verify_transaction(&transaction).await?;
         report.remaining = crate::postgres::retained_local_hook_deliveries(&*transaction)
             .await
-            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+            .map_err(|_| HookDeliveryError::Unavailable)?;
         transaction
             .commit()
             .await
-            .map_err(|_| WebhookDeliveryError::Unavailable)?;
+            .map_err(|_| HookDeliveryError::Unavailable)?;
         Ok(report)
     }
 
     /// Refuse startup or operator use if retained work cannot use its exact
     /// captured destination under the active deployment bindings.
-    pub async fn verify_retained_bindings(&self) -> Result<(), WebhookRetainedBindingError> {
+    pub async fn verify_retained_bindings(&self) -> Result<(), HookRetainedBindingError> {
         self.delivery.verify_retained_bindings().await
     }
 
     /// Return bounded, value-free pending and terminal operator metadata.
-    pub async fn list(
-        &self,
-        limit: u16,
-    ) -> Result<Vec<WebhookDeliveryStatus>, WebhookDeliveryError> {
+    pub async fn list(&self, limit: u16) -> Result<Vec<HookDeliveryStatus>, HookDeliveryError> {
         self.delivery.list(limit).await
     }
 
@@ -1321,7 +1180,7 @@ impl WebhookDeliveryService {
         event_id: Uuid,
         compiled_delivery_id: &str,
         expected_generation: i64,
-    ) -> Result<i64, WebhookDeliveryError> {
+    ) -> Result<i64, HookDeliveryError> {
         self.delivery
             .replay(event_id, compiled_delivery_id, expected_generation)
             .await
@@ -1334,7 +1193,7 @@ impl WebhookDeliveryService {
         event_id: Uuid,
         compiled_delivery_id: &str,
         expected_generation: i64,
-    ) -> Result<i64, WebhookDeliveryError> {
+    ) -> Result<i64, HookDeliveryError> {
         self.delivery
             .discard(event_id, compiled_delivery_id, expected_generation)
             .await
@@ -1342,25 +1201,25 @@ impl WebhookDeliveryService {
 }
 
 #[derive(Clone)]
-pub struct WebhookWorker {
-    kind: WebhookWorkerKind,
+pub struct HookWorker {
+    kind: HookWorkerKind,
 }
 
-impl WebhookWorker {
+impl HookWorker {
     #[must_use]
-    pub fn new(service: WebhookDeliveryService) -> Self {
+    pub fn new(service: HookDeliveryService) -> Self {
         Self {
-            kind: WebhookWorkerKind::Delivery(Box::new(service)),
+            kind: HookWorkerKind::Delivery(Box::new(service)),
         }
     }
 
     pub async fn run(self, shutdown: watch::Receiver<bool>) {
         #[cfg(not(feature = "postgres-test"))]
-        let WebhookWorkerKind::Delivery(service) = self.kind;
+        let HookWorkerKind::Delivery(service) = self.kind;
         #[cfg(feature = "postgres-test")]
         let service = match self.kind {
-            WebhookWorkerKind::Delivery(service) => service,
-            WebhookWorkerKind::LifecycleProbe(probe) => {
+            HookWorkerKind::Delivery(service) => service,
+            HookWorkerKind::LifecycleProbe(probe) => {
                 probe.run(shutdown).await;
                 return;
             }
@@ -1375,26 +1234,26 @@ impl WebhookWorker {
 }
 
 #[derive(Clone)]
-enum WebhookWorkerKind {
-    Delivery(Box<WebhookDeliveryService>),
+enum HookWorkerKind {
+    Delivery(Box<HookDeliveryService>),
     #[cfg(feature = "postgres-test")]
-    LifecycleProbe(WebhookWorkerLifecycleProbe),
+    LifecycleProbe(HookWorkerLifecycleProbe),
 }
 
 /// Test-only observation point for proving startup task ownership.
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
 #[derive(Clone)]
-pub struct WebhookWorkerLifecycleProbe {
-    state: Arc<WebhookWorkerLifecycleState>,
-    mode: WebhookWorkerLifecycleMode,
+pub struct HookWorkerLifecycleProbe {
+    state: Arc<HookWorkerLifecycleState>,
+    mode: HookWorkerLifecycleMode,
 }
 
 /// How the probe ends: on the shutdown signal, never, or on its own before
 /// shutdown is requested.
 #[cfg(feature = "postgres-test")]
 #[derive(Clone, Copy)]
-enum WebhookWorkerLifecycleMode {
+enum HookWorkerLifecycleMode {
     UntilShutdown,
     Hang,
     Panic,
@@ -1402,38 +1261,38 @@ enum WebhookWorkerLifecycleMode {
 }
 
 #[cfg(feature = "postgres-test")]
-struct WebhookWorkerLifecycleState {
+struct HookWorkerLifecycleState {
     started: AtomicBool,
     running: AtomicBool,
     stopped: AtomicBool,
 }
 
 #[cfg(feature = "postgres-test")]
-impl WebhookWorkerLifecycleProbe {
+impl HookWorkerLifecycleProbe {
     #[must_use]
     pub fn new(hang: bool) -> Self {
         Self::with_mode(if hang {
-            WebhookWorkerLifecycleMode::Hang
+            HookWorkerLifecycleMode::Hang
         } else {
-            WebhookWorkerLifecycleMode::UntilShutdown
+            HookWorkerLifecycleMode::UntilShutdown
         })
     }
 
     /// A probe that panics as soon as it starts.
     #[must_use]
     pub fn panicking() -> Self {
-        Self::with_mode(WebhookWorkerLifecycleMode::Panic)
+        Self::with_mode(HookWorkerLifecycleMode::Panic)
     }
 
     /// A probe that returns as soon as it starts, without a shutdown signal.
     #[must_use]
     pub fn returning() -> Self {
-        Self::with_mode(WebhookWorkerLifecycleMode::Return)
+        Self::with_mode(HookWorkerLifecycleMode::Return)
     }
 
-    fn with_mode(mode: WebhookWorkerLifecycleMode) -> Self {
+    fn with_mode(mode: HookWorkerLifecycleMode) -> Self {
         Self {
-            state: Arc::new(WebhookWorkerLifecycleState {
+            state: Arc::new(HookWorkerLifecycleState {
                 started: AtomicBool::new(false),
                 running: AtomicBool::new(false),
                 stopped: AtomicBool::new(false),
@@ -1443,9 +1302,9 @@ impl WebhookWorkerLifecycleProbe {
     }
 
     #[must_use]
-    pub fn worker(&self) -> WebhookWorker {
-        WebhookWorker {
-            kind: WebhookWorkerKind::LifecycleProbe(self.clone()),
+    pub fn worker(&self) -> HookWorker {
+        HookWorker {
+            kind: HookWorkerKind::LifecycleProbe(self.clone()),
         }
     }
 
@@ -1467,12 +1326,12 @@ impl WebhookWorkerLifecycleProbe {
     async fn run(self, mut shutdown: watch::Receiver<bool>) {
         self.state.started.store(true, Ordering::SeqCst);
         self.state.running.store(true, Ordering::SeqCst);
-        let _guard = WebhookWorkerLifecycleGuard(Arc::clone(&self.state));
+        let _guard = HookWorkerLifecycleGuard(Arc::clone(&self.state));
         match self.mode {
-            WebhookWorkerLifecycleMode::UntilShutdown => {}
-            WebhookWorkerLifecycleMode::Hang => std::future::pending::<()>().await,
-            WebhookWorkerLifecycleMode::Panic => panic!("webhook worker lifecycle probe panicked"),
-            WebhookWorkerLifecycleMode::Return => return,
+            HookWorkerLifecycleMode::UntilShutdown => {}
+            HookWorkerLifecycleMode::Hang => std::future::pending::<()>().await,
+            HookWorkerLifecycleMode::Panic => panic!("webhook worker lifecycle probe panicked"),
+            HookWorkerLifecycleMode::Return => return,
         }
         while !*shutdown.borrow() {
             if shutdown.changed().await.is_err() {
@@ -1483,12 +1342,16 @@ impl WebhookWorkerLifecycleProbe {
 }
 
 #[cfg(feature = "postgres-test")]
-struct WebhookWorkerLifecycleGuard(Arc<WebhookWorkerLifecycleState>);
+struct HookWorkerLifecycleGuard(Arc<HookWorkerLifecycleState>);
 
 #[cfg(feature = "postgres-test")]
-impl Drop for WebhookWorkerLifecycleGuard {
+impl Drop for HookWorkerLifecycleGuard {
     fn drop(&mut self) {
         self.0.running.store(false, Ordering::SeqCst);
         self.0.stopped.store(true, Ordering::SeqCst);
     }
 }
+
+#[cfg(test)]
+#[path = "tests/hooks_tests.rs"]
+mod hooks_tests;

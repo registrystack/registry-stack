@@ -608,7 +608,7 @@ changes with the declaration. `unique` and `temporal-non-overlap` conflicts stay
 Record hooks live under `recordTypes[].hooks`; Proposal hooks under
 `actions[].execution.proposal.hooks`. Capture commits with the source operation and delivery
 follows the commit, so later edits never change a captured event. The deployment's
-`eventDestinations` supplies the URL, network and TLS policy, HMAC key, classification ceiling, and
+`destinations.hooks` supplies the URL, network and TLS policy, HMAC key, classification ceiling, and
 limits; it may narrow the compiled contract but never widen it.
 
 ### HTTP request

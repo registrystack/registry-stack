@@ -2120,7 +2120,7 @@ mod tests {
             .chain([DELIVERY_SEQUENCE])
             .collect();
         for object in
-            registry_platform_hooks::delivery_schema::object_names(crate::webhook::DELIVERY_SCHEMA)
+            registry_platform_hooks::delivery_schema::object_names(crate::hooks::DELIVERY_SCHEMA)
         {
             assert!(
                 inventoried.contains(&object.as_str()),

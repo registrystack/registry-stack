@@ -15,7 +15,9 @@
 use registry_platform_audit::{
     AuditEntry, AuditKeyHasher, AuditProfile, AuditRequest, AuditWriter,
 };
+use registry_platform_hooks::delivery::{hook_audit_entry, DeliveryAuditRecord};
 use serde_json::{json, Value};
+#[cfg(test)]
 use uuid::Uuid;
 
 use crate::correlation::RequestCorrelation;
@@ -24,8 +26,14 @@ use crate::postgres::{ActionClaimContext, ClaimContext, ExpectedRegistryIdentity
 
 /// Schema of request, read, mutation, action, and refusal entries.
 pub const AUDIT_SCHEMA: &str = "breg-audit/v3";
-/// Schema of event delivery entries.
-pub const WEBHOOK_AUDIT_SCHEMA: &str = "breg-webhook-audit/v3";
+/// Schema of hook delivery entries.
+pub const HOOK_AUDIT_SCHEMA: &str = "breg-hook-audit/v1";
+/// The `event` every hook delivery entry carries.
+pub const HOOK_AUDIT_EVENT: &str = "breg.hook-delivery";
+/// Keyed-reference domain of the event a hook delivery belongs to.
+const HOOK_EVENT_REFERENCE_DOMAIN: &str = "breg-hook-event-v1";
+/// Keyed-reference domain of one compiled hook delivery.
+const HOOK_DELIVERY_REFERENCE_DOMAIN: &str = "breg-hook-delivery-v1";
 /// The process role operator commands append under, beside the runtime's
 /// destination.
 pub const COMPANION_PROCESS_ROLE: &str = "bregctl";
@@ -369,76 +377,6 @@ pub(crate) enum TerminalAuditOutcome {
     Empty,
     Unresolved,
     Refused,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WebhookAuditPhase {
-    Attempt,
-    Terminal,
-    Replay,
-    Discard,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WebhookAuditOutcome {
-    AttemptStarted,
-    Delivered,
-    HttpNonSuccess,
-    DestinationTimeout,
-    DestinationResolutionRefused,
-    DestinationTransportUnavailable,
-    DestinationPolicyRefused,
-    DestinationBindingRefused,
-    /// The delivery row named a local handler the running package does not
-    /// hold, or holds under a different identity digest or budget.
-    HandlerBindingRefused,
-    /// The handler ran out of its attempt budget.
-    HandlerDeadline,
-    /// The handler exceeded a fuel, memory, or input or output ceiling.
-    HandlerResource,
-    /// The handler trapped, or its script failed.
-    HandlerExecution,
-    /// The handler program or its answer was refused as unusable.
-    HandlerSource,
-    /// The handler could not be reached.
-    HandlerUnavailable,
-    PayloadRefused,
-    PayloadExpired,
-    WorkerInterrupted,
-    ReplayRequested,
-    ReplayCommitted,
-    ReplayRefused,
-    ReplayUnfinished,
-    DiscardRequested,
-    DiscardCommitted,
-    DiscardRefused,
-    DiscardUnfinished,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WebhookAuditDisposition {
-    Leased,
-    Delivered,
-    RetryPending,
-    DeadLettered,
-    Expired,
-    ReplayPending,
-    DiscardPending,
-    Discarded,
-    /// The terminal commit's fate could not be read back; no database state
-    /// is claimed.
-    Unknown,
-}
-
-pub(crate) struct WebhookAudit<'a> {
-    pub event_id: Uuid,
-    pub compiled_delivery_id: &'a str,
-    pub package_revision: &'a str,
-    pub generation: i64,
-    pub attempt: i16,
-    pub phase: WebhookAuditPhase,
-    pub outcome: WebhookAuditOutcome,
-    pub disposition: WebhookAuditDisposition,
 }
 
 /// Append one minimized refusal before protected record I/O: the single
@@ -1012,199 +950,57 @@ fn action_terminal_record(
     Ok(record)
 }
 
-/// The entry of one delivery transition. The attempt is the `request` entry of
-/// one delivery attempt; its terminal outcome and an operator replay are
-/// `response` entries. The correlation is the attempt identity: the keyed
-/// event and delivery references, the generation, and the attempt number.
-pub(crate) fn webhook_entry(
+/// The entry of one hook delivery transition. The attempt is the `request`
+/// entry of one delivery attempt; its terminal outcome and an operator replay
+/// or discard are `response` entries. The correlation is the attempt
+/// identity: the keyed event and delivery references, the generation, and the
+/// attempt number. The shared delivery core owns the record shape and the
+/// request or response filing; this adds the keyed references.
+pub(crate) fn hook_entry(
     profile: &AuditProfile,
-    event: WebhookAudit<'_>,
+    record: &DeliveryAuditRecord<'_>,
 ) -> Result<AuditEntry, RegistryAuditError> {
-    let shape_is_valid = match (event.phase, event.outcome, event.disposition) {
-        (
-            WebhookAuditPhase::Attempt,
-            WebhookAuditOutcome::AttemptStarted,
-            WebhookAuditDisposition::Leased,
-        ) => event.attempt > 0,
-        (
-            WebhookAuditPhase::Terminal,
-            WebhookAuditOutcome::Delivered,
-            WebhookAuditDisposition::Delivered,
-        )
-        // A delivered answer whose proposal dead-lettered: the egress attempt
-        // succeeded, and the deterministic proposal refusal is what made the
-        // row terminal.
-        | (
-            WebhookAuditPhase::Terminal,
-            WebhookAuditOutcome::Delivered,
-            WebhookAuditDisposition::DeadLettered,
-        )
-        | (
-            WebhookAuditPhase::Terminal,
-            WebhookAuditOutcome::HttpNonSuccess
-            | WebhookAuditOutcome::DestinationTimeout
-            | WebhookAuditOutcome::DestinationResolutionRefused
-            | WebhookAuditOutcome::DestinationTransportUnavailable
-            | WebhookAuditOutcome::DestinationPolicyRefused
-            | WebhookAuditOutcome::DestinationBindingRefused
-            | WebhookAuditOutcome::HandlerBindingRefused
-            | WebhookAuditOutcome::HandlerDeadline
-            | WebhookAuditOutcome::HandlerResource
-            | WebhookAuditOutcome::HandlerExecution
-            | WebhookAuditOutcome::HandlerSource
-            | WebhookAuditOutcome::HandlerUnavailable
-            | WebhookAuditOutcome::PayloadRefused
-            | WebhookAuditOutcome::WorkerInterrupted,
-            WebhookAuditDisposition::RetryPending | WebhookAuditDisposition::DeadLettered,
-        )
-        | (
-            WebhookAuditPhase::Terminal,
-            WebhookAuditOutcome::WorkerInterrupted,
-            WebhookAuditDisposition::Unknown,
-        ) => event.attempt > 0,
-        (
-            WebhookAuditPhase::Terminal,
-            WebhookAuditOutcome::PayloadExpired,
-            WebhookAuditDisposition::Expired,
-        ) => event.attempt >= 0,
-        (
-            WebhookAuditPhase::Replay,
-            WebhookAuditOutcome::ReplayRequested
-            | WebhookAuditOutcome::ReplayCommitted
-            | WebhookAuditOutcome::ReplayUnfinished,
-            WebhookAuditDisposition::ReplayPending,
-        )
-        | (
-            WebhookAuditPhase::Replay,
-            WebhookAuditOutcome::ReplayRefused,
-            WebhookAuditDisposition::DeadLettered,
-        ) => event.attempt == 0,
-        (
-            WebhookAuditPhase::Discard,
-            WebhookAuditOutcome::DiscardRequested
-            | WebhookAuditOutcome::DiscardRefused,
-            WebhookAuditDisposition::DiscardPending,
-        )
-        | (
-            WebhookAuditPhase::Discard,
-            WebhookAuditOutcome::DiscardCommitted,
-            WebhookAuditDisposition::Discarded,
-        )
-        | (
-            WebhookAuditPhase::Discard,
-            WebhookAuditOutcome::DiscardUnfinished,
-            WebhookAuditDisposition::Unknown,
-        ) => event.attempt >= 0,
-        _ => false,
-    };
-    if !shape_is_valid
-        || event.generation <= 0
-        || event.compiled_delivery_id.is_empty()
-        || event.compiled_delivery_id.len() > 256
-        || event.package_revision.is_empty()
-        || !profile_is_keyed(profile)
-    {
+    if !record.has_valid_shape() || !profile_is_keyed(profile) {
         return Err(RegistryAuditError::InvalidContext);
     }
     let key_hasher = profile.key_hasher();
     let event_reference = key_hasher
         .audit_reference_hash(
-            "breg-webhook-event-v1",
-            event.package_revision,
-            &event.event_id.to_string(),
+            HOOK_EVENT_REFERENCE_DOMAIN,
+            record.package_revision,
+            &record.event_id.to_string(),
         )
         .map_err(|_| RegistryAuditError::InvalidContext)?;
     let delivery_reference = key_hasher
         .audit_reference_hash(
-            "breg-webhook-delivery-v1",
-            event.package_revision,
-            event.compiled_delivery_id,
+            HOOK_DELIVERY_REFERENCE_DOMAIN,
+            record.package_revision,
+            record.compiled_delivery_id,
         )
         .map_err(|_| RegistryAuditError::InvalidContext)?;
-    let mut correlation = format!(
+    let correlation_base = format!(
         "{event_reference}.{delivery_reference}.{}.{}",
-        event.generation, event.attempt
+        record.generation, record.attempt
     );
-    if event.phase == WebhookAuditPhase::Discard {
-        correlation.push_str(".discard");
-    }
-    let record = json!({
-        "phase": webhook_phase_name(event.phase),
-        "outcome": webhook_outcome_name(event.outcome),
-        "disposition": webhook_disposition_name(event.disposition),
-        "activationId": event.package_revision,
-        "eventReference": event_reference,
-        "deliveryReference": delivery_reference,
-        "generation": event.generation,
-        "attempt": event.attempt,
-    });
-    // An attempt's start and an operator's replay request are requests;
-    // the terminal disposition and the replay's committed or refused reset
-    // answer them under the same correlation.
-    Ok(match (event.phase, event.outcome) {
-        (WebhookAuditPhase::Attempt, _)
-        | (WebhookAuditPhase::Replay, WebhookAuditOutcome::ReplayRequested)
-        | (WebhookAuditPhase::Discard, WebhookAuditOutcome::DiscardRequested) => {
-            AuditEntry::request(WEBHOOK_AUDIT_SCHEMA, correlation, record)
-        }
+    let fields = serde_json::Map::from_iter([
         (
-            WebhookAuditPhase::Terminal | WebhookAuditPhase::Replay | WebhookAuditPhase::Discard,
-            _,
-        ) => AuditEntry::response(WEBHOOK_AUDIT_SCHEMA, correlation, record),
-    })
-}
-
-fn webhook_phase_name(phase: WebhookAuditPhase) -> &'static str {
-    match phase {
-        WebhookAuditPhase::Attempt => "attempt",
-        WebhookAuditPhase::Terminal => "terminal",
-        WebhookAuditPhase::Replay => "replay",
-        WebhookAuditPhase::Discard => "discard",
-    }
-}
-
-fn webhook_outcome_name(outcome: WebhookAuditOutcome) -> &'static str {
-    match outcome {
-        WebhookAuditOutcome::AttemptStarted => "attempt-started",
-        WebhookAuditOutcome::Delivered => "delivered",
-        WebhookAuditOutcome::HttpNonSuccess => "http-non-success",
-        WebhookAuditOutcome::DestinationTimeout => "destination-timeout",
-        WebhookAuditOutcome::DestinationResolutionRefused => "destination-resolution-refused",
-        WebhookAuditOutcome::DestinationTransportUnavailable => "destination-transport-unavailable",
-        WebhookAuditOutcome::DestinationPolicyRefused => "destination-policy-refused",
-        WebhookAuditOutcome::DestinationBindingRefused => "destination-binding-refused",
-        WebhookAuditOutcome::HandlerBindingRefused => "handler-binding-refused",
-        WebhookAuditOutcome::HandlerDeadline => "handler-deadline",
-        WebhookAuditOutcome::HandlerResource => "handler-resource",
-        WebhookAuditOutcome::HandlerExecution => "handler-execution",
-        WebhookAuditOutcome::HandlerSource => "handler-source",
-        WebhookAuditOutcome::HandlerUnavailable => "handler-unavailable",
-        WebhookAuditOutcome::PayloadRefused => "payload-refused",
-        WebhookAuditOutcome::PayloadExpired => "payload-expired",
-        WebhookAuditOutcome::WorkerInterrupted => "worker-interrupted",
-        WebhookAuditOutcome::ReplayRequested => "replay-requested",
-        WebhookAuditOutcome::ReplayCommitted => "replay-committed",
-        WebhookAuditOutcome::ReplayRefused => "replay-refused",
-        WebhookAuditOutcome::ReplayUnfinished => "replay-unfinished",
-        WebhookAuditOutcome::DiscardRequested => "discard-requested",
-        WebhookAuditOutcome::DiscardCommitted => "discard-committed",
-        WebhookAuditOutcome::DiscardRefused => "discard-refused",
-        WebhookAuditOutcome::DiscardUnfinished => "discard-unfinished",
-    }
-}
-
-fn webhook_disposition_name(disposition: WebhookAuditDisposition) -> &'static str {
-    match disposition {
-        WebhookAuditDisposition::Leased => "leased",
-        WebhookAuditDisposition::Delivered => "delivered",
-        WebhookAuditDisposition::RetryPending => "retry-pending",
-        WebhookAuditDisposition::DeadLettered => "dead-lettered",
-        WebhookAuditDisposition::Expired => "expired",
-        WebhookAuditDisposition::ReplayPending => "replay-pending",
-        WebhookAuditDisposition::DiscardPending => "discard-pending",
-        WebhookAuditDisposition::Discarded => "discarded",
-        WebhookAuditDisposition::Unknown => "unknown",
-    }
+            "activationId".to_owned(),
+            Value::String(record.package_revision.to_owned()),
+        ),
+        ("eventReference".to_owned(), Value::String(event_reference)),
+        (
+            "deliveryReference".to_owned(),
+            Value::String(delivery_reference),
+        ),
+    ]);
+    hook_audit_entry(
+        HOOK_AUDIT_SCHEMA,
+        HOOK_AUDIT_EVENT,
+        &correlation_base,
+        fields,
+        record,
+    )
+    .map_err(|_| RegistryAuditError::InvalidContext)
 }
 
 fn terminal_record(
@@ -1562,9 +1358,12 @@ mod action_terminal_tests {
     }
 
     #[test]
-    fn webhook_attempt_and_terminal_share_the_attempt_identity() {
+    fn hook_attempt_and_terminal_share_the_attempt_identity() {
+        use registry_platform_hooks::delivery::{
+            DeliveryAuditDisposition as D, DeliveryAuditOutcome as O, DeliveryAuditPhase as P,
+        };
         let event_id = Uuid::new_v4();
-        let event = |phase, outcome, disposition| WebhookAudit {
+        let event = |phase, outcome, disposition| DeliveryAuditRecord {
             event_id,
             compiled_delivery_id: "delivery",
             package_revision: "package-revision",
@@ -1574,24 +1373,10 @@ mod action_terminal_tests {
             outcome,
             disposition,
         };
-        let attempt = webhook_entry(
-            &profile(),
-            event(
-                WebhookAuditPhase::Attempt,
-                WebhookAuditOutcome::AttemptStarted,
-                WebhookAuditDisposition::Leased,
-            ),
-        )
-        .expect("attempt entry");
-        let terminal = webhook_entry(
-            &profile(),
-            event(
-                WebhookAuditPhase::Terminal,
-                WebhookAuditOutcome::Delivered,
-                WebhookAuditDisposition::Delivered,
-            ),
-        )
-        .expect("terminal entry");
+        let attempt = hook_entry(&profile(), &event(P::Attempt, O::AttemptStarted, D::Leased))
+            .expect("attempt entry");
+        let terminal = hook_entry(&profile(), &event(P::Terminal, O::Delivered, D::Delivered))
+            .expect("terminal entry");
         assert_eq!(
             attempt.phase(),
             registry_platform_audit::AuditPhase::Request
@@ -1601,15 +1386,20 @@ mod action_terminal_tests {
             registry_platform_audit::AuditPhase::Response
         );
         assert_eq!(attempt.correlation(), terminal.correlation());
-        assert_eq!(attempt.schema(), WEBHOOK_AUDIT_SCHEMA);
+        assert_eq!(attempt.schema(), HOOK_AUDIT_SCHEMA);
+        assert_eq!(attempt.record()["event"], HOOK_AUDIT_EVENT);
+        assert_eq!(attempt.record()["activationId"], "package-revision");
         assert!(!attempt.correlation().contains(&event_id.to_string()));
         assert!(!attempt.correlation().contains("delivery."));
     }
 
     #[test]
-    fn webhook_discard_is_answered_under_a_phase_scoped_identity() {
+    fn hook_discard_is_answered_under_a_phase_scoped_identity() {
+        use registry_platform_hooks::delivery::{
+            DeliveryAuditDisposition as D, DeliveryAuditOutcome as O, DeliveryAuditPhase as P,
+        };
         let event_id = Uuid::new_v4();
-        let event = |phase, outcome, disposition| WebhookAudit {
+        let event = |phase, outcome, disposition| DeliveryAuditRecord {
             event_id,
             compiled_delivery_id: "delivery",
             package_revision: "package-revision",
@@ -1619,33 +1409,19 @@ mod action_terminal_tests {
             outcome,
             disposition,
         };
-        let request = webhook_entry(
+        let request = hook_entry(
             &profile(),
-            event(
-                WebhookAuditPhase::Discard,
-                WebhookAuditOutcome::DiscardRequested,
-                WebhookAuditDisposition::DiscardPending,
-            ),
+            &event(P::Discard, O::DiscardRequested, D::DiscardPending),
         )
         .expect("discard request entry");
-        let response = webhook_entry(
+        let response = hook_entry(
             &profile(),
-            event(
-                WebhookAuditPhase::Discard,
-                WebhookAuditOutcome::DiscardCommitted,
-                WebhookAuditDisposition::Discarded,
-            ),
+            &event(P::Discard, O::DiscardCommitted, D::Discarded),
         )
         .expect("discard response entry");
-        let delivery_attempt = webhook_entry(
-            &profile(),
-            event(
-                WebhookAuditPhase::Attempt,
-                WebhookAuditOutcome::AttemptStarted,
-                WebhookAuditDisposition::Leased,
-            ),
-        )
-        .expect("delivery attempt entry");
+        let delivery_attempt =
+            hook_entry(&profile(), &event(P::Attempt, O::AttemptStarted, D::Leased))
+                .expect("delivery attempt entry");
 
         assert_eq!(request.correlation(), response.correlation());
         assert!(request.correlation().ends_with(".discard"));
@@ -1653,36 +1429,47 @@ mod action_terminal_tests {
     }
 
     #[test]
-    fn an_interrupted_terminal_of_unknown_fate_is_recorded_only_as_unknown() {
-        let event = |outcome, disposition| WebhookAudit {
+    fn an_interrupted_hook_terminal_of_unknown_fate_is_recorded_only_as_unknown() {
+        use registry_platform_hooks::delivery::{
+            DeliveryAuditDisposition as D, DeliveryAuditOutcome as O, DeliveryAuditPhase as P,
+        };
+        let event = |outcome, disposition| DeliveryAuditRecord {
             event_id: Uuid::new_v4(),
             compiled_delivery_id: "delivery",
             package_revision: "package-revision",
             generation: 1,
             attempt: 1,
-            phase: WebhookAuditPhase::Terminal,
+            phase: P::Terminal,
             outcome,
             disposition,
         };
-        let entry = webhook_entry(
-            &profile(),
-            event(
-                WebhookAuditOutcome::WorkerInterrupted,
-                WebhookAuditDisposition::Unknown,
-            ),
-        )
-        .expect("interrupted terminal of unknown fate");
+        let entry = hook_entry(&profile(), &event(O::WorkerInterrupted, D::Unknown))
+            .expect("interrupted terminal of unknown fate");
         assert_eq!(entry.record()["disposition"], "unknown");
         // Only an interruption may leave the disposition unknown.
         assert_eq!(
-            webhook_entry(
-                &profile(),
-                event(
-                    WebhookAuditOutcome::Delivered,
-                    WebhookAuditDisposition::Unknown,
-                ),
-            )
-            .err(),
+            hook_entry(&profile(), &event(O::Delivered, D::Unknown)).err(),
+            Some(RegistryAuditError::InvalidContext)
+        );
+    }
+
+    #[test]
+    fn a_hook_entry_is_refused_under_an_unkeyed_profile() {
+        use registry_platform_hooks::delivery::{
+            DeliveryAuditDisposition as D, DeliveryAuditOutcome as O, DeliveryAuditPhase as P,
+        };
+        let record = DeliveryAuditRecord {
+            event_id: Uuid::new_v4(),
+            compiled_delivery_id: "delivery",
+            package_revision: "package-revision",
+            generation: 1,
+            attempt: 1,
+            phase: P::Attempt,
+            outcome: O::AttemptStarted,
+            disposition: D::Leased,
+        };
+        assert_eq!(
+            hook_entry(&AuditProfile::unkeyed_dev_only(), &record).err(),
             Some(RegistryAuditError::InvalidContext)
         );
     }

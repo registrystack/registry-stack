@@ -27,7 +27,7 @@
     "activationId",
     "authorityActivationId"
   ],
-  "breg-webhook-audit/v3": [
+  "breg-hook-audit/v1": [
     "activationId"
   ],
   "breg-access-log/v2/request": [

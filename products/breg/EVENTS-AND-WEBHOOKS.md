@@ -1,4 +1,4 @@
-# Events and webhooks
+# Events and hooks
 
 **Status:** Version 1 implemented
 

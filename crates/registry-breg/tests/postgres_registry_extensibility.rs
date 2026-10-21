@@ -571,11 +571,11 @@ fn event_destinations(
         },
         "audit":{"hashKeyRef":"secret:file/audit-key","path":root.join("audit").join("audit.jsonl")},
         "cursor":{"secretRef":"secret:file/cursor-key", "maximumAgeSeconds":300},
-        "eventDestinations":{"facility-events":{
+        "destinations":{"hooks":{"facility-events":{
             "origin":"https://consumer.example/", "path":"/events", "networkProfile":"production-https", "dnsFamily":"dual-stack-strict",
             "allowedPrivateCidrs":[], "hmacSha256KeyRef":"secret:file/event-key", "classificationCeiling":"internal",
             "deliveryCeilings":{"attemptTimeoutMilliseconds":5000,"maximumAttempts":5}
-        }},
+        }}},
         "operationalTimeouts":{"httpRequestMilliseconds":10000,"shutdownGraceMilliseconds":30000,"recordLockMilliseconds":5000,"migrationLockMilliseconds":30000,"migrationStatementMilliseconds":60000}
     });
     parse_runtime_config(&config.to_string())
