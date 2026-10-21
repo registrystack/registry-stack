@@ -502,10 +502,13 @@ the merge.
 - Replaying a dead-lettered erasure job is owed by WP7; until then a
   version whose erasure dead-lettered stays pending and unservable.
 - The Rust client has no method for the erasure route yet.
-- A custodian's removal of a rejected document finds erasure already armed,
-  so it answers as a repeat with the rejection's due time and revokes no
-  grant. A grant on a rejected version releases nothing, since the version
-  can never become releasable again, but it stays listed as active until it
-  expires or is revoked.
+- Removal ends every active grant on the document whatever state its
+  version is in. The document row records the first request, so a removal
+  after a rejection is a first removal: it revokes the grants issued while
+  the version was approved, and the version keeps the rejection's due time.
+  Only a repeat of a recorded removal changes nothing
+  (`removing_a_rejected_document_revokes_its_grants`). A rejection alone
+  revokes no grant: a grant on a rejected version releases nothing and
+  stays listed as active until it expires or is revoked.
 - A paused deployment keeps due bytes for as long as it stays paused, and
   orphan S3 objects accumulate meanwhile.

@@ -61,7 +61,8 @@ A rejection schedules the erasure of the rejected bytes the same way, due
 `cleanupGraceHours` after the verdict. The version reads `rejected` until its
 bytes are erased and `erased` after; the record stays. A verification that
 dead-letters is not a verdict, so its bytes are kept until an operator replays
-it or the custodian removes the document.
+it or the custodian removes the document. A rejection revokes no grant;
+removing a rejected document revokes them and keeps the rejection's due time.
 
 A cleanup sweep runs every minute. Each pass:
 

@@ -192,6 +192,7 @@ entries:
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_a_releasable_version_under_erasure}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: removing_a_rejected_document_revokes_its_grants}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_approval_after_a_removal_request_releases_nothing}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_verification_job_leased_across_a_removal_is_set_aside}
   - id: DOCUMENTS-SEC-38
