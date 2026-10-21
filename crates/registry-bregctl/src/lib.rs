@@ -12856,7 +12856,7 @@ mod tests {
             .unwrap();
 
         let rendered = String::from_utf8(rendered).unwrap();
-        assert!(rendered.contains("related"));
+        assert!(rendered.contains("note:"));
         assert!(rendered.contains("recordTypes[id=other].id"));
         assert!(rendered.contains("the first identifier is defined here"));
     }
