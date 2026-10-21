@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Shared setup for the PostgreSQL suites: one isolated schema per test,
-//! a development runtime document whose secrets are owner-only files, and
-//! the starter package.
+//! a development runtime document whose secrets are owner-only files, the
+//! starter package, and real ES256 access tokens signed by a test issuer
+//! whose public key set the runtime reads as a static secret.
 //!
 //! The database is named by `DOCUMENTS_TEST_DATABASE_URL`. A test binary
 //! that passes because its database URL is absent is not database
@@ -43,6 +44,7 @@ pub struct Deployment {
     storage: String,
     verifier: String,
     project: String,
+    extra: String,
 }
 
 impl Deployment {
@@ -96,6 +98,7 @@ impl Deployment {
             storage: storage.to_owned(),
             verifier: verifier.to_owned(),
             project: project.to_owned(),
+            extra: String::new(),
         };
         deployment.secret("runtime-database-url", runtime_url.unwrap_or(&scoped_url));
         deployment.secret("migration-database-url", &scoped_url);
@@ -103,6 +106,7 @@ impl Deployment {
             "documents-audit-key",
             "documents-test-audit-key-not-a-secret",
         );
+        deployment.secret("jwks.json", &issuer().jwks);
         deployment.write_package();
         deployment.write_runtime();
         deployment
@@ -139,6 +143,12 @@ impl Deployment {
         self.write_runtime();
     }
 
+    /// Append `block`, top-level runtime keys, to the runtime document.
+    pub fn configure(&mut self, block: &str) {
+        self.extra = block.to_owned();
+        self.write_runtime();
+    }
+
     fn write_runtime(&self) {
         let document = format!(
             "\
@@ -163,19 +173,24 @@ authentication:
   oidc:
     issuer: https://identity.example.test/realms/registry
     audience: urn:example:documents
-    allowedClients: [documents-test]
+    scopeClaim: scope
+    allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]
+    jwksSource:
+      type: static
+      documentRef: secret:file/jwks.json
 audit:
   destination: file
   path: {audit}
   hashKeyRef: secret:file/documents-audit-key
 {storage}{verifier}cleanup:
   erasure: active
-",
+{extra}",
             package = self.directory.path().join("package").display(),
             secrets = self.secrets.display(),
             audit = self.audit_path().display(),
             storage = self.storage,
             verifier = self.verifier,
+            extra = self.extra,
         );
         std::fs::write(&self.runtime, document).unwrap();
     }
@@ -209,30 +224,134 @@ audit:
     }
 }
 
-/// The issuer every synthetic actor carries.
+/// The issuer every test token names.
 pub const TEST_ISSUER: &str = "https://identity.example.test/realms/registry";
+pub const TEST_AUDIENCE: &str = "urn:example:documents";
+const TEST_KEY_ID: &str = "documents-test-1";
 
-/// The header a test names its caller in. A request without it has no
-/// actor.
-pub const TEST_SUBJECT_HEADER: &str = "x-test-subject";
+/// One caller under test: the subject a token names and the client,
+/// scope, and actor kind that resolve it to one starter access profile.
+#[derive(Clone, Copy, Debug)]
+pub struct Principal {
+    pub subject: &'static str,
+    pub client: &'static str,
+    pub scope: &'static str,
+    pub kind: &'static str,
+}
 
-/// A synthetic actor source: the caller is the subject the test header
-/// names, acting under the custodian application's profile.
-#[derive(Debug, Default)]
-pub struct TestActors;
+/// The owning system, under the `custodian-app` profile.
+pub const APP: Principal = Principal {
+    subject: "custodian-app",
+    client: "civil-registry-app",
+    scope: "documents:custody",
+    kind: "service",
+};
+/// A second service under the same profile, at another subject.
+pub const OTHER_APP: Principal = Principal {
+    subject: "other-app",
+    ..APP
+};
+/// The person a document concerns, under the `citizen` profile.
+pub const CITIZEN: Principal = Principal {
+    subject: "citizen-1",
+    client: "citizen-portal",
+    scope: "documents:own",
+    kind: "human",
+};
+pub const OTHER_CITIZEN: Principal = Principal {
+    subject: "citizen-2",
+    ..CITIZEN
+};
+/// A named recipient under the `reader` profile.
+pub const READER: Principal = Principal {
+    subject: "reader-1",
+    client: "partner-portal",
+    scope: "documents:read",
+    kind: "human",
+};
+/// A recipient profile holder no grant names.
+pub const STRANGER: Principal = Principal {
+    subject: "someone-else",
+    ..READER
+};
+/// A named recipient under the `staff` profile.
+pub const STAFF: Principal = Principal {
+    subject: "staff-1",
+    client: "case-portal",
+    scope: "documents:read",
+    kind: "human",
+};
 
-impl registry_documents::actor::ActorSource for TestActors {
-    fn actor(&self, headers: &axum::http::HeaderMap) -> Option<registry_documents::actor::Actor> {
-        let subject = headers.get(TEST_SUBJECT_HEADER)?.to_str().ok()?;
-        Some(registry_documents::actor::Actor {
-            issuer: TEST_ISSUER.to_owned(),
-            subject: subject.to_owned(),
-            kind: registry_documents::actor::ActorKind::Service,
-            client_id: "civil-registry-app".to_owned(),
-            access_profile_id: "custodian-app".to_owned(),
-            issuing_institution: "civil-registry".to_owned(),
-        })
+/// The test issuer: one P-256 signing key for the process and the public
+/// key set every deployment reads.
+pub struct Issuer {
+    signing: Vec<u8>,
+    pub jwks: String,
+}
+
+pub fn issuer() -> &'static Issuer {
+    static ISSUER: std::sync::OnceLock<Issuer> = std::sync::OnceLock::new();
+    ISSUER.get_or_init(|| {
+        use aws_lc_rs::rand::SystemRandom;
+        use aws_lc_rs::signature::{EcdsaKeyPair, KeyPair as _, ECDSA_P256_SHA256_FIXED_SIGNING};
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine as _;
+        let signing =
+            EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &SystemRandom::new())
+                .unwrap();
+        let pair =
+            EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, signing.as_ref()).unwrap();
+        let point = pair.public_key().as_ref();
+        let jwks = serde_json::json!({"keys": [{
+            "kty": "EC",
+            "crv": "P-256",
+            "alg": "ES256",
+            "use": "sig",
+            "kid": TEST_KEY_ID,
+            "x": URL_SAFE_NO_PAD.encode(&point[1..33]),
+            "y": URL_SAFE_NO_PAD.encode(&point[33..]),
+        }]});
+        Issuer {
+            signing: signing.as_ref().to_vec(),
+            jwks: jwks.to_string(),
+        }
+    })
+}
+
+/// Sign an access token for `principal` with `claims` over the ones a
+/// real token carries.
+pub fn token_with(principal: Principal, claims: serde_json::Value) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut body = serde_json::json!({
+        "iss": TEST_ISSUER,
+        "aud": TEST_AUDIENCE,
+        "iat": now,
+        "exp": now + 300,
+        "sub": principal.subject,
+        "azp": principal.client,
+        "client_id": principal.client,
+        "scope": principal.scope,
+        "registry_actor_kind": principal.kind,
+    });
+    for (key, value) in claims.as_object().unwrap() {
+        body[key] = value.clone();
     }
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256);
+    header.kid = Some(TEST_KEY_ID.to_owned());
+    header.typ = Some("at+jwt".to_owned());
+    jsonwebtoken::encode(
+        &header,
+        &body,
+        &jsonwebtoken::EncodingKey::from_ec_der(&issuer().signing),
+    )
+    .unwrap()
+}
+
+pub fn token(principal: Principal) -> String {
+    token_with(principal, serde_json::json!({}))
 }
 
 /// What a [`FakeVerifier`] answers.
@@ -311,26 +430,42 @@ impl Answer {
     }
 }
 
-/// The document router of a prepared runtime, acting through
-/// [`TestActors`].
+/// The router a prepared runtime serves, called with real tokens.
 #[derive(Clone)]
 pub struct Api {
     router: axum::Router,
 }
 
+/// A request builder already carrying `principal`'s bearer token.
+pub fn request(
+    principal: Principal,
+    method: axum::http::Method,
+    path: &str,
+) -> axum::http::request::Builder {
+    axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("authorization", format!("Bearer {}", token(principal)))
+}
+
 impl Api {
     pub fn new(prepared: &registry_documents::runtime::Prepared) -> Self {
         Self {
-            router: registry_documents::http::document_router(
-                prepared.service(),
-                std::sync::Arc::new(TestActors),
-            ),
+            router: prepared.router(),
         }
     }
 
-    pub async fn call(&self, request: axum::http::Request<axum::body::Body>) -> Answer {
+    /// The response to `request`, its body not yet read.
+    pub async fn respond(
+        &self,
+        request: axum::http::Request<axum::body::Body>,
+    ) -> axum::response::Response {
         use tower::ServiceExt as _;
-        let response = self.router.clone().oneshot(request).await.unwrap();
+        self.router.clone().oneshot(request).await.unwrap()
+    }
+
+    pub async fn call(&self, request: axum::http::Request<axum::body::Body>) -> Answer {
+        let response = self.respond(request).await;
         let status = response.status().as_u16();
         let headers = response.headers().clone();
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -344,17 +479,44 @@ impl Api {
         }
     }
 
-    /// Reserve a document for `custodian` as `subject`.
+    /// Send `body` as JSON under `principal`, with `key` as the
+    /// idempotency key when one is given.
+    pub async fn send_json(
+        &self,
+        principal: Principal,
+        method: axum::http::Method,
+        path: &str,
+        key: Option<&str>,
+        body: &serde_json::Value,
+    ) -> Answer {
+        let mut builder = request(principal, method, path).header("content-type", "application/json");
+        if let Some(key) = key {
+            builder = builder.header("idempotency-key", key);
+        }
+        self.call(builder.body(axum::body::Body::from(body.to_string())).unwrap())
+            .await
+    }
+
+    pub async fn get(&self, principal: Principal, path: &str) -> Answer {
+        self.call(
+            request(principal, axum::http::Method::GET, path)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+    }
+
+    /// Reserve a document for `custodian` as `principal`.
     pub async fn reserve(
         &self,
-        subject: &str,
+        principal: Principal,
         policy: &str,
         custodian: &str,
         content: &[u8],
         media_type: &str,
     ) -> Answer {
         self.reserve_declared(
-            subject,
+            principal,
             policy,
             custodian,
             &sha256(content),
@@ -366,41 +528,39 @@ impl Api {
 
     pub async fn reserve_declared(
         &self,
-        subject: &str,
+        principal: Principal,
         policy: &str,
         custodian: &str,
         digest: &str,
         length: u64,
         media_type: &str,
     ) -> Answer {
-        let body = serde_json::json!({
-            "policyId": policy,
-            "custodian": {"subject": custodian},
-            "expectedDigest": digest,
-            "length": length,
-            "mediaType": media_type,
-        });
-        self.call(
-            axum::http::Request::post("/documents")
-                .header(TEST_SUBJECT_HEADER, subject)
-                .header("content-type", "application/json")
-                .body(axum::body::Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
+        let body = reservation_body(policy, custodian, digest, length, media_type);
+        self.reserve_body(principal, &Uuid::new_v4().to_string(), &body)
+            .await
+    }
+
+    /// Reserve with an exact body under the idempotency key `key`.
+    pub async fn reserve_body(
+        &self,
+        principal: Principal,
+        key: &str,
+        body: &serde_json::Value,
+    ) -> Answer {
+        self.send_json(principal, axum::http::Method::POST, "/documents", Some(key), body)
+            .await
     }
 
     /// Send `body` as the content of the upload at `path`.
     pub async fn put(
         &self,
-        subject: &str,
+        principal: Principal,
         path: &str,
         media_type: &str,
         body: axum::body::Body,
     ) -> Answer {
         self.call(
-            axum::http::Request::put(path)
-                .header(TEST_SUBJECT_HEADER, subject)
+            request(principal, axum::http::Method::PUT, path)
                 .header("content-type", media_type)
                 .body(body)
                 .unwrap(),
@@ -408,25 +568,93 @@ impl Api {
         .await
     }
 
-    pub async fn read(&self, subject: &str, document: &str) -> Answer {
-        self.call(
-            axum::http::Request::get(format!("/documents/{document}"))
-                .header(TEST_SUBJECT_HEADER, subject)
-                .body(axum::body::Body::empty())
-                .unwrap(),
+    pub async fn read(&self, principal: Principal, document: &str) -> Answer {
+        self.get(principal, &format!("/documents/{document}")).await
+    }
+
+    pub async fn download(&self, principal: Principal, document: &str, version: &str) -> Answer {
+        self.get(
+            principal,
+            &format!("/documents/{document}/versions/{version}/content"),
         )
         .await
     }
 
-    pub async fn download(&self, subject: &str, document: &str, version: &str) -> Answer {
-        self.call(
-            axum::http::Request::get(format!("/documents/{document}/versions/{version}/content"))
-                .header(TEST_SUBJECT_HEADER, subject)
-                .body(axum::body::Body::empty())
-                .unwrap(),
+    /// Issue a grant on `version` to `grantee` as `principal`.
+    pub async fn grant(
+        &self,
+        principal: Principal,
+        document: &str,
+        version: &str,
+        grantee: &str,
+        expiry_hours: Option<u32>,
+    ) -> Answer {
+        self.grant_with_key(
+            principal,
+            &Uuid::new_v4().to_string(),
+            document,
+            version,
+            grantee,
+            expiry_hours,
         )
         .await
     }
+
+    pub async fn grant_with_key(
+        &self,
+        principal: Principal,
+        key: &str,
+        document: &str,
+        version: &str,
+        grantee: &str,
+        expiry_hours: Option<u32>,
+    ) -> Answer {
+        let mut body = serde_json::json!({
+            "versionId": version,
+            "grantee": {"subject": grantee},
+        });
+        if let Some(hours) = expiry_hours {
+            body["expiryHours"] = serde_json::json!(hours);
+        }
+        self.send_json(
+            principal,
+            axum::http::Method::POST,
+            &format!("/documents/{document}/grants"),
+            Some(key),
+            &body,
+        )
+        .await
+    }
+
+    pub async fn revoke(&self, principal: Principal, grant: &str) -> Answer {
+        self.call(
+            request(
+                principal,
+                axum::http::Method::DELETE,
+                &format!("/document-grants/{grant}"),
+            )
+            .body(axum::body::Body::empty())
+            .unwrap(),
+        )
+        .await
+    }
+}
+
+/// A reservation body.
+pub fn reservation_body(
+    policy: &str,
+    custodian: &str,
+    digest: &str,
+    length: u64,
+    media_type: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "policyId": policy,
+        "custodian": {"subject": custodian},
+        "expectedDigest": digest,
+        "length": length,
+        "mediaType": media_type,
+    })
 }
 
 /// The `sha256:<hex>` digest of `bytes`.

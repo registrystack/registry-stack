@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Database-backed startup tests: a runtime prepared against a real
-//! PostgreSQL server answers its health route through the Rust client and
-//! refuses every other route with a typed problem, a runtime whose database
+//! PostgreSQL server answers its health route through the Rust client,
+//! refuses a document route without a verified bearer token and an unknown
+//! route with typed problems, and serves a document route to a caller whose
+//! token verifies; a runtime whose database
 //! cannot be reached refuses to start before it binds, and so does one whose
 //! database does not carry this release's schema.
 
@@ -12,11 +14,14 @@ use std::time::Duration;
 
 use registry_documents::runtime::{prepare, RuntimeError};
 use registry_documents_client::{DocumentsClient, DocumentsClientConfig, ProblemCode};
-use support::{database_url, Deployment, DATABASE_STORAGE, DISABLED_VERIFIER};
+use support::{
+    database_url, pdf, reservation_body, sha256, token, Deployment, APP, CITIZEN, DATABASE_STORAGE,
+    DISABLED_VERIFIER,
+};
 use url::Url;
 
 #[tokio::test]
-async fn a_prepared_runtime_answers_health_and_refuses_every_other_route() {
+async fn a_prepared_runtime_serves_documents_only_to_a_verified_caller() {
     let deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
     deployment.migrate().await;
     let prepared = prepare(&deployment.runtime)
@@ -35,30 +40,80 @@ async fn a_prepared_runtime_answers_health_and_refuses_every_other_route() {
     .unwrap();
     client.health().await.expect("the health route answers");
 
-    for (method, path) in [
-        (reqwest::Method::GET, "documents"),
-        (reqwest::Method::POST, "documents"),
-        (
-            reqwest::Method::PUT,
-            "uploads/00000000-0000-4000-8000-000000000000/content",
-        ),
-    ] {
-        let response = reqwest::Client::new()
-            .request(method, base.join(path).unwrap())
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    let problem = |response: reqwest::Response| async move {
         assert_eq!(
             response.headers()["content-type"],
             "application/problem+json"
         );
         let problem: serde_json::Value = response.json().await.unwrap();
+        problem["type"].as_str().unwrap().to_owned()
+    };
+    let http = reqwest::Client::new();
+    for (method, path) in [
+        (reqwest::Method::GET, "documents"),
+        (reqwest::Method::POST, "documents"),
+        (reqwest::Method::GET, "document-grants"),
+        (reqwest::Method::GET, "document-policies"),
+        (
+            reqwest::Method::PUT,
+            "uploads/00000000-0000-4000-8000-000000000000/content",
+        ),
+    ] {
+        let response = http
+            .request(method.clone(), base.join(path).unwrap())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED, "{path}");
+        assert_eq!(response.headers()["www-authenticate"], "Bearer");
         assert_eq!(
-            problem["type"],
-            registry_documents_client::type_uri(ProblemCode::RequestNotFound.code())
+            problem(response).await,
+            registry_documents_client::type_uri(ProblemCode::AuthenticationRefused.code())
         );
+        // A token from no issuer this deployment trusts is the same refusal.
+        let response = http
+            .request(method, base.join(path).unwrap())
+            .bearer_auth("not.a.token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED, "{path}");
     }
+    let response = http
+        .get(base.join("no-such-route").unwrap())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    assert_eq!(
+        problem(response).await,
+        registry_documents_client::type_uri(ProblemCode::RequestNotFound.code())
+    );
+
+    // A verified caller reaches the document routes over the socket.
+    let content = pdf(1024, 3);
+    let reserved = http
+        .post(base.join("documents").unwrap())
+        .bearer_auth(token(APP))
+        .header("idempotency-key", "startup-reservation")
+        .json(&reservation_body(
+            "citizen-delivery",
+            CITIZEN.subject,
+            &sha256(&content),
+            1024,
+            "application/pdf",
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reserved.status(), reqwest::StatusCode::CREATED);
+    let policies = http
+        .get(base.join("document-policies").unwrap())
+        .bearer_auth(token(CITIZEN))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(policies.status(), reqwest::StatusCode::OK);
 
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();

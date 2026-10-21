@@ -14,8 +14,6 @@ use serde_json::{json, Value};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::actor::Actor;
-
 /// The schema every Document Store audit entry carries.
 pub const DOCUMENTS_AUDIT_SCHEMA: &str = "registry-documents-audit/v1";
 
@@ -24,6 +22,8 @@ pub const UPLOAD_RESERVATION_EVENT: &str = "documents.upload-reservation";
 pub const UPLOAD_CONTENT_EVENT: &str = "documents.upload-content";
 pub const CONTENT_DOWNLOAD_EVENT: &str = "documents.content-download";
 pub const CONTENT_VERIFICATION_EVENT: &str = "documents.content-verification";
+pub const GRANT_ISSUE_EVENT: &str = "documents.grant-issue";
+pub const GRANT_REVOKE_EVENT: &str = "documents.grant-revoke";
 
 const ACTOR_REFERENCE_CLASS: &str = "documents-actor-v1";
 
@@ -102,11 +102,12 @@ impl DocumentsAudit {
     /// The keyed reference of a caller: the same issuer and subject always
     /// give the same reference under one audit key, and the reference
     /// reveals neither.
-    pub fn actor_reference(&self, actor: &Actor) -> Result<String, ActorReferenceError> {
-        let canonical = canonicalize_json(&Value::from(vec![
-            actor.issuer.as_str(),
-            actor.subject.as_str(),
-        ]))
+    pub fn actor_reference(
+        &self,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<String, ActorReferenceError> {
+        let canonical = canonicalize_json(&Value::from(vec![issuer, subject]))
         .map_err(|_| ActorReferenceError::Canonical)?;
         let canonical =
             std::str::from_utf8(&canonical).map_err(|_| ActorReferenceError::Canonical)?;
@@ -119,7 +120,6 @@ impl DocumentsAudit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::actor::ActorKind;
     use registry_platform_audit::AuditProfile;
 
     fn audit() -> DocumentsAudit {
@@ -132,23 +132,13 @@ mod tests {
         )
     }
 
-    fn actor(subject: &str) -> Actor {
-        Actor {
-            issuer: "https://identity.example.test".to_owned(),
-            subject: subject.to_owned(),
-            kind: ActorKind::Service,
-            client_id: "civil-registry-app".to_owned(),
-            access_profile_id: "custodian-app".to_owned(),
-            issuing_institution: "civil-registry".to_owned(),
-        }
-    }
-
     #[test]
     fn an_actor_reference_is_stable_and_reveals_no_identifier() {
         let audit = audit();
-        let first = audit.actor_reference(&actor("custodian-1")).unwrap();
-        assert_eq!(first, audit.actor_reference(&actor("custodian-1")).unwrap());
-        assert_ne!(first, audit.actor_reference(&actor("custodian-2")).unwrap());
+        let issuer = "https://identity.example.test";
+        let first = audit.actor_reference(issuer, "custodian-1").unwrap();
+        assert_eq!(first, audit.actor_reference(issuer, "custodian-1").unwrap());
+        assert_ne!(first, audit.actor_reference(issuer, "custodian-2").unwrap());
         assert!(!first.contains("custodian-1"));
         assert!(!first.contains("identity.example.test"));
     }
