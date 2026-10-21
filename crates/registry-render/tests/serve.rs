@@ -376,13 +376,23 @@ fn serve_health_and_ready() {
 
 #[test]
 fn a_fixture_port_taken_before_the_bind_moves_to_a_fresh_port() {
-    let (_home, runtime, port) = deployment(
+    let (_home, runtime, configured_port) = deployment(
         DEFAULT_LIMITS,
         &repo_root().join("products/render/bundles/receipt"),
     );
     // A listener that answers nothing holds the port, the way a parallel port
     // discovery can hold it while the child binds.
-    let holder = TcpListener::bind(("127.0.0.1", port)).expect("hold the fixture port");
+    let holder = TcpListener::bind("127.0.0.1:0").expect("hold the fixture port");
+    let port = holder.local_addr().expect("held fixture address").port();
+    let text = std::fs::read_to_string(&runtime).unwrap();
+    std::fs::write(
+        &runtime,
+        text.replace(
+            &format!("  bind: 127.0.0.1:{configured_port}\n"),
+            &format!("  bind: 127.0.0.1:{port}\n"),
+        ),
+    )
+    .unwrap();
     std::thread::spawn(move || holder.incoming().for_each(drop));
     let server = start_server(&runtime);
     assert_ne!(server.port, port);
