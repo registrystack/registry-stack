@@ -26,6 +26,14 @@ pub const STARTER_PROJECT: &str =
 pub const DATABASE_STORAGE: &str = "storage:\n  type: database\n";
 pub const DISABLED_VERIFIER: &str = "contentVerification:\n  type: disabled\n";
 
+/// Where the starter hooks deliver until a suite binds a receiver: a
+/// loopback port nothing listens on, so a delivery attempt fails rather
+/// than reaching anything.
+pub const UNREACHABLE_HOOKS_URL: &str = "http://127.0.0.1:9/document-events";
+
+/// The test-only HMAC key the hook destination signs with.
+pub const HOOK_KEY: &str = "documents-test-hook-key-not-a-secret-0123456789";
+
 pub fn database_url() -> String {
     std::env::var("DOCUMENTS_TEST_DATABASE_URL")
         .expect("DOCUMENTS_TEST_DATABASE_URL names a disposable PostgreSQL test server")
@@ -45,6 +53,7 @@ pub struct Deployment {
     project: String,
     erasure: &'static str,
     extra: String,
+    hooks_url: String,
 }
 
 impl Deployment {
@@ -100,6 +109,7 @@ impl Deployment {
             project: project.to_owned(),
             erasure: "active",
             extra: String::new(),
+            hooks_url: UNREACHABLE_HOOKS_URL.to_owned(),
         };
         deployment.secret("runtime-database-url", runtime_url.unwrap_or(&scoped_url));
         deployment.secret("migration-database-url", &scoped_url);
@@ -108,6 +118,7 @@ impl Deployment {
             "documents-test-audit-key-not-a-secret",
         );
         deployment.secret("jwks.json", &issuer().jwks);
+        deployment.secret("hook-key", HOOK_KEY);
         deployment.write_package();
         deployment.write_runtime();
         deployment
@@ -147,6 +158,13 @@ impl Deployment {
     /// Set `cleanup.erasure` to `mode`, `active` or `paused`.
     pub fn set_erasure(&mut self, mode: &'static str) {
         self.erasure = mode;
+        self.write_runtime();
+    }
+
+    /// Bind the `custodian-events` hook destination every starter hook
+    /// names to `url`, as an operator does between restarts.
+    pub fn bind_hooks(&mut self, url: &str) {
+        self.hooks_url = url.to_owned();
         self.write_runtime();
     }
 
@@ -191,6 +209,13 @@ audit:
   hashKeyRef: secret:file/documents-audit-key
 {storage}{verifier}cleanup:
   erasure: {erasure}
+destinations:
+  hooks:
+    custodian-events:
+      url: {hooks_url}
+      hmacSha256KeyRef: secret:file/hook-key
+      attemptTimeoutMilliseconds: 1000
+      maximumAttempts: 2
 {extra}",
             package = self.directory.path().join("package").display(),
             secrets = self.secrets.display(),
@@ -199,6 +224,7 @@ audit:
             verifier = self.verifier,
             erasure = self.erasure,
             extra = self.extra,
+            hooks_url = self.hooks_url,
         );
         std::fs::write(&self.runtime, document).unwrap();
     }

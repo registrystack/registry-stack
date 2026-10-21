@@ -13,6 +13,7 @@ pub mod auth;
 pub mod config;
 pub mod content;
 pub mod erasure;
+pub mod hooks;
 pub mod http;
 pub mod package;
 pub mod replay;

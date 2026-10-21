@@ -6,9 +6,9 @@
 //! In one transaction it records the document's removal, moves the version
 //! to `erasure pending` with the policy's cleanup grace frozen into its due
 //! time (a version a rejection already armed keeps the rejection's),
-//! suspends release, revokes every active grant on the document, and
-//! cancels any verification still pending, so nothing releases the version
-//! once the request commits. The bytes are erased by the cleanup sweep once
+//! suspends release, revokes every active grant on the document and
+//! captures one grant event for each, and cancels any verification still
+//! pending, so nothing releases the version once the request commits. The bytes are erased by the cleanup sweep once
 //! the version is due. No grant expiry or revocation ever starts this clock.
 
 use registry_documents_core::{may_request_erasure, Caller, DocumentView, ProblemCode};
@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use super::{timestamp, unavailable, DocumentService};
 use crate::audit::ERASURE_REQUEST_EVENT;
+use crate::hooks::GrantChange;
 
 /// What one erasure request changed.
 struct Requested {
@@ -123,14 +124,24 @@ impl DocumentService {
                 .await
                 .map_err(|error| unavailable("erasure request", &error))?;
             let revoked = transaction
-                .execute(
+                .query(
                     "UPDATE documents_grants SET revoked_at = transaction_timestamp()
                       WHERE document_id = $1 AND revoked_at IS NULL
-                        AND expires_at > transaction_timestamp()",
+                        AND expires_at > transaction_timestamp()
+                      RETURNING grant_id",
                     &[&document_id],
                 )
                 .await
                 .map_err(|error| unavailable("erasure grant revocation", &error))?;
+            // Each grant the removal revokes reports its revocation inside
+            // this transaction, through the path a direct revocation uses.
+            for row in &revoked {
+                let grant_id: Uuid = row
+                    .try_get(0)
+                    .map_err(|error| unavailable("erasure grant revocation", &error))?;
+                self.capture_grant_event(&transaction, caller, grant_id, GrantChange::Revoked)
+                    .await?;
+            }
             transaction
                 .execute(
                     "UPDATE documents_verification_jobs
@@ -141,7 +152,7 @@ impl DocumentService {
                 )
                 .await
                 .map_err(|error| unavailable("erasure verification cancel", &error))?;
-            revoked
+            revoked.len() as u64
         };
         let due: chrono::DateTime<chrono::Utc> = transaction
             .query_one(
