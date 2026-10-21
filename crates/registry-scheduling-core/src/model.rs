@@ -12,8 +12,8 @@ use registry_platform_calendar::{
     CalendarEvaluationError, CalendarException, CalendarExceptionKind,
 };
 use registry_platform_yaml::{
-    local_id_collision_diagnostics, ApiVersion, AuthoredId, Decoded, Diagnostic, EnvelopeRule,
-    Expect, FormatSpec, Identified, Reader, RemovedKey, Report,
+    local_id_collision_diagnostics, lookalike_local_id_pairs, ApiVersion, AuthoredId, Decoded,
+    Diagnostic, EnvelopeRule, Expect, FormatSpec, Identified, Reader, RemovedKey, Report,
 };
 
 use crate::diagnostics::{FindingArea, PolicyCheckReason, SchedulingDiagnostic};
@@ -795,53 +795,24 @@ fn records_integrity_diagnostics(decoded: &Decoded<SchedulingRecords>) -> Vec<Di
     )
 }
 
-pub(crate) fn facts_integrity_diagnostics(
-    document: &registry_platform_yaml::Document,
-    facts: &SchedulingFacts,
+type FactsIdNamespace<'a> = (&'static str, Vec<(&'a str, String)>);
+
+fn facts_id_namespaces<'a>(
+    facts: &'a SchedulingFacts,
     pointer_prefix: &str,
-    code_prefix: &str,
-) -> Vec<Diagnostic> {
-    fn collisions(
-        document: &registry_platform_yaml::Document,
-        code: &str,
-        values: &[(String, String)],
-    ) -> Vec<Diagnostic> {
-        let entries = values
-            .iter()
-            .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
-            .collect::<Vec<_>>();
-        local_id_collision_diagnostics(document, code, &entries)
-    }
-    fn list_ids<T: Identified>(base: &str, values: &[T]) -> Vec<(String, String)> {
+) -> Vec<FactsIdNamespace<'a>> {
+    fn list_ids<'a, T: Identified>(base: &str, values: &'a [T]) -> Vec<(&'a str, String)> {
         values
             .iter()
             .enumerate()
-            .map(|(index, value)| (value.id().to_owned(), format!("{base}/{index}/id")))
+            .map(|(index, value)| (value.id(), format!("{base}/{index}/id")))
             .collect()
     }
 
-    let mut diagnostics = Vec::new();
-    for (code, values) in [
-        (
-            format!("{code_prefix}.location-id-collision"),
-            list_ids(&format!("{pointer_prefix}/locations"), &facts.locations),
-        ),
-        (
-            format!("{code_prefix}.exception-id-collision"),
-            list_ids(&format!("{pointer_prefix}/exceptions"), &facts.exceptions),
-        ),
-    ] {
-        diagnostics.extend(collisions(document, &code, &values));
-    }
     let mut supplies = list_ids(&format!("{pointer_prefix}/pools"), &facts.pools);
     supplies.extend(list_ids(
         &format!("{pointer_prefix}/windows"),
         &facts.windows,
-    ));
-    diagnostics.extend(collisions(
-        document,
-        &format!("{code_prefix}.supply-id-collision"),
-        &supplies,
     ));
     let resources = facts
         .pools
@@ -853,7 +824,7 @@ pub(crate) fn facts_integrity_diagnostics(
                 .enumerate()
                 .map(move |(member_index, member)| {
                     (
-                        member.resource_id.clone(),
+                        member.resource_id.as_str(),
                         format!(
                             "{pointer_prefix}/pools/{pool_index}/members/{member_index}/resourceId"
                         ),
@@ -861,32 +832,66 @@ pub(crate) fn facts_integrity_diagnostics(
                 })
         })
         .collect::<Vec<_>>();
-    diagnostics.extend(collisions(
-        document,
-        &format!("{code_prefix}.pool-member-id-collision"),
-        &resources,
-    ));
+    let mut namespaces = vec![
+        (
+            "location-id-collision",
+            list_ids(&format!("{pointer_prefix}/locations"), &facts.locations),
+        ),
+        (
+            "exception-id-collision",
+            list_ids(&format!("{pointer_prefix}/exceptions"), &facts.exceptions),
+        ),
+        ("supply-id-collision", supplies),
+        ("pool-member-id-collision", resources),
+    ];
     for (window_index, window) in facts.windows.iter().enumerate() {
-        let values = window
-            .subquotas
-            .iter()
-            .enumerate()
-            .map(|(subquota_index, subquota)| {
-                (
-                    subquota.id.clone(),
-                    format!(
-                        "{pointer_prefix}/windows/{window_index}/subquotas/{subquota_index}/id"
-                    ),
-                )
-            })
-            .collect::<Vec<_>>();
-        diagnostics.extend(collisions(
-            document,
-            &format!("{code_prefix}.window-subquota-id-collision"),
-            &values,
+        namespaces.push((
+            "window-subquota-id-collision",
+            window
+                .subquotas
+                .iter()
+                .enumerate()
+                .map(|(subquota_index, subquota)| {
+                    (
+                        subquota.id.as_str(),
+                        format!(
+                            "{pointer_prefix}/windows/{window_index}/subquotas/{subquota_index}/id"
+                        ),
+                    )
+                })
+                .collect(),
         ));
     }
-    diagnostics
+    namespaces
+}
+
+pub(crate) fn facts_id_collision(facts: &SchedulingFacts) -> Option<(&str, &str)> {
+    facts_id_namespaces(facts, "")
+        .into_iter()
+        .find_map(|(_, values)| {
+            lookalike_local_id_pairs(values.iter().map(|(id, _)| *id))
+                .into_iter()
+                .next()
+                .map(|(first, second)| (values[first].0, values[second].0))
+        })
+}
+
+pub(crate) fn facts_integrity_diagnostics(
+    document: &registry_platform_yaml::Document,
+    facts: &SchedulingFacts,
+    pointer_prefix: &str,
+    code_prefix: &str,
+) -> Vec<Diagnostic> {
+    facts_id_namespaces(facts, pointer_prefix)
+        .into_iter()
+        .flat_map(|(suffix, values)| {
+            let entries = values
+                .iter()
+                .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+                .collect::<Vec<_>>();
+            local_id_collision_diagnostics(document, &format!("{code_prefix}.{suffix}"), &entries)
+        })
+        .collect()
 }
 
 /// A request for one admission decision. The evaluator is pure: it resolves

@@ -1028,6 +1028,47 @@ fn cfg_check_2_check_identifies_every_yaml_file_of_the_bundle_by_its_envelope() 
 }
 
 #[test]
+fn cfg_diag_5_unused_label_collisions_share_one_file_budget() {
+    for collisions in [101, 1] {
+        let dir = tempdir();
+        assert!(run(&["init", dir.to_str().unwrap()]).status.success());
+        let mut labels = String::from(
+            "apiVersion: id.registrystack.org/formats/render/labels/v1alpha1\nkind: RenderLabels\nlabels:\n",
+        );
+        for index in 0..collisions {
+            labels.push_str(&format!(
+                "  label-{index}: First\n  label_{index}: Second\n"
+            ));
+        }
+        std::fs::write(dir.join("labels/de.yaml"), labels).unwrap();
+        let out = run(&[
+            "check",
+            "--bundle",
+            dir.to_str().unwrap(),
+            "--format",
+            "json",
+        ]);
+        assert_eq!(out.status.code(), Some(1));
+        let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), (collisions + 1).min(101));
+        assert_eq!(diagnostics[0]["code"], "render.bundle.unused-labels");
+        assert_eq!(diagnostics[0]["path"], "/kind");
+        assert_eq!(diagnostics[0]["source"]["line"], 2);
+        assert_eq!(report["warnings"], 1);
+        if collisions > 100 {
+            let marker = diagnostics.last().unwrap();
+            assert_eq!(marker["code"], "config.too-many-problems");
+            assert_eq!(marker["severity"], "error");
+            assert_eq!(
+                marker["message"],
+                "2 more problems in this file are not shown"
+            );
+        }
+    }
+}
+
+#[test]
 fn cfg_diag_1_check_writes_one_report_with_every_diagnostic() {
     let dir = tempdir();
     run(&["init", dir.to_str().unwrap()]);

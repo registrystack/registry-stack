@@ -108,13 +108,16 @@ pub fn read_fixture(
         .zip(&case_pointers)
         .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
         .collect::<Vec<_>>();
-    let collisions =
+    let mut diagnostics =
         local_id_collision_diagnostics(&document, "evidence.fixture.case-id-collision", &case_ids);
-    if !collisions.is_empty() {
-        return Err(document.report_with(collisions));
+    if let Err(diagnostic) =
+        check_coverage(&document, &value, declared_unresolved, assurance_profile)
+    {
+        diagnostics.push(*diagnostic);
     }
-    check_coverage(&document, &value, declared_unresolved, assurance_profile)
-        .map_err(|diagnostic| document.report_with([*diagnostic]))?;
+    if !diagnostics.is_empty() {
+        return Err(document.report_with(diagnostics));
+    }
     if let Some(body) = value.as_object_mut() {
         body.remove("apiVersion");
         body.remove("kind");
@@ -794,6 +797,35 @@ mod tests {
             assert!(diagnostic.message.contains("`source_failure`"));
         }
     }
+
+    #[test]
+    fn separator_collisions_retain_independent_fixture_coverage_refusals() {
+        let text = format!(
+            "{HEADER}syntheticOnly: false\ncases:\n  - id: source-failure\n  - id: source_failure\n"
+        );
+        let report = read_fixture(
+            "fixtures/cases.yaml",
+            text.as_bytes(),
+            false,
+            AssuranceProfile::Local,
+        )
+        .expect_err("the collision and non-synthetic fixture must both be refused");
+
+        assert_eq!(report.files_checked(), Some(1));
+        for (code, path) in [
+            ("evidence.fixture.case-id-collision", "/cases/1/id"),
+            ("evidence.fixture.not-synthetic", "/syntheticOnly"),
+        ] {
+            assert!(
+                report
+                    .diagnostics()
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == code && diagnostic.path == path),
+                "missing {code} at {path}: {report:#?}"
+            );
+        }
+    }
+
     #[test]
     fn retired_fixture_controls_name_the_replacement_without_touching_payload_keys() {
         let base = format!("{HEADER}syntheticOnly: true\ncoequalAcceptanceDefinition: true\ncases:\n  - id: positive\n    source: {{synthetic_only: null, expected_lookup: kept}}\n");

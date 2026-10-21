@@ -11,8 +11,9 @@
 
 use chrono::{DateTime, Utc};
 use registry_platform_yaml::{
-    local_id_collision_diagnostics, ApiVersion, AuthoredId, Decoded, Diagnostic, EnvelopeRule,
-    Expect, FormatSpec, Invalid, Reader, RemovedKey, Report, RetiredApiVersion,
+    local_id_collision_diagnostics, lookalike_local_id_pairs, ApiVersion, AuthoredId, Decoded,
+    Diagnostic, EnvelopeRule, Expect, FormatSpec, Invalid, Reader, RemovedKey, Report,
+    RetiredApiVersion,
 };
 use serde::{de, Deserialize, Deserializer};
 
@@ -23,8 +24,8 @@ use crate::admission::{
 };
 use crate::diagnostics::{FindingArea, PolicyCheckReason, SchedulingDiagnostic};
 use crate::model::{
-    facts_integrity_diagnostics, AdmissionRequest, LedgerClaim, LedgerKind, LedgerSnapshot,
-    PartyCounts, SchedulingFacts,
+    facts_id_collision, facts_integrity_diagnostics, AdmissionRequest, LedgerClaim, LedgerKind,
+    LedgerSnapshot, PartyCounts, SchedulingFacts,
 };
 use crate::naming::{
     RETIRED_SCHEDULING_FIXTURE_API_VERSION, SCHEDULING_FIXTURE_API_VERSION, SCHEDULING_FIXTURE_KIND,
@@ -369,6 +370,8 @@ pub enum ReplayError {
     DuplicateCaseName { case: String },
     #[error("initial claim id {claim} is used more than once; claims are replaced by id")]
     DuplicateInitialClaimId { claim: String },
+    #[error("fixture identifiers {first} and {second} differ only by '-' versus '_'; rename one")]
+    SeparatorCollision { first: String, second: String },
     #[error(
         "case {case} sets rescheduleOf to a claim identifier that no claim in the ledger carries"
     )]
@@ -395,6 +398,42 @@ pub enum ReplayError {
 /// caller has no file name for it.
 pub const SCHEDULING_FIXTURE_FILE: &str = "fixture.yaml";
 
+type FixtureIdNamespace<'a> = (&'static str, Vec<(&'a str, String)>);
+
+fn fixture_id_namespaces(fixture: &SchedulingFixture) -> Vec<FixtureIdNamespace<'_>> {
+    vec![
+        (
+            "case-name-collision",
+            fixture
+                .cases
+                .iter()
+                .enumerate()
+                .map(|(index, case)| (case.name.as_str(), format!("/cases/{index}/name")))
+                .collect(),
+        ),
+        (
+            "initial-claim-id-collision",
+            fixture
+                .initial
+                .iter()
+                .enumerate()
+                .map(|(index, claim)| (claim.id.as_str(), format!("/initial/{index}/id")))
+                .collect(),
+        ),
+    ]
+}
+
+fn fixture_id_collision(fixture: &SchedulingFixture) -> Option<(&str, &str)> {
+    fixture_id_namespaces(fixture)
+        .into_iter()
+        .find_map(|(_, values)| {
+            lookalike_local_id_pairs(values.iter().map(|(id, _)| *id))
+                .into_iter()
+                .next()
+                .map(|(first, second)| (values[first].0, values[second].0))
+        })
+}
+
 impl SchedulingFixture {
     /// Read one fixture document, refusing what its shape does not carry
     /// with every position.
@@ -409,40 +448,20 @@ impl SchedulingFixture {
     /// namespaces and the embedded scheduling facts.
     #[must_use]
     pub fn integrity_diagnostics(decoded: &Decoded<Self>) -> Vec<Diagnostic> {
-        fn collisions(
-            document: &registry_platform_yaml::Document,
-            code: &str,
-            values: &[(String, String)],
-        ) -> Vec<Diagnostic> {
-            let entries = values
-                .iter()
-                .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
-                .collect::<Vec<_>>();
-            local_id_collision_diagnostics(document, code, &entries)
-        }
-
-        let mut diagnostics = collisions(
-            &decoded.document,
-            "scheduling.fixture.case-name-collision",
-            &decoded
-                .value
-                .cases
-                .iter()
-                .enumerate()
-                .map(|(index, case)| (case.name.clone(), format!("/cases/{index}/name")))
-                .collect::<Vec<_>>(),
-        );
-        diagnostics.extend(collisions(
-            &decoded.document,
-            "scheduling.fixture.initial-claim-id-collision",
-            &decoded
-                .value
-                .initial
-                .iter()
-                .enumerate()
-                .map(|(index, claim)| (claim.id.clone(), format!("/initial/{index}/id")))
-                .collect::<Vec<_>>(),
-        ));
+        let mut diagnostics = fixture_id_namespaces(&decoded.value)
+            .into_iter()
+            .flat_map(|(suffix, values)| {
+                let entries = values
+                    .iter()
+                    .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+                    .collect::<Vec<_>>();
+                local_id_collision_diagnostics(
+                    &decoded.document,
+                    &format!("scheduling.fixture.{suffix}"),
+                    &entries,
+                )
+            })
+            .collect::<Vec<_>>();
         diagnostics.extend(facts_integrity_diagnostics(
             &decoded.document,
             &decoded.value.facts,
@@ -575,6 +594,14 @@ impl SchedulingFixture {
                 });
             }
             seen.push(&case.name);
+        }
+        if let Some((first, second)) =
+            fixture_id_collision(self).or_else(|| facts_id_collision(&self.facts))
+        {
+            return Err(ReplayError::SeparatorCollision {
+                first: first.to_owned(),
+                second: second.to_owned(),
+            });
         }
         for case in &self.cases {
             let offering = policy.offering(&case.request.offering).ok_or_else(|| {
@@ -1259,6 +1286,53 @@ cases:
             fixture.check(&policy),
             Err(ReplayError::DuplicateInitialClaimId {
                 claim: "prior-claim".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn programmatic_fixture_check_refuses_separator_lookalikes() {
+        let policy = policy_for_fixture();
+        let lookalike_case = EXACT_TIME_FIXTURE.replace(
+            "name: same-key-retry-is-refused",
+            "name: first_caller_takes_the_last_station",
+        );
+        let fixture = SchedulingFixture::decode(SCHEDULING_FIXTURE_FILE, lookalike_case.as_bytes())
+            .expect("separator lookalikes remain structurally valid")
+            .value;
+        let collision = ReplayError::SeparatorCollision {
+            first: "first-caller-takes-the-last-station".to_owned(),
+            second: "first_caller_takes_the_last_station".to_owned(),
+        };
+        assert_eq!(fixture.check(&policy), Err(collision.clone()));
+        assert_eq!(fixture.replay(&policy), Err(collision));
+
+        let initial = "initial:\n  - id: prior-claim\n    offering: registry-update-30\n    supplyId: station-1\n    kind: booking\n    start: 2026-10-05T01:00:00Z\n    end: 2026-10-05T01:30:00Z\n    units: 1\n  - id: prior_claim\n    offering: registry-update-30\n    supplyId: station-2\n    kind: booking\n    start: 2026-10-05T01:00:00Z\n    end: 2026-10-05T01:30:00Z\n    units: 1\n";
+        let lookalike_initial =
+            EXACT_TIME_FIXTURE.replace("cases:\n", &format!("{initial}cases:\n"));
+        let fixture =
+            SchedulingFixture::decode(SCHEDULING_FIXTURE_FILE, lookalike_initial.as_bytes())
+                .expect("separator lookalikes remain structurally valid")
+                .value;
+        assert_eq!(
+            fixture.check(&policy),
+            Err(ReplayError::SeparatorCollision {
+                first: "prior-claim".to_owned(),
+                second: "prior_claim".to_owned(),
+            })
+        );
+
+        let lookalike_member =
+            EXACT_TIME_FIXTURE.replace("resourceId: station-2", "resourceId: station_1");
+        let fixture =
+            SchedulingFixture::decode(SCHEDULING_FIXTURE_FILE, lookalike_member.as_bytes())
+                .expect("separator lookalikes remain structurally valid")
+                .value;
+        assert_eq!(
+            fixture.check(&policy),
+            Err(ReplayError::SeparatorCollision {
+                first: "station-1".to_owned(),
+                second: "station_1".to_owned(),
             })
         );
     }

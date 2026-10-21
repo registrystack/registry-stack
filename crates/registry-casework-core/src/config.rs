@@ -3,9 +3,10 @@ use std::path::Path;
 
 pub use registry_platform_yaml::ProjectIdentity;
 use registry_platform_yaml::{
-    duplicate_display_text_diagnostics, local_id_collision_diagnostics, ApiVersion,
-    AuthoredDisplayText, AuthoredId, Decoded, Diagnostic, EnvelopeRule, Expect, FormatSpec,
-    Identified, Reader, Refusal, RemovedKey, Report, RetiredApiVersion, ScalarHook, ScalarSite,
+    duplicate_display_text_diagnostics, local_id_collision_diagnostics, lookalike_local_id_pairs,
+    ApiVersion, AuthoredDisplayText, AuthoredId, Decoded, Diagnostic, EnvelopeRule, Expect,
+    FormatSpec, Identified, LocalId, Reader, Refusal, RemovedKey, Report, RetiredApiVersion,
+    ScalarHook, ScalarSite,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -554,7 +555,7 @@ impl CaseworkProject {
                     .chain(integrity),
             ));
         }
-        let findings = decoded.value.findings();
+        let findings = decoded.value.semantic_findings();
         let report = decoded.document.report_with(
             findings
                 .iter()
@@ -597,6 +598,13 @@ impl CaseworkProject {
     #[must_use]
     #[allow(clippy::too_many_lines)]
     pub fn findings(&self) -> Vec<ConfigFinding> {
+        let mut findings = self.semantic_findings();
+        findings.extend(project_local_id_collision_findings(self));
+        findings
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn semantic_findings(&self) -> Vec<ConfigFinding> {
         let mut findings = Findings::default();
         if self.api_version != CASEWORK_API_VERSION {
             findings.push(
@@ -1411,47 +1419,51 @@ impl CaseworkProject {
     }
 }
 
-fn project_integrity_diagnostics(decoded: &mut Decoded<CaseworkProject>) -> Vec<Diagnostic> {
-    fn collisions(
-        document: &registry_platform_yaml::Document,
-        code: &str,
-        values: &[(String, String)],
-    ) -> Vec<Diagnostic> {
-        let entries = values
-            .iter()
-            .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
-            .collect::<Vec<_>>();
-        local_id_collision_diagnostics(document, code, &entries)
-    }
-    fn key_collisions(
-        document: &registry_platform_yaml::Document,
-        code: &str,
-        values: &[(String, String)],
-    ) -> Vec<Diagnostic> {
-        let entries = values
-            .iter()
-            .map(|(id, pointer)| AuthoredId::at_key(id, pointer))
-            .collect::<Vec<_>>();
-        local_id_collision_diagnostics(document, code, &entries)
-    }
+fn local_id_collision_findings(
+    code: &'static str,
+    values: &[(String, String)],
+) -> Vec<ConfigFinding> {
+    lookalike_local_id_pairs(values.iter().map(|(id, _)| id.as_str()))
+        .into_iter()
+        .map(|(first, second)| {
+            let first = &values[first];
+            let second = &values[second];
+            let repeat_ids = LocalId::new(first.0.as_str()).is_ok()
+                && LocalId::new(second.0.as_str()).is_ok();
+            let message = if repeat_ids {
+                format!(
+                    "local identifiers `{}` and `{}` differ only by `-` versus `_`",
+                    first.0, second.0
+                )
+            } else {
+                "two local identifiers differ only by `-` versus `_`".to_owned()
+            };
+            let related = if repeat_ids {
+                format!("the other definition is `{}`", first.0)
+            } else {
+                "the other definition is here".to_owned()
+            };
+            ConfigFinding::new(
+                code,
+                second.1.clone(),
+                message,
+                "Rename one identifier so the two definitions remain distinct after separator normalization.",
+            )
+            .with_related(first.1.clone(), related)
+        })
+        .collect()
+}
 
-    fn duplicate_labels(
-        document: &registry_platform_yaml::Document,
-        code: &str,
-        kind: &str,
-        values: &[(String, String, String)],
-    ) -> Vec<Diagnostic> {
-        let entries = values
-            .iter()
-            .map(|(id, label, pointer)| AuthoredDisplayText {
-                id,
-                text: label,
-                pointer,
-            })
-            .collect::<Vec<_>>();
-        duplicate_display_text_diagnostics(document, code, kind, &entries)
-    }
+#[derive(Clone, Copy)]
+enum LocalIdSite {
+    Key,
+    Value,
+}
 
+fn for_each_project_local_id_namespace(
+    project: &CaseworkProject,
+    mut visit: impl FnMut(&'static str, LocalIdSite, Vec<(String, String)>),
+) {
     fn keyed_ids<T: Identified>(base: &str, values: &[T]) -> Vec<(String, String)> {
         values
             .iter()
@@ -1466,9 +1478,6 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<CaseworkProject>) -> Vec<
             .collect()
     }
 
-    let project = &decoded.value;
-    let document = &decoded.document;
-    let mut errors = Vec::new();
     for (code, values) in [
         (
             "casework.project.access-profile-id-collision",
@@ -1507,7 +1516,7 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<CaseworkProject>) -> Vec<
             keyed_ids("/taskTemplates", &project.task_templates),
         ),
     ] {
-        errors.extend(key_collisions(document, code, &values));
+        visit(code, LocalIdSite::Key, values);
     }
 
     for policy in &project.review_policies {
@@ -1535,13 +1544,13 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<CaseworkProject>) -> Vec<
                     .collect(),
             ),
         ] {
-            errors.extend(collisions(document, code, &values));
+            visit(code, LocalIdSite::Value, values);
         }
-        errors.extend(key_collisions(
-            document,
+        visit(
             "casework.review-policy.outcome-id-collision",
-            &keyed_ids(&format!("{base}/outcomes"), &policy.outcomes),
-        ));
+            LocalIdSite::Key,
+            keyed_ids(&format!("{base}/outcomes"), &policy.outcomes),
+        );
     }
 
     for clock in &project.clocks {
@@ -1552,21 +1561,62 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<CaseworkProject>) -> Vec<
             "/clocks/{}",
             registry_platform_yaml::escape_pointer_segment(clock.id())
         );
-        errors.extend(key_collisions(
-            document,
+        visit(
             "casework.clock.reminder-id-collision",
-            &keyed_ids(&format!("{base}/reminders"), reminders),
-        ));
-        errors.extend(collisions(
-            document,
+            LocalIdSite::Key,
+            keyed_ids(&format!("{base}/reminders"), reminders),
+        );
+        visit(
             "casework.clock.step-id-collision",
-            &steps
+            LocalIdSite::Value,
+            steps
                 .iter()
                 .enumerate()
                 .map(|(index, step)| (step.id.clone(), format!("{base}/steps/{index}/id")))
                 .collect::<Vec<_>>(),
-        ));
+        );
     }
+}
+
+fn project_local_id_collision_findings(project: &CaseworkProject) -> Vec<ConfigFinding> {
+    let mut findings = Vec::new();
+    for_each_project_local_id_namespace(project, |code, _, values| {
+        findings.extend(local_id_collision_findings(code, &values));
+    });
+    findings
+}
+
+fn project_integrity_diagnostics(decoded: &mut Decoded<CaseworkProject>) -> Vec<Diagnostic> {
+    fn duplicate_labels(
+        document: &registry_platform_yaml::Document,
+        code: &str,
+        kind: &str,
+        values: &[(String, String, String)],
+    ) -> Vec<Diagnostic> {
+        let entries = values
+            .iter()
+            .map(|(id, label, pointer)| AuthoredDisplayText {
+                id,
+                text: label,
+                pointer,
+            })
+            .collect::<Vec<_>>();
+        duplicate_display_text_diagnostics(document, code, kind, &entries)
+    }
+
+    let project = &decoded.value;
+    let document = &decoded.document;
+    let mut errors = Vec::new();
+    for_each_project_local_id_namespace(project, |code, site, values| {
+        let entries = values
+            .iter()
+            .map(|(id, pointer)| match site {
+                LocalIdSite::Key => AuthoredId::at_key(id, pointer),
+                LocalIdSite::Value => AuthoredId::at_value(id, pointer),
+            })
+            .collect::<Vec<_>>();
+        errors.extend(local_id_collision_diagnostics(document, code, &entries));
+    });
 
     let warning_groups = [
         (
