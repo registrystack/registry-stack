@@ -24,7 +24,10 @@ use super::{
 /// Said wherever the effective role mode is `single`.
 pub use registry_platform_activation::{Activation, RoleMode, SINGLE_ROLE_STATEMENT};
 
-fn activation_layout() -> Layout {
+/// The Scheduling activation ledger's layout, which the hook worker's
+/// identity check and test fixtures read the record through.
+#[must_use]
+pub fn activation_layout() -> Layout {
     Layout::new(
         "scheduling",
         "scheduling_activations",
@@ -90,6 +93,12 @@ pub struct DeployedPolicy {
     pub scheduling_id: String,
     pub policy_revision: i64,
     pub policy_digest: String,
+    /// The database identity the active activation names, empty before the
+    /// first activation.
+    pub database_id: String,
+    /// The package digest the active activation names, empty before the
+    /// first activation.
+    pub package_digest: String,
 }
 
 /// The activation a records swap answers to: the database identity and the
@@ -233,8 +242,9 @@ impl PostgresStore {
     ///
     /// `verify_retained` proves retained hook events stay deliverable under
     /// the candidate. It runs on its own connection against the committed
-    /// state, before this transaction takes the publication locks, because
-    /// the verification reads the meta row under a share lock.
+    /// state, before this transaction takes the publication locks or runs a
+    /// migration, because the verification reads the activation record and
+    /// the delivery tables those statements lock.
     pub async fn activate<F, Fut>(
         &self,
         request: &ActivationRequest<'_>,
@@ -296,7 +306,7 @@ impl PostgresStore {
             }
         }
         schema.check()?;
-        let deployed = deployed_policy_in(&*transaction).await?;
+        let deployed = deployed_policy_in(&*transaction, active.as_ref()).await?;
         if let Some(deployed) = &deployed {
             refuse_foreign_scheduling_id(deployed, request.policy)?;
             if retains_hook_state(deployed, &schema) {
@@ -310,7 +320,8 @@ impl PostgresStore {
         // publication locks come before any migration DDL lock and a
         // migration never holds a table while it waits on an anchor. The
         // retained-binding check above runs before them on its own
-        // connection, because it reads the meta row under a share lock. A
+        // connection, because it reads the activation record and the
+        // delivery tables those statements lock. A
         // database without the supply and meta tables has no anchor to wait
         // on, so its publication locks are taken once migrations create them.
         let publication_locked = publication_tables_exist(&*transaction).await?;
@@ -459,7 +470,7 @@ impl PostgresStore {
                 changes_pending: false,
             });
         }
-        let deployed = deployed_policy_in(&*transaction).await?;
+        let deployed = deployed_policy_in(&*transaction, active.as_ref()).await?;
         let mut retained_hook_bindings_verified = None;
         if let Some(deployed) = &deployed {
             if let Err(refusal) = refuse_foreign_scheduling_id(deployed, policy) {
@@ -789,6 +800,7 @@ async fn active_activation_in(
 
 async fn deployed_policy_in(
     client: &impl GenericClient,
+    active: Option<&Activation>,
 ) -> Result<Option<DeployedPolicy>, StoreError> {
     let exists: bool = client
         .query_one("SELECT to_regclass('scheduling_meta') IS NOT NULL", &[])
@@ -807,6 +819,8 @@ async fn deployed_policy_in(
         scheduling_id: row.get(0),
         policy_revision: row.get(1),
         policy_digest: row.get(2),
+        database_id: active.map_or_else(String::new, |active| active.database_id.clone()),
+        package_digest: active.map_or_else(String::new, |active| active.package_digest.clone()),
     }))
 }
 

@@ -1259,3 +1259,40 @@ cleanup. The batch test also injects a real dependent foreign key to require
 rollback of all earlier deletions. Audit entries retain their independent
 retention. Committed claims/history and actionable outbox retention remain
 outside this change; terminal cleanup does not replace payload expiry auditing.
+
+## Hook delivery identity from the activation record
+
+**Decision and threat.** A hook worker must not deliver under a package that
+is no longer active. The worker used to compare its scheduling id, policy
+revision, and policy digest with the `scheduling_meta` row under `FOR SHARE`.
+It now calls the shared `registry-platform-hooks` identity seam, which reads
+the active row of `scheduling_activations` through
+`registry-platform-activation` inside the same delivery transaction and
+requires it to name the database id and package digest the worker was started
+with. The policy is part of the package and changes only through an
+activation, so a superseded policy is still caught, and a database id swap is
+now caught too. Any mismatch, missing activation, or read failure is
+`DeliveryError::Unavailable`, which sends nothing and audits nothing; the
+reason is not carried.
+
+**Locking.** The read is a plain snapshot read under a 5 second transaction
+`lock_timeout`, and takes no advisory or row lock. An activation holds its own
+exclusive lock and verifies retained deliveries on a second connection, so a
+shared lock taken here could wait on it while it waits on the worker; a
+migration lock held by an activation makes the attempt fail and retry instead.
+Without the former `FOR SHARE`, an activation may commit between a claim's
+check and its egress, which sends at most the batch already claimed under the
+earlier package. That window existed before as well, because egress always
+ran after the claim transaction committed; the finalize transaction checks
+again and refuses.
+
+**Capability set.** The runtime re-checks the compiled declarations against
+`HookCapabilities::URL_ONLY` (url handlers, no `when`, no `principal`); the
+policy shape already refuses those members, so this is defense in depth. The
+refusal is tested once in the platform crate.
+
+**Tests.** `crates/registry-scheduling/tests/postgres_commitments.rs`:
+`hook_delivery_stops_once_the_activation_record_names_another_package` (a
+later activation for another package leaves the pending delivery unclaimed,
+unsent, and unaudited). `crates/registry-platform-hooks/src/capability.rs`:
+`the_url_only_set_refuses_each_other_part_with_the_one_shared_diagnostic`.
