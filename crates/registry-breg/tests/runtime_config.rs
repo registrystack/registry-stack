@@ -16,7 +16,7 @@ use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::event_destination::EventDestinationActivationError;
 use registry_breg::runtime_config::{
-    load_runtime_config, load_runtime_config_with_env, parse_runtime_config,
+    check_runtime_config, load_runtime_config, load_runtime_config_with_env, parse_runtime_config,
     parse_runtime_config_with_env, RuntimeConfigError, RUNTIME_CONFIG_API_VERSION,
     RUNTIME_CONFIG_KIND,
 };
@@ -394,6 +394,165 @@ fn event_destination_binding(
       maximumAttempts: {maximum_attempts}
 "#
     )
+}
+
+fn evidence_provider_binding(logical_id: &str) -> String {
+    format!(
+        r#"  {logical_id}:
+    baseUrl: https://evidence.example/
+    trustBindingId: civil
+    tokenRef: secret:file/evidence-token
+    trustedJwksRef: secret:file/evidence-jwks
+"#
+    )
+}
+
+fn review_authority_binding(logical_id: &str) -> String {
+    format!(
+        r#"  {logical_id}:
+    endpoint: https://casework.example/reviews/
+    profile: producer
+    producerId: registry-producer
+    recoveryDays: 7
+    tokenRef: secret:file/review-token
+"#
+    )
+}
+
+#[test]
+fn runtime_definition_ids_refuse_separator_collisions_at_both_authored_keys() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let event_destinations = runtime_with_event_destinations(
+        &fixture,
+        &format!(
+            "{}{}",
+            event_destination_binding(
+                "notify-main",
+                "https://events.example/",
+                "/hooks/registry",
+                "secret:file/event-hmac-key",
+                4_000,
+                4,
+            ),
+            event_destination_binding(
+                "notify_main",
+                "https://events.example/",
+                "/hooks/registry",
+                "secret:file/event-hmac-key",
+                4_000,
+                4,
+            )
+        ),
+    );
+    let evidence_providers = format!(
+        "{base}evidenceProviders:\n{}{}",
+        evidence_provider_binding("verify-main"),
+        evidence_provider_binding("verify_main")
+    );
+    let review_authorities = format!(
+        "{base}reviewAuthorities:\n{}{}",
+        review_authority_binding("review-main"),
+        review_authority_binding("review_main")
+    );
+
+    for (source, expected_error, code, first, second) in [
+        (
+            event_destinations,
+            RuntimeConfigError::EventDestinationIdCollision,
+            "breg.runtime.event-destination-id-collision",
+            "/eventDestinations/notify-main",
+            "/eventDestinations/notify_main",
+        ),
+        (
+            evidence_providers,
+            RuntimeConfigError::EvidenceProviderIdCollision,
+            "breg.runtime.evidence-provider-id-collision",
+            "/evidenceProviders/verify-main",
+            "/evidenceProviders/verify_main",
+        ),
+        (
+            review_authorities,
+            RuntimeConfigError::ReviewAuthorityIdCollision,
+            "breg.runtime.review-authority-id-collision",
+            "/reviewAuthorities/review-main",
+            "/reviewAuthorities/review_main",
+        ),
+    ] {
+        assert_eq!(
+            parse_runtime_config_with_env(&source, env_lookup)
+                .expect_err("startup refuses separator-colliding definition ids"),
+            expected_error
+        );
+
+        let path = fixture.path("runtime-collision.yaml");
+        fs::write(&path, &source).expect("runtime fixture writes");
+        let check = check_runtime_config(&path, true, None);
+        let [diagnostic] = check.diagnostics.as_slice() else {
+            panic!("one collision is reported: {:?}", check.diagnostics);
+        };
+        assert_eq!(diagnostic.code, code);
+        assert_eq!(diagnostic.path, second);
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(diagnostic.related[0].path, first);
+        let second_key = second.rsplit('/').next().unwrap();
+        let first_key = first.rsplit('/').next().unwrap();
+        let expected_line = |key: &str| {
+            source
+                .lines()
+                .position(|line| line.trim_start().starts_with(&format!("{key}:")))
+                .map(|line| line + 1)
+        };
+        assert_eq!(
+            diagnostic.source.as_ref().unwrap().line,
+            expected_line(second_key)
+        );
+        assert_eq!(diagnostic.source.as_ref().unwrap().column, Some(3));
+        assert_eq!(diagnostic.related[0].line, expected_line(first_key));
+        assert_eq!(diagnostic.related[0].column, Some(3));
+    }
+}
+
+#[test]
+fn runtime_definition_collision_findings_share_the_runtime_file_budget() {
+    let fixture = RuntimeFixture::new();
+    let mut bindings = String::new();
+    for index in 0..101 {
+        bindings.push_str(&evidence_provider_binding(&format!("provider-{index}")));
+        bindings.push_str(&evidence_provider_binding(&format!("provider_{index}")));
+    }
+    let source = format!(
+        "{}evidenceProviders:\n{bindings}",
+        valid_runtime(&fixture.secret_root, &fixture.package_root)
+    );
+    let path = fixture.path("runtime-collision-overflow.yaml");
+    fs::write(&path, source).expect("runtime fixture writes");
+
+    let check = check_runtime_config(&path, true, None);
+    assert_eq!(check.diagnostics.len(), 101);
+    assert_eq!(
+        check
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == "breg.runtime.evidence-provider-id-collision"
+            })
+            .count(),
+        100
+    );
+    let overflow = check.diagnostics.last().unwrap();
+    assert_eq!(overflow.code, "config.too-many-problems");
+    assert_eq!(overflow.message, "1 more problem in this file is not shown");
+    assert_eq!(overflow.severity, registry_platform_yaml::Severity::Error);
+    let visible_paths = check.diagnostics[..100]
+        .iter()
+        .map(|diagnostic| diagnostic.path.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        visible_paths.len(),
+        100,
+        "the first collision is not duplicated"
+    );
 }
 
 fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::CompiledRegistry {
