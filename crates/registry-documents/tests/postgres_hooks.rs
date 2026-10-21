@@ -150,7 +150,8 @@ async fn a_verdict_captures_one_delivery_per_matching_observer_with_the_closed_p
         ready["subject"],
         json!({
             "recordReference": format!("/documents/{document}/versions/{version}"),
-            "recordRevision": 1,
+            // Reserved, finalized, then approved.
+            "recordRevision": 3,
         })
     );
     let digest: String = deployment
@@ -159,7 +160,6 @@ async fn a_verdict_captures_one_delivery_per_matching_observer_with_the_closed_p
     assert_eq!(
         ready["data"],
         json!({
-            "actorKind": "service",
             "documentId": document,
             "policyId": "citizen-delivery",
             "policyVersion": ready["data"]["policyVersion"],
@@ -192,6 +192,10 @@ async fn a_verdict_captures_one_delivery_per_matching_observer_with_the_closed_p
         .await;
     prepared.verify_due().await;
     assert_eq!(delivery_count(&deployment).await, 2);
+    let revision: i64 = deployment
+        .scalar("SELECT revision FROM documents_versions")
+        .await;
+    assert_eq!(revision, 3, "a repeated approval is not a change");
 }
 
 #[tokio::test]
@@ -228,6 +232,17 @@ async fn a_version_approved_again_after_a_verifier_rebind_reports_ready_again() 
         assert_eq!(envelope["data"]["versionId"], version.as_str());
     }
     assert_ne!(events[0].2["id"], events[1].2["id"]);
+    // Finalize, approve, suspend on rebind, approve again: each recorded
+    // change advances the version's revision, so the second report names a
+    // later revision than the first and a receiver can order them.
+    let revision = |envelope: &Value| envelope["subject"]["recordRevision"].as_i64().unwrap();
+    let (first, second) = (revision(&events[0].2), revision(&events[1].2));
+    assert!(first > 1, "the approval advanced the version's revision");
+    assert_eq!(second, first + 2, "a suspension and an approval later");
+    let stored: i64 = deployment
+        .scalar("SELECT revision FROM documents_versions")
+        .await;
+    assert_eq!(stored, second);
 }
 
 #[tokio::test]
@@ -290,6 +305,8 @@ async fn grant_issue_and_revoke_each_capture_one_event_and_repeats_capture_none(
         String::from_utf8_lossy(&issued.body)
     );
     let grant = issued.json()["id"].as_str().unwrap().to_owned();
+    let expires_at = issued.json()["expiresAt"].clone();
+    assert!(expires_at.is_string());
     let replayed = api
         .grant_with_key(APP, &key, &document, &version, READER.subject, None)
         .await;
@@ -340,6 +357,7 @@ async fn grant_issue_and_revoke_each_capture_one_event_and_repeats_capture_none(
                 "actorKind": "service",
                 "change": change,
                 "documentId": document,
+                "expiresAt": expires_at,
                 "grantId": grant,
                 "versionId": version,
             })
@@ -373,6 +391,7 @@ async fn a_removal_captures_one_revoked_event_per_grant_it_revokes_and_a_repeat_
     let (document, version) = upload(&api, 12).await;
     assert_eq!(prepared.verify_due().await, 1);
     let mut active = Vec::new();
+    let mut expiries = std::collections::BTreeMap::new();
     for grantee in ["reader-one", "reader-two", "reader-three"] {
         let issued = api.grant(APP, &document, &version, grantee, None).await;
         assert_eq!(
@@ -381,7 +400,9 @@ async fn a_removal_captures_one_revoked_event_per_grant_it_revokes_and_a_repeat_
             "{}",
             String::from_utf8_lossy(&issued.body)
         );
-        active.push(issued.json()["id"].as_str().unwrap().to_owned());
+        let grant = issued.json()["id"].as_str().unwrap().to_owned();
+        expiries.insert(grant.clone(), issued.json()["expiresAt"].clone());
+        active.push(grant);
     }
     let already = api
         .grant(APP, &document, &version, "reader-revoked", None)
@@ -414,13 +435,17 @@ async fn a_removal_captures_one_revoked_event_per_grant_it_revokes_and_a_repeat_
                     "actorKind": "human",
                     "change": "revoked",
                     "documentId": document,
+                    "expiresAt": expiries[&grant],
                     "grantId": grant,
                     "versionId": version,
                 })
             );
             assert_eq!(
-                envelope["subject"]["recordReference"],
-                format!("/document-grants/{grant}")
+                envelope["subject"],
+                json!({
+                    "recordReference": format!("/document-grants/{grant}"),
+                    "recordRevision": 2,
+                })
             );
             grant
         })

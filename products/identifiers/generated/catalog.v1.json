@@ -4722,7 +4722,7 @@
       },
       "artifact": {
         "path": "products/documents/generated/events/document-grant-changed.schema.json",
-        "sha256": "f2db2d463b14022bf76d39edfc4650c8a014ee73fcf03035d5de08afe7e2f7fa",
+        "sha256": "dc7d339a46f7450b1c158e7c5bce237f3c1c5ea54a03c1b3fa3e53cb54a1c4a1",
         "mediaType": "application/schema+json"
       }
     },
@@ -4740,7 +4740,7 @@
       },
       "artifact": {
         "path": "products/documents/generated/events/document-version-ready.schema.json",
-        "sha256": "e080237ece0978b9156e48b96be94304e82a302fc1c8647f3a692df2b4a2a878",
+        "sha256": "d341927b2bb9a139cebe16a2edff9acaf6b069c9863b6f6f12108be6e4cd0731",
         "mediaType": "application/schema+json"
       }
     },
@@ -4758,7 +4758,7 @@
       },
       "artifact": {
         "path": "products/documents/generated/events/document-version-rejected.schema.json",
-        "sha256": "8528879a38fbbd825343de405fc363dc9ce694675e9e9675c2fd3c527deef975",
+        "sha256": "02988cabcddaa2560bc4efae9d8ad45bbc800fb2be14abfbb59533112e1c892a",
         "mediaType": "application/schema+json"
       }
     },

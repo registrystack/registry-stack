@@ -18,6 +18,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use chrono::{DateTime, SecondsFormat, Utc};
+
 use registry_documents_core::{
     ActorKind, HookTrigger, DOCUMENTS_EVENT_SOURCE_PREFIX, DOCUMENT_GRANT_EVENT_FIELDS,
 };
@@ -156,15 +158,18 @@ impl GrantChange {
             Self::Revoked => "revoked",
         }
     }
+}
 
-    /// The revision of the grant the change leaves: an issued grant is at
-    /// its first, and a revoked one at its second and last.
-    const fn revision(self) -> i64 {
-        match self {
-            Self::Issued => 1,
-            Self::Revoked => 2,
-        }
-    }
+/// What a grant event reports about the grant itself.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GrantFacts {
+    pub grant_id: Uuid,
+    pub change: GrantChange,
+    /// The kind of the caller that issued or revoked the grant.
+    pub actor_kind: ActorKind,
+    /// The expiry frozen into the grant at issue. Reaching it is not a
+    /// recorded transition and emits no event.
+    pub expires_at: DateTime<Utc>,
 }
 
 /// Everything an observer of one event may be told, read from the store
@@ -179,14 +184,17 @@ pub struct DocumentEvent {
     pub version_digest: String,
     pub policy_id: String,
     pub policy_version: String,
-    pub actor_kind: ActorKind,
-    /// The grant and its change, present exactly on a grant event.
-    pub grant: Option<(Uuid, GrantChange)>,
+    /// The revision the change leaves the reported record at: the
+    /// version's on a version event, the grant's on a grant event. Every
+    /// recorded change of state advances it, so it only grows.
+    pub revision: i64,
+    /// Present exactly on a grant event.
+    pub grant: Option<GrantFacts>,
 }
 
 impl DocumentEvent {
-    /// The version event `trigger` reports for `version_id`. The actor kind
-    /// is the kind of the caller that reserved the version.
+    /// The version event `trigger` reports for `version_id`, read under the
+    /// row lock the transition holds.
     pub async fn version(
         transaction: &Transaction<'_>,
         trigger: HookTrigger,
@@ -200,7 +208,7 @@ impl DocumentEvent {
                 "SELECT document.document_id, version.version_id,
                         COALESCE(version.verified_digest, version.computed_digest,
                                  version.expected_digest),
-                        document.policy_id, document.policy_version, version.actor_kind
+                        document.policy_id, document.policy_version, version.revision
                    FROM documents_versions AS version
                    JOIN documents_documents AS document
                      ON document.document_id = version.document_id
@@ -213,7 +221,7 @@ impl DocumentEvent {
     }
 
     /// The grant event `change` reports for `grant_id`, made by a caller of
-    /// `actor_kind`.
+    /// `actor_kind`, read under the row lock the transition holds.
     pub async fn grant(
         transaction: &Transaction<'_>,
         grant_id: Uuid,
@@ -225,42 +233,44 @@ impl DocumentEvent {
                 "SELECT document.document_id, version.version_id,
                         COALESCE(version.verified_digest, version.computed_digest,
                                  version.expected_digest),
-                        document.policy_id, document.policy_version, $2::text
+                        document.policy_id, document.policy_version, grant_record.revision,
+                        grant_record.expires_at
                    FROM documents_grants AS grant_record
                    JOIN documents_versions AS version
                      ON version.version_id = grant_record.version_id
                    JOIN documents_documents AS document
                      ON document.document_id = grant_record.document_id
                   WHERE grant_record.grant_id = $1",
-                &[&grant_id, &actor_kind.as_str()],
+                &[&grant_id],
             )
             .await
             .map_err(|_| HookCaptureError::Unavailable)?;
+        let expires_at = row.try_get(6).map_err(|_| HookCaptureError::Unavailable)?;
         Self::from_row(
             &row,
             HookTrigger::DocumentGrantChanged,
-            Some((grant_id, change)),
+            Some(GrantFacts {
+                grant_id,
+                change,
+                actor_kind,
+                expires_at,
+            }),
         )
     }
 
     fn from_row(
         row: &tokio_postgres::Row,
         trigger: HookTrigger,
-        grant: Option<(Uuid, GrantChange)>,
+        grant: Option<GrantFacts>,
     ) -> Result<Self, HookCaptureError> {
-        let actor_kind = match row
-            .try_get::<_, String>(5)
-            .map_err(|_| HookCaptureError::Unavailable)?
-            .as_str()
-        {
-            "service" => ActorKind::Service,
-            "human" => ActorKind::Human,
-            _ => return Err(HookCaptureError::InvalidCapture),
-        };
         let column = |index: usize| {
             row.try_get::<_, String>(index)
                 .map_err(|_| HookCaptureError::Unavailable)
         };
+        let revision: i64 = row.try_get(5).map_err(|_| HookCaptureError::Unavailable)?;
+        if revision < 1 {
+            return Err(HookCaptureError::InvalidCapture);
+        }
         Ok(Self {
             trigger,
             document_id: row.try_get(0).map_err(|_| HookCaptureError::Unavailable)?,
@@ -268,31 +278,30 @@ impl DocumentEvent {
             version_digest: column(2)?,
             policy_id: column(3)?,
             policy_version: column(4)?,
-            actor_kind,
+            revision,
             grant,
         })
     }
 
     /// The record the event is about and the revision the change leaves it
-    /// at. A version is reported at its first revision; a grant at the
-    /// revision its change leaves.
+    /// at.
     fn subject(&self) -> Result<EventSubject, HookCaptureError> {
-        match (self.trigger, self.grant) {
-            (HookTrigger::DocumentGrantChanged, Some((grant_id, change))) => Ok(EventSubject {
-                record_reference: format!("/document-grants/{grant_id}"),
-                record_revision: change.revision(),
-            }),
-            (HookTrigger::DocumentVersionReady | HookTrigger::DocumentVersionRejected, None) => {
-                Ok(EventSubject {
-                    record_reference: format!(
-                        "/documents/{}/versions/{}",
-                        self.document_id, self.version_id
-                    ),
-                    record_revision: 1,
-                })
+        let record_reference = match (self.trigger, &self.grant) {
+            (HookTrigger::DocumentGrantChanged, Some(grant)) => {
+                format!("/document-grants/{}", grant.grant_id)
             }
-            _ => Err(HookCaptureError::InvalidCapture),
-        }
+            (HookTrigger::DocumentVersionReady | HookTrigger::DocumentVersionRejected, None) => {
+                format!(
+                    "/documents/{}/versions/{}",
+                    self.document_id, self.version_id
+                )
+            }
+            _ => return Err(HookCaptureError::InvalidCapture),
+        };
+        Ok(EventSubject {
+            record_reference,
+            record_revision: self.revision,
+        })
     }
 }
 
@@ -850,15 +859,18 @@ fn projected(event: &DocumentEvent, projection: &[String]) -> Result<Value, Hook
         if !event.trigger.fields().contains(&field.as_str()) {
             return Err(HookCaptureError::InvalidCapture);
         }
-        let value = match (field.as_str(), event.grant) {
+        let value = match (field.as_str(), &event.grant) {
             ("documentId", _) => json!(event.document_id),
             ("versionId", _) => json!(event.version_id),
             ("versionDigest", _) => json!(event.version_digest),
             ("policyId", _) => json!(event.policy_id),
             ("policyVersion", _) => json!(event.policy_version),
-            ("actorKind", _) => json!(event.actor_kind.as_str()),
-            ("grantId", Some((grant_id, _))) => json!(grant_id),
-            ("change", Some((_, change))) => json!(change.as_str()),
+            ("actorKind", Some(grant)) => json!(grant.actor_kind.as_str()),
+            ("grantId", Some(grant)) => json!(grant.grant_id),
+            ("change", Some(grant)) => json!(grant.change.as_str()),
+            ("expiresAt", Some(grant)) => json!(grant
+                .expires_at
+                .to_rfc3339_opts(SecondsFormat::Millis, true)),
             // Content, labels, media types, names, subjects, recipients,
             // and anything about the person a document describes are not
             // representable here.
@@ -909,17 +921,15 @@ pub fn event_data_schema(trigger: HookTrigger) -> Value {
             "description": "The version of that policy the document was placed under."
         }),
     );
-    let actor = match trigger {
-        HookTrigger::DocumentGrantChanged => "The kind of caller that issued or revoked the grant.",
-        HookTrigger::DocumentVersionReady | HookTrigger::DocumentVersionRejected => {
-            "The kind of caller that reserved the version."
-        }
-    };
-    properties.insert(
-        "actorKind".to_owned(),
-        json!({"type": "string", "enum": ["service", "human"], "description": actor}),
-    );
     if trigger == HookTrigger::DocumentGrantChanged {
+        properties.insert(
+            "actorKind".to_owned(),
+            json!({
+                "type": "string",
+                "enum": ["service", "human"],
+                "description": "The kind of caller that issued or revoked the grant."
+            }),
+        );
         properties.insert(
             "grantId".to_owned(),
             uuid("The document grant that changed."),
@@ -930,6 +940,14 @@ pub fn event_data_schema(trigger: HookTrigger) -> Value {
                 "type": "string",
                 "enum": [GrantChange::Issued.as_str(), GrantChange::Revoked.as_str()],
                 "description": "Whether the grant was issued or revoked."
+            }),
+        );
+        properties.insert(
+            "expiresAt".to_owned(),
+            json!({
+                "type": "string",
+                "format": "date-time",
+                "description": "The expiry frozen into the grant at issue. Reaching it emits no event: the grant stops releasing the version at this instant."
             }),
         );
     }
