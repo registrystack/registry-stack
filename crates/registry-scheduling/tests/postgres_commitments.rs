@@ -19,19 +19,20 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Timelike, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use registry_platform_audit::{AuditHashSecret, AuditKeyHasher};
-use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
 use registry_platform_hooks::delivery::DeliveryOutcome;
 use registry_platform_hooks::{EnvelopeLimits, HookEnvelope, HookHandlerSource};
 use registry_platform_oidc::{
     task_grant::{TaskGrantStatusEndpoint, TaskGrantStatusRegistry},
     JwksFetcher, JwksFetcherConfig, TokenVerifierConfig,
 };
+use registry_platform_yaml::Url;
 use registry_scheduling::audit::{AuditCapture, SchedulingAudit, SCHEDULING_AUDIT_SCHEMA};
 use registry_scheduling::auth::SchedulingAuthenticator;
 use registry_scheduling::config::{
     DatabaseConfig, JwksSource, OidcClientsConfig, OidcConfig, OidcIssuerConfig,
 };
-use registry_scheduling::config::{HookDestinationConfig, ReminderDestinationConfig};
+use registry_scheduling::config::{ReminderDestinationConfig, UrlHookDestinationConfig};
 use registry_scheduling::hooks::{ActivatedHooks, HookRuntimeIdentity};
 use registry_scheduling::http::{router, HttpState};
 use registry_scheduling::runtime::{dispatch_due_intents, reminder_transport};
@@ -389,9 +390,12 @@ async fn fixture_publishing_with_hook_and_status(
     }) {
         hook_destinations.insert(
             destination_id.clone(),
-            HookDestinationConfig {
-                url: hook_url.to_owned(),
-                hmac_sha256_key_ref: format!("secret:env/{hook_secret_name}"),
+            UrlHookDestinationConfig {
+                url: Url::new(hook_url).expect("the test hook URL"),
+                hmac_sha256_key_ref: SecretReference::parse(format!(
+                    "secret:env/{hook_secret_name}"
+                ))
+                .expect("the test hook key reference"),
                 attempt_timeout_milliseconds: 5_000,
                 maximum_attempts: 1,
             },
@@ -2164,9 +2168,11 @@ async fn changed_retained_hook_destination_binding_is_refused() {
         .expect("the scheduling hook secret resolver");
     let destinations = BTreeMap::from([(
         "appointment-events".to_owned(),
-        HookDestinationConfig {
-            url: "http://127.0.0.1:9/changed-scheduling-hooks".to_owned(),
-            hmac_sha256_key_ref: fx.hook_secret_ref.clone(),
+        UrlHookDestinationConfig {
+            url: Url::new("http://127.0.0.1:9/changed-scheduling-hooks")
+                .expect("the changed hook URL"),
+            hmac_sha256_key_ref: SecretReference::parse(fx.hook_secret_ref.clone())
+                .expect("the test hook key reference"),
             attempt_timeout_milliseconds: 5_000,
             maximum_attempts: 1,
         },

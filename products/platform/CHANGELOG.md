@@ -26,6 +26,11 @@
   again.
 - `registry-platform-config` adds the shared blocks `ObjectStorageConfig` and
   `AttachmentVerifierConfig` (CFG-SCHEMA-5).
+- `registry-platform-config` adds the shared block `UrlHookDestinationConfig`
+  (CFG-SCHEMA-5), Scheduling's `destinations.hooks` entry with its keys,
+  bounds, and defaults unchanged. `registry-platform-hooks` activates it with
+  `activate_url_hook_destinations` behind `postgres`, recording the same
+  binding digest.
 - BREAKING: the destination key of both blocks is `url`, not `endpoint`
   (CFG-VAL-7). Rename `endpoint:` to `url:` under `attachmentStorage` and
   `attachmentVerification` in a BReg runtime configuration; the old key is

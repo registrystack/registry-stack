@@ -110,6 +110,17 @@ list work captured under a superseded binding and explicitly discard pending
 work, a dead letter, or an expired lease under its exact generation. Discard
 never rebinds or sends the work, refuses a live lease or recovered proposal
 receipt, and preserves the shared envelope while another delivery needs it.
+
+The simple URL hook destination block, `UrlHookDestinationConfig` (a `url`, an
+`hmacSha256KeyRef`, and a delivery budget), is defined in
+`registry-platform-config` and re-exported from `delivery`.
+`activate_url_hook_destinations` turns a map of them into signing destinations
+under a fixed outbound policy (https, or http on a loopback host, no private
+address range, no client certificate) and records the binding digest. Scheduling
+and Document Store share that block. The Base Registry Engine configures the
+full outbound policy instead, because its destinations may reach private address
+ranges and present a client certificate for mTLS.
+
 Nothing above this section is behind the feature:
 the contract half has no database dependency, so a product that only declares and
 validates hooks takes the crate with default features and links no PostgreSQL
