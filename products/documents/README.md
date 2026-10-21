@@ -44,7 +44,7 @@ stable order.
 |---|---|
 | `registry-documents-core` | Source-neutral naming, the problem vocabulary, wire DTOs, and the `DocumentsProject` model |
 | `registry-documents` | PostgreSQL-backed runtime and the `documents` binary |
-| `registry-documentsctl` | Offline configuration checks and the `documentsctl` binary |
+| `registry-documentsctl` | Configuration checks, packaging, activation, dead-letter replay, and the `documentsctl` binary |
 | `registry-documents-client` | Bounded Rust client over the runtime's HTTP contract |
 
 ## Configuration
@@ -71,8 +71,46 @@ cargo run --locked -p registry-documentsctl -- check \
 refused, 2 for a usage error, and 3 when a file cannot be read. `--format
 json` prints the `DocumentsCtlReport` envelope.
 
-Serve with `documents --runtime-config ABSOLUTE_FILE serve`. The runtime
-listens on `127.0.0.1:8116` in the starter.
+## Operate
+
+`documentsctl init DIRECTORY` writes the starter project and runtime
+configuration into a new directory and never overwrites one. A deployment
+then runs in this order:
+
+```bash
+documentsctl package PROJECT --output PACKAGE_DIRECTORY
+documentsctl plan --runtime-config ABSOLUTE_FILE
+documentsctl apply --runtime-config ABSOLUTE_FILE \
+  --operator-reference CHANGE --backup SNAPSHOT
+documents --runtime-config ABSOLUTE_FILE serve
+```
+
+`package` checks the project and writes the deployable package `package.root`
+names; `--dry-run` reports its digest without writing it, for
+`package.expectedDigest`. `plan` reports what `apply` would change and writes
+nothing. `apply` connects with `database.migrationUrlRef`, applies the schema,
+records the verified package digest in the activation ledger, and grants the
+runtime role what serving needs. Applying the active package again records
+nothing. `status` reports the active package and the activation history.
+
+`serve` refuses a database with no active package, one recorded for another
+`identity.databaseId`, and one whose active package is not the configured
+one; apply the package first. The runtime listens on `127.0.0.1:8116` in the
+starter.
+
+A verification job that dead-letters leaves its version pending and
+suspended. `documentsctl verification list --runtime-config ABSOLUTE_FILE`
+shows each such job with its generation, and
+
+```bash
+documentsctl verification replay --runtime-config ABSOLUTE_FILE \
+  --version-id VERSION --expected-generation GENERATION
+```
+
+returns it to pending under the next generation, to be verified like any
+other. A generation other than the current one is refused. The replay is
+written to the `documentsctl` companion audit journal. No HTTP route lists or
+replays a job.
 
 ## Generated files
 
@@ -100,7 +138,10 @@ products/documents/scripts/check-checkpoint.sh
 products/documents/scripts/check-contracts.sh
 DOCUMENTS_TEST_DATABASE_URL=<disposable database> cargo test --locked \
   -p registry-documents --features postgres-test \
-  --test postgres_startup --test postgres_documents --test postgres_s3
+  --test postgres_startup --test postgres_operator --test postgres_documents \
+  --test postgres_s3
+DOCUMENTS_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-documentsctl --features postgres-test --test postgres_cli
 ```
 
 The checkpoint runs the dependency-direction and database-isolation gates,
