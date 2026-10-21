@@ -17,6 +17,16 @@ name = "postgres_startup"
 path = "tests/postgres_startup.rs"
 required-features = ["postgres-test"]
 
+[[test]]
+name = "postgres_documents"
+path = "tests/postgres_documents.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_s3"
+path = "tests/postgres_s3.rs"
+required-features = ["postgres-test"]
+
 [features]
 default = []
 postgres-test = []

@@ -6,11 +6,15 @@
 //! The runtime serves `/health` and refuses every other request with a
 //! problem from the closed vocabulary in `registry-documents-core`.
 
+pub mod actor;
+pub mod audit;
 pub mod config;
+pub mod content;
 pub mod http;
 pub mod package;
 pub mod runtime;
 #[cfg(feature = "schema")]
 pub mod schema;
+pub mod service;
 pub mod store;
 pub mod verification;
