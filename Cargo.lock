@@ -5394,6 +5394,8 @@ dependencies = [
  "registry-caseworkctl",
  "registry-cli-reference",
  "registry-coordinator",
+ "registry-documents",
+ "registry-documentsctl",
  "registry-evidence",
  "registry-evidence-oid4vci",
  "registry-evidencectl",
@@ -5639,6 +5641,78 @@ dependencies = [
  "thiserror 2.0.21",
  "time",
  "tokio",
+]
+
+[[package]]
+name = "registry-documents"
+version = "0.43.0"
+dependencies = [
+ "axum",
+ "clap",
+ "deadpool-postgres",
+ "jsonschema",
+ "registry-documents-client",
+ "registry-documents-core",
+ "registry-platform-audit",
+ "registry-platform-buildinfo",
+ "registry-platform-config",
+ "registry-platform-httpsec",
+ "registry-platform-yaml",
+ "reqwest 0.12.28",
+ "rustls",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "registry-documents-client"
+version = "0.43.0"
+dependencies = [
+ "axum",
+ "registry-documents-core",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "reqwest 0.12.28",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "registry-documents-core"
+version = "0.43.0"
+dependencies = [
+ "registry-platform-config",
+ "registry-platform-yaml",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "registry-documentsctl"
+version = "0.43.0"
+dependencies = [
+ "clap",
+ "registry-documents",
+ "registry-documents-core",
+ "registry-platform-buildinfo",
+ "registry-platform-yaml",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

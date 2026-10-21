@@ -1,0 +1,28 @@
+[package]
+name = "registry-documentsctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Registry Stack Document Store adopter and local operator tooling."
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "documentsctl"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap.workspace = true
+registry-documents.workspace = true
+registry-documents-core.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-platform-yaml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

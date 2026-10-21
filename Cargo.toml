@@ -75,6 +75,10 @@ members = [
     "crates/registry-messaging-client",
     "crates/registry-messaging-client-node",
     "crates/registry-messaging-client-py",
+    "crates/registry-documents-core",
+    "crates/registry-documents",
+    "crates/registry-documentsctl",
+    "crates/registry-documents-client",
 ]
 exclude = [
     "products/breg/wasm-handler-sdk",
@@ -133,6 +137,10 @@ registry-messaging = { path = "crates/registry-messaging", version = "0.43.0" }
 registry-messaging-core = { path = "crates/registry-messaging-core", version = "0.43.0" }
 registry-messagingctl = { path = "crates/registry-messagingctl", version = "0.43.0" }
 registry-messaging-client = { path = "crates/registry-messaging-client", version = "0.43.0" }
+registry-documents = { path = "crates/registry-documents", version = "0.43.0" }
+registry-documents-core = { path = "crates/registry-documents-core", version = "0.43.0" }
+registry-documentsctl = { path = "crates/registry-documentsctl", version = "0.43.0" }
+registry-documents-client = { path = "crates/registry-documents-client", version = "0.43.0" }
 registry-breg = { path = "crates/registry-breg", version = "0.43.0", default-features = false }
 registry-bregctl = { path = "crates/registry-bregctl", version = "0.43.0" }
 registry-platform-activation = { path = "crates/registry-platform-activation", version = "0.43.0" }
