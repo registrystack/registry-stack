@@ -13,18 +13,19 @@ use uuid::Uuid;
 
 use crate::artifacts::{event_data_schema_binding, generate_artifacts};
 use crate::contract::{
-    parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource, ActionSource,
-    Classification, ConstraintSource, DerivedExecutionSource, DerivedFieldSource, DisplaySource,
-    EntityExtensionSource, EntitySource, EventConditionSource, EventTrigger, FieldSource,
-    FieldTypeSource, GeoJsonSource, HookHandlerSource, HookPhase, LookupValueOrigin,
-    ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
-    ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
-    SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile,
-    WebhookDeadLetterMode, DECIMAL_BOUNDS_REQUIREMENTS, MAX_ACCESS_LOG_EXEMPTIONS,
-    MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES, MAX_ACCESS_LOG_RETENTION_DAYS,
-    MAX_ACCESS_LOG_SUBJECT_CHARACTERS, MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES,
-    MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
-    MAX_FIELD_LOOKUP_NORMALIZATION_STEPS, MAX_STRUCTURED_VALUE_BYTES,
+    parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource,
+    ActionExecutionSource, ActionSource, Classification, ConstraintSource, DerivedExecutionSource,
+    DerivedFieldSource, DisplaySource, EntityExtensionSource, EntitySource, EventConditionSource,
+    EventTrigger, FieldSource, FieldTypeSource, GeoJsonSource, HookHandlerSource, HookPhase,
+    LookupValueOrigin, ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
+    PresentationSource, ReadPathPermissionSource, RegistryModule, RegistryProject,
+    SpatialBboxPermissionSource, SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole,
+    WebhookAuthenticationProfile, WebhookDeadLetterMode, DECIMAL_BOUNDS_REQUIREMENTS,
+    MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
+    MAX_ACCESS_LOG_RETENTION_DAYS, MAX_ACCESS_LOG_SUBJECT_CHARACTERS,
+    MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
+    MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
+    MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::derived_sql::{derived_sql_dependencies, validate_derived_sql};
 use crate::diagnostics::{CompileFailure, Diagnostic};
@@ -1406,6 +1407,20 @@ fn validate_authored_display_text(
             errors,
         );
     }
+    for profile in &project.access_profiles {
+        validate_presentation_source(
+            &profile.display,
+            &format!("accessProfiles[id={}].display", profile.id),
+            errors,
+        );
+    }
+    for dataset in &project.statistical_datasets {
+        validate_presentation_source(
+            &dataset.display,
+            &format!("statisticalDatasets[id={}].display", dataset.id),
+            errors,
+        );
+    }
     for entity in &project.entities {
         validate_entity_display_text(entity, &format!("recordTypes[id={}]", entity.id), errors);
     }
@@ -1442,6 +1457,20 @@ fn validate_authored_display_text(
                     );
                 }
             }
+            for profile in &extension.access_profiles {
+                validate_presentation_source(
+                    &profile.display,
+                    &format!("{path}.accessProfiles[id={}].display", profile.id),
+                    errors,
+                );
+            }
+            for hook in &extension.hooks {
+                validate_presentation_source(
+                    &hook.display,
+                    &format!("{path}.hooks[id={}].display", hook.id),
+                    errors,
+                );
+            }
         }
         for action in &module.actions {
             validate_action_display_text(
@@ -1474,6 +1503,20 @@ fn validate_entity_display_text(entity: &EntitySource, path: &str, errors: &mut 
             );
         }
     }
+    for profile in &entity.access_profiles {
+        validate_presentation_source(
+            &profile.display,
+            &format!("{path}.accessProfiles[id={}].display", profile.id),
+            errors,
+        );
+    }
+    for hook in &entity.hooks {
+        validate_presentation_source(
+            &hook.display,
+            &format!("{path}.hooks[id={}].display", hook.id),
+            errors,
+        );
+    }
 }
 
 fn validate_action_display_text(action: &ActionSource, path: &str, errors: &mut Vec<Diagnostic>) {
@@ -1485,9 +1528,31 @@ fn validate_action_display_text(action: &ActionSource, path: &str, errors: &mut 
             errors,
         );
     }
+    if let ActionExecutionSource::Proposal { proposal } = &action.execution {
+        for hook in &proposal.hooks {
+            validate_presentation_source(
+                &hook.display,
+                &format!("{path}.execution.proposal.hooks[id={}].display", hook.id),
+                errors,
+            );
+        }
+    }
 }
 
 fn validate_display_source(display: &DisplaySource, path: &str, errors: &mut Vec<Diagnostic>) {
+    if let Some(label) = display.label.as_deref() {
+        validate_display_text(label, &format!("{path}.label"), errors);
+    }
+    if let Some(description) = display.description.as_deref() {
+        validate_display_text(description, &format!("{path}.description"), errors);
+    }
+}
+
+fn validate_presentation_source(
+    display: &PresentationSource,
+    path: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
     if let Some(label) = display.label.as_deref() {
         validate_display_text(label, &format!("{path}.label"), errors);
     }
