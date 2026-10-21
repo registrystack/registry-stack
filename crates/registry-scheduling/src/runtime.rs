@@ -20,6 +20,14 @@
 //! external (INT-02). When no destination is configured the outbox is the
 //! boundary: intents are recorded and set aside as local, never pretended
 //! delivered.
+//!
+//! A cancellation or reschedule cancels the appointment's reminders no
+//! attempt has started on inside its own transaction. A reminder a
+//! dispatcher already holds is checked under its lease immediately before
+//! the send and set aside when its appointment was cancelled or moved. A
+//! cancel or reschedule that commits between that check and the send still
+//! sends the stale reminder, and the receiver gets no ordering promise
+//! across processes: that is inherent to at-least-once delivery.
 
 use std::future::Future;
 use std::num::NonZeroUsize;
@@ -294,12 +302,13 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
 
     // One lane, so each intent is leased and sent in turn, as the outbox
     // was always drained.
+    let intent_dispatcher = intents::intent_dispatcher(store.clone())
+        .await
+        .map_err(database_step("delivery intent dispatcher"))?;
     let intent_worker = DispatchWorker::new(
-        intents::intent_dispatcher(store.clone())
-            .await
-            .map_err(database_step("delivery intent dispatcher"))?,
+        intent_dispatcher.clone(),
         Arc::new(intents::IntentTransport::new(
-            store.clone(),
+            intent_dispatcher,
             scheduling_id.clone(),
             reminders.map(Arc::new),
         )),
@@ -721,8 +730,8 @@ fn delivery_of(status: u16) -> Delivery {
 /// payload that cannot become an event, and an exhausted attempt budget set
 /// the intent aside as failed for the operator; with no destination
 /// configured the intent is set aside as local: recorded, never pretended
-/// delivered. A reminder whose appointment was cancelled or moved to a newer
-/// revision is set aside without a send.
+/// delivered. A claimed reminder whose appointment was cancelled or moved to
+/// a newer revision is set aside without a send.
 ///
 /// The runtime runs the same dispatch as a supervised worker; this pass is
 /// the bounded form the database suite drives.
@@ -738,7 +747,7 @@ pub async fn dispatch_due_intents(
 ) -> Result<(), StoreError> {
     let dispatcher = intents::intent_dispatcher(store.clone()).await?;
     let transport =
-        intents::IntentTransport::new(store.clone(), scheduling_id.to_owned(), transport);
+        intents::IntentTransport::new(dispatcher.clone(), scheduling_id.to_owned(), transport);
     for _ in 0..INTENT_DRAIN_LIMIT {
         match dispatcher.dispatch_once(&transport).await {
             Ok(DispatchOutcome::Idle) => return Ok(()),
@@ -828,6 +837,38 @@ pub async fn finish_intent_for_test(
                 detail: (),
             },
         )
+        .await
+        .map_err(|_| StoreError::IntentDispatch)?;
+    Ok(())
+}
+
+/// Send one leased intent as the dispatch worker would, under its lease,
+/// and record the outcome the send returned.
+///
+/// # Errors
+///
+/// Returns [`StoreError::IntentDispatch`] when the send started nothing
+/// because the lease no longer owns the intent, or when the outcome could
+/// not be recorded under it.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn send_claimed_intent_for_test(
+    store: &PostgresStore,
+    scheduling_id: &str,
+    transport: Option<Arc<ReminderTransport>>,
+    lease: &IntentLeaseForTest,
+) -> Result<(), StoreError> {
+    use registry_platform_dispatch::postgres::DispatchTransport as _;
+
+    let dispatcher = intents::intent_dispatcher(store.clone()).await?;
+    let transport =
+        intents::IntentTransport::new(dispatcher.clone(), scheduling_id.to_owned(), transport);
+    let sent = transport
+        .send(&lease.0)
+        .await
+        .map_err(|_| StoreError::IntentDispatch)?;
+    dispatcher
+        .finish(&lease.0, sent)
         .await
         .map_err(|_| StoreError::IntentDispatch)?;
     Ok(())

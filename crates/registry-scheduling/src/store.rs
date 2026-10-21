@@ -46,6 +46,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use registry_platform_calendar::CalendarInterval;
 use registry_platform_config::SecretResolver;
+use registry_platform_dispatch::postgres::{cancel_unattempted, JobKey, JobTable};
 use registry_scheduling_core::{
     assess_window_record_impact, evaluate_exact_time_admission, evaluate_hold_state,
     evaluate_window_admission, AdmissionRefusal, ExactTimeContext, ExternalReference, LedgerClaim,
@@ -1892,8 +1893,9 @@ impl PostgresStore {
                 }))
             .await?;
         // A stale unsent reminder describes an appointment that no longer
-        // exists in this form; its dispatch sets it aside, never sends it
-        // (INT-02).
+        // exists in this form; it is cancelled here, and one a dispatcher
+        // already holds is set aside at its send, never sent (INT-02).
+        transaction.cancel_unsent_reminders(appointment_id).await?;
         let moved = ClaimRow {
             displayed_start: admission.start,
             displayed_end: admission.end,
@@ -2018,6 +2020,7 @@ impl PostgresStore {
                 json!({"reason": reason}),
             )
             .await?;
+        transaction.cancel_unsent_reminders(appointment_id).await?;
         transaction
             .insert_outbox(
                 "cancellation",
@@ -2135,27 +2138,6 @@ impl PostgresStore {
         self.client().await
     }
 
-    /// Whether a claimed intent still describes a decision the caller
-    /// stands by, read immediately before its send. A confirmation, change
-    /// or cancellation always does. A reminder does only while its
-    /// appointment is active at the revision the reminder was minted for:
-    /// a cancellation or reschedule supersedes it, and it is set aside
-    /// rather than sent (INT-02).
-    pub async fn intent_is_current(&self, outbox_id: Uuid) -> Result<bool, StoreError> {
-        let client = self.client().await?;
-        let row = client
-            .query_opt(
-                "SELECT 1 FROM scheduling_outbox AS o \
-                 JOIN scheduling_claims AS c ON c.claim_id = o.claim_id \
-                 WHERE o.outbox_id=$1 \
-                   AND (o.purpose <> 'reminder' \
-                        OR (c.state='active' AND c.revision = o.appointment_revision))",
-                &[&outbox_id],
-            )
-            .await?;
-        Ok(row.is_some())
-    }
-
     /// The intents nothing will deliver without an operator, oldest first.
     ///
     /// A deployment that declares no reminders destination sets every intent
@@ -2164,9 +2146,9 @@ impl PostgresStore {
     /// and then waited on by nobody, so without a read path an operator
     /// cannot tell either has happened. Delivered intents are not listed,
     /// and neither are pending or leased ones: the dispatcher is still
-    /// carrying those. A reminder set aside because its appointment was
-    /// cancelled or moved is not listed either: nobody is meant to deliver
-    /// it.
+    /// carrying those. A reminder cancelled, or set aside, because its
+    /// appointment was cancelled or moved is not listed either: nobody is
+    /// meant to deliver it.
     pub async fn undelivered_intents(
         &self,
         limit: i64,
@@ -2296,10 +2278,12 @@ impl PostgresStore {
         ).await?)
     }
 
-    /// Prune at most 256 delivered outbox intents of any purpose
+    /// Prune at most 256 settled outbox intents of any purpose
     /// (confirmation, change, cancellation, reminder) and 256 terminal hook
     /// deliveries per tick, using the configured receipt metadata horizon.
-    /// Pending, leased and set-aside intents remain retained;
+    /// An intent is settled once delivered, cancelled before any attempt,
+    /// or set aside as superseded: nobody is meant to act on any of them.
+    /// Pending, leased and every other set-aside intent remain retained;
     /// hooks also preserve replay until payload expiry has completed.
     pub async fn erase_terminal_dispatch(
         &self,
@@ -2319,8 +2303,12 @@ impl PostgresStore {
             .execute(
                 "DELETE FROM scheduling_outbox WHERE outbox_id IN (
                 SELECT outbox_id FROM scheduling_outbox
-                WHERE state='delivered' AND delivered_at <= $1
-                ORDER BY delivered_at, outbox_id LIMIT 256 FOR UPDATE SKIP LOCKED
+                WHERE (state='delivered' AND delivered_at <= $1)
+                   OR (state='cancelled' AND updated_at <= $1)
+                   OR (state='dead-lettered' AND last_failure_class='superseded'
+                       AND dead_lettered_at <= $1)
+                ORDER BY COALESCE(delivered_at, dead_lettered_at, updated_at), outbox_id
+                LIMIT 256 FOR UPDATE SKIP LOCKED
              )",
                 &[&cutoff],
             )
@@ -3499,6 +3487,9 @@ trait CapacityStatements {
         due_at: DateTime<Utc>,
         payload: Value,
     ) -> Result<(), StoreError>;
+    /// Cancel the appointment's reminders no attempt has started on, so the
+    /// dispatcher never claims them (INT-02).
+    async fn cancel_unsent_reminders(&self, claim_id: Uuid) -> Result<(), StoreError>;
     /// Write the receipt this commitment answers a replay with. The key is
     /// claimed here, at the end of the transaction, so a writer who finds it
     /// already taken is refused rather than failed.
@@ -3714,6 +3705,31 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
             ],
         )
         .await?;
+        Ok(())
+    }
+
+    async fn cancel_unsent_reminders(&self, claim_id: Uuid) -> Result<(), StoreError> {
+        // A reminder already attempted, or leased by a dispatcher right now,
+        // is left alone: the dispatch core never cancels a job that may
+        // have reached its destination, and the send-time liveness read
+        // sets it aside instead.
+        let schema = current_schema_in(&**self).await?;
+        let table = JobTable::new(&schema, "scheduling_outbox", "outbox_id", "purpose")
+            .map_err(|_| StoreError::Configuration)?;
+        let rows = self
+            .query(
+                "SELECT outbox_id FROM scheduling_outbox \
+                 WHERE claim_id=$1 AND purpose='reminder' AND state='pending' AND attempt=0",
+                &[&claim_id],
+            )
+            .await?;
+        for row in rows {
+            let key =
+                JobKey::new(row.get::<_, Uuid>(0), "reminder").map_err(|_| StoreError::Corrupt)?;
+            cancel_unattempted(self, &table, &key)
+                .await
+                .map_err(|_| StoreError::IntentDispatch)?;
+        }
         Ok(())
     }
 
