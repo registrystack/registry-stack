@@ -42,7 +42,8 @@ use crate::store::{PostgresStore, StoreError};
 use crate::transfer::{TransferBudget, TransferDeadline};
 use crate::verification::{
     activate_verifier, dead_letters, dispatcher, job_table, replay, sweep_bindings, DeadLetter,
-    ReplayError, ReplayRefusal, Replayed, VerdictSource, VerificationStore, VerificationTransport,
+    ReplayError, ReplayFailure, ReplayRefusal, Replayed, VerdictSource, VerificationStore,
+    VerificationTransport,
 };
 
 /// The most verification attempts one process runs at once.
@@ -390,16 +391,17 @@ pub async fn replay_verification(
             source,
         })?;
     let audit = open_audit(config, &secrets, Some(OPERATOR_PROCESS)).await?;
-    let dispatcher = dispatcher(VerificationStore::new(store.clone(), schema, audit))
-        .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
-    replay(&store, &dispatcher, version_id, expected_generation)
+    let verification = VerificationStore::new(store.clone(), schema, audit);
+    replay(&store, verification, version_id, expected_generation)
         .await
         .map_err(|error| match error {
             ReplayError::Refused(refusal) => RuntimeError::Replay(refusal),
+            ReplayError::Failed(failure) => RuntimeError::ReplayFailed(failure),
             ReplayError::Store(source) => RuntimeError::Database {
                 stage: "verification replay",
                 source,
             },
+            ReplayError::Dispatch(error) => RuntimeError::Dispatch(error.to_string()),
         })
 }
 
@@ -557,6 +559,9 @@ pub enum RuntimeError {
     /// An operator replay of a content verification job was refused.
     #[error("the content verification replay was refused: {0}")]
     Replay(ReplayRefusal),
+    /// An operator replay of a content verification job did not finish.
+    #[error("the content verification replay did not finish: {0}")]
+    ReplayFailed(ReplayFailure),
     #[error("the documents command arguments are invalid")]
     Arguments,
     #[error("DOCUMENTS_LOG must be one of error, warn, or info")]

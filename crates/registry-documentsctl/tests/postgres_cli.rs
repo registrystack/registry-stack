@@ -229,7 +229,10 @@ async fn init_package_plan_apply_and_status_activate_a_starter_deployment() {
     ]);
     assert_eq!(code, 1, "{refused:#}");
     assert_eq!(refused["status"], "domain-refusal");
-    assert_eq!(refused["diagnostics"][0]["code"], "verification.not-found");
+    assert_eq!(
+        refused["diagnostics"][0]["code"],
+        "documents.verification.not-found"
+    );
 }
 
 #[tokio::test]

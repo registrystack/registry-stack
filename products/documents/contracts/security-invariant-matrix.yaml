@@ -607,10 +607,10 @@ invariants:
     refusal: >-
       Refuse an unactivated database with
       documentsctl.activation.not-activated, an unknown version with
-      verification.not-found, a job that is not dead-lettered
-      with verification.not-dead-lettered, and a generation
+      documents.verification.not-found, a job that is not dead-lettered
+      with documents.verification.not-dead-lettered, and a generation
       other than the current one with
-      verification.stale-generation; each changes nothing.
+      documents.verification.stale-generation; each changes nothing.
     negativeTest:
       path: crates/registry-documents/tests/postgres_operator.rs
       name: replay_refuses_an_unknown_version_and_an_unactivated_database

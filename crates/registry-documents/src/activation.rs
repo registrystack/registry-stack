@@ -321,6 +321,52 @@ pub async fn apply(
         )
         .await
         .map_err(|error| ActivationError::Audit(error.to_string()))?;
+    let applied = apply_begun(
+        migration,
+        runtime_role,
+        database_id,
+        package_digest,
+        request,
+        audit,
+        &mut audit_request,
+        activation_id,
+    )
+    .await;
+    // A database failure happens before the commit, so nothing changed;
+    // the journal says so rather than leaving the request unanswered.
+    if let Err(ActivationError::Store(error)) = &applied {
+        if let Err(audit_error) = audit_request
+            .respond(json!({
+                "event": PACKAGE_ACTIVATION_EVENT,
+                "activationId": activation_id,
+                "packageDigest": package_digest,
+                "applied": false,
+                "outcome": "failed",
+            }))
+            .await
+        {
+            tracing::error!(
+                database_error = %error,
+                error = %audit_error,
+                "the failed activation's audit response could not be written"
+            );
+        }
+    }
+    applied
+}
+
+/// The audited part of [`apply`], after its audit request is written.
+#[allow(clippy::too_many_arguments)]
+async fn apply_begun(
+    migration: &PostgresStore,
+    runtime_role: &str,
+    database_id: &str,
+    package_digest: &str,
+    request: &ApplyRequest,
+    audit: &DocumentsAudit,
+    audit_request: &mut AuditRequest,
+    activation_id: Uuid,
+) -> Result<ActivationApplied, ActivationError> {
     let mut client = migration.client().await?;
     let tx = client.transaction().await?;
     tx.query_one("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_LOCK_KEY])
@@ -331,7 +377,7 @@ pub async fn apply(
     if let Some(refusal) = schema_history_refusal(&schema) {
         let refusals = vec![refusal];
         drop(tx);
-        respond_refused(&mut audit_request, activation_id, package_digest, &refusals).await?;
+        respond_refused(audit_request, activation_id, package_digest, &refusals).await?;
         return Err(ActivationError::Refused(refusals));
     }
     let migration_role: String = tx.query_one("SELECT current_user::text", &[]).await?.get(0);
@@ -347,7 +393,7 @@ pub async fn apply(
             "the database belongs to another deployment",
         )];
         drop(tx);
-        respond_refused(&mut audit_request, activation_id, package_digest, &refusals).await?;
+        respond_refused(audit_request, activation_id, package_digest, &refusals).await?;
         return Err(ActivationError::Refused(refusals));
     }
     if split {
@@ -370,7 +416,7 @@ pub async fn apply(
                 ),
             )];
             drop(tx);
-            respond_refused(&mut audit_request, activation_id, package_digest, &refusals).await?;
+            respond_refused(audit_request, activation_id, package_digest, &refusals).await?;
             return Err(ActivationError::Refused(refusals));
         }
     }
@@ -402,7 +448,7 @@ pub async fn apply(
             "the runtime role retains activation authority or lacks the complete runtime grants",
         )];
         drop(tx);
-        respond_refused(&mut audit_request, activation_id, package_digest, &refusals).await?;
+        respond_refused(audit_request, activation_id, package_digest, &refusals).await?;
         return Err(ActivationError::Refused(refusals));
     }
     if schema_versions_applied.is_empty()
@@ -517,7 +563,7 @@ pub async fn check_runtime(
                 ActivationError::Store(platform_error(error))
             }
         })?;
-    store.ready().await?;
+    crate::store::schema_ready(&client).await?;
     let role = platform::observe_role(&**client, &layout(), None, &[])
         .await
         .map_err(platform_error)?
