@@ -161,7 +161,7 @@ impl Deployment {
         self.write_runtime();
     }
 
-    /// Bind the `custodian-events` hook destination every starter hook
+    /// Bind the `owning-system-events` hook destination every starter hook
     /// names to `url`, as an operator does between restarts.
     pub fn bind_hooks(&mut self, url: &str) {
         self.hooks_url = url.to_owned();
@@ -211,7 +211,7 @@ audit:
   erasure: {erasure}
 destinations:
   hooks:
-    custodian-events:
+    owning-system-events:
       url: {hooks_url}
       hmacSha256KeyRef: secret:file/hook-key
       attemptTimeoutMilliseconds: 1000

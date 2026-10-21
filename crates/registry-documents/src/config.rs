@@ -998,8 +998,8 @@ pub(crate) mod tests {
     #[test]
     fn a_reference_to_a_disabled_provider_is_refused() {
         let text = STARTER_RUNTIME.replace(
-            "hmacSha256KeyRef: secret:file/custodian-events-hmac",
-            "hmacSha256KeyRef: secret:env/CUSTODIAN_EVENTS_HMAC",
+            "hmacSha256KeyRef: secret:file/owning-system-events-hmac",
+            "hmacSha256KeyRef: secret:env/OWNING_SYSTEM_EVENTS_HMAC",
         );
         assert_ne!(text, STARTER_RUNTIME);
         let error = parse(&text).unwrap_err();
@@ -1009,9 +1009,9 @@ pub(crate) mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(
             findings[0].pointer,
-            "/destinations/hooks/custodian-events/hmacSha256KeyRef"
+            "/destinations/hooks/owning-system-events/hmacSha256KeyRef"
         );
-        assert!(!findings[0].message.contains("CUSTODIAN_EVENTS_HMAC"));
+        assert!(!findings[0].message.contains("OWNING_SYSTEM_EVENTS_HMAC"));
     }
 
     #[test]
