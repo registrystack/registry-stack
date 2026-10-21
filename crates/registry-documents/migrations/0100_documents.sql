@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS documents_versions (
     CONSTRAINT documents_versions_release_shape CHECK (
         eligibility = 'suspended'
         OR (verification_state = 'approved'
-            AND verified_binding_digest IS NOT NULL
+            AND verified_binding_digest = verification_binding_digest
             AND verified_digest = computed_digest
             AND verified_media_type = media_type
             AND verified_at IS NOT NULL)

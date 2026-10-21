@@ -862,6 +862,44 @@ async fn a_verification_audit_failure_refuses_the_claim_and_records_no_verdict()
     assert_eq!(job, "pending:0", "the claim is not committed");
 }
 
+/// SEC-17 and SEC-18: the database refuses a releasable version whose
+/// verdict is not bound to its digest, its media type, and the verifier
+/// binding it is currently recorded under, whichever writer tries it.
+#[tokio::test]
+async fn the_database_refuses_a_releasable_version_under_a_stale_or_mismatched_verdict() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, version) = upload(&api, &pdf(300, 35)).await;
+    prepared.verify_due().await;
+    assert_eq!(status(&api.read(APP, &document).await), "ready");
+
+    for change in [
+        "verification_binding_digest = 'binding-b'",
+        "verified_digest = 'sha256:' || repeat('0', 64)",
+        "verified_media_type = 'image/png'",
+    ] {
+        let error = deployment
+            .admin
+            .batch_execute(&format!(
+                "UPDATE {}.documents_versions SET {change} WHERE version_id = '{version}'",
+                deployment.schema
+            ))
+            .await
+            .expect_err(change);
+        let constraint = error
+            .as_db_error()
+            .and_then(|error| error.constraint())
+            .map(str::to_owned);
+        assert_eq!(
+            constraint.as_deref(),
+            Some("documents_versions_release_shape"),
+            "{change}: {error}"
+        );
+    }
+    assert_eq!(api.download(APP, &document, &version).await.status, 200);
+}
+
 #[tokio::test]
 async fn identical_content_uploaded_twice_gives_two_documents() {
     let deployment = deployment().await;
