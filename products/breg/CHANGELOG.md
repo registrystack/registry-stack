@@ -24,15 +24,17 @@
   `registry_internal.registry_attachment_verification` loses its
   `next_attempt_at`, `lease_id`, `lease_expires_at`, and `attempts` columns
   and the `registry_attachment_verification_pending` index, and gains a
-  `verification_id` column. A failed attempt is retried after a delay that
-  starts at 30 seconds and doubles, with jitter, up to one hour, in place of a
-  fixed 30 seconds; an attempt has 60 seconds in place of 180; and a lease a
+  `verification_id` column. A failed attempt is retried after a delay
+  drawn with equal jitter, 15 to 30 seconds for the first retry and doubling
+  to at most one hour with jitter included, in place of a fixed 30 seconds; an attempt has 60 seconds in place of 180; and a lease a
   stopped worker left behind is retried after that delay and audited as
   `unfinished` by the worker that recovers it. Migration: the tables are not
   converted in place, so install the release on a fresh database. Operator
   queries that read the attempt count or lease from the verdict table read
   `attempt`, `state`, and `lease_expires_at` from the job table, joined on
-  `verification_id`.
+  `verification_id`. A pending verdict whose job is missing or dead-lettered
+  holds back the worker's last success, so
+  `breg_worker_last_success_age_seconds` grows while one waits.
 - BREAKING: hook destinations move from `eventDestinations` to
   `destinations.hooks` in `runtime.yaml` and in the `bregctl dev` clients file
   `dev-clients.yaml` (CFG-NAME-5). Migration: add a `destinations:` block,
