@@ -8,6 +8,7 @@
 //! party to units must be total over every party size the offering accepts,
 //! and what happens above the highest band must be declared, never defaulted.
 
+use registry_platform_yaml::DisplayText;
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::{PolicyCheckReason, SchedulingDiagnostic};
@@ -309,10 +310,13 @@ impl RequiredUnitsPolicy {
     }
 }
 
-/// A `because` must be present, non-blank, and at most 256 bytes: every rule
-/// that decides capacity carries its recorded reason.
+/// A `because` must be present, non-blank, valid display text, and at most 256
+/// bytes: every rule that decides capacity carries its recorded reason.
 pub fn check_because(because: &str, path: &str, findings: &mut Vec<SchedulingDiagnostic>) {
-    if because.trim().is_empty() || because.len() > MAXIMUM_BECAUSE_BYTES {
+    if because.trim().is_empty()
+        || because.len() > MAXIMUM_BECAUSE_BYTES
+        || DisplayText::new(because).is_err()
+    {
         findings.push(SchedulingDiagnostic::new(
             path,
             PolicyCheckReason::InvalidBecause,
@@ -462,6 +466,27 @@ mod tests {
                 PolicyCheckReason::InvalidBecause
             )]
         );
+    }
+
+    #[test]
+    fn programmatic_because_values_obey_the_display_text_contract() {
+        let refused = RequiredUnitsPolicy::Fixed {
+            units: 1,
+            because: "Review\u{202e} this rule".to_owned(),
+        };
+        assert_eq!(
+            refused.check("/p"),
+            vec![SchedulingDiagnostic::new(
+                "/p/because",
+                PolicyCheckReason::InvalidBecause
+            )]
+        );
+
+        let multilingual = RequiredUnitsPolicy::Fixed {
+            units: 1,
+            because: "نام\u{200c}خانوادگی العربية\u{200f} English".to_owned(),
+        };
+        assert!(multilingual.check("/p").is_empty());
     }
 
     #[test]
