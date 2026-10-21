@@ -1,0 +1,103 @@
+{
+  "components": {
+    "schemas": {
+      "Problem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "request.body-too-large",
+              "request.invalid",
+              "request.method-not-allowed",
+              "request.not-found",
+              "request.unprocessable",
+              "request.unsupported-media-type",
+              "service.unavailable"
+            ],
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "traceId": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "https://id.registrystack.org/problems/registry-documents/request/body-too-large",
+              "https://id.registrystack.org/problems/registry-documents/request/invalid",
+              "https://id.registrystack.org/problems/registry-documents/request/method-not-allowed",
+              "https://id.registrystack.org/problems/registry-documents/request/not-found",
+              "https://id.registrystack.org/problems/registry-documents/request/unprocessable",
+              "https://id.registrystack.org/problems/registry-documents/request/unsupported-media-type",
+              "https://id.registrystack.org/problems/registry-documents/service/unavailable"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "code",
+          "traceId"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Registry Stack Document Store HTTP contract. Every refusal is one application/problem+json document from the closed vocabulary.",
+    "license": {
+      "identifier": "Apache-2.0",
+      "name": "Apache-2.0"
+    },
+    "title": "Registry Stack Document Store API",
+    "version": "v1alpha1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "The operation succeeded. The body is empty."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          }
+        },
+        "security": [],
+        "summary": "Report that the process is serving."
+      }
+    }
+  }
+}

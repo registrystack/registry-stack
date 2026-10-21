@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "command": "check",
+  "status": "complete",
+  "apiVersion": "id.registrystack.org/formats/documents/ctl-report/v1alpha1",
+  "kind": "DocumentsCtlReport",
+  "diagnostics": [],
+  "filesChecked": 1,
+  "project": "products/documents/examples/starter"
+}

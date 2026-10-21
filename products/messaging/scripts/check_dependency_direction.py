@@ -16,6 +16,7 @@ PRODUCT_PREFIXES = (
     "registry-breg",
     "registry-casework",
     "registry-coordinator",
+    "registry-documents",
     "registry-scheduling",
     "registry-evidence",
 )
