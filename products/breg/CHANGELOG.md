@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- BREAKING: one 60 second attachment verification attempt covers both the
+  storage read and the verifier call, so `breg` refuses at configuration load
+  an `attachmentStorage.attemptTimeoutMilliseconds` (S3 storage only) plus
+  `attachmentVerification.attemptTimeoutMilliseconds` above 55,000, with
+  `breg.runtime.attachment-attempt-budget-exceeded`; the remaining five
+  seconds are kept for recording the outcome. Migration: lower either timeout
+  so the two add up to at most 55,000.
 - BREAKING: attachment verification runs on the shared
   `registry-platform-dispatch` job core. Each pending verdict has one job in
   the `registry_internal.registry_attachment_verification_jobs` table, and

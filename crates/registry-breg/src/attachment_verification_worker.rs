@@ -23,7 +23,7 @@ use registry_platform_dispatch::postgres::{
     AttemptAudit, ClaimRefusal, Decoded, DispatchConfig, DispatchConnection, DispatchEvent,
     DispatchOutcome, DispatchSql, DispatchStore, DispatchTransport, Dispatcher, JobKey, JobTable,
     LeasedJob, ReplayAudit, SelectSql, TargetAction, Transition, TransitionAudit,
-    TransitionOutcome,
+    TransitionOutcome, LEASE_FINALIZATION_ALLOWANCE,
 };
 use registry_platform_dispatch::{
     AttemptTimeoutBound, Backoff, ConfigError, DispatchError, Jitter, JobPolicy, RetrySchedule,
@@ -58,6 +58,13 @@ const JOB_PART: &str = "verification";
 /// quarantined attachment waits for a verdict rather than for an operator,
 /// and BReg offers no replay of a given-up job.
 const MAXIMUM_ATTEMPTS: i16 = i16::MAX;
+
+/// The time one verification attempt may spend on its storage read and its
+/// verifier call together: the attempt timeout less the allowance the lease
+/// keeps for recording the outcome. Configuration load refuses a storage and
+/// verifier timeout pair that adds up to more.
+pub(crate) const ATTEMPT_BUDGET: Duration =
+    MAX_ATTEMPT_TIMEOUT.saturating_sub(LEASE_FINALIZATION_ALLOWANCE);
 
 /// The dispatch policy every verification job runs under.
 fn verification_policy() -> JobPolicy {
