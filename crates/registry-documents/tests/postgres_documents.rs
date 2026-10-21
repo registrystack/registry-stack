@@ -3154,3 +3154,38 @@ async fn an_approval_after_a_removal_request_releases_nothing() {
         .await
         .assert_problem(ProblemCode::DocumentVersionNotReleasable);
 }
+
+/// Under `institutional-custody` the institution is the custodian, so it
+/// alone may remove the document; the person the document names has no
+/// standing and is answered as if the document did not exist.
+#[tokio::test]
+async fn under_institutional_custody_only_the_institution_may_remove() {
+    let deployment = access_deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, _) = ready_under(
+        &prepared,
+        &api,
+        "institutional-custody",
+        CITIZEN.subject,
+        &pdf(800, 61),
+    )
+    .await;
+    for person in [CITIZEN, CITIZEN_AS_READER] {
+        api.erase(person, &document)
+            .await
+            .assert_problem(ProblemCode::ResourceNotFound);
+    }
+    let pending: String = deployment
+        .scalar("SELECT erasure_state FROM documents_versions")
+        .await;
+    assert_eq!(pending, "none");
+    let removed = api.erase(APP, &document).await;
+    assert_eq!(
+        removed.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&removed.body)
+    );
+    assert_eq!(status(&api.read(APP, &document).await), "erasure-pending");
+}
