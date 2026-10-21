@@ -611,6 +611,55 @@ fn programmatic_project_check_enforces_display_text() {
 }
 
 #[test]
+fn programmatic_project_check_refuses_separator_lookalike_definitions() {
+    let mut project = decode(project_value());
+    project
+        .queues
+        .iter_mut()
+        .find(|queue| queue.id == "reviews")
+        .unwrap()
+        .id = "review-queue".to_owned();
+    project
+        .queues
+        .iter_mut()
+        .find(|queue| queue.id == "north")
+        .unwrap()
+        .id = "review_queue".to_owned();
+    project.teams[0].serves = vec!["review-queue".to_owned(), "review_queue".to_owned()];
+
+    let policy = &mut project.review_policies[0];
+    policy.stages[0].queue = "review-queue".to_owned();
+    policy.stages[0].id = "first-stage".to_owned();
+    let mut second_stage = policy.stages[0].clone();
+    second_stage.id = "first_stage".to_owned();
+    policy.stages.push(second_stage);
+
+    let error = project
+        .check()
+        .expect_err("separator-lookalike definitions are refused");
+    for (code, pointer, related) in [
+        (
+            "casework.project.queue-id-collision",
+            "/queues/review-queue",
+            "/queues/review_queue",
+        ),
+        (
+            "casework.review-policy.stage-id-collision",
+            "/reviewPolicies/notice-review/stages/1/id",
+            "/reviewPolicies/notice-review/stages/0/id",
+        ),
+    ] {
+        let finding = error
+            .findings()
+            .iter()
+            .find(|finding| finding.code == code)
+            .unwrap_or_else(|| panic!("missing {code}: {error:#?}"));
+        assert_eq!(finding.pointer, pointer);
+        assert_eq!(finding.related.as_ref().unwrap().pointer, related);
+    }
+}
+
+#[test]
 fn routing_explanation_and_grant_label_are_presentation_only() {
     let mut value = project_value();
     value["reviewPolicies"]["notice-review"]["routing"] = json!([{"id":"north","because":"Route notices locally","when":{"fields":{"region":{"equals":"north"}}},"queue":"north"}]);

@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 
 use registry_platform_yaml::{
-    local_id_collision_diagnostics, ApiVersion, AuthoredId, DisplayText, Document, EnvelopeRule,
-    Expect, FormatSpec, LocalId, Reader, Report,
+    local_id_collision_diagnostics, ApiVersion, AuthoredId, Diagnostic, DisplayText, Document,
+    EnvelopeRule, Expect, FormatSpec, LocalId, Reader, Report,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -57,11 +57,23 @@ pub(crate) fn labels_path(locale: &str) -> String {
 /// Read one label table through the shared reader, refusing every `${...}`
 /// expression (CFG-SEC-2). `file` is the name every diagnostic carries.
 pub(crate) fn read_labels(file: &str, bytes: &[u8]) -> Result<ReadLabels, Report> {
+    read_labels_with_warning(file, bytes, None)
+}
+
+/// Include a bundle-context warning in the decoded table's one diagnostic budget.
+pub(crate) fn read_labels_with_warning(
+    file: &str,
+    bytes: &[u8],
+    warning: Option<Diagnostic>,
+) -> Result<ReadLabels, Report> {
     let mut hook = registry_platform_config::AuthoredExpressions;
-    let decoded = Reader::new(file)
+    let mut decoded = Reader::new(file)
         .with_hook(&mut hook)
         .decode::<LabelsFile>(bytes, &Expect::one(&LABELS_FORMAT))
         .map_err(with_table_shape)?;
+    if let Some(warning) = warning {
+        decoded.document.push_warning(warning);
+    }
     let label_ids = decoded
         .value
         .labels

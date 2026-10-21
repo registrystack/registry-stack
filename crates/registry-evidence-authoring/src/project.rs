@@ -2,9 +2,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_yaml::{
-    duplicate_display_text_diagnostics, local_id_collision_diagnostics, ApiVersion,
-    AuthoredDisplayText, AuthoredId, BoundedU64, Decoded, Diagnostic, DisplayText, EnvelopeRule,
-    FormatSpec, LocalId, Report, UniqueList,
+    duplicate_display_text_diagnostics, local_id_collision_diagnostics, lookalike_local_id_pairs,
+    ApiVersion, AuthoredDisplayText, AuthoredId, BoundedU64, Decoded, Diagnostic, DisplayText,
+    EnvelopeRule, FormatSpec, LocalId, Report, UniqueList,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -684,7 +684,7 @@ pub fn read_project(file: &str, bytes: &[u8]) -> Result<Decoded<EvidenceProject>
     let mut diagnostics = findings_report(
         &decoded.document,
         "project",
-        validate_project(&decoded.value),
+        validate_project_without_id_collisions(&decoded.value),
     )
     .into_diagnostics();
     diagnostics.extend(integrity);
@@ -695,29 +695,191 @@ pub fn read_project(file: &str, bytes: &[u8]) -> Result<Decoded<EvidenceProject>
     Ok(decoded)
 }
 
+type ProjectIdNamespace<'a> = (&'static str, bool, Vec<(&'a str, FieldPath)>);
+
+fn project_id_namespaces(project: &EvidenceProject) -> Vec<ProjectIdNamespace<'_>> {
+    fn map_ids<'a, T>(
+        key: &'static str,
+        values: &'a BTreeMap<LocalId, T>,
+    ) -> Vec<(&'a str, FieldPath)> {
+        values
+            .keys()
+            .map(|id| {
+                (
+                    id.as_str(),
+                    FieldPath::root().key(key).map_key(id.to_string()),
+                )
+            })
+            .collect()
+    }
+
+    let mut namespaces = vec![
+        (
+            "selector-profile-id-collision",
+            true,
+            map_ids("selectorProfiles", &project.selector_profiles),
+        ),
+        (
+            "source-id-collision",
+            true,
+            map_ids("sources", &project.sources),
+        ),
+        (
+            "assertion-definition-id-collision",
+            true,
+            map_ids("assertionDefinitions", &project.assertion_definitions),
+        ),
+        (
+            "function-id-collision",
+            false,
+            project
+                .functions
+                .iter()
+                .enumerate()
+                .map(|(index, function)| {
+                    (
+                        function.id.as_str(),
+                        FieldPath::root().key("functions").index(index).key("id"),
+                    )
+                })
+                .collect(),
+        ),
+    ];
+    for (profile_id, profile) in &project.selector_profiles {
+        let base = FieldPath::root()
+            .key("selectorProfiles")
+            .map_key(profile_id.to_string())
+            .key("fields");
+        namespaces.push((
+            "selector-field-id-collision",
+            true,
+            profile
+                .fields
+                .keys()
+                .map(|id| (id.as_str(), base.clone().map_key(id.to_string())))
+                .collect(),
+        ));
+    }
+    for (source_id, source) in &project.sources {
+        let base = FieldPath::root()
+            .key("sources")
+            .map_key(source_id.to_string());
+        namespaces.push((
+            "source-fact-id-collision",
+            true,
+            source
+                .facts
+                .keys()
+                .map(|id| {
+                    (
+                        id.as_str(),
+                        base.clone().key("facts").map_key(id.to_string()),
+                    )
+                })
+                .collect(),
+        ));
+        namespaces.push((
+            "source-selector-role-collision",
+            false,
+            source
+                .selectors
+                .iter()
+                .enumerate()
+                .map(|(index, selector)| {
+                    (
+                        selector.role.as_str(),
+                        base.clone().key("selectors").index(index).key("role"),
+                    )
+                })
+                .collect(),
+        ));
+    }
+    for (assertion_id, assertion) in &project.assertion_definitions {
+        let base = FieldPath::root()
+            .key("assertionDefinitions")
+            .map_key(assertion_id.to_string());
+        namespaces.push((
+            "output-id-collision",
+            true,
+            assertion
+                .outputs
+                .keys()
+                .map(|id| {
+                    (
+                        id.as_str(),
+                        base.clone().key("outputs").map_key(id.to_string()),
+                    )
+                })
+                .collect(),
+        ));
+        namespaces.push((
+            "subject-role-collision",
+            false,
+            assertion
+                .subjects
+                .iter()
+                .enumerate()
+                .map(|(index, subject)| {
+                    (
+                        subject.role.as_str(),
+                        base.clone().key("subjects").index(index).key("role"),
+                    )
+                })
+                .collect(),
+        ));
+    }
+    namespaces
+}
+
+fn project_id_collision_findings(project: &EvidenceProject) -> Vec<Finding> {
+    project_id_namespaces(project)
+        .into_iter()
+        .flat_map(|(code, _, values)| {
+            lookalike_local_id_pairs(values.iter().map(|(id, _)| *id))
+                .into_iter()
+                .map(move |(first, second)| {
+                    Finding::new(
+                        values[second].1.clone(),
+                        code,
+                        format!(
+                            "local identifiers `{}` and `{}` differ only by `-` versus `_`",
+                            values[first].0, values[second].0
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn project_id_collision_diagnostics(
+    document: &registry_platform_yaml::Document,
+    project: &EvidenceProject,
+) -> Vec<Diagnostic> {
+    project_id_namespaces(project)
+        .into_iter()
+        .flat_map(|(code, ids_are_keys, values)| {
+            let pointers = values
+                .iter()
+                .map(|(_, path)| path.to_json_pointer())
+                .collect::<Vec<_>>();
+            let entries = values
+                .iter()
+                .zip(&pointers)
+                .map(|((id, _), pointer)| {
+                    if ids_are_keys {
+                        AuthoredId::at_key(id, pointer)
+                    } else {
+                        AuthoredId::at_value(id, pointer)
+                    }
+                })
+                .collect::<Vec<_>>();
+            local_id_collision_diagnostics(document, &format!("evidence.project.{code}"), &entries)
+        })
+        .collect()
+}
+
 fn project_integrity_diagnostics(decoded: &mut Decoded<EvidenceProject>) -> Vec<Diagnostic> {
-    fn collisions(
-        document: &registry_platform_yaml::Document,
-        code: &str,
-        values: &[(String, String)],
-    ) -> Vec<Diagnostic> {
-        let entries = values
-            .iter()
-            .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
-            .collect::<Vec<_>>();
-        local_id_collision_diagnostics(document, code, &entries)
-    }
-    fn key_collisions(
-        document: &registry_platform_yaml::Document,
-        code: &str,
-        values: &[(String, String)],
-    ) -> Vec<Diagnostic> {
-        let entries = values
-            .iter()
-            .map(|(id, pointer)| AuthoredId::at_key(id, pointer))
-            .collect::<Vec<_>>();
-        local_id_collision_diagnostics(document, code, &entries)
-    }
     fn warnings(
         document: &registry_platform_yaml::Document,
         code: &str,
@@ -730,126 +892,9 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<EvidenceProject>) -> Vec<
             .collect::<Vec<_>>();
         duplicate_display_text_diagnostics(document, code, kind, &entries)
     }
-    fn map_ids<T>(base: &str, values: &BTreeMap<LocalId, T>) -> Vec<(String, String)> {
-        values
-            .keys()
-            .map(|id| {
-                let id = id.as_str().to_owned();
-                let pointer = format!(
-                    "{base}/{}",
-                    registry_platform_yaml::escape_pointer_segment(&id)
-                );
-                (id, pointer)
-            })
-            .collect()
-    }
-
     let project = &decoded.value;
     let document = &decoded.document;
-    let mut errors = Vec::new();
-    for (code, values) in [
-        (
-            "evidence.project.selector-profile-id-collision",
-            map_ids("/selectorProfiles", &project.selector_profiles),
-        ),
-        (
-            "evidence.project.source-id-collision",
-            map_ids("/sources", &project.sources),
-        ),
-        (
-            "evidence.project.assertion-definition-id-collision",
-            map_ids("/assertionDefinitions", &project.assertion_definitions),
-        ),
-    ] {
-        errors.extend(key_collisions(document, code, &values));
-    }
-    errors.extend(collisions(
-        document,
-        "evidence.project.function-id-collision",
-        &project
-            .functions
-            .iter()
-            .enumerate()
-            .map(|(index, function)| {
-                (
-                    function.id.as_str().to_owned(),
-                    format!("/functions/{index}/id"),
-                )
-            })
-            .collect::<Vec<_>>(),
-    ));
-    for (profile_id, profile) in &project.selector_profiles {
-        errors.extend(key_collisions(
-            document,
-            "evidence.project.selector-field-id-collision",
-            &map_ids(
-                &format!(
-                    "/selectorProfiles/{}/fields",
-                    registry_platform_yaml::escape_pointer_segment(profile_id.as_str())
-                ),
-                &profile.fields,
-            ),
-        ));
-    }
-    for (source_id, source) in &project.sources {
-        errors.extend(key_collisions(
-            document,
-            "evidence.project.source-fact-id-collision",
-            &map_ids(
-                &format!(
-                    "/sources/{}/facts",
-                    registry_platform_yaml::escape_pointer_segment(source_id.as_str())
-                ),
-                &source.facts,
-            ),
-        ));
-        let roles = source
-            .selectors
-            .iter()
-            .enumerate()
-            .map(|(index, selector)| {
-                (
-                    selector.role.as_str().to_owned(),
-                    format!(
-                        "/sources/{}/selectors/{index}/role",
-                        registry_platform_yaml::escape_pointer_segment(source_id.as_str())
-                    ),
-                )
-            })
-            .collect::<Vec<_>>();
-        errors.extend(collisions(
-            document,
-            "evidence.project.source-selector-role-collision",
-            &roles,
-        ));
-    }
-    for (assertion_id, assertion) in &project.assertion_definitions {
-        let base = format!(
-            "/assertionDefinitions/{}",
-            registry_platform_yaml::escape_pointer_segment(assertion_id.as_str())
-        );
-        errors.extend(key_collisions(
-            document,
-            "evidence.project.output-id-collision",
-            &map_ids(&format!("{base}/outputs"), &assertion.outputs),
-        ));
-        let roles = assertion
-            .subjects
-            .iter()
-            .enumerate()
-            .map(|(index, subject)| {
-                (
-                    subject.role.as_str().to_owned(),
-                    format!("{base}/subjects/{index}/role"),
-                )
-            })
-            .collect::<Vec<_>>();
-        errors.extend(collisions(
-            document,
-            "evidence.project.subject-role-collision",
-            &roles,
-        ));
-    }
+    let errors = project_id_collision_diagnostics(document, project);
 
     let mut found_warnings = Vec::new();
     let top_groups = [
@@ -979,6 +1024,12 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<EvidenceProject>) -> Vec<
 }
 
 pub fn validate_project(project: &EvidenceProject) -> Vec<Finding> {
+    let mut findings = validate_project_without_id_collisions(project);
+    findings.extend(project_id_collision_findings(project));
+    findings
+}
+
+fn validate_project_without_id_collisions(project: &EvidenceProject) -> Vec<Finding> {
     let mut findings = validate_project_display_text(project);
     findings.extend(
         project
