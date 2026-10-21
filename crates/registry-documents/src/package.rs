@@ -19,8 +19,8 @@ use crate::config::RuntimeConfig;
 
 pub use registry_documents_core::PROJECT_FILE;
 
-/// How an operator builds a package by hand: there is no packaging verb yet.
-pub const PACKAGE_COMMAND: &str = "sha256sum documents.yaml > SHA256SUMS";
+/// The command that builds a package from a checked project.
+pub const PACKAGE_COMMAND: &str = "documentsctl package";
 
 /// The largest `documents.yaml` a package may hold.
 pub const MAXIMUM_PROJECT_FILE_BYTES: usize = 1024 * 1024;

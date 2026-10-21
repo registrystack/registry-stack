@@ -27,6 +27,11 @@ name = "postgres_s3"
 path = "tests/postgres_s3.rs"
 required-features = ["postgres-test"]
 
+[[test]]
+name = "postgres_operator"
+path = "tests/postgres_operator.rs"
+required-features = ["postgres-test"]
+
 [features]
 default = []
 postgres-test = []
@@ -52,6 +57,7 @@ futures.workspace = true
 hex.workspace = true
 jsonwebtoken.workspace = true
 registry-documents-core.workspace = true
+registry-platform-activation.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-authcommon.workspace = true
 registry-platform-buildinfo.workspace = true
