@@ -285,26 +285,41 @@ the times are quoted for sizing.
 ## Events and observers
 
 A project may declare `hooks`: after-commit URL observers of three event
-families. Each hook names a trigger, the fields it projects, and a
-destination id; the runtime configuration binds that id under
-`destinations.hooks` to a URL and an HMAC signing key. The project file
-never carries an endpoint or a secret.
+families. Each hook names a trigger, the document policies whose
+documents it hears about, the fields it projects, and a destination id; the
+runtime configuration binds that id under `destinations.hooks` to a URL and
+an HMAC signing key. The project file never carries an endpoint or a secret.
+
+`policies` is required and lists at least one policy the project declares,
+each once. A hook hears only about documents held under a policy it names,
+so a hook for one owning system never reports another system's documents.
+The list is a plain declaration the operator reviews with the package, not a
+condition evaluated at run time; routing by custodian is not offered.
 
 | Trigger | Emitted when | Fields a hook may project |
 |---|---|---|
-| `document-version.ready` | A verdict makes a version ready that was not ready, including a version approved again after a verifier binding change suspended it. | `documentId`, `versionId`, `versionDigest`, `policyId`, `policyVersion`, `actorKind` |
-| `document-version.rejected` | A verdict rejects a version. | the same six |
-| `document-grant.changed` | A grant is issued or revoked. | the same six, plus `grantId` and `change` (`issued` or `revoked`) |
+| `document-version.ready` | A verdict makes a version ready that was not ready, including a version approved again after a verifier binding change suspended it. | `documentId`, `versionId`, `versionDigest`, `policyId`, `policyVersion` |
+| `document-version.rejected` | A verdict rejects a version. | the same five |
+| `document-grant.changed` | A grant is issued or revoked, including each grant a removal request revokes. | the same five, plus `grantId`, `change` (`issued` or `revoked`), `actorKind`, and `expiresAt` |
 
-`actorKind` is `service` or `human`: the kind of caller that reserved the
-version, or that issued or revoked the grant. No event carries content, a
-label, a media type, a name, a subject, or anything else about the person a
-document describes.
+`actorKind` is `service` or `human`: the kind of caller that issued or
+revoked the grant, or that requested the removal which revoked it. A version
+event carries no `actorKind`, because the verdict it reports is the
+verifier's, not a caller's. `expiresAt` is the grant's expiry, as the API
+reports it. No event carries content, a label, a media type, a name, a
+subject, or anything else about the person a document describes.
+
+The envelope's subject names the version or grant and its revision. Every
+recorded change of a version or a grant, a verdict, a suspension, a
+revocation, a removal, raises its revision by one, so two events about one
+record arrive with strictly increasing revisions, and a receiver can drop
+one older than what it already holds.
 
 An event is captured in the same transaction as the transition it reports,
 so a rolled-back verdict or grant change reports nothing, and a capture that
 cannot be written fails the transition. A repeated verdict, an issue replayed
-under its `Idempotency-Key`, and a repeated revocation report nothing.
+under its `Idempotency-Key`, a repeated revocation, and a repeated removal
+request report nothing.
 Delivery runs after commit: each attempt is a signed Version 1 hook envelope
 whose `source` is `urn:registrystack:documents:<project id>`, whose `type`
 is the hook id, and whose `dataschema` names the family's published schema
@@ -318,15 +333,35 @@ Hooks accept only `phase: after` and a `url` handler. A Rhai or Wasm handler,
 a `when` condition, a `principal`, and any other phase are refused when the
 project is read.
 
-A grant reaching its expiry emits nothing: it is not a transition anyone
-performs, and the observer already holds the expiry from the grant's terms.
-Erasure emits nothing yet; erasure events belong with the erasure work.
+A grant reaching its expiry emits nothing. Expiry is not a recorded
+transition: the grant stops releasing at its `expiresAt`, which the
+`issued` event already carried, and no sweep records it as expired. A
+receiver that needs to know when a grant lapses reads `expiresAt` from the
+`issued` event. A removal request reports each grant it revokes; the
+version's own erasure steps emit nothing.
 
 Hooks are part of the package. Adding, removing, or changing a hook changes
 the package digest, so run `documentsctl package` and `documentsctl apply`
 before restarting; `serve` refuses a package that is not the active one.
-Rebinding a destination's URL, key, timeout, or attempt budget in the runtime
-configuration only needs a restart.
+
+Every captured delivery records the binding of its destination: the
+destination id, URL, signing key reference, timeout, and attempt budget.
+Startup refuses to serve while a pending or leased delivery records a
+binding the runtime configuration no longer holds, so changing any of those
+values in place, or removing the entry, fails the next start until that
+work is gone. To move a hook to a new URL or key:
+
+1. Add a destination under a new id in `destinations.hooks` and leave the
+   old entry exactly as it is.
+2. Point the hook's `destinationId` at the new id, then run
+   `documentsctl package` and `documentsctl apply`, and restart. New events
+   go to the new destination; deliveries already captured keep their old
+   one.
+3. Remove the old entry only once its pending deliveries have drained,
+   delivered or dead-lettered, or expired at the end of
+   `retention.hookPayloadRetentionDays`.
+
+There is no command that abandons pending deliveries.
 
 ## Generated files
 

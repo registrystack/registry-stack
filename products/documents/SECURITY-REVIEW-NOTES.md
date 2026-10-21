@@ -47,7 +47,9 @@ reference names or internal hosts into logs.
 - `contentVerification.type: disabled` unless the listener declares
   `development-loopback`;
 - `allowedClients: unrestricted`;
-- an `http` content verifier or hook URL outside development;
+- an `http` content verifier or hook URL outside development; a hook URL
+  needs both a loopback address and `development-loopback` to use `http`,
+  and a non-loopback `http` hook address is refused at startup;
 - a secret reference to an undeclared provider.
 
 The shared runtime loader refuses an environment expression in a secret
@@ -529,7 +531,8 @@ names each test.
 ### Threat
 
 An observer learns more about a document or the person it describes than
-the event needs; an observer is told about a transition that never
+the event needs, or hears about documents held under a policy it was never
+meant to observe; an observer is told about a transition that never
 committed; a slow or hostile observer delays or blocks a verdict or a grant
 change; a project author runs code inside the Store or chooses where events
 go; an observer's answer changes a document, a version, or a grant.
@@ -541,15 +544,27 @@ go; an observer's answer changes a document, a version, or a grant.
   projects a subset of it, and the project reader and hook compilation refuse
   any other field (DOCUMENTS-SEC-48). No field carries content, a label, a
   media type, a name, a subject, or anything about the described person.
-  `actorKind` is only `service` or `human` (DOCUMENTS-DEC-30). Each family
+  `actorKind`, only `service` or `human`, appears on grant events alone
+  (DOCUMENTS-DEC-30). Each family
   publishes a generated closed data schema under `generated/events/`
   (DOCUMENTS-DEC-32).
+- Each hook declares the policies whose documents it hears about; a required,
+  non-empty list of declared policies, reviewed with the package. Capture
+  matches the trigger and the document's policy, so a hook never reports a
+  document under a policy it does not name (DOCUMENTS-SEC-48,
+  DOCUMENTS-DEC-33). Routing by custodian is not offered.
+- The envelope subject carries the record's revision, which every recorded
+  change of a version or a grant raises by one, so a receiver can order
+  events about one record (DOCUMENTS-DEC-27).
 - The outbox and delivery rows are written in the transaction of the verdict,
-  the grant issue, or the grant revocation, so a rollback reports nothing; a
-  capture that cannot be written fails the transition (DOCUMENTS-SEC-49,
+  the grant issue, the grant revocation, or the removal request that revokes
+  a version's grants, so a rollback reports nothing; a capture that cannot
+  be written or committed fails the transition (DOCUMENTS-SEC-49,
   DOCUMENTS-DEC-29). Only a change of state emits: a repeated verdict, an
-  issue replay, and a repeated revocation do not, and grant expiry and
-  erasure emit nothing (DOCUMENTS-DEC-28).
+  issue replay, a repeated revocation, and a repeated removal do not. A
+  removal emits one revoked event for each grant it revokes. Grant expiry is
+  not a recorded transition and emits nothing; the `issued` event carries
+  `expiresAt` (DOCUMENTS-DEC-28).
 - Delivery runs after commit in the shared `registry-platform-hooks` worker:
   a signed Version 1 envelope with source
   `urn:registrystack:documents:<project id>` and type the hook id
@@ -564,7 +579,10 @@ go; an observer's answer changes a document, a version, or a grant.
   the timeout, and the attempt budget come from `destinations.hooks` in the
   operator's runtime configuration. Startup refuses an unbound destination,
   an unresolved key, and a retained delivery whose binding no longer matches
-  (DOCUMENTS-SEC-53). Plain `http` is accepted only to a loopback address.
+  (DOCUMENTS-SEC-53). Plain `http` needs both a loopback address and the
+  `development-loopback` listener. A pending delivery pins its binding, so a
+  hook moves to a new URL or key under a new destination id while the old
+  entry stays until its deliveries drain or expire (DOCUMENTS-DEC-31).
 - Hooks are part of the package, so changing one takes `documentsctl apply`;
   the delivery tables come with the embedded schema, and a split runtime role
   is granted them with the rest of what serving needs (DOCUMENTS-DEC-31).
@@ -577,8 +595,10 @@ go; an observer's answer changes a document, a version, or a grant.
 `crates/registry-documents/src/hooks_tests.rs` covers compilation refusals,
 projections, the published schemas, and destination activation without a
 database. `crates/registry-documents/tests/postgres_hooks.rs` runs capture,
-rollback, delivery to a local receiver, proposal refusal, retry and dead
-letter, and a split runtime role against a disposable database under the
+rollback, a capture whose commit fails, removal events, policy scoping,
+revisions, delivery to a local receiver, proposal refusal, retry and dead
+letter, a binding pinned by a pending delivery, and a split runtime role
+against a disposable database under the
 `postgres-test` feature. `contracts/security-test-traceability.yaml` names
 each test under DOCUMENTS-SEC-48 to DOCUMENTS-SEC-53.
 
@@ -587,6 +607,9 @@ each test under DOCUMENTS-SEC-48 to DOCUMENTS-SEC-53.
 - An observer learns that a document exists, when it became ready or was
   rejected, and when grants on it change, keyed by stable ids. Bind only
   destinations entitled to that timing.
+- Grant expiry produces no event. A receiver that forgets the `expiresAt` an
+  `issued` event carried treats an expired grant as live until it is
+  revoked.
 - Terminal delivery rows and their payloads are not yet pruned; a captured
   payload stops being sent after `retention.hookPayloadRetentionDays` but
   stays in the database until pruning lands.
