@@ -21,7 +21,7 @@ use registry_platform_hooks::delivery::DeliveryOutcome;
 use serde_json::{json, Value};
 use support::{
     pdf, reservation, Api, Deployment, FakeVerifier, APP, APPROVE, CITIZEN, DATABASE_STORAGE,
-    DISABLED_VERIFIER, READER, REJECT, STARTER_PROJECT,
+    DISABLED_VERIFIER, READER, REJECT, STARTER_PROJECT, UNREACHABLE_HOOKS_URL,
 };
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -35,6 +35,7 @@ const READY_MIRROR: &str = "
   - id: ready-mirror
     phase: after
     trigger: document-version.ready
+    policies: [citizen-delivery]
     projection: [documentId]
     handler:
       type: url
@@ -243,6 +244,42 @@ async fn a_version_approved_again_after_a_verifier_rebind_reports_ready_again() 
         .scalar("SELECT revision FROM documents_versions")
         .await;
     assert_eq!(stored, second);
+}
+
+#[tokio::test]
+async fn a_hook_hears_nothing_about_a_document_under_a_policy_it_does_not_name() {
+    // Every starter hook names every starter policy; narrow them all to one
+    // policy the citizen's upload is not held under.
+    let all = "policies: [citizen-delivery, institutional-custody, named-share]";
+    assert_eq!(STARTER_PROJECT.matches(all).count(), 3);
+    let project = STARTER_PROJECT.replace(all, "policies: [institutional-custody]");
+    let deployment = deployment(&project).await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, version) = upload(&api, 14).await;
+    let policy: String = deployment
+        .scalar("SELECT policy_id FROM documents_documents")
+        .await;
+    assert_eq!(policy, "citizen-delivery");
+
+    assert_eq!(prepared.verify_due().await, 1);
+    let issued = api
+        .grant(APP, &document, &version, READER.subject, None)
+        .await;
+    assert_eq!(
+        issued.status,
+        201,
+        "{}",
+        String::from_utf8_lossy(&issued.body)
+    );
+    let grant = issued.json()["id"].as_str().unwrap().to_owned();
+    assert_eq!(api.revoke(APP, &grant).await.status, 200);
+    assert_eq!(api.erase(CITIZEN, &document).await.status, 200);
+    assert!(
+        captured(&deployment).await.is_empty(),
+        "no transition under an unnamed policy captures a delivery"
+    );
+    assert_eq!(delivery_count(&deployment).await, 0);
 }
 
 #[tokio::test]
@@ -565,6 +602,68 @@ async fn a_rolled_back_transition_captures_nothing() {
     allow_commits_on(&deployment, "documents_grants").await;
 }
 
+/// A capture that cannot commit takes its transition down with it: the
+/// refusal is raised by the delivery row itself, after the transition's
+/// own writes succeeded, and each transition is found as it was before.
+#[tokio::test]
+async fn a_capture_that_cannot_commit_rolls_its_transition_back() {
+    const DELIVERIES: &str = "registry_webhook_deliveries";
+    let deployment = deployment(STARTER_PROJECT).await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, version) = upload(&api, 15).await;
+
+    fail_commits_on(&deployment, DELIVERIES).await;
+    prepared.verify_due().await;
+    allow_commits_on(&deployment, DELIVERIES).await;
+    let state: String = deployment
+        .scalar("SELECT verification_state FROM documents_versions")
+        .await;
+    assert_eq!(state, "pending", "the verdict rolled back with its capture");
+    assert_eq!(delivery_count(&deployment).await, 0);
+    deployment
+        .execute(
+            "UPDATE documents_verification_jobs
+                SET state = 'pending', next_attempt_at = now(), attempt_started_at = NULL,
+                    lease_expires_at = NULL, lease_token = NULL",
+        )
+        .await;
+    prepared.verify_due().await;
+    assert_eq!(delivery_count(&deployment).await, 1);
+
+    fail_commits_on(&deployment, DELIVERIES).await;
+    let refused = api
+        .grant(APP, &document, &version, READER.subject, None)
+        .await;
+    allow_commits_on(&deployment, DELIVERIES).await;
+    assert_eq!(refused.status, 503);
+    let grants: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_grants")
+        .await;
+    assert_eq!(grants, 0, "the issue rolled back with its capture");
+
+    let issued = api
+        .grant(APP, &document, &version, READER.subject, None)
+        .await;
+    assert_eq!(issued.status, 201);
+    let grant = issued.json()["id"].as_str().unwrap().to_owned();
+    fail_commits_on(&deployment, DELIVERIES).await;
+    let refused = api.revoke(APP, &grant).await;
+    let removal = api.erase(CITIZEN, &document).await;
+    allow_commits_on(&deployment, DELIVERIES).await;
+    assert_eq!(refused.status, 503);
+    assert_eq!(removal.status, 503);
+    let active: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_grants WHERE revoked_at IS NULL")
+        .await;
+    assert_eq!(active, 1, "the revocation and the removal rolled back");
+    let removed: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_documents WHERE removal_requested_at IS NOT NULL")
+        .await;
+    assert_eq!(removed, 0);
+    assert_eq!(delivery_count(&deployment).await, 2);
+}
+
 #[tokio::test]
 async fn delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal() {
     let receiver = MockServer::start().await;
@@ -743,6 +842,49 @@ async fn startup_refuses_a_project_hook_whose_destination_is_not_bound() {
         .await
         .expect_err("an unbound hook destination refuses startup");
     assert!(error.to_string().contains("destinations.hooks"), "{error}");
+}
+
+#[tokio::test]
+async fn a_destination_changed_under_a_pending_delivery_refuses_startup_until_it_drains() {
+    let mut deployment = deployment(STARTER_PROJECT).await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    upload(&api, 10).await;
+    assert_eq!(prepared.verify_due().await, 1);
+    assert_eq!(delivery_count(&deployment).await, 1);
+    drop((prepared, api));
+
+    // Changing the URL in place while the delivery is pending is refused.
+    deployment.bind_hooks("https://moved.example.test/document-events");
+    let error = prepare_with_verifier(&deployment.runtime, verifier.clone())
+        .await
+        .expect_err("a pending delivery pins its destination binding");
+    assert!(
+        error.to_string().contains("retained hook delivery"),
+        "{error}"
+    );
+
+    // Restored, the pending delivery runs out its attempts.
+    deployment.bind_hooks(UNREACHABLE_HOOKS_URL);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    assert_eq!(
+        prepared.deliver_hooks_once().await.unwrap(),
+        DeliveryOutcome::RetryScheduled
+    );
+    deployment
+        .execute("UPDATE registry_webhook_delivery_state SET next_attempt_at = now()")
+        .await;
+    assert_eq!(
+        prepared.deliver_hooks_once().await.unwrap(),
+        DeliveryOutcome::DeadLettered
+    );
+    drop((prepared, api));
+
+    // Once it has drained, the same change starts.
+    deployment.bind_hooks("https://moved.example.test/document-events");
+    prepare_with_verifier(&deployment.runtime, verifier)
+        .await
+        .expect("no retained delivery needs the old binding");
 }
 
 #[tokio::test]

@@ -21,7 +21,8 @@ use std::time::{Duration, SystemTime};
 use chrono::{DateTime, SecondsFormat, Utc};
 
 use registry_documents_core::{
-    ActorKind, HookTrigger, DOCUMENTS_EVENT_SOURCE_PREFIX, DOCUMENT_GRANT_EVENT_FIELDS,
+    ActorKind, DocumentsProject, HookTrigger, DOCUMENTS_EVENT_SOURCE_PREFIX,
+    DOCUMENT_GRANT_EVENT_FIELDS,
 };
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::{
@@ -305,6 +306,37 @@ impl DocumentEvent {
     }
 }
 
+/// One observer declaration and the document policies it is scoped to.
+/// The shared declaration has no place for the scope, so it travels beside
+/// it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScopedHook {
+    pub declaration: HookDeclaration,
+    /// The policies whose documents the observer hears about, at least one.
+    pub policies: Vec<String>,
+}
+
+impl ScopedHook {
+    /// The scoped declarations of every hook `project` declares, in
+    /// declaration order.
+    #[must_use]
+    pub fn of(project: &DocumentsProject) -> Vec<Self> {
+        project
+            .hooks
+            .iter()
+            .map(|hook| Self {
+                declaration: hook.declaration(),
+                policies: hook
+                    .policies
+                    .as_slice()
+                    .iter()
+                    .map(|policy| policy.as_str().to_owned())
+                    .collect(),
+            })
+            .collect()
+    }
+}
+
 /// Validated and compiled Document Store observer declarations.
 #[derive(Clone, Debug)]
 pub struct CompiledHooks {
@@ -318,6 +350,7 @@ struct CompiledHook {
     id: String,
     trigger: HookTrigger,
     projection: Vec<String>,
+    policies: BTreeSet<String>,
     destination_id: String,
 }
 
@@ -326,13 +359,30 @@ impl CompiledHooks {
     /// observer contract. The authored project was checked when it was
     /// read; compiling again here means no unchecked declaration reaches
     /// capture.
-    pub fn compile(declarations: &[HookDeclaration]) -> Result<Self, HookActivationError> {
-        validate_hooks(declarations).map_err(|_| HookActivationError::InvalidDeclaration)?;
-        HookCapabilities::URL_ONLY.check_declarations(declarations)?;
+    pub fn compile(scoped: &[ScopedHook]) -> Result<Self, HookActivationError> {
+        let declarations = scoped
+            .iter()
+            .map(|hook| hook.declaration.clone())
+            .collect::<Vec<_>>();
+        validate_hooks(&declarations).map_err(|_| HookActivationError::InvalidDeclaration)?;
+        HookCapabilities::URL_ONLY.check_declarations(&declarations)?;
 
         let mut hooks = Vec::with_capacity(declarations.len());
         let mut destination_ids = BTreeSet::new();
-        for declaration in declarations {
+        for ScopedHook {
+            declaration,
+            policies,
+        } in scoped
+        {
+            let scope = policies.iter().cloned().collect::<BTreeSet<_>>();
+            if scope.is_empty()
+                || scope.len() != policies.len()
+                || scope
+                    .iter()
+                    .any(|policy| LocalId::new(policy.as_str()).is_err())
+            {
+                return Err(HookActivationError::UnsupportedContract);
+            }
             if LocalId::new(declaration.id.as_str()).is_err()
                 || declaration.phase != HookPhase::After
             {
@@ -360,6 +410,7 @@ impl CompiledHooks {
                 id: declaration.id.clone(),
                 trigger,
                 projection: declaration.projection.iter().cloned().collect(),
+                policies: scope,
                 destination_id,
             });
         }
@@ -370,6 +421,7 @@ impl CompiledHooks {
                 "id": hook.id,
                 "trigger": hook.trigger.as_str(),
                 "projection": hook.projection,
+                "policies": hook.policies,
                 "destinationId": hook.destination_id,
                 "dataSchema": hook.trigger.data_schema_id(),
             })).collect::<Vec<_>>(),
@@ -425,7 +477,7 @@ impl ActivatedHooks {
     /// bindings stay available for deliveries captured under an earlier
     /// package.
     pub fn activate(
-        declarations: &[HookDeclaration],
+        declarations: &[ScopedHook],
         configured: &BTreeMap<String, UrlHookDestinationConfig>,
         secrets: &SecretResolver,
         identity: HookRuntimeIdentity,
@@ -462,8 +514,9 @@ impl ActivatedHooks {
     }
 
     /// Capture one canonical envelope and one delivery row for every hook on
-    /// `event`'s trigger, in declaration order and inside the caller's
-    /// transaction. Returns how many deliveries were captured.
+    /// `event`'s trigger that is scoped to the policy its document is held
+    /// under, in declaration order and inside the caller's transaction.
+    /// Returns how many deliveries were captured.
     pub async fn capture(
         &self,
         transaction: &Transaction<'_>,
@@ -474,7 +527,9 @@ impl ActivatedHooks {
             .compiled
             .hooks
             .iter()
-            .filter(|hook| hook.trigger == event.trigger)
+            .filter(|hook| {
+                hook.trigger == event.trigger && hook.policies.contains(&event.policy_id)
+            })
             .collect::<Vec<_>>();
         if matching.is_empty() {
             return Ok(0);
