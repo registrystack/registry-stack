@@ -37,8 +37,8 @@ use registry_scheduling::http::{router, HttpState};
 use registry_scheduling::runtime::{dispatch_due_intents, reminder_transport};
 use registry_scheduling::service::SchedulingService;
 use registry_scheduling::store::{
-    attempt_key_reference, ActivationRequest, ActivePackage, CommitError, CommitOutcome,
-    Commitment, PostgresStore, RoleMode, StoreError, SupplyContext,
+    activation_layout, attempt_key_reference, ActivationRequest, ActivePackage, CommitError,
+    CommitOutcome, Commitment, PostgresStore, RoleMode, StoreError, SupplyContext,
 };
 use registry_scheduling_core::{
     location_closure_intervals, location_open_intervals, AdmissionRefusal, AdmissionRequest,
@@ -65,6 +65,11 @@ const AUDIENCE: &str = "urn:registry-scheduling:test";
 const CLIENT: &str = "task-agent";
 const SECRET: &[u8] = b"01234567890123456789012345678901";
 const SCHEDULING_ID: &str = "commitments-test";
+/// The database identity and package the fixture records as active, which
+/// the hook worker's identity check reads back from the activation record.
+const DATABASE_ID: &str = "commitments-test-database";
+const PACKAGE_DIGEST: &str =
+    "sha256:0000000000000000000000000000000000000000000000000000000000000001";
 const OFFERING: &str = "registry-update-30";
 const SECOND_OFFERING: &str = "registry-review-45";
 /// An offering whose service runs twice its start increment, so consecutive
@@ -397,6 +402,8 @@ async fn fixture_publishing_with_hook_and_status(
         &hook_destinations,
         &secrets,
         HookRuntimeIdentity {
+            database_id: DATABASE_ID.to_owned(),
+            package_digest: PACKAGE_DIGEST.to_owned(),
             scheduling_id: SCHEDULING_ID.to_owned(),
             policy_revision: revision,
             policy_digest: digest.clone(),
@@ -1551,14 +1558,33 @@ async fn hook_fixture() -> Fixture {
     hook_fixture_at("http://127.0.0.1:9/scheduling-hooks").await
 }
 
+/// A deployment publishing the observer policy, with the activation record
+/// naming the package its hook worker serves, as `schedulingctl apply`
+/// records it, since the worker checks that record in every transaction.
 async fn hook_fixture_at(hook_url: &str) -> Fixture {
     let policy = read_policy(&observer_policy()).expect("the scheduling hook policy");
-    fixture_publishing_with_hook_url(
+    let fx = fixture_publishing_with_hook_url(
         policy,
         &["north-counter".to_owned(), "two-counter".to_owned()],
         hook_url,
     )
+    .await;
+    registry_platform_activation::append_activation(
+        &fx.admin,
+        &activation_layout(),
+        &registry_platform_activation::NewActivation {
+            activation_id: Uuid::new_v4(),
+            package_digest: PACKAGE_DIGEST,
+            database_id: DATABASE_ID,
+            operator_reference_hash: None,
+            backup_references: &[],
+            role_mode: RoleMode::Single,
+            runtime_role: Some("scheduling_test"),
+        },
+    )
     .await
+    .expect("record the fixture activation");
+    fx
 }
 
 async fn captured_hook_envelopes(
@@ -1995,6 +2021,58 @@ async fn hook_delivery_audit_failure_prevents_egress() {
 }
 
 #[tokio::test]
+async fn hook_delivery_stops_once_the_activation_record_names_another_package() {
+    let destination = MockServer::start().await;
+    let fx = hook_fixture_at(&format!("{}/scheduling-hooks", destination.uri())).await;
+    let _ = booked(&fx, 300, 440, "hook-superseded-package").await;
+    // A later activation names a different package for the same database;
+    // the worker started under the fixture's package must not serve it.
+    registry_platform_activation::append_activation(
+        &fx.admin,
+        &activation_layout(),
+        &registry_platform_activation::NewActivation {
+            activation_id: Uuid::new_v4(),
+            package_digest:
+                "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+            database_id: DATABASE_ID,
+            operator_reference_hash: None,
+            backup_references: &[],
+            role_mode: RoleMode::Single,
+            runtime_role: Some("scheduling_test"),
+        },
+    )
+    .await
+    .expect("record a superseding activation");
+
+    let delivery = fx
+        .hooks
+        .delivery_service(fx.store.clone(), fx.audit.clone());
+    assert!(delivery.deliver_once().await.is_err());
+    assert!(
+        destination
+            .received_requests()
+            .await
+            .expect("read hook requests")
+            .is_empty(),
+        "a worker serving a superseded package sends nothing"
+    );
+    assert!(
+        hook_delivery_entries(&fx).is_empty(),
+        "no attempt is audited under a superseded package"
+    );
+    let state = fx
+        .admin
+        .query_one(
+            "SELECT state, attempt FROM registry_webhook_delivery_state",
+            &[],
+        )
+        .await
+        .expect("read the untouched claim state");
+    assert_eq!(state.get::<_, String>(0), "pending");
+    assert_eq!(state.get::<_, i16>(1), 0);
+}
+
+#[tokio::test]
 async fn changed_retained_hook_destination_binding_is_refused() {
     let fx = hook_fixture().await;
     let _ = booked(&fx, 300, 440, "hook-binding-change").await;
@@ -2015,6 +2093,8 @@ async fn changed_retained_hook_destination_binding_is_refused() {
         &destinations,
         &secrets,
         HookRuntimeIdentity {
+            database_id: DATABASE_ID.to_owned(),
+            package_digest: PACKAGE_DIGEST.to_owned(),
             scheduling_id: SCHEDULING_ID.to_owned(),
             policy_revision: i64::try_from(fx.revision).expect("a bounded policy revision"),
             policy_digest: policy.policy_digest(),
