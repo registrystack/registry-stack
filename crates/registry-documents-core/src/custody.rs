@@ -47,7 +47,10 @@ impl ContentType {
         if valid_content_type(&text) {
             Ok(Self(text))
         } else {
-            Err(Invalid::expected(CONTENT_TYPE_EXPECTED, CONTENT_TYPE_ACTION))
+            Err(Invalid::expected(
+                CONTENT_TYPE_EXPECTED,
+                CONTENT_TYPE_ACTION,
+            ))
         }
     }
 
@@ -316,8 +319,7 @@ pub fn admit_reservation<'p>(
         .find(|(id, _)| id.as_str() == ask.policy_id)
         .ok_or(ProblemCode::DocumentPolicyUnknown)?;
     let restrictions = &policy.mandatory_restrictions;
-    if ask.declared_length == 0 || ask.declared_length > restrictions.maximum_document_bytes.get()
-    {
+    if ask.declared_length == 0 || ask.declared_length > restrictions.maximum_document_bytes.get() {
         return Err(ProblemCode::DocumentTooLarge);
     }
     if !restrictions.allowed_content_types.admits(ask.media_type) {
@@ -360,7 +362,11 @@ mod tests {
             .value
     }
 
-    fn ask<'a>(policy_id: &'a str, declared_length: u64, media_type: &'a str) -> ReservationAsk<'a> {
+    fn ask<'a>(
+        policy_id: &'a str,
+        declared_length: u64,
+        media_type: &'a str,
+    ) -> ReservationAsk<'a> {
         ReservationAsk {
             policy_id,
             declared_length,
@@ -406,10 +412,11 @@ mod tests {
             .expect("admitted");
         assert_eq!(admitted.policy_id.as_str(), "citizen-delivery");
         assert_eq!(admitted.media_type.as_str(), "application/pdf");
-        assert!(
-            admit_reservation(&project, ask("citizen-delivery", 16_777_216, "application/pdf"))
-                .is_ok()
-        );
+        assert!(admit_reservation(
+            &project,
+            ask("citizen-delivery", 16_777_216, "application/pdf")
+        )
+        .is_ok());
     }
 
     #[test]
@@ -476,9 +483,19 @@ mod tests {
         use UploadState::*;
         use VerificationState::*;
         let cases = [
-            (Reserved, Pending, Suspended, DocumentStatus::AwaitingContent),
+            (
+                Reserved,
+                Pending,
+                Suspended,
+                DocumentStatus::AwaitingContent,
+            ),
             (Expired, Pending, Suspended, DocumentStatus::AwaitingContent),
-            (Reserved, Approved, Releasable, DocumentStatus::AwaitingContent),
+            (
+                Reserved,
+                Approved,
+                Releasable,
+                DocumentStatus::AwaitingContent,
+            ),
             (Finalized, Pending, Suspended, DocumentStatus::Pending),
             (Finalized, Pending, Releasable, DocumentStatus::Pending),
             (Finalized, Approved, Releasable, DocumentStatus::Ready),
@@ -488,7 +505,10 @@ mod tests {
         ];
         for (upload, verification, eligibility, expected) in cases {
             let status = DocumentStatus::derive(upload, verification, eligibility);
-            assert_eq!(status, expected, "{upload:?} {verification:?} {eligibility:?}");
+            assert_eq!(
+                status, expected,
+                "{upload:?} {verification:?} {eligibility:?}"
+            );
             assert_eq!(status.is_releasable(), expected == DocumentStatus::Ready);
         }
     }
@@ -499,7 +519,10 @@ mod tests {
             serde_json::to_value(DocumentStatus::AwaitingContent).unwrap(),
             "awaiting-content"
         );
-        assert_eq!(serde_json::to_value(DocumentStatus::Ready).unwrap(), "ready");
+        assert_eq!(
+            serde_json::to_value(DocumentStatus::Ready).unwrap(),
+            "ready"
+        );
     }
 
     #[test]
