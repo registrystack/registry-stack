@@ -192,11 +192,13 @@ entries:
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_a_releasable_version_under_erasure}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_approval_after_a_removal_request_releases_nothing}
   - id: DOCUMENTS-SEC-38
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes}
       - {path: crates/registry-documents-core/src/access.rs, name: only_the_custodian_may_request_erasure_and_an_erasing_document_offers_its_shares_only}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_document_under_an_undeclared_policy_cannot_be_removed}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: under_institutional_custody_only_the_institution_may_remove}
   - id: DOCUMENTS-SEC-39
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_expiry_and_revocation_erase_nothing_held_in_custody}
