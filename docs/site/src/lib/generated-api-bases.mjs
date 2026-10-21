@@ -11,7 +11,8 @@
  * These are the generated bases, not the hand-authored narrative pages
  * reference/apis/registry-evidence, reference/apis/registry-casework,
  * reference/apis/registry-scheduling, reference/apis/registry-messaging, and
- * reference/apis/registry-coordinator, which keep their .md.
+ * reference/apis/registry-coordinator, which keep their .md. The Document
+ * Store has no narrative API page; its operations are generated only.
  */
 export const GENERATED_API_BASES = [
   'reference/apis/evidence',
@@ -20,6 +21,7 @@ export const GENERATED_API_BASES = [
   'reference/apis/scheduling',
   'reference/apis/messaging',
   'reference/apis/coordinator',
+  'reference/apis/documents',
   'reference/apis/breg',
 ];
 

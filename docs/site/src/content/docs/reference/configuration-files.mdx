@@ -56,6 +56,15 @@ Registry Coordinator reads `CoordinatorRuntimeConfig` through the same reader.
 
 </DocsetProduct>
 
+<DocsetProduct product="registry-documents">
+
+The Registry Document Store reads `DocumentsRuntimeConfig` through the same reader.
+
+{/* Evidence: crates/registry-documents/src/config.rs, DOCUMENTS_RUNTIME_KIND;
+    products/documents/RUNTIME-CONFIG.md. */}
+
+</DocsetProduct>
+
 The shared reader is the `registry-platform-yaml` library. Every product's check command reads
 its authored files through it, as the runtimes above read their runtime files, so one YAML subset,
 one value table, one header check, and one diagnostic format apply to every file on this page that
