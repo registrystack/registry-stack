@@ -3,7 +3,7 @@
 //! references, locking, pending writes and durable deletion retries; this
 //! transport owns only bytes.
 
-use std::{fmt, net::IpAddr, time::Duration};
+use std::{fmt, net::IpAddr, sync::Arc, time::Duration};
 
 use hmac::{Hmac, KeyInit, Mac};
 use quick_xml::{events::Event, Reader};
@@ -163,9 +163,7 @@ impl S3Settings {
         resolver: &SecretResolver,
     ) -> Result<S3ObjectStore> {
         namespace.check()?;
-        if scope_input.is_empty() || scope_input.len() > MAXIMUM_SCOPE_INPUT_BYTES {
-            return Err(ObjectStoreError::InvalidConfiguration);
-        }
+        check_scope_input(scope_input)?;
         let resolve = |reference: &SecretReference| {
             resolver
                 .resolve_reference(reference)
@@ -209,9 +207,9 @@ impl S3Settings {
             bucket_url: self.bucket_url.clone(),
             region: self.region.clone(),
             scope,
-            access_key_id,
-            secret_access_key,
-            session_token,
+            access_key_id: Arc::new(access_key_id),
+            secret_access_key: Arc::new(secret_access_key),
+            session_token: session_token.map(Arc::new),
             binding_digest,
         };
         store.ensure_unversioned().await?;
@@ -223,6 +221,13 @@ impl fmt::Debug for S3Settings {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("S3Settings(<redacted>)")
     }
+}
+
+fn check_scope_input(scope_input: &str) -> Result<()> {
+    if scope_input.is_empty() || scope_input.len() > MAXIMUM_SCOPE_INPUT_BYTES {
+        return Err(ObjectStoreError::InvalidConfiguration);
+    }
+    Ok(())
 }
 
 /// The connect phase of one attempt never outlasts the attempt, and never
@@ -257,9 +262,9 @@ pub struct S3ObjectStore {
     bucket_url: Url,
     region: String,
     scope: String,
-    access_key_id: ProtectedSecret,
-    secret_access_key: ProtectedSecret,
-    session_token: Option<ProtectedSecret>,
+    access_key_id: Arc<ProtectedSecret>,
+    secret_access_key: Arc<ProtectedSecret>,
+    session_token: Option<Arc<ProtectedSecret>>,
     binding_digest: String,
 }
 
@@ -274,6 +279,29 @@ impl S3ObjectStore {
     /// delete it.
     pub fn binding_digest(&self) -> &str {
         &self.binding_digest
+    }
+
+    /// The store of another scope in the same bucket, under the same
+    /// namespace, credentials, and HTTP client. Its binding digest and
+    /// object keys are those [`S3Settings::activate`] gives `scope_input`.
+    /// Nothing is resolved or sent: this store refused a versioned bucket
+    /// when it was activated, and every write and deletion probes again.
+    pub fn scoped(&self, scope_input: &str) -> Result<Self> {
+        check_scope_input(scope_input)?;
+        let scope = hex::encode(Sha256::digest(scope_input.as_bytes()));
+        let binding_digest =
+            binding_digest(self.namespace, &self.bucket_url, &self.region, &scope)?;
+        Ok(Self {
+            client: self.client.clone(),
+            namespace: self.namespace,
+            bucket_url: self.bucket_url.clone(),
+            region: self.region.clone(),
+            scope,
+            access_key_id: Arc::clone(&self.access_key_id),
+            secret_access_key: Arc::clone(&self.secret_access_key),
+            session_token: self.session_token.clone(),
+            binding_digest,
+        })
     }
 
     fn object_url(&self, sha256: &str) -> Result<Url> {
