@@ -9,7 +9,7 @@ import * as client from '@registrystack/client';
 import { breg, casework, discovery, evidence } from '@registrystack/client';
 
 assert.strictEqual(typeof breg.BaseRegistryClient, 'function');
-assert.strictEqual(typeof breg.verifyWebhookDelivery, 'function');
+assert.strictEqual(typeof breg.verifyHookDelivery, 'function');
 assert.strictEqual(typeof discovery.DiscoveryClient, 'function');
 assert.strictEqual(typeof evidence.EvidenceClient, 'function');
 assert.strictEqual(typeof casework.CaseworkClient, 'function');

@@ -802,7 +802,7 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
     /// Bind successor activation to the target runtime's activated,
     /// non-secret logical destination inventory. Omitting this inventory is
     /// equivalent to an empty inventory and therefore fails closed when any
-    /// retained non-terminal webhook work exists.
+    /// retained non-terminal hook work exists.
     #[must_use]
     pub fn with_event_destination_compatibility_inventory(
         mut self,
@@ -946,7 +946,7 @@ impl PlannedActivation {
                 "prerequisites",
                 "proposals",
                 "history-coverage",
-                "webhook-bindings",
+                "hook-bindings",
                 "active-state",
             ],
             Self::RoleChange => &[
@@ -956,7 +956,7 @@ impl PlannedActivation {
                 "prerequisites",
                 "active-roles",
                 "history-coverage",
-                "webhook-bindings",
+                "hook-bindings",
                 "active-state",
             ],
             Self::AlreadyActive => &[

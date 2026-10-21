@@ -8,13 +8,13 @@ use serde::{Deserialize, Serialize};
 use crate::artifacts::GeneratedArtifacts;
 use crate::contract::{
     AccessLogSource, AccessProfileSource, BatchSource, Classification, ConstraintSource,
-    EventConditionSource, FieldTypeSource, HookSource, ManifestProjectionCatalogSource,
-    ManifestProjectionDataServiceSource, ManifestProjectionDatasetSource,
-    ManifestProjectionDistributionSource, ManifestProjectionEntitySource,
-    ManifestProjectionPublicServiceSource, ManifestProjectionVocabularySource, MutationMode,
-    NormalizationStep, Operation, PackageIdentitySource, ProvenanceFieldSource,
-    RecipientGroupSource, RecipientOrganizationSource, RowBoundarySource, TemporalSource,
-    ValidTimeRole, WebhookAuthenticationProfile, WebhookDeadLetterMode,
+    EventConditionSource, FieldTypeSource, HookAuthenticationProfile, HookDeadLetterMode,
+    HookSource, ManifestProjectionCatalogSource, ManifestProjectionDataServiceSource,
+    ManifestProjectionDatasetSource, ManifestProjectionDistributionSource,
+    ManifestProjectionEntitySource, ManifestProjectionPublicServiceSource,
+    ManifestProjectionVocabularySource, MutationMode, NormalizationStep, Operation,
+    PackageIdentitySource, ProvenanceFieldSource, RecipientGroupSource,
+    RecipientOrganizationSource, RowBoundarySource, TemporalSource, ValidTimeRole,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
@@ -1152,9 +1152,9 @@ pub struct CompiledEventDelivery {
     pub data_schema: String,
     pub data_schema_fingerprint: String,
     pub data_schema_artifact_path: String,
-    pub authentication_profile: WebhookAuthenticationProfile,
-    pub delivery_mode: CompiledWebhookDeliveryMode,
-    pub retry_profile: CompiledWebhookRetryProfile,
+    pub authentication_profile: HookAuthenticationProfile,
+    pub delivery_mode: CompiledHookDeliveryMode,
+    pub retry_profile: CompiledHookRetryProfile,
     pub attempt_timeout_ms: u32,
     pub initial_backoff_ms: u32,
     pub maximum_backoff_ms: u32,
@@ -1165,7 +1165,7 @@ pub struct CompiledEventDelivery {
     pub retry_delays_ms: Vec<u32>,
     /// Compiler-proved upper bound for the canonical projected JSON body.
     pub maximum_payload_bytes: u32,
-    pub dead_letter: WebhookDeadLetterMode,
+    pub dead_letter: HookDeadLetterMode,
     pub operator_replay: bool,
 }
 
@@ -1267,13 +1267,13 @@ pub struct CompiledHookHandler {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum CompiledWebhookDeliveryMode {
+pub enum CompiledHookDeliveryMode {
     AfterCommit,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum CompiledWebhookRetryProfile {
+pub enum CompiledHookRetryProfile {
     RegistryV1,
 }
 

@@ -333,7 +333,7 @@ async fn startup_refuses_an_instance_id_change_while_deliveries_are_pending() {
         prepare_with_connection_config_for_test(&restored_path, database.runtime_config.clone())
             .await
             .err(),
-        Some(StartupError::RetainedWebhookBindings {
+        Some(StartupError::RetainedHookBindings {
             retained_deliveries: 2
         })
     );
@@ -349,7 +349,7 @@ enum CapturedDeliveryState {
     DeadLettered,
 }
 
-/// Write one captured webhook delivery whose stored envelope names `source`,
+/// Write one captured hook delivery whose stored envelope names `source`,
 /// in the given state, as a previous deployment's capture would have left it.
 async fn insert_captured_delivery(
     database: &TestDatabase,
@@ -2561,11 +2561,7 @@ async fn assert_metrics_publish_the_verified_package_and_every_queue(
         )],
         "the scrape names the verified package once:\n{body}"
     );
-    for queue in [
-        "webhook-delivery",
-        "review-submission",
-        "review-application",
-    ] {
+    for queue in ["hook-delivery", "review-submission", "review-application"] {
         assert!(
             body.contains(&format!(
                 "breg_queue_oldest_pending_age_seconds{{queue=\"{queue}\"}} 0\n"

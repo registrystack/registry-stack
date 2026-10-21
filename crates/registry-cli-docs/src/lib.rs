@@ -286,10 +286,10 @@ mod tests {
         }));
         for invocation in [
             "bregctl explain",
-            "bregctl webhook sample",
-            "bregctl webhook list",
-            "bregctl webhook replay",
-            "bregctl webhook discard",
+            "bregctl hook sample",
+            "bregctl hook list",
+            "bregctl hook replay",
+            "bregctl hook discard",
             "bregctl review-recovery retry-application",
         ] {
             assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());

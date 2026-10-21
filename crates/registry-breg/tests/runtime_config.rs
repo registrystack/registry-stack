@@ -461,7 +461,7 @@ fn runtime_definition_ids_refuse_separator_collisions_at_both_authored_keys() {
         (
             event_destinations,
             RuntimeConfigError::EventDestinationIdCollision,
-            "breg.runtime.event-destination-id-collision",
+            "breg.runtime.hook-destination-id-collision",
             "/destinations/hooks/notify-main",
             "/destinations/hooks/notify_main",
         ),
@@ -611,7 +611,7 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
     });
     let parsed = parse_project_json(&serde_json::to_vec(&project).expect("project serializes"))
         .expect("project parses");
-    compile_project(&parsed, &[], CompileProfile::Authoring).expect("webhooks compile")
+    compile_project(&parsed, &[], CompileProfile::Authoring).expect("hooks compile")
 }
 
 fn event_headers() -> EventDeliveryHeaders<'static> {
@@ -1207,7 +1207,7 @@ fn runtime_config_errors_expose_stable_value_free_metadata() {
         ),
         (
             RuntimeConfigError::InvalidEventDestination,
-            "breg.runtime.invalid-event-destination",
+            "breg.runtime.invalid-hook-destination",
             "/destinations/hooks",
         ),
         (

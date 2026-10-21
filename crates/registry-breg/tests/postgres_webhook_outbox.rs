@@ -256,7 +256,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
             create_request(&plan, &claims, "successful-create", "first"),
         )
         .await
-        .expect("configured webhook capture commits with the record");
+        .expect("configured hook capture commits with the record");
     assert!(!first.replayed());
     let first_response: Value = serde_json::from_slice(first.response().body())
         .expect("held create response is strict JSON");
@@ -751,9 +751,9 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           }]
         }"#,
     )
-    .expect("webhook capture fixture parses");
+    .expect("hook capture fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
-        .expect("webhook capture fixture compiles")
+        .expect("hook capture fixture compiles")
 }
 
 fn mutation_claims(registry: &registry_breg::CompiledRegistry) -> ClaimContext {
@@ -1347,7 +1347,7 @@ package:
 authentication:
   oidc:
     issuer: https://issuer.example
-    audience: urn:breg:webhook-outbox
+    audience: urn:breg:hook-outbox
     allowedAlgorithm: EdDSA
     accessTokenType: JWT
     scopeClaim: scope

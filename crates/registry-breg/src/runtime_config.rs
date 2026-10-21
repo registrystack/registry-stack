@@ -66,8 +66,8 @@ const MAX_JWKS_DOCUMENT_BYTES: u64 = 1024 * 1024;
 const MIN_RSA_MODULUS_BITS: usize = 2048;
 const MAX_RSA_MODULUS_BITS: usize = 8192;
 const MAX_RSA_EXPONENT_BYTES: usize = 8;
-const DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS: u8 = 7;
-const MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS: u8 = 30;
+const DEFAULT_HOOK_PAYLOAD_RETENTION_DAYS: u8 = 7;
+const MAX_HOOK_PAYLOAD_RETENTION_DAYS: u8 = 30;
 const DEFAULT_POOL_WAIT_TIMEOUT_MILLISECONDS: u64 = 30_000;
 const DEFAULT_POOL_CREATE_TIMEOUT_MILLISECONDS: u64 = 30_000;
 const DEFAULT_POOL_RECYCLE_TIMEOUT_MILLISECONDS: u64 = 30_000;
@@ -392,8 +392,8 @@ impl RuntimeConfigError {
             Self::InvalidOidcLeeway => "breg.runtime.invalid-oidc-leeway",
             Self::InvalidAudit => "breg.runtime.invalid-audit",
             Self::InvalidCursor => "breg.runtime.invalid-cursor",
-            Self::InvalidEventDestination => "breg.runtime.invalid-event-destination",
-            Self::EventDestinationIdCollision => "breg.runtime.event-destination-id-collision",
+            Self::InvalidEventDestination => "breg.runtime.invalid-hook-destination",
+            Self::EventDestinationIdCollision => "breg.runtime.hook-destination-id-collision",
             Self::EvidenceProviderIdCollision => "breg.runtime.evidence-provider-id-collision",
             Self::ReviewAuthorityIdCollision => "breg.runtime.review-authority-id-collision",
             Self::InvalidAttachmentStorage => "breg.runtime.invalid-attachment-storage",
@@ -737,7 +737,7 @@ fn runtime_definition_id_diagnostics(
     for (namespace, code, ids) in [
         (
             "destinations/hooks",
-            "breg.runtime.event-destination-id-collision",
+            "breg.runtime.hook-destination-id-collision",
             raw.destinations
                 .hooks
                 .keys()
@@ -3311,14 +3311,14 @@ struct RawRetentionConfig {
         )
     )]
     receipt_retention_days: u16,
-    /// Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.
-    #[serde(default = "default_webhook_payload_retention_days")]
+    /// Defaults to the bounded retained payload lifetime for pending or dead-letter hook work.
+    #[serde(default = "default_hook_payload_retention_days")]
     #[serde(
-        deserialize_with = "crate::contract::bounded_u8::<_, 1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>"
+        deserialize_with = "crate::contract::bounded_u8::<_, 1, { MAX_HOOK_PAYLOAD_RETENTION_DAYS as u32 }>"
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "BoundedU32<1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>")
+        schemars(with = "BoundedU32<1, { MAX_HOOK_PAYLOAD_RETENTION_DAYS as u32 }>")
     )]
     hook_payload_retention_days: u8,
 }
@@ -3327,13 +3327,13 @@ impl Default for RawRetentionConfig {
     fn default() -> Self {
         Self {
             receipt_retention_days: default_receipt_retention_days(),
-            hook_payload_retention_days: default_webhook_payload_retention_days(),
+            hook_payload_retention_days: default_hook_payload_retention_days(),
         }
     }
 }
 
-const fn default_webhook_payload_retention_days() -> u8 {
-    DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS
+const fn default_hook_payload_retention_days() -> u8 {
+    DEFAULT_HOOK_PAYLOAD_RETENTION_DAYS
 }
 
 const fn default_receipt_retention_days() -> u16 {

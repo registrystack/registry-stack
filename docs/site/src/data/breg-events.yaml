@@ -90,7 +90,7 @@
     - ['`dead-lettered`', 'Attempt limit exhausted.', 'Yes', 'Only with unexpired retained payload and matching generation and destination binding.']
     - ['`expired`', 'Payload retention ended.', 'Yes', 'No']
 - id: operator-fields
-  title: Webhook list entry fields
+  title: Hook list entry fields
   columns: [Field, Type, Meaning]
   rows:
     - ['`eventId`', 'UUID string', 'Captured event ID; matches `ce-id`.']
@@ -106,6 +106,6 @@
   columns: [Command, Required arguments, Result]
   rows:
     - ['`explain events`', '`<project>`', 'Compiled event inventory; no database access.']
-    - ['`webhook sample`', '`<project> --event <event-id>`', 'Synthetic request with a placeholder signature; no HTTP send.']
-    - ['`webhook list`', '`--runtime-config <absolute-file>`', 'Delivery metadata without record values; optional `--limit` defaults to 50 and accepts 1 to 100.']
-    - ['`webhook replay`', '`--runtime-config <absolute-file> --event-id <uuid> --delivery-id <id> --expected-generation <number>`', 'Queues an eligible dead letter in a new generation; does not confirm receiver acceptance.']
+    - ['`hook sample`', '`<project> --event <event-id>`', 'Synthetic request with a placeholder signature; no HTTP send.']
+    - ['`hook list`', '`--runtime-config <absolute-file>`', 'Delivery metadata without record values; optional `--limit` defaults to 50 and accepts 1 to 100.']
+    - ['`hook replay`', '`--runtime-config <absolute-file> --event-id <uuid> --delivery-id <id> --expected-generation <number>`', 'Queues an eligible dead letter in a new generation; does not confirm receiver acceptance.']
