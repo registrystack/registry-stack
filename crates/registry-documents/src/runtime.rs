@@ -2,7 +2,8 @@
 
 //! Service assembly: `documents serve` loads and checks the runtime
 //! configuration, confirms the database answers over the runtime
-//! credential, opens the audit journal, activates content storage and the
+//! credential and that its activation ledger names the deployed package
+//! for this deployment, opens the audit journal, activates content storage and the
 //! content verifier, suspends every version verified under another
 //! verifier binding, loads the token issuer's signing keys, binds the
 //! listener, and serves the HTTP surface beside the content verification
@@ -29,6 +30,7 @@ use thiserror::Error;
 use tokio::sync::watch;
 use tracing_subscriber::filter::LevelFilter;
 
+use crate::activation::{self, ActivationError, ApplyRequest};
 use crate::audit::DocumentsAudit;
 use crate::auth::DocumentsAuthenticator;
 use crate::config::{describe_secret_failure, startup_report, RuntimeConfig, RuntimeConfigError};
@@ -39,8 +41,8 @@ use crate::service::{DocumentService, ServiceSettings};
 use crate::store::{PostgresStore, StoreError};
 use crate::transfer::{TransferBudget, TransferDeadline};
 use crate::verification::{
-    activate_verifier, dispatcher, job_table, sweep_bindings, VerdictSource, VerificationStore,
-    VerificationTransport,
+    activate_verifier, dead_letters, dispatcher, job_table, replay, sweep_bindings, DeadLetter,
+    ReplayError, ReplayRefusal, Replayed, VerdictSource, VerificationStore, VerificationTransport,
 };
 
 /// The most verification attempts one process runs at once.
@@ -144,8 +146,9 @@ impl std::fmt::Debug for Prepared {
 }
 
 /// Load and check the runtime document at `path` and the package it names,
-/// confirm the database answers over the runtime credential and carries
-/// exactly this release's schema, open the audit journal, activate content
+/// confirm the database answers over the runtime credential, names this
+/// package active for this deployment, and carries exactly this release's
+/// schema, open the audit journal, activate content
 /// storage and the verifier, and bind the listener.
 pub async fn prepare(path: impl AsRef<Path>) -> Result<Prepared, RuntimeError> {
     prepare_with(path.as_ref(), None).await
@@ -181,15 +184,9 @@ async fn prepare_with(
             stage: "runtime database connection",
             source,
         })?;
-    store
-        .ready()
-        .await
-        .map_err(|source| RuntimeError::Database {
-            stage: "runtime database schema check",
-            source,
-        })?;
-    let audit = open_audit(&config, &secrets).await?;
     let database_id = database_id(&config)?;
+    activation::check_runtime(&store, &database_id, &package.digest).await?;
+    let audit = open_audit(&config, &secrets, None).await?;
     let ceiling = config.storage.maximum_document_bytes();
     let storage = Arc::new(
         ContentStorage::activate(&config.storage, &database_id, Arc::clone(&secrets))
@@ -267,6 +264,145 @@ async fn prepare_with(
     })
 }
 
+/// The operator process name companion audit journals are written under.
+const OPERATOR_PROCESS: &str = "documentsctl";
+
+fn runtime_store(
+    config: &RuntimeConfig,
+    secrets: &registry_platform_config::SecretResolver,
+) -> Result<PostgresStore, RuntimeError> {
+    PostgresStore::connect_runtime(&config.database, secrets).map_err(|source| {
+        RuntimeError::Database {
+            stage: "runtime database configuration",
+            source,
+        }
+    })
+}
+
+/// What `documentsctl apply` would change for the package `config` names,
+/// read over the runtime credential in a read-only transaction. It writes
+/// nothing.
+pub async fn activation_plan(
+    config: &RuntimeConfig,
+) -> Result<activation::ActivationPlan, RuntimeError> {
+    let package = load_package(config)?;
+    let database_id = database_id(config)?;
+    let secrets = config.secret_resolver()?;
+    let store = runtime_store(config, &secrets)?;
+    Ok(activation::plan(&store, &database_id, &package.digest).await?)
+}
+
+/// The activation ledger and schema version, read over the runtime
+/// credential in a read-only transaction.
+pub async fn activation_status(
+    config: &RuntimeConfig,
+) -> Result<activation::ActivationStatus, RuntimeError> {
+    let secrets = config.secret_resolver()?;
+    let store = runtime_store(config, &secrets)?;
+    Ok(activation::status(&store).await?)
+}
+
+/// Apply the schema over the migration credential and record the package
+/// `config` names as active, granting the runtime role what it serves with
+/// when the two credentials are different roles. The package is loaded and
+/// checked exactly as `serve` loads it, pinned digest included.
+pub async fn apply_activation(
+    config: &RuntimeConfig,
+    request: &ApplyRequest,
+) -> Result<activation::ActivationApplied, RuntimeError> {
+    let package = load_package(config)?;
+    let database_id = database_id(config)?;
+    let secrets = config.secret_resolver()?;
+    let runtime = runtime_store(config, &secrets)?;
+    let runtime_role = runtime
+        .current_user()
+        .await
+        .map_err(|source| RuntimeError::Database {
+            stage: "runtime role read",
+            source,
+        })?;
+    let migration =
+        PostgresStore::connect_migration(&config.database, &secrets).map_err(|source| {
+            RuntimeError::Database {
+                stage: "migration database configuration",
+                source,
+            }
+        })?;
+    let audit = open_audit(config, &secrets, Some(OPERATOR_PROCESS)).await?;
+    Ok(activation::apply(
+        &migration,
+        &runtime_role,
+        &database_id,
+        &package.digest,
+        request,
+        &audit,
+    )
+    .await?)
+}
+
+/// The runtime store over a database the ledger names this package and
+/// deployment active in, as `serve` would find it.
+async fn activated_store(
+    config: &RuntimeConfig,
+    secrets: &registry_platform_config::SecretResolver,
+) -> Result<PostgresStore, RuntimeError> {
+    let package = load_package(config)?;
+    let database_id = database_id(config)?;
+    let store = runtime_store(config, secrets)?;
+    activation::check_runtime(&store, &database_id, &package.digest).await?;
+    Ok(store)
+}
+
+/// The oldest `limit` dead-lettered content verification jobs, read over
+/// the runtime credential from an activated database.
+pub async fn dead_lettered_verifications(
+    config: &RuntimeConfig,
+    limit: u16,
+) -> Result<Vec<DeadLetter>, RuntimeError> {
+    let secrets = config.secret_resolver()?;
+    let store = activated_store(config, &secrets).await?;
+    dead_letters(&store, limit)
+        .await
+        .map_err(|source| RuntimeError::Database {
+            stage: "dead letter listing",
+            source,
+        })
+}
+
+/// Return the dead-lettered content verification job of `version_id` to
+/// pending, when its generation is `expected_generation`. Only an operator
+/// reaches this: it runs over the runtime credential against an activated
+/// database, and the dispatcher records the replay in the operator's
+/// companion audit journal before and after it commits. No HTTP route
+/// replays a job.
+pub async fn replay_verification(
+    config: &RuntimeConfig,
+    version_id: uuid::Uuid,
+    expected_generation: i64,
+) -> Result<Replayed, RuntimeError> {
+    let secrets = config.secret_resolver()?;
+    let store = activated_store(config, &secrets).await?;
+    let schema = store
+        .current_schema()
+        .await
+        .map_err(|source| RuntimeError::Database {
+            stage: "schema lookup",
+            source,
+        })?;
+    let audit = open_audit(config, &secrets, Some(OPERATOR_PROCESS)).await?;
+    let dispatcher = dispatcher(VerificationStore::new(store.clone(), schema, audit))
+        .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
+    replay(&store, &dispatcher, version_id, expected_generation)
+        .await
+        .map_err(|error| match error {
+            ReplayError::Refused(refusal) => RuntimeError::Replay(refusal),
+            ReplayError::Store(source) => RuntimeError::Database {
+                stage: "verification replay",
+                source,
+            },
+        })
+}
+
 /// The logical database id the runtime document names. A document without
 /// one is refused with the findings that name the missing key.
 fn database_id(config: &RuntimeConfig) -> Result<String, RuntimeError> {
@@ -279,9 +415,13 @@ fn database_id(config: &RuntimeConfig) -> Result<String, RuntimeError> {
 
 /// Open the audit journal the runtime document names, keyed by its audit
 /// secret.
+/// An operator command passes its own `process` name and writes to its
+/// companion journal, so it never contends for the running service's
+/// journal.
 async fn open_audit(
     config: &RuntimeConfig,
     secrets: &registry_platform_config::SecretResolver,
+    process: Option<&str>,
 ) -> Result<DocumentsAudit, RuntimeError> {
     let reference = config.audit.key.hash_key_ref.as_str();
     let secret = secrets.resolve(reference).map_err(|error| {
@@ -295,13 +435,18 @@ async fn open_audit(
         secret.expose_secret().to_vec(),
     ))
     .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
-    let destination = AuditDestination::from_settings(
+    let mut destination = AuditDestination::from_settings(
         config.audit.destination,
         config.audit.path.clone(),
         None,
         None,
     )
     .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
+    if let Some(process) = process {
+        destination = destination
+            .for_process(process)
+            .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
+    }
     let writer = AuditWriter::open(destination)
         .await
         .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
@@ -405,6 +550,13 @@ impl Prepared {
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
+    /// The database is not activated for this package and deployment, or
+    /// an activation step was refused.
+    #[error(transparent)]
+    Activation(#[from] ActivationError),
+    /// An operator replay of a content verification job was refused.
+    #[error("the content verification replay was refused: {0}")]
+    Replay(ReplayRefusal),
     #[error("the documents command arguments are invalid")]
     Arguments,
     #[error("DOCUMENTS_LOG must be one of error, warn, or info")]

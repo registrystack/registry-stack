@@ -7,6 +7,7 @@
 //! token verification, and refuses every other request with a problem from
 //! the closed vocabulary in `registry-documents-core`.
 
+pub mod activation;
 pub mod audit;
 pub mod auth;
 pub mod config;
