@@ -18,20 +18,18 @@ use registry_platform_config::JwksSource;
 pub use registry_platform_config::{
     AttachmentVerifierConfig, AuditKeyConfig, DatabaseConfig, ObjectStorageConfig,
     OidcClientsConfig, OidcIssuerConfig, PackageConfig, PrivateListenerConfig as ListenerConfig,
-    SecretProvidersConfig, TlsTermination,
+    SecretProvidersConfig, TlsTermination, UrlHookDestinationConfig,
 };
 use registry_platform_config::{
-    ConfigBlockError, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference,
-    SecretResolver, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
+    ConfigBlockError, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretResolver,
+    DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
 };
 use registry_platform_objectstore::{s3::S3Settings, verifier::HttpVerifierSettings};
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy,
     JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
 };
-use registry_platform_yaml::{
-    BoundedU32, BoundedU64, Diagnostic, ExternalId, LocalId, Report, Url,
-};
+use registry_platform_yaml::{BoundedU32, BoundedU64, Diagnostic, ExternalId, LocalId, Report};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -53,12 +51,6 @@ const DOCUMENTS_REMOVED_KEYS: &[registry_platform_config::RemovedKey] =
 
 /// The media type an access token must declare (RFC 9068).
 const DOCUMENTS_ACCESS_TOKEN_TYPE: &str = "at+jwt";
-
-/// The longest a content verifier or hook destination attempt may run.
-pub const MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS: u32 = 60_000;
-
-/// The most delivery attempts a hook destination may configure.
-pub const MAXIMUM_HOOK_ATTEMPTS: u32 = 32;
 
 /// The largest transfer deadline floor, in seconds.
 pub const MAXIMUM_TRANSFER_DEADLINE_SECONDS: u32 = 3_600;
@@ -288,38 +280,18 @@ pub enum Erasure {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DestinationsConfig {
-    #[serde(default)]
+    /// Logical URL hook destinations. The project names only these ids; the
+    /// URL, signing key, and delivery budget stay deployment-owned. At most
+    /// 128 are bound, each keyed by a local identifier.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_config::url_hook_destinations"
+    )]
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "registry_documents_core::local_id_map_schema::<HookDestination>")
+        schemars(schema_with = "registry_platform_config::url_hook_destinations_schema")
     )]
-    pub hooks: BTreeMap<LocalId, HookDestination>,
-}
-
-/// One URL a hook delivers its projection to, and the key it signs with.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HookDestination {
-    pub url: Url,
-    pub hmac_sha256_key_ref: SecretReference,
-    pub attempt_timeout_milliseconds: BoundedU32<100, MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS>,
-    pub maximum_attempts: BoundedU32<1, MAXIMUM_HOOK_ATTEMPTS>,
-}
-
-impl std::fmt::Debug for HookDestination {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("HookDestination")
-            .field("url", &"<redacted>")
-            .field("hmac_sha256_key_ref", &"<redacted>")
-            .field(
-                "attempt_timeout_milliseconds",
-                &self.attempt_timeout_milliseconds,
-            )
-            .field("maximum_attempts", &self.maximum_attempts)
-            .finish()
-    }
+    pub hooks: BTreeMap<String, UrlHookDestinationConfig>,
 }
 
 /// How long one upload or download may take: a floor, plus an allowance
@@ -760,7 +732,7 @@ impl RuntimeConfig {
             if !destination.url.is_https() && !development {
                 findings.push(Finding::new(
                     "documents.runtime.insecure-url",
-                    &format!("/destinations/hooks/{}/url", escape(id.as_str())),
+                    &format!("/destinations/hooks/{}/url", escape(id)),
                     format!("destinations.hooks.{id}.url must be an https URL"),
                     "Write an https URL, or run the listener in development-loopback mode.",
                 ));

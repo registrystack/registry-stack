@@ -15,6 +15,7 @@ workspace = true
 hex.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-config.workspace = true
+registry-platform-hooks.workspace = true
 registry-platform-yaml.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true

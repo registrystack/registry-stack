@@ -29,6 +29,7 @@ pub const ERASURE_REQUEST_EVENT: &str = "documents.erasure-request";
 pub const ERASURE_EVENT: &str = "documents.erasure";
 pub const UPLOAD_EXPIRY_EVENT: &str = "documents.upload-expiry";
 pub const ORPHAN_ERASURE_EVENT: &str = "documents.orphan-erasure";
+pub const HOOK_DELIVERY_EVENT: &str = "documents.hook-delivery";
 
 const ACTOR_REFERENCE_CLASS: &str = "documents-actor-v1";
 const ACTIVATION_REFERENCE_CLASS: &str = "documents-activation-reference-v1";
@@ -92,6 +93,12 @@ impl DocumentsAudit {
                 record,
             ))
             .await
+    }
+
+    /// Write one entry another component built whole, such as a hook
+    /// delivery attempt's entry from the shared delivery worker.
+    pub async fn append(&self, entry: AuditEntry) -> Result<(), AuditUnavailable> {
+        self.writer.append(entry).await
     }
 
     /// Write one response entry under `correlation`.

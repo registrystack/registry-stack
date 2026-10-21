@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Generated documents: the JSON Schemas for the Document Store runtime
-//! configuration and the authored project file, and the OpenAPI description
-//! of the HTTP surface.
+//! configuration, the authored project file, and the data of each event
+//! family an observer receives, and the OpenAPI description of the HTTP
+//! surface.
 //!
 //! Every one is derived, never written by hand. The schemas come from the
 //! strict reader types; the OpenAPI document comes from the same route and
@@ -14,6 +15,8 @@
 //!   --output products/documents/generated/runtime
 //! cargo run -p registry-documents --features schema --example project-schema -- \
 //!   --output products/documents/generated/project
+//! cargo run -p registry-documents --features schema --example event-schemas -- \
+//!   --output products/documents/generated/events
 //! cargo run -p registry-documents --features schema --example openapi -- \
 //!   --output products/documents/generated
 //! ```
@@ -21,9 +24,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use registry_documents_core::{
-    type_uri, DocumentsProject, ProblemCode, DOCUMENTS_PROJECT_API_VERSION, DOCUMENTS_PROJECT_KIND,
-    DOCUMENTS_PROJECT_SCHEMA_ID, DOCUMENTS_RUNTIME_API_VERSION, DOCUMENTS_RUNTIME_KIND,
-    DOCUMENTS_RUNTIME_SCHEMA_ID, HEALTH_PATH, PROJECT_SCHEMA_FILE, RUNTIME_SCHEMA_FILE,
+    type_uri, DocumentsProject, HookTrigger, ProblemCode, DOCUMENTS_PROJECT_API_VERSION,
+    DOCUMENTS_PROJECT_KIND, DOCUMENTS_PROJECT_SCHEMA_ID, DOCUMENTS_RUNTIME_API_VERSION,
+    DOCUMENTS_RUNTIME_KIND, DOCUMENTS_RUNTIME_SCHEMA_ID, HEALTH_PATH, PROJECT_SCHEMA_FILE,
+    RUNTIME_SCHEMA_FILE,
 };
 use serde_json::{json, Map, Value};
 
@@ -502,6 +506,19 @@ pub fn project_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
         ))?,
     )]
     .into())
+}
+
+/// The data schema of each event family, one closed object per trigger.
+pub fn event_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
+    HookTrigger::ALL
+        .into_iter()
+        .map(|trigger| {
+            Ok((
+                trigger.data_schema_file(),
+                render(&crate::hooks::event_data_schema(trigger))?,
+            ))
+        })
+        .collect()
 }
 
 /// The OpenAPI 3.1 description of every operation the public listener
@@ -1050,6 +1067,32 @@ mod tests {
     }
 
     #[test]
+    fn event_schemas_are_deterministic_closed_and_one_per_trigger() {
+        let first = event_documents().unwrap();
+        assert_eq!(first, event_documents().unwrap());
+        assert_eq!(first.len(), HookTrigger::ALL.len());
+        for trigger in HookTrigger::ALL {
+            let document = schema(&first, trigger.data_schema_file());
+            assert_eq!(document["$id"], trigger.data_schema_id());
+            assert_eq!(document["additionalProperties"], false);
+            let mut published = document["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            published.sort();
+            let mut fields = trigger
+                .fields()
+                .iter()
+                .map(|field| (*field).to_owned())
+                .collect::<Vec<_>>();
+            fields.sort();
+            assert_eq!(published, fields, "{}", trigger.as_str());
+        }
+    }
+
+    #[test]
     fn committed_documents_match_generated_bytes() {
         let generated = product().join("generated");
         for (directory, documents, example) in [
@@ -1062,6 +1105,11 @@ mod tests {
                 generated.join("project"),
                 project_documents().unwrap(),
                 "project-schema",
+            ),
+            (
+                generated.join("events"),
+                event_documents().unwrap(),
+                "event-schemas",
             ),
             (generated.clone(), openapi_documents().unwrap(), "openapi"),
         ] {

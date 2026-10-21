@@ -22,7 +22,7 @@ use crate::store::{migrate_in, PostgresStore, StoreError, MIGRATIONS, MIGRATION_
 
 const MAX_BACKUPS: usize = 16;
 
-fn layout() -> Layout {
+pub(crate) fn layout() -> Layout {
     Layout::new(
         "documents",
         "documents_activations",
@@ -31,6 +31,22 @@ fn layout() -> Layout {
         false,
     )
     .expect("static Document Store activation identifiers")
+}
+
+/// The platform hook delivery objects the schema carries beside the
+/// `documents_*` relations. The runtime role is granted, and its grants are
+/// observed, over these exactly as over the Document Store's own tables.
+async fn delivery_objects(
+    client: &impl tokio_postgres::GenericClient,
+) -> Result<Vec<String>, StoreError> {
+    let schema: Option<String> = client
+        .query_one("SELECT current_schema()", &[])
+        .await?
+        .try_get(0)?;
+    let schema = schema.ok_or(StoreError::Configuration)?;
+    Ok(registry_platform_hooks::delivery_schema::object_names(
+        &schema,
+    ))
 }
 
 fn platform_error(error: platform::Error) -> StoreError {
@@ -191,7 +207,7 @@ pub async fn plan(
     let active = platform::active_activation(&*tx, &layout())
         .await
         .map_err(platform_error)?;
-    let observation = platform::observe_role(&*tx, &layout(), None, &[])
+    let observation = platform::observe_role(&*tx, &layout(), None, &delivery_objects(&*tx).await?)
         .await
         .map_err(platform_error)?;
     let database_id_check = platform::database_id_check(active.as_ref(), database_id);
@@ -271,7 +287,7 @@ pub async fn status(store: &PostgresStore) -> Result<ActivationStatus, Activatio
         .await
         .map_err(platform_error)?;
     let active = history.last().cloned();
-    let observation = platform::observe_role(&*tx, &layout(), None, &[])
+    let observation = platform::observe_role(&*tx, &layout(), None, &delivery_objects(&*tx).await?)
         .await
         .map_err(platform_error)?;
     let result = ActivationStatus {
@@ -424,20 +440,35 @@ async fn apply_begun(
     // Observed before granting: a reapply that restores stale grants is a
     // change, recorded as a new activation like any other.
     let grants_were_current = !split
-        || platform::observe_role(&*tx, &layout(), Some(runtime_role), &[])
-            .await
-            .map_err(platform_error)?
-            .is_some_and(|role| role.grants_current);
+        || platform::observe_role(
+            &*tx,
+            &layout(),
+            Some(runtime_role),
+            &delivery_objects(&*tx).await?,
+        )
+        .await
+        .map_err(platform_error)?
+        .is_some_and(|role| role.grants_current);
     let (role_mode, grants_current, readable) = if split {
-        platform::grant_runtime_role(&*tx, &layout(), runtime_role, &[])
-            .await
-            .map_err(platform_error)?;
-        platform::observe_role(&*tx, &layout(), Some(runtime_role), &[])
-            .await
-            .map_err(platform_error)?
-            .map_or((RoleMode::Single, false, false), |role| {
-                (role.mode, role.grants_current, role.readable)
-            })
+        platform::grant_runtime_role(
+            &*tx,
+            &layout(),
+            runtime_role,
+            &delivery_objects(&*tx).await?,
+        )
+        .await
+        .map_err(platform_error)?;
+        platform::observe_role(
+            &*tx,
+            &layout(),
+            Some(runtime_role),
+            &delivery_objects(&*tx).await?,
+        )
+        .await
+        .map_err(platform_error)?
+        .map_or((RoleMode::Single, false, false), |role| {
+            (role.mode, role.grants_current, role.readable)
+        })
     } else {
         (RoleMode::Single, true, true)
     };
@@ -564,10 +595,15 @@ pub async fn check_runtime(
             }
         })?;
     crate::store::schema_ready(&client).await?;
-    let role = platform::observe_role(&**client, &layout(), None, &[])
-        .await
-        .map_err(platform_error)?
-        .ok_or(ActivationError::GrantsStale)?;
+    let role = platform::observe_role(
+        &**client,
+        &layout(),
+        None,
+        &delivery_objects(&**client).await?,
+    )
+    .await
+    .map_err(platform_error)?
+    .ok_or(ActivationError::GrantsStale)?;
     if active.role_mode == RoleMode::Split && role.mode != RoleMode::Split {
         return Err(ActivationError::RoleModeWeakened);
     }

@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
+use registry_documents_core::HookTrigger;
 use registry_platform_config::SecretResolver;
 use registry_platform_dispatch::postgres::{
     AttemptAudit, ClaimRefusal, Decoded, DispatchConfig, DispatchConnection, DispatchEvent,
@@ -44,6 +45,7 @@ use uuid::Uuid;
 use crate::audit::{DocumentsAudit, CONTENT_VERIFICATION_EVENT};
 use crate::config::ContentVerificationConfig;
 use crate::content::{digest_hex, ContentStorage};
+use crate::hooks::{ActivatedHooks, DocumentEvent};
 use crate::replay::ReplayTrace;
 use crate::store::{PostgresStore, StoreError};
 use crate::transfer::TransferBudget;
@@ -399,6 +401,7 @@ pub struct VerificationStore {
     /// The last replay audit entry this store was asked to write.
     replay_trace: ReplayTrace,
     graces: Graces,
+    hooks: Option<ActivatedHooks>,
 }
 
 /// Each declared policy's `cleanupGraceHours`, as the two parallel arrays
@@ -425,6 +428,9 @@ impl Graces {
 }
 
 impl VerificationStore {
+    /// A store that records verdicts and captures no document event. An
+    /// operator command that never writes a verdict uses it as is; `serve`
+    /// adds its hooks with [`VerificationStore::with_hooks`].
     #[must_use]
     pub fn new(
         store: PostgresStore,
@@ -438,7 +444,17 @@ impl VerificationStore {
             audit,
             replay_trace: ReplayTrace::default(),
             graces,
+            hooks: None,
         }
+    }
+
+    /// Capture a `document-version.ready` or `document-version.rejected`
+    /// event through `hooks` inside the transaction that records the
+    /// verdict.
+    #[must_use]
+    pub fn with_hooks(mut self, hooks: ActivatedHooks) -> Self {
+        self.hooks = Some(hooks);
+        self
     }
 
     async fn append(
@@ -558,68 +574,99 @@ impl DispatchStore for VerificationStore {
         };
         let version_id = job.key.id();
         let digest = &job.job.computed_digest;
-        let statement = match &sent.detail {
-            VerificationDetail::Approved { binding } => Some((
-                "UPDATE documents_versions
-                    SET verification_state = 'approved', eligibility = 'releasable',
-                        verified_binding_digest = $2, verified_digest = $3,
-                        verified_media_type = media_type, verified_at = transaction_timestamp()
-                  WHERE version_id = $1 AND upload_state = 'finalized'
-                    AND verification_state <> 'rejected' AND erasure_state = 'none'
-                    AND verification_binding_digest = $2 AND computed_digest = $3
-                    AND media_type = $4",
-                binding,
-            )),
+        let (verdict, binding) = match &sent.detail {
+            VerificationDetail::Approved { binding } => {
+                (HookTrigger::DocumentVersionReady, binding)
+            }
             VerificationDetail::Rejected { binding } => {
-                // A rejection arms the erasure of the rejected bytes after
-                // the policy's grace, through the same sweep a removal
-                // uses. A policy the deployment no longer declares falls
-                // back to the version's upload window, which was cut from
-                // the same grace when the version was reserved.
-                let changed = transaction
-                    .execute(
-                        "UPDATE documents_versions AS version
-                            SET verification_state = 'rejected', eligibility = 'suspended',
-                                verified_binding_digest = $2, verified_digest = $3,
-                                verified_media_type = media_type,
-                                verified_at = transaction_timestamp(),
-                                erasure_state = 'pending',
-                                erasure_requested_at = transaction_timestamp(),
-                                erasure_due_at = transaction_timestamp() + COALESCE(
-                                    (SELECT make_interval(hours => grace.hours)
-                                       FROM documents_documents AS document
-                                       JOIN unnest($5::text[], $6::int[]) AS grace(policy, hours)
-                                         ON grace.policy = document.policy_id
-                                      WHERE document.document_id = version.document_id),
-                                    version.upload_expires_at - version.reserved_at)
-                          WHERE version_id = $1 AND upload_state = 'finalized'
-                            AND erasure_state = 'none'
-                            AND verification_binding_digest = $2 AND computed_digest = $3
-                            AND media_type = $4",
-                        &[
-                            &version_id,
-                            binding,
-                            digest,
-                            &job.job.media_type,
-                            &self.graces.policies,
-                            &self.graces.hours,
-                        ],
-                    )
-                    .await?;
-                if changed == 0 {
-                    return unrecorded_verdict(transaction, version_id, binding).await;
-                }
-                None
+                (HookTrigger::DocumentVersionRejected, binding)
             }
-            VerificationDetail::Superseded | VerificationDetail::Failed => None,
+            VerificationDetail::Superseded | VerificationDetail::Failed => return Ok(()),
         };
-        if let Some((sql, binding)) = statement {
-            let changed = transaction
-                .execute(sql, &[&version_id, binding, digest, &job.job.media_type])
-                .await?;
-            if changed == 0 {
-                return unrecorded_verdict(transaction, version_id, binding).await;
-            }
+        // Read under the row lock the update takes anyway, so the event
+        // reports a transition only when the verdict changes what the
+        // version is: a version already releasable, or already rejected,
+        // emits nothing again.
+        let prior = transaction
+            .query_opt(
+                "SELECT verification_state = 'approved' AND eligibility = 'releasable',
+                        verification_state = 'rejected'
+                   FROM documents_versions WHERE version_id = $1 FOR UPDATE",
+                &[&version_id],
+            )
+            .await?;
+        let changed = if verdict == HookTrigger::DocumentVersionReady {
+            transaction
+                .execute(
+                    "UPDATE documents_versions
+                        SET verification_state = 'approved', eligibility = 'releasable',
+                            verified_binding_digest = $2, verified_digest = $3,
+                            verified_media_type = media_type, verified_at = transaction_timestamp()
+                      WHERE version_id = $1 AND upload_state = 'finalized'
+                        AND verification_state <> 'rejected' AND erasure_state = 'none'
+                        AND verification_binding_digest = $2 AND computed_digest = $3
+                        AND media_type = $4",
+                    &[&version_id, binding, digest, &job.job.media_type],
+                )
+                .await?
+        } else {
+            // A rejection arms the erasure of the rejected bytes after the
+            // policy's grace, through the same sweep a removal uses. A
+            // policy the deployment no longer declares falls back to the
+            // version's upload window, which was cut from the same grace
+            // when the version was reserved.
+            transaction
+                .execute(
+                    "UPDATE documents_versions AS version
+                        SET verification_state = 'rejected', eligibility = 'suspended',
+                            verified_binding_digest = $2, verified_digest = $3,
+                            verified_media_type = media_type,
+                            verified_at = transaction_timestamp(),
+                            erasure_state = 'pending',
+                            erasure_requested_at = transaction_timestamp(),
+                            erasure_due_at = transaction_timestamp() + COALESCE(
+                                (SELECT make_interval(hours => grace.hours)
+                                   FROM documents_documents AS document
+                                   JOIN unnest($5::text[], $6::int[]) AS grace(policy, hours)
+                                     ON grace.policy = document.policy_id
+                                  WHERE document.document_id = version.document_id),
+                                version.upload_expires_at - version.reserved_at)
+                      WHERE version_id = $1 AND upload_state = 'finalized'
+                        AND erasure_state = 'none'
+                        AND verification_binding_digest = $2 AND computed_digest = $3
+                        AND media_type = $4",
+                    &[
+                        &version_id,
+                        binding,
+                        digest,
+                        &job.job.media_type,
+                        &self.graces.policies,
+                        &self.graces.hours,
+                    ],
+                )
+                .await?
+        };
+        if changed == 0 {
+            return unrecorded_verdict(transaction, version_id, binding).await;
+        }
+        let (was_ready, was_rejected) = match &prior {
+            Some(row) => (row.try_get::<_, bool>(0)?, row.try_get::<_, bool>(1)?),
+            None => return Err(DispatchError::Unavailable),
+        };
+        let emits = match verdict {
+            HookTrigger::DocumentVersionReady => !was_ready,
+            _ => !was_rejected,
+        };
+        if let (true, Some(hooks)) = (emits, &self.hooks) {
+            // A capture that fails rolls the verdict back with it, so the
+            // job is retried rather than recorded without its event.
+            let event = DocumentEvent::version(transaction, verdict, version_id)
+                .await
+                .map_err(|_| DispatchError::Unavailable)?;
+            hooks
+                .capture(transaction, &event)
+                .await
+                .map_err(|_| DispatchError::Unavailable)?;
         }
         Ok(())
     }

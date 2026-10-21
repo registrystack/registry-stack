@@ -223,6 +223,17 @@ pub(crate) async fn migrate_in(
             continue;
         }
         transaction.batch_execute(migration).await?;
+        if version == MIGRATIONS[0].0 {
+            // The platform hook delivery outbox, attempts, and state ride
+            // the baseline schema, so every activated database can capture
+            // a document event inside the transaction that makes it.
+            let schema: Option<String> = transaction
+                .query_one("SELECT current_schema()", &[])
+                .await?
+                .try_get(0)?;
+            let schema = schema.ok_or(StoreError::Configuration)?;
+            registry_platform_hooks::delivery_schema::install(transaction, &schema).await?;
+        }
         transaction
             .execute(
                 "INSERT INTO documents_schema_migrations(version,applied_at) VALUES($1,now())",
