@@ -168,10 +168,10 @@ breg_pool_connections{state="maximum-size"} 4
 breg_pool_connections{state="size"} 3
 breg_pool_connections{state="available"} 3
 breg_pool_connections{state="waiting"} 0
-breg_worker_last_success_age_seconds{worker="webhook"} 0.026604833
+breg_worker_last_success_age_seconds{worker="hook"} 0.026604833
 breg_worker_last_success_age_seconds{worker="review"} 0.420682917
 breg_worker_last_success_age_seconds{worker="subject-access-log-retention"} 7.509861375
-breg_queue_oldest_pending_age_seconds{queue="webhook-delivery"} 0
+breg_queue_oldest_pending_age_seconds{queue="hook-delivery"} 0
 breg_queue_oldest_pending_age_seconds{queue="review-submission"} 0
 breg_queue_oldest_pending_age_seconds{queue="review-application"} 0
 breg_active_package_info{package_digest="sha256:ae245974f8da79cd441669fbe0e2461ceb26e216cd1f7f25a7240fd131d20fee"} 1
@@ -215,7 +215,7 @@ Use [blocked Proposal recovery](../breg-changes/#recover-a-blocked-proposal) for
     activation_blocked_application_remains_counted_without_queue_age. */}
 
 The process writes JSON lines on standard output. A failed iteration is a warning with a `code` such
-as `webhook.worker.iteration_failed`, `review.result_lookups.unavailable`, or
+as `hook.worker.iteration_failed`, `review.result_lookups.unavailable`, or
 `metrics.queue_sample.failed`, and serving continues. When a worker or the metrics listener panics
 or returns, the process logs a code naming it, such as `review.worker.panicked`, drains requests,
 and exits with status 1. The same code on every restart names the worker to investigate.
@@ -279,9 +279,9 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `apply.audit.incomplete` | Activation committed, but the audit trail is incomplete. | Repair the audit path and directory permissions; run `bregctl status` to see the active package. Do not apply again. |
 | `apply.migration.statement-failed` | PostgreSQL refused a statement; the SQLSTATE is named. | Fix the cause and retry, or run `migration reconcile`. |
 | `apply.migration.failed` | The apply failed mid-maintenance. | Retry the same target, or run `migration reconcile`. |
-| `apply.event-destinations.refused` | Destinations and bindings do not match. | Compare `destinations.hooks` with `bregctl explain events`. |
-| `startup.event-destinations.refused` | A destination binding was refused. | Check the key file, the origin, and `allowedPrivateCidrs`. |
-| `startup.webhook.retained-bindings` | Pending deliveries need a removed binding. | Restore it until `webhook list` shows them drained. |
+| `apply.hook-destinations.refused` | Destinations and bindings do not match. | Compare `destinations.hooks` with `bregctl explain events`. |
+| `startup.hook-destinations.refused` | A destination binding was refused. | Check the key file, the origin, and `allowedPrivateCidrs`. |
+| `startup.hook.retained-bindings` | Pending deliveries need a removed binding. | Restore it until `hook list` shows them drained. |
 | `startup.instance-id.pending-deliveries` | Pending deliveries carry the previous `identity.instanceId`. | Restore it until they drain. |
 | `migration.review.*` | The reviewed migration directory was refused. | See [write a reviewed migration descriptor](../breg-changes/#write-a-reviewed-migration-descriptor). |
 | `migration.rehearsal.*` | PostgreSQL refused the rehearsal, so `apply` would too. | Correct the SQL or the project. |

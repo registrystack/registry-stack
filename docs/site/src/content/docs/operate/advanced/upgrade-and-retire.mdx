@@ -107,7 +107,7 @@ so a binary that cannot run leaves the installed toolset selected.
    3. Finish, cancel, or record each draft, submitted, or review-pending change request. One that
       must continue is re-entered as a v0.42.0 Proposal after the cutover.
    4. Let the running v0.41.0 `breg` deliver pending webhooks, and replay eligible dead letters
-      with `bregctl webhook replay`. Continue when `bregctl webhook list` shows no pending
+      with `bregctl hook replay`. Continue when `bregctl hook list` shows no pending
       delivery, or record the deliveries you accept losing, since they stop with the runtime.
    5. While v0.41.0 still serves, export every Record type the fresh registry needs with
       `bregctl data export`, naming with `--field` every field the reload needs, since it exports
@@ -289,7 +289,7 @@ so a binary that cannot run leaves the installed toolset selected.
     and nextCursor, turn, rejected, BRegRecoveryHint and BRegApplicationRecoveryHint values,
     Review results name an outcome;
     crates/registry-breg/src/migration.rs, "uninitialized-database" (initial activation check);
-    crates/registry-bregctl/src/lib.rs, ImportAuthorityCommand, WebhookCommand (Replay and List,
+    crates/registry-bregctl/src/lib.rs, ImportAuthorityCommand, HookCommand (Replay and List,
     also in v0.41.0), and DataCommand::Export (needs a serving registry, export-enabled profile);
     crates/registry-breg/src/data.rs, DataImportOperation::Create (only operation and data, so a
     reloaded record gets a new ID);
@@ -300,7 +300,7 @@ so a binary that cannot run leaves the installed toolset selected.
     directory command); crates/registry-casework-core/src/model.rs, TeamRecord; /v1/directory/absences and
     /v1/directory/holidays/{id}/revisions/{revision} (no holiday list route);
     crates/registry-bregctl/src/lib.rs, data export --field (required, repeat per field) and
-    WebhookCommand in v0.42.0; configure/evidence-oid4vci.mdx, offers held in process memory;
+    HookCommand in v0.42.0; configure/evidence-oid4vci.mdx, offers held in process memory;
     products/casework/CHANGELOG.md, WorkItems replaced; crates/registry-casework/src/http.rs,
     /v1/review-policies and /v1/review-tasks/holdings (v0.41.0: /v1/work-items, /v1/review-kinds,
     /v1/holdings);
@@ -366,7 +366,7 @@ runtime and a v0.42.0 client calls routes the previous release does not serve.
   (`listProposals` and `readProposalSubmission`) under a grant that may read them. When no grant
   can read a Proposal, it cannot be carried back, so either accept losing it or roll forward
   instead. Let its pending webhooks deliver, replaying eligible dead letters with
-  `bregctl webhook replay` until `bregctl webhook list` shows none, or record the deliveries you
+  `bregctl hook replay` until `bregctl hook list` shows none, or record the deliveries you
   accept losing. Stop every v0.42.0 `breg` and keep its database. Start the previous
   `breg` with the previous package and runtime file against the retained database; the v0.42.0
   tools cannot read the earlier package or runtime file. Re-enter the recorded changes through the
@@ -558,7 +558,7 @@ in this sequence.
    [Erase retained history](../../breg-retention/#erase-retained-history) and
    [Erase expired Evidence uses](../../breg-retention/#erase-expired-evidence-uses).
 4. Stop `breg`. Pending webhook deliveries stop with it and are not sent; check
-   `bregctl webhook list` first if receivers must see them.
+   `bregctl hook list` first if receivers must see them.
 5. Ship the final audit files and the `bregctl` companion file.
 6. Keep the field-encryption key for as long as you keep any backup that holds sealed values, and
    the audit hash key for as long as you keep the audit archive. Destroy each only when the last
@@ -579,7 +579,7 @@ in this sequence.
     crates/registry-schedulingctl/src/lib.rs, no export command; crates/registry-scheduling/src/runtime.rs,
     outbox workers spawned by the runtime; products/scheduling/README.md, the schedulingctl audit file;
     crates/registry-bregctl/src/lib.rs, DataCommand::Export, ImportAuthorityCommand,
-    WebhookCommand; crates/registry-breg/src/field_encryption.rs, module docs. */}
+    HookCommand; crates/registry-breg/src/field_encryption.rs, module docs. */}
 
 ## Next
 

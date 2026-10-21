@@ -48,9 +48,9 @@ page. Application result references grant no target read authority. Read the
 target through an ordinary authorized `get_record`; the retained result revision
 records application provenance, not a current ETag or write precondition.
 
-## Webhook verification
+## Hook verification
 
-`verify_webhook_delivery(method=..., path=..., headers=..., body=..., key=...)`
+`verify_hook_delivery(method=..., path=..., headers=..., body=..., key=...)`
 authenticates one exact Base Registry Engine Version 1 delivery with the shared
 Rust verifier. Arguments are keyword-only. `path` is the request target the
 receiver was called on, `headers` is a `dict` of string names to string values
@@ -66,7 +66,7 @@ retries within one delivery generation; an effect that must remain once-only
 across operator replay uses a durable apply-once operation keyed by authenticated
 `source` plus `id`, or by an application business key, before acting on `body`.
 
-Refusal raises `BaseRegistryClientError` with kind `webhook-verification` and a
+Refusal raises `BaseRegistryClientError` with kind `hook-verification` and a
 `code` from `missing-header`, `invalid-delivery-time`, `duplicate-header`, `body-too-large`, `invalid-key`, `malformed-signature`, `signature-mismatch`, or `unsupported-version`; an
 argument of the wrong type raises kind `invalid-request`. The message names
 the input to check and never includes a header value, body, or key.

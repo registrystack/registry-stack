@@ -119,7 +119,7 @@ report leaves out the projected `name`; add `--include-payload` to see it.
 
 If `deliveries` is empty, the first delivery has not arrived yet or the registry is still
 retrying; run the command again after a few seconds. On a deployed registry,
-`bregctl webhook list` shows the deliveries still waiting or failed, as
+`bregctl hook list` shows the deliveries still waiting or failed, as
 [Bind webhook receivers](../../operate/breg-webhooks/) describes.
 
 The local receiver proves only that an attempt arrived. A real receiving service stores each
@@ -130,7 +130,7 @@ When you are finished, `bregctl dev stop --remove` stops the registry and delete
 
 {/* Evidence: crates/registry-bregctl/src/dev/events.rs, Receiver, verify and report;
     crates/registry-bregctl/src/dev/mod.rs, CHANGED_INPUTS and reclaimed;
-    crates/registry-bregctl/src/webhook_lifecycle.rs, list_with;
+    crates/registry-bregctl/src/hook_lifecycle.rs, list_with;
     crates/registry-platform-hooks/src/delivery/service.rs, DeliveryStatusKind and
     idempotency_key_is_stable_across_retries_and_changes_on_replay_generation;
     crates/registry-bregctl/src/explain_report.rs, events;

@@ -442,7 +442,7 @@ impl ExpectedManagedCatalog {
                 Some((false, false)),
             );
         }
-        // Runtime workers scrub retained webhook payload bytes after delivery
+        // Runtime workers scrub retained hook payload bytes after delivery
         // or expiry without widening update access to outbox identity columns.
         catalog.column_privilege(
             "registry_internal.registry_outbox",

@@ -4050,14 +4050,14 @@ impl schemars::JsonSchema for EventScalarValue {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum WebhookAuthenticationProfile {
+pub enum HookAuthenticationProfile {
     HmacSha256V1,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum WebhookDeadLetterMode {
+pub enum HookDeadLetterMode {
     Required,
 }
 

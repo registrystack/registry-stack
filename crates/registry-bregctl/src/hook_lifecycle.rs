@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Webhook developer and operator workflows.
+//! Hook developer and operator workflows.
 //!
 //! This module renders offline examples from compiled authority and delegates
 //! live inspection, replay, and discard to Base Registry Engine. It deliberately owns no SQL,
@@ -29,12 +29,12 @@ const SAMPLE_PACKAGE_REVISION: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 const SAMPLE_IDEMPOTENCY_KEY: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
-const SAMPLE_REQUEST_TARGET: &str = "<configured-webhook-request-target>";
+const SAMPLE_REQUEST_TARGET: &str = "<configured-hook-request-target>";
 const SAMPLE_SIGNATURE: &str = "v1=<computed-at-delivery>";
 const MAX_SCHEMA_SYNTHESIS_DEPTH: usize = 16;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum WebhookLifecycleError {
+pub(crate) enum HookLifecycleError {
     Event,
     Sample,
     Operator,
@@ -45,14 +45,14 @@ pub(crate) enum WebhookLifecycleError {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct WebhookSampleOutcome {
+pub(crate) struct HookSampleOutcome {
     pub event_id: String,
-    pub request: WebhookSampleRequest,
+    pub request: HookSampleRequest,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct WebhookSampleRequest {
+pub(crate) struct HookSampleRequest {
     pub method: &'static str,
     pub request_target: &'static str,
     pub headers: BTreeMap<String, String>,
@@ -62,13 +62,13 @@ pub(crate) struct WebhookSampleRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct WebhookListOutcome {
-    pub deliveries: Vec<WebhookListItem>,
+pub(crate) struct HookListOutcome {
+    pub deliveries: Vec<HookListItem>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct WebhookListItem {
+pub(crate) struct HookListItem {
     pub event_id: String,
     pub delivery_id: String,
     pub generation: i64,
@@ -89,7 +89,7 @@ pub(crate) struct WebhookListItem {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct WebhookReplayOutcome {
+pub(crate) struct HookReplayOutcome {
     pub event_id: String,
     pub delivery_id: String,
     pub generation: i64,
@@ -97,7 +97,7 @@ pub(crate) struct WebhookReplayOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct WebhookDiscardOutcome {
+pub(crate) struct HookDiscardOutcome {
     pub event_id: String,
     pub delivery_id: String,
     pub generation: i64,
@@ -107,7 +107,7 @@ pub(crate) struct WebhookDiscardOutcome {
 pub(crate) fn sample(
     registry: &CompiledRegistry,
     authored_event_id: &str,
-) -> Result<WebhookSampleOutcome, WebhookLifecycleError> {
+) -> Result<HookSampleOutcome, HookLifecycleError> {
     let mut matching = registry
         .event_deliveries()
         .deliveries
@@ -115,9 +115,9 @@ pub(crate) fn sample(
         .filter(|delivery| {
             delivery.event_id == authored_event_id || delivery.id == authored_event_id
         });
-    let delivery = matching.next().ok_or(WebhookLifecycleError::Event)?;
+    let delivery = matching.next().ok_or(HookLifecycleError::Event)?;
     if matching.next().is_some() {
-        return Err(WebhookLifecycleError::Event);
+        return Err(HookLifecycleError::Event);
     }
     let (data, event_type) = match &delivery.owner {
         registry_breg::model::CompiledEventOwner::RecordType {
@@ -127,13 +127,13 @@ pub(crate) fn sample(
             let entity = registry
                 .entities()
                 .get(record_type)
-                .ok_or(WebhookLifecycleError::Sample)?;
+                .ok_or(HookLifecycleError::Sample)?;
             let mut values = Map::new();
             for field_id in &delivery.projection_fields {
                 let field = entity
                     .fields
                     .get(field_id)
-                    .ok_or(WebhookLifecycleError::Sample)?;
+                    .ok_or(HookLifecycleError::Sample)?;
                 values.insert(field_id.clone(), synthetic_field_value(&field.field_type)?);
             }
             (
@@ -147,20 +147,20 @@ pub(crate) fn sample(
                 .actions
                 .iter()
                 .find(|entry| &entry.id == action)
-                .ok_or(WebhookLifecycleError::Sample)?;
+                .ok_or(HookLifecycleError::Sample)?;
             let registry_breg::model::CompiledActionExecution::Proposal { proposal } =
                 &action.execution
             else {
-                return Err(WebhookLifecycleError::Sample);
+                return Err(HookLifecycleError::Sample);
             };
             let hook = proposal
                 .hooks
                 .iter()
                 .find(|hook| hook.id == delivery.event_id)
-                .ok_or(WebhookLifecycleError::Sample)?;
+                .ok_or(HookLifecycleError::Sample)?;
             let transition = registry_breg::proposal_hooks::matching_transitions(&hook.transitions)
                 .next()
-                .ok_or(WebhookLifecycleError::Sample)?;
+                .ok_or(HookLifecycleError::Sample)?;
             use registry_breg::contract::ProposalEventTransition as Transition;
             let (from, state, turn) = match transition {
                 Transition::Started => ("none", "draft", "party"),
@@ -203,12 +203,12 @@ pub(crate) fn sample(
     let canonical_body_bytes = envelope
         .to_canonical_bytes(&EnvelopeLimits::tightened_to(
             usize::try_from(delivery.maximum_payload_bytes)
-                .map_err(|_| WebhookLifecycleError::Sample)?,
+                .map_err(|_| HookLifecycleError::Sample)?,
         ))
-        .map_err(|_| WebhookLifecycleError::Sample)?;
+        .map_err(|_| HookLifecycleError::Sample)?;
     let canonical_body =
-        String::from_utf8(canonical_body_bytes).map_err(|_| WebhookLifecycleError::Sample)?;
-    let body = serde_json::to_value(&envelope).map_err(|_| WebhookLifecycleError::Sample)?;
+        String::from_utf8(canonical_body_bytes).map_err(|_| HookLifecycleError::Sample)?;
+    let body = serde_json::to_value(&envelope).map_err(|_| HookLifecycleError::Sample)?;
     let headers = BTreeMap::from([
         ("Accept".to_owned(), "application/json".to_owned()),
         ("Content-Type".to_owned(), "application/json".to_owned()),
@@ -233,9 +233,9 @@ pub(crate) fn sample(
         ("ce-time".to_owned(), SAMPLE_TIME.to_owned()),
         ("ce-type".to_owned(), event_type),
     ]);
-    Ok(WebhookSampleOutcome {
+    Ok(HookSampleOutcome {
         event_id: delivery.event_id.clone(),
-        request: WebhookSampleRequest {
+        request: HookSampleRequest {
             method: "POST",
             request_target: SAMPLE_REQUEST_TARGET,
             headers,
@@ -248,7 +248,7 @@ pub(crate) fn sample(
 pub(crate) fn list(
     runtime_config: &Path,
     limit: u16,
-) -> Result<WebhookListOutcome, WebhookLifecycleError> {
+) -> Result<HookListOutcome, HookLifecycleError> {
     let runtime = operator_runtime()?;
     list_with(runtime_config, limit, |runtime_config, limit| {
         runtime.block_on(async {
@@ -262,12 +262,12 @@ fn list_with(
     runtime_config: &Path,
     limit: u16,
     operation: impl FnOnce(&Path, u16) -> Result<Vec<HookDeliveryStatus>, HookOperatorError>,
-) -> Result<WebhookListOutcome, WebhookLifecycleError> {
+) -> Result<HookListOutcome, HookLifecycleError> {
     if !runtime_config.is_absolute() || limit == 0 || limit > MAX_HOOK_STATUS_RESULTS {
-        return Err(WebhookLifecycleError::Operator);
+        return Err(HookLifecycleError::Operator);
     }
     let deliveries = operation(runtime_config, limit).map_err(operator_failure)?;
-    Ok(WebhookListOutcome {
+    Ok(HookListOutcome {
         deliveries: deliveries.into_iter().map(list_item).collect(),
     })
 }
@@ -276,12 +276,12 @@ pub(crate) fn drain(
     runtime_config: &Path,
     max_attempts: u16,
     timeout_seconds: u16,
-) -> Result<HookDrainReport, WebhookLifecycleError> {
+) -> Result<HookDrainReport, HookLifecycleError> {
     if !runtime_config.is_absolute()
         || !(1..=1000).contains(&max_attempts)
         || !(1..=300).contains(&timeout_seconds)
     {
-        return Err(WebhookLifecycleError::Operator);
+        return Err(HookLifecycleError::Operator);
     }
     operator_runtime()?
         .block_on(HookOperatorService::drain_local(
@@ -297,7 +297,7 @@ pub(crate) fn replay(
     event_id: &str,
     delivery_id: &str,
     expected_generation: i64,
-) -> Result<WebhookReplayOutcome, WebhookLifecycleError> {
+) -> Result<HookReplayOutcome, HookLifecycleError> {
     let runtime = operator_runtime()?;
     replay_with(
         runtime_config,
@@ -321,18 +321,18 @@ fn replay_with(
     delivery_id: &str,
     expected_generation: i64,
     operation: impl FnOnce(&Path, Uuid, &str, i64) -> Result<i64, HookOperatorError>,
-) -> Result<WebhookReplayOutcome, WebhookLifecycleError> {
+) -> Result<HookReplayOutcome, HookLifecycleError> {
     if !runtime_config.is_absolute()
         || delivery_id.is_empty()
         || delivery_id.len() > 256
         || expected_generation <= 0
     {
-        return Err(WebhookLifecycleError::Operator);
+        return Err(HookLifecycleError::Operator);
     }
-    let event_id = Uuid::parse_str(event_id).map_err(|_| WebhookLifecycleError::Operator)?;
+    let event_id = Uuid::parse_str(event_id).map_err(|_| HookLifecycleError::Operator)?;
     let generation = operation(runtime_config, event_id, delivery_id, expected_generation)
         .map_err(operator_failure)?;
-    Ok(WebhookReplayOutcome {
+    Ok(HookReplayOutcome {
         event_id: event_id.to_string(),
         delivery_id: delivery_id.to_owned(),
         generation,
@@ -344,7 +344,7 @@ pub(crate) fn discard(
     event_id: &str,
     delivery_id: &str,
     expected_generation: i64,
-) -> Result<WebhookDiscardOutcome, WebhookLifecycleError> {
+) -> Result<HookDiscardOutcome, HookLifecycleError> {
     let runtime = operator_runtime()?;
     discard_with(
         runtime_config,
@@ -368,18 +368,18 @@ fn discard_with(
     delivery_id: &str,
     expected_generation: i64,
     operation: impl FnOnce(&Path, Uuid, &str, i64) -> Result<i64, HookOperatorError>,
-) -> Result<WebhookDiscardOutcome, WebhookLifecycleError> {
+) -> Result<HookDiscardOutcome, HookLifecycleError> {
     if !runtime_config.is_absolute()
         || delivery_id.is_empty()
         || delivery_id.len() > 256
         || expected_generation <= 0
     {
-        return Err(WebhookLifecycleError::Operator);
+        return Err(HookLifecycleError::Operator);
     }
-    let event_id = Uuid::parse_str(event_id).map_err(|_| WebhookLifecycleError::Operator)?;
+    let event_id = Uuid::parse_str(event_id).map_err(|_| HookLifecycleError::Operator)?;
     let generation = operation(runtime_config, event_id, delivery_id, expected_generation)
         .map_err(operator_failure)?;
-    Ok(WebhookDiscardOutcome {
+    Ok(HookDiscardOutcome {
         event_id: event_id.to_string(),
         delivery_id: delivery_id.to_owned(),
         generation,
@@ -389,23 +389,23 @@ fn discard_with(
 
 /// A package pin mismatch keeps both digests; every other operator failure
 /// stays the one value-free refusal.
-fn operator_failure(error: HookOperatorError) -> WebhookLifecycleError {
+fn operator_failure(error: HookOperatorError) -> HookLifecycleError {
     match error {
         HookOperatorError::PackagePinMismatch(mismatch) => {
-            WebhookLifecycleError::PackagePinMismatch(mismatch)
+            HookLifecycleError::PackagePinMismatch(mismatch)
         }
-        HookOperatorError::Unavailable => WebhookLifecycleError::Operator,
+        HookOperatorError::Unavailable => HookLifecycleError::Operator,
     }
 }
 
-fn operator_runtime() -> Result<tokio::runtime::Runtime, WebhookLifecycleError> {
+fn operator_runtime() -> Result<tokio::runtime::Runtime, HookLifecycleError> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|_| WebhookLifecycleError::Operator)
+        .map_err(|_| HookLifecycleError::Operator)
 }
 
-fn list_item(status: HookDeliveryStatus) -> WebhookListItem {
+fn list_item(status: HookDeliveryStatus) -> HookListItem {
     let state = match status.state {
         HookDeliveryStatusKind::Pending => "pending",
         HookDeliveryStatusKind::Leased => "leased",
@@ -417,7 +417,7 @@ fn list_item(status: HookDeliveryStatus) -> WebhookListItem {
     // not part of the value-free operator list.
     let package_unavailable =
         status.proposal_code.as_deref() == Some("hook.proposal.package_unavailable");
-    WebhookListItem {
+    HookListItem {
         event_id: status.event_id.to_string(),
         delivery_id: status.compiled_delivery_id,
         generation: status.generation,
@@ -435,9 +435,9 @@ fn list_item(status: HookDeliveryStatus) -> WebhookListItem {
 }
 
 /// The sample capture instant, the one [`SAMPLE_TIME`] spells.
-fn sample_time() -> Result<time::OffsetDateTime, WebhookLifecycleError> {
+fn sample_time() -> Result<time::OffsetDateTime, HookLifecycleError> {
     time::OffsetDateTime::parse(SAMPLE_TIME, &time::format_description::well_known::Rfc3339)
-        .map_err(|_| WebhookLifecycleError::Sample)
+        .map_err(|_| HookLifecycleError::Sample)
 }
 
 fn trigger_name(trigger: EventTrigger) -> &'static str {
@@ -448,7 +448,7 @@ fn trigger_name(trigger: EventTrigger) -> &'static str {
     }
 }
 
-fn synthetic_field_value(field_type: &FieldTypeSource) -> Result<Value, WebhookLifecycleError> {
+fn synthetic_field_value(field_type: &FieldTypeSource) -> Result<Value, HookLifecycleError> {
     match field_type {
         FieldTypeSource::Boolean => Ok(Value::Bool(true)),
         FieldTypeSource::String {
@@ -456,10 +456,10 @@ fn synthetic_field_value(field_type: &FieldTypeSource) -> Result<Value, WebhookL
             max_length,
         } => {
             let length =
-                usize::try_from((*min_length).max(1)).map_err(|_| WebhookLifecycleError::Sample)?;
-            let length_u32 = u32::try_from(length).map_err(|_| WebhookLifecycleError::Sample)?;
+                usize::try_from((*min_length).max(1)).map_err(|_| HookLifecycleError::Sample)?;
+            let length_u32 = u32::try_from(length).map_err(|_| HookLifecycleError::Sample)?;
             if *max_length == 0 || length_u32 > *max_length {
-                return Err(WebhookLifecycleError::Sample);
+                return Err(HookLifecycleError::Sample);
             }
             Ok(Value::String("x".repeat(length)))
         }
@@ -505,7 +505,7 @@ fn synthetic_field_value(field_type: &FieldTypeSource) -> Result<Value, WebhookL
             .first()
             .cloned()
             .map(Value::String)
-            .ok_or(WebhookLifecycleError::Sample),
+            .ok_or(HookLifecycleError::Sample),
         FieldTypeSource::Crs84Point { bbox, .. } => {
             let (longitude, latitude) = point_in_bbox(bbox.as_ref())?;
             Ok(json!({"type": "Point", "coordinates": [longitude, latitude]}))
@@ -514,9 +514,7 @@ fn synthetic_field_value(field_type: &FieldTypeSource) -> Result<Value, WebhookL
     }
 }
 
-fn point_in_bbox(
-    bbox: Option<&Crs84BboxSource>,
-) -> Result<(Number, Number), WebhookLifecycleError> {
+fn point_in_bbox(bbox: Option<&Crs84BboxSource>) -> Result<(Number, Number), HookLifecycleError> {
     let coordinate = |minimum: Option<&str>, maximum: Option<&str>| {
         let minimum = minimum.and_then(|value| value.parse::<f64>().ok());
         let maximum = maximum.and_then(|value| value.parse::<f64>().ok());
@@ -525,7 +523,7 @@ fn point_in_bbox(
             (Some(minimum), Some(_)) => minimum,
             _ => 0.0,
         };
-        Number::from_f64(value).ok_or(WebhookLifecycleError::Sample)
+        Number::from_f64(value).ok_or(HookLifecycleError::Sample)
     };
     let longitude = coordinate(
         bbox.map(|bbox| bbox.west.as_str()),
@@ -542,11 +540,11 @@ fn synthesize_schema(
     root: &Value,
     schema: &Value,
     depth: usize,
-) -> Result<Value, WebhookLifecycleError> {
+) -> Result<Value, HookLifecycleError> {
     if depth > MAX_SCHEMA_SYNTHESIS_DEPTH {
-        return Err(WebhookLifecycleError::Sample);
+        return Err(HookLifecycleError::Sample);
     }
-    let object = schema.as_object().ok_or(WebhookLifecycleError::Sample)?;
+    let object = schema.as_object().ok_or(HookLifecycleError::Sample)?;
     for key in ["const", "default"] {
         if let Some(value) = object.get(key) {
             return Ok(value.clone());
@@ -569,8 +567,8 @@ fn synthesize_schema(
     if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
         let pointer = reference
             .strip_prefix('#')
-            .ok_or(WebhookLifecycleError::Sample)?;
-        let referred = root.pointer(pointer).ok_or(WebhookLifecycleError::Sample)?;
+            .ok_or(HookLifecycleError::Sample)?;
+        let referred = root.pointer(pointer).ok_or(HookLifecycleError::Sample)?;
         return synthesize_schema(root, referred, depth + 1);
     }
     for keyword in ["oneOf", "anyOf"] {
@@ -591,7 +589,7 @@ fn synthesize_schema(
             .unwrap_or("null"),
         None if object.contains_key("properties") => "object",
         None => return Ok(Value::Object(Map::new())),
-        _ => return Err(WebhookLifecycleError::Sample),
+        _ => return Err(HookLifecycleError::Sample),
     };
     match schema_type {
         "null" => Ok(Value::Null),
@@ -612,7 +610,7 @@ fn synthesize_schema(
                         .and_then(Value::as_u64)
                         .unwrap_or(1)
                         .max(1);
-                    "x".repeat(usize::try_from(length).map_err(|_| WebhookLifecycleError::Sample)?)
+                    "x".repeat(usize::try_from(length).map_err(|_| HookLifecycleError::Sample)?)
                 }
             };
             Ok(Value::String(value))
@@ -630,7 +628,7 @@ fn synthesize_schema(
                             .and_then(|index| values.get(index))
                     })
                     .or(item_schema)
-                    .ok_or(WebhookLifecycleError::Sample)?;
+                    .ok_or(HookLifecycleError::Sample)?;
                 result.push(synthesize_schema(root, schema, depth + 1)?);
             }
             Ok(Value::Array(result))
@@ -644,10 +642,10 @@ fn synthesize_schema(
                 .flatten();
             let mut result = Map::new();
             for field in required {
-                let field = field.as_str().ok_or(WebhookLifecycleError::Sample)?;
+                let field = field.as_str().ok_or(HookLifecycleError::Sample)?;
                 let field_schema = properties
                     .and_then(|properties| properties.get(field))
-                    .ok_or(WebhookLifecycleError::Sample)?;
+                    .ok_or(HookLifecycleError::Sample)?;
                 result.insert(
                     field.to_owned(),
                     synthesize_schema(root, field_schema, depth + 1)?,
@@ -655,7 +653,7 @@ fn synthesize_schema(
             }
             Ok(Value::Object(result))
         }
-        _ => Err(WebhookLifecycleError::Sample),
+        _ => Err(HookLifecycleError::Sample),
     }
 }
 
@@ -844,7 +842,7 @@ mod tests {
                         Ok::<_, HookOperatorError>(2)
                     },
                 ),
-                Err(WebhookLifecycleError::Operator)
+                Err(HookLifecycleError::Operator)
             );
             assert!(!called.get());
         }
@@ -862,7 +860,7 @@ mod tests {
                     Ok::<_, HookOperatorError>(2)
                 },
             ),
-            Err(WebhookLifecycleError::Operator)
+            Err(HookLifecycleError::Operator)
         );
         assert!(!called.get());
     }

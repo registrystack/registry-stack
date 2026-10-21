@@ -37,9 +37,9 @@ Failures are `BaseRegistryClientError` values with a stable `kind`, a boolean
 `fieldPath`, `status`, `traceId`, `transportKind`, and `tokenKind`. Errors do
 not expose token, private-key, record, or Proposal payload values.
 
-## Webhook verification
+## Hook verification
 
-`verifyWebhookDelivery({ method, path, headers, body, key })` authenticates one
+`verifyHookDelivery({ method, path, headers, body, key })` authenticates one
 exact Base Registry Engine Version 1 delivery with the shared Rust verifier.
 Header lookup is case-insensitive. The result carries the CloudEvents
 attributes, generation, attempt, delivery time, idempotency key, and exact body.
@@ -56,7 +56,7 @@ retries within one delivery generation; an effect that must remain once-only
 across operator replay uses a durable apply-once operation keyed by authenticated
 `source` plus `id`, or by an application business key, before acting on `body`.
 
-Refusal throws `BaseRegistryClientError` with kind `webhook-verification` and a
+Refusal throws `BaseRegistryClientError` with kind `hook-verification` and a
 code from `missing-header`, `invalid-delivery-time`, `duplicate-header`, `body-too-large`, `invalid-key`, `malformed-signature`, `signature-mismatch`, or `unsupported-version`.
 The message names the input to check and never includes a header value, body,
 or key.

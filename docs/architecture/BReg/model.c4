@@ -19,7 +19,7 @@ model {
     technology 'Authoring and operator CLI'
     description 'Checks and compiles a project, generates contracts, tests and packages a candidate, applies migrations and verifies activation. It also lists and replays webhook deliveries through the BReg operator service using the runtime database connection. Production signing uses an external signer and detached signatures.'
     link https://github.com/registrystack/registry-stack/blob/main/products/breg/README.md 'Operator lifecycle'
-    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-bregctl/src/webhook_lifecycle.rs 'Delivery status and replay commands'
+    link https://github.com/registrystack/registry-stack/blob/main/crates/registry-bregctl/src/hook_lifecycle.rs 'Delivery status and replay commands'
   }
   package = artifact 'Registry package' {
     description 'Verified configuration and generated contract closure. Production activation enforces the configured signature policy and matching database identity.'
@@ -72,7 +72,7 @@ model {
     }
     webhooks = component 'Webhook delivery' {
       description 'Claims committed deliveries and sends authenticated CloudEvents to explicitly bound destinations, with bounded retries, retained delivery status and operator replay.'
-      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-breg/src/webhook.rs 'Delivery worker'
+      link https://github.com/registrystack/registry-stack/blob/main/crates/registry-breg/src/hooks.rs 'Delivery worker'
     }
     audit = component 'Audit release gates' {
       description 'Writes minimized request and response entries through the shared per-process file or stdout writer and gates relevant I/O and response release. Grant-bearing refusals and terminal outcomes include minimized authorization context with keyed pseudonyms, source issuer and deadline, never subjects, bounds or purpose value. Audit records have a separate purpose from integration event payloads.'

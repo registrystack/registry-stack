@@ -1,7 +1,7 @@
-"""Verify Base Registry Engine webhook deliveries through the shared Rust verifier.
+"""Verify Base Registry Engine hook deliveries through the shared Rust verifier.
 
 The fixed vector is the one `registry-breg-client/tests/webhook.rs` and the
-Node binding's `webhook-verification.test.js` use, which in turn belongs to
+Node binding's `hook-verification.test.js` use, which in turn belongs to
 `registry-platform-crypto` delivery signatures.
 """
 
@@ -16,7 +16,7 @@ ensure_built()
 import registry_breg_client as breg_client  # noqa: E402
 
 BaseRegistryClientError = breg_client.BaseRegistryClientError
-verify_webhook_delivery = breg_client.verify_webhook_delivery
+verify_hook_delivery = breg_client.verify_hook_delivery
 
 KEY = b"webhook-delivery-signing-key-0123456789abcdef"
 BODY = b'{"entity":"case","values":{"label":"value"}}'
@@ -50,15 +50,15 @@ def verify(**overrides):
         "key": KEY,
     }
     arguments.update(overrides)
-    return verify_webhook_delivery(**arguments)
+    return verify_hook_delivery(**arguments)
 
 
-class WebhookVerificationTests(unittest.TestCase):
+class HookVerificationTests(unittest.TestCase):
     def assert_refused(self, code: str, message: str | None = None, **overrides) -> None:
         with self.assertRaises(BaseRegistryClientError) as raised:
             verify(**overrides)
         error = raised.exception
-        self.assertEqual(error.kind, "webhook-verification")
+        self.assertEqual(error.kind, "hook-verification")
         self.assertEqual(error.code, code)
         self.assertFalse(error.outcome_unknown)
         rendered = str(error)
@@ -88,7 +88,7 @@ class WebhookVerificationTests(unittest.TestCase):
 
     def test_arguments_are_keyword_only(self) -> None:
         with self.assertRaises(TypeError):
-            verify_webhook_delivery("POST", "/hooks/registry", headers(), BODY, KEY)
+            verify_hook_delivery("POST", "/hooks/registry", headers(), BODY, KEY)
 
     def test_refuses_a_tampered_signed_header(self) -> None:
         self.assert_refused(
@@ -113,28 +113,28 @@ class WebhookVerificationTests(unittest.TestCase):
     def test_refuses_a_header_repeated_under_another_case(self) -> None:
         self.assert_refused(
             "duplicate-header",
-            "a Base Registry Engine webhook header is repeated; remove duplicate signed headers",
+            "a Base Registry Engine hook header is repeated; remove duplicate signed headers",
             headers={**headers(), "CE-TYPE": "case-created-v1"},
         )
 
     def test_reports_an_invalid_delivery_time_with_its_fix(self) -> None:
         self.assert_refused(
             "invalid-delivery-time",
-            "the Base Registry Engine webhook delivery time is invalid; check the signed delivery time and sender clock",
+            "the Base Registry Engine hook delivery time is invalid; check the signed delivery time and sender clock",
             headers={**headers(), "x-registry-delivery-time": "not-a-time"},
         )
 
     def test_reports_an_oversized_body_with_its_fix(self) -> None:
         self.assert_refused(
             "body-too-large",
-            "the Base Registry Engine webhook body exceeds the Version 1 limit; reduce the body size",
+            "the Base Registry Engine hook body exceeds the Version 1 limit; reduce the body size",
             body=b"x" * 1_048_577,
         )
 
     def test_reports_an_invalid_key_with_its_fix(self) -> None:
         self.assert_refused(
             "invalid-key",
-            "the Base Registry Engine webhook verification key is too short; configure a key of at least 32 bytes",
+            "the Base Registry Engine hook verification key is too short; configure a key of at least 32 bytes",
             key=b"short-key",
         )
 

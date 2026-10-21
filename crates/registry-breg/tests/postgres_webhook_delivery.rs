@@ -1580,7 +1580,7 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
     let compiled = compiled_registry();
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
-        .expect("migration installs webhook delivery state");
+        .expect("migration installs hook delivery state");
     let original_identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
@@ -1719,7 +1719,7 @@ async fn real_postgres_webhook_worker_records_its_last_success_on_an_idle_iterat
     let compiled = compiled_registry();
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
-        .expect("migration installs webhook delivery state");
+        .expect("migration installs hook delivery state");
     let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
@@ -1778,7 +1778,7 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
     let compiled = compiled_registry();
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
-        .expect("migration installs webhook delivery state");
+        .expect("migration installs hook delivery state");
     let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
@@ -2378,7 +2378,7 @@ async fn create_event(
             },
         )
         .await
-        .expect("record mutation atomically captures one webhook delivery");
+        .expect("record mutation atomically captures one hook delivery");
     let row = database
         .admin
         .query_one(
@@ -2728,10 +2728,7 @@ async fn assert_webhook_audits_are_closed_and_value_free(database: &TestDatabase
         "x-registry-signature",
         "upstream",
     ] {
-        assert!(
-            !joined.contains(forbidden),
-            "webhook audit remains value-free"
-        );
+        assert!(!joined.contains(forbidden), "hook audit remains value-free");
     }
 }
 
@@ -2740,7 +2737,7 @@ fn header<'a>(request: &'a ReceivedRequest, name: &str) -> &'a str {
         .headers
         .get(name)
         .map(String::as_str)
-        .expect("closed webhook header is present")
+        .expect("closed hook header is present")
 }
 
 async fn assert_exact_request(request: &ReceivedRequest, event: &CapturedEvent) {
@@ -2857,9 +2854,9 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           }]
         }"#,
     )
-    .expect("webhook delivery fixture parses");
+    .expect("hook delivery fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
-        .expect("webhook delivery fixture compiles")
+        .expect("hook delivery fixture compiles")
 }
 
 /// The same registry as [`compiled_registry`], with its one hook bound to a
@@ -3053,7 +3050,7 @@ package:
 authentication:
   oidc:
     issuer: https://issuer.example
-    audience: urn:breg:webhook-delivery
+    audience: urn:breg:hook-delivery
     allowedAlgorithm: EdDSA
     accessTokenType: JWT
     scopeClaim: scope

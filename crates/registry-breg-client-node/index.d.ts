@@ -336,6 +336,15 @@ export interface CompleteOutcome {
  */
 export declare function encodeIngestionChunk(chunkIndex: number, items: any, prefixDigest: string): BRegIngestionChunk
 
+/** Exact BReg hook request supplied by a receiver. */
+export interface HookDeliveryInput {
+  method: string
+  path: string
+  headers: Record<string, string>
+  body: Buffer
+  key: Buffer
+}
+
 /** Validated product result serialized before the JavaScript number boundary. */
 export interface JsonOutcome {
   kind: string
@@ -372,8 +381,8 @@ export interface RawOutcome {
   reprDigest?: string
 }
 
-/** Authenticated BReg webhook metadata and exact body. */
-export interface VerifiedWebhookDelivery {
+/** Authenticated BReg hook metadata and exact body. */
+export interface VerifiedHookDelivery {
   id: string
   source: string
   type: string
@@ -386,14 +395,5 @@ export interface VerifiedWebhookDelivery {
   body: Buffer
 }
 
-/** Verify a BReg Version 1 webhook signature without applying receiver policy. */
-export declare function verifyWebhookDelivery(input: WebhookDeliveryInput): VerifiedWebhookDelivery
-
-/** Exact BReg webhook request supplied by a receiver. */
-export interface WebhookDeliveryInput {
-  method: string
-  path: string
-  headers: Record<string, string>
-  body: Buffer
-  key: Buffer
-}
+/** Verify a BReg Version 1 hook signature without applying receiver policy. */
+export declare function verifyHookDelivery(input: HookDeliveryInput): VerifiedHookDelivery

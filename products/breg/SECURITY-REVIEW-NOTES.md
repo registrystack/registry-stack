@@ -135,7 +135,7 @@ and require completed expiry and erased payloads. Active or uncertain work,
 shared-event siblings, spent idempotency keys, and audit history remain protected.
 Neither cleanup path recreates erased material or grants replay authority.
 
-Webhook operational logs carry only committed counts and a closed failure reason:
+Hook operational logs carry only committed counts and a closed failure reason:
 `registry-not-ready`, `lock-timeout`, `query-cancelled`, or `database`. A later batch
 failure reports only earlier committed progress. A capped tick emits one warning,
 a normal nonempty tick one completion, and an idle tick no completion. SQLSTATE
@@ -1153,7 +1153,7 @@ executor's corrected credentials or grants do not.
 
 ### Discarding a retained delivery
 
-`bregctl webhook discard` permanently closes one pending delivery, dead
+`bregctl hook discard` permanently closes one pending delivery, dead
 letter with retained payload, or expired lease at its exact generation. The
 generation and lease checks run under `FOR UPDATE` on the delivery state and
 the shared outbox row, and a worker cannot apply after the discard because it
@@ -1174,15 +1174,15 @@ apply before maintenance in `migration.rs`. Across captured revisions it counts
 pending or leased local rows and operator-replayable dead letters with retained,
 unexpired payloads. Other terminal metadata, non-replayable dead letters, and
 rows whose payload expired or was erased can remain after activation.
-`bregctl webhook drain` attempts
+`bregctl hook drain` attempts
 only due local work for the active activation, with attempt and time bounds.
 It preserves URL work, live leases, future retries and dead letters for their
 existing recovery paths; a drain can itself produce more governed hook work.
 Apply rechecks retention under its activation lock.
 
 Drain executes reviewed Rhai/Wasm handlers in the `bregctl` process. In
-`crates/registry-breg/src/webhook.rs`,
-`WebhookOperatorService::from_runtime_config_with_execution` loads the active
+`crates/registry-breg/src/hooks.rs`,
+`HookOperatorService::from_runtime_config_with_execution` loads the active
 package and execution configuration and uses the runtime database connection.
 It needs the configured destination and audit secrets, handler assets, and,
 when fields are encrypted, the existing field-encryption provider and keys.
@@ -1230,7 +1230,7 @@ committed-receipt tests, and
 Its faults cover the lease token, generation, database, package, maintenance
 state, and an unreadable registry state. No fault case covers the attempt
 comparison in the shared Dispatch lease transition or the shared activation
-lock that `verify_delivery_transaction` in `crates/registry-breg/src/webhook.rs`
+lock that `verify_delivery_transaction` in `crates/registry-breg/src/hooks.rs`
 takes; both are enforced, and their assurance rests on review of that code.
 `in_flight_predecessor_answer_keeps_unreadable_activation_uncertain` continues
 through final-lease recovery, explicit replay, a second receiver request, and
@@ -1366,7 +1366,7 @@ scrape exhaust the runtime pool or hold locks the workers need.
   request failed and left its job pending for a retry is never a success,
   and neither is an idle pass during that retry wait.
 - `breg_queue_oldest_pending_age_seconds` carries only a closed `queue`
-  label (`webhook-delivery`, `review-submission`, `review-application`) and
+  label (`hook-delivery`, `review-submission`, `review-application`) and
   an age. Each scrape takes one runtime pool connection, serialized across
   scrapes by a mutex, inside a read-only transaction whose statement timeout
   is 5 seconds, and runs one aggregate statement that reads only
@@ -3156,8 +3156,8 @@ its terminal result.
   `crates/registry-breg-client-py/src/lib.rs`. Shared transport words come
   from `TransportKind::kind`; retryability, unknown-outcome reporting and
   response validation are unchanged.
-- `BRegWebhookVerificationError::code` in
-  `crates/registry-breg-client/src/webhook.rs` preserves distinct
+- `BRegHookVerificationError::code` in
+  `crates/registry-breg-client/src/hook.rs` preserves distinct
   `invalid-delivery-time`, `duplicate-header`, `body-too-large`, and
   `invalid-key` causes alongside the signature and missing-header failures.
   Every message names the input to fix without rendering its value.

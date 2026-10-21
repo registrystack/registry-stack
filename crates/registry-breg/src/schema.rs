@@ -366,12 +366,12 @@ mod tests {
     #[cfg(feature = "runtime")]
     fn valid_event_destination() -> Value {
         serde_json::json!({
-            "origin": "https://webhook.example",
+            "origin": "https://hook.example",
             "path": "/events",
             "networkProfile": "production-https",
             "dnsFamily": "dual-stack-strict",
             "allowedPrivateCidrs": [],
-            "hmacSha256KeyRef": "secret:file/webhook-hmac",
+            "hmacSha256KeyRef": "secret:file/hook-hmac",
             "classificationCeiling": "public",
             "deliveryCeilings": {
                 "attemptTimeoutMilliseconds": 1000,

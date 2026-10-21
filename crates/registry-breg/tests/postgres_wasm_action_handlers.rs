@@ -591,7 +591,7 @@ async fn wasm_multi_effect_application_rolls_back_completely_on_a_late_failure()
     database.cleanup().await;
 }
 
-/// The activated webhook destination the acceptance project's declared events
+/// The activated hook destination the acceptance project's declared events
 /// expect, the same construction the Rhai handler journey activates.
 fn event_destinations(
     registry: &registry_breg::CompiledRegistry,

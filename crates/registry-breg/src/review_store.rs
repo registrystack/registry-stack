@@ -2455,7 +2455,7 @@ pub async fn poll_one_result(
 ) -> Result<bool, MutationError> {
     // The lookup is claimed with a lease before the outbound exchange so two
     // instances cannot both act on one submission's result at once. Among due
-    // reviews, one a webhook completion already announced goes first, and one
+    // reviews, one a hook completion already announced goes first, and one
     // the authority last answered as unknown goes last, so reviews an
     // authority lost (a restored or replaced review environment) cannot hold
     // back live ones. Every due review is still reached in turn. A completed

@@ -1165,7 +1165,7 @@ fn read_policy(path: &Path) -> Result<Vec<u8>, RuntimeConfigError> {
 /// Plain http is accepted only for an explicit loopback host, so a plaintext
 /// destination can never silently point at another machine. Full network
 /// egress policy is the deployment's perimeter concern, the same boundary
-/// BREG draws for its webhook origins.
+/// BREG draws for its hook origins.
 fn valid_destination_url(value: &str) -> bool {
     let Ok(parsed) = url::Url::parse(value) else {
         return false;
