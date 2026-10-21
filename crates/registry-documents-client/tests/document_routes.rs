@@ -155,6 +155,7 @@ async fn an_identifier_that_is_not_a_lowercase_uuid_is_refused_before_any_reques
                 .await
                 .err(),
             client.revoke_grant(&token(), id).await.err(),
+            client.request_erasure(&token(), id).await.err(),
             client
                 .issue_grant(&token(), IDEMPOTENCY_KEY, id, &grant_request())
                 .await
@@ -656,6 +657,148 @@ async fn revoke_grant_deletes_the_grant_without_a_key() {
     assert_bearer_json(sent);
     assert!(sent.headers.get("idempotency-key").is_none());
     assert!(sent.body.is_empty());
+    server.abort();
+}
+
+fn erasure_pending_json() -> serde_json::Value {
+    let mut document = document_json();
+    document["version"]["status"] = "erasure-pending".into();
+    document["version"]["finalizedAt"] = "2026-10-22T08:05:00Z".into();
+    document["actions"] = serde_json::json!(["list-shares"]);
+    document
+}
+
+#[tokio::test]
+async fn request_erasure_posts_an_empty_request_without_a_key() {
+    let (url, script, server) = serve(vec![Answer::json(
+        StatusCode::OK,
+        erasure_pending_json().to_string(),
+    )])
+    .await;
+    let complete = client(config(&url))
+        .request_erasure(&token(), DOCUMENT_ID)
+        .await
+        .expect("the document pending erasure");
+    assert_eq!(complete.value.id, DOCUMENT_ID);
+    assert_eq!(
+        complete.value.version.status,
+        DocumentStatus::ErasurePending
+    );
+
+    let sent = &script.observations()[0];
+    assert_eq!(sent.method, Method::POST);
+    assert_eq!(
+        sent.uri.path(),
+        format!("{PREFIX}/documents/{DOCUMENT_ID}/erasure")
+    );
+    assert_bearer_json(sent);
+    assert!(sent.headers.get("idempotency-key").is_none());
+    assert!(sent.body.is_empty());
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_repeated_erasure_request_sends_the_same_request_and_reads_the_same_view() {
+    let pending = erasure_pending_json().to_string();
+    let (url, script, server) = serve(vec![
+        Answer::json(StatusCode::OK, pending.clone()),
+        Answer::json(StatusCode::OK, pending),
+    ])
+    .await;
+    let client = client(config(&url));
+    let first = client
+        .request_erasure(&token(), DOCUMENT_ID)
+        .await
+        .expect("the first request");
+    let repeat = client
+        .request_erasure(&token(), DOCUMENT_ID)
+        .await
+        .expect("the repeat");
+    assert_eq!(first.value, repeat.value);
+
+    let observations = script.observations();
+    assert_eq!(observations.len(), 2);
+    for sent in &observations {
+        assert_eq!(sent.method, Method::POST);
+        assert_eq!(
+            sent.uri.path(),
+            format!("{PREFIX}/documents/{DOCUMENT_ID}/erasure")
+        );
+        assert!(sent.headers.get("idempotency-key").is_none());
+        assert!(sent.body.is_empty());
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn an_erasure_request_refused_is_its_typed_code_and_never_resent() {
+    for (code, status) in [
+        (ProblemCode::ProfileNotAuthorized, 403),
+        (ProblemCode::ResourceNotFound, 404),
+    ] {
+        let (url, script, server) = serve(vec![Answer::Problem(code, None)]).await;
+        let error = client(config(&url))
+            .request_erasure(&token(), DOCUMENT_ID)
+            .await
+            .expect_err("a refusal");
+        assert!(
+            matches!(
+                error,
+                DocumentsClientError::Problem {
+                    status: answered,
+                    code: answered_code,
+                    trace_id: Some(ref trace),
+                } if answered == status && answered_code == code && trace == TRACE_ID
+            ),
+            "{error:?}"
+        );
+        assert!(!error.is_outcome_unknown());
+        assert_eq!(script.observations().len(), 1);
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn an_erasure_answer_that_is_malformed_or_oversized_is_refused_and_never_resent() {
+    let mut extra = erasure_pending_json();
+    extra["unexpected"] = true.into();
+    let (url, script, server) = serve(vec![
+        Answer::json(StatusCode::OK, extra.to_string()),
+        Answer::json(StatusCode::OK, erasure_pending_json().to_string()),
+    ])
+    .await;
+    let malformed = client(config(&url))
+        .request_erasure(&token(), DOCUMENT_ID)
+        .await
+        .expect_err("an unknown field is refused");
+    assert!(
+        matches!(
+            malformed,
+            DocumentsClientError::Protocol {
+                status: 200,
+                failure: DocumentsProtocolFailure::Body,
+                ..
+            }
+        ),
+        "{malformed:?}"
+    );
+    assert!(malformed.is_outcome_unknown());
+    let oversized = client(config(&url).with_max_response_bytes(16))
+        .request_erasure(&token(), DOCUMENT_ID)
+        .await
+        .expect_err("the answer exceeds the bound");
+    assert!(
+        matches!(
+            oversized,
+            DocumentsClientError::Transport {
+                kind: TransportKind::ResponseTooLarge
+            }
+        ),
+        "{oversized:?}"
+    );
+    assert!(oversized.is_outcome_unknown());
+    // One request per call: the client leaves the retry to the caller.
+    assert_eq!(script.observations().len(), 2);
     server.abort();
 }
 

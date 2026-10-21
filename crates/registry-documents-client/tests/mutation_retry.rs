@@ -194,7 +194,7 @@ async fn a_refusal_after_an_unknown_outcome_keeps_the_outcome_unknown() {
 
 #[tokio::test]
 async fn unkeyed_mutations_are_never_resent() {
-    let (url, script, server) = serve(vec![unavailable(), unavailable()]).await;
+    let (url, script, server) = serve(vec![unavailable(), unavailable(), unavailable()]).await;
     let client = client(config(&url));
     let reservation: ReservationView =
         serde_json::from_value(reservation_json()).expect("fixture reservation");
@@ -212,6 +212,14 @@ async fn unkeyed_mutations_are_never_resent() {
         .expect_err("the revocation was unavailable");
     assert!(revoke.is_outcome_unknown(), "{revoke:?}");
     assert_eq!(script.observations().len(), 2);
+
+    // Idempotent by design, but still the caller's to resend.
+    let erasure = client
+        .request_erasure(&token(), DOCUMENT_ID)
+        .await
+        .expect_err("the erasure request was unavailable");
+    assert!(erasure.is_outcome_unknown(), "{erasure:?}");
+    assert_eq!(script.observations().len(), 3);
     server.abort();
 }
 
