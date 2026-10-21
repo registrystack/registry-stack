@@ -13,7 +13,8 @@ use async_trait::async_trait;
 use axum::{extract::State, http::StatusCode, routing::post, Router};
 use chrono::{TimeDelta, Utc};
 use registry_casework::{
-    dispatch_review_completions_once_for_test, validate_retained_completion_destinations_for_test,
+    claim_review_completion_for_test, dispatch_review_completions_once_for_test,
+    finish_review_completion_for_test, validate_retained_completion_destinations_for_test,
     CaseworkService, DatabaseConfig, PostgresStore, ReviewResultRead, ReviewRuntimeError,
     ReviewTaskDecisionRequest, RuntimeError, StoreError,
 };
@@ -884,7 +885,7 @@ async fn completion_dispatcher_leases_one_at_a_time_and_fences_a_stale_owner() {
     let first_pass_states = fixture
         .database
         .query(
-            "SELECT request_id,state,attempt_count
+            "SELECT request_id,state,attempt
              FROM casework_review_completion_outbox WHERE request_id IN ($1,$2)",
             &[&request_id, &later_request_id],
         )
@@ -893,28 +894,78 @@ async fn completion_dispatcher_leases_one_at_a_time_and_fences_a_stale_owner() {
     assert!(first_pass_states.iter().any(|row| {
         row.get::<_, Uuid>(0) == request_id
             && row.get::<_, String>(1) == "leased"
-            && row.get::<_, i32>(2) == 1
+            && row.get::<_, i16>(2) == 1
     }));
     assert!(first_pass_states.iter().any(|row| {
         row.get::<_, Uuid>(0) == later_request_id
             && row.get::<_, String>(1) == "pending"
-            && row.get::<_, i32>(2) == 0
+            && row.get::<_, i16>(2) == 0
     }));
+    // Lapse the first owner's lease and hold the later delivery back, so the
+    // next pass recovers the lapsed attempt as a failed one and has nothing
+    // else due.
     fixture
         .database
         .execute(
             "UPDATE casework_review_completion_outbox
-             SET lease_until=transaction_timestamp()-interval '1 second'
+             SET attempt_started_at=transaction_timestamp()-interval '2 seconds',
+                 lease_expires_at=transaction_timestamp()-interval '1 second'
              WHERE request_id=$1 AND state='leased'",
             &[&request_id],
         )
         .await
         .expect("expire the first dispatcher's lease");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET next_attempt_at=transaction_timestamp()+interval '1 hour'
+             WHERE request_id=$1",
+            &[&later_request_id],
+        )
+        .await
+        .expect("hold the later completion delivery back");
+    dispatch_review_completions_once_for_test(
+        fixture.store.clone(),
+        "registry-completion",
+        completion_url.clone(),
+        "completion-secret",
+    )
+    .await
+    .expect("recover the lapsed completion lease");
+    let recovered = fixture
+        .database
+        .query_one(
+            "SELECT state,attempt,last_failure_class,next_attempt_at>transaction_timestamp()
+             FROM casework_review_completion_outbox WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("recovered completion delivery");
+    assert_eq!(recovered.get::<_, String>(0), "pending");
+    assert_eq!(recovered.get::<_, i16>(1), 1);
+    assert_eq!(
+        recovered.get::<_, Option<String>>(2).as_deref(),
+        Some("delivery_failed")
+    );
+    assert!(
+        recovered.get::<_, bool>(3),
+        "a lapsed attempt waits its retry delay like any failed one"
+    );
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET next_attempt_at=transaction_timestamp() WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("make the recovered completion delivery due");
 
     let second_dispatcher = tokio::spawn(dispatch_review_completions_once_for_test(
         fixture.store.clone(),
         "registry-completion",
-        completion_url,
+        completion_url.clone(),
         "completion-secret",
     ));
     tokio::time::timeout(
@@ -926,47 +977,64 @@ async fn completion_dispatcher_leases_one_at_a_time_and_fences_a_stale_owner() {
     let replacement_lease = fixture
         .database
         .query_one(
-            "SELECT state,attempt_count,lease_until
+            "SELECT state,attempt,lease_token
              FROM casework_review_completion_outbox WHERE request_id=$1",
             &[&request_id],
         )
         .await
         .expect("replacement completion lease");
     assert_eq!(replacement_lease.get::<_, String>(0), "leased");
-    assert_eq!(replacement_lease.get::<_, i32>(1), 2);
-    let replacement_lease_until = replacement_lease.get::<_, chrono::DateTime<Utc>>(2);
+    assert_eq!(replacement_lease.get::<_, i16>(1), 2);
+    let replacement_token = replacement_lease.get::<_, Uuid>(2);
 
     race.release_first.notify_one();
-    first_dispatcher
-        .await
-        .expect("first completion dispatcher task")
-        .expect("first completion dispatcher pass");
+    assert!(
+        first_dispatcher
+            .await
+            .expect("first completion dispatcher task")
+            .is_err(),
+        "a finish under a lapsed lease token is refused"
+    );
     let still_owned = fixture
         .database
         .query_one(
-            "SELECT state,attempt_count,lease_until
+            "SELECT state,attempt,lease_token
              FROM casework_review_completion_outbox WHERE request_id=$1",
             &[&request_id],
         )
         .await
         .expect("replacement lease after stale completion failure");
     assert_eq!(still_owned.get::<_, String>(0), "leased");
-    assert_eq!(still_owned.get::<_, i32>(1), 2);
-    assert_eq!(
-        still_owned.get::<_, chrono::DateTime<Utc>>(2),
-        replacement_lease_until
-    );
+    assert_eq!(still_owned.get::<_, i16>(1), 2);
+    assert_eq!(still_owned.get::<_, Uuid>(2), replacement_token);
 
     race.release_second.notify_one();
     second_dispatcher
         .await
         .expect("second completion dispatcher task")
         .expect("second completion dispatcher pass");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET next_attempt_at=transaction_timestamp() WHERE request_id=$1",
+            &[&later_request_id],
+        )
+        .await
+        .expect("make the later completion delivery due");
+    dispatch_review_completions_once_for_test(
+        fixture.store.clone(),
+        "registry-completion",
+        completion_url,
+        "completion-secret",
+    )
+    .await
+    .expect("deliver the later completion");
     receiver.abort();
     let delivered = fixture
         .database
         .query(
-            "SELECT request_id,state,attempt_count,lease_until
+            "SELECT request_id,state,attempt,lease_token
              FROM casework_review_completion_outbox WHERE request_id IN ($1,$2)",
             &[&request_id, &later_request_id],
         )
@@ -975,14 +1043,14 @@ async fn completion_dispatcher_leases_one_at_a_time_and_fences_a_stale_owner() {
     assert!(delivered.iter().any(|row| {
         row.get::<_, Uuid>(0) == request_id
             && row.get::<_, String>(1) == "delivered"
-            && row.get::<_, i32>(2) == 2
-            && row.get::<_, Option<chrono::DateTime<Utc>>>(3).is_none()
+            && row.get::<_, i16>(2) == 2
+            && row.get::<_, Option<Uuid>>(3).is_none()
     }));
     assert!(delivered.iter().any(|row| {
         row.get::<_, Uuid>(0) == later_request_id
             && row.get::<_, String>(1) == "delivered"
-            && row.get::<_, i32>(2) == 1
-            && row.get::<_, Option<chrono::DateTime<Utc>>>(3).is_none()
+            && row.get::<_, i16>(2) == 1
+            && row.get::<_, Option<Uuid>>(3).is_none()
     }));
 }
 
@@ -1002,7 +1070,8 @@ async fn retained_completion_work_requires_its_runtime_destination_until_drain()
         .database
         .execute(
             "UPDATE casework_review_completion_outbox
-                SET state='delivered',delivered_at=transaction_timestamp()
+                SET state='delivered',attempt=1,next_attempt_at=NULL,
+                    delivered_at=transaction_timestamp()
               WHERE request_id=$1",
             &[&request_id],
         )
@@ -1011,6 +1080,305 @@ async fn retained_completion_work_requires_its_runtime_destination_until_drain()
     validate_retained_completion_destinations_for_test(&fixture.store, &[])
         .await
         .expect("a drained destination may be removed");
+}
+
+#[tokio::test]
+async fn completion_delivery_stops_at_its_window_and_never_sends_to_an_unconfigured_destination() {
+    let fixture = fixture().await;
+    let closed = settle_review_for_completion(&fixture, "closed-completion-window").await;
+    let closing = settle_review_for_completion(&fixture, "closing-completion-window").await;
+    let orphaned = settle_review_for_completion(&fixture, "unconfigured-completion").await;
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET next_attempt_at=transaction_timestamp()+interval '1 hour'
+             WHERE request_id IN ($1,$2)",
+            &[&closing, &orphaned],
+        )
+        .await
+        .expect("hold the other completion deliveries back");
+
+    // A delivery whose result window closed before it was sent expires at
+    // claim and is never leased.
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET next_attempt_at=transaction_timestamp()-interval '2 seconds',
+                 retained_until=transaction_timestamp()-interval '1 second'
+             WHERE request_id=$1",
+            &[&closed],
+        )
+        .await
+        .expect("close the first completion window");
+    assert!(
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+            .await
+            .expect("claim past the completion window")
+            .is_none()
+    );
+    let expired = fixture
+        .database
+        .query_one(
+            "SELECT state,attempt,expired_at IS NOT NULL
+             FROM casework_review_completion_outbox WHERE request_id=$1",
+            &[&closed],
+        )
+        .await
+        .expect("expired completion delivery");
+    assert_eq!(expired.get::<_, String>(0), "expired");
+    assert_eq!(expired.get::<_, i16>(1), 0);
+    assert!(expired.get::<_, bool>(2));
+
+    // A retry that would land at or after the window's close expires the
+    // delivery instead of scheduling it.
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET next_attempt_at=transaction_timestamp(),
+                 retained_until=transaction_timestamp()+interval '500 milliseconds'
+             WHERE request_id=$1",
+            &[&closing],
+        )
+        .await
+        .expect("close the second completion window soon");
+    let closing_lease =
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+            .await
+            .expect("lease the closing completion delivery")
+            .expect("the closing completion delivery");
+    finish_review_completion_for_test(
+        fixture.store.clone(),
+        "registry-completion",
+        3,
+        &closing_lease,
+        false,
+    )
+    .await
+    .expect("fail the closing completion delivery");
+    let closed_by_retry = fixture
+        .database
+        .query_one(
+            "SELECT state,attempt,last_failure_class
+             FROM casework_review_completion_outbox WHERE request_id=$1",
+            &[&closing],
+        )
+        .await
+        .expect("completion delivery past its retry window");
+    assert_eq!(closed_by_retry.get::<_, String>(0), "expired");
+    assert_eq!(closed_by_retry.get::<_, i16>(1), 1);
+    assert_eq!(
+        closed_by_retry.get::<_, Option<String>>(2).as_deref(),
+        Some("delivery_failed")
+    );
+
+    // A delivery whose destination this runtime does not configure is set
+    // aside without a send, so it cannot stall the deliveries behind it.
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET next_attempt_at=transaction_timestamp() WHERE request_id=$1",
+            &[&orphaned],
+        )
+        .await
+        .expect("make the unconfigured completion delivery due");
+    assert!(
+        claim_review_completion_for_test(fixture.store.clone(), "another-destination", 3)
+            .await
+            .expect("claim beside an unconfigured destination")
+            .is_none()
+    );
+    let set_aside = fixture
+        .database
+        .query_one(
+            "SELECT state,attempt,last_failure_class
+             FROM casework_review_completion_outbox WHERE request_id=$1",
+            &[&orphaned],
+        )
+        .await
+        .expect("unconfigured completion delivery");
+    assert_eq!(set_aside.get::<_, String>(0), "expired");
+    assert_eq!(set_aside.get::<_, i16>(1), 0);
+    assert_eq!(
+        set_aside.get::<_, Option<String>>(2).as_deref(),
+        Some("destination_unconfigured")
+    );
+}
+
+async fn completion_outbox_row(
+    fixture: &Fixture,
+    request_id: Uuid,
+) -> (String, i16, Option<Uuid>, Option<String>, bool) {
+    let row = fixture
+        .database
+        .query_one(
+            "SELECT state,attempt,lease_token,last_failure_class,dead_lettered_at IS NOT NULL
+             FROM casework_review_completion_outbox WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("completion delivery row");
+    (row.get(0), row.get(1), row.get(2), row.get(3), row.get(4))
+}
+
+async fn lapse_completion_lease(fixture: &Fixture, request_id: Uuid) {
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET attempt_started_at=now() - interval '2 seconds',
+                 lease_expires_at=now() - interval '1 second'
+             WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("lapse the completion lease as an interrupted attempt would");
+}
+
+#[tokio::test]
+async fn an_interrupted_final_completion_attempt_dead_letters_without_another_send() {
+    let fixture = fixture().await;
+    let request_id = settle_review_for_completion(&fixture, "interrupted-final-completion").await;
+    let lease = claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 1)
+        .await
+        .expect("lease the only completion attempt")
+        .expect("the only completion attempt");
+    assert_eq!(lease.attempt(), 1);
+    lapse_completion_lease(&fixture, request_id).await;
+    assert!(
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 1)
+            .await
+            .expect("recover the interrupted final attempt")
+            .is_none(),
+        "an interrupted final attempt is not sent again"
+    );
+    assert_eq!(
+        completion_outbox_row(&fixture, request_id).await,
+        (
+            "dead-lettered".to_owned(),
+            1,
+            None,
+            Some("delivery_failed".to_owned()),
+            true
+        )
+    );
+    assert!(
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 1)
+            .await
+            .expect("claim after the dead letter")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_completion_finish_after_retention_erased_its_row_is_refused() {
+    let fixture = fixture().await;
+    let request_id = settle_review_for_completion(&fixture, "erased-completion").await;
+    let lease = claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+        .await
+        .expect("lease the completion delivery")
+        .expect("the completion delivery");
+    // Review retention erases the row by its window while the send runs.
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_review_completion_outbox WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("erase the leased completion delivery");
+    assert!(
+        finish_review_completion_for_test(
+            fixture.store.clone(),
+            "registry-completion",
+            3,
+            &lease,
+            true,
+        )
+        .await
+        .is_err(),
+        "a finish on an erased delivery is refused"
+    );
+    assert_eq!(
+        count_for_request(&fixture, "casework_review_completion_outbox", request_id).await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn a_lapsed_completion_lease_for_an_unconfigured_destination_dead_letters_without_a_send() {
+    let fixture = fixture().await;
+    let request_id = settle_review_for_completion(&fixture, "unconfigured-lapsed-completion").await;
+    let lease = claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+        .await
+        .expect("lease the completion delivery")
+        .expect("the completion delivery");
+    assert_eq!(lease.attempt(), 1);
+    lapse_completion_lease(&fixture, request_id).await;
+    assert!(
+        claim_review_completion_for_test(fixture.store.clone(), "another-destination", 3)
+            .await
+            .expect("recover beside an unconfigured destination")
+            .is_none()
+    );
+    assert_eq!(
+        completion_outbox_row(&fixture, request_id).await,
+        (
+            "dead-lettered".to_owned(),
+            1,
+            None,
+            Some("destination_unconfigured".to_owned()),
+            true
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_completion_past_a_lowered_attempt_limit_is_set_aside_as_exhausted() {
+    let fixture = fixture().await;
+    let request_id = settle_review_for_completion(&fixture, "lowered-limit-completion").await;
+    let lease = claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+        .await
+        .expect("lease the completion delivery")
+        .expect("the completion delivery");
+    finish_review_completion_for_test(
+        fixture.store.clone(),
+        "registry-completion",
+        3,
+        &lease,
+        false,
+    )
+    .await
+    .expect("fail the first completion attempt");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox SET next_attempt_at=now()
+             WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("make the retry due");
+    // The operator lowers maximumAttempts to the attempts already made.
+    assert!(
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 1)
+            .await
+            .expect("claim under the lowered attempt limit")
+            .is_none()
+    );
+    assert_eq!(
+        completion_outbox_row(&fixture, request_id).await,
+        (
+            "dead-lettered".to_owned(),
+            1,
+            None,
+            Some("attempts_exhausted".to_owned()),
+            true
+        )
+    );
 }
 
 #[tokio::test]
@@ -1252,51 +1620,101 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         1
     );
 
-    let first_lease = fixture
-        .store
-        .lease_review_completions_for_test(10, Utc::now() + TimeDelta::minutes(5))
-        .await
-        .expect("lease completion delivery");
-    assert_eq!(first_lease.len(), 1);
-    let event_id = first_lease[0].event_id;
-    assert!(fixture
-        .store
-        .lease_review_completions_for_test(10, Utc::now() + TimeDelta::minutes(5))
-        .await
-        .expect("do not lease active delivery twice")
-        .is_empty());
+    let first_lease =
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+            .await
+            .expect("lease completion delivery")
+            .expect("a due completion delivery");
+    assert_eq!(first_lease.attempt(), 1);
+    let event_id = first_lease.event().event_id;
+    assert!(
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+            .await
+            .expect("do not lease active delivery twice")
+            .is_none()
+    );
     fixture
         .database
         .execute(
             "UPDATE casework_review_completion_outbox
-             SET lease_until=now() - interval '1 second' WHERE event_id=$1",
+             SET attempt_started_at=now() - interval '2 seconds',
+                 lease_expires_at=now() - interval '1 second'
+             WHERE event_id=$1",
             &[&event_id],
         )
         .await
         .expect("expire completion lease after simulated lost acknowledgement");
-    let recovered_lease = fixture
-        .store
-        .lease_review_completions_for_test(10, Utc::now() + TimeDelta::minutes(5))
-        .await
-        .expect("recover expired completion lease");
-    assert_eq!(recovered_lease.len(), 1);
-    assert_eq!(recovered_lease[0].event_id, event_id);
-    assert_eq!(recovered_lease[0], first_lease[0]);
+    assert!(
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+            .await
+            .expect("recover expired completion lease")
+            .is_none(),
+        "a lapsed attempt is retried after its delay, not at once"
+    );
     fixture
-        .store
-        .finish_review_completion_for_test(event_id, false, 3, Utc::now() + TimeDelta::seconds(30))
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox SET next_attempt_at=now() WHERE event_id=$1",
+            &[&event_id],
+        )
         .await
-        .expect("schedule bounded completion retry");
+        .expect("make recovered completion attempt due");
+    let recovered_lease =
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+            .await
+            .expect("lease recovered completion delivery")
+            .expect("the recovered completion delivery");
+    assert_eq!(recovered_lease.attempt(), 2);
+    assert_eq!(recovered_lease.event(), first_lease.event());
+    assert_eq!(
+        recovered_lease.destination_id(),
+        first_lease.destination_id()
+    );
+    assert_eq!(
+        recovered_lease.recipient_binding(),
+        first_lease.recipient_binding()
+    );
+    assert!(
+        finish_review_completion_for_test(
+            fixture.store.clone(),
+            "registry-completion",
+            3,
+            &first_lease,
+            true,
+        )
+        .await
+        .is_err(),
+        "a finish under a lapsed lease token is refused"
+    );
+    let still_leased = fixture
+        .database
+        .query_one(
+            "SELECT state,attempt FROM casework_review_completion_outbox WHERE event_id=$1",
+            &[&event_id],
+        )
+        .await
+        .expect("completion delivery after a stale finish");
+    assert_eq!(still_leased.get::<_, String>(0), "leased");
+    assert_eq!(still_leased.get::<_, i16>(1), 2);
+    finish_review_completion_for_test(
+        fixture.store.clone(),
+        "registry-completion",
+        3,
+        &recovered_lease,
+        false,
+    )
+    .await
+    .expect("schedule bounded completion retry");
     let pending = fixture
         .database
         .query_one(
-            "SELECT state,attempt_count FROM casework_review_completion_outbox WHERE event_id=$1",
+            "SELECT state,attempt FROM casework_review_completion_outbox WHERE event_id=$1",
             &[&event_id],
         )
         .await
         .expect("pending completion retry");
     assert_eq!(pending.get::<_, String>(0), "pending");
-    assert_eq!(pending.get::<_, i32>(1), 2);
+    assert_eq!(pending.get::<_, i16>(1), 2);
     fixture
         .database
         .execute(
@@ -1305,32 +1723,38 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         )
         .await
         .expect("make final completion attempt due");
-    let final_lease = fixture
-        .store
-        .lease_review_completions_for_test(10, Utc::now() + TimeDelta::minutes(5))
-        .await
-        .expect("lease final completion attempt");
-    assert_eq!(final_lease.len(), 1);
-    assert_eq!(final_lease[0].event_id, event_id);
-    fixture
-        .store
-        .finish_review_completion_for_test(event_id, false, 3, Utc::now())
-        .await
-        .expect("exhaust bounded completion delivery");
+    let final_lease =
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+            .await
+            .expect("lease final completion attempt")
+            .expect("the final completion attempt");
+    assert_eq!(final_lease.event().event_id, event_id);
+    assert_eq!(final_lease.attempt(), 3);
+    finish_review_completion_for_test(
+        fixture.store.clone(),
+        "registry-completion",
+        3,
+        &final_lease,
+        false,
+    )
+    .await
+    .expect("exhaust bounded completion delivery");
     let exhausted = fixture
         .database
         .query_one(
-            "SELECT state,attempt_count,lease_until FROM casework_review_completion_outbox
-             WHERE event_id=$1",
+            "SELECT state,attempt,lease_token,last_failure_class
+             FROM casework_review_completion_outbox WHERE event_id=$1",
             &[&event_id],
         )
         .await
         .expect("exhausted completion delivery");
-    assert_eq!(exhausted.get::<_, String>(0), "exhausted");
-    assert_eq!(exhausted.get::<_, i32>(1), 3);
-    assert!(exhausted
-        .get::<_, Option<chrono::DateTime<Utc>>>(2)
-        .is_none());
+    assert_eq!(exhausted.get::<_, String>(0), "dead-lettered");
+    assert_eq!(exhausted.get::<_, i16>(1), 3);
+    assert!(exhausted.get::<_, Option<Uuid>>(2).is_none());
+    assert_eq!(
+        exhausted.get::<_, Option<String>>(3).as_deref(),
+        Some("delivery_failed")
+    );
 
     let now = Utc::now();
     fixture
@@ -1363,7 +1787,7 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         .database
         .execute(
             "UPDATE casework_review_completion_outbox
-             SET next_attempt_at=$2,retained_until=$3 WHERE request_id=$1",
+             SET next_attempt_at=CASE WHEN state='pending' THEN $2::timestamptz END,retained_until=$3 WHERE request_id=$1",
             &[
                 &first.accepted.request_id,
                 &(now - TimeDelta::days(2)),
@@ -2221,7 +2645,7 @@ async fn terminal_retention_scrubs_private_work_and_expires_owned_idempotency() 
         .database
         .execute(
             "UPDATE casework_review_completion_outbox
-             SET next_attempt_at=$2,retained_until=$3 WHERE request_id=$1",
+             SET next_attempt_at=CASE WHEN state='pending' THEN $2::timestamptz END,retained_until=$3 WHERE request_id=$1",
             &[
                 &request_id,
                 &(now - TimeDelta::days(2)),
@@ -4017,7 +4441,7 @@ async fn own_decisions_filter_authors_scope_and_continue_past_hidden_source_cand
     for statement in [
         "UPDATE casework_review_results SET completed_at=$2,available_until=$3 WHERE request_id=ANY($1)",
         "UPDATE casework_review_terminal_events SET completed_at=$2,retained_until=$3 WHERE request_id=ANY($1)",
-        "UPDATE casework_review_completion_outbox SET next_attempt_at=$2,retained_until=$3 WHERE request_id=ANY($1)",
+        "UPDATE casework_review_completion_outbox SET next_attempt_at=CASE WHEN state='pending' THEN $2::timestamptz END,retained_until=$3 WHERE request_id=ANY($1)",
         "UPDATE casework_review_requests SET terminal_at=$2,result_available_until=$3 WHERE request_id=ANY($1)",
     ] {
         fixture
@@ -8193,7 +8617,7 @@ async fn review_task_scan_checkpoints_bind_scope_and_preserve_hidden_candidate_p
                 "UPDATE casework_review_terminal_events
                  SET completed_at=$2,retained_until=$3 WHERE request_id=$1",
                 "UPDATE casework_review_completion_outbox
-                 SET next_attempt_at=$2,retained_until=$3 WHERE request_id=$1",
+                 SET next_attempt_at=CASE WHEN state='pending' THEN $2::timestamptz END,retained_until=$3 WHERE request_id=$1",
                 "UPDATE casework_review_requests
                  SET terminal_at=$2,result_available_until=$3 WHERE request_id=$1",
             ] {

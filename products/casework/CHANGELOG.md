@@ -14,6 +14,15 @@
   sessions can exercise independent reviewers without changing the policy.
 - Correct the peer version-mismatch remedy to name `--bregctl-bin`.
 
+- BREAKING: review completion delivery runs on the shared dispatch core.
+  `casework_review_completion_outbox` takes the dispatch job table shape: the
+  attempt count is `attempt`, a lease carries `lease_token`, and a row that
+  stops without delivery ends `dead-lettered` when its attempts run out or
+  `expired` when its result window closes, instead of `exhausted`. A lapsed
+  lease counts as a failed attempt and waits `retryDelaySeconds`. A row whose
+  destination is no longer configured stops without a send. Apply this
+  release to a fresh database.
+
 ## 0.43.0 - 2026-10-21
 
 - BREAKING: checked project, runtime, and dev-client definition namespaces reject
