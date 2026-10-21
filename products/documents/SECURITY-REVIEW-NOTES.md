@@ -418,8 +418,9 @@ DOCUMENTS-DEC-26:
   pending verification is cancelled. Grant issue holds the version row and
   refuses an erasing version; download needs a releasable version, which
   the database refuses for a version under removal; and a verdict that
-  arrives later records nothing. Nothing releases the version once the
-  request commits.
+  arrives later records nothing. No release that starts after the request
+  commits serves the version; a download admitted before it may finish (see
+  Residual risk).
 - Grant expiry and revocation erase nothing. The grace is frozen at the
   request from the policy's `cleanupGraceHours`; changing the policy later
   moves no due time.
@@ -434,8 +435,9 @@ DOCUMENTS-DEC-26:
   erasing twice or stranding a version.
 - `cleanup.erasure: paused` stops the erasure worker, the arming, and the
   orphan sweep; serving, removal requests, and upload expiry continue.
-- Upload expiry runs on every pass: a reservation whose transfer deadline
-  lapsed is expired and takes no more bytes. On S3, an uncommitted object
+- Upload expiry runs on every pass: a reservation whose upload window
+  (`upload_expires_at`, the reservation time plus the policy's
+  `cleanupGraceHours`) lapsed is expired and takes no more bytes. On S3, an uncommitted object
   older than the longest transfer deadline plus ten minutes is deleted, and
   its staging row with it, so the sweep never races a live upload.
 - Every foreign key in the schema is `ON DELETE RESTRICT`, with the choice
@@ -460,9 +462,16 @@ names each test.
 ### Residual risk
 
 - "Erased" means the Store can no longer serve the bytes. PostgreSQL keeps
-  them in dead tuples until vacuum reclaims the space; backups, replicas'
-  WAL archives, and S3 bucket versioning or replication outside the Store's
-  key keep them for as long as the operator retains those copies.
+  them on disk after the delete: vacuum only marks the space reusable, so
+  the bytes stay on their pages until overwritten or until `VACUUM FULL`
+  rewrites the table. Backups, WAL archives, replicas, and S3 bucket
+  versioning or replication outside the Store's key keep them for as long
+  as the operator retains those copies.
+- A download admitted before the removal request commits is not
+  interrupted: `release` holds no transaction across the transfer, so it
+  may finish after the commit, within its transfer deadline. The same
+  window applies to a revoked grant (DOCUMENTS-DEC-11); both are proven by
+  `a_transfer_admitted_before_a_revocation_completes`.
 - Restore caveat: erasure requests and erasures newer than a backup are
   lost on restore unless the audit file is restored too and its requests
   are repeated. The restore drill in `README.md` runs with serving stopped

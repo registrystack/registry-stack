@@ -68,6 +68,14 @@ arrives.
 Seven days is a placeholder, not a jurisdictional recommendation: a
 retention schedule approves the deployed values.
 
+Erasure reaches only what the Store serves. Database backups, WAL archives,
+replicas, and S3 bucket replicas or provider backups keep erased bytes for as long as
+the operator retains them, and a removed document's bytes stay on PostgreSQL
+pages until they are overwritten or `VACUUM FULL` rewrites the table. Set the
+retention of backups, archived WAL, and bucket replicas to the
+longest period the retention schedule allows erased content to survive; no
+key in this document controls them.
+
 ## Startup
 
 `serve` reads and checks the whole document and stops, naming every finding,
