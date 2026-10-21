@@ -3,18 +3,19 @@ use crate::{authored, check::Checked};
 use anyhow::{bail, Context as _, Result};
 use registry_evidence_authoring::{
     compile::{self, CompiledProject},
+    formats::finding_diagnostic,
     project::{self, EvidenceProject},
     target::{TargetAssuranceProfile, TargetSigner},
 };
 use registry_platform_crypto::{canonicalize_json, domain_separated_sha256};
-use registry_platform_yaml::Report;
+use registry_platform_yaml::Decoded;
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
 
-pub(crate) fn read(root: &Path) -> Result<(EvidenceProject, BTreeMap<String, String>)> {
+fn read_decoded(root: &Path) -> Result<(Decoded<EvidenceProject>, BTreeMap<String, String>)> {
     let file = if root.is_file() {
         root.to_path_buf()
     } else {
@@ -28,24 +29,19 @@ pub(crate) fn read(root: &Path) -> Result<(EvidenceProject, BTreeMap<String, Str
     let mut scripts = BTreeMap::new();
     for (index, function) in decoded.value.functions.iter().enumerate() {
         let path = safe_asset(directory, &function.source).map_err(|_| {
-            let root = registry_platform_yaml::Reader::new(project::PROJECT_FILE)
-                .scan(&bytes)
-                .expect("the project was decoded")
-                .expect("project document");
-            authored::node_findings_report(
-                project::PROJECT_FILE,
+            let finding = registry_evidence_authoring::Finding {
+                code: "asset-path",
+                field: registry_evidence_authoring::FieldPath::root()
+                    .key("functions")
+                    .index(index)
+                    .key("source"),
+                message: "Function source must name a plain asset inside this project".to_owned(),
+            };
+            decoded.document.report_with([finding_diagnostic(
+                &decoded.document,
                 "project",
-                &root,
-                vec![registry_evidence_authoring::Finding {
-                    code: "asset-path",
-                    field: registry_evidence_authoring::FieldPath::root()
-                        .key("functions")
-                        .index(index)
-                        .key("source"),
-                    message: "Function source must name a plain asset inside this project"
-                        .to_owned(),
-                }],
-            )
+                &finding,
+            )])
         })?;
         let bytes = authored::read_authored_file(&path, "reviewed Function asset")?;
         if bytes.len() > registry_evidence_authoring::layout::MAX_DERIVATION_BYTES as usize {
@@ -103,6 +99,11 @@ pub(crate) fn read(root: &Path) -> Result<(EvidenceProject, BTreeMap<String, Str
             String::from_utf8(bytes).context("reviewed project asset must be UTF-8")?,
         );
     }
+    Ok((decoded, scripts))
+}
+
+pub(crate) fn read(root: &Path) -> Result<(EvidenceProject, BTreeMap<String, String>)> {
+    let (decoded, scripts) = read_decoded(root)?;
     Ok((decoded.value, scripts))
 }
 pub(crate) fn safe_asset(root: &Path, relative: &str) -> Result<PathBuf> {
@@ -125,39 +126,29 @@ pub(crate) fn safe_asset(root: &Path, relative: &str) -> Result<PathBuf> {
     Ok(path)
 }
 pub(crate) fn compile(root: &Path) -> Result<(EvidenceProject, CompiledProject)> {
-    let (project, scripts) = read(root)?;
-    let compiled = compile::compile(&project, &scripts).map_err(|findings| {
-        authored::file_findings_report(project::PROJECT_FILE, "project", findings)
-    })?;
-    Ok((project, compiled))
+    let (decoded, compiled) = compile_decoded(root)?;
+    Ok((decoded.value, compiled))
 }
 
-fn retain_diagnostics(error: anyhow::Error, retained: &Report) -> anyhow::Error {
-    let Some(report) = authored::report_in(&error) else {
-        return error;
-    };
-    let files_checked = report.files_checked().or(retained.files_checked());
-    let mut diagnostics = report.clone().into_diagnostics();
-    diagnostics.extend(retained.clone().into_diagnostics());
-    let mut report = Report::new(diagnostics);
-    if let Some(files) = files_checked {
-        report.set_files_checked(files);
-    }
-    report.into()
+fn compile_decoded(root: &Path) -> Result<(Decoded<EvidenceProject>, CompiledProject)> {
+    let (decoded, scripts) = read_decoded(root)?;
+    let compiled = compile::compile(&decoded.value, &scripts).map_err(|findings| {
+        decoded.document.report_with(
+            findings
+                .iter()
+                .map(|finding| finding_diagnostic(&decoded.document, "project", finding)),
+        )
+    })?;
+    Ok((decoded, compiled))
 }
 
 pub(crate) fn inspect(root: &Path, target: Option<&Path>, command: &str) -> Result<Checked> {
     let target = target.map(crate::target::target_path);
     let snapshot = crate::project_snapshot::capture_project(root)?;
-    let project_path = snapshot.root().join(project::PROJECT_FILE);
-    let project_bytes = authored::read_authored_file(&project_path, "Evidence project")?;
-    let decoded = project::read_project(project::PROJECT_FILE, &project_bytes)
-        .map_err(|report| authored::project_refusal(report.into(), snapshot.root(), root))?;
+    let (decoded, mut compiled) = compile_decoded(snapshot.root())
+        .map_err(|error| authored::project_refusal(error, snapshot.root(), root))?;
     let diagnostics = authored::rebase(decoded.document.warnings(), root);
-    let (project, mut compiled) = compile(snapshot.root()).map_err(|error| {
-        let error = authored::project_refusal(error, snapshot.root(), root);
-        retain_diagnostics(error, &diagnostics)
-    })?;
+    let project = decoded.value;
     for function in &mut compiled.functions {
         let path = function["source"]
             .as_str()

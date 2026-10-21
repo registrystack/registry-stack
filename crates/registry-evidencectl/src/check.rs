@@ -324,6 +324,65 @@ mod tests {
         assert!(warning_source.column.is_some());
     }
     #[test]
+    fn check_caps_project_warnings_with_a_function_compilation_error() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/examples/standalone");
+        copy_tree(&source, temporary.path());
+        let project_file = temporary.path().join("evidence.yaml");
+        let authored = fs::read_to_string(&project_file).unwrap();
+        let source_marker = "sources:\n";
+        let mut repeated_functions = String::new();
+        for index in 0..102 {
+            repeated_functions.push_str(&format!(
+                "- id: repeated-function-{index}\n  label: Indistinguishable Function label\n  interface: assertion-derive/v1\n  source: functions/derive-adult-status.rhai\n"
+            ));
+        }
+        repeated_functions.push_str(source_marker);
+        let authored = authored.replacen(source_marker, &repeated_functions, 1);
+        assert_ne!(authored, fs::read_to_string(&project_file).unwrap());
+        fs::write(&project_file, authored).unwrap();
+        let function_file = temporary.path().join("functions/extract-person.rhai");
+        fs::write(&function_file, "fn extract(").unwrap();
+
+        let error = check(temporary.path(), None, false, false)
+            .expect_err("the Function error refuses a project with excess warnings");
+        let report = error
+            .downcast_ref::<Report>()
+            .expect("a bounded structured mixed report");
+        assert_eq!(report.files_checked(), Some(1));
+        assert_eq!(report.diagnostics().len(), 101);
+        assert_eq!(report.error_count(), 1);
+        assert_eq!(report.warning_count(), 100);
+        assert_eq!(
+            report.diagnostics()[0].code,
+            "evidence.project.function-compile"
+        );
+        assert_eq!(report.diagnostics()[0].path, "/functions/0");
+        assert_eq!(
+            report.diagnostics()[0].source.as_ref().unwrap().file,
+            project_file.to_string_lossy()
+        );
+        let overflow = report.diagnostics().last().unwrap();
+        assert_eq!(overflow.code, "config.too-many-problems");
+        assert_eq!(
+            overflow.message,
+            "2 more problems in this file are not shown"
+        );
+
+        let refused = refused_check_report(temporary.path(), None, report);
+        let json = serde_json::to_string(&refused).unwrap();
+        assert!(json.contains("evidence.project.function-compile"));
+        assert!(json.contains("evidence.project.duplicate-function-label"));
+        assert!(!json.contains("Indistinguishable Function label"));
+        let mut human = Vec::new();
+        render_human(&refused, report, &mut human).unwrap();
+        let human = String::from_utf8(human).unwrap();
+        assert!(human.contains("evidence.project.function-compile"));
+        assert!(human.contains("evidence.project.duplicate-function-label"));
+        assert!(!human.contains("Indistinguishable Function label"));
+    }
+    #[test]
     fn check_preserves_duplicate_display_warning_when_function_asset_is_missing() {
         let temporary = tempfile::tempdir().unwrap();
         let source = Path::new(env!("CARGO_MANIFEST_DIR"))

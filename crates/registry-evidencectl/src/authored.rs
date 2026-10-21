@@ -98,27 +98,6 @@ pub(crate) fn file_findings_report(file: &str, area: &str, findings: Vec<Finding
     report
 }
 
-/// Every finding of an authoring check over a document the shared reader
-/// scanned without an envelope, such as a reviewed JSON Schema, each placed
-/// at the value it concerns or, when that value is absent, at the nearest
-/// member that is written.
-pub(crate) fn node_findings_report(
-    file: &str,
-    area: &str,
-    root: &Node,
-    findings: Vec<Finding>,
-) -> Report {
-    let mut report = Report::new(
-        file_findings_report(file, area, findings)
-            .into_diagnostics()
-            .into_iter()
-            .map(|diagnostic| placed(diagnostic, root))
-            .collect(),
-    );
-    report.set_files_checked(1);
-    report
-}
-
 /// The diagnostic with its line and column taken from the member its path
 /// names: the value when it is written, and otherwise the key of the nearest
 /// written member above it, where the missing member belongs.
