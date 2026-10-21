@@ -197,7 +197,7 @@
           "$ref": "#/$defs/LocalizedText"
         },
         "endpoint_description": {
-          "$ref": "#/$defs/DisplayText"
+          "type": "string"
         },
         "endpoint_url": {
           "type": "string"

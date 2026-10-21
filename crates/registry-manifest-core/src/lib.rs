@@ -880,8 +880,7 @@ pub struct DataServiceManifest {
     pub description: Option<LocalizedText>,
     #[serde(default)]
     pub endpoint_url: Option<String>,
-    #[serde(default, deserialize_with = "optional_display_text")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<DisplayText>"))]
+    #[serde(default)]
     pub endpoint_description: Option<String>,
     #[serde(default)]
     pub serves_datasets: Vec<String>,
