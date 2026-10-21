@@ -349,9 +349,8 @@ fn compile_project_with_documents(
             // capture stopped at the first invalid source. Successful
             // compilation uses only documents decoded from the captured bytes.
             let documents = read_documents(project, outcome)?;
-            outcome
-                .report
-                .push(place(project, &documents, diagnostic, Severity::Error));
+            let diagnostic = place(project, &documents, diagnostic, Severity::Error);
+            documents.extend_report(outcome, vec![diagnostic]);
             return None;
         }
     };
@@ -621,35 +620,41 @@ fn read_documents(project: &Path, outcome: &mut Outcome) -> Option<Documents> {
             refused = true;
         }
     }
-    match decoded_project {
-        Some(document) if !refused => Some(Documents {
-            project: document,
-            modules,
-        }),
-        _ => {
-            // A refused file always stops the check with an error, even if
-            // the reader reported none for it.
-            if !outcome.report.has_errors() {
-                outcome.report.push(file_diagnostic(
-                    "breg.source.file-invalid",
-                    project,
-                    Some(PROJECT_ARTIFACT),
-                    "a project file was refused without a reported cause",
-                    CORRECT_SOURCE,
-                ));
-            }
-            None
+    if refused {
+        // Successful documents retain their warnings until every source has
+        // been read. A later refusal still reports those warnings once, while
+        // a complete read lets the caller combine them with the capture
+        // diagnostic under each document's single budget.
+        if let Some(document) = &decoded_project {
+            outcome.report.extend(document.warnings());
         }
+        for (_, document) in &modules {
+            outcome.report.extend(document.warnings());
+        }
+        // A refused file always stops the check with an error, even if
+        // the reader reported none for it.
+        if !outcome.report.has_errors() {
+            outcome.report.push(file_diagnostic(
+                "breg.source.file-invalid",
+                project,
+                Some(PROJECT_ARTIFACT),
+                "a project file was refused without a reported cause",
+                CORRECT_SOURCE,
+            ));
+        }
+        return None;
     }
+
+    Some(Documents {
+        project: decoded_project.expect("an accepted project document was decoded"),
+        modules,
+    })
 }
 
-/// Keep a decoded document's warnings; report a refused one's diagnostics.
+/// Retain a decoded document with its warnings; report a refused one's diagnostics.
 fn decode(read: Result<Document, Report>, outcome: &mut Outcome) -> Option<Document> {
     match read {
-        Ok(document) => {
-            outcome.report.extend(document.warnings());
-            Some(document)
-        }
+        Ok(document) => Some(document),
         Err(report) => {
             outcome.report.extend(report);
             None
