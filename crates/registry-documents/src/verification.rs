@@ -13,7 +13,10 @@
 //! version pending and suspended, never approved and never rejected.
 //!
 //! At startup, every version recorded under another verifier binding is
-//! suspended and given a job under the current one.
+//! suspended and given a job under the current one, and its pending job
+//! under the old binding is cancelled. A worker that claims a job recorded
+//! under a binding other than its own retries it rather than ending it, so
+//! a worker under the version's own binding can still verify it.
 
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -218,10 +221,12 @@ pub struct VerificationJob {
     pub computed_digest: String,
     pub length: u64,
     pub object_id: Option<Uuid>,
+    /// The verifier binding the version is currently recorded under.
+    pub binding: String,
 }
 
-const JOB_COLUMNS: &str =
-    "version.media_type, version.computed_digest, version.length, version.object_id";
+const JOB_COLUMNS: &str = "version.media_type, version.computed_digest, version.length, \
+     version.object_id, version.verification_binding_digest";
 const JOB_JOINS: &str =
     "JOIN {schema}.documents_versions AS version ON version.version_id = state.version_id";
 
@@ -238,12 +243,14 @@ fn decode_job(row: &Row, first: usize) -> Result<VerificationJob, DispatchError>
     let computed_digest: Option<String> = row.try_get(first + 1)?;
     let length: i64 = row.try_get(first + 2)?;
     let object_id: Option<Uuid> = row.try_get(first + 3)?;
+    let binding: String = row.try_get(first + 4)?;
     Ok(VerificationJob {
         version_id: row.try_get(0)?,
         media_type,
         computed_digest: computed_digest.ok_or(DispatchError::Unavailable)?,
         length: u64::try_from(length).map_err(|_| DispatchError::Unavailable)?,
         object_id,
+        binding,
     })
 }
 
@@ -568,7 +575,9 @@ impl VerificationTransport {
     async fn attempt(&self, job: &LeasedJob<VerificationJob>) -> Sent<VerificationDetail> {
         let version_id = job.key.id();
         let binding = self.verifier.binding_digest();
-        if job.key.part() != job_part(version_id, binding) {
+        // A job under a binding the version is no longer recorded under can
+        // never record a verdict, whichever worker holds it.
+        if job.key.part() != job_part(version_id, &job.job.binding) {
             return match FailureCode::new(SUPERSEDED) {
                 Ok(code) => Sent {
                     outcome: SendOutcome::Permanent { code },
@@ -576,6 +585,16 @@ impl VerificationTransport {
                 },
                 Err(_) => failed(),
             };
+        }
+        // A current job claimed by a worker under another binding, as while
+        // two instances with different verifiers run side by side, is left
+        // for a worker under the version's own binding.
+        if job.job.binding != binding {
+            tracing::warn!(
+                version = %version_id,
+                "a content verification job is recorded under another verifier binding; it is left for a worker under that binding"
+            );
+            return failed();
         }
         let content = match self.store.client().await {
             Ok(client) => {
@@ -641,8 +660,10 @@ impl DispatchTransport for VerificationTransport {
 /// Suspend every finalized, unrejected version recorded under a verifier
 /// binding other than `binding`, record it under `binding`, and give it a
 /// pending job under that binding. A job that already finished under the
-/// same binding is re-armed as a new generation. Returns how many versions
-/// were suspended.
+/// same binding is re-armed as a new generation, and a pending job under any
+/// other binding is cancelled, so no worker spends an attempt on a binding
+/// that can no longer record a verdict. Returns how many versions were
+/// suspended.
 pub async fn sweep_bindings(store: &PostgresStore, binding: &str) -> Result<u64, StoreError> {
     let mut client = store.client().await?;
     let transaction = client.transaction().await?;
@@ -658,7 +679,17 @@ pub async fn sweep_bindings(store: &PostgresStore, binding: &str) -> Result<u64,
         .await?;
     for row in &rows {
         let version_id: Uuid = row.try_get(0)?;
-        arm_job(&transaction, version_id, &job_part(version_id, binding)).await?;
+        let part = job_part(version_id, binding);
+        arm_job(&transaction, version_id, &part).await?;
+        transaction
+            .execute(
+                "UPDATE documents_verification_jobs
+                    SET state = 'cancelled', next_attempt_at = NULL,
+                        updated_at = transaction_timestamp()
+                  WHERE version_id = $1 AND part <> $2 AND state = 'pending'",
+                &[&version_id, &part],
+            )
+            .await?;
     }
     transaction.commit().await?;
     Ok(rows.len() as u64)

@@ -602,13 +602,16 @@ async fn a_verifier_binding_change_at_restart_suspends_and_verifies_again() {
     let jobs: i64 = deployment
         .scalar("SELECT count(*) FROM documents_verification_jobs WHERE state = 'pending'")
         .await;
+    assert_eq!(jobs, 2, "one job per version under the new binding");
+    let cancelled: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_verification_jobs WHERE state = 'cancelled'")
+        .await;
     assert_eq!(
-        jobs, 3,
-        "one job per version under the new binding, plus the stale one"
+        cancelled, 1,
+        "the stale job under the old binding is cancelled"
     );
 
-    // The stale job under the old binding is dead-lettered without a
-    // verdict; the new binding's verdict is the one recorded.
+    // The new binding's verdict is the one recorded.
     deployment
         .execute(
             "UPDATE documents_verification_jobs SET next_attempt_at = now()
@@ -617,10 +620,10 @@ async fn a_verifier_binding_change_at_restart_suspends_and_verifies_again() {
         .await;
     second.answer(APPROVE);
     restarted.verify_due().await;
-    let superseded: i64 = deployment
+    let dead_lettered: i64 = deployment
         .scalar("SELECT count(*) FROM documents_verification_jobs WHERE state = 'dead-lettered'")
         .await;
-    assert_eq!(superseded, 1);
+    assert_eq!(dead_lettered, 0);
     assert_eq!(status(&api.read(APP, &ready).await), "ready");
     assert_eq!(status(&api.read(APP, &waiting).await), "ready");
     assert_eq!(second.calls.load(Ordering::SeqCst), 2);
@@ -631,6 +634,82 @@ async fn a_verifier_binding_change_at_restart_suspends_and_verifies_again() {
         .await;
     assert_eq!(binding, "binding-b");
     assert_eq!(api.download(APP, &ready, &ready_version).await.status, 200);
+}
+
+/// SEC-18: while two instances run under different verifier bindings, a
+/// job is never dead-lettered only because the worker that claimed it holds
+/// the other binding. It stays pending for a worker under the version's own
+/// binding, and the stale job a restart supersedes is cancelled.
+#[tokio::test]
+async fn a_worker_under_another_binding_leaves_the_job_pending_for_its_own() {
+    let deployment = deployment().await;
+    let old = FakeVerifier::new("binding-a", APPROVE);
+    let (old_instance, old_api) = start(&deployment, &old).await;
+    let (swept, _) = upload(&old_api, &pdf(300, 31)).await;
+
+    // A second instance starts under a new binding while the first runs,
+    // writing its own audit journal.
+    let audit = deployment.audit_path();
+    let second_runtime = deployment.directory.path().join("runtime-second.yaml");
+    std::fs::write(
+        &second_runtime,
+        std::fs::read_to_string(&deployment.runtime)
+            .unwrap()
+            .replace(
+                &audit.display().to_string(),
+                &audit.with_extension("second.ndjson").display().to_string(),
+            ),
+    )
+    .unwrap();
+    let new = FakeVerifier::new("binding-b", APPROVE);
+    let new_instance = prepare_with_verifier(&second_runtime, new.clone())
+        .await
+        .expect("the second instance prepares");
+    let new_api = Api::new(&new_instance);
+    let states: Vec<String> = deployment
+        .admin
+        .query(
+            &format!(
+                "SELECT state FROM {}.documents_verification_jobs ORDER BY state",
+                deployment.schema
+            ),
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(states, ["cancelled", "pending"]);
+
+    // The old instance finalizes a version under its own binding.
+    let (late, late_version) = upload(&old_api, &pdf(300, 32)).await;
+    let due = "UPDATE documents_verification_jobs SET next_attempt_at = now()
+                WHERE state = 'pending'";
+
+    // The new instance claims both jobs; only the one under its binding is
+    // verified, and the other is retried rather than dead-lettered.
+    deployment.execute(due).await;
+    new_instance.verify_due().await;
+    assert_eq!(new.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(status(&new_api.read(APP, &swept).await), "ready");
+    assert_eq!(status(&new_api.read(APP, &late).await), "pending");
+    let late_job: String = deployment
+        .scalar(&format!(
+            "SELECT state FROM documents_verification_jobs WHERE version_id = '{late_version}'"
+        ))
+        .await;
+    assert_eq!(late_job, "pending");
+    let dead_lettered: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_verification_jobs WHERE state = 'dead-lettered'")
+        .await;
+    assert_eq!(dead_lettered, 0);
+
+    // A worker under the version's own binding verifies it.
+    deployment.execute(due).await;
+    old_instance.verify_due().await;
+    assert_eq!(old.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(status(&old_api.read(APP, &late).await), "ready");
 }
 
 #[tokio::test]
