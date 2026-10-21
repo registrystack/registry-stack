@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.43.0
+
+- BREAKING: metadata display fields, profile names and descriptions, and
+  unsupported-mapping explanations reject prohibited display controls and
+  Unicode noncharacters. Supported multilingual shaping and direction marks
+  remain valid. Remove the prohibited character from the reported field.
+- BREAKING: checked definition namespaces reject identifiers differing only
+  by `-` versus `_`. Rename one definition and update its references.
+  Equivalent peer labels produce warnings, or refusals with `--deny-warnings`.
+  Run metadata and profile validation before upgrading. See
+  [the shared upgrade notes](../../../release/notes/v0.43.0.md#authored-text-and-identifier-checks).
+
 ## 0.42.0
 
 - Registry Manifest has no user-visible changes in this release.

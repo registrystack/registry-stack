@@ -1,0 +1,45 @@
+stack:
+  release: beta-55
+  version: 0.43.0
+  source_repo: registrystack/registry-stack
+  source_tag: v0.43.0
+artifacts:
+  registry-manifest: 0.43.0
+  evidence: 0.43.0
+  evidencectl: 0.43.0
+  evidence-oid4vci: 0.43.0
+  evidencectl-installer: 0.43.0
+  registry-docs: 0.43.0
+  discovery: 0.43.0
+  discoveryctl: 0.43.0
+  breg: 0.43.0
+  bregctl: 0.43.0
+  breg-mcp: 0.43.0
+  breg-review: 0.43.0
+  breg-installer: 0.43.0
+  casework: 0.43.0
+  caseworkctl: 0.43.0
+  casework-installer: 0.43.0
+  scheduling: 0.43.0
+  schedulingctl: 0.43.0
+  scheduling-installer: 0.43.0
+  messaging: 0.43.0
+  messagingctl: 0.43.0
+  registry-render: 0.43.0
+  registry-client-node: 0.43.0
+  registry-client-python: 0.43.0
+identifier_catalog:
+  path: products/identifiers/generated/catalog.v1.json
+  sha256: 4a95f2a4c58c726d72cd109674ac4081b17cb11b2b0764103c63c0bf022ae000
+  entry_count: 259
+external: {}
+warnings:
+- code: breg-active-reference-integrity
+  classification: breaking-change
+  detail: Build a successor against the deployed baseline, validate it on a representative restored-data copy, repair active references to tombstoned targets through the current package, and activate the successor before switching runtimes. See release/notes/v0.43.0.md.
+- code: authored-display-and-identifiers
+  classification: breaking-change
+  detail: Current readers refuse prohibited display characters and checked definition namespaces refuse hyphen/underscore identifier collisions. Run product checks and repair the reported definitions before cutover. Discovery v1alpha1 schema bytes remain unchanged. See release/notes/v0.43.0.md.
+- code: breg-package-and-explanation-versions
+  classification: breaking-change
+  detail: Rebuild governed packages and update inspection consumers to model/access/actions v1alpha6, proposals v1alpha2, and lifecycle v1alpha7. Display-only successor packages retain compatible frozen Proposals. See release/notes/v0.43.0.md.

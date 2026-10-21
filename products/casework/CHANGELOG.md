@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.43.0 - 2026-10-21
+
+- BREAKING: checked project, runtime, and dev-client definition namespaces reject
+  identifiers differing only by `-` versus `_`. Human-visible fields using the
+  shared display-text contract reject prohibited Unicode controls, and
+  equivalent queue and team labels produce warnings. Run the applicable checks
+  before upgrading; see [the upgrade notes](../../release/notes/v0.43.0.md#authored-text-and-identifier-checks).
+
 - Report routing errors at the authored rule or stage, without duplicate
   findings for the derived field projection or stage queue. The projection's
   field-count limit points at the policy's `routing` list.
