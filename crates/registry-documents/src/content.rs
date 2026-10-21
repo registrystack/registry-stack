@@ -25,6 +25,7 @@ use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
 use crate::config::StorageConfig;
+use crate::store::{PostgresStore, StoreError};
 
 /// The binding domain of content held in PostgreSQL.
 const DATABASE_BINDING_DOMAIN: &str = "documents-content-database-v1";
@@ -118,6 +119,8 @@ pub enum StorageError {
     Query(#[from] tokio_postgres::Error),
     #[error("the stored content is missing")]
     Missing,
+    #[error("the content storage connection failed: {0}")]
+    Store(#[from] StoreError),
 }
 
 /// Where this deployment holds content.
@@ -205,10 +208,12 @@ impl ContentStorage {
     }
 
     /// Read the content of a finalized version and check it against its
-    /// recorded digest and length before handing any of it back.
-    pub async fn read<C: GenericClient>(
+    /// recorded digest and length before handing any of it back. The
+    /// database connection is returned to the pool before an object is
+    /// fetched, so a slow object read never holds one.
+    pub async fn read(
         &self,
-        client: &C,
+        store: &PostgresStore,
         version_id: Uuid,
         object_id: Option<Uuid>,
         digest: &str,
@@ -216,6 +221,7 @@ impl ContentStorage {
     ) -> Result<Vec<u8>, StorageError> {
         let bytes = match (self, object_id) {
             (Self::Database { .. }, None) => {
+                let client = store.client().await?;
                 let row = client
                     .query_opt(
                         "SELECT content FROM documents_contents WHERE version_id = $1",
@@ -226,21 +232,13 @@ impl ContentStorage {
                 row.try_get::<_, Vec<u8>>(0)?
             }
             (Self::S3 { .. }, Some(object_id)) => {
-                let row = client
-                    .query_opt(
-                        "SELECT binding_digest FROM documents_staged_objects
-                         WHERE object_id = $1 AND version_id = $2 AND committed",
-                        &[&object_id, &version_id],
-                    )
-                    .await?
-                    .ok_or(StorageError::Missing)?;
-                let recorded: String = row.try_get(0)?;
-                let store = self.object(object_id).await?;
-                if store.binding_digest() != recorded {
+                let recorded = staged_binding(store, version_id, object_id).await?;
+                let object = self.object(object_id).await?;
+                if object.binding_digest() != recorded {
                     return Err(StorageError::BindingMismatch);
                 }
                 let sha = digest_hex(digest).ok_or(StorageError::Binding)?;
-                store.get(sha, length).await?
+                object.get(sha, length).await?
             }
             _ => return Err(StorageError::BindingMismatch),
         };
@@ -249,6 +247,25 @@ impl ContentStorage {
         }
         Ok(bytes)
     }
+}
+
+/// The binding a committed object was staged under. The connection is
+/// released when this returns.
+async fn staged_binding(
+    store: &PostgresStore,
+    version_id: Uuid,
+    object_id: Uuid,
+) -> Result<String, StorageError> {
+    let client = store.client().await?;
+    let row = client
+        .query_opt(
+            "SELECT binding_digest FROM documents_staged_objects
+             WHERE object_id = $1 AND version_id = $2 AND committed",
+            &[&object_id, &version_id],
+        )
+        .await?
+        .ok_or(StorageError::Missing)?;
+    Ok(row.try_get(0)?)
 }
 
 fn s3_namespace(ceiling: u64) -> ObjectNamespace {

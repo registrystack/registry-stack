@@ -44,6 +44,7 @@ use crate::audit::{DocumentsAudit, CONTENT_VERIFICATION_EVENT};
 use crate::config::ContentVerificationConfig;
 use crate::content::{digest_hex, ContentStorage};
 use crate::store::{PostgresStore, StoreError};
+use crate::transfer::TransferBudget;
 
 /// The verification job table, in the shape `registry-platform-dispatch`
 /// declares.
@@ -594,11 +595,14 @@ async fn unrecorded_verdict(
     }
 }
 
-/// Reads a claimed version's content and asks the verifier.
+/// Reads a claimed version's content and asks the verifier. The bytes an
+/// attempt holds are counted against the transfer budget uploads and
+/// downloads share; an attempt waits for room rather than adding to it.
 pub struct VerificationTransport {
     store: PostgresStore,
     storage: Arc<ContentStorage>,
     verifier: Arc<dyn VerdictSource>,
+    budget: TransferBudget,
 }
 
 impl VerificationTransport {
@@ -607,11 +611,13 @@ impl VerificationTransport {
         store: PostgresStore,
         storage: Arc<ContentStorage>,
         verifier: Arc<dyn VerdictSource>,
+        budget: TransferBudget,
     ) -> Self {
         Self {
             store,
             storage,
             verifier,
+            budget,
         }
     }
 
@@ -639,23 +645,20 @@ impl VerificationTransport {
             );
             return failed();
         }
-        let content = match self.store.client().await {
-            Ok(client) => {
-                self.storage
-                    .read(
-                        &**client,
-                        version_id,
-                        job.job.object_id,
-                        &job.job.computed_digest,
-                        job.job.length,
-                    )
-                    .await
-            }
-            Err(error) => {
-                tracing::error!(error = %error, "the content verification worker could not reach the database");
-                return failed();
-            }
+        let Some(_permit) = self.budget.reserve(job.job.length).await else {
+            tracing::error!("the transfer budget is closed; verification will retry");
+            return failed();
         };
+        let content = self
+            .storage
+            .read(
+                &self.store,
+                version_id,
+                job.job.object_id,
+                &job.job.computed_digest,
+                job.job.length,
+            )
+            .await;
         let bytes = match content {
             Ok(bytes) => bytes,
             Err(error) => {

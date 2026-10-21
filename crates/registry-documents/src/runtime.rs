@@ -4,8 +4,9 @@
 //! configuration, confirms the database answers over the runtime
 //! credential, opens the audit journal, activates content storage and the
 //! content verifier, suspends every version verified under another
-//! verifier binding, binds the listener, and serves the HTTP surface beside
-//! the content verification worker.
+//! verifier binding, loads the token issuer's signing keys, binds the
+//! listener, and serves the HTTP surface beside the content verification
+//! worker.
 //!
 //! Every step that can refuse a deployment runs before the listener binds,
 //! so a mis-provisioned deployment never answers a request.
@@ -20,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Arg, Command};
+use registry_documents_core::AccessProfiles;
 use registry_platform_audit::{AuditDestination, AuditProfile, AuditWriter};
 use registry_platform_dispatch::postgres::{DispatchWorker, Dispatcher, WorkerConfig};
 use registry_platform_yaml::Report;
@@ -30,10 +32,12 @@ use tracing_subscriber::filter::LevelFilter;
 use crate::audit::DocumentsAudit;
 use crate::config::{describe_secret_failure, startup_report, RuntimeConfig, RuntimeConfigError};
 use crate::content::{pinned_storage, ContentStorage, StorageError};
-use crate::http::router;
+use crate::auth::DocumentsAuthenticator;
+use crate::http::{router, DocumentRoutes};
 use crate::package::{load_package, PackageLoadError};
-use crate::service::DocumentService;
+use crate::service::{DocumentService, ServiceSettings};
 use crate::store::{PostgresStore, StoreError};
+use crate::transfer::{TransferBudget, TransferDeadline};
 use crate::verification::{
     activate_verifier, dispatcher, job_table, sweep_bindings, VerdictSource, VerificationStore,
     VerificationTransport,
@@ -125,7 +129,7 @@ fn load_config(path: &Path) -> Result<RuntimeConfig, RuntimeError> {
 /// A runtime that passed every startup check and holds its bound listener.
 pub struct Prepared {
     listener: tokio::net::TcpListener,
-    service: Arc<DocumentService>,
+    routes: DocumentRoutes,
     dispatcher: Dispatcher<VerificationStore>,
     transport: Arc<VerificationTransport>,
 }
@@ -220,26 +224,44 @@ async fn prepare_with(
     let jobs = job_table(&schema).map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
     let dispatcher = dispatcher(VerificationStore::new(store.clone(), schema, audit.clone()))
         .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
+    let budget = TransferBudget::new(ceiling);
     let transport = Arc::new(VerificationTransport::new(
         store.clone(),
         Arc::clone(&storage),
         Arc::clone(&verifier),
+        budget.clone(),
+    ));
+    let project = Arc::new(package.project);
+    let keys = config.jwks_fetcher(&secrets).await?;
+    let authenticator = Arc::new(DocumentsAuthenticator::new(
+        config.verifier_profile(),
+        keys,
+        AccessProfiles::new(&project),
+        config.binds_assertion_issuers(),
     ));
     let service = Arc::new(DocumentService::new(
         store,
-        Arc::new(package.project),
+        project,
         storage,
-        verifier.binding_digest().to_owned(),
         jobs,
         audit,
-        ceiling,
+        ServiceSettings {
+            verifier_binding: verifier.binding_digest().to_owned(),
+            ceiling,
+            budget,
+            deadline: TransferDeadline::new(&config.transfers),
+            idempotency_days: config.retention.receipt_retention_days.get(),
+        },
     ));
     let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr())
         .await
         .map_err(RuntimeError::Listen)?;
     Ok(Prepared {
         listener,
-        service,
+        routes: DocumentRoutes {
+            service,
+            authenticator,
+        },
         dispatcher,
         transport,
     })
@@ -321,7 +343,21 @@ impl Prepared {
     /// The document operations this runtime serves.
     #[must_use]
     pub fn service(&self) -> Arc<DocumentService> {
-        Arc::clone(&self.service)
+        Arc::clone(&self.routes.service)
+    }
+
+    /// This runtime with its document routes writing to `audit`.
+    #[cfg(feature = "postgres-test")]
+    #[must_use]
+    pub fn with_audit(mut self, audit: crate::audit::DocumentsAudit) -> Self {
+        self.routes.service = Arc::new(self.routes.service.with_audit(audit));
+        self
+    }
+
+    /// The router this runtime serves, authentication included.
+    #[must_use]
+    pub fn router(&self) -> axum::Router {
+        router(self.routes.clone())
     }
 
     /// Run every due content verification attempt now and return how many
@@ -354,7 +390,7 @@ impl Prepared {
         }
         let (stop, stopped) = watch::channel(false);
         let worker = tokio::spawn(self.worker().run(stopped));
-        let served = axum::serve(self.listener, router())
+        let served = axum::serve(self.listener, router(self.routes))
             .with_graceful_shutdown(shutdown)
             .await
             .map_err(RuntimeError::Listen);

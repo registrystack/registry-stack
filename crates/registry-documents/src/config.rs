@@ -22,7 +22,13 @@ use registry_platform_config::{
     ConfigBlockError, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference,
     SecretResolver, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
 };
+use jsonwebtoken::Algorithm;
+use registry_platform_config::JwksSource;
 use registry_platform_objectstore::{s3::S3Settings, verifier::HttpVerifierSettings};
+use registry_platform_oidc::{
+    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy,
+    JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+};
 use registry_platform_yaml::{
     BoundedU32, BoundedU64, Diagnostic, ExternalId, LocalId, Report, Url,
 };
@@ -45,11 +51,20 @@ pub const DOCUMENTS_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
 const DOCUMENTS_REMOVED_KEYS: &[registry_platform_config::RemovedKey] =
     &[REMOVED_OIDC_JWKS_URI, REMOVED_OIDC_JWKS_SOURCE_KIND];
 
+/// The media type an access token must declare (RFC 9068).
+const DOCUMENTS_ACCESS_TOKEN_TYPE: &str = "at+jwt";
+
 /// The longest a content verifier or hook destination attempt may run.
 pub const MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS: u32 = 60_000;
 
 /// The most delivery attempts a hook destination may configure.
 pub const MAXIMUM_HOOK_ATTEMPTS: u32 = 32;
+
+/// The largest transfer deadline floor, in seconds.
+pub const MAXIMUM_TRANSFER_DEADLINE_SECONDS: u32 = 3_600;
+
+/// The largest allowance per mebibyte transferred, in seconds.
+pub const MAXIMUM_MEBIBYTE_ALLOWANCE_SECONDS: u32 = 600;
 
 /// The longest a submission receipt may be retained, in days.
 pub const MAXIMUM_RECEIPT_RETENTION_DAYS: u32 = 365;
@@ -76,6 +91,8 @@ pub struct RuntimeConfig {
     pub authentication: AuthenticationConfig,
     pub audit: AuditConfig,
     pub storage: StorageConfig,
+    #[serde(default)]
+    pub transfers: TransfersConfig,
     pub content_verification: ContentVerificationConfig,
     pub cleanup: CleanupConfig,
     #[serde(default)]
@@ -303,6 +320,38 @@ impl std::fmt::Debug for HookDestination {
     }
 }
 
+/// How long one upload or download may take: a floor, plus an allowance
+/// for every mebibyte the document carries. A transfer still running at its
+/// deadline is cut off and lets go of its bytes.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TransfersConfig {
+    /// The deadline of the smallest transfer.
+    #[serde(default = "default_minimum_deadline_seconds")]
+    pub minimum_deadline_seconds: BoundedU32<1, MAXIMUM_TRANSFER_DEADLINE_SECONDS>,
+    /// The time added for every started mebibyte of the document.
+    #[serde(default = "default_mebibyte_allowance_seconds")]
+    pub mebibyte_allowance_seconds: BoundedU32<1, MAXIMUM_MEBIBYTE_ALLOWANCE_SECONDS>,
+}
+
+impl Default for TransfersConfig {
+    fn default() -> Self {
+        Self {
+            minimum_deadline_seconds: default_minimum_deadline_seconds(),
+            mebibyte_allowance_seconds: default_mebibyte_allowance_seconds(),
+        }
+    }
+}
+
+fn default_minimum_deadline_seconds() -> BoundedU32<1, MAXIMUM_TRANSFER_DEADLINE_SECONDS> {
+    BoundedU32::new(60).expect("sixty seconds is within the transfer deadline bounds")
+}
+
+fn default_mebibyte_allowance_seconds() -> BoundedU32<1, MAXIMUM_MEBIBYTE_ALLOWANCE_SECONDS> {
+    BoundedU32::new(8).expect("eight seconds is within the mebibyte allowance bounds")
+}
+
 /// Retention periods, in days. A jurisdiction's retention schedule approves
 /// the deployed values; the bounds only keep a typo from becoming a policy.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -380,6 +429,14 @@ pub enum RuntimeConfigError {
     /// The secret providers could not be prepared.
     #[error("the secret providers could not be prepared: {0}")]
     SecretProviders(String),
+    /// The token issuer's discovery document or key set could not be
+    /// fetched or read.
+    #[error("the OIDC issuer's signing keys could not be loaded")]
+    Oidc,
+    /// The static key set named by `authentication.oidc.jwksSource.documentRef`
+    /// could not be resolved.
+    #[error("{0}")]
+    OidcJwksSecret(String),
 }
 
 fn refused(findings: &[Finding]) -> String {
@@ -417,6 +474,84 @@ impl RuntimeConfig {
         self.secret_providers
             .resolver()
             .map_err(|error| RuntimeConfigError::SecretProviders(error.to_string()))
+    }
+
+    /// Build the token verifier's key source from the configured JWKS
+    /// source.
+    pub async fn jwks_fetcher(
+        &self,
+        secrets: &SecretResolver,
+    ) -> Result<std::sync::Arc<JwksFetcher>, RuntimeConfigError> {
+        let provider = &self.authentication.oidc.provider;
+        if provider.allow_insecure_http {
+            tracing::warn!(
+                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
+            );
+        }
+        let network =
+            IssuerNetworkPolicy::new(provider.issuer.as_str(), provider.allow_insecure_http)
+                .map_err(|_| RuntimeConfigError::Oidc)?;
+        let fetcher = match &provider.jwks_source {
+            JwksSource::Discovery {} => {
+                let (discovery, policy) = fetch_discovery_for_issuer(
+                    &OidcDiscoveryConfig {
+                        issuer: provider.issuer.to_string(),
+                        jwks_uri_override: None,
+                        discovery_timeout: std::time::Duration::from_secs(5),
+                        max_doc_bytes: 1024 * 1024,
+                    },
+                    provider.allow_insecure_http,
+                )
+                .await
+                .map_err(|_| RuntimeConfigError::Oidc)?;
+                JwksFetcher::new_with_fetch_url_policy(
+                    discovery.jwks_uri,
+                    JwksFetcherConfig::defaults(),
+                    policy,
+                )
+            }
+            JwksSource::Uri { uri } => JwksFetcher::new_with_fetch_url_policy(
+                uri.to_string(),
+                JwksFetcherConfig::defaults(),
+                network.declared_jwks_fetch_policy(),
+            ),
+            JwksSource::Static { document_ref } => {
+                let document = secrets.resolve(document_ref).map_err(|error| {
+                    RuntimeConfigError::OidcJwksSecret(describe_secret_failure(
+                        "authentication.oidc.jwksSource.documentRef",
+                        document_ref,
+                        &error,
+                    ))
+                })?;
+                let jwks = parse_static_jwks(document.expose_secret())
+                    .map_err(|_| RuntimeConfigError::Oidc)?;
+                JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
+            }
+        };
+        Ok(std::sync::Arc::new(fetcher))
+    }
+
+    /// The access-token verifier profile this deployment's OIDC settings
+    /// describe: RFC 9068 access tokens only, from the configured issuer,
+    /// for the configured audience, from an admitted client.
+    #[must_use]
+    pub fn verifier_profile(&self) -> TokenVerifierConfig {
+        let oidc = &self.authentication.oidc;
+        TokenVerifierConfig::access_token_profile(
+            oidc.provider.issuer.to_string(),
+            vec![oidc.provider.audience.clone()],
+            vec![Algorithm::RS256, Algorithm::ES256],
+            access_token_typ_set(DOCUMENTS_ACCESS_TOKEN_TYPE),
+        )
+        .with_scope_claim(oidc.scope_claim.as_str().to_owned())
+        .with_allowed_clients(oidc.clients.allowed_clients.clone())
+        .with_assertion_issuers(oidc.clients.assertion_issuers.clone())
+    }
+
+    /// Whether this deployment declared any token-exchange authority.
+    #[must_use]
+    pub fn binds_assertion_issuers(&self) -> bool {
+        !self.authentication.oidc.clients.assertion_issuers.is_empty()
     }
 
     /// Every rule this document breaks, in document order.
@@ -687,7 +822,9 @@ pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report>
             let report = check_runtime_file(path, true).report;
             (!report.is_empty()).then_some(report)
         }
-        RuntimeConfigError::SecretProviders(_) => None,
+        RuntimeConfigError::SecretProviders(_)
+        | RuntimeConfigError::Oidc
+        | RuntimeConfigError::OidcJwksSecret(_) => None,
     }
 }
 
@@ -771,6 +908,8 @@ pub(crate) mod tests {
                 .map(|diagnostic| diagnostic.code.clone())
                 .collect(),
             RuntimeConfigError::SecretProviders(message) => vec![message],
+            RuntimeConfigError::Oidc => vec!["oidc".to_owned()],
+            RuntimeConfigError::OidcJwksSecret(message) => vec![message],
         }
     }
 

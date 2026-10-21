@@ -2,8 +2,9 @@
 
 //! Database-backed document tests over PostgreSQL storage: reservation,
 //! content upload, verification on dispatch, and release, with every
-//! refusal the upload design names. Callers are synthetic actors; the
-//! verifier is a fake that approves, rejects, or does not answer.
+//! refusal the upload design names. Callers present real access tokens
+//! from a test issuer; the verifier is a fake that approves, rejects, or
+//! does not answer.
 
 mod support;
 
@@ -16,6 +17,7 @@ use registry_documents::config::RuntimeConfig;
 use registry_documents::content::ContentStorage;
 use registry_documents::runtime::{prepare_with_verifier, Prepared, RuntimeError};
 use registry_documents::store::PostgresStore;
+use registry_documents::transfer::TransferBudget;
 use registry_documents::verification::{
     dispatcher, VerdictSource, VerificationStore, VerificationTransport, MAXIMUM_ATTEMPTS,
 };
@@ -24,12 +26,10 @@ use registry_platform_audit::{AuditProfile, AuditWriter};
 use registry_platform_dispatch::DispatchError;
 use registry_platform_objectstore::{Verdict, VerifierError};
 use support::{
-    pdf, reservation, sha256, Api, Deployment, FakeVerifier, APPROVE, DATABASE_STORAGE,
-    DISABLED_VERIFIER, REJECT, STARTER_PROJECT, UNAVAILABLE,
+    pdf, reservation, sha256, Api, Deployment, FakeVerifier, APP, APPROVE, CITIZEN,
+    DATABASE_STORAGE, DISABLED_VERIFIER, REJECT, STARTER_PROJECT, STRANGER, UNAVAILABLE,
 };
 
-const APP: &str = "custodian-app";
-const CITIZEN: &str = "citizen-1";
 const PDF: &str = "application/pdf";
 
 async fn deployment() -> Deployment {
@@ -50,7 +50,7 @@ async fn start(deployment: &Deployment, verifier: &Arc<FakeVerifier>) -> (Prepar
 /// and version ids.
 async fn upload(api: &Api, content: &[u8]) -> (String, String) {
     let reserved = api
-        .reserve(APP, "citizen-delivery", CITIZEN, content, PDF)
+        .reserve(APP, "citizen-delivery", CITIZEN.subject, content, PDF)
         .await;
     let (document, version, path) = reservation(&reserved);
     let put = api.put(APP, &path, PDF, Body::from(content.to_vec())).await;
@@ -73,7 +73,7 @@ async fn an_uploaded_document_is_released_only_after_it_is_verified() {
     let content = pdf(4096, 7);
 
     let reserved = api
-        .reserve(APP, "citizen-delivery", CITIZEN, &content, PDF)
+        .reserve(APP, "citizen-delivery", CITIZEN.subject, &content, PDF)
         .await;
     let (document, version, path) = reservation(&reserved);
     assert_eq!(
@@ -91,31 +91,39 @@ async fn an_uploaded_document_is_released_only_after_it_is_verified() {
     assert_eq!(put.json()["version"]["expectedDigest"], sha256(&content));
     assert!(put.json()["version"]["finalizedAt"].is_string());
 
-    api.download(APP, &document, &version)
+    api.download(CITIZEN, &document, &version)
         .await
         .assert_problem(ProblemCode::DocumentVersionNotReleasable);
 
     assert_eq!(prepared.verify_due().await, 1);
     assert_eq!(status(&api.read(CITIZEN, &document).await), "ready");
 
-    for reader in [APP, CITIZEN] {
-        let released = api.download(reader, &document, &version).await;
-        assert_eq!(released.status, 200);
-        assert_eq!(released.body, content);
-        assert_eq!(released.headers["content-type"], PDF);
-        assert_eq!(released.headers["content-length"], "4096");
-        assert_eq!(released.headers["content-disposition"], "attachment");
-        assert_eq!(released.headers["cache-control"], "no-store");
-    }
+    let released = api.download(CITIZEN, &document, &version).await;
+    assert_eq!(released.status, 200);
+    assert_eq!(released.body, content);
+    assert_eq!(released.headers["content-type"], PDF);
+    assert_eq!(released.headers["content-length"], "4096");
+    assert_eq!(released.headers["content-disposition"], "attachment");
+    assert_eq!(released.headers["cache-control"], "no-store");
 
-    // A caller that is neither the custodian nor the reserving caller, and
-    // a request with no caller, learn nothing.
-    api.read("someone-else", &document)
+    // The reserving system sees the metadata it placed, never the content:
+    // custody went to the citizen.
+    let placed = api.read(APP, &document).await;
+    assert_eq!(placed.status, 200);
+    assert_eq!(placed.json()["actions"], serde_json::json!(["share", "revoke-share", "list-shares"]));
+    api.download(APP, &document, &version)
         .await
-        .assert_problem(ProblemCode::RequestNotFound);
-    api.download("someone-else", &document, &version)
+        .assert_problem(ProblemCode::ResourceNotFound);
+
+    // A caller that is neither the custodian nor the reserving caller learns
+    // nothing, and a request with no credential is refused before anything
+    // is looked up.
+    api.read(STRANGER, &document)
         .await
-        .assert_problem(ProblemCode::RequestNotFound);
+        .assert_problem(ProblemCode::ResourceNotFound);
+    api.download(STRANGER, &document, &version)
+        .await
+        .assert_problem(ProblemCode::ResourceNotFound);
     let anonymous = api
         .call(
             axum::http::Request::get(format!("/documents/{document}"))
@@ -123,7 +131,7 @@ async fn an_uploaded_document_is_released_only_after_it_is_verified() {
                 .unwrap(),
         )
         .await;
-    anonymous.assert_problem(ProblemCode::RequestNotFound);
+    anonymous.assert_problem(ProblemCode::AuthenticationRefused);
 
     // Provenance is written once, from the actor, never from the body.
     let institution: String = deployment
@@ -153,9 +161,9 @@ async fn an_uploaded_document_is_released_only_after_it_is_verified() {
         .into_iter()
         .filter(|entry| entry["record"]["outcome"] == "released")
         .count();
-    assert_eq!(released, 2);
+    assert_eq!(released, 1);
     let journal = std::fs::read_to_string(deployment.audit_path()).unwrap();
-    assert!(!journal.contains(CITIZEN), "the journal names no caller");
+    assert!(!journal.contains(CITIZEN.subject), "the journal names no caller");
 }
 
 #[tokio::test]
@@ -165,7 +173,7 @@ async fn content_that_differs_from_the_reserved_digest_or_length_never_finalizes
     let (_prepared, api) = start(&deployment, &verifier).await;
     let content = pdf(2048, 1);
     let (_, _, path) = reservation(
-        &api.reserve(APP, "citizen-delivery", CITIZEN, &content, PDF)
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &content, PDF)
             .await,
     );
 
@@ -202,7 +210,7 @@ async fn a_body_over_the_reserved_length_is_cut_off_and_keeps_nothing() {
     let (_prepared, api) = start(&deployment, &verifier).await;
     let content = pdf(1000, 3);
     let (_, _, path) = reservation(
-        &api.reserve(APP, "citizen-delivery", CITIZEN, &content, PDF)
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &content, PDF)
             .await,
     );
 
@@ -223,8 +231,7 @@ async fn a_body_over_the_reserved_length_is_cut_off_and_keeps_nothing() {
     // byte is read, and one other than the reserved length too.
     let over = api
         .call(
-            axum::http::Request::put(&path)
-                .header(support::TEST_SUBJECT_HEADER, APP)
+            support::request(APP, axum::http::Method::PUT, &path)
                 .header("content-type", PDF)
                 .header("content-length", "16777217")
                 .body(Body::empty())
@@ -234,8 +241,7 @@ async fn a_body_over_the_reserved_length_is_cut_off_and_keeps_nothing() {
     over.assert_problem(ProblemCode::RequestBodyTooLarge);
     let other = api
         .call(
-            axum::http::Request::put(&path)
-                .header(support::TEST_SUBJECT_HEADER, APP)
+            support::request(APP, axum::http::Method::PUT, &path)
                 .header("content-type", PDF)
                 .header("content-length", "999")
                 .body(Body::from(content[..999].to_vec()))
@@ -260,7 +266,7 @@ async fn a_media_type_outside_the_policy_is_refused_at_reservation_and_at_upload
     api.reserve(
         APP,
         "citizen-delivery",
-        CITIZEN,
+        CITIZEN.subject,
         b"plain text",
         "text/plain",
     )
@@ -269,7 +275,7 @@ async fn a_media_type_outside_the_policy_is_refused_at_reservation_and_at_upload
     api.reserve(
         APP,
         "citizen-delivery",
-        CITIZEN,
+        CITIZEN.subject,
         b"%PDF",
         "application/pdf; charset=binary",
     )
@@ -280,7 +286,7 @@ async fn a_media_type_outside_the_policy_is_refused_at_reservation_and_at_upload
     // recorded; the bytes are never inspected for a type.
     let png = b"\x89PNG\r\n\x1a\nnot-really-an-image".to_vec();
     let (document, version, path) = reservation(
-        &api.reserve(APP, "citizen-delivery", CITIZEN, &png, PDF)
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &png, PDF)
             .await,
     );
     api.put(APP, &path, "image/png", Body::from(png.clone()))
@@ -288,8 +294,7 @@ async fn a_media_type_outside_the_policy_is_refused_at_reservation_and_at_upload
         .assert_problem(ProblemCode::UploadContentTypeMismatch);
     let missing = api
         .call(
-            axum::http::Request::put(&path)
-                .header(support::TEST_SUBJECT_HEADER, APP)
+            support::request(APP, axum::http::Method::PUT, &path)
                 .body(Body::from(png.clone()))
                 .unwrap(),
         )
@@ -302,7 +307,7 @@ async fn a_media_type_outside_the_policy_is_refused_at_reservation_and_at_upload
         200
     );
     prepared.verify_due().await;
-    let released = api.download(APP, &document, &version).await;
+    let released = api.download(CITIZEN, &document, &version).await;
     assert_eq!(released.status, 200);
     assert_eq!(released.headers["content-type"], PDF);
     assert_eq!(released.body, png);
@@ -314,16 +319,16 @@ async fn a_document_above_the_policy_size_is_refused_before_any_byte_moves() {
     let verifier = FakeVerifier::new("binding-a", APPROVE);
     let (_prepared, api) = start(&deployment, &verifier).await;
     let digest = sha256(b"unused");
-    api.reserve_declared(APP, "citizen-delivery", CITIZEN, &digest, 16_777_217, PDF)
+    api.reserve_declared(APP, "citizen-delivery", CITIZEN.subject, &digest, 16_777_217, PDF)
         .await
         .assert_problem(ProblemCode::DocumentTooLarge);
-    api.reserve_declared(APP, "named-share", CITIZEN, &digest, 10_485_761, PDF)
+    api.reserve_declared(APP, "named-share", CITIZEN.subject, &digest, 10_485_761, PDF)
         .await
         .assert_problem(ProblemCode::DocumentTooLarge);
-    api.reserve_declared(APP, "no-such-policy", CITIZEN, &digest, 10, PDF)
+    api.reserve_declared(APP, "no-such-policy", CITIZEN.subject, &digest, 10, PDF)
         .await
         .assert_problem(ProblemCode::DocumentPolicyUnknown);
-    api.reserve_declared(APP, "citizen-delivery", CITIZEN, &digest, 0, PDF)
+    api.reserve_declared(APP, "citizen-delivery", CITIZEN.subject, &digest, 0, PDF)
         .await
         .assert_problem(ProblemCode::RequestUnprocessable);
     let reserved: i64 = deployment
@@ -339,12 +344,12 @@ async fn stored_content_that_no_longer_matches_its_digest_is_never_released() {
     let (prepared, api) = start(&deployment, &verifier).await;
     let (document, version) = upload(&api, &pdf(512, 9)).await;
     prepared.verify_due().await;
-    assert_eq!(api.download(APP, &document, &version).await.status, 200);
+    assert_eq!(api.download(CITIZEN, &document, &version).await.status, 200);
 
     deployment
         .execute("UPDATE documents_contents SET content = overlay(content placing '\\x00'::bytea from 200)")
         .await;
-    api.download(APP, &document, &version)
+    api.download(CITIZEN, &document, &version)
         .await
         .assert_problem(ProblemCode::ServiceUnavailable);
     let refused = deployment
@@ -380,7 +385,7 @@ async fn the_storage_binding_is_pinned_at_the_first_write() {
         .await;
     let content = pdf(64, 5);
     let (_, _, path) = reservation(
-        &api.reserve(APP, "citizen-delivery", CITIZEN, &content, PDF)
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &content, PDF)
             .await,
     );
     api.put(APP, &path, PDF, Body::from(content))
@@ -409,7 +414,7 @@ async fn concurrent_uploads_of_one_reservation_finalize_once() {
     let (_prepared, api) = start(&deployment, &verifier).await;
     let content = pdf(65_536, 6);
     let (_, _, path) = reservation(
-        &api.reserve(APP, "citizen-delivery", CITIZEN, &content, PDF)
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &content, PDF)
             .await,
     );
 
@@ -421,15 +426,15 @@ async fn concurrent_uploads_of_one_reservation_finalize_once() {
             tokio::spawn(async move { api.put(APP, &path, PDF, Body::from(content)).await })
         })
         .collect::<Vec<_>>();
+    // Every attempt that carries the reserved content succeeds: the losers
+    // of the finalize race are answered with the finalized view.
     let mut views = Vec::new();
     for attempt in attempts {
         let answer = attempt.await.unwrap();
-        match answer.status {
-            200 => views.push(answer.json()),
-            _ => answer.assert_problem(ProblemCode::UploadFinalized),
-        }
+        assert_eq!(answer.status, 200, "{}", String::from_utf8_lossy(&answer.body));
+        views.push(answer.json());
     }
-    assert!(!views.is_empty());
+    assert_eq!(views.len(), 8);
     assert!(views.windows(2).all(|pair| pair[0] == pair[1]));
     let contents: i64 = deployment
         .scalar("SELECT count(*) FROM documents_contents")
@@ -438,10 +443,39 @@ async fn concurrent_uploads_of_one_reservation_finalize_once() {
         .scalar("SELECT count(*) FROM documents_verification_jobs")
         .await;
     assert_eq!((contents, jobs), (1, 1));
+}
 
-    api.put(APP, &path, PDF, Body::from(content))
+/// A client that lost the answer to a finished upload may send it again:
+/// the same bytes are answered with the finalized view, and other bytes of
+/// the same length are refused without touching what was stored.
+#[tokio::test]
+async fn a_retry_after_finalize_with_the_same_content_is_answered_and_other_content_is_refused() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    let content = pdf(2048, 9);
+    let (_, _, path) = reservation(
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &content, PDF)
+            .await,
+    );
+    let first = api.put(APP, &path, PDF, Body::from(content.clone())).await;
+    assert_eq!(first.status, 200);
+
+    let retry = api.put(APP, &path, PDF, Body::from(content.clone())).await;
+    assert_eq!(retry.status, 200);
+    assert_eq!(retry.json(), first.json());
+
+    api.put(APP, &path, PDF, Body::from(pdf(2048, 10)))
         .await
         .assert_problem(ProblemCode::UploadFinalized);
+    let stored: Vec<u8> = deployment
+        .scalar("SELECT content FROM documents_contents")
+        .await;
+    assert_eq!(stored, content);
+    let jobs: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_verification_jobs")
+        .await;
+    assert_eq!(jobs, 1);
 }
 
 #[tokio::test]
@@ -463,7 +497,7 @@ async fn the_custodian_quota_holds_against_concurrent_reservations() {
             let api = api.clone();
             let digest = digest.clone();
             tokio::spawn(async move {
-                api.reserve_declared(APP, "citizen-delivery", CITIZEN, &digest, 10_000_000, PDF)
+                api.reserve_declared(APP, "citizen-delivery", CITIZEN.subject, &digest, 10_000_000, PDF)
                     .await
             })
         })
@@ -502,7 +536,7 @@ async fn the_custodian_quota_holds_against_concurrent_reservations() {
         )
         .await;
     assert_eq!(
-        api.reserve_declared(APP, "citizen-delivery", CITIZEN, &digest, 10_000_000, PDF)
+        api.reserve_declared(APP, "citizen-delivery", CITIZEN.subject, &digest, 10_000_000, PDF)
             .await
             .status,
         201
@@ -517,7 +551,7 @@ async fn a_rejected_version_is_never_released() {
     let (document, version) = upload(&api, &pdf(256, 8)).await;
     assert_eq!(prepared.verify_due().await, 1);
     assert_eq!(status(&api.read(APP, &document).await), "rejected");
-    api.download(APP, &document, &version)
+    api.download(CITIZEN, &document, &version)
         .await
         .assert_problem(ProblemCode::DocumentVersionNotReleasable);
     let job: String = deployment
@@ -547,7 +581,7 @@ async fn an_unavailable_verifier_never_releases_and_a_dead_letter_neither_approv
     assert_eq!(prepared.verify_due().await, 1);
     assert_eq!(verifier.calls.load(Ordering::SeqCst), 1);
     assert_eq!(status(&api.read(APP, &document).await), "pending");
-    api.download(APP, &document, &version)
+    api.download(CITIZEN, &document, &version)
         .await
         .assert_problem(ProblemCode::DocumentVersionNotReleasable);
     let scheduled: bool = deployment
@@ -585,7 +619,7 @@ async fn an_unavailable_verifier_never_releases_and_a_dead_letter_neither_approv
         (verification.as_str(), eligibility.as_str()),
         ("pending", "suspended")
     );
-    api.download(APP, &document, &version)
+    api.download(CITIZEN, &document, &version)
         .await
         .assert_problem(ProblemCode::DocumentVersionNotReleasable);
 }
@@ -608,7 +642,7 @@ async fn a_verifier_binding_change_at_restart_suspends_and_verifies_again() {
     let second = FakeVerifier::new("binding-b", UNAVAILABLE);
     let (restarted, api) = start(&deployment, &second).await;
     assert_eq!(status(&api.read(APP, &ready).await), "suspended");
-    api.download(APP, &ready, &ready_version)
+    api.download(CITIZEN, &ready, &ready_version)
         .await
         .assert_problem(ProblemCode::DocumentVersionNotReleasable);
     let jobs: i64 = deployment
@@ -645,7 +679,7 @@ async fn a_verifier_binding_change_at_restart_suspends_and_verifies_again() {
         ))
         .await;
     assert_eq!(binding, "binding-b");
-    assert_eq!(api.download(APP, &ready, &ready_version).await.status, 200);
+    assert_eq!(api.download(CITIZEN, &ready, &ready_version).await.status, 200);
 }
 
 /// SEC-18: while two instances run under different verifier bindings, a
@@ -846,7 +880,12 @@ async fn a_verification_audit_failure_refuses_the_claim_and_records_no_verdict()
         audit,
     ))
     .unwrap();
-    let transport = VerificationTransport::new(store, storage, verifier.clone());
+    let transport = VerificationTransport::new(
+        store,
+        storage,
+        verifier.clone(),
+        TransferBudget::new(16_777_216),
+    );
 
     let outcome = failing.dispatch_once(&transport).await;
     assert!(
@@ -900,7 +939,7 @@ async fn the_database_refuses_a_releasable_version_under_a_stale_or_mismatched_v
             "{change}: {error}"
         );
     }
-    assert_eq!(api.download(APP, &document, &version).await.status, 200);
+    assert_eq!(api.download(CITIZEN, &document, &version).await.status, 200);
 }
 
 #[tokio::test]
@@ -1000,12 +1039,12 @@ async fn an_expired_or_unknown_upload_is_refused() {
     let (_prepared, api) = start(&deployment, &verifier).await;
     let content = pdf(128, 14);
     let (_, _, path) = reservation(
-        &api.reserve(APP, "citizen-delivery", CITIZEN, &content, PDF)
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &content, PDF)
             .await,
     );
-    api.put("someone-else", &path, PDF, Body::from(content.clone()))
+    api.put(STRANGER, &path, PDF, Body::from(content.clone()))
         .await
-        .assert_problem(ProblemCode::RequestNotFound);
+        .assert_problem(ProblemCode::ResourceNotFound);
     api.put(
         APP,
         "/uploads/00000000-0000-4000-8000-000000000000/content",
@@ -1013,7 +1052,7 @@ async fn an_expired_or_unknown_upload_is_refused() {
         Body::from(content.clone()),
     )
     .await
-    .assert_problem(ProblemCode::RequestNotFound);
+    .assert_problem(ProblemCode::ResourceNotFound);
     deployment
         .execute(
             "UPDATE documents_versions
