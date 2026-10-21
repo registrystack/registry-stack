@@ -10,8 +10,9 @@ The product is pre-1.0 and held out of releases. The configuration formats,
 schemas, problem vocabulary, tooling, CI gates, and release hold-out exist.
 Custody, PostgreSQL and S3 storage, upload with digest and length checks,
 content verification on dispatch, document grants, and release of a verified
-version are implemented and served behind OAuth access-token verification.
-Retention, erasure, and hooks arrive in later changes.
+version are implemented and served behind OAuth access-token verification,
+with removal from custody and erasure by a cleanup sweep. Hooks arrive in a
+later change.
 
 ## Routes
 
@@ -32,11 +33,79 @@ contract.
 | `GET /documents/{documentId}/grants` | List every grant on a document |
 | `GET /document-grants` | List the active grants naming the caller |
 | `DELETE /document-grants/{grantId}` | Revoke a grant |
+| `POST /documents/{documentId}/erasure` | Remove a document from custody; only its custodian may, and a repeat answers the same view |
 | `GET /document-policies` | List the policies the caller may reserve under, with their bounds |
 
 A document the caller may not see answers `resource.not-found`, the same as
 one that does not exist. Lists page by `cursor` and `limit` (at most 100) in a
 stable order.
+
+## Retention and erasure
+
+A document is kept until its custodian removes it. Nothing expires on a
+timer: a grant that expires or is revoked erases nothing held in custody, and
+there is no sliding expiry. A citizen-held document is kept until the citizen
+removes it.
+
+`POST /documents/{documentId}/erasure` starts the only custody clock. In one
+transaction it suspends release, revokes every active grant on the document,
+cancels any pending verification, and marks the version `erasure-pending` with
+a due time of now plus the policy's `cleanupGraceHours`. From that commit no
+grant, download, or verdict releases the version.
+
+A cleanup sweep runs every minute. Each pass:
+
+- expires uploads whose transfer deadline lapsed, so a lapsed reservation
+  takes no more bytes;
+- arms an erasure job on `registry-platform-dispatch` for each version past
+  its due time;
+- on S3, deletes objects an upload staged but never committed once they are
+  older than the longest transfer deadline plus ten minutes.
+
+An erasure job retries for about seven days before it dead-letters; a
+dead-lettered erasure stays `erasure-pending` until an operator replays it.
+The version moves to `erased` only once erasure is confirmed:
+
+- PostgreSQL `bytea`: the content row is deleted in the same transaction that
+  records `erased`. PostgreSQL reclaims the space at its next vacuum; until
+  then the bytes sit in dead tuples no query reaches.
+- S3: the object is deleted and a following read must answer 404. A delete
+  the store accepts but does not honour leaves the version pending and is
+  retried.
+
+"Erased" means the Store can no longer serve the bytes. It does not reach
+backups, database pages before vacuum, or object-store versions the bucket
+keeps outside the Store's key. Records are kept: documents, versions, grants,
+verification history, and the audit file survive erasure, and every foreign
+key between them is `ON DELETE RESTRICT`.
+
+Set `cleanup.erasure: paused` in the runtime configuration to halt erasure
+without halting the rest of the runtime. A paused deployment still serves,
+still takes removal requests, and still expires lapsed uploads; it arms no
+erasure job, runs no erasure worker, and sweeps no orphan, and it logs a
+warning at startup. Due versions wait and are erased on the first pass after
+erasure is set back to `active` and the runtime restarts.
+
+### Restore drill
+
+Rehearse a restore before relying on one:
+
+1. Set `cleanup.erasure: paused` and stop serving traffic at the edge.
+2. Restore the database backup, and restore the audit file from the same
+   point if you have it.
+3. Start the runtime. It serves no request you have not let through, and the
+   sweep erases nothing while paused.
+4. Compare the restored state with the audit file. Revocations and erasure
+   requests newer than the backup are lost unless the audit file was
+   restored too: the database no longer knows about them, so a grant revoked
+   after the backup is active again and a document removed after the backup
+   is in custody again. Repeat them from the audit file before serving.
+5. Set `cleanup.erasure: active` and restart. The next pass handles every
+   version that became due after the backup was taken; the drill needs no
+   step for them. Bytes erased after the backup are back in the restored
+   database or bucket until their version is erased again. An S3 object
+   erased after the backup stays gone if the bucket was not restored, and
+   its restored version refuses download until it is removed again.
 
 ## Crates
 
