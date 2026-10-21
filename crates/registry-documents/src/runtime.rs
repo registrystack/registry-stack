@@ -355,7 +355,6 @@ impl Prepared {
     }
 
     /// The router this runtime serves, authentication included.
-    #[must_use]
     pub fn router(&self) -> axum::Router {
         router(self.routes.clone())
     }
