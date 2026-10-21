@@ -3075,13 +3075,9 @@
             "type": "string"
           },
           "description": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/DisplayText"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           },
           "id": {

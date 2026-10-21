@@ -728,12 +728,15 @@ fn stage_clock_findings(
                 IDENTIFIER_ACTION,
             );
         }
-        if step.because.trim().is_empty() || step.because.len() > 256 {
+        if step.because.trim().is_empty()
+            || step.because.len() > 256
+            || registry_platform_yaml::DisplayText::new(step.because.as_str()).is_err()
+        {
             findings.push(
                 "casework.clock.invalid-because",
                 format!("{at}/steps/{index}/because"),
-                "expected a reason of 1 to 256 bytes that is not only spaces",
-                "Write a short reason for the step.",
+                "expected display text of 1 to 256 bytes that is not only spaces",
+                "Write a short display-safe reason for the step.",
             );
         }
         if !queues.contains(&step.action.reassign.queue) {

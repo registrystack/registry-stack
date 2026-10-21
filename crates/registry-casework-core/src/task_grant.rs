@@ -445,6 +445,15 @@ impl TaskTemplate {
                     format!("expected 1 to {maximum} bytes with no control characters or '*'"),
                     "Write the value without control characters or '*'.",
                 );
+            } else if member == "label"
+                && registry_platform_yaml::DisplayText::new(value.as_str()).is_err()
+            {
+                findings.push(
+                    "casework.task-template.invalid-text",
+                    "/label",
+                    "the label contains a character that cannot be shown safely",
+                    "Write a display label without hidden reordering controls, line separators, byte-order marks, or Unicode noncharacters.",
+                );
             }
         }
         list_findings(&mut findings, "/eligibleTeams", &self.eligible_teams, 32);
