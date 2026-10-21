@@ -25,6 +25,7 @@ def metadata(edges: dict[str, list[str]]) -> dict:
         "evidence-client": "registry-evidence-client",
         "coordinator": "registry-coordinator",
         "coordinator-client": "registry-coordinator-client",
+        "documents-core": "registry-documents-core",
         "platform": "registry-platform-calendar",
         "serde": "serde",
     }
@@ -96,6 +97,28 @@ class DependencyDirectionTests(unittest.TestCase):
         failures = "\n".join(MODULE.violations(graph))
         self.assertIn(
             "registry-scheduling-client transitively depends on other-product package(s): registry-evidence-client",
+            failures,
+        )
+
+    def test_a_document_store_dependency_is_rejected_both_ways(self):
+        edges = {
+            "core": ["serde"],
+            "client": ["documents-core"],
+            "runtime": ["core"],
+            "ctl": ["core"],
+            "documents-core": [],
+            "platform": [],
+            "serde": [],
+        }
+        failures = "\n".join(MODULE.violations(metadata(edges)))
+        self.assertIn(
+            "registry-scheduling-client transitively depends on other-product package(s): registry-documents-core",
+            failures,
+        )
+        edges = {**edges, "client": ["core"], "documents-core": ["client"]}
+        failures = "\n".join(MODULE.violations(metadata(edges)))
+        self.assertIn(
+            "registry-documents-core transitively depends on Scheduling package(s): registry-scheduling-client, registry-scheduling-core",
             failures,
         )
 

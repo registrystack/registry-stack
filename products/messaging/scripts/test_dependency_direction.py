@@ -21,6 +21,7 @@ NAMES = {
     "breg": "registry-breg",
     "coordinator": "registry-coordinator",
     "coordinator-client": "registry-coordinator-client",
+    "documents-core": "registry-documents-core",
     "casework-core": "registry-casework-core",
     "scheduling-core": "registry-scheduling-core",
     "evidence-client": "registry-evidence-client",
@@ -40,6 +41,7 @@ INTENDED = {
     "breg": [],
     "coordinator": [],
     "coordinator-client": [],
+    "documents-core": [],
     "casework-core": [],
     "scheduling-core": [],
     "evidence-client": [],
@@ -89,6 +91,7 @@ class DependencyDirectionTests(unittest.TestCase):
             "breg",
             "casework-core",
             "coordinator",
+            "documents-core",
             "scheduling-core",
             "evidence-client",
         ):

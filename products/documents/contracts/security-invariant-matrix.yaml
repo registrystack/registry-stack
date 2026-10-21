@@ -1,0 +1,217 @@
+apiVersion: registry.registrystack.org/product-contract/v1
+product: documents
+scope: bootstrap
+evidenceStatus: source-mapped-not-executed
+evidenceNote: >-
+  Test references identify maintained proof obligations. This file does not
+  assert that any test ran or passed in a particular review. Rows whose named
+  test lives in a PostgreSQL suite are proven only when that suite runs against
+  a disposable database under the postgres-test feature.
+reviewRule: >-
+  This matrix is the baseline every later Document Store change is reviewed
+  against. A change that weakens a row rewrites the row in the same commit and
+  says why. A row may not lose its negative test. A pending row names the work
+  package that owes its enforcement and carries no test until that package
+  lands; it becomes partial or enforced only in the change that adds the
+  negative test that earns it. The runtime serves only its health route, so
+  the enforced rows cover configuration, the request edge, and the client
+  boundary; the document invariants arrive as rows with the work packages that
+  build documents.
+invariants:
+  - id: DOCUMENTS-SEC-01
+    state: enforced
+    threat: >-
+      A runtime starts on a partly valid configuration, so a refused member is
+      silently replaced by a default and the operator never learns which
+      setting the service is actually running with.
+    enforcementPoint: >-
+      The runtime reads its whole configuration through the shared platform
+      reader and its own semantic checks before it opens a database
+      connection or binds a socket, and reports every finding at once.
+    refusal: >-
+      Exit before anything binds, naming each refused member at its JSON
+      Pointer under its code.
+    negativeTest:
+      path: crates/registry-documents/src/runtime.rs
+      name: a_refused_document_reports_every_finding_before_anything_binds
+  - id: DOCUMENTS-SEC-02
+    state: enforced
+    threat: >-
+      A route the product has not designed yet answers, so a caller reaches
+      behaviour that no authorization, verification, or audit rule governs.
+    enforcementPoint: >-
+      The router declares the health route and nothing else; every other path
+      and method falls through to the request-edge problem answers.
+    refusal: >-
+      Answer 404 request.not-found or 405 request.method-not-allowed as
+      application/problem+json, with the caller's trace echoed.
+    negativeTest:
+      path: crates/registry-documents/src/http.rs
+      name: every_other_route_is_not_found
+  - id: DOCUMENTS-SEC-03
+    state: enforced
+    threat: >-
+      A production deployment connects to PostgreSQL in plaintext, exposing
+      database credentials and document metadata on the network.
+    enforcementPoint: >-
+      The runtime configuration accepts testOnlyPlaintext only in builds with
+      the postgres-test feature; an operator build refuses the member.
+    refusal: >-
+      Refuse the configuration at /database/testOnlyPlaintext before any
+      connection is attempted.
+    negativeTest:
+      path: crates/registry-documents/src/config.rs
+      name: plaintext_database_is_refused_outside_test_builds
+  - id: DOCUMENTS-SEC-04
+    state: enforced
+    threat: >-
+      An operator disables content verification on a deployment reachable by
+      others, so later versions could release bytes no verifier inspected.
+    enforcementPoint: >-
+      The runtime configuration accepts contentVerification type disabled only
+      when the listener declares development-loopback TLS termination.
+    refusal: >-
+      Refuse with documents.runtime.content-verification-disabled at
+      /contentVerification/type.
+    negativeTest:
+      path: crates/registry-documents/src/config.rs
+      name: disabled_content_verification_requires_development_loopback
+  - id: DOCUMENTS-SEC-05
+    state: enforced
+    threat: >-
+      Any client the issuer knows can call the Document Store because the
+      operator never named the clients the deployment serves.
+    enforcementPoint: >-
+      The runtime configuration requires an explicit allowedClients list; the
+      unrestricted form is refused.
+    refusal: >-
+      Refuse with documents.runtime.allowed-clients-required at
+      /authentication/oidc/allowedClients.
+    negativeTest:
+      path: crates/registry-documents/src/config.rs
+      name: unrestricted_clients_are_refused
+  - id: DOCUMENTS-SEC-06
+    state: enforced
+    threat: >-
+      A configuration diagnostic repeats the refused value, leaking a secret
+      reference, an environment variable name, or an internal host into logs
+      and CI output.
+    enforcementPoint: >-
+      Runtime and documentsctl diagnostics name the member by JSON Pointer and
+      the rule it broke, never the value read from the document.
+    refusal: >-
+      Report the finding with its pointer, code, and action, and no value.
+    negativeTest:
+      path: crates/registry-documentsctl/src/lib.rs
+      name: a_refused_runtime_configuration_names_the_finding_without_the_value
+  - id: DOCUMENTS-SEC-07
+    state: enforced
+    threat: >-
+      A relying application acts on a forged or misrouted answer: a problem
+      whose status disagrees with its code, or a response carrying another
+      request's trace.
+    enforcementPoint: >-
+      The Rust client accepts a problem only when its type, status, and trace
+      match the pinned vocabulary and the request it sent, and reads bodies
+      under a fixed bound.
+    refusal: >-
+      Surface a protocol failure instead of the problem or the answer.
+    negativeTest:
+      path: crates/registry-documents-client/tests/http_boundary.rs
+      name: a_problem_whose_trace_disagrees_is_a_protocol_failure
+  - id: DOCUMENTS-SEC-08
+    state: enforced
+    threat: >-
+      A hook or verifier destination uses plaintext HTTP outside development,
+      sending document events or verifier credentials over the network
+      unprotected.
+    enforcementPoint: >-
+      The runtime configuration reads every outbound URL through the shared
+      checked URL type and refuses http outside a development-loopback
+      deployment.
+    refusal: >-
+      Refuse with documents.runtime.insecure-url at the destination's url.
+    negativeTest:
+      path: crates/registry-documents/src/config.rs
+      name: a_plaintext_hook_destination_is_refused_outside_development
+  - id: DOCUMENTS-SEC-09
+    state: pending
+    plannedSlice: WP3
+    threat: >-
+      A caller downloads bytes that content verification has not marked
+      releasable, or bytes whose digest differs from the version requested.
+    enforcementPoint: >-
+      The download path releases a version only in the releasable state and
+      only after an exact-version and digest check.
+    refusal: >-
+      Refuse release of any version that is pending, suspended, or rejected.
+    pendingNote: >-
+      WP3 adds storage, upload, the verification worker, and release, with a
+      PostgreSQL negative test that a version never releases before it is
+      releasable.
+  - id: DOCUMENTS-SEC-10
+    state: pending
+    plannedSlice: WP4
+    threat: >-
+      A document route answers a caller without a verified bearer token, or
+      tells an unauthorized caller whether a document exists.
+    enforcementPoint: >-
+      Token verification through platform-oidc and access-profile resolution
+      run before any document route reads the store, with one uniform 404 for
+      a missing and an invisible document.
+    refusal: >-
+      Answer 401 without a verified token and 404 for every document the
+      caller may not see.
+    pendingNote: >-
+      WP4 adds authentication, access profiles, and document grants, with
+      negative tests for an absent token, a foreign client, and the existence
+      oracle.
+  - id: DOCUMENTS-SEC-11
+    state: enforced
+    threat: >-
+      A credential is taken from the process environment where the operator
+      did not mean it to be, or an authored project carries a value an
+      operator substitutes per deployment, so the reviewed project is not the
+      one that runs.
+    enforcementPoint: >-
+      The shared runtime loader refuses an environment expression in every
+      secret reference, and the project reader refuses one anywhere in
+      documents.yaml.
+    refusal: >-
+      Refuse the file with config.substitution-not-allowed at the member,
+      without reading the variable.
+    negativeTest:
+      path: crates/registry-documents/src/config.rs
+      name: shared_runtime_loader_refuses_environment_expressions_in_secret_references
+  - id: DOCUMENTS-SEC-12
+    state: enforced
+    threat: >-
+      An access profile written with an empty scope or client list reads as
+      both "nobody" and "anybody", and a later runtime resolves it to the
+      wider meaning.
+    enforcementPoint: >-
+      The project reader refuses an empty requiredScopes or requesterClients
+      list, and the published schema states the same minimum.
+    refusal: >-
+      Refuse the project at the empty member.
+    negativeTest:
+      path: crates/registry-documents-core/src/project.rs
+      name: an_empty_scope_or_client_list_is_refused_at_its_member
+  - id: DOCUMENTS-SEC-13
+    state: pending
+    plannedSlice: WP3
+    threat: >-
+      The runtime serves a project other than the one package.expectedDigest
+      pins, so a reviewed package is silently replaced.
+    enforcementPoint: >-
+      Startup verifies the package at package.root and compares its digest
+      with the pin before it reads the project or binds.
+    refusal: >-
+      Refuse to start, naming the expected and the found digest in the shared
+      shape.
+    pendingNote: >-
+      The bootstrap runtime does not open its package. WP3 reads the project
+      from the verified package, adds the digest-mismatch negative test, and
+      adds the Document Store row to the shared runtime configuration
+      conformance gate, which requires that test of every runtime holding a
+      package block.
