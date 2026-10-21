@@ -308,7 +308,7 @@ impl Lines {
         let message_indent = indent + INDENT.len();
         for relation in related {
             self.lines.push(format!(
-                "{}related{GAP}{}",
+                "{}note:{GAP}{}",
                 " ".repeat(indent),
                 styled(
                     PATH,
@@ -700,7 +700,7 @@ mod tests {
         lines.refusal_findings(&[diagnostic]);
 
         let rendered = plain(&lines.finish());
-        assert!(rendered.contains("related  recordTypes[id=case-file].id"));
+        assert!(rendered.contains("note:  recordTypes[id=case-file].id"));
         assert!(rendered.contains("the first identifier is defined here"));
     }
 
