@@ -196,6 +196,7 @@ hickory-resolver = { version = "0.26.1", default-features = false, features = ["
 hex = { version = "0.4" }
 hmac = { version = "0.13" }
 http = { version = "1" }
+http-body = { version = "1" }
 icu_casemap = { version = "~2.2.0", default-features = false, features = ["compiled_data"] }
 icu_normalizer = { version = "~2.2.0", default-features = false, features = ["compiled_data"] }
 inquire = { version = "0.9.4" }
