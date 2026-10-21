@@ -76,7 +76,11 @@ The Document Store is held out of releases.
   configured one.
 - `documentsctl verification list` and `verification replay` show
   dead-lettered verification jobs and return one to pending under its next
-  generation, audited in the `documentsctl` companion journal.
+  generation, audited in the `documentsctl` companion journal. A replay of
+  a version under removal is refused.
+- `documentsctl erasure status`, `erasure list`, and `erasure replay` report
+  the erasure state and counts and return a dead-lettered erasure job to
+  pending, audited the same way.
 - Removal from custody: `POST /documents/{documentId}/erasure`, custodian
   only, suspends release, revokes the document's active grants, cancels
   pending verification, and schedules erasure after the policy's

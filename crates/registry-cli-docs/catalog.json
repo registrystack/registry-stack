@@ -9012,7 +9012,7 @@
                 },
                 {
                   "display": "--version-id <UUID>",
-                  "description": "The document version whose verification job is replayed",
+                  "description": "The document version whose job is replayed",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -9021,7 +9021,204 @@
                 },
                 {
                   "display": "--expected-generation <GENERATION>",
-                  "description": "The generation `verification list` reported for the job",
+                  "description": "The generation the list command reported for the job",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "erasure",
+          "invocation": "documentsctl erasure",
+          "about": "Report erasure, and inspect and replay dead-lettered erasure jobs",
+          "long_about": null,
+          "usage": "documentsctl erasure [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "status",
+              "invocation": "documentsctl erasure status",
+              "about": "Report the erasure setting and how many versions wait for erasure",
+              "long_about": null,
+              "usage": "documentsctl erasure status [OPTIONS] --runtime-config <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "list",
+              "invocation": "documentsctl erasure list",
+              "about": "List the oldest dead-lettered erasure jobs",
+              "long_about": null,
+              "usage": "documentsctl erasure list [OPTIONS] --runtime-config <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--limit <COUNT>",
+                  "description": "The most dead letters to report, oldest first",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "50"
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "replay",
+              "invocation": "documentsctl erasure replay",
+              "about": "Return one dead-lettered erasure job to pending",
+              "long_about": null,
+              "usage": "documentsctl erasure replay [OPTIONS] --runtime-config <FILE> --version-id <UUID> --expected-generation <GENERATION>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--version-id <UUID>",
+                  "description": "The document version whose job is replayed",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--expected-generation <GENERATION>",
+                  "description": "The generation the list command reported for the job",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
