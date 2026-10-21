@@ -186,6 +186,12 @@ entries:
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_replay_whose_audit_request_is_refused_changes_nothing}
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_replay_whose_audit_response_is_refused_stands_and_says_so}
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_fails_closed_on_an_unwritable_audit_journal}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_refuses_a_verification_whose_content_is_being_removed}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: erasure_replay_returns_a_dead_lettered_erasure_to_pending}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: an_erasure_replay_whose_audit_request_is_refused_changes_nothing}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: an_erasure_replay_whose_audit_response_is_refused_stands_and_says_so}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: erasure_replay_fails_closed_on_an_unwritable_audit_journal}
+      - {path: crates/registry-documentsctl/src/operate.rs, name: each_replay_outcome_reports_its_own_job_code}
       - {path: crates/registry-documentsctl/tests/postgres_cli.rs, name: the_dead_letter_verbs_refuse_a_database_that_is_not_activated}
       - {path: crates/registry-documents/src/http.rs, name: every_other_route_is_not_found}
   - id: DOCUMENTS-SEC-37
@@ -195,6 +201,7 @@ entries:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: removing_a_rejected_document_revokes_its_grants}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_approval_after_a_removal_request_releases_nothing}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_verification_job_leased_across_a_removal_is_set_aside}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_refuses_a_verification_whose_content_is_being_removed}
   - id: DOCUMENTS-SEC-38
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes}
@@ -209,6 +216,7 @@ entries:
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_paused_deployment_erases_nothing}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_job_armed_before_a_pause_erases_nothing}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_replayed_erasure_waits_while_erasure_is_paused}
   - id: DOCUMENTS-SEC-41
     tests:
       - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_unconfirmed_s3_delete_keeps_the_version_pending}

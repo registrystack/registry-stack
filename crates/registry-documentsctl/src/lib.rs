@@ -12,7 +12,11 @@
 //!   writes, over the migration credential.
 //! - `verification list` and `verification replay` read the dead-lettered
 //!   content verification jobs and return one to pending under a new
-//!   generation. No HTTP route replays a job.
+//!   generation.
+//! - `erasure status` reports the erasure setting and how many versions
+//!   wait for erasure; `erasure list` and `erasure replay` do for the
+//!   dead-lettered erasure jobs what the verification commands do for
+//!   theirs. No HTTP route replays a job.
 //!
 //! Exit codes: 0 when the command succeeds, 1 when the input or the
 //! database state is refused, 2 for a usage error, and 3 when a file,
@@ -53,8 +57,8 @@ use report::{DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT, USAGE_EXIT};
 /// The largest `documents.yaml` file `check` and `package` read.
 const MAXIMUM_PROJECT_BYTES: u64 = 1024 * 1024;
 
-/// How many dead letters `verification list` reports when `--limit` is not
-/// given.
+/// How many dead letters `verification list` and `erasure list` report
+/// when `--limit` is not given.
 const DEFAULT_DEAD_LETTER_LISTING: u16 = 50;
 
 /// The next step for a command line clap refused.
@@ -93,6 +97,9 @@ enum Command {
     /// Inspect and replay dead-lettered content verification jobs.
     #[command(subcommand)]
     Verification(VerificationCommand),
+    /// Report erasure, and inspect and replay dead-lettered erasure jobs.
+    #[command(subcommand)]
+    Erasure(ErasureCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -101,6 +108,33 @@ enum VerificationCommand {
     List(ListArgs),
     /// Return one dead-lettered content verification job to pending.
     Replay(ReplayArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum ErasureCommand {
+    /// Report the erasure setting and how many versions wait for erasure.
+    Status(ActivationArgs),
+    /// List the oldest dead-lettered erasure jobs.
+    List(ListArgs),
+    /// Return one dead-lettered erasure job to pending.
+    Replay(ReplayArgs),
+}
+
+/// The kind of dead-lettered job a list or replay command reaches.
+#[derive(Clone, Copy, Debug)]
+enum Job {
+    Verification,
+    Erasure,
+}
+
+impl Job {
+    /// The member a refusal about this job names.
+    fn path(self) -> &'static str {
+        match self {
+            Self::Verification => "verification",
+            Self::Erasure => "erasure",
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -189,10 +223,10 @@ struct ListArgs {
 struct ReplayArgs {
     #[command(flatten)]
     activation: ActivationArgs,
-    /// The document version whose verification job is replayed.
+    /// The document version whose job is replayed.
     #[arg(long, value_name = "UUID")]
     version_id: Uuid,
-    /// The generation `verification list` reported for the job.
+    /// The generation the list command reported for the job.
     #[arg(
         long,
         value_name = "GENERATION",
@@ -239,8 +273,9 @@ enum View {
     Init,
     Package,
     Activation,
-    DeadLetters,
+    DeadLetters(Job),
     Replayed,
+    Erasure,
 }
 
 impl Outcome {
@@ -345,7 +380,7 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
         ),
         "audit.unconfirmed" => (
             "audit",
-            "The change stands, so do not repeat it; restore the audit destination and confirm with documentsctl status or documentsctl verification list.",
+            "The change stands, so do not repeat it; restore the audit destination and confirm with documentsctl status, documentsctl verification list, or documentsctl erasure list.",
         ),
         "documents.verification.outcome-unknown" => (
             "verification-job",
@@ -400,6 +435,26 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
         "documents.verification.stale-generation" => (
             "verification-job",
             "Run documentsctl verification list and pass the generation it reports as --expected-generation.",
+        ),
+        "documents.verification.removal-requested" => (
+            "verification-job",
+            "Leave the job: content whose removal was requested is never verified again. See its erasure with documentsctl erasure status.",
+        ),
+        "documents.erasure.not-found" => (
+            "erasure-job",
+            "Find the version id with documentsctl erasure list.",
+        ),
+        "documents.erasure.not-dead-lettered" | "documents.erasure.changed" => (
+            "erasure-job",
+            "Run documentsctl erasure list and replay only a job it reports.",
+        ),
+        "documents.erasure.stale-generation" => (
+            "erasure-job",
+            "Run documentsctl erasure list and pass the generation it reports as --expected-generation.",
+        ),
+        "documents.erasure.outcome-unknown" => (
+            "erasure-job",
+            "Run documentsctl erasure list to see whether the job is still dead-lettered before replaying it again.",
         ),
         _ if exit == OPERATIONAL_FAILURE_EXIT => (
             "runtime-dependency",
@@ -463,10 +518,25 @@ where
             &args.backups,
         ),
         Command::Status(args) => operate::status(&args.runtime_config),
-        Command::Verification(VerificationCommand::List(args)) => {
-            operate::dead_letters(&args.activation.runtime_config, args.limit)
-        }
+        Command::Verification(VerificationCommand::List(args)) => operate::dead_letters(
+            Job::Verification,
+            &args.activation.runtime_config,
+            args.limit,
+        ),
         Command::Verification(VerificationCommand::Replay(args)) => operate::replay(
+            Job::Verification,
+            &args.activation.runtime_config,
+            args.version_id,
+            args.expected_generation,
+        ),
+        Command::Erasure(ErasureCommand::Status(args)) => {
+            operate::erasure_status(&args.runtime_config)
+        }
+        Command::Erasure(ErasureCommand::List(args)) => {
+            operate::dead_letters(Job::Erasure, &args.activation.runtime_config, args.limit)
+        }
+        Command::Erasure(ErasureCommand::Replay(args)) => operate::replay(
+            Job::Erasure,
             &args.activation.runtime_config,
             args.version_id,
             args.expected_generation,
@@ -486,6 +556,9 @@ fn command_path(command: &Command) -> &'static str {
         Command::Status(_) => "status",
         Command::Verification(VerificationCommand::List(_)) => "verification list",
         Command::Verification(VerificationCommand::Replay(_)) => "verification replay",
+        Command::Erasure(ErasureCommand::Status(_)) => "erasure status",
+        Command::Erasure(ErasureCommand::List(_)) => "erasure list",
+        Command::Erasure(ErasureCommand::Replay(_)) => "erasure replay",
     }
 }
 
@@ -776,13 +849,18 @@ fn render_human(
             writeln!(stdout, "package digest: {}", text(&report["packageDigest"]))
         }
         View::Activation => render_activation(report, stdout),
-        View::DeadLetters => {
+        View::DeadLetters(job) => {
             let letters = report["deadLetters"]
                 .as_array()
                 .cloned()
                 .unwrap_or_default();
             if letters.is_empty() {
-                return writeln!(stdout, "no dead-lettered content verification jobs");
+                return match job {
+                    Job::Verification => {
+                        writeln!(stdout, "no dead-lettered content verification jobs")
+                    }
+                    Job::Erasure => writeln!(stdout, "no dead-lettered erasure jobs"),
+                };
             }
             for letter in &letters {
                 writeln!(
@@ -802,6 +880,12 @@ fn render_human(
             text(&report["versionId"]),
             report["generation"],
         ),
+        View::Erasure => {
+            writeln!(stdout, "erasure: {}", text(&report["erasure"]))?;
+            writeln!(stdout, "awaiting grace: {}", report["awaitingGrace"])?;
+            writeln!(stdout, "due: {}", report["due"])?;
+            writeln!(stdout, "dead-lettered: {}", report["deadLettered"])
+        }
     }
 }
 
@@ -1322,6 +1406,12 @@ mod tests {
             "documents.verification.stale-generation",
             "documents.verification.changed",
             "documents.verification.outcome-unknown",
+            "documents.verification.removal-requested",
+            "documents.erasure.not-found",
+            "documents.erasure.not-dead-lettered",
+            "documents.erasure.stale-generation",
+            "documents.erasure.changed",
+            "documents.erasure.outcome-unknown",
             "audit.unconfirmed",
             "audit.unavailable",
             "package.outcome-unknown",

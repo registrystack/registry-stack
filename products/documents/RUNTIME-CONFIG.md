@@ -99,8 +99,8 @@ before it opens a connection or binds a socket. It then, in order:
 6. binds the listener, serves `GET /health` and the document routes, and
    runs the content verification worker until shutdown.
 
-`documentsctl plan`, `apply`, `status`, and `verification list` and `replay`
-read this same document. They write their audit records to a companion
+`documentsctl plan`, `apply`, `status`, `verification list` and `replay`, and
+`erasure status`, `list`, and `replay` read this same document. They write their audit records to a companion
 journal under the `documentsctl` process name, beside the runtime's file
 journal, so they never contend for the running service's journal.
 

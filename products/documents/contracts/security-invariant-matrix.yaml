@@ -596,21 +596,29 @@ invariants:
     state: enforced
     threat: >-
       A caller over HTTP, or a stale operator command, returns a dead-lettered
-      verification to the queue, so a version is re-verified outside the
-      operator's deliberate step or a replay races a newer one.
+      verification or erasure to the queue, so a version is re-verified or
+      erased outside the operator's deliberate step, a replay races a newer
+      one, or content whose removal was requested is verified again.
     enforcementPoint: >-
-      Replay exists only as documentsctl verification replay, over the
-      runtime credential against an activated database; no HTTP route
-      reaches it. The replay names the job's current generation, bumps it,
-      returns the job to pending without approving or releasing the version,
-      and records the replay in the operator's companion audit journal.
+      Replay exists only as documentsctl verification replay and
+      documentsctl erasure replay, over the runtime credential against an
+      activated database; no HTTP route reaches either. A replay names the
+      job's current generation, bumps it, returns the job to pending without
+      approving, releasing, or erasing anything itself, and records the
+      replay in the operator's companion audit journal. A verification
+      replay first reads the version and refuses one whose erasure is
+      pending or done or whose document has a removal requested.
     refusal: >-
       Refuse an unactivated database with
       documentsctl.activation.not-activated, an unknown version with
-      documents.verification.not-found, a job that is not dead-lettered
-      with documents.verification.not-dead-lettered, and a generation
-      other than the current one with
-      documents.verification.stale-generation; each changes nothing.
+      documents.verification.not-found or documents.erasure.not-found, a
+      job that is not dead-lettered with
+      documents.verification.not-dead-lettered or
+      documents.erasure.not-dead-lettered, a generation other than the
+      current one with documents.verification.stale-generation or
+      documents.erasure.stale-generation, and a verification of content
+      being removed with documents.verification.removal-requested; each
+      changes nothing.
     negativeTest:
       path: crates/registry-documents/tests/postgres_operator.rs
       name: replay_refuses_an_unknown_version_and_an_unactivated_database

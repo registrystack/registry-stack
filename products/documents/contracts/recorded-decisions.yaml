@@ -293,9 +293,11 @@ decisions:
     decision: >-
       documentsctl verification list shows dead-lettered verification jobs
       and documentsctl verification replay returns one to pending under its
-      next generation. Both use the runtime credential against an activated
-      database and write the replay to the documentsctl companion audit
-      journal. No HTTP route lists or replays a job.
+      next generation; documentsctl erasure list and erasure replay do the
+      same for erasure jobs, the only way back for a dead-lettered erasure,
+      which the sweep never re-arms. All use the runtime credential against
+      an activated database and write the replay to the documentsctl
+      companion audit journal. No HTTP route lists or replays a job.
     reasoning: >-
       A replay re-queues work the dispatcher already owns, so it needs no
       authority beyond the runtime's. Keeping it off HTTP leaves no caller
@@ -303,6 +305,7 @@ decisions:
       issued from a stale listing fail rather than race.
     evidence:
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_returns_a_dead_lettered_verification_to_pending}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: erasure_replay_returns_a_dead_lettered_erasure_to_pending}
       - {path: crates/registry-documentsctl/tests/postgres_cli.rs, name: the_dead_letter_verbs_refuse_a_database_that_is_not_activated}
   - id: DOCUMENTS-DEC-19
     subject: Grant expiry and revocation erase nothing held in custody

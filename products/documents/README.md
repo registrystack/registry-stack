@@ -203,9 +203,18 @@ documentsctl verification replay --runtime-config ABSOLUTE_FILE \
 ```
 
 returns it to pending under the next generation, to be verified like any
-other. A generation other than the current one is refused. The replay is
-written to the `documentsctl` companion audit journal. No HTTP route lists or
-replays a job.
+other. A generation other than the current one is refused, and so is a
+version whose erasure is pending or done or whose document has a removal
+requested. The replay is written to the `documentsctl` companion audit
+journal. No HTTP route lists or replays a job.
+
+`documentsctl erasure status --runtime-config ABSOLUTE_FILE` reports whether
+erasure is active or paused and counts the versions awaiting their grace, the
+ones due, and the dead-lettered erasure jobs. A dead-lettered erasure is never
+re-armed by the sweep: `documentsctl erasure list` shows each one with its
+generation, and `documentsctl erasure replay`, with the same `--version-id`
+and `--expected-generation` options, returns it to pending, audited the same
+way. While erasure is paused a replayed job waits.
 
 ## Generated files
 

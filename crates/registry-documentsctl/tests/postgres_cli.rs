@@ -233,6 +233,48 @@ async fn init_package_plan_apply_and_status_activate_a_starter_deployment() {
         refused["diagnostics"][0]["code"],
         "documents.verification.not-found"
     );
+
+    let (code, erasure) = ctl(&["erasure", "status", "--runtime-config", &runtime]);
+    assert_eq!(code, 0, "{erasure:#}");
+    assert_eq!(erasure["command"], "erasure status");
+    assert_eq!(erasure["status"], "complete");
+    assert_eq!(erasure["erasure"], "active");
+    assert_eq!(erasure["awaitingGrace"], 0);
+    assert_eq!(erasure["due"], 0);
+    assert_eq!(erasure["deadLettered"], 0);
+    let output = Command::new(env!("CARGO_BIN_EXE_documentsctl"))
+        .args(["erasure", "status", "--runtime-config", &runtime])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "erasure: active\nawaiting grace: 0\ndue: 0\ndead-lettered: 0\n"
+    );
+
+    let (code, listed) = ctl(&["erasure", "list", "--runtime-config", &runtime]);
+    assert_eq!(code, 0, "{listed:#}");
+    assert_eq!(listed["command"], "erasure list");
+    assert_eq!(listed["deadLetters"], serde_json::json!([]));
+
+    let (code, refused) = ctl(&[
+        "erasure",
+        "replay",
+        "--runtime-config",
+        &runtime,
+        "--version-id",
+        &Uuid::new_v4().to_string(),
+        "--expected-generation",
+        "1",
+    ]);
+    assert_eq!(code, 1, "{refused:#}");
+    assert_eq!(refused["command"], "erasure replay");
+    assert_eq!(
+        refused["diagnostics"][0]["code"],
+        "documents.erasure.not-found"
+    );
+    assert_eq!(refused["diagnostics"][0]["path"], "erasure");
 }
 
 #[tokio::test]
@@ -244,6 +286,18 @@ async fn the_dead_letter_verbs_refuse_a_database_that_is_not_activated() {
         vec!["verification", "list", "--runtime-config", &runtime],
         vec![
             "verification",
+            "replay",
+            "--runtime-config",
+            &runtime,
+            "--version-id",
+            "00000000-0000-4000-8000-000000000001",
+            "--expected-generation",
+            "1",
+        ],
+        vec!["erasure", "status", "--runtime-config", &runtime],
+        vec!["erasure", "list", "--runtime-config", &runtime],
+        vec![
+            "erasure",
             "replay",
             "--runtime-config",
             &runtime,
