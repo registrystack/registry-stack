@@ -439,9 +439,13 @@ DOCUMENTS-DEC-26:
   orphan sweep; serving, removal requests, and upload expiry continue.
 - Upload expiry runs on every pass: a reservation whose upload window
   (`upload_expires_at`, the reservation time plus the policy's
-  `cleanupGraceHours`) lapsed is expired and takes no more bytes. On S3, an uncommitted object
-  older than the longest transfer deadline plus ten minutes is deleted, and
-  its staging row with it, so the sweep never races a live upload.
+  `cleanupGraceHours`) lapsed is expired and takes no more bytes. On S3,
+  an uncommitted object older than the longest transfer deadline plus ten
+  minutes is deleted, and its staging row with it. An upload whose commit
+  arrives after that finds no staging row and is refused, so no object is
+  left that no row names. An object whose delete fails is skipped for the
+  rest of the pass and counted, the count logged once per pass, and the
+  next pass retries it.
 - Every foreign key in the schema is `ON DELETE RESTRICT`, with the choice
   stated beside it. Erasure deletes bytes and keeps documents, versions,
   grants, verification history, and idempotency receipts. One CHECK holds

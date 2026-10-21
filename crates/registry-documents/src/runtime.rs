@@ -188,6 +188,7 @@ impl Cleanup {
                         expired_uploads = pass.expired_uploads,
                         armed_erasures = pass.armed_erasures,
                         erased_orphans = pass.erased_orphans,
+                        failed_orphans = pass.failed_orphans,
                         "a cleanup pass finished"
                     );
                 }
