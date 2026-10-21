@@ -2183,3 +2183,63 @@ fn failing_audit() -> DocumentsAudit {
         .key_hasher(),
     )
 }
+
+/// A request body that records whether anything read it.
+fn watched_body(polled: &Arc<AtomicBool>) -> Body {
+    let polled = polled.clone();
+    Body::from_stream(futures::stream::once(async move {
+        polled.store(true, Ordering::SeqCst);
+        Ok::<_, std::io::Error>(Bytes::from_static(b"{}"))
+    }))
+}
+
+#[tokio::test]
+async fn a_json_body_is_not_read_before_the_caller_is_authenticated() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("none", APPROVE);
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    let document = Uuid::new_v4();
+    for path in [
+        "/documents".to_owned(),
+        format!("/documents/{document}/grants"),
+    ] {
+        for authorization in [None, Some("Bearer not-a-token")] {
+            let polled = Arc::new(AtomicBool::new(false));
+            let mut request = axum::http::Request::builder()
+                .method("POST")
+                .uri(&path)
+                .header("content-type", "application/json")
+                .header("idempotency-key", "unauthenticated-body");
+            if let Some(value) = authorization {
+                request = request.header("authorization", value);
+            }
+            let answer = api.call(request.body(watched_body(&polled)).unwrap()).await;
+            answer.assert_problem(ProblemCode::AuthenticationRefused);
+            assert!(
+                !polled.load(Ordering::SeqCst),
+                "{path} read the body of an unauthenticated request"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_authenticated_json_body_over_the_limit_is_refused_as_too_large() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("none", APPROVE);
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    let chunk = Bytes::from(vec![b' '; 64 * 1024]);
+    let body = Body::from_stream(futures::stream::iter(
+        (0..17).map(move |_| Ok::<_, std::io::Error>(chunk.clone())),
+    ));
+    let answer = api
+        .call(
+            support::request(APP, axum::http::Method::POST, "/documents")
+                .header("content-type", "application/json")
+                .header("idempotency-key", "oversized-body")
+                .body(body)
+                .unwrap(),
+        )
+        .await;
+    answer.assert_problem(ProblemCode::RequestBodyTooLarge);
+}
