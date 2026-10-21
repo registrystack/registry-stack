@@ -124,6 +124,12 @@ accepted reference through the explicitly enabled environment or file provider.
   `authorizationRef`, `policyId`, and `attemptTimeoutMilliseconds`. The block
   has no default; a product that makes verification optional states its own
   disabled form beside it.
+- `UrlHookDestinationConfig`: one signed URL hook destination: a checked
+  `url`, `hmacSha256KeyRef`, `attemptTimeoutMilliseconds` (default 5000, from
+  100 to 10000), and `maximumAttempts` (default 8, from 1 to 20). A product
+  holds them as a map of at most 128 entries keyed by a local identifier
+  through `url_hook_destinations`. `registry-platform-hooks` activates the
+  block under a fixed outbound policy: https, or http on a loopback host.
 
 ## Package
 

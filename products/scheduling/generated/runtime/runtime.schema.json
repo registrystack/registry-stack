@@ -135,8 +135,9 @@
       "properties": {
         "hooks": {
           "additionalProperties": {
-            "$ref": "#/$defs/HookDestinationConfig"
+            "$ref": "#/$defs/UrlHookDestinationConfig"
           },
+          "default": {},
           "description": "Logical URL hook destinations. The governed policy names only these\nids; URL, signing secret, and retry ceilings stay deployment-owned.\nAt most 128 are bound, each keyed by a local identifier.",
           "maxProperties": 128,
           "propertyNames": {
@@ -179,39 +180,6 @@
       },
       "required": [
         "root"
-      ],
-      "type": "object"
-    },
-    "HookDestinationConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "attemptTimeoutMilliseconds": {
-          "default": 5000,
-          "description": "How long one delivery attempt may take, from 100 through 10000\nmilliseconds.",
-          "format": "uint32",
-          "maximum": 10000,
-          "minimum": 100,
-          "type": "integer"
-        },
-        "hmacSha256KeyRef": {
-          "$ref": "#/$defs/SecretReference"
-        },
-        "maximumAttempts": {
-          "default": 8,
-          "description": "How many delivery attempts one event gets, from 1 through 20.",
-          "format": "uint8",
-          "maximum": 20,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "url": {
-          "$ref": "#/$defs/Url",
-          "description": "An https URL, or http on 127.0.0.1, localhost, or [::1], without a\nquery or fragment."
-        }
-      },
-      "required": [
-        "url",
-        "hmacSha256KeyRef"
       ],
       "type": "object"
     },
@@ -565,6 +533,40 @@
       "maxLength": 2048,
       "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
       "type": "string"
+    },
+    "UrlHookDestinationConfig": {
+      "additionalProperties": false,
+      "description": "One URL hook destination a runtime signs and sends hook deliveries to:\nthe URL, the HMAC-SHA256 key reference, and the delivery budget. The\noutbound policy is fixed: `registry-platform-hooks` activates it with no\nprivate address range and no client certificate. A runtime whose\ndestinations need either configures its own full outbound policy instead.",
+      "properties": {
+        "attemptTimeoutMilliseconds": {
+          "default": 5000,
+          "description": "How long one delivery attempt may take, from 100 through 10000\nmilliseconds.",
+          "format": "uint32",
+          "maximum": 10000,
+          "minimum": 100,
+          "type": "integer"
+        },
+        "hmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "maximumAttempts": {
+          "default": 8,
+          "description": "How many delivery attempts one event gets, from 1 through 20.",
+          "format": "uint8",
+          "maximum": 20,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "url": {
+          "$ref": "#/$defs/Url",
+          "description": "An https URL, or http on 127.0.0.1, localhost, or [::1], without a\nquery or fragment."
+        }
+      },
+      "required": [
+        "url",
+        "hmacSha256KeyRef"
+      ],
+      "type": "object"
     }
   },
   "$id": "https://id.registrystack.org/schemas/scheduling/runtime/runtime.v1alpha1.schema.json",

@@ -822,8 +822,9 @@ The reader refuses unknown keys in the same positions (CFG-SCHEMA-8).
 defines `ListenerConfig`, `PrivateListenerConfig`, `DatabaseConfig`,
 `OidcIssuerConfig`, `OidcClientsConfig`, `JwksSource`, `AuditKeyConfig`,
 `SecretProvidersConfig`, `SecretReference`, `TaskGrantStatusConfig`,
-`ObjectStorageConfig`, `AttachmentVerifierConfig`, `IdentityConfig`,
-`ProjectIdentity`, `Url`, `LocalId`, `ExternalId`, and `Digest`. A product
+`ObjectStorageConfig`, `AttachmentVerifierConfig`,
+`UrlHookDestinationConfig`, `IdentityConfig`, `ProjectIdentity`, `Url`,
+`LocalId`, `ExternalId`, and `Digest`. A product
 embeds a shared definition unchanged under its shared name, or flattens a
 shared block from the platform crate, and never declares its own type for a
 concept a shared block covers, whatever its shape. A shared block held as the

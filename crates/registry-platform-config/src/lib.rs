@@ -18,18 +18,22 @@ mod secrets;
 
 use sha2::{Digest, Sha256};
 
+#[cfg(feature = "schema")]
+pub use blocks::url_hook_destinations_schema;
 pub use blocks::{
-    describe_secret_failure, is_sha256_label, AttachmentVerifierConfig, AttemptTimeoutMilliseconds,
-    AuditKeyConfig, ConfigBlockError, ConfigBlockErrorKind, DatabaseConfig,
-    EnvironmentSecretProviderConfig, FileSecretProviderConfig, JwksSource, ListenerBind,
-    ListenerConfig, ListenerNetworkExposure, ObjectStorageConfig, OidcClientsConfig,
+    describe_secret_failure, is_sha256_label, url_hook_destinations, AttachmentVerifierConfig,
+    AttemptTimeoutMilliseconds, AuditKeyConfig, ConfigBlockError, ConfigBlockErrorKind,
+    DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig, JwksSource,
+    ListenerBind, ListenerConfig, ListenerNetworkExposure, ObjectStorageConfig, OidcClientsConfig,
     OidcIssuerConfig, PackageConfig, PackageDigestMismatch, PrivateListenerConfig,
-    SecretProvidersConfig, TaskGrantStatusConfig, TlsTermination,
-    DEFAULT_ATTEMPT_TIMEOUT_MILLISECONDS, DEFAULT_TASK_GRANT_STATUS_PATH,
-    DEFAULT_TASK_GRANT_STATUS_SCOPE, MAX_ASSERTION_ISSUERS_PER_CLIENT, MAX_ASSERTION_ISSUER_BYTES,
-    MAX_ASSERTION_ISSUER_CLIENTS, MAX_ASSERTION_ISSUER_CLIENT_BYTES,
-    MAX_ATTEMPT_TIMEOUT_MILLISECONDS, MAX_LISTENER_BIND_CHARACTERS, MAX_OIDC_AUDIENCE_CHARACTERS,
-    MIN_ATTEMPT_TIMEOUT_MILLISECONDS,
+    SecretProvidersConfig, TaskGrantStatusConfig, TlsTermination, UrlHookDestinationConfig,
+    DEFAULT_ATTEMPT_TIMEOUT_MILLISECONDS, DEFAULT_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
+    DEFAULT_HOOK_MAXIMUM_ATTEMPTS, DEFAULT_TASK_GRANT_STATUS_PATH, DEFAULT_TASK_GRANT_STATUS_SCOPE,
+    MAX_ASSERTION_ISSUERS_PER_CLIENT, MAX_ASSERTION_ISSUER_BYTES, MAX_ASSERTION_ISSUER_CLIENTS,
+    MAX_ASSERTION_ISSUER_CLIENT_BYTES, MAX_ATTEMPT_TIMEOUT_MILLISECONDS, MAX_HOOK_ATTEMPTS,
+    MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS, MAX_HOOK_DESTINATIONS, MAX_LISTENER_BIND_CHARACTERS,
+    MAX_OIDC_AUDIENCE_CHARACTERS, MIN_ATTEMPT_TIMEOUT_MILLISECONDS,
+    MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
 };
 pub use loader::{
     contains_environment_expression, reject_environment_expressions_in_authored_yaml,

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `destinations.hooks` entries are the shared `UrlHookDestinationConfig`
+  block from `registry-platform-config`, activated by
+  `registry-platform-hooks`. The keys, bounds, defaults, refusals, and the
+  recorded binding digest are unchanged; the runtime schema names the
+  definition `UrlHookDestinationConfig` instead of `HookDestinationConfig`.
 - BREAKING: the hook delivery worker checks its identity against the
   activation record instead of the `scheduling_meta` row. Every claim,
   finalization, and replay transaction now requires the active activation in

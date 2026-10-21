@@ -15,12 +15,12 @@ use std::time::{Duration, SystemTime};
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::SecretResolver;
 use registry_platform_hooks::delivery::{
-    hook_audit_entry, insert_delivery, url_destination_address, verify_active_package,
-    DeliveryAuditRecord, DeliveryCapture, DeliveryConfig, DeliveryConnection, DeliveryError,
-    DeliveryOperationalEvent, DeliveryOutcome, DeliverySeams, DeliveryService, DeliveryWorker,
-    HookHandlerBinding, NoLocalHandler, PooledConnection, ProposalApplication, ProposalOutcome,
-    ProposalReceiptRecovery, SharedUrlDestination, UrlDestination, UrlDestinationError,
-    UrlDestinationParts,
+    activate_url_hook_destinations, hook_audit_entry, insert_delivery, verify_active_package,
+    ActivatedUrlHookDestinations, DeliveryAuditRecord, DeliveryCapture, DeliveryConfig,
+    DeliveryConnection, DeliveryError, DeliveryOperationalEvent, DeliveryOutcome, DeliverySeams,
+    DeliveryService, DeliveryWorker, HookHandlerBinding, NoLocalHandler, PooledConnection,
+    ProposalApplication, ProposalOutcome, ProposalReceiptRecovery, SharedUrlDestination,
+    UrlHookActivationError, UrlHookDestinationConfig,
 };
 use registry_platform_hooks::{
     exponential_retry_delays_ms, validate_hooks, BoundedText, Causation, EnvelopeLimits,
@@ -28,9 +28,7 @@ use registry_platform_hooks::{
     HookEnvelope, HookHandlerKind, HookHandlerSource, HookPhase, MAX_REFUSAL_CODE_BYTES,
     MAX_REFUSAL_SUMMARY_BYTES,
 };
-use registry_platform_httputil::destination::{
-    EventDestinationPolicy, MAX_DESTINATION_REQUEST_BODY_BYTES,
-};
+use registry_platform_httputil::destination::MAX_DESTINATION_REQUEST_BODY_BYTES;
 use registry_scheduling_core::{
     valid_identifier, APPOINTMENT_CANCELLED_TRIGGER, APPOINTMENT_CONFIRMED_TRIGGER,
     APPOINTMENT_OBSERVER_FIELDS, APPOINTMENT_RESCHEDULED_TRIGGER, CANCELLATION_OBSERVER_FIELDS,
@@ -43,8 +41,7 @@ use uuid::Uuid;
 
 use crate::audit::{SchedulingAudit, SCHEDULING_AUDIT_SCHEMA};
 use crate::config::{
-    valid_logical_destination_id, HookDestinationConfig, MAX_HOOK_ATTEMPTS,
-    MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
+    valid_logical_destination_id, MAX_HOOK_ATTEMPTS, MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
 };
 use crate::store::{activation_layout, ClaimRow, PostgresStore};
 
@@ -264,7 +261,7 @@ impl ActivatedHooks {
     #[allow(clippy::too_many_arguments)]
     pub fn activate(
         declarations: &[HookDeclaration],
-        configured: &BTreeMap<String, HookDestinationConfig>,
+        configured: &BTreeMap<String, UrlHookDestinationConfig>,
         secrets: &SecretResolver,
         identity: HookRuntimeIdentity,
         database_schema: String,
@@ -272,7 +269,7 @@ impl ActivatedHooks {
     ) -> Result<Self, HookActivationError> {
         let compiled = Arc::new(CompiledHooks::compile(declarations)?);
         validate_identity(&identity, &database_schema, payload_retention)?;
-        let destinations = Arc::new(ActivatedDestinations::activate(
+        let destinations = Arc::new(activate_destinations(
             &compiled.destination_ids,
             configured,
             secrets,
@@ -300,11 +297,11 @@ impl ActivatedHooks {
     /// candidate's hooks cannot run before anything is planned or applied.
     pub fn check_destinations(
         declarations: &[HookDeclaration],
-        configured: &BTreeMap<String, HookDestinationConfig>,
+        configured: &BTreeMap<String, UrlHookDestinationConfig>,
         secrets: &SecretResolver,
     ) -> Result<(), HookActivationError> {
         let compiled = CompiledHooks::compile(declarations)?;
-        ActivatedDestinations::activate(&compiled.destination_ids, configured, secrets)?;
+        activate_destinations(&compiled.destination_ids, configured, secrets)?;
         Ok(())
     }
 
@@ -506,84 +503,40 @@ impl ActivatedHooks {
     }
 }
 
-#[derive(Clone)]
-struct ActivatedDestinations {
-    bindings: BTreeMap<String, Arc<UrlDestination>>,
-    binding_digest: String,
-}
+/// Scheduling's activated destinations: the shared URL hook destination
+/// block, activated under Scheduling's binding schema.
+type ActivatedDestinations = ActivatedUrlHookDestinations;
 
-impl ActivatedDestinations {
-    fn activate(
-        expected: &BTreeSet<String>,
-        configured: &BTreeMap<String, HookDestinationConfig>,
-        secrets: &SecretResolver,
-    ) -> Result<Self, HookActivationError> {
-        let configured_ids = configured.keys().cloned().collect::<BTreeSet<_>>();
-        if !expected.is_subset(&configured_ids) {
-            return Err(HookActivationError::DestinationInventoryMismatch);
-        }
-        let mut bindings = BTreeMap::new();
-        let mut digest_values = Vec::with_capacity(configured.len());
-        for (logical_id, config) in configured {
-            let (destination, digest_value) = activate_destination(logical_id, config, secrets)?;
-            digest_values.push(digest_value);
-            bindings.insert(logical_id.clone(), Arc::new(destination));
-        }
-        let binding_digest = canonical_digest(&json!({
-            "schemaVersion": DESTINATION_BINDING_SCHEMA,
-            "destinations": digest_values,
-        }))
-        .map_err(|_| HookActivationError::InvalidDestination)?;
-        Ok(Self {
-            bindings,
-            binding_digest,
-        })
-    }
-}
-
-/// Activate one configured destination, returning it with the non-secret
-/// value its binding digest and the inventory digest cover.
-fn activate_destination(
-    logical_id: &str,
-    config: &HookDestinationConfig,
+/// Activate the configured destination inventory, which must cover every
+/// destination `expected` names.
+fn activate_destinations(
+    expected: &BTreeSet<String>,
+    configured: &BTreeMap<String, UrlHookDestinationConfig>,
     secrets: &SecretResolver,
-) -> Result<(UrlDestination, Value), HookActivationError> {
-    if !valid_logical_destination_id(logical_id) || !config.within_delivery_budget() {
-        return Err(HookActivationError::DeliveryBudgetWidening);
+) -> Result<ActivatedDestinations, HookActivationError> {
+    let configured_ids = configured.keys().cloned().collect::<BTreeSet<_>>();
+    if !expected.is_subset(&configured_ids) {
+        return Err(HookActivationError::DestinationInventoryMismatch);
     }
-    let address = url_destination_address(&config.url)
-        .map_err(|_| HookActivationError::InvalidDestination)?;
-    let policy = EventDestinationPolicy::new(logical_id, &address.origin, address.profile, &[])
-        .map_err(|_| HookActivationError::InvalidDestination)?;
-    let hmac_sha256_key = secrets
-        .resolve(&config.hmac_sha256_key_ref)
-        .map_err(|_| HookActivationError::InvalidSigningMaterial)?;
-    let digest_value = json!({
-        "logicalId": logical_id,
-        "url": config.url,
-        "hmacSha256KeyRef": config.hmac_sha256_key_ref,
-        "attemptTimeoutMilliseconds": config.attempt_timeout_milliseconds,
-        "maximumAttempts": config.maximum_attempts,
-    });
-    let binding_digest = canonical_digest(&json!({
-        "schemaVersion": DESTINATION_BINDING_SCHEMA,
-        "destination": digest_value,
-    }))
-    .map_err(|_| HookActivationError::InvalidDestination)?;
-    let destination = UrlDestination::new(UrlDestinationParts {
-        binding_digest,
-        request_target: address.request_target,
-        policy,
-        maximum_payload_bytes: MAXIMUM_PAYLOAD_BYTES,
-        hmac_sha256_key,
-        attempt_timeout: Duration::from_millis(u64::from(config.attempt_timeout_milliseconds)),
-        maximum_attempts: config.maximum_attempts,
-    })
-    .map_err(|error| match error {
-        UrlDestinationError::InvalidBinding => HookActivationError::InvalidDestination,
-        UrlDestinationError::InvalidSigningMaterial => HookActivationError::InvalidSigningMaterial,
-    })?;
-    Ok((destination, digest_value))
+    activate_url_hook_destinations(
+        DESTINATION_BINDING_SCHEMA,
+        configured,
+        secrets,
+        MAXIMUM_PAYLOAD_BYTES,
+    )
+    .map_err(activation_error)
+}
+
+fn activation_error(error: UrlHookActivationError) -> HookActivationError {
+    match error {
+        UrlHookActivationError::DeliveryBudgetWidening => {
+            HookActivationError::DeliveryBudgetWidening
+        }
+        UrlHookActivationError::InvalidDestination => HookActivationError::InvalidDestination,
+        UrlHookActivationError::InvalidSigningMaterial => {
+            HookActivationError::InvalidSigningMaterial
+        }
+    }
 }
 
 /// The delays between attempts: from 30 seconds, doubling, capped at one
@@ -886,8 +839,12 @@ fn bounded_proposal_summary(value: &'static str) -> BoundedText<MAX_REFUSAL_SUMM
 #[cfg(test)]
 mod tests {
     use chrono::{TimeDelta, Utc};
-    use registry_platform_config::SecretProvider;
+    use registry_platform_config::{SecretProvider, SecretReference};
+    use registry_platform_hooks::delivery::{
+        activate_url_hook_destination, url_destination_address,
+    };
     use registry_platform_hooks::HOOK_HANDLER_ABI_V1;
+    use registry_platform_yaml::Url;
     use registry_scheduling_core::LedgerKind;
 
     use super::*;
@@ -1128,7 +1085,7 @@ mod tests {
         .expect("the pinned hook destinations read");
         let expected = ["appointment-events".to_owned()].into_iter().collect();
 
-        let activated = ActivatedDestinations::activate(&expected, &configured.hooks, &secrets)
+        let activated = activate_destinations(&expected, &configured.hooks, &secrets)
             .expect("the pinned hook destinations activate");
 
         assert_eq!(
@@ -1147,7 +1104,7 @@ mod tests {
 
     /// Whether the runtime configuration's reader accepts `config` bound to
     /// the hook destination `id`.
-    fn configuration_accepts(id: &str, config: &HookDestinationConfig) -> bool {
+    fn configuration_accepts(id: &str, config: &UrlHookDestinationConfig) -> bool {
         reads_block::<DestinationsConfig>(&json!({"hooks": {id: {
             "url": config.url,
             "hmacSha256KeyRef": config.hmac_sha256_key_ref,
@@ -1165,9 +1122,10 @@ mod tests {
         // the budget is refused one step later, for its signing material.
         let secrets = SecretResolver::new([SecretProvider::Environment], "/")
             .expect("the test secret resolver");
-        let binding = |timeout: u32, attempts: u8| HookDestinationConfig {
-            url: "https://events.example.test/scheduling".to_owned(),
-            hmac_sha256_key_ref: "secret:file/hook-key".to_owned(),
+        let binding = |timeout: u32, attempts: u8| UrlHookDestinationConfig {
+            url: Url::new("https://events.example.test/scheduling").expect("the test URL"),
+            hmac_sha256_key_ref: SecretReference::parse("secret:file/hook-key")
+                .expect("the test key reference"),
             attempt_timeout_milliseconds: timeout,
             maximum_attempts: attempts,
         };
@@ -1203,7 +1161,15 @@ mod tests {
         let mut accepted = 0;
         for (id, config) in cases {
             let configured = configuration_accepts(&id, &config);
-            let activated = activate_destination(&id, &config, &secrets).map(drop);
+            let activated = activate_url_hook_destination(
+                DESTINATION_BINDING_SCHEMA,
+                &id,
+                &config,
+                &secrets,
+                MAXIMUM_PAYLOAD_BYTES,
+            )
+            .map(drop)
+            .map_err(activation_error);
             if configured {
                 accepted += 1;
                 assert!(
