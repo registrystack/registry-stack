@@ -2503,3 +2503,654 @@ async fn a_verification_attempt_waits_for_transfer_budget_only_within_its_attemp
     assert_eq!(verifier.calls.load(Ordering::SeqCst), 0);
     drop(held);
 }
+
+/// The constraint that refused `sql`, run in its own rolled-back
+/// transaction, or `None` when the write was accepted.
+async fn refusing_constraint(deployment: &Deployment, sql: &str) -> Option<String> {
+    let outcome = deployment
+        .admin
+        .batch_execute(&format!(
+            "BEGIN; SET LOCAL search_path TO {}; {sql}; ROLLBACK",
+            deployment.schema
+        ))
+        .await;
+    match outcome {
+        Ok(()) => None,
+        Err(error) => {
+            deployment
+                .admin
+                .batch_execute("ROLLBACK")
+                .await
+                .expect("rolls back the refused write");
+            Some(
+                error
+                    .as_db_error()
+                    .and_then(|error| error.constraint())
+                    .unwrap_or("<no constraint>")
+                    .to_owned(),
+            )
+        }
+    }
+}
+
+fn count_events(deployment: &Deployment, event: &str, outcome: &str) -> usize {
+    deployment
+        .audit_entries()
+        .iter()
+        .filter(|entry| entry["record"]["event"] == event && entry["record"]["outcome"] == outcome)
+        .count()
+}
+
+/// Every erasure state carries exactly the timestamps it names, and each
+/// nullable comparison is guarded, so no writer can record an erasure that
+/// has no request, no due time, or an erasure before its request.
+#[tokio::test]
+async fn the_database_refuses_an_erasure_state_without_its_timestamps() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    let (_, version) = upload(&api, &pdf(300, 60)).await;
+    let set = |assignments: &str| {
+        format!("UPDATE documents_versions SET {assignments} WHERE version_id = '{version}'")
+    };
+    for refused in [
+        "erasure_state = 'pending'",
+        "erasure_state = 'pending', erasure_requested_at = now()",
+        "erasure_state = 'pending', erasure_due_at = now()",
+        "erasure_state = 'pending', erasure_requested_at = now(), \
+         erasure_due_at = now() - interval '1 hour'",
+        "erasure_state = 'pending', erasure_requested_at = now(), erasure_due_at = now(), \
+         erased_at = now()",
+        "erasure_state = 'erased'",
+        "erasure_state = 'erased', erasure_requested_at = now(), erasure_due_at = now()",
+        "erasure_state = 'erased', erasure_requested_at = now(), erasure_due_at = now(), \
+         erased_at = now() - interval '1 hour'",
+        "erasure_requested_at = now()",
+        "erasure_due_at = now()",
+        "erased_at = now()",
+    ] {
+        assert_eq!(
+            refusing_constraint(&deployment, &set(refused))
+                .await
+                .as_deref(),
+            Some("documents_versions_erasure_shape"),
+            "{refused}"
+        );
+    }
+    // An unknown state matches no branch of the shape check either, and
+    // PostgreSQL names whichever refusing constraint it checks first.
+    let unknown = refusing_constraint(&deployment, &set("erasure_state = 'gone'")).await;
+    assert!(
+        matches!(
+            unknown.as_deref(),
+            Some("documents_versions_erasure_state_check" | "documents_versions_erasure_shape")
+        ),
+        "{unknown:?}"
+    );
+    for accepted in [
+        "erasure_state = 'pending', erasure_requested_at = now(), erasure_due_at = now()",
+        "erasure_state = 'erased', erasure_requested_at = now(), erasure_due_at = now(), \
+         erased_at = now()",
+    ] {
+        assert_eq!(
+            refusing_constraint(&deployment, &set(accepted)).await,
+            None,
+            "{accepted}"
+        );
+    }
+}
+
+/// An erasing or erased version is never releasable, whichever writer
+/// tries to make it so.
+#[tokio::test]
+async fn the_database_refuses_a_releasable_version_under_erasure() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (_, version) = ready(&prepared, &api, &pdf(300, 61)).await;
+    for erasure in [
+        "erasure_state = 'pending', erasure_requested_at = now(), erasure_due_at = now()",
+        "erasure_state = 'erased', erasure_requested_at = now(), erasure_due_at = now(), \
+         erased_at = now()",
+    ] {
+        assert_eq!(
+            refusing_constraint(
+                &deployment,
+                &format!("UPDATE documents_versions SET {erasure} WHERE version_id = '{version}'")
+            )
+            .await
+            .as_deref(),
+            Some("documents_versions_release_shape"),
+            "{erasure}"
+        );
+    }
+}
+
+/// The custodian removes a document: release stops at once, every active
+/// grant on it is revoked, and the sweep erases the bytes once the
+/// policy's grace has passed. The document stays as a tombstone its
+/// custodian can read.
+#[tokio::test]
+async fn a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let content = pdf(900, 62);
+    let (document, version) = ready(&prepared, &api, &content).await;
+    let grant = grant_id(
+        &api.grant(APP, &document, &version, READER.subject, None)
+            .await,
+    );
+    assert_eq!(api.download(READER, &document, &version).await.status, 200);
+    assert!(api.read(CITIZEN, &document).await.json()["actions"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("request-erasure")));
+
+    // Only the custodian removes a document; a caller that does not see it
+    // learns nothing.
+    api.erase(APP, &document)
+        .await
+        .assert_problem(ProblemCode::ProfileNotAuthorized);
+    api.erase(STRANGER, &document)
+        .await
+        .assert_problem(ProblemCode::ResourceNotFound);
+    api.erase(CITIZEN, "00000000-0000-4000-8000-000000000000")
+        .await
+        .assert_problem(ProblemCode::ResourceNotFound);
+
+    let requested = api.erase(CITIZEN, &document).await;
+    assert_eq!(
+        requested.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&requested.body)
+    );
+    assert_eq!(status(&requested), "erasure-pending");
+    assert_eq!(requested.json()["actions"], json!(["list-shares"]));
+    // Asking again changes nothing.
+    assert_eq!(api.erase(CITIZEN, &document).await.json(), requested.json());
+
+    let revoked = api.get(APP, &format!("/documents/{document}/grants")).await;
+    assert_eq!(revoked.json()["items"][0]["id"], grant.as_str());
+    assert_eq!(revoked.json()["items"][0]["state"], "revoked");
+    api.download(READER, &document, &version)
+        .await
+        .assert_problem(ProblemCode::ResourceNotFound);
+    api.download(CITIZEN, &document, &version)
+        .await
+        .assert_problem(ProblemCode::DocumentVersionNotReleasable);
+    api.grant(APP, &document, &version, READER.subject, None)
+        .await
+        .assert_problem(ProblemCode::DocumentVersionNotReleasable);
+
+    // The starter policy holds removed bytes for its grace period.
+    prepared.sweep_due().await;
+    let held: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_contents")
+        .await;
+    assert_eq!(held, 1, "nothing is erased before the grace has passed");
+
+    deployment
+        .execute(
+            "UPDATE documents_versions
+                SET erasure_requested_at = erasure_requested_at - interval '2 days',
+                    erasure_due_at = now() - interval '1 second'",
+        )
+        .await;
+    prepared.sweep_due().await;
+    let held: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_contents")
+        .await;
+    assert_eq!(held, 0, "the bytes are gone");
+    assert_eq!(status(&api.read(CITIZEN, &document).await), "erased");
+    api.download(CITIZEN, &document, &version)
+        .await
+        .assert_problem(ProblemCode::DocumentVersionNotReleasable);
+    let erased_at: Option<chrono::DateTime<chrono::Utc>> = deployment
+        .scalar("SELECT erased_at FROM documents_versions")
+        .await;
+    assert!(erased_at.is_some());
+
+    // A further pass erases nothing twice.
+    prepared.sweep_due().await;
+    let again: Option<chrono::DateTime<chrono::Utc>> = deployment
+        .scalar("SELECT erased_at FROM documents_versions")
+        .await;
+    assert_eq!(again, erased_at);
+    assert_eq!(
+        count_events(
+            &deployment,
+            "documents.erasure-request",
+            "erasure-requested"
+        ),
+        2
+    );
+    assert_eq!(count_events(&deployment, "documents.erasure", "erased"), 1);
+}
+
+/// A removed document whose upload never finished takes no content: the
+/// reserved upload answers as expired.
+#[tokio::test]
+async fn an_upload_to_a_removed_document_is_refused() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    let content = pdf(400, 63);
+    let (document, _, path) = reservation(
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &content, PDF)
+            .await,
+    );
+    assert_eq!(api.erase(CITIZEN, &document).await.status, 200);
+    api.put(APP, &path, PDF, Body::from(content))
+        .await
+        .assert_problem(ProblemCode::UploadExpired);
+    let state: String = deployment
+        .scalar("SELECT upload_state FROM documents_versions")
+        .await;
+    assert_eq!(state, "reserved");
+}
+
+/// A paused deployment still records removals and expires uploads, but
+/// erases nothing until erasure is active again.
+#[tokio::test]
+async fn a_paused_deployment_erases_nothing() {
+    let mut deployment = deployment().await;
+    deployment.set_erasure("paused");
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, _) = ready(&prepared, &api, &pdf(500, 64)).await;
+    assert_eq!(api.erase(CITIZEN, &document).await.status, 200);
+    deployment
+        .execute(
+            "UPDATE documents_versions
+                SET erasure_requested_at = erasure_requested_at - interval '2 days',
+                    erasure_due_at = now() - interval '1 second'",
+        )
+        .await;
+    prepared.sweep_due().await;
+    prepared.sweep_due().await;
+    let held: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_contents")
+        .await;
+    assert_eq!(held, 1, "a paused sweep erases nothing");
+    let jobs: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_erasure_jobs")
+        .await;
+    assert_eq!(jobs, 0);
+    assert_eq!(
+        status(&api.read(CITIZEN, &document).await),
+        "erasure-pending"
+    );
+    drop(api);
+    drop(prepared);
+
+    deployment.set_erasure("active");
+    let (resumed, api) = start(&deployment, &verifier).await;
+    resumed.sweep_due().await;
+    let held: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_contents")
+        .await;
+    assert_eq!(held, 0);
+    assert_eq!(status(&api.read(CITIZEN, &document).await), "erased");
+}
+
+/// The grant clock and the custody clock are distinct: a grant that
+/// expires or is revoked stops releasing and erases nothing in custody.
+#[tokio::test]
+async fn grant_expiry_and_revocation_erase_nothing_held_in_custody() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let content = pdf(800, 65);
+    let (document, version) = ready(&prepared, &api, &content).await;
+    let expiring = grant_id(
+        &api.grant(APP, &document, &version, READER.subject, None)
+            .await,
+    );
+    let revoked = grant_id(
+        &api.grant(APP, &document, &version, STRANGER.subject, None)
+            .await,
+    );
+    deployment
+        .execute(&format!(
+            "UPDATE documents_grants
+                SET issued_at = now() - interval '30 days',
+                    expires_at = now() - interval '29 days'
+              WHERE grant_id = '{expiring}'"
+        ))
+        .await;
+    assert_eq!(api.revoke(APP, &revoked).await.status, 200);
+    deployment
+        .execute(
+            "UPDATE documents_grants
+                SET issued_at = now() - interval '30 days',
+                    expires_at = now() - interval '29 days',
+                    revoked_at = now() - interval '29 days' - interval '1 hour'
+              WHERE revoked_at IS NOT NULL",
+        )
+        .await;
+    prepared.sweep_due().await;
+    let held: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_contents")
+        .await;
+    assert_eq!(held, 1);
+    assert_eq!(status(&api.read(CITIZEN, &document).await), "ready");
+    let released = api.download(CITIZEN, &document, &version).await;
+    assert_eq!(released.body, content);
+    api.download(READER, &document, &version)
+        .await
+        .assert_problem(ProblemCode::ResourceNotFound);
+}
+
+/// An upload left unfinished past its deadline is expired by the sweep,
+/// paused or not, in an audited batch, and its bytes stop counting
+/// against the custodian's quota.
+#[tokio::test]
+async fn an_unfinished_upload_past_its_deadline_is_expired_by_the_sweep() {
+    let mut deployment = deployment().await;
+    deployment.set_erasure("paused");
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (_, lapsed, _) = reservation(
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &pdf(200, 66), PDF)
+            .await,
+    );
+    let (_, live, _) = reservation(
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &pdf(200, 67), PDF)
+            .await,
+    );
+    deployment
+        .execute(&format!(
+            "UPDATE documents_versions
+                SET reserved_at = reserved_at - interval '2 days',
+                    upload_expires_at = now() - interval '1 second'
+              WHERE version_id = '{lapsed}'"
+        ))
+        .await;
+    prepared.sweep_due().await;
+    let state = |version: String| {
+        let deployment = &deployment;
+        async move {
+            deployment
+                .scalar::<String>(&format!(
+                    "SELECT upload_state FROM documents_versions WHERE version_id = '{version}'"
+                ))
+                .await
+        }
+    };
+    assert_eq!(state(lapsed.clone()).await, "expired");
+    assert_eq!(state(live).await, "reserved");
+    let batches = deployment
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| {
+            entry["record"]["event"] == "documents.upload-expiry"
+                && entry["record"]["outcome"] == "expired"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0]["record"]["versionIds"], json!([lapsed]));
+}
+
+/// Fault injection: a sweep interrupted mid-batch, with one version's
+/// recording transaction failing, erases the others, and the next pass
+/// finishes the interrupted one. No version is erased twice and none is
+/// left pending.
+#[tokio::test]
+async fn an_interrupted_erasure_batch_resumes_without_double_erasure() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let mut versions = Vec::new();
+    for seed in 70..73 {
+        let (document, version) = ready(&prepared, &api, &pdf(300, seed)).await;
+        assert_eq!(api.erase(CITIZEN, &document).await.status, 200);
+        versions.push(version);
+    }
+    deployment
+        .execute(
+            "UPDATE documents_versions
+                SET erasure_requested_at = erasure_requested_at - interval '2 days',
+                    erasure_due_at = now() - interval '1 second'",
+        )
+        .await;
+    let interrupted = &versions[1];
+    deployment
+        .execute(&format!(
+            "CREATE FUNCTION interrupt_erasure() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'the erasure was interrupted'; END $$;
+             CREATE TRIGGER interrupt_erasure BEFORE UPDATE ON documents_versions
+                FOR EACH ROW WHEN (NEW.erasure_state = 'erased'
+                                   AND OLD.version_id = '{interrupted}')
+                EXECUTE FUNCTION interrupt_erasure();"
+        ))
+        .await;
+    prepared.sweep_due().await;
+    let states = || async {
+        let mut states = Vec::new();
+        for version in &versions {
+            states.push(
+                deployment
+                    .scalar::<String>(&format!(
+                        "SELECT erasure_state FROM documents_versions
+                          WHERE version_id = '{version}'"
+                    ))
+                    .await,
+            );
+        }
+        states
+    };
+    assert_eq!(states().await, ["erased", "pending", "erased"]);
+    let held: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_contents")
+        .await;
+    assert_eq!(
+        held, 1,
+        "the interrupted version keeps its bytes until recorded"
+    );
+    let first_erased: String = deployment
+        .scalar(&format!(
+            "SELECT erased_at::text FROM documents_versions WHERE version_id = '{}'",
+            versions[0]
+        ))
+        .await;
+
+    deployment
+        .execute(
+            "DROP TRIGGER interrupt_erasure ON documents_versions;
+             DROP FUNCTION interrupt_erasure();
+             UPDATE documents_erasure_jobs
+                SET attempt_started_at = now() - interval '2 hours',
+                    lease_expires_at = now() - interval '1 hour'
+              WHERE state = 'leased';",
+        )
+        .await;
+    for _ in 0..3 {
+        deployment
+            .execute(
+                "UPDATE documents_erasure_jobs SET next_attempt_at = now()
+                  WHERE state = 'pending'",
+            )
+            .await;
+        prepared.sweep_due().await;
+    }
+    assert_eq!(states().await, ["erased", "erased", "erased"]);
+    let held: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_contents")
+        .await;
+    assert_eq!(held, 0);
+    let unfinished: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_erasure_jobs WHERE state <> 'delivered'")
+        .await;
+    assert_eq!(unfinished, 0, "no erasure job is stranded");
+    let again: String = deployment
+        .scalar(&format!(
+            "SELECT erased_at::text FROM documents_versions WHERE version_id = '{}'",
+            versions[0]
+        ))
+        .await;
+    assert_eq!(again, first_erased, "a recorded erasure is never repeated");
+    for version in &versions {
+        let erased = deployment
+            .audit_entries()
+            .iter()
+            .filter(|entry| {
+                entry["record"]["event"] == "documents.erasure"
+                    && entry["record"]["outcome"] == "erased"
+                    && entry["record"]["versionId"] == version.as_str()
+            })
+            .count();
+        assert_eq!(erased, 1, "{version}");
+    }
+}
+
+/// Erasure deletes bytes, never records: every foreign key in the schema
+/// refuses a delete of the row it names, so no delete can cascade through
+/// a grant, a job, or a version the audit trail names, and an erased
+/// version keeps every row that referenced it.
+#[tokio::test]
+async fn no_delete_cascades_through_custody_records() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, version) = ready(&prepared, &api, &pdf(300, 74)).await;
+    let granted = api
+        .grant(APP, &document, &version, READER.subject, None)
+        .await;
+    assert_eq!(granted.status, 201);
+    assert_eq!(api.erase(CITIZEN, &document).await.status, 200);
+    deployment
+        .execute(
+            "UPDATE documents_versions
+                SET erasure_requested_at = erasure_requested_at - interval '2 days',
+                    erasure_due_at = now() - interval '1 second'",
+        )
+        .await;
+    prepared.sweep_due().await;
+    assert_eq!(status(&api.read(CITIZEN, &document).await), "erased");
+
+    let actions: Vec<String> = deployment
+        .admin
+        .query(
+            "SELECT confdeltype::text FROM pg_constraint
+              WHERE contype = 'f' AND connamespace = $1::text::regnamespace",
+            &[&deployment.schema],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert!(!actions.is_empty());
+    assert!(
+        actions.iter().all(|action| action == "r"),
+        "every foreign key is ON DELETE RESTRICT: {actions:?}"
+    );
+    for refused in [
+        format!("DELETE FROM documents_versions WHERE version_id = '{version}'"),
+        format!("DELETE FROM documents_documents WHERE document_id = '{document}'"),
+    ] {
+        assert!(
+            refusing_constraint(&deployment, &refused).await.is_some(),
+            "{refused}"
+        );
+    }
+    for (table, kept) in [
+        ("documents_grants", 1_i64),
+        ("documents_verification_jobs", 1),
+        ("documents_erasure_jobs", 1),
+    ] {
+        let rows: i64 = deployment
+            .scalar(&format!("SELECT count(*) FROM {table}"))
+            .await;
+        assert_eq!(rows, kept, "{table}");
+    }
+}
+
+/// A document whose policy the deployed package no longer declares is
+/// seen by nobody, so even its custodian cannot ask for its removal; its
+/// bytes stay until the policy is declared again.
+#[tokio::test]
+async fn a_document_under_an_undeclared_policy_cannot_be_removed() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, _) = ready(&prepared, &api, &pdf(300, 75)).await;
+    deployment
+        .execute("UPDATE documents_documents SET policy_id = 'retired-policy'")
+        .await;
+    api.erase(CITIZEN, &document)
+        .await
+        .assert_problem(ProblemCode::ResourceNotFound);
+    let state: String = deployment
+        .scalar("SELECT erasure_state FROM documents_versions")
+        .await;
+    assert_eq!(state, "none");
+}
+
+/// A verifier that sees the version's removal requested while it decides.
+struct RemovedWhileVerifying {
+    client: tokio_postgres::Client,
+    schema: String,
+}
+
+#[async_trait::async_trait]
+impl VerdictSource for RemovedWhileVerifying {
+    fn binding_digest(&self) -> &str {
+        "binding-a"
+    }
+
+    async fn verdict(&self, _: &str, _: &str, _: Vec<u8>) -> Result<Verdict, VerifierError> {
+        self.client
+            .batch_execute(&format!(
+                "UPDATE {}.documents_versions
+                    SET erasure_state = 'pending', erasure_requested_at = now(),
+                        erasure_due_at = now() + interval '1 day'",
+                self.schema
+            ))
+            .await
+            .expect("the removal is recorded under the verifier");
+        Ok(Verdict::Approved)
+    }
+}
+
+/// An approval that arrives after the custodian asked for removal is not
+/// recorded, and the job is delivered rather than retried: the version
+/// stays suspended and is never released.
+#[tokio::test]
+async fn an_approval_after_a_removal_request_releases_nothing() {
+    let deployment = deployment().await;
+    let (client, connection) =
+        tokio_postgres::connect(&support::database_url(), tokio_postgres::NoTls)
+            .await
+            .unwrap();
+    tokio::spawn(async move { connection.await.expect("the removing connection") });
+    let verifier = Arc::new(RemovedWhileVerifying {
+        client,
+        schema: deployment.schema.clone(),
+    });
+    let prepared = prepare_with_verifier(&deployment.runtime, verifier)
+        .await
+        .expect("the runtime prepares");
+    let api = Api::new(&prepared);
+    let (document, version) = upload(&api, &pdf(300, 76)).await;
+    prepared.verify_due().await;
+    let (job, eligibility): (String, String) = (
+        deployment
+            .scalar("SELECT state FROM documents_verification_jobs")
+            .await,
+        deployment
+            .scalar("SELECT eligibility FROM documents_versions")
+            .await,
+    );
+    assert_eq!(job, "delivered");
+    assert_eq!(eligibility, "suspended");
+    assert_eq!(
+        status(&api.read(CITIZEN, &document).await),
+        "erasure-pending"
+    );
+    api.download(CITIZEN, &document, &version)
+        .await
+        .assert_problem(ProblemCode::DocumentVersionNotReleasable);
+}

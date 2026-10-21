@@ -188,3 +188,39 @@ entries:
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_fails_closed_on_an_unwritable_audit_journal}
       - {path: crates/registry-documentsctl/tests/postgres_cli.rs, name: the_dead_letter_verbs_refuse_a_database_that_is_not_activated}
       - {path: crates/registry-documents/src/http.rs, name: every_other_route_is_not_found}
+  - id: DOCUMENTS-SEC-37
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_a_releasable_version_under_erasure}
+  - id: DOCUMENTS-SEC-38
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes}
+      - {path: crates/registry-documents-core/src/access.rs, name: only_the_custodian_may_request_erasure_and_an_erasing_document_offers_its_shares_only}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_document_under_an_undeclared_policy_cannot_be_removed}
+  - id: DOCUMENTS-SEC-39
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_expiry_and_revocation_erase_nothing_held_in_custody}
+  - id: DOCUMENTS-SEC-40
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_paused_deployment_erases_nothing}
+  - id: DOCUMENTS-SEC-41
+    tests:
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_unconfirmed_s3_delete_keeps_the_version_pending}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_s3_erasure_deletes_the_object_and_confirms_it_gone}
+  - id: DOCUMENTS-SEC-42
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_interrupted_erasure_batch_resumes_without_double_erasure}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_s3_erasure_interrupted_after_the_delete_resumes_once}
+  - id: DOCUMENTS-SEC-43
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_an_erasure_state_without_its_timestamps}
+  - id: DOCUMENTS-SEC-44
+    tests:
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: the_orphan_sweep_erases_only_old_uncommitted_objects}
+  - id: DOCUMENTS-SEC-45
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_upload_to_a_removed_document_is_refused}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_unfinished_upload_past_its_deadline_is_expired_by_the_sweep}
+  - id: DOCUMENTS-SEC-46
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: no_delete_cascades_through_custody_records}

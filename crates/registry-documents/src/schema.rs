@@ -29,8 +29,9 @@ use serde_json::{json, Map, Value};
 
 use crate::config::RuntimeConfig;
 use crate::http::{
-    DOCUMENTS_PATH, DOCUMENT_CONTENT_PATH, DOCUMENT_GRANTS_PATH, DOCUMENT_PATH, GRANTS_PATH,
-    GRANT_PATH, MAXIMUM_IDEMPOTENCY_KEY_BYTES, POLICIES_PATH, UPLOAD_CONTENT_PATH,
+    DOCUMENTS_PATH, DOCUMENT_CONTENT_PATH, DOCUMENT_ERASURE_PATH, DOCUMENT_GRANTS_PATH,
+    DOCUMENT_PATH, GRANTS_PATH, GRANT_PATH, MAXIMUM_IDEMPOTENCY_KEY_BYTES, POLICIES_PATH,
+    UPLOAD_CONTENT_PATH,
 };
 use crate::service::MAXIMUM_CURSOR_BYTES;
 use registry_documents_core::{DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE};
@@ -292,6 +293,19 @@ pub const OPERATIONS: &[Operation] = &[
         request: Payload::Empty,
         success: 200,
         response: Payload::Json("DocumentGrantView"),
+        problems: &READ_PROBLEMS,
+    },
+    Operation {
+        method: "post",
+        path: DOCUMENT_ERASURE_PATH,
+        operation_id: "requestDocumentErasure",
+        summary: "Ask, as the custodian, for a document's erasure; release stops at once.",
+        authenticated: true,
+        idempotent: false,
+        paged: false,
+        request: Payload::Empty,
+        success: 200,
+        response: Payload::Json("DocumentView"),
         problems: &READ_PROBLEMS,
     },
     Operation {
@@ -991,6 +1005,7 @@ mod tests {
                 DOCUMENT_GRANTS_PATH => "DOCUMENT_GRANTS_PATH",
                 GRANTS_PATH => "GRANTS_PATH",
                 GRANT_PATH => "GRANT_PATH",
+                DOCUMENT_ERASURE_PATH => "DOCUMENT_ERASURE_PATH",
                 POLICIES_PATH => "POLICIES_PATH",
                 UPLOAD_CONTENT_PATH => "UPLOAD_CONTENT_PATH",
                 other => panic!("{other} is not a served path"),
