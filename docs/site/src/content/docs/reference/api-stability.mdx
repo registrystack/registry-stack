@@ -259,7 +259,8 @@ Evidence's normalized `v0.42.0` model starts a new baseline. Retired split
 question/source projects and targets with bundled authority have no in-place conversion.
 Retain the previous deployment and audit, author `evidence.yaml`, a target, and complete target
 authority with the current tooling, then package and verify a fresh synthetic assertion before
-cutover. The predecessor rehearsal refuses to start from a release before `v0.42.0`.
+cutover. `v0.43.0` continued this forward path from `v0.42.0`. The current predecessor rehearsal
+starts at `v0.43.0`, so bring `v0.42.0` state through `v0.43.0` first.
 
 Casework's review-only replacement requires a fresh database. It refuses the retired
 database containing WorkItem tables without converting or deleting its state. Drain or cancel old reviews,
@@ -320,8 +321,8 @@ The promise is machine-checked where a checker exists:
   Messaging, upgrades with the binaries built from the pull request, and fails when captured
   views differ, retained tables lose rows, or an audit file loses entries. It starts from the newest
   published release at or below the workspace version, so it rehearses the immediate predecessor,
-  and it refuses to start from a release before `v0.42.0`, where Evidence's normalized baseline
-  and the Messaging and Scheduling fresh schema baselines start.
+  and it refuses to start from a release before `v0.43.0`, the predecessor current source reads.
+  `v0.43.0` continued the path from the `v0.42.0` Evidence, Messaging, and Scheduling baselines.
   While no release from that floor onward is published, the rehearsal uses the binaries under test
   on both sides and reports that it has no published predecessor. This exercises the scenarios with
   the same build; it does not demonstrate compatibility between releases. Once a release on the

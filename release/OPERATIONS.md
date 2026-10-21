@@ -801,9 +801,11 @@ gh workflow run release-upgrade-rehearsal.yml \
 ```
 
 `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
-earliest release this source reads state from, `v0.42.0`, and the script
+earliest release this source reads state from, `v0.43.0`, and the script
 refuses to start from any earlier release rather than skipping the check.
-The forward state path starts there because no product reads `v0.41.0` state:
+`v0.43.0` continued the forward state path from `v0.42.0`; current source reads
+the state `v0.43.0` wrote, so older state must first move through that release.
+The retained path started at `v0.42.0` because no product reads `v0.41.0` state:
 BReg and Casework start on a fresh database, Evidence starts at its normalized
 `v0.42.0` baseline, and Messaging and Scheduling each install a fresh schema
 baseline and refuse a pre-1.0 ledger. The earlier `v0.40.0` fresh-install boundary still excludes

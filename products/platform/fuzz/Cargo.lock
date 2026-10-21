@@ -1668,7 +1668,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.43.0"
+version = "0.44.0"
 dependencies = [
  "base64 0.23.1",
  "registry-platform-crypto",
@@ -1683,7 +1683,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-canonical-json"
-version = "0.43.0"
+version = "0.44.0"
 dependencies = [
  "ryu-js",
  "serde",
@@ -1693,7 +1693,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-config"
-version = "0.43.0"
+version = "0.44.0"
 dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-yaml",
@@ -1708,7 +1708,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.43.0"
+version = "0.44.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1750,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.43.0"
+version = "0.44.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1778,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oidc"
-version = "0.43.0"
+version = "0.44.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -1797,7 +1797,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.43.0"
+version = "0.44.0"
 dependencies = [
  "base64 0.23.1",
  "getrandom 0.4.3",
@@ -1813,7 +1813,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sqlite"
-version = "0.43.0"
+version = "0.44.0"
 dependencies = [
  "rusqlite",
  "rustix",
@@ -1825,7 +1825,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-yaml"
-version = "0.43.0"
+version = "0.44.0"
 dependencies = [
  "icu_casemap",
  "icu_normalizer",
