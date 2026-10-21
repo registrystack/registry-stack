@@ -7,13 +7,14 @@
 
 mod support;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
 use registry_documents::runtime::{prepare_with_verifier, Prepared, RuntimeError};
-use registry_documents::verification::MAXIMUM_ATTEMPTS;
+use registry_documents::verification::{VerdictSource, MAXIMUM_ATTEMPTS};
 use registry_documents_core::ProblemCode;
+use registry_platform_objectstore::{Verdict, VerifierError};
 use support::{
     pdf, reservation, sha256, Api, Deployment, FakeVerifier, APPROVE, DATABASE_STORAGE,
     DISABLED_VERIFIER, REJECT, STARTER_PROJECT, UNAVAILABLE,
@@ -710,6 +711,84 @@ async fn a_worker_under_another_binding_leaves_the_job_pending_for_its_own() {
     old_instance.verify_due().await;
     assert_eq!(old.calls.load(Ordering::SeqCst), 1);
     assert_eq!(status(&old_api.read(APP, &late).await), "ready");
+}
+
+/// A verifier that approves, and while it answers changes the version's
+/// recorded media type once, as a concurrent writer would.
+struct TamperingVerifier {
+    client: tokio_postgres::Client,
+    schema: String,
+    tampered: AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl VerdictSource for TamperingVerifier {
+    fn binding_digest(&self) -> &str {
+        "binding-a"
+    }
+
+    async fn verdict(&self, _: &str, _: &str, _: Vec<u8>) -> Result<Verdict, VerifierError> {
+        if !self.tampered.swap(true, Ordering::SeqCst) {
+            self.client
+                .batch_execute(&format!(
+                    "UPDATE {}.documents_versions SET media_type = 'image/png'",
+                    self.schema
+                ))
+                .await
+                .expect("the version is changed under the verifier");
+        }
+        Ok(Verdict::Approved)
+    }
+}
+
+/// A verdict that records nothing while the version is still under the
+/// verifier's binding is not taken as delivered: the attempt is not
+/// committed, and the job is retried once its lease lapses.
+#[tokio::test]
+async fn a_verdict_that_records_nothing_under_the_current_binding_is_retried() {
+    let deployment = deployment().await;
+    let (client, connection) =
+        tokio_postgres::connect(&support::database_url(), tokio_postgres::NoTls)
+            .await
+            .unwrap();
+    tokio::spawn(async move { connection.await.expect("the tampering connection") });
+    let verifier = Arc::new(TamperingVerifier {
+        client,
+        schema: deployment.schema.clone(),
+        tampered: AtomicBool::new(false),
+    });
+    let prepared = prepare_with_verifier(&deployment.runtime, verifier)
+        .await
+        .expect("the runtime prepares");
+    let api = Api::new(&prepared);
+    let (document, _) = upload(&api, &pdf(300, 33)).await;
+
+    prepared.verify_due().await;
+    let job: String = deployment
+        .scalar("SELECT state FROM documents_verification_jobs")
+        .await;
+    assert_eq!(job, "leased", "the attempt is not committed");
+    assert_eq!(status(&api.read(APP, &document).await), "pending");
+
+    // Once the version matches again and the lease lapses, the job is
+    // verified.
+    deployment
+        .execute(
+            "UPDATE documents_versions SET media_type = 'application/pdf';
+             UPDATE documents_verification_jobs
+                SET attempt_started_at = now() - interval '2 hours',
+                    lease_expires_at = now() - interval '1 hour'",
+        )
+        .await;
+    prepared.verify_due().await;
+    deployment
+        .execute(
+            "UPDATE documents_verification_jobs SET next_attempt_at = now()
+              WHERE state = 'pending'",
+        )
+        .await;
+    prepared.verify_due().await;
+    assert_eq!(status(&api.read(APP, &document).await), "ready");
 }
 
 #[tokio::test]

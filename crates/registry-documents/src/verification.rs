@@ -431,10 +431,7 @@ impl DispatchStore for VerificationStore {
                 .execute(sql, &[&version_id, binding, digest, &job.job.media_type])
                 .await?;
             if changed == 0 {
-                tracing::info!(
-                    version = %version_id,
-                    "a verdict arrived for a version whose verifier binding has since changed; it was not recorded"
-                );
+                return unrecorded_verdict(transaction, version_id, binding).await;
             }
         }
         Ok(())
@@ -548,6 +545,52 @@ impl DispatchStore for VerificationStore {
                 tracing::warn!(event = ?event, "a content verification job left the claim set");
             }
         }
+    }
+}
+
+/// Decide what a verdict that changed no version row means. A version that
+/// has since moved to another verifier binding, or was already rejected,
+/// needs no verdict from this job, which is delivered without one. Anything
+/// else means the version no longer matches what the job read, so the
+/// attempt is refused and the job is retried after its lease lapses rather
+/// than delivered with nothing recorded.
+async fn unrecorded_verdict(
+    transaction: &Transaction<'_>,
+    version_id: Uuid,
+    binding: &str,
+) -> Result<(), DispatchError> {
+    let current = transaction
+        .query_opt(
+            "SELECT verification_binding_digest, verification_state
+               FROM documents_versions WHERE version_id = $1",
+            &[&version_id],
+        )
+        .await?;
+    let (current_binding, state) = match &current {
+        Some(row) => (
+            row.try_get::<_, Option<String>>(0)?,
+            row.try_get::<_, String>(1)?,
+        ),
+        None => (None, String::new()),
+    };
+    if current.is_some() && current_binding.as_deref() != Some(binding) {
+        tracing::info!(
+            version = %version_id,
+            "a verdict arrived for a version whose verifier binding has since changed; it was not recorded"
+        );
+        Ok(())
+    } else if state == "rejected" {
+        tracing::warn!(
+            version = %version_id,
+            "a verdict arrived for a version that is already rejected; it was not recorded"
+        );
+        Ok(())
+    } else {
+        tracing::error!(
+            version = %version_id,
+            "a verdict matched no version under the current verifier binding; it was not recorded and verification will retry"
+        );
+        Err(DispatchError::Unavailable)
     }
 }
 
