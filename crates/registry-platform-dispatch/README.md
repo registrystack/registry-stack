@@ -117,6 +117,13 @@ worker runs on this core over the product's
 an uncertain outcome, and attempt timeouts from 100 milliseconds to 10 seconds.
 See `crates/registry-platform-hooks/src/delivery/store.rs`.
 
+Registry Casework delivers review completion wake-ups on this core over its
+`casework_review_completion_outbox` table, with a frozen schedule of one
+constant retry delay, `Retry` on an uncertain outcome, the row's retention
+time as its expiry, quarantine of rows a claim cannot take, and attempt
+timeouts from 100 milliseconds to 30 seconds. See
+`crates/registry-casework/src/runtime/completion.rs`.
+
 The `postgres-test` feature enables the PostgreSQL test consumer in
 `tests/postgres_dispatch.rs`. Its tests require `DISPATCH_TEST_DATABASE_URL`,
 naming a disposable database, and fail when it is absent.
