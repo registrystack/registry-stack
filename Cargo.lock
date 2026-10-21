@@ -5722,6 +5722,7 @@ dependencies = [
  "hex",
  "registry-platform-canonical-json",
  "registry-platform-config",
+ "registry-platform-hooks",
  "registry-platform-yaml",
  "schemars",
  "serde",

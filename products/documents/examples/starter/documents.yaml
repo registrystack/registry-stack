@@ -117,21 +117,21 @@ hooks:
   - id: document-version-ready
     phase: after
     trigger: document-version.ready
-    projection: [documentId, documentVersionId, documentPolicy, releaseEligibility]
+    projection: [documentId, versionId, versionDigest, policyId, policyVersion, actorKind]
     handler:
       type: url
       destinationId: custodian-events
   - id: document-version-rejected
     phase: after
     trigger: document-version.rejected
-    projection: [documentId, documentVersionId, documentPolicy]
+    projection: [documentId, versionId, policyId, policyVersion]
     handler:
       type: url
       destinationId: custodian-events
   - id: document-grant-changed
     phase: after
     trigger: document-grant.changed
-    projection: [documentGrantId, documentVersionId, state, expiresAt]
+    projection: [grantId, change, documentId, versionId, actorKind]
     handler:
       type: url
       destinationId: custodian-events
