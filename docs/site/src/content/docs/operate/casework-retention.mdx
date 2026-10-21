@@ -116,7 +116,8 @@ A failed call returns to the queue and is tried again after `retryDelaySeconds` 
 readable until `availableUntil`.
 
 {/* Evidence: products/casework/generated/runtime/runtime.schema.json, ReviewCompletionRuntimeConfig;
-    crates/registry-casework/src/runtime.rs, ReviewCompletionDispatcher, lease_one() and finish(). */}
+    crates/registry-casework/src/runtime/completion.rs, CompletionStore and completion_policy();
+    crates/registry-casework/src/runtime.rs, review_completion_worker(). */}
 
 ## Keep the audit file
 

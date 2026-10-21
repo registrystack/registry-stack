@@ -361,29 +361,115 @@ CREATE TABLE casework_review_terminal_events (
 CREATE INDEX casework_review_terminal_feed_idx
     ON casework_review_terminal_events(producer_id, feed_position);
 
-CREATE TABLE casework_review_completion_outbox (
-    event_id uuid PRIMARY KEY,
-    request_id uuid NOT NULL,
-    destination_id text NOT NULL CHECK (octet_length(destination_id) BETWEEN 1 AND 128),
-    recipient_binding text NOT NULL CHECK (octet_length(recipient_binding) BETWEEN 1 AND 256),
-    state text NOT NULL CHECK (state IN ('pending','leased','delivered','exhausted')),
-    attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-    next_attempt_at timestamptz NOT NULL,
-    lease_until timestamptz,
-    last_failure_class text CHECK (last_failure_class IS NULL OR octet_length(last_failure_class) BETWEEN 1 AND 128),
-    retained_until timestamptz NOT NULL,
-    delivered_at timestamptz,
-    CHECK ((state = 'delivered') = (delivered_at IS NOT NULL)),
-    CHECK ((state = 'leased') = (lease_until IS NOT NULL)),
-    CHECK (retained_until > next_attempt_at),
-    FOREIGN KEY (event_id, request_id)
+-- The completion wake-up job table is exactly the platform dispatch core's
+-- shape, keyed by the terminal event and its destination, so the core owns
+-- claim, lease, retry, and terminal state. The columns and constraints after
+-- it are Casework's own.
+CREATE TABLE IF NOT EXISTS casework_review_completion_outbox (
+                 event_id uuid NOT NULL,
+                 destination_id text NOT NULL
+                     CHECK (destination_id <> '' AND octet_length(destination_id) <= 256),
+                 generation bigint NOT NULL CHECK (generation > 0),
+                 state text NOT NULL
+                     CONSTRAINT casework_review_completion_outbox_state_values CHECK (
+                         state IN ('pending', 'leased', 'delivered', 'dead-lettered',
+                                   'expired', 'unknown', 'cancelled')
+                     ),
+                 attempt smallint NOT NULL CHECK (attempt >= 0),
+                 next_attempt_at timestamptz,
+                 attempt_started_at timestamptz,
+                 lease_expires_at timestamptz,
+                 lease_token uuid,
+                 delivered_at timestamptz,
+                 dead_lettered_at timestamptz,
+                 expired_at timestamptz,
+                 updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 PRIMARY KEY (event_id, destination_id),
+                 CONSTRAINT casework_review_completion_outbox_shape CHECK (
+                     (state = 'pending'
+                         AND next_attempt_at IS NOT NULL
+                         AND attempt_started_at IS NULL
+                         AND lease_expires_at IS NULL
+                         AND lease_token IS NULL
+                         AND delivered_at IS NULL
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NULL)
+                     OR (state = 'leased'
+                         AND attempt > 0
+                         AND next_attempt_at IS NULL
+                         AND attempt_started_at IS NOT NULL
+                         AND lease_expires_at > attempt_started_at
+                         AND lease_token IS NOT NULL
+                         AND delivered_at IS NULL
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NULL)
+                     OR (state = 'delivered'
+                         AND attempt > 0
+                         AND next_attempt_at IS NULL
+                         AND attempt_started_at IS NULL
+                         AND lease_expires_at IS NULL
+                         AND lease_token IS NULL
+                         AND delivered_at IS NOT NULL
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NULL)
+                     OR (state = 'dead-lettered'
+                         AND attempt > 0
+                         AND next_attempt_at IS NULL
+                         AND attempt_started_at IS NULL
+                         AND lease_expires_at IS NULL
+                         AND lease_token IS NULL
+                         AND delivered_at IS NULL
+                         AND dead_lettered_at IS NOT NULL)
+                     OR (state = 'expired'
+                         AND next_attempt_at IS NULL
+                         AND attempt_started_at IS NULL
+                         AND lease_expires_at IS NULL
+                         AND lease_token IS NULL
+                         AND delivered_at IS NULL
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NOT NULL)
+                     OR (state = 'unknown'
+                         AND attempt > 0
+                         AND next_attempt_at IS NULL
+                         AND attempt_started_at IS NULL
+                         AND lease_expires_at IS NULL
+                         AND lease_token IS NULL
+                         AND delivered_at IS NULL
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NULL)
+                     OR (state = 'cancelled'
+                         AND next_attempt_at IS NULL
+                         AND attempt_started_at IS NULL
+                         AND lease_expires_at IS NULL
+                         AND lease_token IS NULL
+                         AND delivered_at IS NULL
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NULL)
+                 )
+             );
+CREATE INDEX IF NOT EXISTS casework_review_completion_outbox_due_idx
+                 ON casework_review_completion_outbox (next_attempt_at, event_id, destination_id)
+                 WHERE state = 'pending';
+CREATE INDEX IF NOT EXISTS casework_review_completion_outbox_lease_idx
+                 ON casework_review_completion_outbox (lease_expires_at, event_id, destination_id)
+                 WHERE state = 'leased';
+ALTER TABLE casework_review_completion_outbox
+    ADD COLUMN request_id uuid NOT NULL,
+    ADD COLUMN recipient_binding text NOT NULL
+        CHECK (octet_length(recipient_binding) BETWEEN 1 AND 256),
+    ADD COLUMN last_failure_class text
+        CHECK (last_failure_class IS NULL OR octet_length(last_failure_class) BETWEEN 1 AND 128),
+    ADD COLUMN retained_until timestamptz NOT NULL,
+    ADD CONSTRAINT casework_review_completion_outbox_destination_bound
+        CHECK (octet_length(destination_id) BETWEEN 1 AND 128),
+    ADD CONSTRAINT casework_review_completion_outbox_one_destination
+        UNIQUE (event_id),
+    ADD CONSTRAINT casework_review_completion_outbox_retained
+        CHECK (next_attempt_at IS NULL OR retained_until > next_attempt_at),
+    ADD FOREIGN KEY (event_id, request_id)
         REFERENCES casework_review_terminal_events(event_id, request_id) ON DELETE CASCADE,
-    FOREIGN KEY (request_id, destination_id, recipient_binding)
-        REFERENCES casework_review_requests(request_id, completion_destination, completion_recipient_binding)
-);
-CREATE INDEX casework_review_completion_due_idx
-    ON casework_review_completion_outbox(next_attempt_at, event_id)
-    WHERE state IN ('pending','leased');
+    ADD FOREIGN KEY (request_id, destination_id, recipient_binding)
+        REFERENCES casework_review_requests(request_id, completion_destination, completion_recipient_binding);
 CREATE INDEX casework_review_completion_retention_idx
     ON casework_review_completion_outbox(retained_until, event_id);
 
