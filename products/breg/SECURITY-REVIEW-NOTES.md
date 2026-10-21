@@ -99,8 +99,10 @@ leaves quarantine without a verdict.
 - Only an `approved` or `rejected` answer from the configured verifier ends
   a job with a verdict. A verifier failure, a content read or integrity
   failure, or the 60-second attempt budget running out leaves the row
-  pending and retries the job after 30 seconds doubling, with equal jitter,
-  to one hour. The policy has no expiry, treats an uncertain outcome as a
+  pending and retries the job after a delay drawn with equal jitter between
+  half and all of a base delay that starts at 30 seconds and doubles to one
+  hour, so the first retry follows in 15 to 30 seconds and no delay exceeds
+  one hour. The policy has no expiry, treats an uncertain outcome as a
   retry, and allows 32,767 attempts, so a quarantined file waits for a
   verdict rather than for an operator; a job that stops anyway fails the
   worker pass visibly.
@@ -117,9 +119,12 @@ leaves quarantine without a verdict.
   `breg-attachment-verification-v1` domain over the content digest, content
   type, and lease id. A reader joining entries across the change branches on
   the schema, as `products/breg/contracts/audit-identity.md` states.
-- The worker records its last success, as before, only for a pass that
-  reached a verdict, or that found no due job while no job an earlier
-  attempt failed, or a lapsed lease, waits for its retry.
+- The worker records its last success only for a pass that reached a
+  verdict, or that found no due job while no job an earlier attempt failed,
+  or a lapsed lease, waits for its retry, and no verifiable pending verdict
+  is stranded: its job missing, or stopped (dead-lettered, unknown, expired,
+  or cancelled) without a verdict. A stranded verdict is otherwise claimed
+  by nothing, so the growing last-success age is its signal.
 
 ### Tests
 
@@ -148,12 +153,20 @@ and did not compile against the code before it.
   is gone. Each database statement is bounded by the 30-second statement
   timeout and the configured lock timeout, and the content read and
   verifier request by the 60-second attempt budget.
-- **Uncertain finish.** When the commit of a finished attempt cannot be
-  confirmed, the worker writes an `unfinished` entry, and if the lease then
-  lapses the recovering worker writes a second `unfinished` entry for the
-  same attempt.
+- **Double `unfinished`.** One attempt can be answered `unfinished` twice:
+  by the worker that wrote it, and again by the worker that recovers its
+  lapsed lease. The first comes from a finish whose commit cannot be
+  confirmed, from a claim whose lease commit failed and whose read-back
+  found nothing, and from a finish whose commit cannot be confirmed after
+  `after_finished` deleted the job row of a retired verdict, so the
+  read-back finds no row even when the finish committed. A worker whose
+  lease lapsed before it finished writes no `discarded` or verdict entry at
+  all: its finish is refused by the stale fence, the recovering worker's
+  `unfinished` is the attempt's only terminal entry, and the lapsed pass
+  emits `attachment_verification.worker.iteration_failed`.
 - **Longer retry wait.** A verifier that recovers after a long outage may
-  wait up to an hour, plus jitter, before a quarantined file is retried.
+  wait up to an hour, jitter included, before a quarantined file is
+  retried.
 
 ## Immediate Action availability and guard refusal disclosure
 
@@ -1455,9 +1468,10 @@ scrape exhaust the runtime pool or hold locks the workers need.
   label and an age; it is absent until the worker first succeeds. The
   attachment verification worker notes a success only for a pass that
   reached a verdict, or that found no due job while no job an earlier
-  attempt failed waits for its retry. A pass whose content read or verifier
-  request failed and left its job pending for a retry is never a success,
-  and neither is an idle pass during that retry wait.
+  attempt failed waits for its retry and no verifiable pending verdict is
+  stranded without a job that can still run. A pass whose content read or
+  verifier request failed and left its job pending for a retry is never a
+  success, and neither is an idle pass during that retry wait.
 - `breg_queue_oldest_pending_age_seconds` carries only a closed `queue`
   label (`hook-delivery`, `review-submission`, `review-application`) and
   an age. Each scrape takes one runtime pool connection, serialized across
@@ -1537,8 +1551,11 @@ added codes.
   keeps routing to a process until it exits. Between a task stopping and the
   exit, the process drains within the shutdown grace.
 - **Attachment queue.** The attachment verification queue is not sampled by
-  `breg_queue_oldest_pending_age_seconds`; its worker progress age is
-  published.
+  `breg_queue_oldest_pending_age_seconds`. Its signal is the worker's
+  `breg_worker_last_success_age_seconds`, which stops advancing while a job
+  waits for a retry, a lease lapsed, or a verifiable pending verdict has no
+  job that can still run (missing or dead-lettered), so an operator sees a
+  stalled, lost, or given-up verification as a growing age.
 - **Retention failures.** A failed subject access log retention pass still
   writes a raw error record without a closed `code`; only its last-success
   age and its stop code are closed.
