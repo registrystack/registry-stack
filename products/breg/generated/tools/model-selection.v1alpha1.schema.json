@@ -1,5 +1,12 @@
 {
   "$defs": {
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "not": {
+        "pattern": "[  ‪-‮⁦-⁩﻿﷐-﷯￾￿]|🿾|🿿|𯿾|𯿿|𿿾|𿿿|񏿾|񏿿|񟿾|񟿿|񯿾|񯿿|񿿾|񿿿|򏿾|򏿿|򟿾|򟿿|򯿾|򯿿|򿿾|򿿿|󏿾|󏿿|󟿾|󟿿|󯿾|󯿿|󿿾|󿿿|􏿾|􏿿"
+      },
+      "type": "string"
+    },
     "EntitySelection": {
       "additionalProperties": false,
       "description": "One concept of the model that becomes an entity.",
@@ -71,7 +78,7 @@
           "$ref": "#/$defs/LocalId"
         },
         "title": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         }
       },
       "required": [

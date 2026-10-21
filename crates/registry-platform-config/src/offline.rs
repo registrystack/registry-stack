@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use registry_platform_yaml::{
-    escape_pointer_segment, Diagnostic, Node, NodeValue, Reader, Related, Source,
+    escape_pointer_segment, Diagnostic, Node, NodeValue, Reader, Related, Report, Severity, Source,
+    MAXIMUM_DIAGNOSTICS_PER_FILE,
 };
 use serde::de::DeserializeOwned;
 
@@ -41,6 +42,82 @@ pub struct RuntimeFileCheck<T> {
 }
 
 impl<T> RuntimeFileCheck<T> {
+    /// Combine the loader's diagnostics with raw product diagnostics about
+    /// this runtime file, then sort and bound them as one checked document.
+    ///
+    /// Pass only diagnostics about this file. Reports for package or other
+    /// companion files keep their own per-file budgets and are appended by
+    /// the product after this report. When decoding failed, no typed product
+    /// checks can run, so the loader's already normalized report is retained
+    /// unchanged.
+    #[must_use]
+    pub fn report_with(
+        &self,
+        artifact: &str,
+        diagnostics: impl IntoIterator<Item = Diagnostic>,
+    ) -> Report {
+        let additional = diagnostics.into_iter().collect::<Vec<_>>();
+        if self.loaded.is_none() {
+            assert!(
+                additional.is_empty(),
+                "product diagnostics require a decoded runtime file"
+            );
+            let mut report = Report::new(self.diagnostics.clone());
+            report.set_files_checked(1);
+            return report;
+        }
+
+        let mut diagnostics = self.diagnostics.clone();
+        diagnostics.extend(additional);
+        diagnostics.sort_by_key(|diagnostic| {
+            diagnostic
+                .source
+                .as_ref()
+                .and_then(|source| {
+                    source
+                        .line
+                        .map(|line| (1, line, source.column.unwrap_or(0)))
+                })
+                .unwrap_or((0, 0, 0))
+        });
+        if diagnostics.len() > MAXIMUM_DIAGNOSTICS_PER_FILE {
+            let hidden = diagnostics.split_off(MAXIMUM_DIAGNOSTICS_PER_FILE);
+            let hidden_count = hidden.len();
+            let message = match hidden_count {
+                1 => "1 more problem in this file is not shown".to_owned(),
+                count => format!("{count} more problems in this file are not shown"),
+            };
+            let mut marker = if hidden
+                .iter()
+                .all(|diagnostic| diagnostic.severity == Severity::Warning)
+            {
+                Diagnostic::warning(
+                    "config.too-many-problems",
+                    "",
+                    message,
+                    "Fix the problems shown, then check the file again.",
+                )
+            } else {
+                Diagnostic::error(
+                    "config.too-many-problems",
+                    "",
+                    message,
+                    "Fix the problems shown, then check the file again.",
+                )
+            };
+            marker.artifact = Some(artifact.to_owned());
+            marker.source = Some(Source {
+                file: self.file.clone(),
+                line: None,
+                column: None,
+            });
+            diagnostics.push(marker);
+        }
+        let mut report = Report::new(diagnostics);
+        report.set_files_checked(1);
+        report
+    }
+
     /// Whether the member at `pointer`, or a member above it, holds an
     /// expression the check did not substitute. A product skips its value
     /// checks of such a member.
@@ -332,6 +409,7 @@ fn default_stand_in<'n>(text: &'n str, defaults: &mut BTreeMap<&'n str, usize>) 
 mod tests {
     use super::*;
     use crate::RuntimeEnvelope;
+    use registry_platform_yaml::{ApiVersion, EnvelopeRule, Expect, FormatSpec};
     use serde::Deserialize;
     use std::fs;
 
@@ -505,6 +583,113 @@ mod tests {
         let source = diagnostic.source.unwrap();
         assert_eq!((source.line, source.column), (Some(3), Some(7)));
         assert_eq!(diagnostic.artifact.as_deref(), Some("ExampleRuntimeConfig"));
+    }
+
+    #[test]
+    fn cfg_diag_5_runtime_product_diagnostics_match_the_document_report() {
+        type DiagnosticShape<'a> = (Severity, &'a str, &'a str, Option<usize>, Option<usize>);
+
+        fn shape(report: &Report) -> Vec<DiagnosticShape<'_>> {
+            report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| {
+                    let source = diagnostic.source.as_ref().unwrap();
+                    (
+                        diagnostic.severity,
+                        diagnostic.code.as_str(),
+                        diagnostic.message.as_str(),
+                        source.line,
+                        source.column,
+                    )
+                })
+                .collect()
+        }
+
+        let items = MAXIMUM_DIAGNOSTICS_PER_FILE + 2;
+        let names = (0..items)
+            .map(|index| format!("  - item-{index:03}\n"))
+            .collect::<String>();
+        let text = format!("{HEAD}bind: 127.0.0.1:8080\ncount: 3\nnames:\n{names}");
+        let api_versions = [ApiVersion::current(
+            "registry.registrystack.org/example-runtime/v1alpha1",
+        )];
+        let format = FormatSpec {
+            kind: "ExampleRuntimeConfig",
+            envelope: EnvelopeRule::ApiVersionKind {
+                api_versions: &api_versions,
+                retired_api_versions: &[],
+            },
+            removed_keys: &[],
+        };
+
+        for error_index in [0, items - 1] {
+            let checked = check(&text, false);
+            assert!(checked.loaded.is_some());
+            let document = Reader::new("runtime.yaml")
+                .read(text.as_bytes(), &Expect::one(&format))
+                .unwrap();
+            let mut runtime_diagnostics = Vec::new();
+            let mut document_diagnostics = Vec::new();
+            for index in 0..items {
+                let severity = if index == error_index {
+                    Severity::Error
+                } else {
+                    Severity::Warning
+                };
+                let pointer = format!("/names/{index}");
+                let mut runtime = checked.error_at(
+                    "ExampleRuntimeConfig",
+                    "example.runtime.name",
+                    &pointer,
+                    "the name needs attention",
+                    "Correct the name.",
+                );
+                runtime.severity = severity;
+                runtime_diagnostics.push(runtime);
+                document_diagnostics.push(document.diagnostic_at_value(
+                    severity,
+                    "example.runtime.name",
+                    &pointer,
+                    "the name needs attention",
+                    "Correct the name.",
+                ));
+            }
+            let runtime = checked.report_with("ExampleRuntimeConfig", runtime_diagnostics);
+            let document = document.report_with(document_diagnostics);
+            assert_eq!(shape(&runtime), shape(&document));
+            assert_eq!(runtime.files_checked(), Some(1));
+            let marker = runtime.diagnostics().last().unwrap();
+            assert_eq!(
+                marker.severity,
+                if error_index == 0 {
+                    Severity::Warning
+                } else {
+                    Severity::Error
+                }
+            );
+            assert_eq!(marker.code, "config.too-many-problems");
+            assert_eq!(marker.message, "2 more problems in this file are not shown");
+        }
+    }
+
+    #[test]
+    fn cfg_diag_5_a_loader_refusal_is_not_bounded_twice() {
+        let unknown = (0..MAXIMUM_DIAGNOSTICS_PER_FILE + 20)
+            .map(|index| format!("unknown{index}: true\n"))
+            .collect::<String>();
+        let text = format!("{HEAD}bind: 127.0.0.1:8080\ncount: 3\n{unknown}");
+        let checked = check(&text, false);
+        assert!(checked.loaded.is_none());
+        assert_eq!(checked.diagnostics.len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+        assert_eq!(
+            checked.diagnostics.last().unwrap().code,
+            "config.too-many-problems"
+        );
+        let retained = checked.diagnostics.clone();
+        let report = checked.report_with("ExampleRuntimeConfig", []);
+        assert_eq!(report.diagnostics(), retained);
+        assert_eq!(report.files_checked(), Some(1));
     }
 
     #[test]

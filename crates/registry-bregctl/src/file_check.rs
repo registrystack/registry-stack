@@ -451,6 +451,31 @@ pub(crate) fn diagnostic_near(
     message: &str,
     suggested_action: &str,
 ) -> Diagnostic {
+    let written = nearest_written_pointer(document, pointer);
+    let mut diagnostic =
+        document.diagnostic_at_value(Severity::Error, code, written, message, suggested_action);
+    diagnostic.path = pointer.to_owned();
+    diagnostic
+}
+
+/// Attach a related note at the nearest authored member while retaining the
+/// compiler's exact logical path when that member was derived.
+pub(crate) fn add_related_near(
+    document: &Document,
+    diagnostic: &mut Diagnostic,
+    pointer: &str,
+    message: &str,
+) {
+    let written = nearest_written_pointer(document, pointer);
+    document.add_related_value(diagnostic, written, message);
+    diagnostic
+        .related
+        .last_mut()
+        .expect("the related location was appended")
+        .path = pointer.to_owned();
+}
+
+fn nearest_written_pointer<'a>(document: &Document, pointer: &'a str) -> &'a str {
     let mut written = pointer;
     while document.span_of(written).is_none() {
         match written.rfind('/') {
@@ -458,10 +483,7 @@ pub(crate) fn diagnostic_near(
             None => break,
         }
     }
-    let mut diagnostic =
-        document.diagnostic_at_value(Severity::Error, code, written, message, suggested_action);
-    diagnostic.path = pointer.to_owned();
-    diagnostic
+    written
 }
 
 #[cfg(test)]
