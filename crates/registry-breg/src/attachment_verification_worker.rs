@@ -23,7 +23,7 @@ use registry_platform_dispatch::postgres::{
     AttemptAudit, ClaimRefusal, Decoded, DispatchConfig, DispatchConnection, DispatchEvent,
     DispatchOutcome, DispatchSql, DispatchStore, DispatchTransport, Dispatcher, JobKey, JobTable,
     LeasedJob, ReplayAudit, SelectSql, TargetAction, Transition, TransitionAudit,
-    TransitionOutcome,
+    TransitionOutcome, LEASE_FINALIZATION_ALLOWANCE,
 };
 use registry_platform_dispatch::{
     AttemptTimeoutBound, Backoff, ConfigError, DispatchError, Jitter, JobPolicy, RetrySchedule,
@@ -45,7 +45,7 @@ use crate::postgres::{ExpectedRegistryIdentity, RegistryLockKey, RuntimePool};
 
 /// The audit schema of the attachment-verification attempt and outcome
 /// entries.
-pub const ATTACHMENT_VERIFICATION_AUDIT_SCHEMA: &str = "breg-attachment-verification-audit/v2";
+pub const ATTACHMENT_VERIFICATION_AUDIT_SCHEMA: &str = "breg-attachment-verification-audit/v3";
 
 /// The verification job table, in the shape `registry-platform-dispatch`
 /// declares.
@@ -58,6 +58,13 @@ const JOB_PART: &str = "verification";
 /// quarantined attachment waits for a verdict rather than for an operator,
 /// and BReg offers no replay of a given-up job.
 const MAXIMUM_ATTEMPTS: i16 = i16::MAX;
+
+/// The time one verification attempt may spend on its storage read and its
+/// verifier call together: the attempt timeout less the allowance the lease
+/// keeps for recording the outcome. Configuration load refuses a storage and
+/// verifier timeout pair that adds up to more.
+pub(crate) const ATTEMPT_BUDGET: Duration =
+    MAX_ATTEMPT_TIMEOUT.saturating_sub(LEASE_FINALIZATION_ALLOWANCE);
 
 /// The dispatch policy every verification job runs under.
 fn verification_policy() -> JobPolicy {
@@ -100,17 +107,37 @@ const CLAIM_COLUMNS: &str = "verdict.verification_id, verdict.sha256, verdict.co
 const CLAIM_JOINS: &str = "LEFT JOIN {schema}.registry_attachment_verification AS verdict \
        ON verdict.verification_id = state.verification_id \
      LEFT JOIN {schema}.registry_attachment_blobs AS blob ON blob.sha256 = verdict.sha256";
-/// A job is claimable when its verdict row is gone or decided, so it can
-/// end, or when the row waits under the pinned verifier binding for bytes a
-/// live reference still holds. Any other pending row waits unclaimed.
-const CLAIM_PREDICATE: &str = "verdict.verification_id IS NULL OR verdict.verdict <> 'pending' \
-     OR (verdict.policy_digest = (SELECT verification_policy \
+/// A verdict row waits for a verifier when it was written under the pinned
+/// verifier binding for bytes a live reference still holds.
+macro_rules! verifiable {
+    () => {
+        "(verdict.policy_digest = (SELECT verification_policy \
              FROM {schema}.registry_attachment_storage_binding WHERE singleton) \
          AND blob.state = 'live' \
          AND EXISTS (SELECT 1 FROM {schema}.registry_proposal_attachments AS reference \
              WHERE reference.sha256 = verdict.sha256 \
                AND reference.content_type = verdict.content_type \
-               AND reference.erased_at IS NULL))";
+               AND reference.erased_at IS NULL))"
+    };
+}
+/// A job is claimable when its verdict row is gone or decided, so it can
+/// end, or when the pending row is verifiable. Any other pending row waits
+/// unclaimed.
+const CLAIM_PREDICATE: &str = concat!(
+    "verdict.verification_id IS NULL OR verdict.verdict <> 'pending' OR ",
+    verifiable!()
+);
+/// A pending verdict row is stranded when it is verifiable but has no job
+/// that can still run: its job is missing, or it stopped without a verdict.
+const STRANDED_VERDICT: &str = concat!(
+    "SELECT 1 FROM {schema}.registry_attachment_verification AS verdict \
+       LEFT JOIN {schema}.registry_attachment_blobs AS blob ON blob.sha256 = verdict.sha256 \
+     WHERE verdict.verdict = 'pending' AND ",
+    verifiable!(),
+    " AND NOT EXISTS (SELECT 1 FROM {schema}.{table} AS state \
+         WHERE state.verification_id = verdict.verification_id \
+           AND state.state IN ('pending', 'leased'))"
+);
 
 fn claim_select() -> SelectSql {
     SelectSql {
@@ -140,6 +167,11 @@ pub struct AttachmentVerificationWorker {
 struct Engine {
     dispatcher: Dispatcher<VerificationStore>,
     transport: Arc<VerificationTransport>,
+    /// The store's discarded leases, emptied after every pass.
+    discarded: Arc<Mutex<HashSet<Uuid>>>,
+    /// Serialises passes, so emptying the discarded leases after one pass
+    /// never drops a mark another pass has yet to audit.
+    pass: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -155,7 +187,7 @@ enum Iteration {
     /// retry.
     Idle,
     /// No job was due, but a job an earlier attempt failed waits for its
-    /// retry.
+    /// retry, or a pending verdict is stranded without a job that can run.
     RetryWaiting,
     /// The verifier answered, and its verdict committed or was discarded as
     /// stale, or the job's verdict row was already gone.
@@ -187,10 +219,11 @@ impl AttachmentVerificationWorker {
         let engine = match &verification {
             AttachmentVerification::Disabled => None,
             AttachmentVerification::Http(verifier) => {
+                let discarded = Arc::<Mutex<HashSet<Uuid>>>::default();
                 let store = VerificationStore {
                     admission: Arc::clone(&admission),
                     audit,
-                    discarded: Arc::default(),
+                    discarded: Arc::clone(&discarded),
                 };
                 let dispatcher = Dispatcher::new(
                     store,
@@ -218,6 +251,8 @@ impl AttachmentVerificationWorker {
                         storage,
                         verifier: Arc::clone(verifier),
                     }),
+                    discarded,
+                    pass: Arc::default(),
                 })
             }
         };
@@ -294,11 +329,22 @@ impl AttachmentVerificationWorker {
         let Some(engine) = &self.engine else {
             return Ok(Iteration::Idle);
         };
-        let outcome = engine
-            .dispatcher
-            .dispatch_once(engine.transport.as_ref())
-            .await
-            .map_err(unavailable)?;
+        let outcome = {
+            let _pass = engine.pass.lock().await;
+            let outcome = engine
+                .dispatcher
+                .dispatch_once(engine.transport.as_ref())
+                .await;
+            // A finish that failed after its verdict write was refused never
+            // reaches its terminal entry, so its discard mark goes here,
+            // whatever the outcome.
+            engine
+                .discarded
+                .lock()
+                .map_err(|_| VerificationWorkerError)?
+                .clear();
+            outcome.map_err(unavailable)?
+        };
         match outcome {
             DispatchOutcome::Idle => Ok(if self.retry_waiting().await? {
                 Iteration::RetryWaiting
@@ -320,8 +366,9 @@ impl AttachmentVerificationWorker {
     }
 
     /// Whether a claimable job an earlier attempt failed waits for its
-    /// retry, or holds a lapsed lease the next claim recovers. A job another
-    /// worker holds a live lease on is not waiting.
+    /// retry, or holds a lapsed lease the next claim recovers, or a
+    /// verifiable pending verdict is stranded with no job that can still
+    /// run. A job another worker holds a live lease on is not waiting.
     async fn retry_waiting(&self) -> Result<bool> {
         let mut client = self.admission.pool.get().await.map_err(unavailable)?;
         let transaction = client.transaction().await.map_err(unavailable)?;
@@ -331,9 +378,13 @@ impl AttachmentVerificationWorker {
             "SELECT EXISTS (SELECT 1 FROM {schema}.{JOB_TABLE} AS state {}
               WHERE ((state.state = 'pending' AND state.attempt > 0)
                   OR (state.state = 'leased' AND state.lease_expires_at <= transaction_timestamp()))
-                AND ({}))",
+                AND ({}))
+              OR EXISTS ({})",
             CLAIM_JOINS.replace("{schema}", &schema),
             CLAIM_PREDICATE.replace("{schema}", &schema),
+            STRANDED_VERDICT
+                .replace("{schema}", &schema)
+                .replace("{table}", JOB_TABLE),
         );
         let waiting: bool = transaction
             .query_one(&statement, &[])
@@ -480,7 +531,7 @@ impl VerificationStore {
             .profile()
             .key_hasher()
             .audit_reference_hash(
-                "breg-attachment-verification-v1",
+                "breg-attachment-verification-v2",
                 &self.admission.expected.activation_id,
                 correlation,
             )
@@ -735,13 +786,14 @@ impl DispatchStore for VerificationStore {
                 let correlation = lease_correlation(audit.record.verification_id, lease_token);
                 self.append(&correlation, "terminal", "unfinished").await
             }
-            (transition, _) => {
-                let correlation = format!(
-                    "{}:{}:{}",
-                    audit.record.verification_id, audit.generation, audit.attempt
-                );
-                self.append(&correlation, "terminal", transition.disposition().as_str())
-                    .await
+            // Unreachable: the dispatcher this worker configures has no
+            // expiry statement and no replayable or cancellable action, and
+            // every lapsed record carries its lease token. A transition that
+            // arrives anyway has no attempt to correlate with, so it fails
+            // visibly rather than write an entry no attempt answers to.
+            (Transition::LeaseLapsed(_), None)
+            | (Transition::Expired { .. } | Transition::Cancelled, _) => {
+                Err(DispatchError::Unavailable)
             }
         }
     }

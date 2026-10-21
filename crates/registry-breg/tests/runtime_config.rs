@@ -4768,6 +4768,55 @@ fn attachment_verification_defaults_off_and_validates_operator_binding() {
 }
 
 #[test]
+fn one_attempt_budget_covers_the_storage_read_and_the_verifier_call() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let both = |storage: u32, verifier: u32| {
+        format!(
+            "{base}\nattachmentStorage:\n  type: s3\n  url: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: {storage}\n\
+             attachmentVerification:\n  type: http\n  url: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n  attemptTimeoutMilliseconds: {verifier}\n"
+        )
+    };
+    parse_runtime_config(&both(30_000, 25_000)).expect("the largest pair the budget holds");
+
+    let error = parse_runtime_config(&both(30_000, 25_001)).unwrap_err();
+    assert_eq!(error, RuntimeConfigError::AttachmentAttemptBudgetExceeded);
+    assert_eq!(
+        code_of(&error),
+        "breg.runtime.attachment-attempt-budget-exceeded"
+    );
+    assert_eq!(
+        path_of(&error),
+        "/attachmentVerification/attemptTimeoutMilliseconds"
+    );
+    let [diagnostic] = <[_; 1]>::try_from(error.diagnostics(None)).unwrap();
+    for named in [
+        "attachmentStorage.attemptTimeoutMilliseconds",
+        "attachmentVerification.attemptTimeoutMilliseconds",
+        "55000",
+    ] {
+        assert!(diagnostic.message.contains(named), "{}", diagnostic.message);
+        assert!(
+            diagnostic.suggested_action.contains(named),
+            "{}",
+            diagnostic.suggested_action
+        );
+    }
+
+    // Each timeout alone may reach the shared maximum when the other side
+    // makes no network call.
+    let database_storage = format!(
+        "{base}\nattachmentVerification:\n  type: http\n  url: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n  attemptTimeoutMilliseconds: 55000\n"
+    );
+    parse_runtime_config(&database_storage).expect("a database read takes no storage budget");
+    let disabled_verification = format!(
+        "{base}\nattachmentStorage:\n  type: s3\n  url: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 60000\n"
+    );
+    parse_runtime_config(&disabled_verification)
+        .expect("storage alone serves requests, not verification attempts");
+}
+
+#[test]
 fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     use registry_breg::field_encryption::FieldEncryptionProvider;
     let fixture = RuntimeFixture::new();

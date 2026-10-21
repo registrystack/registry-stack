@@ -110,9 +110,13 @@ leaves quarantine without a verdict.
   retired commits nothing and is audited as `discarded`, and the job of a
   retired row is deleted with the row unless a worker holds it, in which
   case that worker deletes it when it finishes.
-- The audit schema stays `breg-attachment-verification-audit/v2` with the
-  same record fields; the keyed verification reference is derived from the
-  verification id and the lease token.
+- The audit schema is `breg-attachment-verification-audit/v3`, replacing
+  `/v2` with the same record fields: the keyed verification reference is
+  derived under the `breg-attachment-verification-v2` domain from the
+  verification id and the lease token, in place of the
+  `breg-attachment-verification-v1` domain over the content digest, content
+  type, and lease id. A reader joining entries across the change branches on
+  the schema, as `products/breg/contracts/audit-identity.md` states.
 - The worker records its last success, as before, only for a pass that
   reached a verdict, or that found no due job while no job an earlier
   attempt failed, or a lapsed lease, waits for its retry.

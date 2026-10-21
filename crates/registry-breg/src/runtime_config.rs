@@ -357,6 +357,11 @@ pub enum RuntimeConfigError {
     InvalidAttachmentStorage,
     #[error("runtime configuration contains an invalid attachment verification binding")]
     InvalidAttachmentVerification,
+    #[error(
+        "attachmentStorage.attemptTimeoutMilliseconds plus attachmentVerification.attemptTimeoutMilliseconds exceeds the {budget} millisecond budget of one verification attempt",
+        budget = crate::attachment_verification_worker::ATTEMPT_BUDGET.as_millis()
+    )]
+    AttachmentAttemptBudgetExceeded,
     #[error("runtime configuration contains an invalid field encryption binding")]
     InvalidFieldEncryption,
     #[error("runtime configuration contains invalid operational bounds")]
@@ -398,6 +403,9 @@ impl RuntimeConfigError {
             Self::ReviewAuthorityIdCollision => "breg.runtime.review-authority-id-collision",
             Self::InvalidAttachmentStorage => "breg.runtime.invalid-attachment-storage",
             Self::InvalidAttachmentVerification => "breg.runtime.invalid-attachment-verification",
+            Self::AttachmentAttemptBudgetExceeded => {
+                "breg.runtime.attachment-attempt-budget-exceeded"
+            }
             Self::InvalidFieldEncryption => "breg.runtime.invalid-field-encryption",
             Self::InvalidBounds => "breg.runtime.invalid-bounds",
             Self::InvalidWasmExecution => "breg.runtime.invalid-wasm-execution",
@@ -434,6 +442,9 @@ impl RuntimeConfigError {
             Self::ReviewAuthorityIdCollision => "/reviewAuthorities",
             Self::InvalidAttachmentStorage => "/attachmentStorage",
             Self::InvalidAttachmentVerification => "/attachmentVerification",
+            Self::AttachmentAttemptBudgetExceeded => {
+                "/attachmentVerification/attemptTimeoutMilliseconds"
+            }
             Self::InvalidFieldEncryption => "/fieldEncryption",
             Self::InvalidBounds => "/operationalTimeouts",
             Self::InvalidWasmExecution => "/wasmExecution",
@@ -509,6 +520,11 @@ impl RuntimeConfigError {
             }
             Self::InvalidAttachmentVerification => {
                 "Correct attachmentVerification: give the verifier as an https URL and name its authorization by secret reference."
+            }
+            // The figure is `attachment_verification_worker::ATTEMPT_BUDGET`;
+            // the runtime configuration tests hold the two together.
+            Self::AttachmentAttemptBudgetExceeded => {
+                "Lower attachmentStorage.attemptTimeoutMilliseconds or attachmentVerification.attemptTimeoutMilliseconds so the two add up to at most 55000."
             }
             Self::InvalidFieldEncryption => {
                 "Correct fieldEncryption: name the data key by secret reference and give the transit endpoint as an https URL."
@@ -880,6 +896,29 @@ pub struct RuntimeConfig {
     metrics_listener: Option<MetricsListenerConfig>,
 }
 
+/// Refuses a storage read and a verifier call that could not both finish
+/// inside one verification attempt. A database read makes no network call
+/// and takes none of the budget; without a verifier no attempt runs.
+fn validate_attachment_attempt_budget(
+    storage: &crate::attachment_storage::RawAttachmentStorageConfig,
+    verification: &crate::attachment_verification::RawAttachmentVerificationConfig,
+) -> Result<()> {
+    use crate::attachment_storage::RawAttachmentStorageConfig;
+    use crate::attachment_verification::RawAttachmentVerificationConfig;
+    let RawAttachmentVerificationConfig::Http(verifier) = verification else {
+        return Ok(());
+    };
+    let storage_ms = match storage {
+        RawAttachmentStorageConfig::Database {} => 0,
+        RawAttachmentStorageConfig::S3(config) => config.attempt_timeout_milliseconds.get(),
+    };
+    let total_ms = u128::from(storage_ms) + u128::from(verifier.attempt_timeout_milliseconds.get());
+    if total_ms > crate::attachment_verification_worker::ATTEMPT_BUDGET.as_millis() {
+        return Err(RuntimeConfigError::AttachmentAttemptBudgetExceeded);
+    }
+    Ok(())
+}
+
 impl RuntimeConfig {
     fn from_raw(raw: RawRuntimeConfig) -> Result<Self> {
         validate_runtime_definition_ids(&raw)?;
@@ -887,6 +926,7 @@ impl RuntimeConfig {
         let identity = DeploymentIdentity::from_raw(raw.identity)?;
         let secret_providers = SecretProvidersConfig::from_raw(raw.secret_providers)?;
         let database = DatabaseConfig::from_raw(raw.database)?;
+        validate_attachment_attempt_budget(&raw.attachment_storage, &raw.attachment_verification)?;
         let attachment_storage =
             crate::attachment_storage::AttachmentStorageConfig::from_raw(raw.attachment_storage)
                 .map_err(|_| RuntimeConfigError::InvalidAttachmentStorage)?;
