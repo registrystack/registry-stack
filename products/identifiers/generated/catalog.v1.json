@@ -4718,11 +4718,11 @@
       "description": "Registry Document Store project JSON Schema.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "85a3f5394664ecbc45b6ae3aa2352b294a495b94ac1006c27b6e3029fe1f6b7a"
+        "sha256": "a6cffa50f4a56171a7d4c2ee42d1f4e654cfe29edff45e3b9248e46250b16b70"
       },
       "artifact": {
         "path": "products/documents/generated/project/project.schema.json",
-        "sha256": "11b4d321eed5973141c48ff6920d963ad217077918a4657220ab8c34f3772b6f",
+        "sha256": "84c49f84ed380a506b63fc4cf333b86b0b43a221a88a28308e0c06e888e5196c",
         "mediaType": "application/schema+json"
       }
     },
@@ -4736,7 +4736,7 @@
       "description": "Registry Document Store runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "85a3f5394664ecbc45b6ae3aa2352b294a495b94ac1006c27b6e3029fe1f6b7a"
+        "sha256": "a6cffa50f4a56171a7d4c2ee42d1f4e654cfe29edff45e3b9248e46250b16b70"
       },
       "artifact": {
         "path": "products/documents/generated/runtime/runtime.schema.json",
