@@ -53,7 +53,7 @@
     },
     "CleanupConfig": {
       "additionalProperties": false,
-      "description": "Erasure of what expired and revoked document grants released.",
+      "description": "Erasure of the bytes of documents whose custodian asked for their\nremoval.",
       "properties": {
         "erasure": {
           "$ref": "#/$defs/Erasure"
@@ -177,7 +177,7 @@
       "type": "object"
     },
     "Erasure": {
-      "description": "Whether erasure work runs. `paused` stops it; expired and revoked\ndocument grants stop releasing bytes regardless.",
+      "description": "Whether erasure work runs. `paused` stops every erasure and the sweep\nof orphaned objects; a removal request still stops release at once, and\nlapsed uploads are still expired.",
       "enum": [
         "active",
         "paused"

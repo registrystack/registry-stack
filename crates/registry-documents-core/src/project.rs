@@ -369,7 +369,9 @@ pub struct MandatoryRestrictions {
     pub allowed_content_types: AllowedContentTypes,
     pub grant_expiry_hours: BoundedU32<1, MAXIMUM_PERIOD_HOURS>,
     pub maximum_grant_expiry_hours: BoundedU32<1, MAXIMUM_PERIOD_HOURS>,
-    /// Time between expiry or revocation and erasure of what it released.
+    /// Time between the custodian's removal request and erasure of the
+    /// bytes. Grant expiry and revocation erase nothing: they only stop a
+    /// grant releasing.
     pub cleanup_grace_hours: BoundedU32<0, MAXIMUM_PERIOD_HOURS>,
 }
 

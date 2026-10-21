@@ -614,3 +614,155 @@ invariants:
     negativeTest:
       path: crates/registry-documents/tests/postgres_operator.rs
       name: replay_refuses_an_unknown_version_and_an_unactivated_database
+  - id: DOCUMENTS-SEC-37
+    state: enforced
+    threat: >-
+      A document whose custodian asked for its removal is still released,
+      through a grant issued before the request or one issued while it
+      commits.
+    enforcementPoint: >-
+      The removal request moves the version to erasure pending, suspends
+      it, and revokes every active grant on the document in one
+      transaction; grant issue holds the version row and refuses a version
+      under erasure; the database refuses a releasable version whose
+      erasure state is not none.
+    refusal: >-
+      Answer resource.not-found to a former grant holder,
+      document.version-not-releasable to the custodian and to a new grant,
+      and write nothing.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes
+  - id: DOCUMENTS-SEC-38
+    state: enforced
+    threat: >-
+      A caller other than the custodian, such as the reserving system or a
+      grant holder, erases a document it does not hold in custody.
+    enforcementPoint: >-
+      Only the custodian is offered and allowed the removal request; a
+      caller that cannot see the document is answered as if it did not
+      exist.
+    refusal: >-
+      Answer profile.not-authorized to a caller that sees the document but
+      is not its custodian and resource.not-found to any other, and change
+      nothing.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes
+  - id: DOCUMENTS-SEC-39
+    state: enforced
+    threat: >-
+      A grant's expiry or revocation erases bytes still held in custody,
+      so a document its custodian keeps disappears when its last share
+      lapses.
+    enforcementPoint: >-
+      Only a removal request sets a version's erasure state, and the sweep
+      arms erasure only for versions pending removal whose grace has
+      ended.
+    refusal: >-
+      Keep the content and the version's state; the expired or revoked
+      grant alone stops releasing.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: grant_expiry_and_revocation_erase_nothing_held_in_custody
+  - id: DOCUMENTS-SEC-40
+    state: enforced
+    threat: >-
+      Erasure runs while an operator has paused it, for example during a
+      backup restore, and destroys bytes the restore was meant to recover.
+    enforcementPoint: >-
+      With cleanup.erasure paused, no erasure job is armed or attempted
+      and no orphaned object is erased; the erasure worker is not started.
+    refusal: >-
+      Erase nothing and arm no job; the version stays erasure pending and
+      unservable.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: a_paused_deployment_erases_nothing
+  - id: DOCUMENTS-SEC-41
+    state: enforced
+    threat: >-
+      A version is recorded erased while the object store still serves its
+      object, so the Store claims a removal it did not make.
+    enforcementPoint: >-
+      An S3 erasure deletes each committed object and requires a read of
+      it to answer 404 before the transaction that records the version
+      erased deletes its staged row.
+    refusal: >-
+      Keep the version erasure pending with its staged row, deliver no
+      job, and retry with backoff.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_s3.rs
+      name: an_unconfirmed_s3_delete_keeps_the_version_pending
+  - id: DOCUMENTS-SEC-42
+    state: enforced
+    threat: >-
+      A sweep interrupted mid-batch records an erasure twice, or strands a
+      version pending with no job that will finish it.
+    enforcementPoint: >-
+      The recording transaction moves a version to erased only from
+      pending, deleting the rows that named its bytes in the same
+      transaction; an attempt that did not commit leaves its job leased or
+      pending, and the lapsed lease is reclaimed.
+    refusal: >-
+      Record nothing for the interrupted attempt; the next attempt
+      confirms the bytes gone and records the erasure once.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: an_interrupted_erasure_batch_resumes_without_double_erasure
+  - id: DOCUMENTS-SEC-43
+    state: enforced
+    threat: >-
+      A writer records an erasure state without its request, due, or
+      erasure time, or an erasure before its request, so the record cannot
+      say when the custody clock ran.
+    enforcementPoint: >-
+      A database CHECK requires exactly the timestamps each erasure state
+      names, with every nullable comparison guarded by IS NOT NULL.
+    refusal: >-
+      Refuse the write with documents_versions_erasure_shape.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: the_database_refuses_an_erasure_state_without_its_timestamps
+  - id: DOCUMENTS-SEC-44
+    state: enforced
+    threat: >-
+      The orphan sweep deletes the object of an upload still being
+      written, leaving an object no row names, or deletes a committed
+      object outside an erasure.
+    enforcementPoint: >-
+      The sweep reads only uncommitted staged rows older than the longest
+      transfer deadline plus ten minutes, locks each row while it deletes
+      the object, and deletes the row only after the delete is confirmed.
+    refusal: >-
+      Leave a younger or committed object and its row in place.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_s3.rs
+      name: the_orphan_sweep_erases_only_old_uncommitted_objects
+  - id: DOCUMENTS-SEC-45
+    state: enforced
+    threat: >-
+      An upload to a document whose removal was requested, or to a
+      reservation past its deadline, finalizes and stores bytes again.
+    enforcementPoint: >-
+      Upload and finalize refuse a version under erasure or past its
+      deadline, and the sweep marks a lapsed reservation expired.
+    refusal: >-
+      Answer upload.expired and store nothing.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: an_upload_to_a_removed_document_is_refused
+  - id: DOCUMENTS-SEC-46
+    state: enforced
+    threat: >-
+      An erasure, or any delete, cascades through grants, jobs, or
+      versions the audit trail names, silently removing history.
+    enforcementPoint: >-
+      Every foreign key in the schema is ON DELETE RESTRICT; erasure
+      deletes only the content row or the object and its staged row.
+    refusal: >-
+      Refuse the delete of a version or document any row references, and
+      keep every grant and job of an erased version.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: no_delete_cascades_through_custody_records

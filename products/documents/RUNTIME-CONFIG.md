@@ -60,7 +60,7 @@ arrives.
 | `contentVerification` | `type: http` with `url`, `authorizationRef`, `policyId`, and `attemptTimeoutMilliseconds` (100 to 60000). `type: disabled` is accepted only beside `tlsTermination: development-loopback`. |
 | `transfers.minimumDeadlineSeconds` | 1 to 3600, default 60. The deadline of the smallest upload or download. |
 | `transfers.mebibyteAllowanceSeconds` | 1 to 600, default 8. The time added to a transfer's deadline for every started mebibyte of the document. |
-| `cleanup.erasure` | `active` or `paused`. Expired and revoked document grants stop releasing bytes regardless. |
+| `cleanup.erasure` | `active` or `paused`. `paused` stops every erasure and the sweep of orphaned objects; a removal request still stops release at once, and lapsed uploads are still expired. |
 | `destinations.hooks` | Hook destinations by id: `url`, `hmacSha256KeyRef`, `attemptTimeoutMilliseconds` (100 to 60000), and `maximumAttempts` (1 to 32). A plaintext URL is refused outside development. |
 | `retention.receiptRetentionDays` | 1 to 365, default 7. How long an `Idempotency-Key` on a reservation or a grant is held; a retry after it answers `idempotency.expired`. |
 | `retention.hookPayloadRetentionDays` | 1 to 30, default 7. |

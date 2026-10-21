@@ -58,6 +58,8 @@ pub const DOCUMENT_GRANTS_PATH: &str = "/documents/{documentId}/grants";
 pub const GRANTS_PATH: &str = "/document-grants";
 /// The route that revokes one grant.
 pub const GRANT_PATH: &str = "/document-grants/{grantId}";
+/// The route a custodian asks for a document's erasure on.
+pub const DOCUMENT_ERASURE_PATH: &str = "/documents/{documentId}/erasure";
 /// The route that lists the policies the caller may place documents under.
 pub const POLICIES_PATH: &str = "/document-policies";
 
@@ -219,6 +221,7 @@ pub fn router(routes: DocumentRoutes) -> Router {
         .route(DOCUMENT_GRANTS_PATH, post(issue_grant).get(document_grants))
         .route(GRANTS_PATH, get(received_grants))
         .route(GRANT_PATH, delete(revoke_grant))
+        .route(DOCUMENT_ERASURE_PATH, post(request_erasure))
         .route(POLICIES_PATH, get(policies))
         .with_state(routes.clone());
     let unlimited = Router::new()
@@ -481,6 +484,24 @@ async fn revoke_grant(
             let view = routes
                 .service
                 .revoke_grant(&caller, identifier(&grant_id)?)
+                .await?;
+            Ok(Json(view).into_response())
+        }
+        .await,
+    )
+}
+
+async fn request_erasure(
+    State(routes): State<DocumentRoutes>,
+    headers: HeaderMap,
+    Path(document_id): Path<String>,
+) -> Response {
+    answer(
+        async {
+            let caller = routes.caller(&headers).await?;
+            let view = routes
+                .service
+                .request_erasure(&caller, identifier(&document_id)?)
                 .await?;
             Ok(Json(view).into_response())
         }

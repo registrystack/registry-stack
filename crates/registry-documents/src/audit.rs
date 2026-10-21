@@ -25,6 +25,10 @@ pub const CONTENT_VERIFICATION_EVENT: &str = "documents.content-verification";
 pub const GRANT_ISSUE_EVENT: &str = "documents.grant-issue";
 pub const GRANT_REVOKE_EVENT: &str = "documents.grant-revoke";
 pub const PACKAGE_ACTIVATION_EVENT: &str = "documents.package-activation";
+pub const ERASURE_REQUEST_EVENT: &str = "documents.erasure-request";
+pub const ERASURE_EVENT: &str = "documents.erasure";
+pub const UPLOAD_EXPIRY_EVENT: &str = "documents.upload-expiry";
+pub const ORPHAN_ERASURE_EVENT: &str = "documents.orphan-erasure";
 
 const ACTOR_REFERENCE_CLASS: &str = "documents-actor-v1";
 const ACTIVATION_REFERENCE_CLASS: &str = "documents-activation-reference-v1";

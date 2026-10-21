@@ -25,8 +25,9 @@ use registry_documents_core::{
     admit_reservation, allowed_actions, check_custodian_quota, place_custody, standing, ActorKind,
     Caller, ContentType, CustodianRef, Custody, CustodyAsk, DocumentPage, DocumentPolicy,
     DocumentPolicyList, DocumentPolicyView, DocumentStatus, DocumentVersionView, DocumentView,
-    DocumentsProject, Eligibility, PolicyBinding, ProblemCode, ReservationAsk, ReservationView,
-    ReserveDocumentRequest, Reserver, Standing, UploadState, VerificationState, MAXIMUM_PAGE_SIZE,
+    DocumentsProject, Eligibility, ErasureState, PolicyBinding, ProblemCode, ReservationAsk,
+    ReservationView, ReserveDocumentRequest, Reserver, Standing, UploadState, VerificationState,
+    MAXIMUM_PAGE_SIZE,
 };
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_dispatch::postgres::{enqueue, JobKey, JobTable};
@@ -44,6 +45,7 @@ use crate::store::PostgresStore;
 use crate::transfer::{ReleaseBody, TransferBudget, TransferDeadline};
 use crate::verification::job_part;
 
+mod erasure;
 mod grants;
 
 /// The idempotency operation a reservation is keyed under.
@@ -226,7 +228,7 @@ const RECORD_COLUMNS: &str = "document.document_id, document.policy_id, document
     version.actor_issuer, version.actor_subject, version.actor_kind,
     version.verified_binding_digest,
     version.verified_digest, version.verified_media_type, version.computed_digest,
-    version.object_id";
+    version.object_id, version.erasure_state";
 const RECORD_FROM: &str = "documents_documents AS document
     JOIN documents_versions AS version ON version.document_id = document.document_id";
 
@@ -244,6 +246,15 @@ fn parse_verification(text: &str) -> Option<VerificationState> {
         "pending" => Some(VerificationState::Pending),
         "approved" => Some(VerificationState::Approved),
         "rejected" => Some(VerificationState::Rejected),
+        _ => None,
+    }
+}
+
+fn parse_erasure(text: &str) -> Option<ErasureState> {
+    match text {
+        "none" => Some(ErasureState::None),
+        "pending" => Some(ErasureState::Pending),
+        "erased" => Some(ErasureState::Erased),
         _ => None,
     }
 }
@@ -297,6 +308,7 @@ impl Record {
         let text = |name: &str| get::<String>(row, name);
         let upload = parse_upload(&text("upload_state")?).ok_or("an unknown upload state")?;
         let status = DocumentStatus::derive(
+            parse_erasure(&text("erasure_state")?).ok_or("an unknown erasure state")?,
             upload,
             parse_verification(&text("verification_state")?)
                 .ok_or("an unknown verification state")?,
@@ -850,7 +862,7 @@ impl DocumentService {
                    JOIN documents_documents AS document
                      ON document.document_id = version.document_id
                   WHERE document.custodian_issuer = $1 AND document.custodian_subject = $2
-                    AND document.policy_id = $3
+                    AND document.policy_id = $3 AND version.erasure_state <> 'erased'
                     AND (version.upload_state = 'finalized'
                          OR (version.upload_state = 'reserved'
                              AND version.upload_expires_at > transaction_timestamp()))",
@@ -1042,7 +1054,13 @@ impl DocumentService {
     {
         let record = &reservation.record;
         let finalized = record.upload == UploadState::Finalized;
-        if !finalized && (record.upload == UploadState::Expired || record.upload_lapsed) {
+        // A removed document takes no content: its reservation answers as
+        // lapsed.
+        if !finalized
+            && (record.upload == UploadState::Expired
+                || record.upload_lapsed
+                || record.status.is_erasing())
+        {
             return Err(ProblemCode::UploadExpired);
         }
         if content_type != Some(record.media_type.as_str()) {
@@ -1188,7 +1206,7 @@ impl DocumentService {
         let row = transaction
             .query_one(
                 "SELECT upload_state, computed_digest,
-                        upload_expires_at <= transaction_timestamp()
+                        upload_expires_at <= transaction_timestamp(), erasure_state <> 'none'
                    FROM documents_versions WHERE version_id = $1 FOR UPDATE",
                 &[&version_id],
             )
@@ -1198,11 +1216,12 @@ impl DocumentService {
         let state: String = row.try_get(0).map_err(read)?;
         let computed: Option<String> = row.try_get(1).map_err(read)?;
         let lapsed: bool = row.try_get(2).map_err(read)?;
+        let erasing: bool = row.try_get(3).map_err(read)?;
         match state.as_str() {
             "finalized" if computed.as_deref() == Some(digest) => return Ok(false),
             "finalized" => return Err(ProblemCode::UploadFinalized),
             "expired" => return Err(ProblemCode::UploadExpired),
-            _ if lapsed => return Err(ProblemCode::UploadExpired),
+            _ if lapsed || erasing => return Err(ProblemCode::UploadExpired),
             _ => {}
         }
         if !pin_storage(&*transaction, &self.storage)

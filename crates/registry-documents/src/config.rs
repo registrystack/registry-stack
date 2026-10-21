@@ -263,7 +263,8 @@ impl std::fmt::Debug for ContentVerificationConfig {
     }
 }
 
-/// Erasure of what expired and revoked document grants released.
+/// Erasure of the bytes of documents whose custodian asked for their
+/// removal.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -271,8 +272,9 @@ pub struct CleanupConfig {
     pub erasure: Erasure,
 }
 
-/// Whether erasure work runs. `paused` stops it; expired and revoked
-/// document grants stop releasing bytes regardless.
+/// Whether erasure work runs. `paused` stops every erasure and the sweep
+/// of orphaned objects; a removal request still stops release at once, and
+/// lapsed uploads are still expired.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]

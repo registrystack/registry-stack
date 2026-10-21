@@ -12,6 +12,7 @@ pub mod audit;
 pub mod auth;
 pub mod config;
 pub mod content;
+pub mod erasure;
 pub mod http;
 pub mod package;
 pub mod runtime;

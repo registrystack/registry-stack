@@ -639,7 +639,7 @@ impl DispatchStore for VerificationStore {
                         verified_binding_digest = $2, verified_digest = $3,
                         verified_media_type = media_type, verified_at = transaction_timestamp()
                   WHERE version_id = $1 AND upload_state = 'finalized'
-                    AND verification_state <> 'rejected'
+                    AND verification_state <> 'rejected' AND erasure_state = 'none'
                     AND verification_binding_digest = $2 AND computed_digest = $3
                     AND media_type = $4",
                 binding,
@@ -650,6 +650,7 @@ impl DispatchStore for VerificationStore {
                         verified_binding_digest = $2, verified_digest = $3,
                         verified_media_type = media_type, verified_at = transaction_timestamp()
                   WHERE version_id = $1 AND upload_state = 'finalized'
+                    AND erasure_state = 'none'
                     AND verification_binding_digest = $2 AND computed_digest = $3
                     AND media_type = $4",
                 binding,
@@ -784,11 +785,12 @@ impl DispatchStore for VerificationStore {
 }
 
 /// Decide what a verdict that changed no version row means. A version that
-/// has since moved to another verifier binding, or was already rejected,
-/// needs no verdict from this job, which is delivered without one. Anything
-/// else means the version no longer matches what the job read, so the
-/// attempt is refused and the job is retried after its lease lapses rather
-/// than delivered with nothing recorded.
+/// has since moved to another verifier binding, was already rejected, or
+/// whose removal its custodian requested needs no verdict from this job,
+/// which is delivered without one. Anything else means the version no
+/// longer matches what the job read, so the attempt is refused and the job
+/// is retried after its lease lapses rather than delivered with nothing
+/// recorded.
 async fn unrecorded_verdict(
     transaction: &Transaction<'_>,
     version_id: Uuid,
@@ -796,19 +798,26 @@ async fn unrecorded_verdict(
 ) -> Result<(), DispatchError> {
     let current = transaction
         .query_opt(
-            "SELECT verification_binding_digest, verification_state
+            "SELECT verification_binding_digest, verification_state, erasure_state <> 'none'
                FROM documents_versions WHERE version_id = $1",
             &[&version_id],
         )
         .await?;
-    let (current_binding, state) = match &current {
+    let (current_binding, state, erasing) = match &current {
         Some(row) => (
             row.try_get::<_, Option<String>>(0)?,
             row.try_get::<_, String>(1)?,
+            row.try_get::<_, bool>(2)?,
         ),
-        None => (None, String::new()),
+        None => (None, String::new(), false),
     };
-    if current.is_some() && current_binding.as_deref() != Some(binding) {
+    if erasing {
+        tracing::info!(
+            version = %version_id,
+            "a verdict arrived for a version whose erasure was requested; it was not recorded"
+        );
+        Ok(())
+    } else if current.is_some() && current_binding.as_deref() != Some(binding) {
         tracing::info!(
             version = %version_id,
             "a verdict arrived for a version whose verifier binding has since changed; it was not recorded"
@@ -957,7 +966,7 @@ pub async fn sweep_bindings(store: &PostgresStore, binding: &str) -> Result<u64,
             "UPDATE documents_versions
                 SET eligibility = 'suspended', verification_binding_digest = $1
               WHERE upload_state = 'finalized' AND verification_state <> 'rejected'
-                AND verification_binding_digest <> $1
+                AND erasure_state = 'none' AND verification_binding_digest <> $1
               RETURNING version_id",
             &[&binding],
         )

@@ -265,7 +265,7 @@
           "uniqueItems": true
         },
         "cleanupGraceHours": {
-          "description": "Time between expiry or revocation and erasure of what it released.",
+          "description": "Time between the custodian's removal request and erasure of the\nbytes. Grant expiry and revocation erase nothing: they only stop a\ngrant releasing.",
           "format": "uint32",
           "maximum": 8760,
           "minimum": 0,
