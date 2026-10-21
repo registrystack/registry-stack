@@ -85,6 +85,12 @@ SHARDS = {
         "registry-messaging-client-node",
         "registry-messaging-client-py",
     ),
+    "documents": (
+        "registry-documents-core",
+        "registry-documents",
+        "registry-documentsctl",
+        "registry-documents-client",
+    ),
     "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (
         "registry-evidence",
@@ -117,6 +123,7 @@ BREG_PACKAGES = frozenset(SHARDS["breg"])
 CASEWORK_PACKAGES = frozenset(SHARDS["casework"])
 SCHEDULING_PACKAGES = frozenset(SHARDS["scheduling"])
 MESSAGING_PACKAGES = frozenset(SHARDS["messaging"])
+DOCUMENTS_PACKAGES = frozenset(SHARDS["documents"])
 STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 
 # The runtime configuration conformance gate reads the sources of the runtimes
@@ -149,6 +156,7 @@ CONFIG_CHECK_PACKAGES = frozenset(
         "registry-bregctl",
         "registry-caseworkctl",
         "registry-discoveryctl",
+        "registry-documentsctl",
         "registry-evidence",
         "registry-evidence-oid4vci",
         "registry-evidencectl",
@@ -1139,6 +1147,8 @@ def classify(
                 seeds.update(SCHEDULING_PACKAGES)
             elif path.startswith("products/messaging/"):
                 seeds.update(MESSAGING_PACKAGES)
+            elif path.startswith("products/documents/"):
+                seeds.update(DOCUMENTS_PACKAGES)
             elif path.startswith("products/coordinator/"):
                 seeds.add("registry-coordinator")
             elif path.startswith("products/identifiers/"):
@@ -1400,6 +1410,8 @@ def classify(
                 "products/scheduling/generated/fixture/",
                 "products/messaging/generated/authoring/",
                 "products/messaging/generated/runtime/",
+                "products/documents/generated/project/",
+                "products/documents/generated/runtime/",
                 "products/discovery/schemas/",
             )
         )
@@ -1528,6 +1540,8 @@ def classify(
         ) and bool(affected & (SCHEDULING_PACKAGES | {"registry-platform-dispatch"})),
         "messaging_contracts": bool(affected & MESSAGING_PACKAGES),
         "messaging_postgres": bool(affected & MESSAGING_PACKAGES),
+        "documents_contracts": bool(affected & DOCUMENTS_PACKAGES),
+        "documents_postgres": bool(affected & DOCUMENTS_PACKAGES),
         "coordinator": "registry-coordinator" in affected,
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,

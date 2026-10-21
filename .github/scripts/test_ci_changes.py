@@ -31,6 +31,7 @@ from ci_changes import (
     REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
     BREG_PACKAGES,
     CASEWORK_PACKAGES,
+    DOCUMENTS_PACKAGES,
     MESSAGING_PACKAGES,
     MESSAGING_TUTORIAL_INPUTS,
     RENDER_TUTORIAL_INPUTS,
@@ -346,6 +347,12 @@ class CiChangesTest(unittest.TestCase):
                 "needs.changes.outputs.messaging_postgres == 'true'"
             ),
             "coordinator-postgres": "needs.changes.outputs.coordinator == 'true'",
+            "documents-contracts": (
+                "needs.changes.outputs.documents_contracts == 'true'"
+            ),
+            "documents-postgres": (
+                "needs.changes.outputs.documents_postgres == 'true'"
+            ),
             "messaging-contracts": (
                 "needs.changes.outputs.messaging_contracts == 'true'"
             ),
@@ -481,6 +488,8 @@ class CiChangesTest(unittest.TestCase):
             "messaging-contracts",
             "messaging-postgres",
             "messaging-smtp",
+            "documents-contracts",
+            "documents-postgres",
             "coordinator-postgres",
             "release-tool",
             "release-tool-required",
@@ -522,6 +531,8 @@ class CiChangesTest(unittest.TestCase):
                 "messaging-postgres",
                 "messaging-contracts",
                 "messaging-smtp",
+                "documents-contracts",
+                "documents-postgres",
                 "coordinator-postgres",
                 "config-conformance",
             ),
@@ -550,6 +561,8 @@ class CiChangesTest(unittest.TestCase):
                 "messaging-postgres",
                 "messaging-contracts",
                 "messaging-smtp",
+                "documents-contracts",
+                "documents-postgres",
                 "coordinator-postgres",
                 "config-conformance",
                 "release-tool",
@@ -612,7 +625,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(37, len(final_needs))
+        self.assertEqual(39, len(final_needs))
         # Platform line coverage publishes from main and the nightly sweep;
         # it does not hold the merge queue.
         self.assertNotIn("platform-coverage", final_needs)
@@ -1168,6 +1181,27 @@ class CiChangesTest(unittest.TestCase):
         unrelated = classify(self.workspace, ("crates/registry-scheduling/src/lib.rs",))
         self.assertFalse(unrelated["messaging_contracts"])
         self.assertFalse(unrelated["messaging_postgres"])
+
+    def test_document_store_product_and_core_select_its_own_gates(self) -> None:
+        for path in (
+            "products/documents/README.md",
+            "crates/registry-documents-core/src/project.rs",
+            "crates/registry-documents/src/http.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertIn(
+                    "documents",
+                    {row["name"] for row in outputs["rust_matrix"]["include"]},
+                )
+                self.assertTrue(outputs["documents_contracts"])
+                self.assertTrue(outputs["documents_postgres"])
+                self.assertFalse(outputs["messaging_postgres"])
+        product = classify(self.workspace, ("products/documents/README.md",))
+        self.assertLessEqual(set(DOCUMENTS_PACKAGES), set(product["rust_packages"]))
+        unrelated = classify(self.workspace, ("crates/registry-messaging/src/lib.rs",))
+        self.assertFalse(unrelated["documents_contracts"])
+        self.assertFalse(unrelated["documents_postgres"])
 
     def test_coordinator_selects_its_runtime_cli_reference_and_postgres_proof(self) -> None:
         for path in (
