@@ -8,7 +8,9 @@
 
 pub mod config;
 pub mod http;
+pub mod package;
 pub mod runtime;
 #[cfg(feature = "schema")]
 pub mod schema;
 pub mod store;
+pub mod verification;

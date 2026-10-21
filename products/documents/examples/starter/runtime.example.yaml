@@ -41,11 +41,14 @@ audit:
   hashKeyRef: secret:file/documents-audit-key
 storage:
   # Document version bytes held in PostgreSQL. maximumDocumentBytes is the
-  # deployment ceiling; a policy's mandatory restriction may only be lower.
+  # deployment ceiling, at most 16777216 (16 MiB) and 16 MiB when omitted; a
+  # policy's mandatory restriction may only be lower, and startup refuses a
+  # package whose policy asks for more.
   type: database
   maximumDocumentBytes: 16777216
   # S3-compatible object storage, the same keys Base Registry Engine reads
-  # under attachmentStorage. The binding is pinned at the first upload.
+  # under attachmentStorage. The binding is pinned at the first upload, and
+  # maximumDocumentBytes may rise to 67108864 (64 MiB).
   # type: s3
   # url: https://objects.example.test
   # bucket: registry-documents
@@ -55,12 +58,12 @@ storage:
   # secretAccessKeyRef: secret:file/s3-secret-access-key
   # caBundleRef: secret:file/s3-ca.pem
   # attemptTimeoutMilliseconds: 10000
-  # maximumDocumentBytes: 104857600
+  # maximumDocumentBytes: 67108864
 contentVerification:
   # Required: no document version becomes releasable until this verifier
   # accepts it. The keys match Base Registry Engine attachmentVerification.
-  # An omitted member is refused; `type: disabled` is accepted only beside
-  # `tlsTermination: development-loopback`.
+  # attemptTimeoutMilliseconds defaults to 10000. `type: disabled` is
+  # accepted only beside `tlsTermination: development-loopback`.
   type: http
   url: https://scanner.example.test/v1/verify
   authorizationRef: secret:file/content-verifier-authorization

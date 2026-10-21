@@ -72,7 +72,9 @@
           "description": "An HTTP verifier the runtime asks about each document version.",
           "properties": {
             "attemptTimeoutMilliseconds": {
-              "format": "uint32",
+              "default": 10000,
+              "description": "The longest one verification attempt may run, body included.\nOmitted, 10000.",
+              "format": "uint64",
               "maximum": 60000,
               "minimum": 100,
               "type": "integer"
@@ -81,29 +83,32 @@
               "$ref": "#/$defs/SecretReference"
             },
             "policyId": {
-              "$ref": "#/$defs/ExternalId",
-              "description": "Non-secret identity of the verifier and its rules generation."
+              "description": "Non-secret identity of the external scanner and its rules generation.",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "type": "string"
             },
             "type": {
               "const": "http",
               "type": "string"
             },
             "url": {
-              "$ref": "#/$defs/Url"
+              "$ref": "#/$defs/Url",
+              "description": "The URL the content is posted to. It is `https`; `http` is accepted\nonly for a loopback host, for local development."
             }
           },
           "required": [
             "type",
             "url",
             "authorizationRef",
-            "policyId",
-            "attemptTimeoutMilliseconds"
+            "policyId"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
-          "description": "No verifier, accepted only beside `tlsTermination:\ndevelopment-loopback`.",
+          "description": "No verifier, accepted only beside `tlsTermination:\ndevelopment-loopback`. Every finalized version is recorded as\napproved under the `disabled` verifier binding.",
           "properties": {
             "type": {
               "const": "disabled",
@@ -483,12 +488,13 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "Document version bytes held in PostgreSQL.",
+          "description": "Document version bytes held in PostgreSQL `bytea`.",
           "properties": {
             "maximumDocumentBytes": {
-              "description": "The deployment ceiling on one document version; a policy's\nmandatory restriction may only be lower.",
+              "default": 16777216,
+              "description": "The deployment ceiling on one document version; a policy's\nmandatory restriction may only be lower. Omitted, 16 MiB.",
               "format": "uint64",
-              "maximum": 1073741824,
+              "maximum": 16777216,
               "minimum": 1,
               "type": "integer"
             },
@@ -498,8 +504,76 @@
             }
           },
           "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Document version bytes held in one S3-compatible bucket, under\nserver-chosen opaque keys.",
+          "properties": {
+            "accessKeyIdRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "attemptTimeoutMilliseconds": {
+              "default": 10000,
+              "description": "The longest one request may run, body included. Omitted, 10000.",
+              "format": "uint64",
+              "maximum": 60000,
+              "minimum": 100,
+              "type": "integer"
+            },
+            "bucket": {
+              "description": "The bucket name: lowercase letters, digits, `-` and `.`.",
+              "maxLength": 63,
+              "minLength": 3,
+              "type": "string"
+            },
+            "caBundleRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "PEM CA bundle for the service. Omitted, the platform's trusted roots\nverify it."
+            },
+            "maximumDocumentBytes": {
+              "default": 16777216,
+              "description": "The deployment ceiling on one document version; a policy's\nmandatory restriction may only be lower. Omitted, 16 MiB.",
+              "format": "uint64",
+              "maximum": 67108864,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "pathStyle": {
+              "default": true,
+              "description": "Address the bucket as a path under `url` rather than as a host name.\nOmitted, `true`.",
+              "type": "boolean"
+            },
+            "region": {
+              "description": "The signing region: lowercase letters, digits and `-`.",
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "secretAccessKeyRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "sessionTokenRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "s3",
+              "type": "string"
+            },
+            "url": {
+              "$ref": "#/$defs/Url",
+              "description": "The service's base URL, with no path. It is `https`; `http` is\naccepted only for a loopback host, for local development."
+            }
+          },
+          "required": [
             "type",
-            "maximumDocumentBytes"
+            "url",
+            "bucket",
+            "region",
+            "accessKeyIdRef",
+            "secretAccessKeyRef"
           ],
           "type": "object"
         }

@@ -11,18 +11,18 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use registry_documents_core::{
-    DOCUMENTS_RUNTIME_API_VERSION, DOCUMENTS_RUNTIME_KIND, MAXIMUM_DOCUMENT_BYTES,
-};
+use registry_documents_core::{DOCUMENTS_RUNTIME_API_VERSION, DOCUMENTS_RUNTIME_KIND};
 use registry_platform_audit::{AuditDestination, AuditDestinationKind};
 pub use registry_platform_config::{
-    AuditKeyConfig, DatabaseConfig, OidcClientsConfig, OidcIssuerConfig, PackageConfig,
-    PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TlsTermination,
+    AttachmentVerifierConfig, AuditKeyConfig, DatabaseConfig, ObjectStorageConfig,
+    OidcClientsConfig, OidcIssuerConfig, PackageConfig, PrivateListenerConfig as ListenerConfig,
+    SecretProvidersConfig, TlsTermination,
 };
 use registry_platform_config::{
     ConfigBlockError, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference,
     SecretResolver, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
 };
+use registry_platform_objectstore::{s3::S3Settings, verifier::HttpVerifierSettings};
 use registry_platform_yaml::{
     BoundedU32, BoundedU64, Diagnostic, ExternalId, LocalId, Report, Url,
 };
@@ -140,6 +140,15 @@ pub struct AuditConfig {
     pub path: Option<std::path::PathBuf>,
 }
 
+/// The largest document version held in PostgreSQL, and the default
+/// ceiling for either storage type: 16 MiB, in line with BReg.
+pub const DATABASE_MAXIMUM_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
+
+/// The largest document version held in S3: 64 MiB. The upload body is
+/// buffered in memory, so the ceiling stays a small multiple of the
+/// database one.
+pub const S3_MAXIMUM_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Where document version bytes are held.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
@@ -151,14 +160,55 @@ pub struct AuditConfig {
     deny_unknown_fields
 )]
 pub enum StorageConfig {
-    /// Document version bytes held in PostgreSQL.
+    /// Document version bytes held in PostgreSQL `bytea`.
     Database {
         /// The deployment ceiling on one document version; a policy's
-        /// mandatory restriction may only be lower.
-        maximum_document_bytes: BoundedU64<1, MAXIMUM_DOCUMENT_BYTES>,
+        /// mandatory restriction may only be lower. Omitted, 16 MiB.
+        #[serde(default = "default_database_maximum_document_bytes")]
+        maximum_document_bytes: BoundedU64<1, DATABASE_MAXIMUM_DOCUMENT_BYTES>,
+    },
+    /// Document version bytes held in one S3-compatible bucket, under
+    /// server-chosen opaque keys.
+    S3 {
+        /// The bucket and the runtime's credentials for it. Boxed: the
+        /// bucket settings are several times the size of the database
+        /// variant.
+        #[serde(rename(deserialize = "registry-platform-yaml/shared-block/object-storage"))]
+        #[cfg_attr(feature = "schema", schemars(flatten))]
+        settings: Box<ObjectStorageConfig>,
+        /// The deployment ceiling on one document version; a policy's
+        /// mandatory restriction may only be lower. Omitted, 16 MiB.
+        #[serde(default = "default_s3_maximum_document_bytes")]
+        maximum_document_bytes: BoundedU64<1, S3_MAXIMUM_DOCUMENT_BYTES>,
     },
 }
 registry_platform_yaml::tagged_union!(StorageConfig);
+
+fn default_database_maximum_document_bytes() -> BoundedU64<1, DATABASE_MAXIMUM_DOCUMENT_BYTES> {
+    BoundedU64::new(DATABASE_MAXIMUM_DOCUMENT_BYTES)
+        .expect("the database ceiling is within its own bounds")
+}
+
+fn default_s3_maximum_document_bytes() -> BoundedU64<1, S3_MAXIMUM_DOCUMENT_BYTES> {
+    BoundedU64::new(DATABASE_MAXIMUM_DOCUMENT_BYTES)
+        .expect("the database ceiling is within the S3 bounds")
+}
+
+impl StorageConfig {
+    /// The deployment ceiling on one document version, in bytes.
+    #[must_use]
+    pub fn maximum_document_bytes(&self) -> u64 {
+        match self {
+            Self::Database {
+                maximum_document_bytes,
+            } => u64::from(*maximum_document_bytes),
+            Self::S3 {
+                maximum_document_bytes,
+                ..
+            } => u64::from(*maximum_document_bytes),
+        }
+    }
+}
 
 /// The content verifier every document version passes before it becomes
 /// releasable.
@@ -174,14 +224,15 @@ registry_platform_yaml::tagged_union!(StorageConfig);
 pub enum ContentVerificationConfig {
     /// An HTTP verifier the runtime asks about each document version.
     Http {
-        url: Url,
-        authorization_ref: SecretReference,
-        /// Non-secret identity of the verifier and its rules generation.
-        policy_id: ExternalId,
-        attempt_timeout_milliseconds: BoundedU32<100, MAXIMUM_ATTEMPT_TIMEOUT_MILLISECONDS>,
+        /// The verifier URL, its credential, policy generation, and attempt
+        /// timeout.
+        #[serde(rename(deserialize = "registry-platform-yaml/shared-block/attachment-verifier"))]
+        #[cfg_attr(feature = "schema", schemars(flatten))]
+        settings: AttachmentVerifierConfig,
     },
     /// No verifier, accepted only beside `tlsTermination:
-    /// development-loopback`.
+    /// development-loopback`. Every finalized version is recorded as
+    /// approved under the `disabled` verifier binding.
     Disabled {},
 }
 registry_platform_yaml::tagged_union!(ContentVerificationConfig);
@@ -381,6 +432,7 @@ impl RuntimeConfig {
         self.check_database(&mut findings);
         self.check_oidc(&mut findings);
         self.check_audit(&mut findings);
+        self.check_storage(&mut findings);
         self.check_content_verification(&mut findings);
         self.check_hook_destinations(&mut findings);
         findings
@@ -419,13 +471,26 @@ impl RuntimeConfig {
             .into_iter()
             .map(|(field, reference)| (field.to_owned(), reference))
             .collect();
-        if let ContentVerificationConfig::Http {
-            authorization_ref, ..
-        } = &self.content_verification
-        {
+        if let StorageConfig::S3 { settings, .. } = &self.storage {
+            references.push((
+                "storage.accessKeyIdRef".to_owned(),
+                settings.access_key_id_ref.as_str(),
+            ));
+            references.push((
+                "storage.secretAccessKeyRef".to_owned(),
+                settings.secret_access_key_ref.as_str(),
+            ));
+            if let Some(reference) = &settings.session_token_ref {
+                references.push(("storage.sessionTokenRef".to_owned(), reference.as_str()));
+            }
+            if let Some(reference) = &settings.ca_bundle_ref {
+                references.push(("storage.caBundleRef".to_owned(), reference.as_str()));
+            }
+        }
+        if let ContentVerificationConfig::Http { settings } = &self.content_verification {
             references.push((
                 "contentVerification.authorizationRef".to_owned(),
-                authorization_ref.as_str(),
+                settings.authorization_ref.as_str(),
             ));
         }
         for (id, destination) in &self.destinations.hooks {
@@ -490,6 +555,28 @@ impl RuntimeConfig {
         }
     }
 
+    fn check_storage(&self, findings: &mut Vec<Finding>) {
+        let StorageConfig::S3 { settings, .. } = &self.storage else {
+            return;
+        };
+        let development = self.listener.tls_termination == TlsTermination::DevelopmentLoopback;
+        if !settings.url.is_https() && !development {
+            findings.push(Finding::new(
+                "documents.runtime.insecure-url",
+                "/storage/url",
+                "storage.url must be an https URL",
+                "Write an https URL, or run the listener in development-loopback mode.",
+            ));
+        } else if S3Settings::from_config(settings).is_err() {
+            findings.push(Finding::new(
+                "documents.runtime.invalid-object-storage",
+                "/storage",
+                "storage is not a usable S3 bucket: url must be https (http only for a loopback host) with no path, query, or fragment, and bucket and region must be lowercase S3 names",
+                "Correct storage.url, storage.bucket, and storage.region.",
+            ));
+        }
+    }
+
     fn check_content_verification(&self, findings: &mut Vec<Finding>) {
         let development = self.listener.tls_termination == TlsTermination::DevelopmentLoopback;
         match &self.content_verification {
@@ -501,12 +588,24 @@ impl RuntimeConfig {
                     "Configure an http content verifier, or run the listener in development-loopback mode.",
                 ));
             }
-            ContentVerificationConfig::Http { url, .. } if !url.is_https() && !development => {
+            ContentVerificationConfig::Http { settings }
+                if !settings.url.is_https() && !development =>
+            {
                 findings.push(Finding::new(
                     "documents.runtime.insecure-url",
                     "/contentVerification/url",
                     "contentVerification.url must be an https URL",
                     "Write an https URL, or run the listener in development-loopback mode.",
+                ));
+            }
+            ContentVerificationConfig::Http { settings }
+                if HttpVerifierSettings::from_config(settings).is_err() =>
+            {
+                findings.push(Finding::new(
+                    "documents.runtime.invalid-content-verification",
+                    "/contentVerification",
+                    "contentVerification is not a usable verifier: url must be https (http only for a loopback host) with no credentials or fragment, and policyId must be 1 to 128 printable ASCII characters",
+                    "Correct contentVerification.url and contentVerification.policyId.",
                 ));
             }
             _ => {}
@@ -635,6 +734,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
         ["authentication", "oidc", "issuer"]
         | ["authentication", "oidc", "jwksSource", "uri"]
         | ["contentVerification", "url"]
+        | ["storage", "url"]
         | ["destinations", "hooks", _, "url"] => "https://deferred.invalid",
         _ => DEFAULT_STAND_IN,
     }
@@ -689,6 +789,7 @@ pub(crate) mod tests {
             config.storage,
             StorageConfig::Database { maximum_document_bytes } if u64::from(maximum_document_bytes) == 16_777_216
         ));
+        assert_eq!(config.storage.maximum_document_bytes(), 16_777_216);
         assert!(matches!(
             config.content_verification,
             ContentVerificationConfig::Http { .. }
@@ -763,10 +864,7 @@ pub(crate) mod tests {
 
     #[test]
     fn disabled_content_verification_requires_development_loopback() {
-        let disabled = STARTER_RUNTIME.replace(
-            "  type: http\n  url: https://scanner.example.test/v1/verify\n  authorizationRef: secret:file/content-verifier-authorization\n  policyId: documents-default\n  attemptTimeoutMilliseconds: 10000\n",
-            "  type: disabled\n",
-        );
+        let disabled = STARTER_RUNTIME.replace(HTTP_VERIFIER, "  type: disabled\n");
         assert_ne!(disabled, STARTER_RUNTIME);
         assert_eq!(
             codes(parse(&disabled).unwrap_err()),
@@ -811,14 +909,117 @@ pub(crate) mod tests {
         );
     }
 
+    const HTTP_VERIFIER: &str = "  type: http\n  url: https://scanner.example.test/v1/verify\n  authorizationRef: secret:file/content-verifier-authorization\n  policyId: documents-default\n  attemptTimeoutMilliseconds: 10000\n";
+
+    const DATABASE_STORAGE: &str = "  type: database\n  maximumDocumentBytes: 16777216\n";
+
+    fn with_s3(url: &str, extra: &str) -> String {
+        let text = STARTER_RUNTIME.replace(
+            DATABASE_STORAGE,
+            &format!(
+                "  type: s3\n  url: {url}\n  bucket: registry-documents\n  region: eu-west-1\n  accessKeyIdRef: secret:file/s3-access-key-id\n  secretAccessKeyRef: secret:file/s3-secret-access-key\n{extra}"
+            ),
+        );
+        assert_ne!(text, STARTER_RUNTIME, "the fixture names database storage");
+        text
+    }
+
     #[test]
-    fn a_storage_ceiling_above_the_product_bound_is_out_of_range() {
+    fn a_database_ceiling_above_sixteen_mebibytes_is_out_of_range() {
         let text = STARTER_RUNTIME.replace(
             "maximumDocumentBytes: 16777216",
-            "maximumDocumentBytes: 1073741825",
+            "maximumDocumentBytes: 16777217",
         );
         assert_ne!(text, STARTER_RUNTIME);
         assert!(codes(parse(&text).unwrap_err()).contains(&"config.out-of-range".to_owned()));
+    }
+
+    #[test]
+    fn an_omitted_database_ceiling_is_sixteen_mebibytes() {
+        let text = STARTER_RUNTIME.replace(DATABASE_STORAGE, "  type: database\n");
+        assert_ne!(text, STARTER_RUNTIME);
+        let config = parse(&text).expect("an omitted ceiling");
+        assert_eq!(config.storage.maximum_document_bytes(), 16_777_216);
+    }
+
+    #[test]
+    fn s3_storage_reads_the_shared_object_storage_block() {
+        let config = parse(&with_s3(
+            "https://objects.example.test",
+            "  maximumDocumentBytes: 67108864\n",
+        ))
+        .expect("an s3 storage block");
+        let StorageConfig::S3 { settings, .. } = &config.storage else {
+            panic!("s3 storage");
+        };
+        assert_eq!(settings.bucket, "registry-documents");
+        assert!(settings.path_style);
+        assert_eq!(config.storage.maximum_document_bytes(), 67_108_864);
+        let omitted = parse(&with_s3("https://objects.example.test", "")).unwrap();
+        assert_eq!(omitted.storage.maximum_document_bytes(), 16_777_216);
+    }
+
+    #[test]
+    fn an_s3_ceiling_above_sixty_four_mebibytes_is_out_of_range() {
+        let text = with_s3(
+            "https://objects.example.test",
+            "  maximumDocumentBytes: 67108865\n",
+        );
+        assert!(codes(parse(&text).unwrap_err()).contains(&"config.out-of-range".to_owned()));
+    }
+
+    #[test]
+    fn an_unknown_s3_member_names_the_shared_keys() {
+        let text = with_s3("https://objects.example.test", "  bucketPolicy: open\n");
+        assert!(codes(parse(&text).unwrap_err()).contains(&"config.unknown-key".to_owned()));
+    }
+
+    #[test]
+    fn plaintext_s3_is_refused_outside_development() {
+        let text = with_s3("http://objects.example.test", "");
+        assert_eq!(
+            codes(parse(&text).unwrap_err()),
+            ["documents.runtime.insecure-url"]
+        );
+    }
+
+    #[test]
+    fn an_s3_url_with_a_path_is_refused_without_naming_it() {
+        let text = with_s3("https://objects.example.test/private-path", "");
+        let RuntimeConfigError::Refused(findings) = parse(&text).unwrap_err() else {
+            panic!("a refused document");
+        };
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, "documents.runtime.invalid-object-storage");
+        assert_eq!(findings[0].pointer, "/storage");
+        assert!(!findings[0].message.contains("private-path"));
+    }
+
+    #[test]
+    fn s3_credentials_name_an_enabled_provider() {
+        let text = with_s3("https://objects.example.test", "").replace(
+            "secret:file/s3-access-key-id",
+            "secret:env/S3_ACCESS_KEY_ID",
+        );
+        let RuntimeConfigError::Refused(findings) = parse(&text).unwrap_err() else {
+            panic!("a refused document");
+        };
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].pointer, "/storage/accessKeyIdRef");
+        assert!(!findings[0].message.contains("S3_ACCESS_KEY_ID"));
+    }
+
+    #[test]
+    fn a_verifier_policy_id_outside_printable_ascii_is_refused() {
+        let text = STARTER_RUNTIME.replace(
+            "policyId: documents-default",
+            "policyId: \"documents default\"",
+        );
+        assert_ne!(text, STARTER_RUNTIME);
+        assert_eq!(
+            codes(parse(&text).unwrap_err()),
+            ["documents.runtime.invalid-content-verification"]
+        );
     }
 
     #[test]
