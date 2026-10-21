@@ -215,6 +215,15 @@
         "phase": {
           "$ref": "#/$defs/HookPhase"
         },
+        "policies": {
+          "description": "The document policies whose documents the observer hears about: a\nchange to a document held under any other policy captures nothing\nfor it. Listing them is the operator's declaration of who may\nreceive which documents' events.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
         "projection": {
           "description": "The fields of the trigger's projection the observer receives.",
           "items": {
@@ -231,6 +240,7 @@
         "id",
         "phase",
         "trigger",
+        "policies",
         "projection",
         "handler"
       ],

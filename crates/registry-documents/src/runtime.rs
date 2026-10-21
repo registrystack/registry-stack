@@ -41,7 +41,9 @@ use crate::erasure::{
     cleanup_once, erasure_status, CleanupPass, ErasureStatus, ErasureStore, ErasureTransport,
     ORPHAN_MARGIN,
 };
-use crate::hooks::{ActivatedHooks, HookActivationError, HookDeliveryService, HookRuntimeIdentity};
+use crate::hooks::{
+    ActivatedHooks, HookActivationError, HookDeliveryService, HookRuntimeIdentity, ScopedHook,
+};
 use crate::http::{router, DocumentRoutes};
 use crate::package::{load_package, LoadedPackage, PackageLoadError};
 use crate::service::{DocumentService, ServiceSettings};
@@ -616,7 +618,7 @@ fn activate_hooks(
     schema: String,
 ) -> Result<ActivatedHooks, RuntimeError> {
     Ok(ActivatedHooks::activate(
-        &package.project.hook_declarations(),
+        &ScopedHook::of(&package.project),
         &config.destinations.hooks,
         secrets,
         HookRuntimeIdentity {
