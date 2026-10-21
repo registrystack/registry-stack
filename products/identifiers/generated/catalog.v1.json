@@ -3889,7 +3889,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/model-selection.v1alpha1.schema.json",
-        "sha256": "1f02f199bd6a722452f2e3abb15f1c74f03f62c5b52acdbea6a33d90b60b0ffd",
+        "sha256": "975478df7cdc216115fcf370f1478ffc3309c6ac6ae47f79be1c8b358c90dd7e",
         "mediaType": "application/schema+json"
       }
     },
@@ -3907,7 +3907,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "0cf71aabdeb44baa75e633391095f9dafecf6707fe4919814a9a8ef65334a9bd",
+        "sha256": "9c6e8165dfd0ad5d9e2429bb59e06851dedcdb4991937d706e3e1fed3da2880d",
         "mediaType": "application/schema+json"
       }
     },
@@ -3925,7 +3925,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "33f386cba710f62639b29bf10a5c5328f627530ab50ffa119427337a768d0914",
+        "sha256": "50777fbe48b4e9616b33584b8f0741338a36d7951e9b486e47136c98d4f9f79e",
         "mediaType": "application/schema+json"
       }
     },
@@ -4173,7 +4173,7 @@
       "description": "Registry Coordinator runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/runtime.rs",
-        "sha256": "4b15385708723cc16d62de43382c6879c495c8bcd38c598530f8a76c1ed5a294"
+        "sha256": "4e05c080eeaccf0a54da1057222550c97c7a2c390d424e16d4a55ead331c6ebe"
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
