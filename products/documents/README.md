@@ -6,11 +6,13 @@ names. An owning system places a document in custody under a document policy;
 content verification decides whether a version may ever be released; a
 document grant names one recipient, one version, and an expiry.
 
-The product is pre-1.0 and held out of releases. This directory and its four
-crates are a wired skeleton: the configuration formats, schemas, problem
-vocabulary, tooling, CI gates, and release hold-out exist, and the runtime
-serves only its health route. Document custody, storage, content
-verification, document grants, retention, and hooks arrive in later changes.
+The product is pre-1.0 and held out of releases. The configuration formats,
+schemas, problem vocabulary, tooling, CI gates, and release hold-out exist.
+Custody, PostgreSQL and S3 storage, upload with digest and length checks,
+content verification on dispatch, and release of a verified version are
+implemented and proven through a router that only test builds compile; the
+served runtime answers only its health route until authentication lands.
+Document grants, retention, and hooks arrive in later changes.
 
 ## Crates
 
@@ -73,10 +75,13 @@ The problem catalog published under
 products/documents/scripts/check-checkpoint.sh
 products/documents/scripts/check-contracts.sh
 DOCUMENTS_TEST_DATABASE_URL=<disposable database> cargo test --locked \
-  -p registry-documents --features postgres-test --test postgres_startup
+  -p registry-documents --features postgres-test \
+  --test postgres_startup --test postgres_documents --test postgres_s3
 ```
 
 The checkpoint runs the dependency-direction and database-isolation gates,
 the script tests, the contract validator, the schema drift test, and the
-offline `documentsctl` refusal cases. The PostgreSQL suite needs a disposable
-database and fails, rather than skips, without `DOCUMENTS_TEST_DATABASE_URL`.
+offline `documentsctl` refusal cases. The PostgreSQL suites need a disposable
+database and fail, rather than skip, without `DOCUMENTS_TEST_DATABASE_URL`.
+Each test runs in its own schema. `postgres_s3` runs the S3 storage branch
+against a loopback fake object store and HTTP verifier it starts itself.

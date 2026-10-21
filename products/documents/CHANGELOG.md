@@ -14,3 +14,23 @@ The Document Store is held out of releases.
   `request.not-found`.
 - The `registry-documents` problem vocabulary is published in the identifiers
   catalog.
+- Document custody under a document policy: reservation refuses an unknown
+  policy, a size above the policy or deployment ceiling, a media type outside
+  the policy list, and a custodian over its per-policy byte quota, before any
+  byte moves.
+- Content upload hashes and bounds the body while reading it, finalizes only
+  when digest and length match the reservation, and keeps nothing otherwise.
+  Concurrent uploads to one reservation finalize once.
+- PostgreSQL `bytea` storage, or S3 storage through the shared object storage
+  block, with the storage binding pinned at the first upload. Identical
+  content uploaded twice is stored twice.
+- Content verification on dispatch through the shared HTTP verifier, with
+  backoff for about seven days before a job dead-letters. A version is
+  released only on an approved verdict bound to its digest, media type, and
+  the current verifier binding; a verifier change at restart suspends and
+  re-verifies.
+- Download checks stored content against its digest before the first byte
+  and refuses a mismatch.
+- Audit entries for reservation, upload, verification, and download.
+- The served runtime still answers only `GET /health`: the document routes
+  are compiled only into test builds until authentication lands.
