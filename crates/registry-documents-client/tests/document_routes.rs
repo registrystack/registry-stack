@@ -13,7 +13,7 @@ use std::task::{Context, Poll};
 use axum::http::{Method, StatusCode};
 use bytes::Bytes;
 use registry_documents_client::{
-    CustodianRef, Digest, DocumentLabel, DocumentStatus, DocumentsClientConfig,
+    ActorKind, CustodianRef, Digest, DocumentLabel, DocumentStatus, DocumentsClientConfig,
     DocumentsClientError, DocumentsProtocolFailure, ExternalId, GrantState, GranteeRef,
     IssueGrantRequest, PageRequest, ProblemCode, ReservationView, ReserveDocumentRequest,
     TransportKind, UploadBody,
@@ -43,6 +43,7 @@ fn grant_request() -> IssueGrantRequest {
         version_id: VERSION_ID.to_owned(),
         grantee: GranteeRef {
             subject: ExternalId::new("clerk-0001").expect("fixture subject"),
+            kind: ActorKind::Human,
         },
         expiry_hours: Some(24),
     }
@@ -522,6 +523,35 @@ async fn a_download_refused_by_the_service_is_its_typed_code() {
 }
 
 #[tokio::test]
+async fn a_download_refused_to_a_caller_who_sees_the_document_is_the_profile_refusal() {
+    // The reserving system owns a document it holds for someone else and
+    // may read it, but the runtime refuses it the content.
+    let (url, script, server) = serve(vec![Answer::Problem(
+        ProblemCode::ProfileNotAuthorized,
+        None,
+    )])
+    .await;
+    let error = client(config(&url))
+        .download_content(&token(), DOCUMENT_ID, VERSION_ID, &expected_digest())
+        .await
+        .expect_err("a refusal");
+    assert!(
+        matches!(
+            error,
+            DocumentsClientError::Problem {
+                status: 403,
+                code: ProblemCode::ProfileNotAuthorized,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(!error.is_outcome_unknown());
+    assert_eq!(script.observations().len(), 1);
+    server.abort();
+}
+
+#[tokio::test]
 async fn issue_grant_posts_the_grant_with_its_key() {
     let (url, script, server) = serve(vec![Answer::json(
         StatusCode::CREATED,
@@ -545,6 +575,10 @@ async fn issue_grant_posts_the_grant_with_its_key() {
     assert_eq!(sent.headers["content-type"], "application/json");
     assert_eq!(sent.headers["idempotency-key"], IDEMPOTENCY_KEY);
     let body: serde_json::Value = serde_json::from_slice(&sent.body).expect("a JSON body");
+    assert_eq!(
+        body["grantee"],
+        serde_json::json!({ "subject": "clerk-0001", "kind": "human" })
+    );
     assert_eq!(
         body,
         serde_json::to_value(grant_request()).expect("the request as JSON")

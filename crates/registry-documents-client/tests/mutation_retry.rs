@@ -13,9 +13,9 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use registry_documents_client::{
-    CustodianRef, Digest, DocumentsClientConfig, DocumentsClientError, ExternalId, GranteeRef,
-    IssueGrantRequest, ProblemCode, ReservationView, ReserveDocumentRequest, TransportKind,
-    UploadBody,
+    ActorKind, CustodianRef, Digest, DocumentsClientConfig, DocumentsClientError, ExternalId,
+    GranteeRef, IssueGrantRequest, ProblemCode, ReservationView, ReserveDocumentRequest,
+    TransportKind, UploadBody,
 };
 use support::*;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -43,6 +43,7 @@ fn grant_request() -> IssueGrantRequest {
         version_id: VERSION_ID.to_owned(),
         grantee: GranteeRef {
             subject: ExternalId::new("clerk-0001").expect("fixture subject"),
+            kind: ActorKind::Human,
         },
         expiry_hours: None,
     }
