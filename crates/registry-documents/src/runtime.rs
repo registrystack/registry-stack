@@ -30,9 +30,9 @@ use tokio::sync::watch;
 use tracing_subscriber::filter::LevelFilter;
 
 use crate::audit::DocumentsAudit;
+use crate::auth::DocumentsAuthenticator;
 use crate::config::{describe_secret_failure, startup_report, RuntimeConfig, RuntimeConfigError};
 use crate::content::{pinned_storage, ContentStorage, StorageError};
-use crate::auth::DocumentsAuthenticator;
 use crate::http::{router, DocumentRoutes};
 use crate::package::{load_package, PackageLoadError};
 use crate::service::{DocumentService, ServiceSettings};

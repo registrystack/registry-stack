@@ -28,9 +28,26 @@ use registry_documents_core::{
 use serde_json::{json, Map, Value};
 
 use crate::config::RuntimeConfig;
+use crate::http::{
+    DOCUMENTS_PATH, DOCUMENT_CONTENT_PATH, DOCUMENT_GRANTS_PATH, DOCUMENT_PATH, GRANTS_PATH,
+    GRANT_PATH, MAXIMUM_IDEMPOTENCY_KEY_BYTES, POLICIES_PATH, UPLOAD_CONTENT_PATH,
+};
+use crate::service::MAXIMUM_CURSOR_BYTES;
+use registry_documents_core::{DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE};
 
 /// File name of the generated OpenAPI document.
 pub const OPENAPI_FILE: &str = "registry-documents.openapi.json";
+
+/// What one side of an operation carries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Payload {
+    /// No body.
+    Empty,
+    /// A JSON document of the named component schema.
+    Json(&'static str),
+    /// Document content of the reserved media type, as raw bytes.
+    Content,
+}
 
 /// One operation the public listener serves.
 pub struct Operation {
@@ -38,18 +55,386 @@ pub struct Operation {
     pub path: &'static str,
     pub operation_id: &'static str,
     pub summary: &'static str,
+    /// Whether the caller must present a bearer access token.
+    pub authenticated: bool,
+    /// Whether the request carries a required `Idempotency-Key` header.
+    pub idempotent: bool,
+    /// Whether the operation pages by `cursor` and `limit`.
+    pub paged: bool,
+    pub request: Payload,
+    pub success: u16,
+    pub response: Payload,
     pub problems: &'static [ProblemCode],
 }
 
+/// Every problem an authenticated operation can answer before it reads
+/// anything of the request but its credential.
+const CALLER: [ProblemCode; 4] = [
+    ProblemCode::AuthenticationRefused,
+    ProblemCode::ProfileNotAuthorized,
+    ProblemCode::RequestMethodNotAllowed,
+    ProblemCode::ServiceUnavailable,
+];
+
+/// Every problem reading a JSON request body can answer.
+const JSON_BODY: [ProblemCode; 4] = [
+    ProblemCode::RequestBodyTooLarge,
+    ProblemCode::RequestInvalid,
+    ProblemCode::RequestUnprocessable,
+    ProblemCode::RequestUnsupportedMediaType,
+];
+
+const fn join<const A: usize, const B: usize, const C: usize, const N: usize>(
+    first: [ProblemCode; A],
+    second: [ProblemCode; B],
+    third: [ProblemCode; C],
+) -> [ProblemCode; N] {
+    assert!(A + B + C == N, "the joined length is the sum of the parts");
+    let mut joined = [ProblemCode::ServiceUnavailable; N];
+    let mut index = 0;
+    while index < A {
+        joined[index] = first[index];
+        index += 1;
+    }
+    while index < A + B {
+        joined[index] = second[index - A];
+        index += 1;
+    }
+    while index < N {
+        joined[index] = third[index - A - B];
+        index += 1;
+    }
+    joined
+}
+
+const RESERVE_PROBLEMS: [ProblemCode; 15] = join(
+    CALLER,
+    JSON_BODY,
+    [
+        ProblemCode::CustodyNotPermitted,
+        ProblemCode::CustodyQuotaExceeded,
+        ProblemCode::DocumentContentTypeNotAllowed,
+        ProblemCode::DocumentPolicyUnknown,
+        ProblemCode::DocumentTooLarge,
+        ProblemCode::IdempotencyExpired,
+        ProblemCode::IdempotencyKeyReused,
+    ],
+);
+const LIST_PROBLEMS: [ProblemCode; 5] = join(CALLER, [ProblemCode::RequestInvalid], []);
+const READ_PROBLEMS: [ProblemCode; 5] = join(CALLER, [ProblemCode::ResourceNotFound], []);
+const DOWNLOAD_PROBLEMS: [ProblemCode; 6] = join(
+    CALLER,
+    [
+        ProblemCode::DocumentVersionNotReleasable,
+        ProblemCode::ResourceNotFound,
+    ],
+    [],
+);
+const UPLOAD_PROBLEMS: [ProblemCode; 13] = join(
+    CALLER,
+    [
+        ProblemCode::RequestBodyTooLarge,
+        ProblemCode::RequestInvalid,
+        ProblemCode::ResourceNotFound,
+    ],
+    [
+        ProblemCode::UploadContentTypeMismatch,
+        ProblemCode::UploadDigestMismatch,
+        ProblemCode::UploadExpired,
+        ProblemCode::UploadFinalized,
+        ProblemCode::UploadLengthMismatch,
+        ProblemCode::CustodyQuotaExceeded,
+    ],
+);
+const ISSUE_GRANT_PROBLEMS: [ProblemCode; 11] = join(
+    CALLER,
+    JSON_BODY,
+    [
+        ProblemCode::DocumentVersionNotReleasable,
+        ProblemCode::IdempotencyKeyReused,
+        ProblemCode::ResourceNotFound,
+    ],
+);
+const LIST_GRANTS_PROBLEMS: [ProblemCode; 6] = join(
+    CALLER,
+    [ProblemCode::RequestInvalid, ProblemCode::ResourceNotFound],
+    [],
+);
+
 /// Every operation the public listener serves. Every other route answers
 /// `request.not-found`.
-pub const OPERATIONS: &[Operation] = &[Operation {
-    method: "get",
-    path: HEALTH_PATH,
-    operation_id: "health",
-    summary: "Report that the process is serving.",
-    problems: &[ProblemCode::RequestMethodNotAllowed],
-}];
+pub const OPERATIONS: &[Operation] = &[
+    Operation {
+        method: "get",
+        path: HEALTH_PATH,
+        operation_id: "health",
+        summary: "Report that the process is serving.",
+        authenticated: false,
+        idempotent: false,
+        paged: false,
+        request: Payload::Empty,
+        success: 200,
+        response: Payload::Empty,
+        problems: &[ProblemCode::RequestMethodNotAllowed],
+    },
+    Operation {
+        method: "post",
+        path: DOCUMENTS_PATH,
+        operation_id: "reserveDocument",
+        summary: "Reserve a document under a policy and receive its upload path.",
+        authenticated: true,
+        idempotent: true,
+        paged: false,
+        request: Payload::Json("ReserveDocumentRequest"),
+        success: 201,
+        response: Payload::Json("ReservationView"),
+        problems: &RESERVE_PROBLEMS,
+    },
+    Operation {
+        method: "get",
+        path: DOCUMENTS_PATH,
+        operation_id: "listDocuments",
+        summary: "List the documents the caller holds in custody or reserved.",
+        authenticated: true,
+        idempotent: false,
+        paged: true,
+        request: Payload::Empty,
+        success: 200,
+        response: Payload::Json("DocumentPage"),
+        problems: &LIST_PROBLEMS,
+    },
+    Operation {
+        method: "get",
+        path: DOCUMENT_PATH,
+        operation_id: "readDocument",
+        summary: "Read one document's metadata and the actions the caller may take.",
+        authenticated: true,
+        idempotent: false,
+        paged: false,
+        request: Payload::Empty,
+        success: 200,
+        response: Payload::Json("DocumentView"),
+        problems: &READ_PROBLEMS,
+    },
+    Operation {
+        method: "get",
+        path: DOCUMENT_CONTENT_PATH,
+        operation_id: "downloadDocumentVersion",
+        summary: "Download one releasable document version, as the custodian or a grant holder.",
+        authenticated: true,
+        idempotent: false,
+        paged: false,
+        request: Payload::Empty,
+        success: 200,
+        response: Payload::Content,
+        problems: &DOWNLOAD_PROBLEMS,
+    },
+    Operation {
+        method: "put",
+        path: UPLOAD_CONTENT_PATH,
+        operation_id: "uploadDocumentContent",
+        summary: "Send the reserved content; a repeat of the same content answers the same view.",
+        authenticated: true,
+        idempotent: false,
+        paged: false,
+        request: Payload::Content,
+        success: 200,
+        response: Payload::Json("DocumentView"),
+        problems: &UPLOAD_PROBLEMS,
+    },
+    Operation {
+        method: "post",
+        path: DOCUMENT_GRANTS_PATH,
+        operation_id: "issueDocumentGrant",
+        summary: "Grant one named recipient one exact document version until a fixed expiry.",
+        authenticated: true,
+        idempotent: true,
+        paged: false,
+        request: Payload::Json("IssueGrantRequest"),
+        success: 201,
+        response: Payload::Json("DocumentGrantView"),
+        problems: &ISSUE_GRANT_PROBLEMS,
+    },
+    Operation {
+        method: "get",
+        path: DOCUMENT_GRANTS_PATH,
+        operation_id: "listDocumentGrants",
+        summary: "List every grant on one document, in any state.",
+        authenticated: true,
+        idempotent: false,
+        paged: true,
+        request: Payload::Empty,
+        success: 200,
+        response: Payload::Json("DocumentGrantPage"),
+        problems: &LIST_GRANTS_PROBLEMS,
+    },
+    Operation {
+        method: "get",
+        path: GRANTS_PATH,
+        operation_id: "listReceivedGrants",
+        summary: "List the active grants that name the caller.",
+        authenticated: true,
+        idempotent: false,
+        paged: true,
+        request: Payload::Empty,
+        success: 200,
+        response: Payload::Json("DocumentGrantPage"),
+        problems: &LIST_PROBLEMS,
+    },
+    Operation {
+        method: "delete",
+        path: GRANT_PATH,
+        operation_id: "revokeDocumentGrant",
+        summary: "Revoke one grant; revoking a revoked grant answers the same view.",
+        authenticated: true,
+        idempotent: false,
+        paged: false,
+        request: Payload::Empty,
+        success: 200,
+        response: Payload::Json("DocumentGrantView"),
+        problems: &READ_PROBLEMS,
+    },
+    Operation {
+        method: "get",
+        path: POLICIES_PATH,
+        operation_id: "listDocumentPolicies",
+        summary: "List the policies the caller may place documents under, with their bounds.",
+        authenticated: true,
+        idempotent: false,
+        paged: false,
+        request: Payload::Empty,
+        success: 200,
+        response: Payload::Json("DocumentPolicyList"),
+        problems: &CALLER,
+    },
+];
+
+/// The JSON Schema of every body the operations name, keyed by component
+/// name, with each type's own definitions hoisted beside it.
+fn component_schemas() -> Result<Map<String, Value>, serde_json::Error> {
+    use registry_documents_core::{
+        DocumentGrantPage, DocumentGrantView, DocumentPage, DocumentPolicyList, DocumentView,
+        IssueGrantRequest, ReservationView, ReserveDocumentRequest,
+    };
+    let derived = [
+        (
+            "ReserveDocumentRequest",
+            schemars::schema_for!(ReserveDocumentRequest),
+        ),
+        ("ReservationView", schemars::schema_for!(ReservationView)),
+        ("DocumentView", schemars::schema_for!(DocumentView)),
+        ("DocumentPage", schemars::schema_for!(DocumentPage)),
+        (
+            "IssueGrantRequest",
+            schemars::schema_for!(IssueGrantRequest),
+        ),
+        (
+            "DocumentGrantView",
+            schemars::schema_for!(DocumentGrantView),
+        ),
+        (
+            "DocumentGrantPage",
+            schemars::schema_for!(DocumentGrantPage),
+        ),
+        (
+            "DocumentPolicyList",
+            schemars::schema_for!(DocumentPolicyList),
+        ),
+    ];
+    let mut components = Map::new();
+    for (name, schema) in derived {
+        let mut schema = serde_json::to_value(schema)?;
+        refuse_null(&mut schema);
+        retarget_references(&mut schema);
+        let Value::Object(mut object) = schema else {
+            unreachable!("schemars derives a schema object for a struct")
+        };
+        object.remove("$schema");
+        object.remove("title");
+        if let Some(Value::Object(definitions)) = object.remove("$defs") {
+            components.extend(definitions);
+        }
+        components.insert(name.to_owned(), Value::Object(object));
+    }
+    Ok(components)
+}
+
+/// Point every `#/$defs/` reference at the OpenAPI components.
+fn retarget_references(schema: &mut Value) {
+    match schema {
+        Value::Object(object) => {
+            if let Some(Value::String(reference)) = object.get_mut("$ref") {
+                if let Some(name) = reference.strip_prefix("#/$defs/") {
+                    *reference = format!("#/components/schemas/{name}");
+                }
+            }
+            object.values_mut().for_each(retarget_references);
+        }
+        Value::Array(items) => items.iter_mut().for_each(retarget_references),
+        _ => {}
+    }
+}
+
+fn payload_content(payload: Payload) -> Option<Value> {
+    match payload {
+        Payload::Empty => None,
+        Payload::Json(schema) => Some(json!({"application/json": {
+            "schema": {"$ref": format!("#/components/schemas/{schema}")}
+        }})),
+        Payload::Content => Some(json!({"*/*": {
+            "schema": {"type": "string", "contentMediaType": "application/octet-stream"}
+        }})),
+    }
+}
+
+/// The parameters of `operation`: its path identifiers, its paging query,
+/// and its idempotency key.
+fn parameters(operation: &Operation) -> Vec<Value> {
+    let mut parameters: Vec<Value> = operation
+        .path
+        .split('/')
+        .filter_map(|segment| segment.strip_prefix('{')?.strip_suffix('}'))
+        .map(|name| {
+            json!({
+                "name": name,
+                "in": "path",
+                "required": true,
+                "schema": {"type": "string", "format": "uuid"}
+            })
+        })
+        .collect();
+    if operation.paged {
+        parameters.push(json!({
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The opaque cursor a previous page returned as `nextCursor`.",
+            "schema": {"type": "string", "maxLength": MAXIMUM_CURSOR_BYTES}
+        }));
+        parameters.push(json!({
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Items per page.",
+            "schema": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAXIMUM_PAGE_SIZE,
+                "default": DEFAULT_PAGE_SIZE
+            }
+        }));
+    }
+    if operation.idempotent {
+        parameters.push(json!({
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "The caller's key for this request. A retry with the same key and body answers the first outcome; another body under the key is refused.",
+            "schema": {"type": "string", "minLength": 1, "maxLength": MAXIMUM_IDEMPOTENCY_KEY_BYTES, "pattern": "^[!-~]+$"}
+        }));
+    }
+    parameters
+}
 
 pub fn runtime_documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> {
     let mut derived = serde_json::to_value(schemars::schema_for!(RuntimeConfig))?;
@@ -92,10 +477,22 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
     let mut paths = Map::new();
     for operation in OPERATIONS {
         let mut responses = Map::new();
-        responses.insert(
-            "200".to_owned(),
-            json!({"description": "The operation succeeded. The body is empty."}),
-        );
+        let mut success = json!({"description": match operation.response {
+            Payload::Empty => "The operation succeeded. The body is empty.",
+            Payload::Json(_) => "The operation succeeded.",
+            Payload::Content => "The document version's content, exactly as reserved and verified.",
+        }});
+        if let Some(content) = payload_content(operation.response) {
+            success["content"] = content;
+        }
+        if operation.success == 201 {
+            success["headers"] = json!({"Location": {
+                "description": "The path of the created resource.",
+                "required": true,
+                "schema": {"type": "string"}
+            }});
+        }
+        responses.insert(operation.success.to_string(), success);
         let mut by_status: BTreeMap<u16, Vec<&str>> = BTreeMap::new();
         for problem in operation.problems {
             by_status
@@ -103,7 +500,8 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
                 .or_default()
                 .push(problem.code());
         }
-        for (status, codes) in by_status {
+        for (status, mut codes) in by_status {
+            codes.sort_unstable();
             let mut response = json!({
                 "description": format!("A problem: {}.", codes.join(", ")),
                 "content": {"application/problem+json": {"schema": {
@@ -116,23 +514,36 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
             if status == 503 {
                 response["headers"] = retry_after();
             }
+            if status == 401 {
+                response["headers"] = json!({"WWW-Authenticate": {
+                    "description": "The bearer challenge.",
+                    "required": true,
+                    "schema": {"type": "string", "const": "Bearer"}
+                }});
+            }
             responses.insert(status.to_string(), response);
+        }
+        let mut entry = json!({
+            "operationId": operation.operation_id,
+            "summary": operation.summary,
+            "security": if operation.authenticated { json!([{"bearer": []}]) } else { json!([]) },
+            "responses": responses,
+        });
+        let parameters = parameters(operation);
+        if !parameters.is_empty() {
+            entry["parameters"] = Value::Array(parameters);
+        }
+        if let Some(content) = payload_content(operation.request) {
+            entry["requestBody"] = json!({"required": true, "content": content});
         }
         paths
             .entry(operation.path.to_owned())
             .or_insert_with(|| Value::Object(Map::new()))
             .as_object_mut()
             .expect("every path item is an object")
-            .insert(
-                operation.method.to_owned(),
-                json!({
-                    "operationId": operation.operation_id,
-                    "summary": operation.summary,
-                    "security": [],
-                    "responses": responses,
-                }),
-            );
+            .insert(operation.method.to_owned(), entry);
     }
+    let mut schemas = component_schemas()?;
     let problem_types: Vec<String> = ProblemCode::ALL
         .iter()
         .map(|problem| type_uri(problem.code()))
@@ -141,6 +552,22 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
         .iter()
         .map(|problem| problem.code())
         .collect();
+    schemas.insert(
+        "Problem".to_owned(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "title", "status", "detail", "code", "traceId"],
+            "properties": {
+                "type": {"type": "string", "enum": problem_types},
+                "title": {"type": "string"},
+                "status": {"type": "integer"},
+                "detail": {"type": "string"},
+                "code": {"type": "string", "enum": codes},
+                "traceId": {"type": "string"}
+            }
+        }),
+    );
     let document = json!({
         "openapi": "3.1.0",
         "info": {
@@ -152,21 +579,10 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
         },
         "paths": paths,
         "components": {
-            "schemas": {
-                "Problem": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["type", "title", "status", "detail", "code", "traceId"],
-                    "properties": {
-                        "type": {"type": "string", "enum": problem_types},
-                        "title": {"type": "string"},
-                        "status": {"type": "integer"},
-                        "detail": {"type": "string"},
-                        "code": {"type": "string", "enum": codes},
-                        "traceId": {"type": "string"}
-                    }
-                }
-            }
+            "securitySchemes": {
+                "bearer": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
+            },
+            "schemas": schemas
         }
     });
     Ok([(OPENAPI_FILE, render(&document)?)].into())
@@ -502,6 +918,85 @@ mod tests {
             .map(|problem| problem.code())
             .collect();
         assert_eq!(codes, catalogued);
+    }
+
+    #[test]
+    fn openapi_states_bearer_security_and_resolves_every_reference() {
+        let document = schema(&openapi_documents().unwrap(), OPENAPI_FILE);
+        assert_eq!(
+            document["components"]["securitySchemes"]["bearer"]["scheme"],
+            "bearer"
+        );
+        for operation in OPERATIONS {
+            let entry = &document["paths"][operation.path][operation.method];
+            let expected = if operation.authenticated {
+                json!([{"bearer": []}])
+            } else {
+                json!([])
+            };
+            assert_eq!(entry["security"], expected, "{}", operation.operation_id);
+            assert_eq!(
+                entry["responses"].get("401").is_some(),
+                operation.authenticated,
+                "{}",
+                operation.operation_id
+            );
+        }
+        let mut references = Vec::new();
+        collect_references(&document, &mut references);
+        assert!(!references.is_empty());
+        for reference in references {
+            let name = reference
+                .strip_prefix("#/components/schemas/")
+                .unwrap_or_else(|| panic!("{reference} points outside the components"));
+            assert!(
+                document["components"]["schemas"].get(name).is_some(),
+                "{reference} does not resolve"
+            );
+        }
+    }
+
+    fn collect_references(value: &Value, references: &mut Vec<String>) {
+        match value {
+            Value::Object(object) => {
+                if let Some(Value::String(reference)) = object.get("$ref") {
+                    references.push(reference.clone());
+                }
+                object
+                    .values()
+                    .for_each(|value| collect_references(value, references));
+            }
+            Value::Array(items) => items
+                .iter()
+                .for_each(|value| collect_references(value, references)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn openapi_describes_exactly_the_routes_the_listener_serves() {
+        let source = include_str!("http.rs");
+        let served: std::collections::BTreeSet<&str> = source
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix(".route("))
+            .filter_map(|rest| rest.split(',').next())
+            .collect();
+        let described: std::collections::BTreeSet<&str> = OPERATIONS
+            .iter()
+            .map(|operation| match operation.path {
+                HEALTH_PATH => "HEALTH_PATH",
+                DOCUMENTS_PATH => "DOCUMENTS_PATH",
+                DOCUMENT_PATH => "DOCUMENT_PATH",
+                DOCUMENT_CONTENT_PATH => "DOCUMENT_CONTENT_PATH",
+                DOCUMENT_GRANTS_PATH => "DOCUMENT_GRANTS_PATH",
+                GRANTS_PATH => "GRANTS_PATH",
+                GRANT_PATH => "GRANT_PATH",
+                POLICIES_PATH => "POLICIES_PATH",
+                UPLOAD_CONTENT_PATH => "UPLOAD_CONTENT_PATH",
+                other => panic!("{other} is not a served path"),
+            })
+            .collect();
+        assert_eq!(served, described);
     }
 
     #[test]

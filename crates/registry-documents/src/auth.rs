@@ -250,12 +250,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn authenticator() -> DocumentsAuthenticator {
-        DocumentsAuthenticator::new(
-            verifier(),
-            keys(),
-            AccessProfiles::new(&project()),
-            false,
-        )
+        DocumentsAuthenticator::new(verifier(), keys(), AccessProfiles::new(&project()), false)
     }
 
     /// Sign an access token, filling in the claims a real token always

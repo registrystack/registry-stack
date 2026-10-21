@@ -221,7 +221,9 @@ mod tests {
     #[test]
     fn a_transfer_beyond_the_remaining_budget_is_refused_until_room_returns() {
         let budget = TransferBudget::new(1);
-        let held = budget.try_reserve(TRANSFER_BUFFER_BYTES - UNIT_BYTES).unwrap();
+        let held = budget
+            .try_reserve(TRANSFER_BUFFER_BYTES - UNIT_BYTES)
+            .unwrap();
         assert!(budget.try_reserve(2 * UNIT_BYTES).is_none());
         let small = budget.try_reserve(1).unwrap();
         assert_eq!(budget.available_bytes(), 0);
@@ -272,7 +274,10 @@ mod tests {
         let content = vec![7u8; 200_000];
         let permit = budget.try_reserve(content.len() as u64).unwrap();
         let mut body = ReleaseBody::new(content, permit, Duration::from_secs(30));
-        assert_eq!(body.next().await.unwrap().unwrap().len(), RELEASE_CHUNK_BYTES);
+        assert_eq!(
+            body.next().await.unwrap().unwrap().len(),
+            RELEASE_CHUNK_BYTES
+        );
         assert!(budget.available_bytes() < TRANSFER_BUFFER_BYTES);
         tokio::time::sleep(Duration::from_secs(31)).await;
         assert_eq!(
