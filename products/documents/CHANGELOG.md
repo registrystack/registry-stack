@@ -77,3 +77,15 @@ The Document Store is held out of releases.
 - `documentsctl verification list` and `verification replay` show
   dead-lettered verification jobs and return one to pending under its next
   generation, audited in the `documentsctl` companion journal.
+- Removal from custody: `POST /documents/{documentId}/erasure`, custodian
+  only, suspends release, revokes the document's active grants, cancels
+  pending verification, and schedules erasure after the policy's
+  `cleanupGraceHours`. Grant expiry and revocation erase nothing.
+- A cleanup sweep expires lapsed uploads, erases due versions through a
+  dispatch job (PostgreSQL row deletion, or S3 delete confirmed by a 404),
+  and, on S3, deletes objects abandoned uploads left behind. A version is
+  recorded erased only once the Store can no longer serve its bytes.
+- `cleanup.erasure: paused` halts erasure without halting the runtime.
+- Every foreign key is `ON DELETE RESTRICT`; erasure keeps documents,
+  versions, grants, and verification history.
+- `products/documents/README.md` gains a restore drill.
