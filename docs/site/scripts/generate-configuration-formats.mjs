@@ -111,6 +111,14 @@ export const PRODUCTS = [
       { label: 'Registry Coordinator configuration reference', page: 'reference/coordinator-configuration' },
     ],
   },
+  // No docset publishes the Document Store yet, so its formats render nowhere.
+  {
+    id: 'documents',
+    title: 'Document Store',
+    docsetProduct: 'registry-documents',
+    checkPage: 'reference/cli/documentsctl',
+    references: [],
+  },
   {
     id: 'platform',
     title: 'Registry Platform',

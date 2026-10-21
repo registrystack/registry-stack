@@ -97,6 +97,7 @@ Use the product-owned projects to inspect each component separately:
 | Registry Coordinator | [Maintained flows](products/coordinator/README.md#start-from-a-maintained-project), including external directory and job examples |
 | Registry Scheduling | [Exact-time project](products/scheduling/examples/standalone-exact-time/) and [arrival-window project](products/scheduling/examples/standalone-arrival-window/), with [setup instructions](products/scheduling/README.md#start-from-an-authored-project) |
 | Registry Messaging | [Starter project](products/messaging/examples/starter/) and [local development instructions](products/messaging/README.md) |
+| Document Store | [Starter project](products/documents/examples/starter/) for the bootstrap skeleton, held out of releases ([product notes](products/documents/README.md)) |
 | Registry Discovery | [Offline catalog project](products/discovery/fixtures/project/README.md) |
 | Registry Manifest | [Static publication examples](products/manifest/examples/README.md) |
 | Registry Render | [Receipt, certificate, and card bundles](products/render/bundles/), with [compile instructions](products/render/README.md#the-10-minute-path) |
