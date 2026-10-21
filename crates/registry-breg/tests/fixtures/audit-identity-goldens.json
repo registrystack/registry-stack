@@ -14,7 +14,7 @@
   "breg-evidence-retention-audit/v2": [
     "activationId"
   ],
-  "breg-attachment-verification-audit/v2": [
+  "breg-attachment-verification-audit/v3": [
     "activationId"
   ],
   "breg-attachment-cleanup-audit/v2": [
