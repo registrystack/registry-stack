@@ -1,7 +1,7 @@
 use registry_evidence_authoring::{
     compile,
     project::{self, FunctionInterface},
-    target,
+    selector, target,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -42,6 +42,136 @@ fn normalized_project_compiles_sources_outputs_and_named_functions() {
         compiled.functions[0]["callSites"][0],
         "/sources/person/extract"
     );
+}
+
+#[test]
+fn constructed_project_display_text_is_checked_before_compilation() {
+    let mut project = project();
+    let question = "private marker\u{202e}hidden";
+    project
+        .assertion_definitions
+        .values_mut()
+        .next()
+        .unwrap()
+        .question = question.to_owned();
+
+    for findings in [
+        project::validate_project(&project),
+        compile::compile(&project, &scripts()).expect_err("unsafe display text must be refused"),
+    ] {
+        assert!(findings.iter().any(|finding| {
+            finding.code == "definition-question"
+                && finding.field.to_json_pointer() == "/assertionDefinitions/active-status/question"
+        }));
+        assert!(findings
+            .iter()
+            .all(|finding| !finding.message.contains(question)));
+    }
+}
+
+#[test]
+fn constructed_presentation_fields_share_display_text_validation() {
+    type Mutate = fn(&mut project::EvidenceProject, &str);
+    let cases: &[(&str, Mutate)] = &[
+        ("/label", |project, value| {
+            project.label = Some(value.to_owned())
+        }),
+        (
+            "/selectorProfiles/person-by-id/description",
+            |project, value| {
+                project
+                    .selector_profiles
+                    .values_mut()
+                    .next()
+                    .unwrap()
+                    .description = Some(value.to_owned());
+            },
+        ),
+        (
+            "/selectorProfiles/person-by-id/fields/person-id/label",
+            |project, value| {
+                let field = project
+                    .selector_profiles
+                    .values_mut()
+                    .next()
+                    .unwrap()
+                    .fields
+                    .values_mut()
+                    .next()
+                    .unwrap();
+                let selector::Field::String { label, .. } = field else {
+                    panic!("fixture selector field changed type");
+                };
+                *label = Some(value.to_owned());
+            },
+        ),
+        ("/functions/0/description", |project, value| {
+            project.functions[0].description = Some(value.to_owned());
+        }),
+        (
+            "/assertionDefinitions/active-status/label",
+            |project, value| {
+                project
+                    .assertion_definitions
+                    .values_mut()
+                    .next()
+                    .unwrap()
+                    .label = Some(value.to_owned());
+            },
+        ),
+        (
+            "/assertionDefinitions/active-status/outputs/active/description",
+            |project, value| {
+                project
+                    .assertion_definitions
+                    .values_mut()
+                    .next()
+                    .unwrap()
+                    .outputs
+                    .values_mut()
+                    .next()
+                    .unwrap()
+                    .description = Some(value.to_owned());
+            },
+        ),
+        ("/sources/person/label", |project, value| {
+            project.sources.values_mut().next().unwrap().label = Some(value.to_owned());
+        }),
+    ];
+
+    let unsafe_text = "private marker\u{fdd0}hidden";
+    for (path, mutate) in cases {
+        let mut project = project();
+        mutate(&mut project, unsafe_text);
+        let findings = project::validate_project(&project);
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.code == "display-text"
+                    && finding.field.to_json_pointer() == *path)
+                .count(),
+            1,
+            "missing display-text finding at {path}: {findings:#?}"
+        );
+        assert!(findings
+            .iter()
+            .all(|finding| !finding.message.contains(unsafe_text)));
+    }
+}
+
+#[test]
+fn constructed_multilingual_display_text_remains_valid() {
+    let mut project = project();
+    project.label = Some("می\u{200c}خواهم\u{00ad}".to_owned());
+    project
+        .assertion_definitions
+        .values_mut()
+        .next()
+        .unwrap()
+        .question = "العربية \u{200f}Latin".to_owned();
+
+    assert!(project::validate_project(&project).is_empty());
+    compile::compile(&project, &scripts()).expect("allowed multilingual text compiles");
 }
 
 #[test]

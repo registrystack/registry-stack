@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_yaml::{
     duplicate_display_text_diagnostics, local_id_collision_diagnostics, ApiVersion,
-    AuthoredDisplayText, AuthoredId, BoundedU64, Decoded, Diagnostic, EnvelopeRule, FormatSpec,
-    LocalId, Report, UniqueList,
+    AuthoredDisplayText, AuthoredId, BoundedU64, Decoded, Diagnostic, DisplayText, EnvelopeRule,
+    FormatSpec, LocalId, Report, UniqueList,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -979,18 +979,21 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<EvidenceProject>) -> Vec<
 }
 
 pub fn validate_project(project: &EvidenceProject) -> Vec<Finding> {
-    let mut findings = project
-        .selector_profiles
-        .iter()
-        .flat_map(|(id, profile)| {
-            crate::selector::validate(
-                profile,
-                &FieldPath::root()
-                    .key("selectorProfiles")
-                    .map_key(id.to_string()),
-            )
-        })
-        .collect::<Vec<_>>();
+    let mut findings = validate_project_display_text(project);
+    findings.extend(
+        project
+            .selector_profiles
+            .iter()
+            .flat_map(|(id, profile)| {
+                crate::selector::validate(
+                    profile,
+                    &FieldPath::root()
+                        .key("selectorProfiles")
+                        .map_key(id.to_string()),
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
     let mut push = |path, code, message| findings.push(Finding::new(path, code, message));
     let functions: BTreeMap<_, _> = project.functions.iter().map(|f| (&f.id, f)).collect();
     if functions.len() != project.functions.len() {
@@ -1038,7 +1041,10 @@ pub fn validate_project(project: &EvidenceProject) -> Vec<Finding> {
                 "declare a bounded lowercase purpose code",
             );
         }
-        if definition.question.trim().is_empty() || definition.question.len() > 1024 {
+        if definition.question.trim().is_empty()
+            || definition.question.len() > 1024
+            || DisplayText::new(definition.question.as_str()).is_err()
+        {
             push(
                 at.clone().key("question"),
                 "definition-question",
@@ -1430,6 +1436,69 @@ pub fn validate_project(project: &EvidenceProject) -> Vec<Finding> {
     }
     findings.extend(crate::acquisition_validation::validate(project));
     findings
+}
+
+fn validate_project_display_text(project: &EvidenceProject) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    validate_presentation(
+        project.label.as_deref(),
+        project.description.as_deref(),
+        &FieldPath::root(),
+        &mut findings,
+    );
+    for (index, function) in project.functions.iter().enumerate() {
+        validate_presentation(
+            function.label.as_deref(),
+            function.description.as_deref(),
+            &FieldPath::root().key("functions").index(index),
+            &mut findings,
+        );
+    }
+    for (id, definition) in &project.assertion_definitions {
+        let at = FieldPath::root()
+            .key("assertionDefinitions")
+            .map_key(id.to_string());
+        validate_presentation(
+            definition.label.as_deref(),
+            definition.description.as_deref(),
+            &at,
+            &mut findings,
+        );
+        for (id, output) in &definition.outputs {
+            validate_presentation(
+                output.label.as_deref(),
+                output.description.as_deref(),
+                &at.clone().key("outputs").map_key(id.to_string()),
+                &mut findings,
+            );
+        }
+    }
+    for (id, source) in &project.sources {
+        validate_presentation(
+            source.label.as_deref(),
+            source.description.as_deref(),
+            &FieldPath::root().key("sources").map_key(id.to_string()),
+            &mut findings,
+        );
+    }
+    findings
+}
+
+pub(crate) fn validate_presentation(
+    label: Option<&str>,
+    description: Option<&str>,
+    at: &FieldPath,
+    findings: &mut Vec<Finding>,
+) {
+    for (field, value) in [("label", label), ("description", description)] {
+        if value.is_some_and(|value| DisplayText::new(value).is_err()) {
+            findings.push(Finding::new(
+                at.clone().key(field),
+                "display-text",
+                "display text contains a character that cannot be shown safely",
+            ));
+        }
+    }
 }
 
 pub fn valid_asset(path: &str, extension: &str) -> bool {
