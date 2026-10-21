@@ -1278,7 +1278,7 @@ pub fn check_runtime(
 ) -> RuntimeCheck {
     let check =
         RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, substitute, stand_in_for);
-    let mut diagnostics = check.diagnostics.clone();
+    let mut diagnostics = Vec::new();
     if let Some(loaded) = &check.loaded {
         diagnostics.extend(
             loaded
@@ -1294,9 +1294,9 @@ pub fn check_runtime(
             &loaded.config,
         ));
     }
-    in_file_order(&mut diagnostics);
+    let report = check.report_with(SCHEDULING_RUNTIME_KIND, diagnostics);
     RuntimeCheck {
-        diagnostics,
+        diagnostics: report.into_diagnostics(),
         unavailable: check.unavailable,
     }
 }
@@ -1327,25 +1327,8 @@ pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report>
         .map(|finding| positioned(&check, finding))
         .collect();
     diagnostics.extend(runtime_identifier_collision_diagnostics(&check, config));
-    in_file_order(&mut diagnostics);
-    (!diagnostics.is_empty()).then(|| Report::new(diagnostics))
-}
-
-/// Order `diagnostics` as the shared reader orders its own: those without a
-/// line first, then by line and column, keeping the order in which equal
-/// positions were found.
-fn in_file_order(diagnostics: &mut [Diagnostic]) {
-    diagnostics.sort_by_key(|diagnostic| {
-        diagnostic
-            .source
-            .as_ref()
-            .and_then(|source| {
-                source
-                    .line
-                    .map(|line| (1, line, source.column.unwrap_or(0)))
-            })
-            .unwrap_or((0, 0, 0))
-    });
+    let report = check.report_with(SCHEDULING_RUNTIME_KIND, diagnostics);
+    (!report.is_empty()).then_some(report)
 }
 
 /// `finding` at the value of its member, or, for a member that is absent, at
