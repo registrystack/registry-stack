@@ -26,6 +26,7 @@ use super::{
     Cursor, DocumentService, PageRequest, Record, Replay,
 };
 use crate::audit::{GRANT_ISSUE_EVENT, GRANT_REVOKE_EVENT};
+use crate::hooks::{DocumentEvent, GrantChange};
 
 /// The columns [`Grant::from_row`] reads, by name.
 const GRANT_COLUMNS: &str = "grant_record.grant_id, grant_record.document_id,
@@ -251,6 +252,8 @@ impl DocumentService {
                     .await
                     .map_err(|error| unavailable("grant insert", &error))?;
                 record_key(&transaction, &key, &digest, grant_id, days).await?;
+                self.capture_grant_event(&transaction, caller, grant_id, GrantChange::Issued)
+                    .await?;
                 grant_id
             }
         };
@@ -325,8 +328,22 @@ impl DocumentService {
                 .map_err(|error| unavailable("grant decode", &error))?
         };
         self.grantable(caller, document_id, true).await?;
-        let client = self.client().await?;
-        let row = client
+        let mut client = self.client().await?;
+        let transaction = client
+            .transaction()
+            .await
+            .map_err(|error| unavailable("grant transaction", &error))?;
+        let already_revoked = transaction
+            .query_one(
+                "SELECT revoked_at IS NOT NULL FROM documents_grants
+                  WHERE grant_id = $1 FOR UPDATE",
+                &[&grant_id],
+            )
+            .await
+            .map_err(|error| unavailable("grant read", &error))?
+            .try_get::<_, bool>(0)
+            .map_err(|error| unavailable("grant decode", &error))?;
+        let row = transaction
             .query_one(
                 &format!(
                     "UPDATE documents_grants AS grant_record
@@ -338,9 +355,38 @@ impl DocumentService {
             )
             .await
             .map_err(|error| unavailable("grant revoke", &error))?;
+        // Repeating a revocation changes nothing, so it reports nothing.
+        if !already_revoked {
+            self.capture_grant_event(&transaction, caller, grant_id, GrantChange::Revoked)
+                .await?;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| unavailable("grant commit", &error))?;
         Grant::from_row(&row)
             .and_then(|grant| grant.view())
             .map_err(|error| unavailable("grant decode", &error))
+    }
+
+    /// Capture a `document-grant.changed` event inside the transaction that
+    /// issues or revokes the grant. A capture that fails refuses the change
+    /// with it; a delivery that later fails never reaches it.
+    pub(crate) async fn capture_grant_event(
+        &self,
+        transaction: &tokio_postgres::Transaction<'_>,
+        caller: &Caller,
+        grant_id: Uuid,
+        change: GrantChange,
+    ) -> Result<(), ProblemCode> {
+        let event = DocumentEvent::grant(transaction, grant_id, change, caller.kind)
+            .await
+            .map_err(|error| unavailable("grant event read", &error))?;
+        self.hooks
+            .capture(transaction, &event)
+            .await
+            .map_err(|error| unavailable("grant event capture", &error))?;
+        Ok(())
     }
 
     /// Every grant on one document, in every state, oldest first.

@@ -41,6 +41,7 @@ use crate::audit::{
     DocumentsAudit, CONTENT_DOWNLOAD_EVENT, UPLOAD_CONTENT_EVENT, UPLOAD_RESERVATION_EVENT,
 };
 use crate::content::{digest_hex, pin_storage, read_hashing, BodyRefusal, ContentStorage};
+use crate::hooks::ActivatedHooks;
 use crate::store::PostgresStore;
 use crate::transfer::{ReleaseBody, TransferBudget, TransferDeadline};
 use crate::verification::job_part;
@@ -187,6 +188,7 @@ pub struct DocumentService {
     jobs: JobTable,
     audit: DocumentsAudit,
     settings: ServiceSettings,
+    hooks: ActivatedHooks,
 }
 
 impl std::fmt::Debug for DocumentService {
@@ -540,6 +542,7 @@ impl DocumentService {
         jobs: JobTable,
         audit: DocumentsAudit,
         settings: ServiceSettings,
+        hooks: ActivatedHooks,
     ) -> Self {
         Self {
             store,
@@ -548,6 +551,7 @@ impl DocumentService {
             jobs,
             audit,
             settings,
+            hooks,
         }
     }
 
@@ -563,6 +567,7 @@ impl DocumentService {
             jobs: self.jobs.clone(),
             audit,
             settings: self.settings.clone(),
+            hooks: self.hooks.clone(),
         }
     }
 
