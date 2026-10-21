@@ -10,7 +10,7 @@
 //! the cleanup sweep once the version is due. No grant expiry or
 //! revocation ever starts this clock.
 
-use registry_documents_core::{Caller, DocumentView, ProblemCode};
+use registry_documents_core::{may_request_erasure, Caller, DocumentView, ProblemCode};
 use serde_json::{json, Value};
 use tokio_postgres::Transaction;
 use uuid::Uuid;
@@ -78,7 +78,7 @@ impl DocumentService {
         if !access.sees() {
             return Err(ProblemCode::ResourceNotFound);
         }
-        if !access.standing.custodian {
+        if !may_request_erasure(access.standing) {
             return Err(ProblemCode::ProfileNotAuthorized);
         }
         // A custodian sees the document only under a declared policy.

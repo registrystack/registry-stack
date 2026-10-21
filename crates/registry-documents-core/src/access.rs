@@ -361,6 +361,14 @@ pub enum DocumentAction {
     RequestErasure,
 }
 
+/// Whether a caller with `standing` may ask for the document's removal from
+/// custody. Custody belongs to the custodian, so only the custodian may end
+/// it. The removal route and the actions a document offers both ask this.
+#[must_use]
+pub const fn may_request_erasure(standing: Standing) -> bool {
+    standing.custodian
+}
+
 /// The actions `standing` allows on a document whose current version has
 /// `status`, in vocabulary order. `granted` is whether the caller holds an
 /// active grant on that version. A document whose removal was requested
@@ -392,7 +400,7 @@ pub fn allowed_actions(
     if standing.sees() {
         actions.push(DocumentAction::ListShares);
     }
-    if standing.custodian {
+    if may_request_erasure(standing) {
         actions.push(DocumentAction::RequestErasure);
     }
     actions
@@ -773,6 +781,9 @@ mod tests {
             owner: true,
             may_grant: true,
         };
+        assert!(may_request_erasure(custodian));
+        assert!(!may_request_erasure(owner));
+        assert!(!may_request_erasure(Standing::default()));
         assert!(allowed_actions(custodian, DocumentStatus::Ready, false)
             .contains(&DocumentAction::RequestErasure));
         assert!(!allowed_actions(owner, DocumentStatus::Ready, false)
