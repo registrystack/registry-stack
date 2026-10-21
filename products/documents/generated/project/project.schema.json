@@ -265,10 +265,10 @@
           "uniqueItems": true
         },
         "cleanupGraceHours": {
-          "description": "Time between the custodian's removal request and erasure of the\nbytes. Grant expiry and revocation erase nothing: they only stop a\ngrant releasing.",
+          "description": "Time between the custodian's removal request, or a rejection, and\nerasure of the bytes, and the length of a reservation's upload\nwindow. At least one hour, so an operator always has a window to\nrestore from a mistaken request. Grant expiry and revocation erase\nnothing: they only stop a grant releasing.",
           "format": "uint32",
           "maximum": 8760,
-          "minimum": 0,
+          "minimum": 1,
           "type": "integer"
         },
         "grantExpiryHours": {

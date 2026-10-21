@@ -2,15 +2,16 @@
 
 //! Removal from custody: the custodian asks for a document's erasure.
 //!
-//! The request is the custody clock's only trigger. In one transaction it
-//! moves the version to `erasure pending` with the policy's cleanup grace
-//! frozen into its due time, suspends release, revokes every active grant
-//! on the document, and cancels any verification still pending, so nothing
-//! released the version once the request commits. The bytes are erased by
-//! the cleanup sweep once the version is due. No grant expiry or
-//! revocation ever starts this clock.
+//! Besides a rejection, the request is the custody clock's only trigger.
+//! In one transaction it records the document's removal, moves the version
+//! to `erasure pending` with the policy's cleanup grace frozen into its due
+//! time (a version a rejection already armed keeps the rejection's),
+//! suspends release, revokes every active grant on the document, and
+//! cancels any verification still pending, so nothing releases the version
+//! once the request commits. The bytes are erased by the cleanup sweep once
+//! the version is due. No grant expiry or revocation ever starts this clock.
 
-use registry_documents_core::{Caller, DocumentView, ProblemCode};
+use registry_documents_core::{may_request_erasure, Caller, DocumentView, ProblemCode};
 use serde_json::{json, Value};
 use tokio_postgres::Transaction;
 use uuid::Uuid;
@@ -21,7 +22,7 @@ use crate::audit::ERASURE_REQUEST_EVENT;
 /// What one erasure request changed.
 struct Requested {
     view: DocumentView,
-    /// The request found the version already erasing and changed nothing.
+    /// The document's removal was already requested; nothing changed.
     repeated: bool,
     revoked_grants: u64,
     due_at: String,
@@ -78,7 +79,7 @@ impl DocumentService {
         if !access.sees() {
             return Err(ProblemCode::ResourceNotFound);
         }
-        if !access.standing.custodian {
+        if !may_request_erasure(access.standing) {
             return Err(ProblemCode::ProfileNotAuthorized);
         }
         // A custodian sees the document only under a declared policy.
@@ -93,22 +94,34 @@ impl DocumentService {
             .transaction()
             .await
             .map_err(|error| unavailable("erasure transaction", &error))?;
-        let moved = transaction
-            .query_opt(
-                "UPDATE documents_versions
-                    SET erasure_state = 'pending', eligibility = 'suspended',
-                        erasure_requested_at = transaction_timestamp(),
-                        erasure_due_at = transaction_timestamp() + make_interval(hours => $2)
-                  WHERE version_id = $1 AND erasure_state = 'none'
-              RETURNING erasure_due_at",
-                &[&version_id, &grace],
+        // The document's removal state decides first request or repeat, not
+        // its version's: a rejected version is already erasing, yet its
+        // document was never removed and may still list active grants.
+        let repeated = transaction
+            .execute(
+                "UPDATE documents_documents SET removal_requested_at = transaction_timestamp()
+                  WHERE document_id = $1 AND removal_requested_at IS NULL",
+                &[&document_id],
             )
             .await
-            .map_err(|error| unavailable("erasure request", &error))?;
-        let repeated = moved.is_none();
+            .map_err(|error| unavailable("erasure request", &error))?
+            == 0;
         let revoked_grants = if repeated {
             0
         } else {
+            // A version a rejection already armed keeps the rejection's due
+            // time.
+            transaction
+                .execute(
+                    "UPDATE documents_versions
+                        SET erasure_state = 'pending', eligibility = 'suspended',
+                            erasure_requested_at = transaction_timestamp(),
+                            erasure_due_at = transaction_timestamp() + make_interval(hours => $2)
+                      WHERE version_id = $1 AND erasure_state = 'none'",
+                    &[&version_id, &grace],
+                )
+                .await
+                .map_err(|error| unavailable("erasure request", &error))?;
             let revoked = transaction
                 .execute(
                     "UPDATE documents_grants SET revoked_at = transaction_timestamp()

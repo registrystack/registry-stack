@@ -816,8 +816,7 @@ impl DocumentService {
                 .policy
                 .mandatory_restrictions
                 .cleanup_grace_hours
-                .get()
-                .max(1),
+                .get(),
         )
         .map_err(|error| unavailable("upload window", &error))?;
         let days = i32::try_from(self.settings.idempotency_days)

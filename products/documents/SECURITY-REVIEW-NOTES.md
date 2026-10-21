@@ -417,13 +417,21 @@ DOCUMENTS-DEC-26:
   pending and suspended, every active grant on the document is revoked, and
   pending verification is cancelled. Grant issue holds the version row and
   refuses an erasing version; download needs a releasable version, which
-  the database refuses for a version under removal; and a verdict that
-  arrives later records nothing. No release that starts after the request
+  the database refuses for a version under removal; a verdict that
+  arrives later records nothing; and a verification job leased across the
+  request ends at its next attempt, before the bytes are read, without
+  asking the verifier. No release that starts after the request
   commits serves the version; a download admitted before it may finish (see
   Residual risk).
 - Grant expiry and revocation erase nothing. The grace is frozen at the
   request from the policy's `cleanupGraceHours`; changing the policy later
   moves no due time.
+- A rejection arms the erasure of the rejected bytes in the transaction that
+  records the verdict, due after the policy's `cleanupGraceHours` (the
+  version's upload window when the policy is no longer declared), and the
+  same sweep erases them. The version reads `rejected`, then `erased`. A
+  dead-lettered verification is not a verdict and keeps its bytes for a
+  replay (DOCUMENTS-DEC-21).
 - The sweep arms one erasure job per due version on
   `registry-platform-dispatch` and records `erased` only in the transaction
   that deletes the content row (PostgreSQL) or after every committed S3
@@ -437,9 +445,13 @@ DOCUMENTS-DEC-26:
   orphan sweep; serving, removal requests, and upload expiry continue.
 - Upload expiry runs on every pass: a reservation whose upload window
   (`upload_expires_at`, the reservation time plus the policy's
-  `cleanupGraceHours`) lapsed is expired and takes no more bytes. On S3, an uncommitted object
-  older than the longest transfer deadline plus ten minutes is deleted, and
-  its staging row with it, so the sweep never races a live upload.
+  `cleanupGraceHours`) lapsed is expired and takes no more bytes. On S3,
+  an uncommitted object older than the longest transfer deadline plus ten
+  minutes is deleted, and its staging row with it. An upload whose commit
+  arrives after that finds no staging row and is refused, so no object is
+  left that no row names. An object whose delete fails is skipped for the
+  rest of the pass and counted, the count logged once per pass, and the
+  next pass retries it.
 - Every foreign key in the schema is `ON DELETE RESTRICT`, with the choice
   stated beside it. Erasure deletes bytes and keeps documents, versions,
   grants, verification history, and idempotency receipts. One CHECK holds
@@ -447,7 +459,10 @@ DOCUMENTS-DEC-26:
   releasable version under removal, and every nullable comparison in a
   CHECK is guarded with `IS NOT NULL`.
 - Removal requests, erasure outcomes, upload expiry, and orphan erasure are
-  audited with `begin` before the change and `finish` after it.
+  audited with `begin` before the change and `finish` after it. An upload
+  expiry batch or an orphan's staged-row deletion that does not commit
+  finishes its entry as `failed` before the pass reports the error, and the
+  next pass retries it.
 
 ### Tests
 
@@ -458,6 +473,14 @@ does not honour, and store an object while answering 503. The unit tests in
 `registry-documents-core/src/access.rs` and `src/erasure.rs` cover removal
 standing and the erasure retry window. `contracts/security-test-traceability.yaml`
 names each test.
+
+### Owed in this pull request
+
+The `documentsctl` erasure status report, over
+`registry_documents::erasure::erasure_status` (its counts are proven by
+`the_erasure_status_counts_grace_due_and_dead_lettered`), lands in the
+same pull request as the sweep. It is not a residual risk to carry past
+the merge.
 
 ### Residual risk
 
@@ -478,8 +501,14 @@ names each test.
   and erasure paused.
 - Replaying a dead-lettered erasure job is owed by WP7; until then a
   version whose erasure dead-lettered stays pending and unservable.
-- `documentsctl` does not yet report the erasure status; the runtime crate
-  exposes `registry_documents::erasure::erasure_status` for it.
 - The Rust client has no method for the erasure route yet.
+- Removal ends every active grant on the document whatever state its
+  version is in. The document row records the first request, so a removal
+  after a rejection is a first removal: it revokes the grants issued while
+  the version was approved, and the version keeps the rejection's due time.
+  Only a repeat of a recorded removal changes nothing
+  (`removing_a_rejected_document_revokes_its_grants`). A rejection alone
+  revokes no grant: a grant on a rejected version releases nothing and
+  stays listed as active until it expires or is revoked.
 - A paused deployment keeps due bytes for as long as it stays paused, and
   orphan S3 objects accumulate meanwhile.

@@ -281,7 +281,9 @@ pub enum DocumentStatus {
 
 impl DocumentStatus {
     /// Derive the status from the stored dimensions. Only `ready` releases
-    /// content, and erasure outranks every other dimension.
+    /// content, and erasure outranks every other dimension but one: a
+    /// rejection arms the erasure of the rejected bytes, and the version
+    /// reads as rejected until they are erased.
     #[must_use]
     pub const fn derive(
         erasure: ErasureState,
@@ -289,10 +291,13 @@ impl DocumentStatus {
         verification: VerificationState,
         eligibility: Eligibility,
     ) -> Self {
-        match erasure {
-            ErasureState::Pending => return Self::ErasurePending,
-            ErasureState::Erased => return Self::Erased,
-            ErasureState::None => {}
+        match (erasure, upload, verification) {
+            (ErasureState::Pending, UploadState::Finalized, VerificationState::Rejected) => {
+                return Self::Rejected
+            }
+            (ErasureState::Pending, _, _) => return Self::ErasurePending,
+            (ErasureState::Erased, _, _) => return Self::Erased,
+            (ErasureState::None, _, _) => {}
         }
         match (upload, verification, eligibility) {
             (UploadState::Reserved | UploadState::Expired, _, _) => Self::AwaitingContent,
@@ -555,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn erasure_outranks_every_other_dimension() {
+    fn erasure_outranks_every_other_dimension_but_a_rejection() {
         for upload in [
             UploadState::Reserved,
             UploadState::Finalized,
@@ -567,15 +572,22 @@ mod tests {
                 VerificationState::Rejected,
             ] {
                 for eligibility in [Eligibility::Suspended, Eligibility::Releasable] {
+                    let rejected = upload == UploadState::Finalized
+                        && verification == VerificationState::Rejected;
                     for (erasure, expected) in [
                         (ErasureState::Pending, DocumentStatus::ErasurePending),
                         (ErasureState::Erased, DocumentStatus::Erased),
                     ] {
                         let status =
                             DocumentStatus::derive(erasure, upload, verification, eligibility);
-                        assert_eq!(status, expected);
                         assert!(!status.is_releasable());
-                        assert!(status.is_erasing());
+                        if rejected && erasure == ErasureState::Pending {
+                            assert_eq!(status, DocumentStatus::Rejected);
+                            assert!(!status.is_erasing());
+                        } else {
+                            assert_eq!(status, expected);
+                            assert!(status.is_erasing());
+                        }
                     }
                 }
             }

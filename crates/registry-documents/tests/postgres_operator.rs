@@ -24,7 +24,7 @@ use registry_documents::runtime::{
 };
 use registry_documents::store::{PostgresStore, StoreError};
 use registry_documents::verification::{
-    replay, ReplayError, ReplayFailure, ReplayRefusal, VerificationStore, MAXIMUM_ATTEMPTS,
+    replay, Graces, ReplayError, ReplayFailure, ReplayRefusal, VerificationStore, MAXIMUM_ATTEMPTS,
 };
 use registry_platform_activation::{DatabaseIdCheck, PlanKind, RoleMode};
 use registry_platform_audit::{AuditProfile, AuditWriter};
@@ -709,7 +709,12 @@ async fn replay_audited(
         .unwrap()
         .key_hasher(),
     );
-    let verification = VerificationStore::new(store.clone(), deployment.schema.clone(), audit);
+    let verification = VerificationStore::new(
+        store.clone(),
+        deployment.schema.clone(),
+        audit,
+        Graces::default(),
+    );
     replay(&store, verification, version, 1).await
 }
 
