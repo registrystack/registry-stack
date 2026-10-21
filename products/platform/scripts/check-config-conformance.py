@@ -79,7 +79,8 @@ class RustBlock:
     """A runtime struct field that must hold a shared block type, or a `Vec` of
     it when `repeated` is set. With `variant` set, `struct` names a tagged
     union and `field` one of its newtype variants: the variant's members are
-    the shared block's, read beside the union's tag."""
+    the shared block's, read beside the union's tag. The gate checks the union
+    is internally tagged, so those members do sit beside the tag."""
 
     path: str
     struct: str
@@ -850,6 +851,21 @@ def enum_variants(code: str, enum: str) -> dict[str, str] | None:
     return variants
 
 
+def is_internally_tagged(code: str, enum: str) -> bool:
+    """Whether `enum` reads as an internally tagged union: through the shared
+    `tagged_union!` reader, or through serde's `tag` without `content`."""
+    if re.search(rf"\btagged_union!\s*\(\s*{enum}\s*[,)]", code):
+        return True
+    declaration = re.search(rf"\benum\s+{enum}\b", code)
+    if declaration is None:
+        return False
+    preamble = re.split(r"[;}]", code[: declaration.start()])[-1]
+    serde = " ".join(re.findall(r"#\[serde\((.*?)\)\]", preamble, re.DOTALL))
+    return bool(re.search(r"\btag\s*=", serde)) and not re.search(
+        r"\b(?:content\s*=|untagged\b)", serde
+    )
+
+
 def imports_from_platform(code: str, block: str) -> bool:
     for use in re.finditer(rf"\buse\s+{PLATFORM_CRATE}\s*::\s*([^;]*);", code):
         if re.search(rf"(?<![\w:]){block}\b(?!\s*as\b)", use.group(1)):
@@ -878,6 +894,13 @@ def check_rust_blocks(root: Path, row: Row, canonical: dict[str, object]) -> lis
         )
         if fields is None:
             problems.append(f"{row.product}: {entry.path} has no {kind} {entry.struct}")
+            continue
+        if entry.variant and not is_internally_tagged(code, entry.struct):
+            problems.append(
+                f"{row.product}: {entry.path} enum {entry.struct} is not an "
+                "internally tagged union; read it through tagged_union! or "
+                "#[serde(tag = ...)]"
+            )
             continue
         written = fields.get(entry.field)
         expected = f"Vec<{entry.block}>" if entry.repeated else entry.block
