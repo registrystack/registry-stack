@@ -38,7 +38,8 @@
           "download",
           "share",
           "revoke-share",
-          "list-shares"
+          "list-shares",
+          "request-erasure"
         ],
         "type": "string"
       },
@@ -192,7 +193,7 @@
         "type": "object"
       },
       "DocumentStatus": {
-        "description": "The one status a client reads, derived from the three state dimensions.\nThere is no `verifying` value: a verification attempt in flight changes\nnothing a client can act on.",
+        "description": "The one status a client reads, derived from the four state dimensions.\nThere is no `verifying` value: a verification attempt in flight changes\nnothing a client can act on.",
         "oneOf": [
           {
             "const": "awaiting-content",
@@ -217,6 +218,16 @@
           {
             "const": "rejected",
             "description": "The verifier rejected the content.",
+            "type": "string"
+          },
+          {
+            "const": "erasure-pending",
+            "description": "The custodian asked for removal; the bytes await erasure.",
+            "type": "string"
+          },
+          {
+            "const": "erased",
+            "description": "The bytes are erased; the record remains.",
             "type": "string"
           }
         ]
@@ -1693,6 +1704,175 @@
           }
         ],
         "summary": "Read one document's metadata and the actions the caller may take."
+      }
+    },
+    "/documents/{documentId}/erasure": {
+      "post": {
+        "operationId": "requestDocumentErasure",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "documentId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentView"
+                }
+              }
+            },
+            "description": "The operation succeeded."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "authentication.refused"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: authentication.refused.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The bearer challenge.",
+                "required": true,
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "profile.not-authorized"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: profile.not-authorized."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "resource.not-found"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: resource.not-found."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: service.unavailable.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Ask, as the custodian, for a document's erasure; release stops at once."
       }
     },
     "/documents/{documentId}/grants": {

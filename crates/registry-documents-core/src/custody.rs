@@ -242,7 +242,21 @@ pub enum Eligibility {
     Releasable,
 }
 
-/// The one status a client reads, derived from the three state dimensions.
+/// Where a version stands in its removal from custody. Erasure is the
+/// custody clock, distinct from any grant's expiry: only a custodian's
+/// request starts it, and nothing a grant does moves it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ErasureState {
+    /// Held in custody.
+    None,
+    /// Removal requested: never released again, bytes erased once due.
+    Pending,
+    /// The Store can no longer serve the bytes.
+    Erased,
+}
+
+/// The one status a client reads, derived from the four state dimensions.
 /// There is no `verifying` value: a verification attempt in flight changes
 /// nothing a client can act on.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -259,17 +273,27 @@ pub enum DocumentStatus {
     Suspended,
     /// The verifier rejected the content.
     Rejected,
+    /// The custodian asked for removal; the bytes await erasure.
+    ErasurePending,
+    /// The bytes are erased; the record remains.
+    Erased,
 }
 
 impl DocumentStatus {
     /// Derive the status from the stored dimensions. Only `ready` releases
-    /// content.
+    /// content, and erasure outranks every other dimension.
     #[must_use]
     pub const fn derive(
+        erasure: ErasureState,
         upload: UploadState,
         verification: VerificationState,
         eligibility: Eligibility,
     ) -> Self {
+        match erasure {
+            ErasureState::Pending => return Self::ErasurePending,
+            ErasureState::Erased => return Self::Erased,
+            ErasureState::None => {}
+        }
         match (upload, verification, eligibility) {
             (UploadState::Reserved | UploadState::Expired, _, _) => Self::AwaitingContent,
             (UploadState::Finalized, VerificationState::Rejected, _) => Self::Rejected,
@@ -286,6 +310,12 @@ impl DocumentStatus {
     #[must_use]
     pub const fn is_releasable(self) -> bool {
         matches!(self, Self::Ready)
+    }
+
+    /// Whether the custodian has asked for the document's removal.
+    #[must_use]
+    pub const fn is_erasing(self) -> bool {
+        matches!(self, Self::ErasurePending | Self::Erased)
     }
 }
 
@@ -514,13 +544,46 @@ mod tests {
             (Finalized, Rejected, Releasable, DocumentStatus::Rejected),
         ];
         for (upload, verification, eligibility, expected) in cases {
-            let status = DocumentStatus::derive(upload, verification, eligibility);
+            let status =
+                DocumentStatus::derive(ErasureState::None, upload, verification, eligibility);
             assert_eq!(
                 status, expected,
                 "{upload:?} {verification:?} {eligibility:?}"
             );
             assert_eq!(status.is_releasable(), expected == DocumentStatus::Ready);
         }
+    }
+
+    #[test]
+    fn erasure_outranks_every_other_dimension() {
+        for upload in [
+            UploadState::Reserved,
+            UploadState::Finalized,
+            UploadState::Expired,
+        ] {
+            for verification in [
+                VerificationState::Pending,
+                VerificationState::Approved,
+                VerificationState::Rejected,
+            ] {
+                for eligibility in [Eligibility::Suspended, Eligibility::Releasable] {
+                    for (erasure, expected) in [
+                        (ErasureState::Pending, DocumentStatus::ErasurePending),
+                        (ErasureState::Erased, DocumentStatus::Erased),
+                    ] {
+                        let status =
+                            DocumentStatus::derive(erasure, upload, verification, eligibility);
+                        assert_eq!(status, expected);
+                        assert!(!status.is_releasable());
+                        assert!(status.is_erasing());
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            serde_json::to_value(DocumentStatus::ErasurePending).unwrap(),
+            "erasure-pending"
+        );
     }
 
     #[test]

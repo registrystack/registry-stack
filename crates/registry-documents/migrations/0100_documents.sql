@@ -1,5 +1,13 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- Document Store schema, version 100: the 1.0 baseline.
+--
+-- Erasure deletes bytes, never records. A document and its versions stay as
+-- tombstones once their content is erased, so every foreign key below is
+-- `ON DELETE RESTRICT`: no delete may cascade through a grant, a job, or a
+-- version and take an audit-relevant row with it, and a delete that would
+-- strand a referencing row fails instead. The rows erasure does delete
+-- (`documents_contents`, `documents_staged_objects`) are referenced by
+-- nothing.
 
 -- The storage binding a deployment pinned at its first write. A later start
 -- under another backend, bucket, or scope refuses rather than reading or
@@ -43,7 +51,10 @@ CREATE INDEX IF NOT EXISTS documents_documents_custodian_list_idx
 -- them. Provenance is written once, at reservation and at finalization.
 CREATE TABLE IF NOT EXISTS documents_versions (
     version_id uuid PRIMARY KEY,
-    document_id uuid NOT NULL REFERENCES documents_documents (document_id),
+    -- RESTRICT: a document row is a tombstone that outlives its versions'
+    -- bytes; it is never deleted while a version names it.
+    document_id uuid NOT NULL
+        REFERENCES documents_documents (document_id) ON DELETE RESTRICT,
     upload_id uuid NOT NULL UNIQUE,
     upload_state text NOT NULL
         CHECK (upload_state IN ('reserved', 'finalized', 'expired')),
@@ -71,6 +82,15 @@ CREATE TABLE IF NOT EXISTS documents_versions (
     verified_digest text,
     verified_media_type text,
     verified_at timestamptz,
+    -- The custody clock: a custodian's removal request moves a version to
+    -- `pending` with the policy's cleanup grace frozen into `erasure_due_at`,
+    -- and the sweep records `erased` once the bytes are gone. No grant
+    -- expiry or revocation touches these columns.
+    erasure_state text NOT NULL DEFAULT 'none'
+        CHECK (erasure_state IN ('none', 'pending', 'erased')),
+    erasure_requested_at timestamptz,
+    erasure_due_at timestamptz,
+    erased_at timestamptz,
     -- A CHECK passes when its expression is NULL, so every equality on a
     -- nullable column in the shape checks below carries its own IS NOT NULL.
     CONSTRAINT documents_versions_finalized_shape CHECK (
@@ -89,9 +109,28 @@ CREATE TABLE IF NOT EXISTS documents_versions (
             AND verification_state = 'pending'
             AND eligibility = 'suspended')
     ),
+    CONSTRAINT documents_versions_erasure_shape CHECK (
+        (erasure_state = 'none'
+            AND erasure_requested_at IS NULL
+            AND erasure_due_at IS NULL
+            AND erased_at IS NULL)
+        OR (erasure_state = 'pending'
+            AND erasure_requested_at IS NOT NULL
+            AND erasure_due_at IS NOT NULL
+            AND erasure_due_at >= erasure_requested_at
+            AND erased_at IS NULL)
+        OR (erasure_state = 'erased'
+            AND erasure_requested_at IS NOT NULL
+            AND erasure_due_at IS NOT NULL
+            AND erasure_due_at >= erasure_requested_at
+            AND erased_at IS NOT NULL
+            AND erased_at >= erasure_requested_at)
+    ),
+    -- A version whose removal was requested is never releasable again.
     CONSTRAINT documents_versions_release_shape CHECK (
         eligibility = 'suspended'
-        OR (verification_state = 'approved'
+        OR (erasure_state = 'none'
+            AND verification_state = 'approved'
             AND verified_binding_digest IS NOT NULL
             AND verification_binding_digest IS NOT NULL
             AND verified_binding_digest = verification_binding_digest
@@ -113,6 +152,21 @@ CREATE TABLE IF NOT EXISTS documents_versions (
 CREATE INDEX IF NOT EXISTS documents_versions_document_idx
     ON documents_versions (document_id);
 
+-- The upload-expiry sweep reads only reserved versions past their deadline,
+-- oldest first: a partial index on the deadline over the reserved rows lets
+-- it range-scan the due prefix instead of the whole version table, and stays
+-- as small as the set of uploads in flight.
+CREATE INDEX IF NOT EXISTS documents_versions_upload_expiry_idx
+    ON documents_versions (upload_expires_at)
+    WHERE upload_state = 'reserved';
+
+-- The erasure sweep reads only versions awaiting erasure whose grace has
+-- passed: the partial index holds just the pending rows, ordered by due
+-- time, so the scan stops at the first version not yet due.
+CREATE INDEX IF NOT EXISTS documents_versions_erasure_due_idx
+    ON documents_versions (erasure_due_at)
+    WHERE erasure_state = 'pending';
+
 -- Documents a caller reserved for another custodian, listed in creation
 -- order.
 CREATE INDEX IF NOT EXISTS documents_versions_actor_idx
@@ -122,8 +176,13 @@ CREATE INDEX IF NOT EXISTS documents_versions_actor_idx
 -- frozen at issue. A grant is never extended; revocation is final.
 CREATE TABLE IF NOT EXISTS documents_grants (
     grant_id uuid PRIMARY KEY,
-    document_id uuid NOT NULL REFERENCES documents_documents (document_id),
-    version_id uuid NOT NULL REFERENCES documents_versions (version_id),
+    -- RESTRICT on both: a grant is share history the custodian and the
+    -- audit trail still name after erasure. Erasure revokes a grant and
+    -- keeps its row; it never deletes one.
+    document_id uuid NOT NULL
+        REFERENCES documents_documents (document_id) ON DELETE RESTRICT,
+    version_id uuid NOT NULL
+        REFERENCES documents_versions (version_id) ON DELETE RESTRICT,
     grantee_issuer text NOT NULL CHECK (grantee_issuer <> ''),
     grantee_subject text NOT NULL CHECK (grantee_subject <> ''),
     grantee_kind text NOT NULL
@@ -134,8 +193,10 @@ CREATE TABLE IF NOT EXISTS documents_grants (
     issued_at timestamptz NOT NULL,
     expires_at timestamptz NOT NULL CHECK (expires_at > issued_at),
     revoked_at timestamptz CHECK (revoked_at >= issued_at),
+    -- RESTRICT: like the single-column keys above, the pair a grant names
+    -- outlives erasure; a version is never deleted while a grant names it.
     CONSTRAINT documents_grants_document_version FOREIGN KEY (document_id, version_id)
-        REFERENCES documents_versions (document_id, version_id)
+        REFERENCES documents_versions (document_id, version_id) ON DELETE RESTRICT
 );
 
 CREATE INDEX IF NOT EXISTS documents_grants_document_idx
@@ -148,7 +209,9 @@ CREATE INDEX IF NOT EXISTS documents_grants_version_idx
 -- One idempotency key, scoped to the caller and the operation and stored
 -- only as a digest. The request digest is the canonical body's; the
 -- resource is the one the first request created. A key expires with the
--- receipt retention period.
+-- receipt retention period. It carries no foreign key: a key's resource
+-- may be a document or a grant, both kept as tombstones, so erasure never
+-- leaves a key naming a missing row. The erasure sweep does not prune keys.
 CREATE TABLE IF NOT EXISTS documents_idempotency (
     key_digest text PRIMARY KEY CHECK (key_digest ~ '^[0-9a-f]{64}$'),
     request_digest text NOT NULL CHECK (request_digest ~ '^[0-9a-f]{64}$'),
@@ -159,7 +222,13 @@ CREATE TABLE IF NOT EXISTS documents_idempotency (
 
 -- Content held in PostgreSQL, one row per finalized version.
 CREATE TABLE IF NOT EXISTS documents_contents (
-    version_id uuid PRIMARY KEY REFERENCES documents_versions (version_id),
+    -- RESTRICT: erasure deletes this row and keeps the version. A version
+    -- is never deleted, so the bytes never vanish by cascade unrecorded.
+    -- Deleting the row makes the bytes unservable at once; the space they
+    -- held is reclaimed only when PostgreSQL vacuums the table and its
+    -- TOAST relation.
+    version_id uuid PRIMARY KEY
+        REFERENCES documents_versions (version_id) ON DELETE RESTRICT,
     content bytea NOT NULL
 );
 
@@ -169,7 +238,10 @@ CREATE TABLE IF NOT EXISTS documents_contents (
 -- transaction of the one attempt that won.
 CREATE TABLE IF NOT EXISTS documents_staged_objects (
     object_id uuid PRIMARY KEY,
-    version_id uuid NOT NULL REFERENCES documents_versions (version_id),
+    -- RESTRICT: the row is deleted only after its object is confirmed gone,
+    -- by the erasure or orphan sweep; the version stays.
+    version_id uuid NOT NULL
+        REFERENCES documents_versions (version_id) ON DELETE RESTRICT,
     binding_digest text NOT NULL CHECK (binding_digest ~ '^[0-9a-f]{64}$'),
     sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
     length bigint NOT NULL CHECK (length > 0),
@@ -179,6 +251,13 @@ CREATE TABLE IF NOT EXISTS documents_staged_objects (
 
 CREATE INDEX IF NOT EXISTS documents_staged_objects_version_idx
     ON documents_staged_objects (version_id);
+
+-- The orphan sweep reads only uncommitted rows older than its settling age:
+-- the partial index holds just the uncommitted rows, which a finalized
+-- upload leaves none of, ordered by staging time.
+CREATE INDEX IF NOT EXISTS documents_staged_objects_orphan_idx
+    ON documents_staged_objects (staged_at)
+    WHERE NOT committed;
 
 -- The content verification job table, exactly the shape
 -- `registry-platform-dispatch` declares (`JobTable::create_statements`),
@@ -275,8 +354,112 @@ CREATE INDEX IF NOT EXISTS documents_verification_jobs_lease_idx
 
 
 ALTER TABLE documents_verification_jobs
+    -- RESTRICT: a job is attempt history for a version that is never
+    -- deleted.
     ADD CONSTRAINT documents_verification_jobs_version
-        FOREIGN KEY (version_id) REFERENCES documents_versions (version_id);
+        FOREIGN KEY (version_id) REFERENCES documents_versions (version_id)
+        ON DELETE RESTRICT;
+
+-- The erasure job table, exactly the shape `registry-platform-dispatch`
+-- declares (`JobTable::create_statements`), keyed by the version and a
+-- fixed part. One job erases one version's bytes. A unit test holds the two
+-- in parity.
+CREATE TABLE IF NOT EXISTS documents_erasure_jobs (
+    version_id uuid NOT NULL,
+    part text NOT NULL
+        CHECK (part <> '' AND octet_length(part) <= 256),
+    generation bigint NOT NULL CHECK (generation > 0),
+    state text NOT NULL
+        CONSTRAINT documents_erasure_jobs_state_values CHECK (
+            state IN ('pending', 'leased', 'delivered', 'dead-lettered',
+                      'expired', 'unknown', 'cancelled')
+        ),
+    attempt smallint NOT NULL CHECK (attempt >= 0),
+    next_attempt_at timestamptz,
+    attempt_started_at timestamptz,
+    lease_expires_at timestamptz,
+    lease_token uuid,
+    delivered_at timestamptz,
+    dead_lettered_at timestamptz,
+    expired_at timestamptz,
+    updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+    PRIMARY KEY (version_id, part),
+    CONSTRAINT documents_erasure_jobs_shape CHECK (
+        (state = 'pending'
+            AND next_attempt_at IS NOT NULL
+            AND attempt_started_at IS NULL
+            AND lease_expires_at IS NULL
+            AND lease_token IS NULL
+            AND delivered_at IS NULL
+            AND dead_lettered_at IS NULL
+            AND expired_at IS NULL)
+        OR (state = 'leased'
+            AND attempt > 0
+            AND next_attempt_at IS NULL
+            AND attempt_started_at IS NOT NULL
+            AND lease_expires_at > attempt_started_at
+            AND lease_token IS NOT NULL
+            AND delivered_at IS NULL
+            AND dead_lettered_at IS NULL
+            AND expired_at IS NULL)
+        OR (state = 'delivered'
+            AND attempt > 0
+            AND next_attempt_at IS NULL
+            AND attempt_started_at IS NULL
+            AND lease_expires_at IS NULL
+            AND lease_token IS NULL
+            AND delivered_at IS NOT NULL
+            AND dead_lettered_at IS NULL
+            AND expired_at IS NULL)
+        OR (state = 'dead-lettered'
+            AND attempt > 0
+            AND next_attempt_at IS NULL
+            AND attempt_started_at IS NULL
+            AND lease_expires_at IS NULL
+            AND lease_token IS NULL
+            AND delivered_at IS NULL
+            AND dead_lettered_at IS NOT NULL)
+        OR (state = 'expired'
+            AND next_attempt_at IS NULL
+            AND attempt_started_at IS NULL
+            AND lease_expires_at IS NULL
+            AND lease_token IS NULL
+            AND delivered_at IS NULL
+            AND dead_lettered_at IS NULL
+            AND expired_at IS NOT NULL)
+        OR (state = 'unknown'
+            AND attempt > 0
+            AND next_attempt_at IS NULL
+            AND attempt_started_at IS NULL
+            AND lease_expires_at IS NULL
+            AND lease_token IS NULL
+            AND delivered_at IS NULL
+            AND dead_lettered_at IS NULL
+            AND expired_at IS NULL)
+        OR (state = 'cancelled'
+            AND next_attempt_at IS NULL
+            AND attempt_started_at IS NULL
+            AND lease_expires_at IS NULL
+            AND lease_token IS NULL
+            AND delivered_at IS NULL
+            AND dead_lettered_at IS NULL
+            AND expired_at IS NULL)
+    )
+);
+CREATE INDEX IF NOT EXISTS documents_erasure_jobs_due_idx
+    ON documents_erasure_jobs (next_attempt_at, version_id, part)
+    WHERE state = 'pending';
+CREATE INDEX IF NOT EXISTS documents_erasure_jobs_lease_idx
+    ON documents_erasure_jobs (lease_expires_at, version_id, part)
+    WHERE state = 'leased';
+
+
+ALTER TABLE documents_erasure_jobs
+    -- RESTRICT: a job is attempt history for a version that is never
+    -- deleted.
+    ADD CONSTRAINT documents_erasure_jobs_version
+        FOREIGN KEY (version_id) REFERENCES documents_versions (version_id)
+        ON DELETE RESTRICT;
 
 -- The activation ledger: one row per package `documentsctl apply` made
 -- active, oldest first. `serve` refuses a database whose newest row does

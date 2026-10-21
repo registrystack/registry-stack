@@ -358,17 +358,26 @@ pub enum DocumentAction {
     Share,
     RevokeShare,
     ListShares,
+    RequestErasure,
 }
 
 /// The actions `standing` allows on a document whose current version has
 /// `status`, in vocabulary order. `granted` is whether the caller holds an
-/// active grant on that version.
+/// active grant on that version. A document whose removal was requested
+/// offers nothing but its share history: every grant on it is revoked.
 #[must_use]
 pub fn allowed_actions(
     standing: Standing,
     status: DocumentStatus,
     granted: bool,
 ) -> Vec<DocumentAction> {
+    if status.is_erasing() {
+        return if standing.sees() {
+            vec![DocumentAction::ListShares]
+        } else {
+            Vec::new()
+        };
+    }
     let ready = status.is_releasable();
     let mut actions = Vec::new();
     if ready && (standing.custodian || granted) {
@@ -382,6 +391,9 @@ pub fn allowed_actions(
     }
     if standing.sees() {
         actions.push(DocumentAction::ListShares);
+    }
+    if standing.custodian {
+        actions.push(DocumentAction::RequestErasure);
     }
     actions
 }
@@ -706,7 +718,11 @@ mod tests {
         assert!(refused.custodian && !refused.may_grant);
         assert_eq!(
             allowed_actions(refused, DocumentStatus::Ready, false),
-            vec![DocumentAction::Download, DocumentAction::ListShares]
+            vec![
+                DocumentAction::Download,
+                DocumentAction::ListShares,
+                DocumentAction::RequestErasure
+            ]
         );
         let permitted = standing(
             &policy("named-share"),
@@ -732,12 +748,50 @@ mod tests {
         ] {
             assert_eq!(
                 allowed_actions(custodian, status, true),
-                vec![DocumentAction::RevokeShare, DocumentAction::ListShares]
+                vec![
+                    DocumentAction::RevokeShare,
+                    DocumentAction::ListShares,
+                    DocumentAction::RequestErasure
+                ]
             );
         }
         assert_eq!(
             allowed_actions(Standing::default(), DocumentStatus::Ready, true),
             vec![DocumentAction::Download]
+        );
+    }
+
+    #[test]
+    fn only_the_custodian_may_request_erasure_and_an_erasing_document_offers_its_shares_only() {
+        let custodian = Standing {
+            custodian: true,
+            owner: false,
+            may_grant: true,
+        };
+        let owner = Standing {
+            custodian: false,
+            owner: true,
+            may_grant: true,
+        };
+        assert!(allowed_actions(custodian, DocumentStatus::Ready, false)
+            .contains(&DocumentAction::RequestErasure));
+        assert!(!allowed_actions(owner, DocumentStatus::Ready, false)
+            .contains(&DocumentAction::RequestErasure));
+        for status in [DocumentStatus::ErasurePending, DocumentStatus::Erased] {
+            for standing in [custodian, owner] {
+                assert_eq!(
+                    allowed_actions(standing, status, true),
+                    vec![DocumentAction::ListShares]
+                );
+            }
+            assert_eq!(
+                allowed_actions(Standing::default(), status, true),
+                Vec::new()
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(DocumentAction::RequestErasure).unwrap(),
+            "request-erasure"
         );
     }
 
