@@ -52,18 +52,30 @@ decisions:
       - {path: crates/registry-documents/src/config.rs, name: an_s3_ceiling_above_sixty_four_mebibytes_is_out_of_range}
       - {path: crates/registry-documents/src/config.rs, name: s3_storage_reads_the_shared_object_storage_block}
   - id: DOCUMENTS-DEC-04
-    subject: The project file is parsed and bounded but not cross-checked
+    subject: The project file is bounded and its profile references are cross-checked
     decision: >-
       documentsctl check reads documents.yaml against its schema and bounds,
-      and refuses unknown members and repeated hook ids, but does not yet
-      check references between policies, profiles, and hooks.
+      refuses unknown members and repeated hook ids, and checks the
+      references a document policy makes to access profiles: a policy that
+      names an undeclared profile is refused with
+      documents.project.unknown-profile, and one that lists a profile in a
+      member its role does not admit with
+      documents.project.profile-role-mismatch. It also refuses a requester
+      client listed in two profiles and a default grant expiry above the
+      policy's maximum, and reports every such finding in one run.
     reasoning: >-
-      The meaning of those references is defined by the document model and
-      access rules, which arrive in WP3 and WP4. Checking them earlier would
-      freeze rules that are not designed yet.
+      A policy reference that resolves to no profile, or to one with the
+      wrong role, would leave a document nobody can hold or let the wrong
+      caller grant it. Refusing it when the project is checked keeps the
+      mistake out of a package instead of surfacing it as a refusal at
+      runtime.
     evidence:
       - {path: crates/registry-documents-core/src/project.rs, name: an_unknown_member_is_refused}
       - {path: crates/registry-documents-core/src/project.rs, name: a_repeated_hook_id_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_policy_naming_an_undeclared_profile_is_refused_at_the_reference}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_profile_listed_against_its_role_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_requester_client_shared_by_two_profiles_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: every_reference_finding_is_reported_in_one_run}
       - {path: crates/registry-documentsctl/src/lib.rs, name: the_starter_project_and_runtime_check_clean}
   - id: DOCUMENTS-DEC-05
     subject: Identical content uploaded twice gives two documents
