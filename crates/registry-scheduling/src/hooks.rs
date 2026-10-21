@@ -1098,6 +1098,53 @@ mod tests {
         assert_eq!(retry_delays_ms(), expected);
     }
 
+    /// The binding digests a deployed Scheduling runtime records with every
+    /// captured delivery. A retained delivery is refused once its recorded
+    /// digest no longer matches the activated destination, so these values
+    /// are pinned: a change to the digest shape is a breaking change.
+    #[test]
+    fn hook_destination_binding_digests_are_pinned() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("the test secret directory");
+        let key_path = directory.path().join("hook-key");
+        std::fs::write(&key_path, [0x5a; 32]).expect("write the test hook key");
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict the test hook key");
+        let secrets = SecretResolver::new([SecretProvider::File], directory.path())
+            .expect("the test secret resolver");
+        let configured: DestinationsConfig = serde_json::from_value(json!({"hooks": {
+            "appointment-events": {
+                "url": "https://events.example.test/scheduling",
+                "hmacSha256KeyRef": "secret:file/hook-key",
+            },
+            "audit-mirror": {
+                "url": "http://127.0.0.1:8080/hooks",
+                "hmacSha256KeyRef": "secret:file/hook-key",
+                "attemptTimeoutMilliseconds": 250,
+                "maximumAttempts": 3,
+            },
+        }}))
+        .expect("the pinned hook destinations read");
+        let expected = ["appointment-events".to_owned()].into_iter().collect();
+
+        let activated = ActivatedDestinations::activate(&expected, &configured.hooks, &secrets)
+            .expect("the pinned hook destinations activate");
+
+        assert_eq!(
+            activated.binding_digest,
+            "sha256:6021194b5df3b34eeb31b21c8b3ef448f2d639d3e8393d13b98a8276b5411df0"
+        );
+        assert_eq!(
+            activated.bindings["appointment-events"].binding_digest(),
+            "sha256:519db07c7b8250700c34939c5212b9fabf77b2c37c42e72dfa997214e4da985d"
+        );
+        assert_eq!(
+            activated.bindings["audit-mirror"].binding_digest(),
+            "sha256:dd0b35e51274ab6a1d2456e9b0520acdf5b68e720a352d0d4819f41090ff7d97"
+        );
+    }
+
     /// Whether the runtime configuration's reader accepts `config` bound to
     /// the hook destination `id`.
     fn configuration_accepts(id: &str, config: &HookDestinationConfig) -> bool {
