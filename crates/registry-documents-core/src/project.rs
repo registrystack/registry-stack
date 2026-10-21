@@ -162,7 +162,7 @@ impl DocumentsProject {
                         "documents.project.unsupported-hook-projection",
                         &format!("/hooks/{index}/projection/{position}"),
                         "this field is not in the trigger's closed projection",
-                        "List only fields the trigger projects: actorKind, documentId, policyId, policyVersion, versionDigest, and versionId, and for document-grant.changed also change and grantId.",
+                        "List only fields the trigger projects: documentId, policyId, policyVersion, versionDigest, and versionId, and for document-grant.changed also actorKind, change, expiresAt, and grantId.",
                     ));
                 }
             }
@@ -439,11 +439,10 @@ pub enum HookTrigger {
 }
 
 /// The closed fields a version observer may project: which version of which
-/// document, under which policy, and the kind of actor that reserved it.
-/// Content, labels, media types, names, subjects, and anything about the
-/// person a document describes are not representable.
+/// document, and under which policy. Content, labels, media types, names,
+/// subjects, the actors involved, and anything about the person a document
+/// describes are not representable.
 pub const DOCUMENT_VERSION_EVENT_FIELDS: &[&str] = &[
-    "actorKind",
     "documentId",
     "policyId",
     "policyVersion",
@@ -452,13 +451,15 @@ pub const DOCUMENT_VERSION_EVENT_FIELDS: &[&str] = &[
 ];
 
 /// The closed fields a grant observer may project: the version fields, the
-/// grant, and whether it was issued or revoked. The actor kind is the kind of
-/// the caller that issued or revoked the grant; the recipient is not
-/// representable.
+/// grant, whether it was issued or revoked, the kind of the caller that
+/// issued or revoked it, and the expiry frozen into it at issue. A grant
+/// that reaches its expiry emits no event, so an observer that tracks
+/// access reads the expiry here. The recipient is not representable.
 pub const DOCUMENT_GRANT_EVENT_FIELDS: &[&str] = &[
     "actorKind",
     "change",
     "documentId",
+    "expiresAt",
     "grantId",
     "policyId",
     "policyVersion",
@@ -1002,7 +1003,6 @@ mod tests {
     #[test]
     fn each_trigger_names_its_closed_projection_fields() {
         let version = [
-            "actorKind",
             "documentId",
             "policyId",
             "policyVersion",
@@ -1017,6 +1017,7 @@ mod tests {
                 "actorKind",
                 "change",
                 "documentId",
+                "expiresAt",
                 "grantId",
                 "policyId",
                 "policyVersion",

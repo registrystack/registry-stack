@@ -116,6 +116,7 @@ impl DocumentService {
                 .execute(
                     "UPDATE documents_versions
                         SET erasure_state = 'pending', eligibility = 'suspended',
+                            revision = revision + 1,
                             erasure_requested_at = transaction_timestamp(),
                             erasure_due_at = transaction_timestamp() + make_interval(hours => $2)
                       WHERE version_id = $1 AND erasure_state = 'none'",
@@ -125,7 +126,8 @@ impl DocumentService {
                 .map_err(|error| unavailable("erasure request", &error))?;
             let revoked = transaction
                 .query(
-                    "UPDATE documents_grants SET revoked_at = transaction_timestamp()
+                    "UPDATE documents_grants
+                        SET revoked_at = transaction_timestamp(), revision = revision + 1
                       WHERE document_id = $1 AND revoked_at IS NULL
                         AND expires_at > transaction_timestamp()
                       RETURNING grant_id",

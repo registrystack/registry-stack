@@ -4,14 +4,6 @@
   "additionalProperties": false,
   "description": "The data of a document-version.ready event: a document version passed content verification and is releasable.",
   "properties": {
-    "actorKind": {
-      "description": "The kind of caller that reserved the version.",
-      "enum": [
-        "service",
-        "human"
-      ],
-      "type": "string"
-    },
     "documentId": {
       "description": "The document the event is about.",
       "format": "uuid",

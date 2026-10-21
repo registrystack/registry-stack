@@ -292,7 +292,8 @@ impl DispatchStore for ErasureStore {
             transaction
                 .execute(
                     "UPDATE documents_versions
-                        SET erasure_state = 'erased', erased_at = transaction_timestamp()
+                        SET erasure_state = 'erased', erased_at = transaction_timestamp(),
+                            revision = revision + 1
                       WHERE version_id = $1 AND erasure_state = 'pending'",
                     &[&version_id],
                 )
@@ -631,7 +632,8 @@ async fn expire_uploads(
         let committed = async {
             transaction
                 .execute(
-                    "UPDATE documents_versions SET upload_state = 'expired'
+                    "UPDATE documents_versions
+                        SET upload_state = 'expired', revision = revision + 1
                       WHERE version_id = ANY($1) AND upload_state = 'reserved'",
                     &[&ids],
                 )

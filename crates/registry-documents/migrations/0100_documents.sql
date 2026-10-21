@@ -96,6 +96,9 @@ CREATE TABLE IF NOT EXISTS documents_versions (
     erasure_requested_at timestamptz,
     erasure_due_at timestamptz,
     erased_at timestamptz,
+    -- Advanced by every update that changes the version's state, so the
+    -- revision an event reports only grows for one version.
+    revision bigint NOT NULL DEFAULT 1 CHECK (revision >= 1),
     -- A CHECK passes when its expression is NULL, so every equality on a
     -- nullable column in the shape checks below carries its own IS NOT NULL.
     CONSTRAINT documents_versions_finalized_shape CHECK (
@@ -198,6 +201,8 @@ CREATE TABLE IF NOT EXISTS documents_grants (
     issued_at timestamptz NOT NULL,
     expires_at timestamptz NOT NULL CHECK (expires_at > issued_at),
     revoked_at timestamptz CHECK (revoked_at >= issued_at),
+    -- 1 at issue, advanced once by revocation, the only later change.
+    revision bigint NOT NULL DEFAULT 1 CHECK (revision >= 1),
     -- RESTRICT: like the single-column keys above, the pair a grant names
     -- outlives erasure; a version is never deleted while a grant names it.
     CONSTRAINT documents_grants_document_version FOREIGN KEY (document_id, version_id)
