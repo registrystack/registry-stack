@@ -20,6 +20,7 @@ entries:
       - {path: crates/registry-documents/src/http.rs, name: health_answers_without_a_credential}
       - {path: crates/registry-documents/src/http.rs, name: the_trace_is_echoed_on_a_refusal}
       - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_prepared_runtime_answers_health_and_refuses_every_other_route}
+      - {path: crates/registry-documents/src/http.rs, name: the_served_router_carries_no_document_route}
   - id: DOCUMENTS-SEC-03
     tests:
       - {path: crates/registry-documents/src/config.rs, name: plaintext_database_is_refused_outside_test_builds}
@@ -47,6 +48,13 @@ entries:
     tests:
       - {path: crates/registry-documents/src/config.rs, name: a_plaintext_hook_destination_is_refused_outside_development}
       - {path: crates/registry-documentsctl/src/lib.rs, name: a_refused_runtime_configuration_names_the_finding_without_the_value}
+  - id: DOCUMENTS-SEC-09
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_uploaded_document_is_released_only_after_it_is_verified}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: stored_content_that_no_longer_matches_its_digest_is_never_released}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_rejected_version_is_never_released}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: s3_content_is_staged_verified_over_http_and_released}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_s3_object_that_no_longer_matches_is_never_released}
   - id: DOCUMENTS-SEC-11
     tests:
       - {path: crates/registry-documents/src/config.rs, name: shared_runtime_loader_refuses_environment_expressions_in_secret_references}
@@ -54,3 +62,32 @@ entries:
   - id: DOCUMENTS-SEC-12
     tests:
       - {path: crates/registry-documents-core/src/project.rs, name: an_empty_scope_or_client_list_is_refused_at_its_member}
+  - id: DOCUMENTS-SEC-13
+    tests:
+      - {path: crates/registry-documents/src/package.rs, name: a_package_digest_mismatch_is_refused_in_the_shared_shape}
+  - id: DOCUMENTS-SEC-14
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: content_that_differs_from_the_reserved_digest_or_length_never_finalizes}
+      - {path: crates/registry-documents/src/content.rs, name: content_is_checked_by_digest_and_length}
+  - id: DOCUMENTS-SEC-15
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_body_over_the_reserved_length_is_cut_off_and_keeps_nothing}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_document_above_the_policy_size_is_refused_before_any_byte_moves}
+  - id: DOCUMENTS-SEC-16
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_media_type_outside_the_policy_is_refused_at_reservation_and_at_upload_without_sniffing}
+      - {path: crates/registry-documents-core/src/custody.rs, name: a_media_type_outside_the_policy_list_is_refused_at_reservation}
+  - id: DOCUMENTS-SEC-17
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_unavailable_verifier_never_releases_and_a_dead_letter_neither_approves_nor_rejects}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_rejected_version_is_never_released}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_http_verifier_rejection_or_outage_never_releases}
+  - id: DOCUMENTS-SEC-18
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_verifier_binding_change_at_restart_suspends_and_verifies_again}
+  - id: DOCUMENTS-SEC-19
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: concurrent_uploads_of_one_reservation_finalize_once}
+  - id: DOCUMENTS-SEC-20
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_custodian_quota_holds_against_concurrent_reservations}

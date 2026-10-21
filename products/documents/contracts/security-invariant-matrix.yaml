@@ -13,10 +13,10 @@ reviewRule: >-
   says why. A row may not lose its negative test. A pending row names the work
   package that owes its enforcement and carries no test until that package
   lands; it becomes partial or enforced only in the change that adds the
-  negative test that earns it. The runtime serves only its health route, so
-  the enforced rows cover configuration, the request edge, and the client
-  boundary; the document invariants arrive as rows with the work packages that
-  build documents.
+  negative test that earns it. Until authentication lands, the served runtime
+  answers only its health route; the document invariants are proven through a
+  router that only test builds compile, with a synthetic caller standing in
+  for the verified token.
 invariants:
   - id: DOCUMENTS-SEC-01
     state: enforced
@@ -135,20 +135,21 @@ invariants:
       path: crates/registry-documents/src/config.rs
       name: a_plaintext_hook_destination_is_refused_outside_development
   - id: DOCUMENTS-SEC-09
-    state: pending
-    plannedSlice: WP3
+    state: enforced
     threat: >-
       A caller downloads bytes that content verification has not marked
       releasable, or bytes whose digest differs from the version requested.
     enforcementPoint: >-
-      The download path releases a version only in the releasable state and
-      only after an exact-version and digest check.
+      The download path releases a version only in the releasable state, and
+      reads the whole content and checks it against the recorded digest and
+      length before the first byte is sent.
     refusal: >-
-      Refuse release of any version that is pending, suspended, or rejected.
-    pendingNote: >-
-      WP3 adds storage, upload, the verification worker, and release, with a
-      PostgreSQL negative test that a version never releases before it is
-      releasable.
+      Answer 409 document-version.not-releasable for a pending, suspended, or
+      rejected version, and 503 service.unavailable, with a storage-integrity
+      audit entry and no byte released, when stored content no longer matches.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: an_uploaded_document_is_released_only_after_it_is_verified
   - id: DOCUMENTS-SEC-10
     state: pending
     plannedSlice: WP4
@@ -198,8 +199,7 @@ invariants:
       path: crates/registry-documents-core/src/project.rs
       name: an_empty_scope_or_client_list_is_refused_at_its_member
   - id: DOCUMENTS-SEC-13
-    state: pending
-    plannedSlice: WP3
+    state: partial
     threat: >-
       The runtime serves a project other than the one package.expectedDigest
       pins, so a reviewed package is silently replaced.
@@ -207,11 +207,122 @@ invariants:
       Startup verifies the package at package.root and compares its digest
       with the pin before it reads the project or binds.
     refusal: >-
-      Refuse to start, naming the expected and the found digest in the shared
-      shape.
-    pendingNote: >-
-      The bootstrap runtime does not open its package. WP3 reads the project
-      from the verified package, adds the digest-mismatch negative test, and
-      adds the Document Store row to the shared runtime configuration
-      conformance gate, which requires that test of every runtime holding a
-      package block.
+      Refuse to start with documents.package.digest-mismatch at
+      /package/expectedDigest, naming the expected and the found digest in the
+      shared shape.
+    negativeTest:
+      path: crates/registry-documents/src/package.rs
+      name: a_package_digest_mismatch_is_refused_in_the_shared_shape
+    partialNote: >-
+      The shared runtime configuration conformance gate has no Document Store
+      row yet, so the gate does not require this test of the runtime. Adding
+      the row is a change to the shared platform gate, outside this product.
+  - id: DOCUMENTS-SEC-14
+    state: enforced
+    threat: >-
+      Bytes other than the ones the custodian declared become a document
+      version, because the upload trusts the body it was sent.
+    enforcementPoint: >-
+      The upload hashes and counts the body while reading it and finalizes
+      only when the computed digest and length equal the reservation's, in
+      the finalizing transaction; nothing is written before that check.
+    refusal: >-
+      Answer 422 upload.digest-mismatch or upload.length-mismatch, keep no
+      content and enqueue no verification, and leave the reservation open
+      until it expires.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: content_that_differs_from_the_reserved_digest_or_length_never_finalizes
+  - id: DOCUMENTS-SEC-15
+    state: enforced
+    threat: >-
+      A caller exhausts memory or storage by sending a body far larger than
+      the length it reserved, or than the deployment ceiling.
+    enforcementPoint: >-
+      The upload route has its own body limit at the deployment ceiling,
+      refuses a declared Content-Length above it or different from the
+      reserved length, and stops reading at the reserved length plus one
+      byte.
+    refusal: >-
+      Answer 413 request.body-too-large or 422 upload.length-mismatch and keep
+      nothing.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: a_body_over_the_reserved_length_is_cut_off_and_keeps_nothing
+  - id: DOCUMENTS-SEC-16
+    state: enforced
+    threat: >-
+      Content of a type the policy does not allow enters custody, either
+      declared at reservation or switched at upload, or the Store guesses a
+      type from the bytes and releases them under it.
+    enforcementPoint: >-
+      Reservation checks the declared media type against the policy list by
+      exact match; the upload requires Content-Type to equal the reserved
+      type; the bytes are never inspected for a type, and release serves the
+      reserved type.
+    refusal: >-
+      Answer 422 document.content-type-not-allowed at reservation and 422
+      upload.content-type-mismatch at upload.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: a_media_type_outside_the_policy_is_refused_at_reservation_and_at_upload_without_sniffing
+  - id: DOCUMENTS-SEC-17
+    state: enforced
+    threat: >-
+      A version is released on a verdict that does not cover it: no verdict,
+      a rejection, a verdict on other bytes or another media type, a verdict
+      from a verifier the deployment no longer uses, or a job that gave up.
+    enforcementPoint: >-
+      Release requires the approved state with a verdict recorded against the
+      version's computed digest, its media type, and the current verifier
+      binding digest; an unavailable verifier schedules a retry, and a
+      dead-lettered job records no verdict.
+    refusal: >-
+      Answer 409 document-version.not-releasable; a dead-lettered job leaves
+      the version pending and suspended, never approved or rejected.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: an_unavailable_verifier_never_releases_and_a_dead_letter_neither_approves_nor_rejects
+  - id: DOCUMENTS-SEC-18
+    state: enforced
+    threat: >-
+      An operator replaces the content verifier and versions approved under
+      the old one keep being released without the new verifier's verdict.
+    enforcementPoint: >-
+      At startup, every finalized version verified or queued under another
+      binding digest is suspended and re-enqueued under the current binding;
+      a job keyed to a superseded binding is dead-lettered without a verdict.
+    refusal: >-
+      Answer 409 document-version.not-releasable until the current verifier
+      approves the version again.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: a_verifier_binding_change_at_restart_suspends_and_verifies_again
+  - id: DOCUMENTS-SEC-19
+    state: enforced
+    threat: >-
+      Concurrent uploads to one reservation finalize more than once, leaving
+      two contents or two verification jobs behind one version.
+    enforcementPoint: >-
+      Finalization locks the version row and finalizes only a reservation
+      still open; no transaction is held while bytes arrive.
+    refusal: >-
+      A later attempt with the same content gets the one finalized version;
+      an attempt after finalization gets 409 upload.finalized.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: concurrent_uploads_of_one_reservation_finalize_once
+  - id: DOCUMENTS-SEC-20
+    state: enforced
+    threat: >-
+      A custodian exceeds the per-policy byte quota by sending reservations
+      concurrently, each seeing the quota before the others commit.
+    enforcementPoint: >-
+      Reservation takes a transaction advisory lock per custodian and policy,
+      sums finalized and unexpired reserved bytes, and checks the quota
+      before it inserts.
+    refusal: >-
+      Answer 422 custody.quota-exceeded and reserve nothing.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: the_custodian_quota_holds_against_concurrent_reservations
