@@ -191,6 +191,35 @@ mod tests {
     }
 
     #[test]
+    fn documents_publishes_its_runtime_package_and_operator_commands() {
+        let catalog = catalog();
+        for invocation in [
+            "documents serve",
+            "documentsctl init",
+            "documentsctl check",
+            "documentsctl package",
+            "documentsctl plan",
+            "documentsctl apply",
+            "documentsctl status",
+            "documentsctl verification list",
+            "documentsctl verification replay",
+        ] {
+            assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());
+        }
+        let replay = find_command(&catalog.binaries, "documentsctl verification replay");
+        for required in [
+            "--runtime-config ",
+            "--version-id ",
+            "--expected-generation ",
+        ] {
+            assert!(replay
+                .options
+                .iter()
+                .any(|option| option.display.starts_with(required)));
+        }
+    }
+
+    #[test]
     fn registry_render_publishes_its_bundle_and_serve_commands() {
         let catalog = catalog();
         for invocation in [
