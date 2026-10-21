@@ -3444,11 +3444,11 @@
           ]
         },
         {
-          "name": "webhook",
-          "invocation": "bregctl webhook",
-          "about": "Inspect and operate configured webhook deliveries",
+          "name": "hook",
+          "invocation": "bregctl hook",
+          "about": "Inspect and operate configured hook deliveries",
           "long_about": null,
-          "usage": "bregctl webhook [OPTIONS] <COMMAND>",
+          "usage": "bregctl hook [OPTIONS] <COMMAND>",
           "arguments": [],
           "options": [
             {
@@ -3479,10 +3479,10 @@
           "subcommands": [
             {
               "name": "sample",
-              "invocation": "bregctl webhook sample",
+              "invocation": "bregctl hook sample",
               "about": "Render one deterministic exact CloudEvents request with synthetic values",
               "long_about": null,
-              "usage": "bregctl webhook sample [OPTIONS] --event <ID> <PROJECT>",
+              "usage": "bregctl hook sample [OPTIONS] --event <ID> <PROJECT>",
               "arguments": [
                 {
                   "display": "<PROJECT>",
@@ -3533,10 +3533,10 @@
             },
             {
               "name": "list",
-              "invocation": "bregctl webhook list",
+              "invocation": "bregctl hook list",
               "about": "List bounded value-free delivery metadata, including superseded bindings",
               "long_about": null,
-              "usage": "bregctl webhook list [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "usage": "bregctl hook list [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
               "arguments": [],
               "options": [
                 {
@@ -3588,10 +3588,10 @@
             },
             {
               "name": "drain",
-              "invocation": "bregctl webhook drain",
+              "invocation": "bregctl hook drain",
               "about": "Attempt due local hooks under the active package with bounded time and attempts",
               "long_about": null,
-              "usage": "bregctl webhook drain [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "usage": "bregctl hook drain [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
               "arguments": [],
               "options": [
                 {
@@ -3654,10 +3654,10 @@
             },
             {
               "name": "replay",
-              "invocation": "bregctl webhook replay",
+              "invocation": "bregctl hook replay",
               "about": "Replay one eligible retained dead-letter using optimistic generation binding",
               "long_about": null,
-              "usage": "bregctl webhook replay [OPTIONS] --runtime-config <ABSOLUTE_FILE> --event-id <UUID> --delivery-id <ID> --expected-generation <NUMBER>",
+              "usage": "bregctl hook replay [OPTIONS] --runtime-config <ABSOLUTE_FILE> --event-id <UUID> --delivery-id <ID> --expected-generation <NUMBER>",
               "arguments": [],
               "options": [
                 {
@@ -3671,7 +3671,7 @@
                 },
                 {
                   "display": "--event-id <UUID>",
-                  "description": "Stable event UUID shown by `webhook list`",
+                  "description": "Stable event UUID shown by `hook list`",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3680,7 +3680,7 @@
                 },
                 {
                   "display": "--delivery-id <ID>",
-                  "description": "Compiled delivery identifier shown by `webhook list`",
+                  "description": "Compiled delivery identifier shown by `hook list`",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3689,7 +3689,7 @@
                 },
                 {
                   "display": "--expected-generation <NUMBER>",
-                  "description": "Current generation shown by `webhook list`",
+                  "description": "Current generation shown by `hook list`",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3725,10 +3725,10 @@
             },
             {
               "name": "discard",
-              "invocation": "bregctl webhook discard",
+              "invocation": "bregctl hook discard",
               "about": "Permanently discard one retained delivery using optimistic generation binding",
               "long_about": null,
-              "usage": "bregctl webhook discard [OPTIONS] --runtime-config <ABSOLUTE_FILE> --event-id <UUID> --delivery-id <ID> --expected-generation <NUMBER>",
+              "usage": "bregctl hook discard [OPTIONS] --runtime-config <ABSOLUTE_FILE> --event-id <UUID> --delivery-id <ID> --expected-generation <NUMBER>",
               "arguments": [],
               "options": [
                 {
@@ -3742,7 +3742,7 @@
                 },
                 {
                   "display": "--event-id <UUID>",
-                  "description": "Stable event UUID shown by `webhook list`",
+                  "description": "Stable event UUID shown by `hook list`",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3751,7 +3751,7 @@
                 },
                 {
                   "display": "--delivery-id <ID>",
-                  "description": "Compiled delivery identifier shown by `webhook list`",
+                  "description": "Compiled delivery identifier shown by `hook list`",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],
@@ -3760,7 +3760,7 @@
                 },
                 {
                   "display": "--expected-generation <NUMBER>",
-                  "description": "Current generation shown by `webhook list`",
+                  "description": "Current generation shown by `hook list`",
                   "always_required": true,
                   "repeatable": false,
                   "default_values": [],

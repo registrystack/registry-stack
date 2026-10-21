@@ -124,7 +124,7 @@ Before maintenance, `plan` and `apply` refuse blocking local work with
 `apply.hooks.local-retained`: the same count, capped at 100 with a truncation
 indicator, and the distinct compiled delivery identifiers from that bounded set.
 Plan writes no state or audit; apply audits the outcome as `refused`. The active
-package remains ready with no target pinned. Use `bregctl webhook drain` under
+package remains ready with no target pinned. Use `bregctl hook drain` under
 the active package to attempt due local work before go-live. Because activation
 refuses while local work that can still run is retained under any activation,
 all such work is under the active package, and drain needs no other. It has explicit
@@ -167,7 +167,7 @@ only once its attempt budget is exhausted.
 
 ### Wire format
 
-Webhooks use CloudEvents 1.0 HTTP binary mode with canonical JSON data:
+Hooks use CloudEvents 1.0 HTTP binary mode with canonical JSON data:
 
 - `ce-specversion: 1.0`
 - `ce-id`: the stable event UUID
@@ -290,24 +290,24 @@ The first complete journey must be possible without reading Rust code:
 - `bregctl explain events` shows triggers, conditions, projections,
   classifications, destinations, payload bounds, and fixed delivery behavior,
   but no deployed URLs or secrets.
-- `bregctl webhook sample` writes an exact example request with
+- `bregctl hook sample` writes an exact example request with
   synthetic values and a placeholder signature.
 - `bregctl dev start` binds declared destinations to an owned loopback receiver.
   `bregctl dev events` shows received delivery metadata; `--include-payload`
   explicitly reveals projected development values. See the
   [native development lifecycle](DEV.md#observe-local-events) for retention
   and runtime queue inspection.
-- `bregctl webhook list` shows value-free pending and dead-letter
+- `bregctl hook list` shows value-free pending and dead-letter
   status, including whether the captured binding is still active, whether an
   explicit discard is eligible, and a closed dead-letter reason.
-- `bregctl webhook drain` attempts only due local handlers under the active
+- `bregctl hook drain` attempts only due local handlers under the active
   package, bounded by `--max-attempts` (1 to 1000, default 100) and
   `--timeout-seconds` (1 to 300, default 30). It reports completed attempts,
   its stopping reason, and the bounded retained local inventory. URL work,
   live leases, future retries, and dead letters are not replayed or discarded.
-- `bregctl webhook replay` replays one eligible dead letter using
+- `bregctl hook replay` replays one eligible dead letter using
   its event id, delivery id, and expected generation.
-- `bregctl webhook discard` closes one retained pending delivery, dead letter,
+- `bregctl hook discard` closes one retained pending delivery, dead letter,
   or expired lease using the same optimistic identity. Discard prevents future
   attempts and never reinterprets the work under a replacement binding. It
   does not undo a request the receiver may already have accepted.

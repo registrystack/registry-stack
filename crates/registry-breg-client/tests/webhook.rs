@@ -1,8 +1,6 @@
 use std::collections::BTreeMap;
 
-use registry_breg_client::{
-    verify_webhook_delivery, BRegWebhookDelivery, BRegWebhookVerificationError,
-};
+use registry_breg_client::{verify_hook_delivery, BRegHookDelivery, BRegHookVerificationError};
 
 const KEY: &[u8] = b"webhook-delivery-signing-key-0123456789abcdef";
 const BODY: &[u8] = br#"{"entity":"case","values":{"label":"value"}}"#;
@@ -41,8 +39,8 @@ fn delivery<'a>(
     headers: &'a BTreeMap<String, String>,
     body: &'a [u8],
     key: &'a [u8],
-) -> BRegWebhookDelivery<'a> {
-    BRegWebhookDelivery {
+) -> BRegHookDelivery<'a> {
+    BRegHookDelivery {
         method: "POST",
         path: "/hooks/registry",
         headers,
@@ -54,7 +52,7 @@ fn delivery<'a>(
 #[test]
 fn fixed_vector_verifies_and_returns_exact_delivery() {
     let headers = headers();
-    let verified = verify_webhook_delivery(delivery(&headers, BODY, KEY)).unwrap();
+    let verified = verify_hook_delivery(delivery(&headers, BODY, KEY)).unwrap();
 
     assert_eq!(verified.id, "00000000-0000-4000-8000-000000000001");
     assert_eq!(
@@ -86,15 +84,15 @@ fn refusal_codes_are_closed_and_value_free() {
     let mut missing = headers();
     missing.remove("ce-type");
     assert_eq!(
-        verify_webhook_delivery(delivery(&missing, BODY, KEY)),
-        Err(BRegWebhookVerificationError::MissingHeader)
+        verify_hook_delivery(delivery(&missing, BODY, KEY)),
+        Err(BRegHookVerificationError::MissingHeader)
     );
 
     let mut malformed = headers();
     malformed.insert("x-registry-signature".into(), "v1=truncated".into());
     assert_eq!(
-        verify_webhook_delivery(delivery(&malformed, BODY, KEY)),
-        Err(BRegWebhookVerificationError::MalformedSignature)
+        verify_hook_delivery(delivery(&malformed, BODY, KEY)),
+        Err(BRegHookVerificationError::MalformedSignature)
     );
 
     let mut unsupported = headers();
@@ -103,22 +101,22 @@ fn refusal_codes_are_closed_and_value_free() {
         SIGNATURE.replacen("v1=", "v2=", 1),
     );
     assert_eq!(
-        verify_webhook_delivery(delivery(&unsupported, BODY, KEY)),
-        Err(BRegWebhookVerificationError::UnsupportedVersion)
+        verify_hook_delivery(delivery(&unsupported, BODY, KEY)),
+        Err(BRegHookVerificationError::UnsupportedVersion)
     );
 
     let mut tampered = headers();
     tampered.insert("ce-type".into(), "case-patched-v1".into());
     assert_eq!(
-        verify_webhook_delivery(delivery(&tampered, BODY, KEY)),
-        Err(BRegWebhookVerificationError::SignatureMismatch)
+        verify_hook_delivery(delivery(&tampered, BODY, KEY)),
+        Err(BRegHookVerificationError::SignatureMismatch)
     );
 
     for error in [
-        BRegWebhookVerificationError::MissingHeader,
-        BRegWebhookVerificationError::MalformedSignature,
-        BRegWebhookVerificationError::SignatureMismatch,
-        BRegWebhookVerificationError::UnsupportedVersion,
+        BRegHookVerificationError::MissingHeader,
+        BRegHookVerificationError::MalformedSignature,
+        BRegHookVerificationError::SignatureMismatch,
+        BRegHookVerificationError::UnsupportedVersion,
     ] {
         assert!(!error.to_string().contains(SIGNATURE));
         assert!(!error.to_string().contains("case-patched-v1"));
@@ -129,12 +127,12 @@ fn refusal_codes_are_closed_and_value_free() {
 fn invalid_delivery_time_names_the_delivery_time_fix() {
     let mut invalid = headers();
     invalid.insert("x-registry-delivery-time".into(), "not-a-time".into());
-    let error = verify_webhook_delivery(delivery(&invalid, BODY, KEY)).unwrap_err();
-    assert_eq!(error, BRegWebhookVerificationError::InvalidDeliveryTime);
+    let error = verify_hook_delivery(delivery(&invalid, BODY, KEY)).unwrap_err();
+    assert_eq!(error, BRegHookVerificationError::InvalidDeliveryTime);
     assert_eq!(error.code(), "invalid-delivery-time");
     assert_eq!(
         error.to_string(),
-        "the Base Registry Engine webhook delivery time is invalid; check the signed delivery time and sender clock"
+        "the Base Registry Engine hook delivery time is invalid; check the signed delivery time and sender clock"
     );
 }
 
@@ -142,36 +140,36 @@ fn invalid_delivery_time_names_the_delivery_time_fix() {
 fn duplicate_header_names_the_header_fix() {
     let mut duplicate = headers();
     duplicate.insert("CE-TYPE".into(), "case-created-v1".into());
-    let error = verify_webhook_delivery(delivery(&duplicate, BODY, KEY)).unwrap_err();
-    assert_eq!(error, BRegWebhookVerificationError::DuplicateHeader);
+    let error = verify_hook_delivery(delivery(&duplicate, BODY, KEY)).unwrap_err();
+    assert_eq!(error, BRegHookVerificationError::DuplicateHeader);
     assert_eq!(error.code(), "duplicate-header");
     assert_eq!(
         error.to_string(),
-        "a Base Registry Engine webhook header is repeated; remove duplicate signed headers"
+        "a Base Registry Engine hook header is repeated; remove duplicate signed headers"
     );
 }
 
 #[test]
 fn oversized_body_names_the_body_size_fix() {
     let oversized = vec![b'x'; 1_048_577];
-    let error = verify_webhook_delivery(delivery(&headers(), &oversized, KEY)).unwrap_err();
-    assert_eq!(error, BRegWebhookVerificationError::BodyTooLarge);
+    let error = verify_hook_delivery(delivery(&headers(), &oversized, KEY)).unwrap_err();
+    assert_eq!(error, BRegHookVerificationError::BodyTooLarge);
     assert_eq!(error.code(), "body-too-large");
     assert_eq!(
         error.to_string(),
-        "the Base Registry Engine webhook body exceeds the Version 1 limit; reduce the body size"
+        "the Base Registry Engine hook body exceeds the Version 1 limit; reduce the body size"
     );
     assert!(!error.to_string().contains(&"x".repeat(64)));
 }
 
 #[test]
 fn invalid_key_names_the_key_configuration_fix() {
-    let error = verify_webhook_delivery(delivery(&headers(), BODY, b"short-key")).unwrap_err();
-    assert_eq!(error, BRegWebhookVerificationError::InvalidKey);
+    let error = verify_hook_delivery(delivery(&headers(), BODY, b"short-key")).unwrap_err();
+    assert_eq!(error, BRegHookVerificationError::InvalidKey);
     assert_eq!(error.code(), "invalid-key");
     assert_eq!(
         error.to_string(),
-        "the Base Registry Engine webhook verification key is too short; configure a key of at least 32 bytes"
+        "the Base Registry Engine hook verification key is too short; configure a key of at least 32 bytes"
     );
     assert!(!error.to_string().contains("short-key"));
 }

@@ -1031,7 +1031,7 @@ bindings:
                 SchemaTestRuntimeSetupError::EventDestinations(
                     EventDestinationActivationError::InventoryMismatch,
                 ),
-                "test.event-destinations.inventory-mismatch",
+                "test.hook-destinations.inventory-mismatch",
                 "destinations.hooks",
             ),
         ];
@@ -1044,7 +1044,7 @@ bindings:
         ] {
             cases.push((
                 SchemaTestRuntimeSetupError::EventDestinations(error),
-                "test.event-destinations.activation-failed",
+                "test.hook-destinations.activation-failed",
                 "destinations.hooks",
             ));
         }

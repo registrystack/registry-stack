@@ -8,7 +8,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use napi::{bindgen_prelude::Buffer, Error as NapiError, Result};
 use napi_derive::napi;
 use registry_breg_client::{
-    verify_webhook_delivery as verify_core_webhook_delivery, BRegActionAvailabilityRequest,
+    verify_hook_delivery as verify_core_hook_delivery, BRegActionAvailabilityRequest,
     BRegActionBinding, BRegActionInvocationRequest,
     BRegActionTargetConditions as CoreActionTargetConditions, BRegActionTargetConditionsRequest,
     BRegAsOfContinuation, BRegAsOfContinuationProjection, BRegAsOfListRequest, BRegBatchBinding,
@@ -16,17 +16,17 @@ use registry_breg_client::{
     BRegContinuation, BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest,
     BRegCurrentContinuation, BRegCurrentContinuationProjection, BRegCurrentListRequest,
     BRegDirectWrite, BRegEtag, BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection,
-    BRegGeoJsonListRequest, BRegGeoJsonOptions, BRegIngestionChunk as CoreIngestionChunk,
-    BRegIngestionError, BRegIngestionPrefixDigest as CoreIngestionPrefixDigest,
-    BRegIngestionRunListQuery, BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest,
-    BRegMetadata as CoreMetadata, BRegMetadataSelectionError, BRegMetadataSelectionErrorKind,
-    BRegPage, BRegPatchBinding, BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
+    BRegGeoJsonListRequest, BRegGeoJsonOptions, BRegHookDelivery as CoreHookDelivery,
+    BRegHookVerificationError, BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
+    BRegIngestionPrefixDigest as CoreIngestionPrefixDigest, BRegIngestionRunListQuery,
+    BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
+    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding,
+    BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
     BRegPreparedCreate as CorePreparedCreate, BRegProblemCode, BRegProtocolFailure,
     BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
     BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegReleaseSelection,
     BRegReleaseStatus, BRegSnapshotContinuation, BRegSnapshotContinuationProjection,
-    BRegSnapshotListRequest, BRegStatisticsFormat, BRegTombstoneBinding,
-    BRegWebhookDelivery as CoreWebhookDelivery, BRegWebhookVerificationError, BRegWithdrawalReason,
+    BRegSnapshotListRequest, BRegStatisticsFormat, BRegTombstoneBinding, BRegWithdrawalReason,
     BaseRegistryClient as CoreClient, BaseRegistryClientConfig, BaseRegistryClientError,
     PrivateKeyJwt, PrivateKeyJwtConfig, StaticToken, TokenError, TokenProvider,
 };
@@ -60,9 +60,9 @@ pub struct JsonOutcome {
     pub valid_at: Option<String>,
 }
 
-/// Exact BReg webhook request supplied by a receiver.
+/// Exact BReg hook request supplied by a receiver.
 #[napi(object)]
-pub struct WebhookDeliveryInput {
+pub struct HookDeliveryInput {
     pub method: String,
     pub path: String,
     pub headers: BTreeMap<String, String>,
@@ -70,9 +70,9 @@ pub struct WebhookDeliveryInput {
     pub key: Buffer,
 }
 
-/// Authenticated BReg webhook metadata and exact body.
+/// Authenticated BReg hook metadata and exact body.
 #[napi(object)]
-pub struct VerifiedWebhookDelivery {
+pub struct VerifiedHookDelivery {
     pub id: String,
     pub source: String,
     pub r#type: String,
@@ -85,18 +85,18 @@ pub struct VerifiedWebhookDelivery {
     pub body: Buffer,
 }
 
-/// Verify a BReg Version 1 webhook signature without applying receiver policy.
+/// Verify a BReg Version 1 hook signature without applying receiver policy.
 #[napi]
-pub fn verify_webhook_delivery(input: WebhookDeliveryInput) -> Result<VerifiedWebhookDelivery> {
-    let verified = verify_core_webhook_delivery(CoreWebhookDelivery {
+pub fn verify_hook_delivery(input: HookDeliveryInput) -> Result<VerifiedHookDelivery> {
+    let verified = verify_core_hook_delivery(CoreHookDelivery {
         method: &input.method,
         path: &input.path,
         headers: &input.headers,
         body: input.body.as_ref(),
         key: input.key.as_ref(),
     })
-    .map_err(webhook_verification_error)?;
-    Ok(VerifiedWebhookDelivery {
+    .map_err(hook_verification_error)?;
+    Ok(VerifiedHookDelivery {
         id: verified.id,
         source: verified.source,
         r#type: verified.event_type,
@@ -110,9 +110,9 @@ pub fn verify_webhook_delivery(input: WebhookDeliveryInput) -> Result<VerifiedWe
     })
 }
 
-fn webhook_verification_error(error: BRegWebhookVerificationError) -> NapiError {
+fn hook_verification_error(error: BRegHookVerificationError) -> NapiError {
     mapped_error(json!({
-        "kind": "webhook-verification",
+        "kind": "hook-verification",
         "code": error.code(),
         "message": error.to_string(),
     }))

@@ -11,7 +11,7 @@
   start on it. The destination binding digest a retained delivery was captured
   under is unchanged, so retained deliveries stay deliverable. `bregctl
   doctor` reports the check as `destinations.hooks`; its diagnostic codes are
-  unchanged.
+  renamed in the hook vocabulary entry below.
 - BREAKING: hook delivery audit entries use the schema `breg-hook-audit/v1`
   in place of `breg-webhook-audit/v3`, carry `"event": "breg.hook-delivery"`,
   and derive their keyed event and delivery references under the
@@ -24,7 +24,12 @@
   `registry-platform-hooks` executor, which uses the bare
   `registry-platform-script` engine. Hook programs lose the `join` helper the
   action planner engine carries. Migration: build the string in the program
-  itself; a program that calls `join` still compiles and fails when it runs.
+  itself. A package whose hook calls `join` still compiles and activates,
+  because the engine resolves functions when the program runs, and then
+  dead-letters every delivery of that hook with the reason
+  `handler-execution`. After upgrading, run `bregctl hook list` and look for
+  `handler-execution` dead letters; fix the program, then replay them with
+  `bregctl hook replay`.
   Action handlers keep `join`. The WASM hook entry point no longer shares the
   action handler module cache.
 - BREAKING: the Rust module `registry_breg::webhook` is `registry_breg::hooks`,
@@ -34,6 +39,56 @@
   capability set at compile time and refused outside it with
   `hook.capability.unsupported`; every declaration BReg accepted before is
   still accepted.
+- BREAKING: the sending side of event delivery is named hooks throughout,
+  with no aliases. Migration: update every script, alert, dashboard, and
+  receiver that names the old words:
+  - the operator verb `bregctl webhook` is `bregctl hook` (`sample`, `list`,
+    `drain`, `replay`, `discard`), and its diagnostics name the artifacts
+    `hook-sample` and `hook-operations` and the suggested actions
+    `select-hook-event` and `verify-hook-operation`; the offline sample
+    request target placeholder is `<configured-hook-request-target>`;
+  - the codes `webhook.sample.event-refused`, `webhook.sample.render-refused`,
+    `webhook.package.refused`, `webhook.operation.refused`,
+    `webhook.claim.*`, and `webhook.worker.*` are `hook.*` with the same
+    suffix;
+  - `startup.webhook.retained-bindings` is `startup.hook.retained-bindings`,
+    and `startup.event-destinations.refused`,
+    `apply.event-destinations.refused`,
+    `test.event-destinations.inventory-mismatch`, and
+    `test.event-destinations.activation-failed` name `hook-destinations` in
+    place of `event-destinations`;
+  - `breg.event.webhook-projection-too-large`,
+    `breg.event.webhook-destination-invalid`,
+    `breg.runtime.invalid-event-destination`, and
+    `breg.runtime.event-destination-id-collision` are
+    `breg.event.hook-projection-too-large`,
+    `breg.event.hook-destination-invalid`,
+    `breg.runtime.invalid-hook-destination`, and
+    `breg.runtime.hook-destination-id-collision`;
+  - the operational events `WebhookWorkerIterationFailed` and
+    `WebhookStateTransitionFailed` are `HookWorkerIterationFailed` and
+    `HookStateTransitionFailed`, and every hook worker log uses the target
+    `registry_breg::hooks` in place of `registry_breg::webhook`;
+  - the metrics labels `worker="webhook"` and `queue="webhook-delivery"` are
+    `worker="hook"` and `queue="hook-delivery"`, and the `bregctl plan`
+    and `apply` check `webhook-bindings` is `hook-bindings`;
+  - the Rust constants `WEBHOOK_*`, `MAX_WEBHOOK_*`, `MIN_WEBHOOK_*`, and
+    `DEFAULT_WEBHOOK_*` are `HOOK_*`, `MAX_HOOK_*`, `MIN_HOOK_*`, and
+    `DEFAULT_HOOK_*`;
+  - in `registry-breg-client`, `verify_webhook_delivery`,
+    `BRegWebhookDelivery`, `BRegVerifiedWebhookDelivery`, and
+    `BRegWebhookVerificationError` are `verify_hook_delivery`,
+    `BRegHookDelivery`, `BRegVerifiedHookDelivery`, and
+    `BRegHookVerificationError`; the Node.js client exports
+    `verifyHookDelivery`, `HookDeliveryInput`, `VerifiedHookDelivery`, and
+    `HookVerificationRefusalCode`, the Python client exports
+    `verify_hook_delivery`, and both report a refused delivery with the error
+    kind `hook-verification` in place of `webhook-verification`.
+  The signature and idempotency domains (`breg-webhook-signature-v1`,
+  `breg-webhook-idempotency-v1`), the delivery tables, the compiled delivery
+  identifiers, the destination binding digests, and the CloudEvents request a
+  receiver gets are unchanged, so retained deliveries stay deliverable and
+  receivers keep verifying.
 - BREAKING: `attachmentStorage` and `attachmentVerification` in `runtime.yaml`
   name their destination `url`, not `endpoint` (CFG-VAL-7). Migration: rename
   `endpoint:` to `url:` in both blocks and keep the value. A file that still

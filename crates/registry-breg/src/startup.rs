@@ -140,17 +140,17 @@ pub enum StartupError {
     #[error("the Registry event destination bindings were refused")]
     EventDestinations,
     #[error(
-        "{retained_deliveries} retained webhook deliveries require superseded bindings; inspect \
-         them with `bregctl webhook list` and either restore the exact bindings or explicitly \
+        "{retained_deliveries} retained hook deliveries require superseded bindings; inspect \
+         them with `bregctl hook list` and either restore the exact bindings or explicitly \
          discard each delivery"
     )]
-    RetainedWebhookBindings { retained_deliveries: u64 },
-    /// Pending or leased webhook deliveries were captured under an event
+    RetainedHookBindings { retained_deliveries: u64 },
+    /// Pending or leased hook deliveries were captured under an event
     /// source other than the one `identity.instanceId` derives. The worker
     /// would refuse each stored envelope and dead-letter it, so startup
     /// refuses first. Both values are deployment identifiers, not secrets.
     #[error(
-        "{pending_deliveries} pending webhook deliveries were captured under event source \
+        "{pending_deliveries} pending hook deliveries were captured under event source \
          {stored_source}, but identity.instanceId {configured_instance_id} derives another; \
          restore the previous identity.instanceId until those deliveries drain, then change it"
     )]
@@ -195,10 +195,10 @@ pub enum OperationalLogLevel {
     Error,
 }
 
-/// Closed webhook state-transition failure codes. These codes identify only
+/// Closed hook state-transition failure codes. These codes identify only
 /// the failed transition class and never carry destination or event values.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WebhookStateTransitionCode {
+pub enum HookStateTransitionCode {
     ClaimIdentityRefused,
     ClaimRecoveryFailed,
     ClaimSelectFailed,
@@ -208,7 +208,7 @@ pub enum WebhookStateTransitionCode {
     ClaimCommitFailed,
 }
 
-impl WebhookStateTransitionCode {
+impl HookStateTransitionCode {
     /// Every allowed state-transition code, used by exhaustive operational-log
     /// contract tests.
     pub const ALL: [Self; 7] = [
@@ -224,13 +224,13 @@ impl WebhookStateTransitionCode {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::ClaimIdentityRefused => "webhook.claim.identity_refused",
-            Self::ClaimRecoveryFailed => "webhook.claim.recovery_failed",
-            Self::ClaimSelectFailed => "webhook.claim.select_failed",
-            Self::ClaimPolicyRefused => "webhook.claim.policy_refused",
-            Self::ClaimUpdateFailed => "webhook.claim.update_failed",
-            Self::ClaimAuditFailed => "webhook.claim.audit_failed",
-            Self::ClaimCommitFailed => "webhook.claim.commit_failed",
+            Self::ClaimIdentityRefused => "hook.claim.identity_refused",
+            Self::ClaimRecoveryFailed => "hook.claim.recovery_failed",
+            Self::ClaimSelectFailed => "hook.claim.select_failed",
+            Self::ClaimPolicyRefused => "hook.claim.policy_refused",
+            Self::ClaimUpdateFailed => "hook.claim.update_failed",
+            Self::ClaimAuditFailed => "hook.claim.audit_failed",
+            Self::ClaimCommitFailed => "hook.claim.commit_failed",
         }
     }
 }
@@ -274,8 +274,8 @@ impl BackgroundTaskStop {
 
 const fn background_task_stop_code(task: BackgroundTask, stop: BackgroundTaskStop) -> &'static str {
     match (task, stop) {
-        (BackgroundTask::HookWorker, BackgroundTaskStop::Panicked) => "webhook.worker.panicked",
-        (BackgroundTask::HookWorker, BackgroundTaskStop::Returned) => "webhook.worker.returned",
+        (BackgroundTask::HookWorker, BackgroundTaskStop::Panicked) => "hook.worker.panicked",
+        (BackgroundTask::HookWorker, BackgroundTaskStop::Returned) => "hook.worker.returned",
         (BackgroundTask::AttachmentVerificationWorker, BackgroundTaskStop::Panicked) => {
             "attachment_verification.worker.panicked"
         }
@@ -352,7 +352,7 @@ pub enum OperationalEvent {
     Listening,
     Stopped,
     StoppedWithError(StartupError),
-    WebhookWorkerIterationFailed,
+    HookWorkerIterationFailed,
     AttachmentVerificationIterationFailed,
     AttachmentVerificationRetryPending,
     ReviewWorkerIterationFailed,
@@ -362,7 +362,7 @@ pub enum OperationalEvent {
     /// The queue ages could not be read for one metrics scrape, so that
     /// scrape publishes none.
     MetricsQueueSampleFailed,
-    WebhookStateTransitionFailed(WebhookStateTransitionCode),
+    HookStateTransitionFailed(HookStateTransitionCode),
     /// One PostgreSQL baseline advisory, logged once at startup. It carries a
     /// closed code and message plus the server's observed setting counts.
     PostgresBaselineAdvisory(BaselineAdvisory),
@@ -431,12 +431,12 @@ impl OperationalEvent {
                 error: None,
                 code: Some("startup.authentication.clients_unrestricted"),
             },
-            Self::WebhookWorkerIterationFailed => OperationalLogRecord {
+            Self::HookWorkerIterationFailed => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
-                target: "registry_breg::webhook",
-                message: "webhook worker iteration failed",
+                target: "registry_breg::hooks",
+                message: "hook worker iteration failed",
                 error: None,
-                code: Some("webhook.worker.iteration_failed"),
+                code: Some("hook.worker.iteration_failed"),
             },
             Self::AttachmentVerificationIterationFailed => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
@@ -473,10 +473,10 @@ impl OperationalEvent {
                 error: None,
                 code: Some("metrics.queue_sample.failed"),
             },
-            Self::WebhookStateTransitionFailed(code) => OperationalLogRecord {
+            Self::HookStateTransitionFailed(code) => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
-                target: "registry_breg::webhook",
-                message: "webhook state transition failed",
+                target: "registry_breg::hooks",
+                message: "hook state transition failed",
                 error: None,
                 code: Some(code.as_str()),
             },
@@ -572,9 +572,9 @@ impl OperationalEvent {
                 let code = record.code.expect("metrics warning records have a code");
                 tracing::warn!(target: "registry_breg::metrics", code, message = record.message);
             }
-            Self::WebhookWorkerIterationFailed | Self::WebhookStateTransitionFailed(_) => {
-                let code = record.code.expect("webhook warning records have a code");
-                tracing::warn!(target: "registry_breg::webhook", code, message = record.message);
+            Self::HookWorkerIterationFailed | Self::HookStateTransitionFailed(_) => {
+                let code = record.code.expect("hook warning records have a code");
+                tracing::warn!(target: "registry_breg::hooks", code, message = record.message);
             }
             Self::PostgresBaselineAdvisory(advisory) => {
                 let code = record.code.expect("baseline advisory records have a code");
@@ -660,11 +660,11 @@ impl StartupError {
                 "the Registry attachment storage or verification binding was refused"
             }
             Self::EventDestinations => "the Registry event destination bindings were refused",
-            Self::RetainedWebhookBindings { .. } => {
-                "retained webhook deliveries require superseded bindings; run `bregctl doctor` to name the recovery"
+            Self::RetainedHookBindings { .. } => {
+                "retained hook deliveries require superseded bindings; run `bregctl doctor` to name the recovery"
             }
             Self::InstanceIdChangedWithPendingDeliveries { .. } => {
-                "pending webhook deliveries were captured under a different identity.instanceId; restore the previous identity.instanceId until they drain, and run `bregctl doctor` to name it"
+                "pending hook deliveries were captured under a different identity.instanceId; restore the previous identity.instanceId until they drain, and run `bregctl doctor` to name it"
             }
             Self::FieldEncryption => "the Registry field-encryption key state was refused",
             Self::FieldEncryptionCustody => {
@@ -720,7 +720,7 @@ pub struct PreparedServer {
     bind: SocketAddr,
     app: Router,
     shutdown_grace: Duration,
-    webhook_worker: Option<HookWorker>,
+    hook_worker: Option<HookWorker>,
     attachment_verification_worker: Option<AttachmentVerificationWorker>,
     review_worker: Option<crate::review_store::ReviewWorker>,
     access_log_retention: Option<(RuntimePool, Arc<LastSuccess>)>,
@@ -801,7 +801,7 @@ impl PreparedServer {
             bind,
             app,
             shutdown_grace,
-            webhook_worker: None,
+            hook_worker: None,
             attachment_verification_worker: None,
             review_worker: None,
             access_log_retention: None,
@@ -830,17 +830,17 @@ impl PreparedServer {
     #[cfg(feature = "postgres-test")]
     #[doc(hidden)]
     #[must_use]
-    pub fn from_parts_with_webhook_worker_for_test(
+    pub fn from_parts_with_hook_worker_for_test(
         bind: SocketAddr,
         app: Router,
         shutdown_grace: Duration,
-        webhook_worker: HookWorker,
+        hook_worker: HookWorker,
     ) -> Self {
         Self {
             bind,
             app,
             shutdown_grace,
-            webhook_worker: Some(webhook_worker),
+            hook_worker: Some(hook_worker),
             attachment_verification_worker: None,
             review_worker: None,
             access_log_retention: None,
@@ -1289,7 +1289,7 @@ impl std::io::Write for RefuseEveryEntry {
 /// Every request, including the transactions it holds, is abandoned after the
 /// configured request timeout, at most one minute. Outside a request, the
 /// longest wait a server transaction holds open is one object-store read by
-/// the attachment verification worker, also capped at one minute; webhook,
+/// the attachment verification worker, also capped at one minute; hook,
 /// review, Evidence, and verifier calls run between transactions. A pool
 /// checkout waits at most one minute too. The bound is twice the largest of
 /// those caps, so it only ends a transaction that nothing is still bounding.
@@ -1527,7 +1527,7 @@ async fn finish_prepared_server(
     let idempotency = config
         .idempotency_policy()
         .map_err(StartupError::RuntimeConfig)?;
-    let webhook_delivery = HookDeliveryService::new_with_runtime_bindings(
+    let hook_delivery = HookDeliveryService::new_with_runtime_bindings(
         pool.clone(),
         Arc::clone(&event_destinations),
         hook_handlers,
@@ -1542,21 +1542,21 @@ async fn finish_prepared_server(
     );
     verify_pending_delivery_source(&pool, &expected.package_id, config.identity().instance_id())
         .await?;
-    webhook_delivery
+    hook_delivery
         .verify_retained_bindings()
         .await
         .map_err(|error| match error {
             HookRetainedBindingError::Mismatch {
                 retained_deliveries,
-            } => StartupError::RetainedWebhookBindings {
+            } => StartupError::RetainedHookBindings {
                 retained_deliveries,
             },
             HookRetainedBindingError::Unavailable => StartupError::EventDestinations,
         })?;
     // The worker also owns payload expiry, so it runs even when the active
     // package declares no events. Compatible retained work is checked above.
-    let webhook_progress = webhook_delivery.last_success();
-    let webhook_worker = Some(HookWorker::new(webhook_delivery));
+    let hook_progress = hook_delivery.last_success();
+    let hook_worker = Some(HookWorker::new(hook_delivery));
     let evidence = config
         .activate_evidence(&registry)
         .map_err(StartupError::RuntimeConfig)?;
@@ -1665,7 +1665,7 @@ async fn finish_prepared_server(
     let telemetry_metrics = config.metrics_listener().map(|_| {
         let mut registry = Metrics::new(telemetry_pool)
             .with_active_package(startup.package().package_digest())
-            .with_worker_progress(ProgressWorker::Webhook, webhook_progress);
+            .with_worker_progress(ProgressWorker::Hook, hook_progress);
         if let Some(worker) = &attachment_verification_worker {
             registry = registry.with_worker_progress(
                 ProgressWorker::AttachmentVerification,
@@ -1699,7 +1699,7 @@ async fn finish_prepared_server(
         bind: config.listener().bind(),
         app,
         shutdown_grace: config.operational_timeouts().shutdown_grace,
-        webhook_worker,
+        hook_worker,
         attachment_verification_worker,
         review_worker,
         access_log_retention,
@@ -1909,7 +1909,7 @@ pub async fn serve_until_shutdown(
         bind,
         app,
         shutdown_grace,
-        webhook_worker,
+        hook_worker,
         attachment_verification_worker,
         review_worker,
         access_log_retention,
@@ -1972,7 +1972,7 @@ pub async fn serve_until_shutdown(
             task_stopped_tx.clone(),
         )
     });
-    let mut worker = webhook_worker.map(|worker| {
+    let mut worker = hook_worker.map(|worker| {
         SupervisedTask::spawn(
             BackgroundTask::HookWorker,
             worker.run(worker_shutdown_rx.clone()),
@@ -2499,7 +2499,7 @@ impl DynamicRuntimeReadiness {
     }
 }
 
-/// Bind retained webhook work to the event source this deployment stamps.
+/// Bind retained hook work to the event source this deployment stamps.
 ///
 /// Threat: the delivery worker accepts a stored envelope only when its
 /// `source` equals the source `identity.instanceId` derives, so renaming the

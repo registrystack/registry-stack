@@ -2504,34 +2504,34 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
     let (mut migration, migration_task) = database.connect_migration().await;
     let destination_fixture = EventDestinationCompatibilityFixture::create();
 
-    let first = PackageFixture::build(None, fingerprint(1), PlanChoice::WebhookSchema);
+    let first = PackageFixture::build(None, fingerprint(1), PlanChoice::HookSchema);
     let provisional_first = load_package(first.root.path(), &local_context())
-        .expect("initial webhook package verifies before fingerprinting");
+        .expect("initial hook package verifies before fingerprinting");
     let transaction = migration
         .transaction()
         .await
-        .expect("initial webhook fingerprint transaction starts");
+        .expect("initial hook fingerprint transaction starts");
     install_compiled_schema(
         &transaction,
         provisional_first.registry(),
         &database.runtime_role,
     )
     .await
-    .expect("initial webhook schema installs for fingerprinting");
+    .expect("initial hook schema installs for fingerprinting");
     let first_catalog = ExpectedManagedCatalog::compiled(provisional_first.registry());
     let first_fingerprint =
         managed_schema_fingerprint(&transaction, &database.runtime_role, &first_catalog)
             .await
-            .expect("initial webhook fingerprint derives");
+            .expect("initial hook fingerprint derives");
     transaction
         .rollback()
         .await
-        .expect("initial webhook fingerprint transaction rolls back");
+        .expect("initial hook fingerprint transaction rolls back");
     rewrite_unsigned(first.root.path(), |manifest| {
         manifest.schema_fingerprint.clone_from(&first_fingerprint);
     });
     let verified_first = load_package(first.root.path(), &local_context())
-        .expect("initial webhook package reloads with exact fingerprint");
+        .expect("initial hook package reloads with exact fingerprint");
     let active = apply_package(
         &database,
         &verified_first,
@@ -2540,7 +2540,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         Duration::from_secs(1),
     )
     .await
-    .expect("initial webhook package activates");
+    .expect("initial hook package activates");
 
     let exact_inventory = destination_fixture.inventory(verified_first.registry(), "/events/v1");
     let exact_digest = exact_inventory
@@ -2551,7 +2551,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         .data_schema
         .as_str();
     let pending_event = Uuid::new_v4();
-    insert_upgrade_webhook_delivery(
+    insert_upgrade_hook_delivery(
         &database,
         &active,
         pending_event,
@@ -2561,7 +2561,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         UpgradeDeliveryState::Pending,
     )
     .await;
-    insert_upgrade_webhook_delivery(
+    insert_upgrade_hook_delivery(
         &database,
         &active,
         Uuid::new_v4(),
@@ -2572,7 +2572,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
     )
     .await;
     let erased_pending_event = Uuid::new_v4();
-    insert_upgrade_webhook_delivery(
+    insert_upgrade_hook_delivery(
         &database,
         &active,
         erased_pending_event,
@@ -2593,7 +2593,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         .await
         .expect("upgrade test erases one pending payload before retention cleanup");
     let expired_pending_event = Uuid::new_v4();
-    insert_upgrade_webhook_delivery(
+    insert_upgrade_hook_delivery(
         &database,
         &active,
         expired_pending_event,
@@ -2614,7 +2614,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         .await
         .expect("upgrade test expires one pending payload before retention cleanup");
     let replayable_dead_letter_event = Uuid::new_v4();
-    insert_upgrade_webhook_delivery(
+    insert_upgrade_hook_delivery(
         &database,
         &active,
         replayable_dead_letter_event,
@@ -2624,7 +2624,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         UpgradeDeliveryState::DeadLettered,
     )
     .await;
-    insert_upgrade_webhook_delivery(
+    insert_upgrade_hook_delivery(
         &database,
         &active,
         Uuid::new_v4(),
@@ -2638,15 +2638,15 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
     let second = PackageFixture::build(
         Some(&active.package_digest),
         first_fingerprint,
-        PlanChoice::WebhookSecondTable,
+        PlanChoice::HookSecondTable,
     );
     let activation_context = local_context();
     let provisional_second = load_package(second.root.path(), &activation_context)
-        .expect("unrelated additive webhook successor verifies before fingerprinting");
+        .expect("unrelated additive hook successor verifies before fingerprinting");
     let transaction = migration
         .transaction()
         .await
-        .expect("successor webhook fingerprint transaction starts");
+        .expect("successor hook fingerprint transaction starts");
     for statement in &provisional_second.manifest().migration_plan.statements {
         transaction
             .batch_execute(&statement.sql)
@@ -2675,16 +2675,16 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
     let second_fingerprint =
         managed_schema_fingerprint(&transaction, &database.runtime_role, &second_catalog)
             .await
-            .expect("successor webhook fingerprint derives");
+            .expect("successor hook fingerprint derives");
     transaction
         .rollback()
         .await
-        .expect("successor webhook fingerprint transaction rolls back");
+        .expect("successor hook fingerprint transaction rolls back");
     rewrite_unsigned(second.root.path(), |manifest| {
         manifest.schema_fingerprint.clone_from(&second_fingerprint);
     });
     let verified_second = load_package(second.root.path(), &activation_context)
-        .expect("successor webhook package reloads with exact fingerprint");
+        .expect("successor hook package reloads with exact fingerprint");
     migration_task.abort();
 
     let before_refusals = registry_state_snapshot(&database.admin).await;
@@ -2886,8 +2886,8 @@ enum PlanChoice {
     Schema,
     SecondTable,
     ThirdTable,
-    WebhookSchema,
-    WebhookSecondTable,
+    HookSchema,
+    HookSecondTable,
     TemporalSchema,
 }
 
@@ -2895,8 +2895,8 @@ fn predecessor_plan_choice(plan: PlanChoice) -> PlanChoice {
     match plan {
         PlanChoice::Schema | PlanChoice::SecondTable => PlanChoice::Schema,
         PlanChoice::ThirdTable => PlanChoice::SecondTable,
-        PlanChoice::WebhookSchema => PlanChoice::WebhookSchema,
-        PlanChoice::WebhookSecondTable => PlanChoice::WebhookSchema,
+        PlanChoice::HookSchema => PlanChoice::HookSchema,
+        PlanChoice::HookSecondTable => PlanChoice::HookSchema,
         PlanChoice::TemporalSchema => PlanChoice::TemporalSchema,
     }
 }
@@ -3117,7 +3117,7 @@ fn module_bytes(plan: PlanChoice) -> Vec<u8> {
     }
     let second = if matches!(
         plan,
-        PlanChoice::SecondTable | PlanChoice::ThirdTable | PlanChoice::WebhookSecondTable
+        PlanChoice::SecondTable | PlanChoice::ThirdTable | PlanChoice::HookSecondTable
     ) {
         r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":[{"id":"writer","principalClaim":"principal","operations":["get","create"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}"#
     } else {
@@ -3128,10 +3128,7 @@ fn module_bytes(plan: PlanChoice) -> Vec<u8> {
     } else {
         ""
     };
-    let events = if matches!(
-        plan,
-        PlanChoice::WebhookSchema | PlanChoice::WebhookSecondTable
-    ) {
+    let events = if matches!(plan, PlanChoice::HookSchema | PlanChoice::HookSecondTable) {
         r#","hooks":[{"phase":"after","id":"neutral-created-v1","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"neutral-events"}}]"#
     } else {
         ""
@@ -3310,7 +3307,7 @@ enum UpgradeDeliveryState {
     Expired,
 }
 
-async fn insert_upgrade_webhook_delivery(
+async fn insert_upgrade_hook_delivery(
     database: &TestDatabase,
     active: &ExpectedRegistryIdentity,
     event_id: Uuid,
@@ -3497,7 +3494,7 @@ package:
 authentication:
   oidc:
     issuer: https://issuer.example
-    audience: urn:breg:webhook-upgrade
+    audience: urn:breg:hook-upgrade
     allowedAlgorithm: EdDSA
     accessTokenType: JWT
     scopeClaim: scope

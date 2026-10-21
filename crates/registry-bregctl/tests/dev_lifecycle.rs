@@ -301,7 +301,7 @@ seed:
     let events = || session.success(&["dev", "events", project.to_str().unwrap()]);
     let pending = || {
         session.success(&[
-            "webhook",
+            "hook",
             "list",
             "--runtime-config",
             runtime_file.to_str().unwrap(),
@@ -446,7 +446,7 @@ seed:
                     && earlier["generation"] == delivery["generation"]
             }));
         let replay = session.success(&[
-            "webhook",
+            "hook",
             "replay",
             "--runtime-config",
             runtime_file.to_str().unwrap(),

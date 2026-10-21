@@ -43,7 +43,7 @@ use crate::mutation::{HookChangeApplication, HookChangeOutcome, MutationTransact
 use crate::package::PackageError;
 use crate::postgres::{ExpectedRegistryIdentity, RegistryLockKey, RuntimePool};
 use crate::runtime_config::load_runtime_config;
-use crate::startup::{OperationalEvent, WebhookStateTransitionCode};
+use crate::startup::{HookStateTransitionCode, OperationalEvent};
 
 pub use registry_platform_hooks::delivery::{
     DeliveryError as HookDeliveryError, DeliveryFailureReason as HookDeliveryFailureReason,
@@ -143,7 +143,7 @@ fn start_hook_wasm_runtime(
 }
 
 const _: () = assert!(
-    crate::compiler::MAX_WEBHOOK_PAYLOAD_BYTES as usize
+    crate::compiler::MAX_HOOK_PAYLOAD_BYTES as usize
         == registry_platform_crypto::delivery_signature::MAX_BODY_BYTES
 );
 
@@ -154,7 +154,7 @@ pub enum HookOperatorError {
     /// not secrets, so the refusal names them.
     #[error("{0}")]
     PackagePinMismatch(registry_platform_config::blocks::PackageDigestMismatch),
-    #[error("webhook operator request is unavailable")]
+    #[error("hook operator request is unavailable")]
     Unavailable,
 }
 
@@ -338,7 +338,7 @@ impl HookOperatorService {
 }
 
 /// Base Registry Engine's seams under the platform delivery worker: the
-/// runtime pool, the deployment-identity preflight, the webhook audit
+/// runtime pool, the deployment-identity preflight, the hook audit
 /// journal, the operational vocabulary, and the activated destinations.
 #[derive(Clone)]
 struct BregDeliverySeams {
@@ -781,10 +781,10 @@ impl DeliverySeams for BregDeliverySeams {
     fn operational_event(&self, event: DeliveryOperationalEvent) {
         match event {
             DeliveryOperationalEvent::IterationFailed => {
-                OperationalEvent::WebhookWorkerIterationFailed.emit();
+                OperationalEvent::HookWorkerIterationFailed.emit();
             }
             DeliveryOperationalEvent::TransitionFailed(code) => {
-                OperationalEvent::WebhookStateTransitionFailed(transition_code(code)).emit();
+                OperationalEvent::HookStateTransitionFailed(transition_code(code)).emit();
             }
         }
     }
@@ -888,21 +888,17 @@ fn proposal_summary(summary: String) -> registry_platform_hooks::delivery::Propo
     BoundedText::new(summary).expect("a non-empty trimmed summary fits the summary bound")
 }
 
-fn transition_code(code: DeliveryTransitionCode) -> WebhookStateTransitionCode {
+fn transition_code(code: DeliveryTransitionCode) -> HookStateTransitionCode {
     match code {
         DeliveryTransitionCode::ClaimIdentityRefused => {
-            WebhookStateTransitionCode::ClaimIdentityRefused
+            HookStateTransitionCode::ClaimIdentityRefused
         }
-        DeliveryTransitionCode::ClaimRecoveryFailed => {
-            WebhookStateTransitionCode::ClaimRecoveryFailed
-        }
-        DeliveryTransitionCode::ClaimSelectFailed => WebhookStateTransitionCode::ClaimSelectFailed,
-        DeliveryTransitionCode::ClaimPolicyRefused => {
-            WebhookStateTransitionCode::ClaimPolicyRefused
-        }
-        DeliveryTransitionCode::ClaimUpdateFailed => WebhookStateTransitionCode::ClaimUpdateFailed,
-        DeliveryTransitionCode::ClaimAuditFailed => WebhookStateTransitionCode::ClaimAuditFailed,
-        DeliveryTransitionCode::ClaimCommitFailed => WebhookStateTransitionCode::ClaimCommitFailed,
+        DeliveryTransitionCode::ClaimRecoveryFailed => HookStateTransitionCode::ClaimRecoveryFailed,
+        DeliveryTransitionCode::ClaimSelectFailed => HookStateTransitionCode::ClaimSelectFailed,
+        DeliveryTransitionCode::ClaimPolicyRefused => HookStateTransitionCode::ClaimPolicyRefused,
+        DeliveryTransitionCode::ClaimUpdateFailed => HookStateTransitionCode::ClaimUpdateFailed,
+        DeliveryTransitionCode::ClaimAuditFailed => HookStateTransitionCode::ClaimAuditFailed,
+        DeliveryTransitionCode::ClaimCommitFailed => HookStateTransitionCode::ClaimCommitFailed,
     }
 }
 
@@ -1330,7 +1326,7 @@ impl HookWorkerLifecycleProbe {
         match self.mode {
             HookWorkerLifecycleMode::UntilShutdown => {}
             HookWorkerLifecycleMode::Hang => std::future::pending::<()>().await,
-            HookWorkerLifecycleMode::Panic => panic!("webhook worker lifecycle probe panicked"),
+            HookWorkerLifecycleMode::Panic => panic!("hook worker lifecycle probe panicked"),
             HookWorkerLifecycleMode::Return => return,
         }
         while !*shutdown.borrow() {

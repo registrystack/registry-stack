@@ -1218,7 +1218,7 @@
       "properties": {
         "hookPayloadRetentionDays": {
           "default": 7,
-          "description": "Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.",
+          "description": "Defaults to the bounded retained payload lifetime for pending or dead-letter hook work.",
           "format": "uint32",
           "maximum": 30,
           "minimum": 1,
