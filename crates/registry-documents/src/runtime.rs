@@ -37,7 +37,10 @@ use crate::config::{
     describe_secret_failure, startup_report, Erasure, RuntimeConfig, RuntimeConfigError,
 };
 use crate::content::{pinned_storage, ContentStorage, StorageError};
-use crate::erasure::{cleanup_once, CleanupPass, ErasureStore, ErasureTransport, ORPHAN_MARGIN};
+use crate::erasure::{
+    cleanup_once, erasure_status, CleanupPass, ErasureStatus, ErasureStore, ErasureTransport,
+    ORPHAN_MARGIN,
+};
 use crate::http::{router, DocumentRoutes};
 use crate::package::{load_package, PackageLoadError};
 use crate::service::{DocumentService, ServiceSettings};
@@ -507,6 +510,69 @@ pub async fn replay_verification(
         })
 }
 
+/// The erasure setting and how many versions wait for erasure, read over
+/// the runtime credential from an activated database.
+pub async fn erasure_report(config: &RuntimeConfig) -> Result<ErasureStatus, RuntimeError> {
+    let secrets = config.secret_resolver()?;
+    let store = activated_store(config, &secrets).await?;
+    erasure_status(&store, config.cleanup.erasure)
+        .await
+        .map_err(|source| RuntimeError::Database {
+            stage: "erasure status",
+            source,
+        })
+}
+
+/// The oldest `limit` dead-lettered erasure jobs, read over the runtime
+/// credential from an activated database.
+pub async fn dead_lettered_erasures(
+    config: &RuntimeConfig,
+    limit: u16,
+) -> Result<Vec<DeadLetter>, RuntimeError> {
+    let secrets = config.secret_resolver()?;
+    let store = activated_store(config, &secrets).await?;
+    crate::erasure::dead_letters(&store, limit)
+        .await
+        .map_err(|source| RuntimeError::Database {
+            stage: "erasure dead letter listing",
+            source,
+        })
+}
+
+/// Return the dead-lettered erasure job of `version_id` to pending, when
+/// its generation is `expected_generation`, exactly as
+/// [`replay_verification`] does for a content verification job. The sweep
+/// never arms a second erasure job for the version, so this is the only
+/// way its erasure runs again.
+pub async fn replay_erasure(
+    config: &RuntimeConfig,
+    version_id: uuid::Uuid,
+    expected_generation: i64,
+) -> Result<Replayed, RuntimeError> {
+    let secrets = config.secret_resolver()?;
+    let store = activated_store(config, &secrets).await?;
+    let schema = store
+        .current_schema()
+        .await
+        .map_err(|source| RuntimeError::Database {
+            stage: "schema lookup",
+            source,
+        })?;
+    let audit = open_audit(config, &secrets, Some(OPERATOR_PROCESS)).await?;
+    let erasure = ErasureStore::new(store.clone(), schema, audit);
+    crate::erasure::replay(&store, erasure, version_id, expected_generation)
+        .await
+        .map_err(|error| match error {
+            ReplayError::Refused(refusal) => RuntimeError::ErasureReplay(refusal),
+            ReplayError::Failed(failure) => RuntimeError::ErasureReplayFailed(failure),
+            ReplayError::Store(source) => RuntimeError::Database {
+                stage: "erasure replay",
+                source,
+            },
+            ReplayError::Dispatch(error) => RuntimeError::Dispatch(error.to_string()),
+        })
+}
+
 /// The logical database id the runtime document names. A document without
 /// one is refused with the findings that name the missing key.
 fn database_id(config: &RuntimeConfig) -> Result<String, RuntimeError> {
@@ -703,6 +769,12 @@ pub enum RuntimeError {
     /// An operator replay of a content verification job did not finish.
     #[error("the content verification replay did not finish: {0}")]
     ReplayFailed(ReplayFailure),
+    /// An operator replay of an erasure job was refused.
+    #[error("the erasure replay was refused: {0}")]
+    ErasureReplay(ReplayRefusal),
+    /// An operator replay of an erasure job did not finish.
+    #[error("the erasure replay did not finish: {0}")]
+    ErasureReplayFailed(ReplayFailure),
     #[error("the documents command arguments are invalid")]
     Arguments,
     #[error("DOCUMENTS_LOG must be one of error, warn, or info")]

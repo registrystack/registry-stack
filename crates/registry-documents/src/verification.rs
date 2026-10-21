@@ -44,6 +44,7 @@ use uuid::Uuid;
 use crate::audit::{DocumentsAudit, CONTENT_VERIFICATION_EVENT};
 use crate::config::ContentVerificationConfig;
 use crate::content::{digest_hex, ContentStorage};
+use crate::replay::ReplayTrace;
 use crate::store::{PostgresStore, StoreError};
 use crate::transfer::TransferBudget;
 
@@ -98,79 +99,9 @@ pub fn job_table(schema: &str) -> Result<JobTable, ConfigError> {
     JobTable::new(schema, JOB_TABLE, "version_id", "part")
 }
 
-/// The most dead letters one operator listing returns.
-pub const MAXIMUM_DEAD_LETTER_LISTING: u16 = 500;
-
-/// A dead-lettered content verification job, as an operator lists it.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DeadLetter {
-    pub version_id: Uuid,
-    /// The generation a replay names as `--expected-generation`.
-    pub generation: i64,
-    pub attempt: i16,
-    /// When the job was dead-lettered, in UTC, RFC 3339 to the second.
-    pub dead_lettered_at: String,
-}
-
-/// A replayed job: pending again, at attempt zero, under a new generation.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Replayed {
-    pub version_id: Uuid,
-    pub generation: i64,
-}
-
-/// Why an operator replay was refused. A refused replay changes nothing.
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum ReplayRefusal {
-    #[error("the version has no content verification job under its verifier binding")]
-    NotFound,
-    #[error("the content verification job is {state}; only a dead-lettered job is replayed")]
-    NotDeadLettered { state: String },
-    #[error("the content verification job is at generation {current}; name it with --expected-generation {current}")]
-    StaleGeneration { current: i64 },
-    #[error("the content verification job changed while it was replayed; list the dead letters and try again")]
-    Changed,
-}
-
-/// A replay the dispatcher did not finish, and what it left behind.
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum ReplayFailure {
-    /// The replay's audit request was not written, so nothing was changed.
-    #[error("the replay audit request could not be written; the job was not changed")]
-    AuditUnavailable,
-    /// The replay committed but its audit response was not written: the
-    /// change stands.
-    #[error("the content verification job of {version_id} is pending at generation {generation}, but the replay's audit response was not written")]
-    Unaudited { version_id: Uuid, generation: i64 },
-    /// The database did not confirm whether the replay committed.
-    #[error("the database did not confirm whether the replay of {version_id} committed")]
-    OutcomeUnknown { version_id: Uuid },
-    /// The database refused or lost the replay; the job is unchanged.
-    #[error("the database did not complete the replay; the job is still dead-lettered")]
-    DatabaseUnavailable,
-}
-
-/// A replay that was refused, that did not finish, or that could not reach
-/// the database.
-#[derive(Debug, thiserror::Error)]
-pub enum ReplayError {
-    #[error(transparent)]
-    Refused(#[from] ReplayRefusal),
-    #[error(transparent)]
-    Failed(ReplayFailure),
-    #[error(transparent)]
-    Store(#[from] StoreError),
-    #[error("the content verification dispatcher could not be built: {0}")]
-    Dispatch(#[from] ConfigError),
-}
-
-impl From<tokio_postgres::Error> for ReplayError {
-    fn from(error: tokio_postgres::Error) -> Self {
-        Self::Store(StoreError::Query(error))
-    }
-}
+pub use crate::replay::{
+    DeadLetter, ReplayError, ReplayFailure, ReplayRefusal, Replayed, MAXIMUM_DEAD_LETTER_LISTING,
+};
 
 /// The oldest `limit` dead-lettered jobs under each version's current
 /// verifier binding. It reads and changes nothing else.
@@ -220,7 +151,9 @@ pub async fn dead_letters(
 /// Return the dead-lettered job of `version_id` under its current verifier
 /// binding to pending, at attempt zero under the next generation, through
 /// the dispatcher's generation-checked replay. The version stays pending
-/// and suspended until the job's verdict. Every other job is refused.
+/// and suspended until the job's verdict. Every other job is refused, and
+/// so is the job of a version whose erasure is pending or done or whose
+/// document's removal was requested: that content is never verified again.
 ///
 /// A replay the dispatcher did not finish is told apart by the last audit
 /// entry `verification` was asked to write and, when that does not decide
@@ -233,90 +166,51 @@ pub async fn replay(
     expected_generation: i64,
 ) -> Result<Replayed, ReplayError> {
     let client = store.client().await?;
-    let binding: Option<String> = client
+    let version = client
         .query_opt(
-            "SELECT verification_binding_digest FROM documents_versions WHERE version_id = $1",
+            "SELECT version.verification_binding_digest, version.erasure_state,
+                    document.removal_requested_at IS NOT NULL
+               FROM documents_versions AS version
+               JOIN documents_documents AS document ON document.document_id = version.document_id
+              WHERE version.version_id = $1",
             &[&version_id],
-        )
-        .await?
-        .map(|row| row.try_get(0))
-        .transpose()?
-        .flatten();
-    let binding = binding.ok_or(ReplayRefusal::NotFound)?;
-    let part = job_part(version_id, &binding);
-    let row = client
-        .query_opt(
-            "SELECT state, generation FROM documents_verification_jobs
-              WHERE version_id = $1 AND part = $2",
-            &[&version_id, &part],
         )
         .await?
         .ok_or(ReplayRefusal::NotFound)?;
     drop(client);
-    let state: String = row.try_get(0)?;
-    let current: i64 = row.try_get(1)?;
-    if state != JobState::DeadLettered.as_str() {
-        return Err(ReplayRefusal::NotDeadLettered { state }.into());
+    let binding: Option<String> = version.try_get(0)?;
+    let erasure: String = version.try_get(1)?;
+    let removal_requested: bool = version.try_get(2)?;
+    let erasing = match erasure.as_str() {
+        "none" if removal_requested => Some("the version's document has a removal requested"),
+        "none" => None,
+        "erased" => Some("the version is erased"),
+        _ => Some("the version's erasure is pending"),
+    };
+    if let Some(reason) = erasing {
+        return Err(ReplayRefusal::RemovalRequested { reason }.into());
     }
-    if current != expected_generation {
-        return Err(ReplayRefusal::StaleGeneration { current }.into());
-    }
+    let binding = binding.ok_or(ReplayRefusal::NotFound)?;
+    let part = job_part(version_id, &binding);
+    let job = crate::replay::job_state(store, JOB_TABLE, version_id, &part).await?;
+    crate::replay::check_replayable(job, expected_generation)?;
     let key = JobKey::new(version_id, part.clone()).map_err(|_| ReplayRefusal::NotFound)?;
-    let trace = Arc::clone(&verification.replay_trace);
+    let trace = verification.replay_trace.clone();
     let dispatcher = dispatcher(verification)?;
     let Ok(generation) = dispatcher.replay(&key, expected_generation).await else {
-        let last = *trace
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        return Err(match last {
-            Some((ReplayOutcome::Requested, false)) => {
-                ReplayError::Failed(ReplayFailure::AuditUnavailable)
-            }
-            Some((ReplayOutcome::Committed, _)) => ReplayError::Failed(ReplayFailure::Unaudited {
-                version_id,
-                generation: expected_generation + 1,
-            }),
-            Some((ReplayOutcome::Unfinished, _)) => {
-                ReplayError::Failed(ReplayFailure::OutcomeUnknown { version_id })
-            }
-            _ => unfinished_replay(store, version_id, &part, expected_generation).await?,
-        });
+        return Err(crate::replay::unfinished(
+            store,
+            &trace,
+            JOB_TABLE,
+            version_id,
+            &part,
+            expected_generation,
+        )
+        .await?);
     };
     Ok(Replayed {
         version_id,
         generation,
-    })
-}
-
-/// Why a replay the dispatcher refused before or without committing did
-/// not finish: a job still dead-lettered at the expected generation was
-/// not changed by anyone, so the database failed it; any other job was
-/// changed by someone else.
-async fn unfinished_replay(
-    store: &PostgresStore,
-    version_id: Uuid,
-    part: &str,
-    expected_generation: i64,
-) -> Result<ReplayError, ReplayError> {
-    let client = store.client().await?;
-    let row = client
-        .query_opt(
-            "SELECT state, generation FROM documents_verification_jobs
-              WHERE version_id = $1 AND part = $2",
-            &[&version_id, &part],
-        )
-        .await?;
-    let unchanged = match row {
-        Some(row) => {
-            row.try_get::<_, String>(0)? == JobState::DeadLettered.as_str()
-                && row.try_get::<_, i64>(1)? == expected_generation
-        }
-        None => false,
-    };
-    Ok(if unchanged {
-        ReplayError::Failed(ReplayFailure::DatabaseUnavailable)
-    } else {
-        ReplayRefusal::Changed.into()
     })
 }
 
@@ -502,9 +396,8 @@ pub struct VerificationStore {
     store: PostgresStore,
     schema: String,
     audit: DocumentsAudit,
-    /// The last replay audit entry this store was asked to write, and
-    /// whether it was written.
-    replay_trace: Arc<std::sync::Mutex<Option<(ReplayOutcome, bool)>>>,
+    /// The last replay audit entry this store was asked to write.
+    replay_trace: ReplayTrace,
     graces: Graces,
 }
 
@@ -543,7 +436,7 @@ impl VerificationStore {
             store,
             schema,
             audit,
-            replay_trace: Arc::default(),
+            replay_trace: ReplayTrace::default(),
             graces,
         }
     }
@@ -827,11 +720,7 @@ impl DispatchStore for VerificationStore {
         });
         let request = audit.outcome == ReplayOutcome::Requested;
         let written = self.append(request, correlation, record).await;
-        *self
-            .replay_trace
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some((audit.outcome, written.is_ok()));
+        self.replay_trace.record(audit.outcome, written.is_ok());
         written
     }
 

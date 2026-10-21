@@ -46,6 +46,10 @@ use uuid::Uuid;
 use crate::audit::{DocumentsAudit, ERASURE_EVENT, ORPHAN_ERASURE_EVENT, UPLOAD_EXPIRY_EVENT};
 use crate::config::Erasure;
 use crate::content::ContentStorage;
+use crate::replay::{
+    check_replayable, job_state, unfinished, DeadLetter, ReplayError, ReplayRefusal, ReplayTrace,
+    Replayed, MAXIMUM_DEAD_LETTER_LISTING,
+};
 use crate::store::{PostgresStore, StoreError};
 
 /// The erasure job table, in the shape `registry-platform-dispatch`
@@ -138,6 +142,8 @@ pub struct ErasureStore {
     store: PostgresStore,
     schema: String,
     audit: DocumentsAudit,
+    /// The last replay audit entry this store was asked to write.
+    replay_trace: ReplayTrace,
 }
 
 impl ErasureStore {
@@ -147,6 +153,7 @@ impl ErasureStore {
             store,
             schema,
             audit,
+            replay_trace: ReplayTrace::default(),
         }
     }
 
@@ -240,14 +247,16 @@ impl DispatchStore for ErasureStore {
         Ok(row.try_get(0)?)
     }
 
+    /// The record an operator action names is the version itself, the
+    /// job key's identifier.
     fn decode_target(
         &self,
-        row: &Row,
+        _row: &Row,
         _first: usize,
-        _key: &JobKey,
+        key: &JobKey,
         _action: TargetAction,
     ) -> Result<Option<Uuid>, DispatchError> {
-        Ok(Some(row.try_get(0)?))
+        Ok(Some(key.id()))
     }
 
     /// Delete the rows of every object the attempt confirmed gone and, once
@@ -384,7 +393,9 @@ impl DispatchStore for ErasureStore {
             "outcome": format!("{:?}", audit.outcome).to_lowercase(),
         });
         let request = audit.outcome == ReplayOutcome::Requested;
-        self.append(request, correlation, record).await
+        let written = self.append(request, correlation, record).await;
+        self.replay_trace.record(audit.outcome, written.is_ok());
+        written
     }
 
     fn operational_event(&self, event: DispatchEvent) {
@@ -781,6 +792,76 @@ async fn erase_orphans(
     Ok(Orphans {
         erased,
         failed: failed.len() as u64,
+    })
+}
+
+/// The oldest `limit` dead-lettered erasure jobs. It reads and changes
+/// nothing else. The sweep never arms a second job for a version that has
+/// one, so a replay is the only way a dead-lettered erasure runs again.
+pub async fn dead_letters(
+    store: &PostgresStore,
+    limit: u16,
+) -> Result<Vec<DeadLetter>, StoreError> {
+    let limit = i64::from(limit.min(MAXIMUM_DEAD_LETTER_LISTING));
+    let client = store.client().await?;
+    let rows = client
+        .query(
+            "SELECT version_id, generation, attempt,
+                    to_char(dead_lettered_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')
+               FROM documents_erasure_jobs
+              WHERE state = 'dead-lettered' AND part = $2
+              ORDER BY dead_lettered_at, version_id
+              LIMIT $1",
+            &[&limit, &JOB_PART],
+        )
+        .await?;
+    rows.iter()
+        .map(|row| {
+            Ok(DeadLetter {
+                version_id: row.try_get(0)?,
+                generation: row.try_get(1)?,
+                attempt: row.try_get(2)?,
+                dead_lettered_at: row.try_get(3)?,
+            })
+        })
+        .collect()
+}
+
+/// Return the dead-lettered erasure job of `version_id` to pending, at
+/// attempt zero under the next generation, through the dispatcher's
+/// generation-checked replay. The version stays pending and unservable
+/// until the job erases its bytes; while erasure is paused the job waits.
+/// Every other job is refused.
+///
+/// A replay the dispatcher did not finish is told apart by the last audit
+/// entry `erasure` was asked to write and, when that does not decide it,
+/// by reading the job again: only a job someone else changed is refused as
+/// changed.
+pub async fn replay(
+    store: &PostgresStore,
+    erasure: ErasureStore,
+    version_id: Uuid,
+    expected_generation: i64,
+) -> Result<Replayed, ReplayError> {
+    let job = job_state(store, JOB_TABLE, version_id, JOB_PART).await?;
+    check_replayable(job, expected_generation)?;
+    let key = JobKey::new(version_id, JOB_PART).map_err(|_| ReplayRefusal::NotFound)?;
+    let trace = erasure.replay_trace.clone();
+    let dispatcher = dispatcher(erasure)?;
+    let Ok(generation) = dispatcher.replay(&key, expected_generation).await else {
+        return Err(unfinished(
+            store,
+            &trace,
+            JOB_TABLE,
+            version_id,
+            JOB_PART,
+            expected_generation,
+        )
+        .await?);
+    };
+    Ok(Replayed {
+        version_id,
+        generation,
     })
 }
 
