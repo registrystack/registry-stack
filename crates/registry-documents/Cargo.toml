@@ -37,6 +37,16 @@ name = "postgres_journey"
 path = "tests/postgres_journey.rs"
 required-features = ["postgres-test"]
 
+[[test]]
+name = "volume_fit"
+path = "tests/volume_fit.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "restore_drill"
+path = "tests/restore_drill.rs"
+required-features = ["postgres-test"]
+
 [features]
 default = []
 postgres-test = []
