@@ -4626,7 +4626,7 @@
       },
       "artifact": {
         "path": "products/documents/generated/runtime/runtime.schema.json",
-        "sha256": "bcd8077549d8329b1ccb2ac4792bdd546ce11eee878815abb89942e474329361",
+        "sha256": "add6bc1846398510b4fefaaf04dc7b6a990f249cf1a2d6f90194e20936373417",
         "mediaType": "application/schema+json"
       }
     },

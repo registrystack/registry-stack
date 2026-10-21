@@ -3,6 +3,10 @@ set -euo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
+# shellcheck source-path=SCRIPTDIR/../../..
+# shellcheck source=scripts/cargo-runtime-library-path.sh
+. "$repo_root/scripts/cargo-runtime-library-path.sh"
+
 cd "$repo_root"
 python3 products/documents/scripts/check_dependency_direction.py
 python3 products/documents/scripts/check_database_test_isolation.py
@@ -18,8 +22,7 @@ CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
 if [[ -n "${DOCUMENTSCTL_BIN:-}" ]]; then
   documentsctl_bin=$DOCUMENTSCTL_BIN
 else
-  # documentsctl links no AWS-LC FIPS library, so a plain build runs directly.
-  cargo build --locked --quiet -p registry-documentsctl
+  registry_cargo_build "$repo_root" --locked --quiet -p registry-documentsctl
   documentsctl_bin="${CARGO_TARGET_DIR:-$repo_root/target}/debug/documentsctl"
 fi
 if [[ ! -x "$documentsctl_bin" ]]; then
