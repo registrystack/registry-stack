@@ -11,10 +11,13 @@
 //! eight attempts, a frozen retry schedule doubling from thirty seconds, no
 //! expiry, and a retry when an attempt's outcome is unknown, because every
 //! event carries the intent's identifier as its `id` and the destination
-//! deduplicates on it. A reminder whose appointment was cancelled or moved
-//! to a newer revision is set aside without a send at the moment it would be
-//! sent. A row the claim cannot take is set aside without a send so it never
-//! stalls the rows behind it.
+//! deduplicates on it. A reminder no attempt has started on is cancelled by
+//! the cancellation or reschedule that supersedes it, in that transaction. A
+//! claimed reminder whose appointment was cancelled or moved to a newer
+//! revision is set aside without a send, by a liveness read under its lease
+//! at the moment it would be sent; a lease that lapsed starts no send. A row
+//! the claim cannot take is set aside without a send so it never stalls the
+//! rows behind it.
 
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -416,22 +419,38 @@ impl DispatchStore for IntentStore {
     }
 }
 
+/// Whether a leased intent still describes a decision the caller stands by.
+/// A confirmation, change or cancellation always does. A reminder does only
+/// while its appointment is active at the revision the reminder was minted
+/// for: a cancellation or reschedule that committed after the claim
+/// supersedes it (INT-02).
+const LIVENESS_SELECT: SelectSql = SelectSql {
+    columns: "(state.purpose <> 'reminder' \
+              OR (claim.state = 'active' AND claim.revision = state.appointment_revision))",
+    joins: "JOIN {schema}.scheduling_claims AS claim ON claim.claim_id = state.claim_id",
+    predicate: "TRUE",
+};
+
+fn decode_liveness(row: &Row, first: usize) -> Result<bool, tokio_postgres::Error> {
+    row.try_get(first)
+}
+
 /// The send half: one intent to the configured reminders destination, or a
 /// local hold when the deployment declares none.
 pub(crate) struct IntentTransport {
-    store: PostgresStore,
+    dispatcher: IntentDispatcher,
     scheduling_id: String,
     destination: Option<Arc<ReminderTransport>>,
 }
 
 impl IntentTransport {
     pub(crate) fn new(
-        store: PostgresStore,
+        dispatcher: IntentDispatcher,
         scheduling_id: String,
         destination: Option<Arc<ReminderTransport>>,
     ) -> Self {
         Self {
-            store,
+            dispatcher,
             scheduling_id,
             destination,
         }
@@ -461,16 +480,17 @@ impl DispatchTransport for IntentTransport {
 
     async fn send(&self, job: &LeasedJob<OutboxRow>) -> Result<Sent<()>, DispatchError> {
         let row = &job.job;
-        // The intent's own liveness, read immediately before the send: a
-        // reminder whose appointment was cancelled or moved to a newer
-        // revision is not sent. An unreadable answer sends nothing and
-        // leaves the lease to lapse into a retry.
-        if !self
-            .store
-            .intent_is_current(row.outbox_id)
+        // The intent's own liveness, read under its lease immediately before
+        // the send: a reminder whose appointment was cancelled or moved to a
+        // newer revision is not sent. A lease that lapsed or was taken over,
+        // or an unreadable answer, sends nothing and leaves the lease to
+        // lapse into a retry.
+        let current = self
+            .dispatcher
+            .read_leased(job.fence(), &LIVENESS_SELECT, decode_liveness)
             .await
-            .map_err(|_| DispatchError::Unavailable)?
-        {
+            .map_err(|_| DispatchError::Unavailable)?;
+        if !current {
             tracing::info!(
                 outbox_id = %row.outbox_id,
                 "a claimed reminder was superseded before its dispatch"

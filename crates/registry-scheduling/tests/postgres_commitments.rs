@@ -37,7 +37,7 @@ use registry_scheduling::hooks::{ActivatedHooks, HookRuntimeIdentity};
 use registry_scheduling::http::{router, HttpState};
 use registry_scheduling::runtime::{
     claim_due_intent_for_test, dispatch_due_intents, finish_intent_for_test, reminder_transport,
-    ReminderTransport,
+    send_claimed_intent_for_test, IntentLeaseForTest, ReminderTransport,
 };
 use registry_scheduling::service::SchedulingService;
 use registry_scheduling::store::{
@@ -8439,11 +8439,12 @@ async fn a_lapsed_final_attempt_is_set_aside_for_an_operator() {
     assert_eq!(held[0].attempts, 8);
 }
 
-/// A reminder whose appointment is cancelled is set aside when it falls
-/// due, without a send, and is not listed for an operator: nobody is meant
-/// to deliver it. The cancellation the caller made is still delivered.
+/// A reminder whose appointment is cancelled before any attempt is
+/// cancelled in the same transaction, is never sent, and is not listed for
+/// an operator: nobody is meant to deliver it. The cancellation the caller
+/// made is still delivered.
 #[tokio::test]
-async fn a_cancelled_appointments_reminder_is_set_aside_without_a_send() {
+async fn a_cancelled_appointments_reminder_is_cancelled_without_a_send() {
     let destination = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/events"))
@@ -8462,34 +8463,24 @@ async fn a_cancelled_appointments_reminder_is_set_aside_without_a_send() {
         )
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        !fx.store
-            .intent_is_current(reminder)
-            .await
-            .expect("the liveness read runs"),
-        "a cancelled appointment's reminder is superseded"
+    assert_eq!(
+        outbox_row(&fx, reminder).await,
+        ("cancelled".to_owned(), 0, None, None),
+        "the cancel transaction cancels the unattempted reminder"
     );
     let cancellation = intent_of(&fx, &appointment, "cancellation").await;
-    assert!(fx
-        .store
-        .intent_is_current(cancellation)
-        .await
-        .expect("the liveness read runs"));
+    assert_eq!(outbox_row(&fx, cancellation).await.0, "pending");
 
     bring_intents_due(&fx, pinned_now() + TimeDelta::days(1)).await;
     dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport_to(&destination)))
         .await
         .expect("the dispatch pass runs");
 
-    // The row survives as accounting, set aside rather than deleted.
+    // The row survives as accounting until retention, cancelled rather
+    // than deleted, and no dispatch claims it.
     assert_eq!(
         outbox_row(&fx, reminder).await,
-        (
-            "dead-lettered".to_owned(),
-            1,
-            Some("superseded".to_owned()),
-            None
-        )
+        ("cancelled".to_owned(), 0, None, None)
     );
     assert_eq!(outbox_row(&fx, cancellation).await.0, "delivered");
     let types: Vec<String> = destination
@@ -8630,8 +8621,8 @@ async fn a_default_availability_request_continues_its_own_cursor() {
 }
 
 /// A reschedule mints the replacement reminder at the new revision beside
-/// the one its obsolete revision minted. The obsolete one is retained as
-/// accounting and set aside without a send when it falls due, and the
+/// the one its obsolete revision minted. The obsolete one is cancelled in
+/// the reschedule transaction and retained as accounting, and the
 /// replacement is delivered: a reminder that names anything but the
 /// appointment's current revision is never sent.
 #[tokio::test]
@@ -8684,16 +8675,12 @@ async fn a_reschedule_supersedes_the_obsolete_reminder_and_mints_its_replacement
         2,
         "the replacement names the new revision"
     );
-    assert!(!fx
-        .store
-        .intent_is_current(obsolete)
-        .await
-        .expect("the liveness read runs"));
-    assert!(fx
-        .store
-        .intent_is_current(replacement)
-        .await
-        .expect("the liveness read runs"));
+    assert_eq!(
+        outbox_row(&fx, obsolete).await,
+        ("cancelled".to_owned(), 0, None, None),
+        "the reschedule transaction cancels the obsolete reminder"
+    );
+    assert_eq!(outbox_row(&fx, replacement).await.0, "pending");
 
     bring_intents_due(&fx, pinned_now() + TimeDelta::days(1)).await;
     dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport_to(&destination)))
@@ -8701,13 +8688,8 @@ async fn a_reschedule_supersedes_the_obsolete_reminder_and_mints_its_replacement
         .expect("the dispatch pass runs");
     assert_eq!(
         outbox_row(&fx, obsolete).await,
-        (
-            "dead-lettered".to_owned(),
-            1,
-            Some("superseded".to_owned()),
-            None
-        ),
-        "the obsolete reminder is set aside, not sent"
+        ("cancelled".to_owned(), 0, None, None),
+        "the obsolete reminder stays cancelled, not sent"
     );
     assert_eq!(outbox_row(&fx, replacement).await.0, "delivered");
     let reminders: Vec<Value> = destination
@@ -8721,6 +8703,313 @@ async fn a_reschedule_supersedes_the_obsolete_reminder_and_mints_its_replacement
     assert_eq!(reminders.len(), 1, "only the replacement is sent");
     assert_eq!(reminders[0]["id"], replacement.to_string());
     assert_eq!(reminders[0]["subject"]["recordRevision"], 2);
+}
+
+/// A destination that answers every event with 202.
+async fn accepting_destination() -> MockServer {
+    let destination = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/events"))
+        .respond_with(ResponseTemplate::new(202))
+        .mount(&destination)
+        .await;
+    destination
+}
+
+/// The requests a destination received.
+async fn requests_to(destination: &MockServer) -> usize {
+    destination
+        .received_requests()
+        .await
+        .expect("the requests")
+        .len()
+}
+
+/// Book one appointment, deliver its confirmation, and lease its reminder,
+/// so the test holds the reminder between its claim and its send.
+async fn leased_reminder(
+    fx: &Fixture,
+    destination: &MockServer,
+    key: &str,
+) -> (String, u64, Uuid, IntentLeaseForTest) {
+    let (appointment, revision) = booked(fx, 300, 440, key).await;
+    let reminder = intent_of(fx, &appointment, "reminder").await;
+    bring_intents_due(fx, pinned_now()).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport_to(destination)))
+        .await
+        .expect("the confirmation is delivered");
+    make_intent_due(fx, reminder).await;
+    let lease = claim_due_intent_for_test(&fx.store)
+        .await
+        .expect("the delivery claim runs")
+        .expect("the reminder is due");
+    assert_eq!(lease.outbox_id(), reminder);
+    (appointment, revision, reminder, lease)
+}
+
+/// The order "claimed, then cancelled, then sent": a reminder a dispatcher
+/// already holds is not cancelled under it, and the liveness read under its
+/// lease sets it aside at the send instead, so it is never sent and needs
+/// no operator.
+#[tokio::test]
+async fn a_reminder_claimed_before_its_cancellation_is_set_aside_at_its_send() {
+    let destination = accepting_destination().await;
+    let fx = fixture().await;
+    let (appointment, revision, reminder, lease) =
+        leased_reminder(&fx, &destination, "backstop-1").await;
+    let sent_before = requests_to(&destination).await;
+
+    let (status, _) = fx
+        .post(
+            &format!("/v1/appointments/{appointment}/cancel"),
+            &fx.agent,
+            "backstop-cancel",
+            json!({"observedRevision": revision, "reason": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        outbox_row(&fx, reminder).await.0,
+        "leased",
+        "the cancel leaves a leased reminder to its dispatcher"
+    );
+
+    send_claimed_intent_for_test(
+        &fx.store,
+        SCHEDULING_ID,
+        Some(transport_to(&destination)),
+        &lease,
+    )
+    .await
+    .expect("the send runs under its lease");
+    assert_eq!(
+        outbox_row(&fx, reminder).await,
+        (
+            "dead-lettered".to_owned(),
+            1,
+            Some("superseded".to_owned()),
+            None
+        )
+    );
+    assert_eq!(
+        requests_to(&destination).await,
+        sent_before,
+        "a superseded reminder is never sent"
+    );
+    assert!(fx
+        .store
+        .undelivered_intents(100)
+        .await
+        .expect("the operator reads the undelivered intents")
+        .is_empty());
+}
+
+/// A dispatcher whose lease lapsed between its claim and its send starts no
+/// send: the liveness read runs under the lease, and a lapsed lease answers
+/// nothing.
+#[tokio::test]
+async fn a_lapsed_dispatch_lease_starts_no_send() {
+    let destination = accepting_destination().await;
+    let fx = fixture().await;
+    let (_, _, reminder, lease) = leased_reminder(&fx, &destination, "lapsed-send").await;
+    let sent_before = requests_to(&destination).await;
+    lapse_intent_lease(&fx, reminder).await;
+
+    let outcome = send_claimed_intent_for_test(
+        &fx.store,
+        SCHEDULING_ID,
+        Some(transport_to(&destination)),
+        &lease,
+    )
+    .await;
+    assert!(
+        matches!(outcome, Err(StoreError::IntentDispatch)),
+        "a lapsed lease refuses the send: {outcome:?}"
+    );
+    assert_eq!(
+        requests_to(&destination).await,
+        sent_before,
+        "no request leaves under a lapsed lease"
+    );
+    assert_eq!(
+        outbox_row(&fx, reminder).await.0,
+        "leased",
+        "the lapsed lease is left for recovery"
+    );
+}
+
+/// A payload that cannot become an event is held on its first attempt
+/// with that class, and nothing is sent.
+#[tokio::test]
+async fn an_unrenderable_intent_is_held_on_its_first_attempt_without_a_send() {
+    let destination = accepting_destination().await;
+    let fx = fixture().await;
+    let (appointment, _) = booked(&fx, 300, 440, "unrenderable-1").await;
+    let reminder = intent_of(&fx, &appointment, "reminder").await;
+    bring_intents_due(&fx, pinned_now()).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport_to(&destination)))
+        .await
+        .expect("the confirmation is delivered");
+    let sent_before = requests_to(&destination).await;
+
+    // Past the event body bound, so the envelope cannot be rendered.
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET payload = jsonb_build_object('padding', repeat('x', 20000)) \
+             WHERE outbox_id = $1",
+            &[&reminder],
+        )
+        .await
+        .expect("corrupt the payload");
+    make_intent_due(&fx, reminder).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport_to(&destination)))
+        .await
+        .expect("the dispatch pass runs");
+
+    assert_eq!(
+        outbox_row(&fx, reminder).await,
+        (
+            "dead-lettered".to_owned(),
+            1,
+            Some("event_unrenderable".to_owned()),
+            None
+        )
+    );
+    assert_eq!(requests_to(&destination).await, sent_before);
+    let undelivered = fx
+        .store
+        .undelivered_intents(100)
+        .await
+        .expect("the operator reads the undelivered intents");
+    assert_eq!(undelivered.len(), 1);
+    assert_eq!(undelivered[0].outbox_id, reminder);
+    assert_eq!(undelivered[0].delivery_state, "failed");
+}
+
+/// A row the claim cannot read as an intent is set aside without a send,
+/// and never stalls the rows behind it. Never attempted, it lands in
+/// `expired` and an operator sees it as failed.
+#[tokio::test]
+async fn an_unreadable_intent_is_quarantined_without_stalling_the_rows_behind_it() {
+    let destination = accepting_destination().await;
+    let fx = fixture().await;
+    let (broken_appointment, _) = booked(&fx, 90, 200, "quarantine-broken").await;
+    let (sound_appointment, _) = booked(&fx, 300, 440, "quarantine-sound").await;
+    bring_intents_due(&fx, pinned_now()).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport_to(&destination)))
+        .await
+        .expect("the confirmations are delivered");
+    let broken = intent_of(&fx, &broken_appointment, "reminder").await;
+    let sound = intent_of(&fx, &sound_appointment, "reminder").await;
+    let sent_before = requests_to(&destination).await;
+
+    // An instant no timestamp type in the runtime can hold, due first.
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET due_at = 'infinity', \
+                    next_attempt_at = transaction_timestamp() - interval '1 minute' \
+              WHERE outbox_id = $1",
+            &[&broken],
+        )
+        .await
+        .expect("make the intent unreadable");
+    make_intent_due(&fx, sound).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport_to(&destination)))
+        .await
+        .expect("the dispatch pass runs");
+
+    assert_eq!(
+        outbox_row(&fx, broken).await,
+        (
+            "expired".to_owned(),
+            0,
+            Some("delivery_unreadable".to_owned()),
+            None
+        ),
+        "an intent never attempted is set aside as expired"
+    );
+    assert_eq!(
+        outbox_row(&fx, sound).await.0,
+        "delivered",
+        "the row behind it is still sent"
+    );
+    assert_eq!(requests_to(&destination).await, sent_before + 1);
+    // The operator listing reads the instant too, so the row is given a
+    // readable one back before the listing is asked how it stands.
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET due_at = created_at WHERE outbox_id = $1",
+            &[&broken],
+        )
+        .await
+        .expect("make the intent readable again");
+    let undelivered = fx
+        .store
+        .undelivered_intents(100)
+        .await
+        .expect("the operator reads the undelivered intents");
+    assert_eq!(undelivered.len(), 1);
+    assert_eq!(undelivered[0].outbox_id, broken);
+    assert_eq!(undelivered[0].delivery_state, "failed");
+    assert_eq!(undelivered[0].attempts, 0);
+}
+
+/// Due intents are claimed by `next_attempt_at`, then `outbox_id`, then
+/// `purpose`. An outbox identifier names one intent, so `purpose` never
+/// decides between two rows; the earlier instant wins over the lower
+/// identifier, and the lower identifier breaks a tie on the instant.
+#[tokio::test]
+async fn due_intents_are_claimed_by_instant_then_identifier() {
+    let fx = fixture().await;
+    let mut reminders = Vec::new();
+    for (from, to, key) in [
+        (90, 200, "order-1"),
+        (300, 440, "order-2"),
+        (480, 620, "order-3"),
+    ] {
+        let (appointment, _) = booked(&fx, from, to, key).await;
+        reminders.push(intent_of(&fx, &appointment, "reminder").await);
+    }
+    // Leave the confirmations out of the way.
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET next_attempt_at = transaction_timestamp() + interval '1 day' \
+             WHERE purpose <> 'reminder'",
+            &[],
+        )
+        .await
+        .expect("defer the confirmations");
+    reminders.sort();
+    let (lowest, middle, highest) = (reminders[0], reminders[1], reminders[2]);
+    for (id, offset) in [
+        (highest, "2 minutes"),
+        (lowest, "1 minute"),
+        (middle, "1 minute"),
+    ] {
+        fx.admin
+            .execute(
+                &format!(
+                    "UPDATE scheduling_outbox \
+                        SET next_attempt_at = transaction_timestamp() - interval '{offset}' \
+                      WHERE outbox_id = $1"
+                ),
+                &[&id],
+            )
+            .await
+            .expect("schedule the reminder");
+    }
+    let mut claimed = Vec::new();
+    for _ in 0..3 {
+        let lease = claim_due_intent_for_test(&fx.store)
+            .await
+            .expect("the delivery claim runs")
+            .expect("a reminder is due");
+        claimed.push(lease.outbox_id());
+        finish_intent_for_test(&fx.store, &lease, true)
+            .await
+            .expect("the reminder is delivered");
+    }
+    assert_eq!(claimed, vec![highest, lowest, middle]);
 }
 
 #[tokio::test]
@@ -10068,11 +10357,12 @@ mod terminal_retention {
         let recent = cutoff + TimeDelta::microseconds(1);
         let mut cases = Vec::new();
         // A leased intent may have an uncertain in-flight send. Intents set
-        // aside, whether local, failed or superseded, remain operator-visible
-        // accounting rather than being presumed disposable. Every purpose is
-        // terminal dispatch metadata once delivered, so the receipt cutoff
-        // applies to confirmations, changes and cancellations exactly as it
-        // does to reminders.
+        // aside as local or failed remain operator-visible accounting rather
+        // than being presumed disposable. Every purpose is terminal dispatch
+        // metadata once delivered, so the receipt cutoff applies to
+        // confirmations, changes and cancellations exactly as it does to
+        // reminders. A reminder cancelled before any attempt or set aside as
+        // superseded needs nobody, so it ages out on the same cutoff.
         for (purpose, state, attempts, terminal_at, class, remove) in [
             ("reminder", "delivered", 1_i16, old, None, true),
             ("reminder", "delivered", 1, cutoff, None, true),
@@ -10117,6 +10407,33 @@ mod terminal_retention {
                 1,
                 old,
                 Some("superseded"),
+                true,
+            ),
+            (
+                "reminder",
+                "dead-lettered",
+                1,
+                cutoff,
+                Some("superseded"),
+                true,
+            ),
+            (
+                "reminder",
+                "dead-lettered",
+                1,
+                recent,
+                Some("superseded"),
+                false,
+            ),
+            ("reminder", "cancelled", 0, old, None, true),
+            ("reminder", "cancelled", 0, cutoff, None, true),
+            ("reminder", "cancelled", 0, recent, None, false),
+            (
+                "reminder",
+                "expired",
+                0,
+                old,
+                Some("delivery_unreadable"),
                 false,
             ),
         ] {
@@ -10125,8 +10442,8 @@ mod terminal_retention {
                 .execute(
                     "INSERT INTO scheduling_outbox
              (outbox_id,purpose,generation,state,attempt,next_attempt_at,attempt_started_at,
-              lease_expires_at,lease_token,delivered_at,dead_lettered_at,claim_id,
-              appointment_revision,due_at,payload,created_at,last_failure_class)
+              lease_expires_at,lease_token,delivered_at,dead_lettered_at,expired_at,claim_id,
+              appointment_revision,due_at,payload,created_at,last_failure_class,updated_at)
              VALUES ($1,$7,1,$4,$5,
                      CASE WHEN $4='pending' THEN $6::timestamptz END,
                      CASE WHEN $4='leased' THEN $6::timestamptz END,
@@ -10134,7 +10451,10 @@ mod terminal_retention {
                      CASE WHEN $4='leased' THEN gen_random_uuid() END,
                      CASE WHEN $4='delivered' THEN $6::timestamptz END,
                      CASE WHEN $4='dead-lettered' THEN $6::timestamptz END,
-                     $2,1,$3,'{}'::jsonb,$3,$8)",
+                     CASE WHEN $4='expired' THEN $6::timestamptz END,
+                     $2,1,$3,'{}'::jsonb,$3,$8,
+                     CASE WHEN $4='cancelled' THEN $6::timestamptz
+                          ELSE transaction_timestamp() END)",
                     &[
                         &id,
                         &claim,
@@ -10174,7 +10494,7 @@ mod terminal_retention {
                 .is_some();
             assert_eq!(
                 exists, !remove,
-                "{purpose} intent {id}: only delivered rows at or before receipt cutoff are disposable"
+                "{purpose} intent {id}: only settled rows at or before receipt cutoff are disposable"
             );
         }
         let after = rows(&fx, "scheduling_outbox").await;
