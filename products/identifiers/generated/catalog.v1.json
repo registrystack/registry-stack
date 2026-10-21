@@ -2303,7 +2303,7 @@
       "description": "The upload would exceed the bytes this custodian may hold under the policy.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "custody.quota-exceeded",
@@ -2322,7 +2322,7 @@
       "description": "The request names a document policy this deployment does not hold.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "document-policy.unknown",
@@ -2341,7 +2341,7 @@
       "description": "The document version is not ready for release. Read its status and try again once it is ready.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "document-version.not-releasable",
@@ -2360,7 +2360,7 @@
       "description": "The declared media type is not one the document policy allows.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "document.content-type-not-allowed",
@@ -2376,10 +2376,10 @@
       "compatibilityLine": "v1alpha1",
       "owner": "documents",
       "title": "Document too large",
-      "description": "The declared length is zero or exceeds the document policy maximum.",
+      "description": "The declared length exceeds the document policy maximum.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "document.too-large",
@@ -2398,7 +2398,7 @@
       "description": "The request body exceeds the accepted size.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "request.body-too-large",
@@ -2417,7 +2417,7 @@
       "description": "The request could not be read as a Document Store request.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "request.invalid",
@@ -2436,7 +2436,7 @@
       "description": "The route exists but not for this method.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "request.method-not-allowed",
@@ -2455,7 +2455,7 @@
       "description": "The requested route does not exist.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "request.not-found",
@@ -2474,7 +2474,7 @@
       "description": "The request body could not be processed.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "request.unprocessable",
@@ -2493,7 +2493,7 @@
       "description": "The request body is not JSON.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "request.unsupported-media-type",
@@ -2512,7 +2512,7 @@
       "description": "The Document Store is unavailable. Try again after the service recovers.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "service.unavailable",
@@ -2531,7 +2531,7 @@
       "description": "The content type differs from the media type the upload reserved.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "upload.content-type-mismatch",
@@ -2550,7 +2550,7 @@
       "description": "The content does not match the expected digest. Nothing was kept; send the reserved content again.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "upload.digest-mismatch",
@@ -2569,7 +2569,7 @@
       "description": "The upload reservation has expired. Reserve a new upload.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "upload.expired",
@@ -2588,7 +2588,7 @@
       "description": "The upload already holds other content and cannot be replaced.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "upload.finalized",
@@ -2607,7 +2607,7 @@
       "description": "The content length differs from the reserved length. Nothing was kept; send the reserved content again.",
       "source": {
         "path": "crates/registry-documents-core/src/problem.rs",
-        "sha256": "93bdb82b8e90c59c44386ecd1b92f68b4d13e4bfda9be381b0c5337f7545b59a"
+        "sha256": "db69da295d6dcc3230373d5f33d12fdff2b27027c5067d98c8c1f2b2b9376434"
       },
       "problem": {
         "code": "upload.length-mismatch",

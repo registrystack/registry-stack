@@ -323,6 +323,9 @@ async fn a_document_above_the_policy_size_is_refused_before_any_byte_moves() {
     api.reserve_declared(APP, "no-such-policy", CITIZEN, &digest, 10, PDF)
         .await
         .assert_problem(ProblemCode::DocumentPolicyUnknown);
+    api.reserve_declared(APP, "citizen-delivery", CITIZEN, &digest, 0, PDF)
+        .await
+        .assert_problem(ProblemCode::RequestUnprocessable);
     let reserved: i64 = deployment
         .scalar("SELECT count(*) FROM documents_versions")
         .await;

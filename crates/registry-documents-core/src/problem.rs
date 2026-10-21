@@ -166,7 +166,7 @@ impl ProblemCode {
             Self::DocumentPolicyUnknown => "The request names a document policy this deployment does not hold.",
             Self::DocumentVersionNotReleasable => "The document version is not ready for release. Read its status and try again once it is ready.",
             Self::DocumentContentTypeNotAllowed => "The declared media type is not one the document policy allows.",
-            Self::DocumentTooLarge => "The declared length is zero or exceeds the document policy maximum.",
+            Self::DocumentTooLarge => "The declared length exceeds the document policy maximum.",
             Self::RequestBodyTooLarge => "The request body exceeds the accepted size.",
             Self::RequestInvalid => "The request could not be read as a Document Store request.",
             Self::RequestMethodNotAllowed => "The route exists but not for this method.",
