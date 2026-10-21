@@ -44,29 +44,11 @@ tokio::task_local! {
 /// Every problem the HTTP surface can answer with.
 pub const HTTP_PROBLEMS: &[ProblemCode] = ProblemCode::ALL;
 
-/// The route that reserves a document.
-pub const DOCUMENTS_PATH: &str = "/documents";
-/// The route that reads one document.
-pub const DOCUMENT_PATH: &str = "/documents/{documentId}";
-/// The route that releases the content of one document version.
-pub const DOCUMENT_CONTENT_PATH: &str = "/documents/{documentId}/versions/{versionId}/content";
-/// The route an upload's content is sent to.
-pub const UPLOAD_CONTENT_PATH: &str = "/uploads/{uploadId}/content";
-/// The route that issues and lists the grants of one document.
-pub const DOCUMENT_GRANTS_PATH: &str = "/documents/{documentId}/grants";
-/// The route that lists the grants naming the caller.
-pub const GRANTS_PATH: &str = "/document-grants";
-/// The route that revokes one grant.
-pub const GRANT_PATH: &str = "/document-grants/{grantId}";
-/// The route a custodian asks for a document's erasure on.
-pub const DOCUMENT_ERASURE_PATH: &str = "/documents/{documentId}/erasure";
-/// The route that lists the policies the caller may place documents under.
-pub const POLICIES_PATH: &str = "/document-policies";
-
-/// The header a creating request names its idempotency key in.
-pub const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
-/// The longest idempotency key accepted.
-pub const MAXIMUM_IDEMPOTENCY_KEY_BYTES: usize = 128;
+pub use registry_documents_core::{
+    DOCUMENTS_PATH, DOCUMENT_CONTENT_PATH, DOCUMENT_ERASURE_PATH, DOCUMENT_GRANTS_PATH,
+    DOCUMENT_PATH, GRANTS_PATH, GRANT_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
+    POLICIES_PATH, UPLOAD_CONTENT_PATH,
+};
 
 /// Apply the shared fallbacks and boundary layers. `limited` routes take
 /// the default request body limit; `unlimited` routes bound their own body.

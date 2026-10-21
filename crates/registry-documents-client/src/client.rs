@@ -5,8 +5,10 @@ use std::time::Duration;
 
 use registry_documents_core::{
     type_uri, DocumentGrantPage, DocumentGrantView, DocumentPage, DocumentPolicyList, DocumentView,
-    IssueGrantRequest, ProblemCode, ReservationView, ReserveDocumentRequest, HEALTH_PATH,
-    MAXIMUM_PAGE_SIZE,
+    IssueGrantRequest, ProblemCode, ReservationView, ReserveDocumentRequest, DOCUMENTS_PATH,
+    DOCUMENT_CONTENT_PATH, DOCUMENT_GRANTS_PATH, DOCUMENT_PATH, GRANTS_PATH, GRANT_PATH,
+    HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_IDEMPOTENCY_KEY_BYTES, MAXIMUM_PAGE_SIZE,
+    POLICIES_PATH, UPLOAD_CONTENT_PATH,
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
@@ -34,11 +36,6 @@ const DEFAULT_MAXIMUM_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 const MAXIMUM_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 const DEFAULT_MAXIMUM_DOWNLOAD_BYTES: u64 = 16 * 1024 * 1024;
 const MAXIMUM_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
-
-/// The header a creating request names its idempotency key in.
-const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
-/// The longest idempotency key the service accepts.
-const MAXIMUM_IDEMPOTENCY_KEY_BYTES: usize = 128;
 
 /// The body of a content upload: in memory, or streamed from any
 /// `http_body::Body` through `UploadBody::wrap`. A streamed body is sent as
@@ -257,13 +254,7 @@ impl DocumentsClient {
 
     /// Whether the process answers at all.
     pub async fn health(&self) -> Result<DocumentsComplete<()>, DocumentsClientError> {
-        let segments = HEALTH_PATH
-            .trim_start_matches('/')
-            .split('/')
-            .collect::<Vec<_>>();
-        let url = append_path_segments(self.base_url.as_url(), &segments).map_err(|_| {
-            DocumentsClientError::configuration("the service base URL is not usable")
-        })?;
+        let url = self.url(HEALTH_PATH, &[])?;
         let response =
             self.http
                 .get(url)
@@ -331,7 +322,7 @@ impl DocumentsClient {
             DocumentsClientError::invalid_request("the reservation could not be encoded")
         })?;
         let request = self
-            .authorized(self.http.post(self.url(&["documents"])?), token)
+            .authorized(self.http.post(self.url(DOCUMENTS_PATH, &[])?), token)
             .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
             .header(IDEMPOTENCY_KEY_HEADER, idempotency_key)
             .body(body);
@@ -345,7 +336,7 @@ impl DocumentsClient {
         token: &BearerToken,
         page: &PageRequest,
     ) -> Result<DocumentsComplete<DocumentPage>, DocumentsClientError> {
-        let url = self.page_url(&["documents"], page)?;
+        let url = self.page_url(DOCUMENTS_PATH, &[], page)?;
         self.json_answer(self.authorized(self.http.get(url), token), StatusCode::OK)
             .await
     }
@@ -362,7 +353,7 @@ impl DocumentsClient {
             document_id,
             "the document identifier is not a lowercase hyphenated UUID",
         )?;
-        let url = self.url(&["documents", document_id])?;
+        let url = self.url(DOCUMENT_PATH, &[document_id])?;
         self.json_answer(self.authorized(self.http.get(url), token), StatusCode::OK)
             .await
     }
@@ -401,7 +392,7 @@ impl DocumentsClient {
                 "the content length differs from the reserved length",
             ));
         }
-        let url = self.url(&["uploads", upload_id, "content"])?;
+        let url = self.url(UPLOAD_CONTENT_PATH, &[upload_id])?;
         let request = self
             .authorized(self.http.put(url), token)
             .header(CONTENT_TYPE, version.media_type.as_str())
@@ -437,7 +428,7 @@ impl DocumentsClient {
             version_id,
             "the version identifier is not a lowercase hyphenated UUID",
         )?;
-        let url = self.url(&["documents", document_id, "versions", version_id, "content"])?;
+        let url = self.url(DOCUMENT_CONTENT_PATH, &[document_id, version_id])?;
         let request = self
             .http
             .get(url)
@@ -498,7 +489,7 @@ impl DocumentsClient {
         let request = self
             .authorized(
                 self.http
-                    .post(self.url(&["documents", document_id, "grants"])?),
+                    .post(self.url(DOCUMENT_GRANTS_PATH, &[document_id])?),
                 token,
             )
             .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
@@ -518,7 +509,7 @@ impl DocumentsClient {
             document_id,
             "the document identifier is not a lowercase hyphenated UUID",
         )?;
-        let url = self.page_url(&["documents", document_id, "grants"], page)?;
+        let url = self.page_url(DOCUMENT_GRANTS_PATH, &[document_id], page)?;
         self.json_answer(self.authorized(self.http.get(url), token), StatusCode::OK)
             .await
     }
@@ -530,7 +521,7 @@ impl DocumentsClient {
         token: &BearerToken,
         page: &PageRequest,
     ) -> Result<DocumentsComplete<DocumentGrantPage>, DocumentsClientError> {
-        let url = self.page_url(&["document-grants"], page)?;
+        let url = self.page_url(GRANTS_PATH, &[], page)?;
         self.json_answer(self.authorized(self.http.get(url), token), StatusCode::OK)
             .await
     }
@@ -548,7 +539,7 @@ impl DocumentsClient {
             grant_id,
             "the grant identifier is not a lowercase hyphenated UUID",
         )?;
-        let url = self.url(&["document-grants", grant_id])?;
+        let url = self.url(GRANT_PATH, &[grant_id])?;
         self.json_answer(
             self.authorized(self.http.delete(url), token),
             StatusCode::OK,
@@ -562,17 +553,36 @@ impl DocumentsClient {
         &self,
         token: &BearerToken,
     ) -> Result<DocumentsComplete<DocumentPolicyList>, DocumentsClientError> {
-        let url = self.url(&["document-policies"])?;
+        let url = self.url(POLICIES_PATH, &[])?;
         self.json_answer(self.authorized(self.http.get(url), token), StatusCode::OK)
             .await
     }
 
-    fn url(&self, segments: &[&str]) -> Result<Url, DocumentsClientError> {
-        append_path_segments(self.base_url.as_url(), segments)
+    /// The URL of one route under the deployment prefix, with each `{name}`
+    /// segment of the route taking the next of `values` in order.
+    fn url(&self, route: &str, values: &[&str]) -> Result<Url, DocumentsClientError> {
+        let mut values = values.iter();
+        let segments = route_segments(route)
+            .map(|segment| match segment {
+                RouteSegment::Literal(literal) => Some(literal),
+                RouteSegment::Placeholder => values.next().copied(),
+            })
+            .collect::<Option<Vec<_>>>();
+        let segments = segments
+            .filter(|_| values.next().is_none())
+            .ok_or_else(|| {
+                DocumentsClientError::configuration("the route does not take these values")
+            })?;
+        append_path_segments(self.base_url.as_url(), &segments)
             .map_err(|_| DocumentsClientError::configuration("the service base URL is not usable"))
     }
 
-    fn page_url(&self, segments: &[&str], page: &PageRequest) -> Result<Url, DocumentsClientError> {
+    fn page_url(
+        &self,
+        route: &str,
+        values: &[&str],
+        page: &PageRequest,
+    ) -> Result<Url, DocumentsClientError> {
         if page
             .limit
             .is_some_and(|limit| !(1..=MAXIMUM_PAGE_SIZE).contains(&limit))
@@ -581,7 +591,7 @@ impl DocumentsClient {
                 "the page limit is not between 1 and the maximum page size",
             ));
         }
-        let mut url = self.url(segments)?;
+        let mut url = self.url(route, values)?;
         if page.cursor.is_some() || page.limit.is_some() {
             let mut query = url.query_pairs_mut();
             if let Some(cursor) = &page.cursor {
@@ -748,15 +758,43 @@ fn is_id(value: &str) -> bool {
 /// The upload a reservation's `uploadPath` names. The path is read only for
 /// its upload identifier; the request goes to that upload under the
 /// configured service URL, deployment prefix included.
+enum RouteSegment<'a> {
+    Literal(&'a str),
+    Placeholder,
+}
+
+/// The segments of a route template such as `/documents/{documentId}`.
+fn route_segments(route: &str) -> impl Iterator<Item = RouteSegment<'_>> {
+    route.trim_start_matches('/').split('/').map(|segment| {
+        if segment.starts_with('{') && segment.ends_with('}') {
+            RouteSegment::Placeholder
+        } else {
+            RouteSegment::Literal(segment)
+        }
+    })
+}
+
+/// The upload id an upload path names, when the path is the upload content
+/// route with exactly one id in its placeholder.
 fn upload_id(path: &str) -> Result<&str, DocumentsClientError> {
-    path.strip_prefix("/uploads/")
-        .and_then(|rest| rest.strip_suffix("/content"))
-        .filter(|id| is_id(id))
-        .ok_or_else(|| {
-            DocumentsClientError::invalid_request(
-                "the reservation's upload path does not name an upload",
-            )
-        })
+    let mut id = None;
+    let mut route = route_segments(UPLOAD_CONTENT_PATH);
+    let mut given = path.strip_prefix('/').unwrap_or_default().split('/');
+    let matches = loop {
+        match (route.next(), given.next()) {
+            (None, None) => break true,
+            (Some(RouteSegment::Literal(literal)), Some(segment)) if literal == segment => {}
+            (Some(RouteSegment::Placeholder), Some(segment)) if is_id(segment) => {
+                id = Some(segment);
+            }
+            _ => break false,
+        }
+    };
+    id.filter(|_| matches).ok_or_else(|| {
+        DocumentsClientError::invalid_request(
+            "the reservation's upload path does not name an upload",
+        )
+    })
 }
 
 fn is_visible_ascii(value: &str) -> bool {
@@ -897,6 +935,23 @@ mod tests {
         ] {
             assert!(upload_id(&path).is_err(), "{path}");
         }
+    }
+
+    #[test]
+    fn a_route_takes_exactly_its_placeholder_values_in_order() {
+        let client = DocumentsClient::new(DocumentsClientConfig::new(
+            Url::parse("https://documents.example.invalid/store/").expect("fixture URL"),
+        ))
+        .expect("client");
+        let url = client
+            .url(DOCUMENT_CONTENT_PATH, &["d-1", "v-2"])
+            .expect("route URL");
+        assert_eq!(
+            url.as_str(),
+            "https://documents.example.invalid/store/documents/d-1/versions/v-2/content"
+        );
+        assert!(client.url(DOCUMENT_CONTENT_PATH, &["d-1"]).is_err());
+        assert!(client.url(DOCUMENTS_PATH, &["d-1"]).is_err());
     }
 
     #[test]
