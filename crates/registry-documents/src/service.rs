@@ -27,7 +27,7 @@ use registry_documents_core::{
     DocumentPolicyList, DocumentPolicyView, DocumentStatus, DocumentVersionView, DocumentView,
     DocumentsProject, Eligibility, ErasureState, PolicyBinding, ProblemCode, ReservationAsk,
     ReservationView, ReserveDocumentRequest, Reserver, Standing, UploadState, VerificationState,
-    MAXIMUM_PAGE_SIZE,
+    MAXIMUM_PAGE_SIZE, UPLOAD_CONTENT_PATH,
 };
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_dispatch::postgres::{enqueue, JobKey, JobTable};
@@ -54,7 +54,7 @@ const RESERVE_OPERATION: &str = "document.reserve";
 /// The route an upload's content is sent to.
 #[must_use]
 pub fn upload_path(upload_id: Uuid) -> String {
-    format!("/uploads/{upload_id}/content")
+    UPLOAD_CONTENT_PATH.replace("{uploadId}", &upload_id.to_string())
 }
 
 /// Content released to a reader: the exact bytes of one version, checked
