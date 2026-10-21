@@ -92,8 +92,16 @@
 - BREAKING: `attachmentStorage` and `attachmentVerification` in `runtime.yaml`
   name their destination `url`, not `endpoint` (CFG-VAL-7). Migration: rename
   `endpoint:` to `url:` in both blocks and keep the value. A file that still
-  writes `endpoint` is refused with `config.removed-key` at that member, and
-  `breg` refuses to start on it. The S3 adapter and the verifier transport now
+  writes `endpoint` under `type: s3` or `type: http` is refused with
+  `config.removed-key` at that member, and `breg` refuses to start on it;
+  under `type: database` or `type: disabled`, which take no `url` either, it
+  is refused as an unknown key. The value is kept exactly as written: no
+  whitespace is trimmed, no host is mapped through IDNA, and no backslash is
+  rewritten; a value holding whitespace, a control character, or a
+  backslash, or a host the URL parser would rewrite, is refused instead. User
+  information and a scheme other than `http` or `https` are refused when the
+  file is decoded, with `config.invalid-value` at the member and the shared
+  URL sentence. The S3 adapter and the verifier transport now
   come from `registry-platform-objectstore`; the object keys, the storage and
   verification binding digests a registry has pinned, the requests, the
   timeouts, and the refusals are unchanged, so no package is rebuilt and no

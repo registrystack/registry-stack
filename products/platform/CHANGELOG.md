@@ -34,7 +34,16 @@
 - BREAKING: the destination key of both blocks is `url`, not `endpoint`
   (CFG-VAL-7). Rename `endpoint:` to `url:` under `attachmentStorage` and
   `attachmentVerification` in a BReg runtime configuration; the old key is
-  refused with a pointer to the new one.
+  refused with a pointer to the new one under `type: s3` and `type: http`,
+  and as an unknown key under `type: database` and `type: disabled`. The
+  shared URL reader keeps the value exactly as written: it never trims
+  whitespace, maps a host through IDNA, or rewrites a backslash, and refuses
+  instead a value holding whitespace, a control character, or a backslash, or
+  a host the URL parser would rewrite. It also refuses user information and
+  any scheme other than `http` or `https` when the file is decoded, with
+  `config.invalid-value` at the member and the shared URL sentence.
+- A removed-key path segment may name a variant, `name[tag=value]`, so a key
+  renamed in one variant of a tagged union is named as renamed only there.
 
 ## 0.43.0 - 2026-10-21
 
