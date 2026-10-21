@@ -32,6 +32,11 @@ name = "postgres_operator"
 path = "tests/postgres_operator.rs"
 required-features = ["postgres-test"]
 
+[[test]]
+name = "postgres_journey"
+path = "tests/postgres_journey.rs"
+required-features = ["postgres-test"]
+
 [features]
 default = []
 postgres-test = []

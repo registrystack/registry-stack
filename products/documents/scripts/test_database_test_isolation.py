@@ -102,5 +102,77 @@ class DatabaseTestIsolationTests(unittest.TestCase):
                 self.assertEqual(bool(MODULE.violations(MODULE.load_metadata(root, None))), expected)
 
 
+READ = 'std::env::var("DOCUMENTS_TEST_DATABASE_URL")'
+
+
+class DatabaseVariableTests(unittest.TestCase):
+    """A database suite fails, rather than skips, without its database."""
+
+    def setUp(self):
+        suites = patch.object(
+            MODULE,
+            "DATABASE_SUITES",
+            {"registry-documents": {"postgres_migrate", "postgres_package"}},
+        )
+        suites.start()
+        self.addCleanup(suites.stop)
+        directory = tempfile.TemporaryDirectory(prefix="documents-suite-source.")
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.tests = self.root / "crates/registry-documents/tests"
+        (self.tests / "support").mkdir(parents=True)
+
+    def write(self, name, text):
+        (self.tests / name).write_text(text, encoding="utf-8")
+
+    def suites(self, migrate="mod support;\n", package="mod support;\n", support=None):
+        self.write("support/mod.rs", support if support is not None else f'{READ}\n    .expect("a database");\n')
+        self.write("postgres_migrate.rs", migrate)
+        self.write("postgres_package.rs", package)
+        return MODULE.source_violations(self.root)
+
+    def test_suites_reading_through_an_expecting_support_module_pass(self):
+        self.assertEqual(self.suites(), [])
+
+    def test_a_suite_may_read_the_variable_itself(self):
+        self.assertEqual(self.suites(package=f'let url = {READ}.expect("x");\n'), [])
+
+    def test_a_read_that_tolerates_absence_is_refused(self):
+        for tolerant in (".ok()", ".unwrap_or_default()", ".is_err()"):
+            with self.subTest(tolerant):
+                failures = self.suites(package=f"let url = {READ}{tolerant};\n")
+                self.assertEqual(len(failures), 1)
+                self.assertIn("postgres_package:1 reads", failures[0])
+
+    def test_a_matched_read_is_refused(self):
+        failures = self.suites(package=f"match {READ} {{ Ok(u) => u, Err(_) => return }};\n")
+        self.assertIn("without .expect", failures[0])
+
+    def test_a_tolerant_support_module_is_refused(self):
+        failures = self.suites(support=f"{READ}.ok()\n")
+        self.assertIn("support/mod.rs:1 reads", failures[0])
+
+    def test_a_suite_that_never_reads_the_variable_is_refused(self):
+        self.assertEqual(
+            self.suites(migrate="#[test]\nfn nothing() {}\n"),
+            ["registry-documents/postgres_migrate never reads DOCUMENTS_TEST_DATABASE_URL"],
+        )
+
+    def test_an_ignored_database_test_is_refused(self):
+        failures = self.suites(package='mod support;\n#[ignore = "later"]\n#[test]\nfn t() {}\n')
+        self.assertEqual(failures, ["registry-documents/postgres_package ignores a database test, so it never runs"])
+
+    def test_a_declared_suite_without_source_is_refused(self):
+        self.suites()
+        (self.tests / "postgres_package.rs").unlink()
+        self.assertIn("has no source", MODULE.source_violations(self.root)[0])
+
+
+
+class MaintainedSuiteSourceTests(unittest.TestCase):
+    def test_the_maintained_suites_fail_without_their_database(self):
+        self.assertEqual(MODULE.source_violations(SCRIPT.resolve().parents[3]), [])
+
+
 if __name__ == "__main__":
     unittest.main()
