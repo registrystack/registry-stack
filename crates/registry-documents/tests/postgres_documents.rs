@@ -1034,7 +1034,7 @@ async fn the_database_refuses_a_releasable_version_with_a_null_verdict_column() 
         }
     }
     assert!(accepted.is_empty(), "accepted NULL in {accepted:?}");
-    assert_eq!(api.download(APP, &document, &version).await.status, 200);
+    assert_eq!(api.download(CITIZEN, &document, &version).await.status, 200);
 }
 
 #[tokio::test]
