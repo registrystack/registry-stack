@@ -56,7 +56,11 @@ curl --fail --silent --show-error --aws-sigv4 "aws:amz:us-east-1:s3" \
 
 export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
-# The real backend case proves storage semantics. Native Proposal transport,
-# quarantine and recovery run separately in test-postgres.sh with loopback S3.
+# The real backend case proves storage semantics. The adapter the engine binds
+# lives in registry-platform-objectstore; the engine's own attachment_storage
+# tests pin its namespace over it. Native Proposal transport, quarantine and
+# recovery run separately in test-postgres.sh with loopback S3.
+export OBJECTSTORE_TEST_S3_URL="$BREG_TEST_S3_ENDPOINT"
+cargo test --locked -p registry-platform-objectstore --lib s3 -- --include-ignored
 cargo test --locked -p registry-breg --features runtime,tooling,schema --lib \
   attachment_storage -- --include-ignored

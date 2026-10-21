@@ -210,6 +210,14 @@ const REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "rename fieldEncryption.provider.kind to fieldEncryption.provider.type, and write the value localFile as local-file",
     },
     RemovedKey {
+        path: "attachmentStorage.endpoint",
+        replacement: "rename attachmentStorage.endpoint to attachmentStorage.url; the value stays as it is",
+    },
+    RemovedKey {
+        path: "attachmentVerification.endpoint",
+        replacement: "rename attachmentVerification.endpoint to attachmentVerification.url; the value stays as it is",
+    },
+    RemovedKey {
         path: "attachmentStorage.kind",
         replacement: "rename attachmentStorage.kind to attachmentStorage.type; the value stays as it is",
     },
@@ -493,7 +501,7 @@ impl RuntimeConfigError {
                 "Rename one identifier so the two definitions remain distinct after separator normalization."
             }
             Self::InvalidAttachmentStorage => {
-                "Correct attachmentStorage: name every credential by secret reference and give the S3 endpoint as an https URL."
+                "Correct attachmentStorage: name every credential by secret reference and give the S3 service url as an https URL."
             }
             Self::InvalidAttachmentVerification => {
                 "Correct attachmentVerification: give the verifier as an https URL and name its authorization by secret reference."
@@ -812,7 +820,7 @@ fn runtime_stand_in(pointer: &str) -> &'static str {
         | ["fieldEncryption", "provider", "unixSocketPath"]
         | ["eventDestinations", _, "path"] => "/deferred",
         ["taskGrantStatus", _, "statusPath"] => "/{grantId}",
-        ["attachmentStorage" | "attachmentVerification", "endpoint"]
+        ["attachmentStorage" | "attachmentVerification", "url"]
         | ["eventDestinations", _, "origin"]
         | ["evidenceProviders", _, "baseUrl"]
         | ["taskGrantStatus", _, "baseUrl"

@@ -145,7 +145,8 @@ SHARED_BLOCKS = (
     "ListenerConfig", "PrivateListenerConfig", "DatabaseConfig", "OidcIssuerConfig",
     "OidcClientsConfig", "JwksSource", "AuditKeyConfig", "SecretProvidersConfig",
     "SecretReference", "IdentityConfig", "ProjectIdentity", "Url", "LocalId",
-    "ExternalId", "Digest", "TaskGrantStatusConfig",
+    "ExternalId", "Digest", "TaskGrantStatusConfig", "ObjectStorageConfig",
+    "AttachmentVerifierConfig",
 )
 VALUE_TYPES = ("Url", "Digest", "LocalId", "ExternalId", "SecretReference")
 FOREIGN = "x-registry-foreign"

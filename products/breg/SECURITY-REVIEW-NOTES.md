@@ -8,6 +8,60 @@ security-invariant matrix in `contracts/security-invariant-matrix.yaml` is the
 row-per-invariant baseline; this file is the narrative behind the decisions
 and the residuals the matrix rows do not state.
 
+## Attachment storage and verification through the shared object store
+
+The S3 adapter and the attachment verifier transport moved from
+`registry-breg` into `registry-platform-objectstore`, so another product can
+store and verify content under its own namespace without a second copy of the
+signing, integrity, and verdict code. The threat is drift: a moved adapter
+that signs, addresses, or accepts differently would change which bytes a
+registry releases, or would leave the binding a registry pinned at its first
+upload unrecognised.
+
+The engine supplies its namespace, `NAMESPACE` in
+`crates/registry-breg/src/attachment_storage.rs` and
+`crates/registry-breg/src/attachment_verification.rs`: key prefix `breg`,
+binding domains `breg-attachment-s3-v1` and
+`breg-attachment-verification-http-v1`, and the attachment size bound. The
+object key, the storage binding digest (domain, bucket URL, region, and the
+digest of the database and registry scope), and the verification binding
+digest (domain, URL, `policyId`) are computed as before, so a registry that
+pinned its bindings starts unchanged. The request shapes, the four verifier
+headers, the attempt and connect timeouts, the refusal of redirects, proxies,
+retries, and versioned buckets, and the closed fail-closed verdict parser are
+unchanged; `policyId` is still committed in the binding and never sent.
+
+The only configuration change is the destination member: `endpoint` is now
+`url` in both blocks (CFG-VAL-7), and `endpoint` is refused as a removed key.
+The defaults are unchanged: storage defaults to `type: database` and
+verification to `type: disabled`; the shared verifier block has no default of
+its own.
+
+### Tests
+
+- `crates/registry-platform-objectstore/src/s3_tests.rs` pins the SigV4
+  canonical request and signature, the header set, the object key and binding
+  digest, and the refusal of missing, corrupt, oversized, versioned,
+  redirected, and interrupted responses (BREG-SEC-54 now points here).
+- `crates/registry-platform-objectstore/src/verifier_tests.rs` pins the
+  request bytes and headers, the absence of `policyId` on the wire, the
+  timeouts, the binding digest, and every unavailable verdict.
+- `the_registry_namespace_keeps_its_key_prefix_and_binding_digest` in
+  `crates/registry-breg/src/attachment_storage.rs` pins the engine's key
+  prefix, domain, and request paths; the verifier tests in
+  `crates/registry-breg/src/attachment_verification.rs` keep BREG-SEC-55.
+- `attachment_destinations_are_named_url_and_the_endpoint_key_is_refused` in
+  `crates/registry-breg/tests/runtime_config.rs` pins the removed-key refusal.
+
+### Accepted residuals
+
+- **Refusal messages name object storage.** An adapter error's display text
+  says "object storage" rather than "attachment storage". Every engine call
+  site maps the error to its own closed refusal, so no message an operator or
+  caller sees changes.
+- The crate's own notes are in the "Security review notes" section of
+  `crates/registry-platform-objectstore/README.md`.
+
 ## Immediate Action availability and guard refusal disclosure
 
 An application may ask whether one referenced target currently satisfies an
