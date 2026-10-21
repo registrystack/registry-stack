@@ -11,9 +11,17 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
+use registry_documents::audit::DocumentsAudit;
+use registry_documents::config::RuntimeConfig;
+use registry_documents::content::ContentStorage;
 use registry_documents::runtime::{prepare_with_verifier, Prepared, RuntimeError};
-use registry_documents::verification::{VerdictSource, MAXIMUM_ATTEMPTS};
+use registry_documents::store::PostgresStore;
+use registry_documents::verification::{
+    dispatcher, VerdictSource, VerificationStore, VerificationTransport, MAXIMUM_ATTEMPTS,
+};
 use registry_documents_core::ProblemCode;
+use registry_platform_audit::{AuditProfile, AuditWriter};
+use registry_platform_dispatch::DispatchError;
 use registry_platform_objectstore::{Verdict, VerifierError};
 use support::{
     pdf, reservation, sha256, Api, Deployment, FakeVerifier, APPROVE, DATABASE_STORAGE,
@@ -789,6 +797,69 @@ async fn a_verdict_that_records_nothing_under_the_current_binding_is_retried() {
         .await;
     prepared.verify_due().await;
     assert_eq!(status(&api.read(APP, &document).await), "ready");
+}
+
+/// An audit sink that refuses every line.
+struct FailingSink;
+
+impl std::io::Write for FailingSink {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("the audit sink refuses"))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(std::io::Error::other("the audit sink refuses"))
+    }
+}
+
+/// SEC-10: a verification attempt whose audit entry cannot be written is
+/// refused before the verifier is asked, and records no verdict.
+#[tokio::test]
+async fn a_verification_audit_failure_refuses_the_claim_and_records_no_verdict() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    let (document, _) = upload(&api, &pdf(300, 34)).await;
+
+    let config = RuntimeConfig::load(&deployment.runtime).unwrap();
+    let secrets = Arc::new(config.secret_resolver().unwrap());
+    let store = PostgresStore::connect_runtime(&config.database, &secrets).unwrap();
+    let audit = DocumentsAudit::new(
+        AuditWriter::from_line_sink(Box::new(FailingSink)),
+        AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+            b"documents-test-audit-key-not-a-secret".to_vec(),
+        ))
+        .unwrap()
+        .key_hasher(),
+    );
+    let storage = Arc::new(
+        ContentStorage::activate(&config.storage, "registry-documents-test", secrets)
+            .await
+            .unwrap(),
+    );
+    let failing = dispatcher(VerificationStore::new(
+        store.clone(),
+        deployment.schema.clone(),
+        audit,
+    ))
+    .unwrap();
+    let transport = VerificationTransport::new(store, storage, verifier.clone());
+
+    let outcome = failing.dispatch_once(&transport).await;
+    assert!(
+        matches!(outcome, Err(DispatchError::Unavailable)),
+        "{outcome:?}"
+    );
+    assert_eq!(verifier.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(status(&api.read(APP, &document).await), "pending");
+    let verdicts: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_versions WHERE verified_at IS NOT NULL")
+        .await;
+    assert_eq!(verdicts, 0);
+    let job: String = deployment
+        .scalar("SELECT state || ':' || attempt FROM documents_verification_jobs")
+        .await;
+    assert_eq!(job, "pending:0", "the claim is not committed");
 }
 
 #[tokio::test]
