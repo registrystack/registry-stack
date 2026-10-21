@@ -79,8 +79,11 @@ class RustBlock:
     """A runtime struct field that must hold a shared block type, or a `Vec` of
     it when `repeated` is set. With `variant` set, `struct` names a tagged
     union and `field` one of its newtype variants: the variant's members are
-    the shared block's, read beside the union's tag. The gate checks the union
-    is internally tagged, so those members do sit beside the tag."""
+    the shared block's, read beside the union's tag. With `member` set too,
+    `field` names a struct variant and `member` its named field holding the
+    block (boxed or not), flattened beside the tag by the shared-block
+    deserialize rename. The gate checks the union is internally tagged, so
+    those members do sit beside the tag."""
 
     path: str
     struct: str
@@ -88,6 +91,7 @@ class RustBlock:
     block: str
     repeated: bool = False
     variant: bool = False
+    member: str = ""
 
 
 @dataclass(frozen=True)
@@ -504,6 +508,22 @@ ROWS: tuple[Row, ...] = (
                 "key",
                 "AuditKeyConfig",
             ),
+            RustBlock(
+                "crates/registry-documents/src/config.rs",
+                "StorageConfig",
+                "S3",
+                "ObjectStorageConfig",
+                variant=True,
+                member="settings",
+            ),
+            RustBlock(
+                "crates/registry-documents/src/config.rs",
+                "ContentVerificationConfig",
+                "Http",
+                "AttachmentVerifierConfig",
+                variant=True,
+                member="settings",
+            ),
         ),
     ),
     Row(
@@ -905,6 +925,40 @@ def enum_variants(code: str, enum: str) -> dict[str, str] | None:
     return variants
 
 
+def variant_member(
+    code: str, text: str, enum: str, variant: str, member: str
+) -> tuple[str, bool] | None:
+    """The type of `member` in struct variant `variant` of `enum`, and whether
+    it carries the shared-block deserialize rename. `text` is the source
+    `code` was blanked from, at the same offsets."""
+    declaration = re.search(rf"\benum\s+{enum}\b[^{{;]*\{{", code)
+    if declaration is None:
+        return None
+    end = matching_brace(code, declaration.end() - 1)
+    opening = re.compile(rf"\b{variant}\s*\{{").search(code, declaration.end(), end)
+    if opening is None:
+        return None
+    start, close = opening.end(), matching_brace(code, opening.end() - 1)
+    depth = 0
+    for index in range(start, close + 1):
+        character = code[index]
+        if character in "<([{":
+            depth += 1
+        elif character in ">)]}":
+            depth -= 1
+        if (character == "," and depth == 0) or index == close:
+            chunk = re.sub(r"#\[[^\]]*\]", " ", code[start:index])
+            field = re.fullmatch(
+                r"\s*(?:pub(?:\([^)]*\))?\s+)?(\w+)\s*:\s*(.+?)\s*", chunk, re.DOTALL
+            )
+            if field is not None and field.group(1) == member:
+                written = re.sub(r"\s+", "", field.group(2))
+                flattened = SHARED_BLOCK_RENAME.search(text, start, index) is not None
+                return written, flattened
+            start = index + 1
+    return None
+
+
 def is_internally_tagged(code: str, enum: str) -> bool:
     """Whether `enum` reads as an internally tagged union: through the shared
     `tagged_union!` reader, or through serde's `tag` without `content`."""
@@ -925,6 +979,11 @@ def imports_from_platform(code: str, block: str) -> bool:
         if re.search(rf"(?<![\w:]){block}\b(?!\s*as\b)", use.group(1)):
             return True
     return False
+
+
+SHARED_BLOCK_RENAME = re.compile(
+    r'#\[serde\(rename\(deserialize\s*=\s*"registry-platform-yaml/shared-block/'
+)
 
 
 def check_rust_blocks(root: Path, row: Row, canonical: dict[str, object]) -> list[str]:
@@ -958,6 +1017,28 @@ def check_rust_blocks(root: Path, row: Row, canonical: dict[str, object]) -> lis
             continue
         written = fields.get(entry.field)
         expected = f"Vec<{entry.block}>" if entry.repeated else entry.block
+        if entry.member:
+            found = variant_member(
+                code,
+                path.read_text(encoding="utf-8"),
+                entry.struct,
+                entry.field,
+                entry.member,
+            )
+            written, flattened = found if found is not None else (None, True)
+            item = re.fullmatch(r"Box<(.+)>", written or "")
+            written = item.group(1) if item else written
+            separator, field = "::", f"{entry.field}.{entry.member}"
+            shared = written in (entry.block, f"{PLATFORM_CRATE}::{entry.block}")
+            if shared and not flattened:
+                problems.append(
+                    f"{row.product}: {entry.path} {entry.struct}::{field} does not "
+                    "place the shared block beside the tag; mark it with the "
+                    "registry-platform-yaml/shared-block/ deserialize rename"
+                )
+                continue
+        else:
+            field = entry.field
         if entry.repeated:
             item = re.fullmatch(r"Vec<(.+)>", written or "")
             written = item.group(1) if item else None
@@ -965,7 +1046,7 @@ def check_rust_blocks(root: Path, row: Row, canonical: dict[str, object]) -> lis
             continue
         if written != entry.block:
             problems.append(
-                f"{row.product}: {entry.path} {entry.struct}{separator}{entry.field} "
+                f"{row.product}: {entry.path} {entry.struct}{separator}{field} "
                 f"is not typed {expected}"
             )
             continue
