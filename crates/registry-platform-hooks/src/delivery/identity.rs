@@ -17,12 +17,15 @@ use super::seams::DeliveryError;
 /// Check that the activation record in `layout` names `database_id` and
 /// `package_digest` as the active package.
 ///
-/// The transaction's `lock_timeout` is set to `lock_timeout_ms` first, so a
-/// concurrent activation holding the ledger makes this attempt fail rather
-/// than wait. The read takes no advisory lock: an activation takes its own
-/// exclusive lock and may verify retained deliveries on another connection,
-/// and a shared advisory lock held here would wait on it while it waits on
-/// this worker.
+/// The transaction's `lock_timeout` is set to `lock_timeout_ms` first, which
+/// bounds waits on a DDL or migration lock over the activation table. An
+/// activation only inserts into the ledger, which never blocks this plain
+/// read, so the read is not serialized against an activation: one may commit
+/// between this check and egress, and the finalize transaction checks again.
+/// The read takes no advisory lock: an activation takes its own exclusive
+/// lock and may verify retained deliveries on another connection, and a
+/// shared advisory lock held here would wait on it while it waits on this
+/// worker.
 ///
 /// # Errors
 ///
