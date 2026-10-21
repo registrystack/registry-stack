@@ -384,3 +384,7 @@ names each test under DOCUMENTS-SEC-34 to DOCUMENTS-SEC-36.
   repeated verifier load, not disclosure.
 - The companion journal lives on the host the operator command runs on;
   collect it with the runtime's journal.
+- `documentsctl init` refuses an existing path before it stages the
+  starter, but an empty directory another local process creates at that
+  path before the final rename is replaced by the starter; the window needs
+  write access to the parent directory and loses no content.
