@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha5.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha6.schema.json",
   "title": "ActionsExplanation",
   "description": "Author inspection of normalized Action definitions. Reviewed asset paths and module identities are included; program bytes are absent.",
   "type": "object",
@@ -14,11 +14,13 @@
     "actions",
     "statisticalDatasets",
     "display",
-    "reviewAuthorities"
+    "reviewAuthorities",
+    "datasets",
+    "accessProfiles"
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/actions-explanation/v1alpha5"
+      "const": "id.registrystack.org/formats/breg/actions-explanation/v1alpha6"
     },
     "kind": {
       "const": "BRegActionsExplanation"
@@ -32,7 +34,192 @@
       "pattern": "^sha256:[0-9a-f]{64}$"
     },
     "recordTypes": {
-      "type": "array"
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "apiName",
+          "revision",
+          "display",
+          "fields",
+          "relationships",
+          "sourceModule",
+          "primaryDataset",
+          "route",
+          "mutationMode",
+          "mutationPolicy",
+          "classification",
+          "canonicalId",
+          "tombstone",
+          "batch",
+          "temporal",
+          "geojson",
+          "accessLog",
+          "constraints",
+          "indexes",
+          "selectorProfiles",
+          "readPaths",
+          "hooks",
+          "derivedRelations",
+          "moduleOrigins"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "revision": {
+            "$ref": "#/$defs/Digest"
+          },
+          "mutationMode": {
+            "enum": [
+              "mutable",
+              "create-only"
+            ]
+          },
+          "mutationPolicy": {
+            "type": "object",
+            "additionalProperties": {
+              "const": "proposal-required"
+            },
+            "propertyNames": {
+              "$ref": "#/$defs/LocalId"
+            }
+          },
+          "classification": {
+            "enum": [
+              "public",
+              "internal",
+              "restricted"
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "apiName",
+                "schema",
+                "fieldType",
+                "required",
+                "classification",
+                "display"
+              ],
+              "properties": {
+                "fieldType": {
+                  "type": "object",
+                  "x-registry-passthrough": "The compiled FieldTypeSource, as in query field summaries; its internal shape follows the engine's field type contract."
+                },
+                "display": {
+                  "$ref": "#/$defs/Display"
+                }
+              },
+              "x-registry-passthrough": "Normalized logical field schema and effective classification; compiler-owned metadata."
+            }
+          },
+          "readPaths": {
+            "type": "object",
+            "x-registry-passthrough": "Compiler-resolved read paths, separate from relationship edges."
+          },
+          "hooks": {
+            "type": "object",
+            "x-registry-passthrough": "Compiled hook declarations, with empty condition tests omitted.",
+            "propertyNames": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "display": {
+                  "$ref": "#/$defs/Presentation"
+                }
+              },
+              "x-registry-passthrough": "Compiled hook declaration, including optional authored display."
+            }
+          },
+          "moduleOrigins": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "fields": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              },
+              "constraints": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              },
+              "hooks": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              },
+              "derivedRelations": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              },
+              "indexes": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              },
+              "accessProfiles": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              },
+              "selectorProfiles": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              },
+              "readPaths": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              }
+            },
+            "description": "Module ids that contributed members of this Record type. An absent member originated in the project root."
+          }
+        },
+        "x-registry-passthrough": "Source-free normalized definition owned by the compiler; identity and revision are pinned here."
+      }
     },
     "actions": {
       "type": "array",
@@ -92,6 +279,24 @@
                   "immediate",
                   "proposal"
                 ]
+              },
+              "proposal": {
+                "type": "object",
+                "properties": {
+                  "hooks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "display": {
+                          "$ref": "#/$defs/Presentation"
+                        }
+                      },
+                      "x-registry-passthrough": "Compiled Proposal hook, including optional authored display."
+                    }
+                  }
+                },
+                "x-registry-passthrough": "Compiled Proposal policy; display is presentation only."
               }
             },
             "x-registry-passthrough": "The fixed mode and complete typed Proposal policy are owned by the compiled engine contract."
@@ -127,6 +332,9 @@
                 },
                 "nullable": {
                   "type": "boolean"
+                },
+                "display": {
+                  "$ref": "#/$defs/Display"
                 }
               },
               "x-registry-passthrough": "Normalized compiled logical field metadata; its field type and schema are owned by the engine."
@@ -321,7 +529,20 @@
       "type": "array",
       "items": {
         "type": "object",
-        "x-registry-passthrough": "Compiled statistical dataset definitions, owned by the engine."
+        "required": [
+          "id",
+          "unitEntityId",
+          "population",
+          "period",
+          "dimensions",
+          "disclosure"
+        ],
+        "x-registry-passthrough": "Normalized compiled statistical dataset inventory, including authority requirements; no source bytes.",
+        "properties": {
+          "display": {
+            "$ref": "#/$defs/Presentation"
+          }
+        }
       }
     },
     "display": {
@@ -349,6 +570,44 @@
           }
         }
       }
+    },
+    "datasets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "display"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "display": {
+            "$ref": "#/$defs/Display"
+          }
+        }
+      }
+    },
+    "accessProfiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "display"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "display": {
+            "$ref": "#/$defs/Presentation"
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -367,6 +626,23 @@
           "type": "string"
         },
         "titleField": {
+          "type": "string"
+        }
+      }
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "Presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "description": {
           "type": "string"
         }
       }

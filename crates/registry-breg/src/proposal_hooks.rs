@@ -165,6 +165,7 @@ pub(crate) fn compile_hooks(
             };
             proposal.hooks.push(CompiledProposalHook {
                 id: hook.id.clone(),
+                display: hook.display.clone(),
                 transitions: hook.transitions.iter().copied().collect(),
                 destination_id,
                 handler,

@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Preserve authored display on access profiles, statistical datasets, record and
+  Proposal hooks, and derived fields. Model inspection includes native datasets,
+  all project access-profile labels, field display, and module origins.
+  Workspace metadata for the caller includes authored labels and descriptions
+  for readable derived fields. Labels never select an identity or grant authority.
+- BREAKING: the model, access, and actions explanation formats advance to
+  `v1alpha6`, proposals to `v1alpha2`, and lifecycle to `v1alpha7`. Select the
+  matching schemas. Action inputs retain optional authored `display` separately
+  from the existing `label` fallback. Lifecycle states report their possible `turns`,
+  including the ordered conditions for submitted work, from the runtime rule.
+- Model explanation lists each source document's authored JSON Pointers before
+  defaults and module composition. Consumers can distinguish a source member
+  from a compiled default after resolving the object's source document and ID.
+  Index-field, profile read-path, and target-permission diagnostics now retain
+  the exact owning item, including its module extension block.
+- Rebuild governed packages after upgrading. Dataset and access-profile
+  presentation metadata now contributes to the compiled revision and artifact
+  bytes.
+
 - Extend `bregctl explain access` with each Action target's runtime-enforced
   authority, whether the profile also has a direct Record grant, and the
   compiled write or existing-target role of each use. The report identifies

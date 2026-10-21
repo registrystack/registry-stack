@@ -2,6 +2,7 @@
 //! Source-free Proposal lifecycle catalogue for author inspection.
 //! Runtime controllers independently enforce caller authority and commit preconditions.
 
+use crate::proposal_workflow::ProposalState;
 use serde::Serialize;
 
 /// One state machine reported by `bregctl explain lifecycle`.
@@ -15,17 +16,222 @@ pub struct LifecycleDescription {
     pub enforcement: Vec<EnforcementLayer>,
 }
 
-/// One state in a `LifecycleDescription`. Every field but `id` is derived from
-/// `transitions` and the declared initial state; none of them is authored per state.
+/// One state in a `LifecycleDescription`. Structural fields are derived from
+/// the transitions, and `turns` comes from the pure runtime turn rule.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LifecycleState {
     pub id: &'static str,
+    pub turns: Vec<LifecycleTurn>,
     pub initial: bool,
     pub terminal: bool,
     pub unreachable: bool,
     pub incoming_transitions: usize,
     pub outgoing_transitions: usize,
+}
+
+/// One possible answer to whose move a Proposal in this state waits on.
+/// This is workflow guidance only; caller authority remains an independent
+/// runtime decision represented by `LifecycleDescription::enforcement`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LifecycleTurn {
+    pub turn: &'static str,
+    pub condition: &'static str,
+}
+
+/// How far the current submission's review has gone. Runtime code derives this
+/// only from BReg's retained submission and result rows; no authority is asked.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "runtime"))]
+pub(crate) enum ProposalReviewProgress {
+    /// The submission's Action requires no review.
+    NotRequired,
+    /// The review authority holds the request, or BReg is still delivering it.
+    Pending,
+    /// Delivery or result lookup failed and Retry may resume it.
+    Retrying,
+    /// The review submission failed for good; only a later submission can be reviewed.
+    Failed,
+    Approved,
+    /// An approval whose availability window has passed.
+    ApprovalExpired,
+    Rejected,
+    ChangesRequested,
+    /// An `answered` result, which has no meaning for a Proposal.
+    Answered,
+    /// A withdrawn round, or a Casework `cancelled` or `superseded` result.
+    Ended,
+}
+
+/// The application facts that can change a submitted Proposal's turn after its
+/// Review has approved it or when no Review is required.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "runtime"))]
+pub(crate) enum ProposalApplicationProgress {
+    Manual,
+    BlockedRetry,
+    BlockedOther,
+    Other,
+}
+
+/// Inputs to the pure Proposal turn rule.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "runtime"))]
+pub(crate) struct ProposalTurnContext {
+    pub(crate) submission_blocked: bool,
+    pub(crate) review: ProposalReviewProgress,
+    pub(crate) application: ProposalApplicationProgress,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProposalTurn {
+    Party,
+    Official,
+    Nobody,
+}
+
+impl ProposalTurn {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Party => "party",
+            Self::Official => "official",
+            Self::Nobody => "nobody",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TurnCondition {
+    Always,
+    SubmittedParty,
+    SubmittedOfficial,
+    SubmittedNobody,
+}
+
+impl TurnCondition {
+    const fn description(self) -> &'static str {
+        match self {
+            Self::Always => "Always while the Proposal is in this state.",
+            Self::SubmittedParty => {
+                "The submission package is blocked; Review ended without a usable approval; or, after approval or when Review is not required, application is not manual and is blocked without recovery retry."
+            }
+            Self::SubmittedOfficial => {
+                "The submission package is not blocked, and either Review is pending or being retried, or, after approval or when Review is not required, application is manual or is blocked with recovery retry."
+            }
+            Self::SubmittedNobody => {
+                "The submission package is not blocked, Review is approved or not required, and application is neither manual nor blocked, including queued, running, or unreported application status."
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "runtime"))]
+    fn matches(self, context: ProposalTurnContext) -> bool {
+        match self {
+            Self::Always => true,
+            Self::SubmittedParty => submitted_turn(context) == ProposalTurn::Party,
+            Self::SubmittedOfficial => submitted_turn(context) == ProposalTurn::Official,
+            Self::SubmittedNobody => submitted_turn(context) == ProposalTurn::Nobody,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "runtime"))]
+fn submitted_turn(context: ProposalTurnContext) -> ProposalTurn {
+    if context.submission_blocked {
+        return ProposalTurn::Party;
+    }
+    match context.review {
+        ProposalReviewProgress::Pending | ProposalReviewProgress::Retrying => {
+            ProposalTurn::Official
+        }
+        ProposalReviewProgress::Failed
+        | ProposalReviewProgress::ApprovalExpired
+        | ProposalReviewProgress::Rejected
+        | ProposalReviewProgress::ChangesRequested
+        | ProposalReviewProgress::Answered
+        | ProposalReviewProgress::Ended => ProposalTurn::Party,
+        ProposalReviewProgress::NotRequired | ProposalReviewProgress::Approved => {
+            match context.application {
+                ProposalApplicationProgress::Manual | ProposalApplicationProgress::BlockedRetry => {
+                    ProposalTurn::Official
+                }
+                ProposalApplicationProgress::BlockedOther => ProposalTurn::Party,
+                ProposalApplicationProgress::Other => ProposalTurn::Nobody,
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TurnRule {
+    turn: ProposalTurn,
+    condition: TurnCondition,
+}
+
+const DRAFT_TURN_RULES: &[TurnRule] = &[TurnRule {
+    turn: ProposalTurn::Party,
+    condition: TurnCondition::Always,
+}];
+const SUBMITTED_TURN_RULES: &[TurnRule] = &[
+    // Package blocking precedes Review and application progress in the runtime.
+    TurnRule {
+        turn: ProposalTurn::Party,
+        condition: TurnCondition::SubmittedParty,
+    },
+    TurnRule {
+        turn: ProposalTurn::Official,
+        condition: TurnCondition::SubmittedOfficial,
+    },
+    TurnRule {
+        turn: ProposalTurn::Nobody,
+        condition: TurnCondition::SubmittedNobody,
+    },
+];
+const TERMINAL_TURN_RULES: &[TurnRule] = &[TurnRule {
+    turn: ProposalTurn::Nobody,
+    condition: TurnCondition::Always,
+}];
+
+fn proposal_state_id(state: ProposalState) -> &'static str {
+    match state {
+        ProposalState::Draft => "draft",
+        ProposalState::Submitted => "submitted",
+        ProposalState::Cancelled => "cancelled",
+        ProposalState::Applied => "applied",
+        ProposalState::Rejected => "rejected",
+    }
+}
+
+fn proposal_turn_rules(state: ProposalState) -> &'static [TurnRule] {
+    match state {
+        ProposalState::Draft => DRAFT_TURN_RULES,
+        ProposalState::Submitted => SUBMITTED_TURN_RULES,
+        ProposalState::Cancelled | ProposalState::Applied | ProposalState::Rejected => {
+            TERMINAL_TURN_RULES
+        }
+    }
+}
+
+/// Whose move a Proposal waits on. The exhaustive state match above means a
+/// new Proposal state cannot compile without an explicit turn rule.
+#[cfg(any(test, feature = "runtime"))]
+pub(crate) fn proposal_turn(state: ProposalState, context: ProposalTurnContext) -> ProposalTurn {
+    proposal_turn_rules(state)
+        .iter()
+        .find(|rule| rule.condition.matches(context))
+        .expect("every Proposal state and context has a turn")
+        .turn
+}
+
+fn lifecycle_turns(state: ProposalState) -> Vec<LifecycleTurn> {
+    proposal_turn_rules(state)
+        .iter()
+        .map(|rule| LifecycleTurn {
+            turn: rule.turn.as_str(),
+            condition: rule.condition.description(),
+        })
+        .collect()
 }
 
 /// One edge in a `LifecycleDescription`, in declaration order.
@@ -52,24 +258,26 @@ pub struct EnforcementLayer {
 }
 
 /// Builds a `LifecycleDescription`, deriving each state's `initial`, `terminal`,
-/// `unreachable`, and transition counts from `transitions` and `initial_state_id` instead
-/// of accepting them as separate hand-written input that could drift from the edges.
+/// `unreachable`, transition counts, and turns from the transitions and pure
+/// Proposal rules instead of accepting separate hand-written input that could drift.
 fn build_lifecycle(
     id: &'static str,
     label: &'static str,
     initial_state_id: &'static str,
-    state_ids: &[&'static str],
+    states: &[ProposalState],
     transitions: Vec<LifecycleTransition>,
     enforcement: Vec<EnforcementLayer>,
 ) -> LifecycleDescription {
-    let states = state_ids
+    let states = states
         .iter()
-        .map(|&state_id| {
+        .map(|&state| {
+            let state_id = proposal_state_id(state);
             let incoming_transitions = transitions.iter().filter(|t| t.to == state_id).count();
             let outgoing_transitions = transitions.iter().filter(|t| t.from == state_id).count();
             let initial = state_id == initial_state_id;
             LifecycleState {
                 id: state_id,
+                turns: lifecycle_turns(state),
                 initial,
                 terminal: outgoing_transitions == 0,
                 unreachable: incoming_transitions == 0 && !initial,
@@ -143,7 +351,13 @@ pub fn proposal_lifecycle() -> LifecycleDescription {
         "proposal",
         "Proposal lifecycle",
         "draft",
-        &["draft", "submitted", "cancelled", "applied", "rejected"],
+        &[
+            ProposalState::Draft,
+            ProposalState::Submitted,
+            ProposalState::Cancelled,
+            ProposalState::Applied,
+            ProposalState::Rejected,
+        ],
         vec![
             LifecycleTransition {
                 from: "draft",
@@ -235,17 +449,25 @@ mod tests {
         )
     }
 
+    fn turn(
+        state: ProposalState,
+        submission_blocked: bool,
+        review: ProposalReviewProgress,
+        application: ProposalApplicationProgress,
+    ) -> &'static str {
+        proposal_turn(
+            state,
+            ProposalTurnContext {
+                submission_blocked,
+                review,
+                application,
+            },
+        )
+        .as_str()
+    }
+
     #[test]
     fn catalogue_covers_every_current_proposal_state() {
-        fn name(state: ProposalState) -> &'static str {
-            match state {
-                ProposalState::Draft => "draft",
-                ProposalState::Submitted => "submitted",
-                ProposalState::Cancelled => "cancelled",
-                ProposalState::Applied => "applied",
-                ProposalState::Rejected => "rejected",
-            }
-        }
         let states = [
             ProposalState::Draft,
             ProposalState::Submitted,
@@ -253,7 +475,7 @@ mod tests {
             ProposalState::Applied,
             ProposalState::Rejected,
         ]
-        .map(name);
+        .map(proposal_state_id);
         let lifecycle = proposal_lifecycle();
         assert_eq!(
             lifecycle
@@ -273,6 +495,169 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["cancelled", "applied", "rejected"]
         );
+    }
+
+    #[test]
+    fn turn_rule_covers_every_submitted_review_and_application_branch() {
+        assert_eq!(
+            turn(
+                ProposalState::Submitted,
+                true,
+                ProposalReviewProgress::Pending,
+                ProposalApplicationProgress::Manual,
+            ),
+            "party",
+            "package blocking precedes Review and application progress"
+        );
+        for review in [
+            ProposalReviewProgress::Pending,
+            ProposalReviewProgress::Retrying,
+        ] {
+            assert_eq!(
+                turn(
+                    ProposalState::Submitted,
+                    false,
+                    review,
+                    ProposalApplicationProgress::Other,
+                ),
+                "official"
+            );
+        }
+        for review in [
+            ProposalReviewProgress::Failed,
+            ProposalReviewProgress::ApprovalExpired,
+            ProposalReviewProgress::Rejected,
+            ProposalReviewProgress::ChangesRequested,
+            ProposalReviewProgress::Answered,
+            ProposalReviewProgress::Ended,
+        ] {
+            assert_eq!(
+                turn(
+                    ProposalState::Submitted,
+                    false,
+                    review,
+                    ProposalApplicationProgress::BlockedRetry,
+                ),
+                "party",
+                "Review ending precedes application progress"
+            );
+        }
+        for review in [
+            ProposalReviewProgress::NotRequired,
+            ProposalReviewProgress::Approved,
+        ] {
+            for application in [
+                ProposalApplicationProgress::Manual,
+                ProposalApplicationProgress::BlockedRetry,
+            ] {
+                assert_eq!(
+                    turn(ProposalState::Submitted, false, review, application),
+                    "official"
+                );
+            }
+            assert_eq!(
+                turn(
+                    ProposalState::Submitted,
+                    false,
+                    review,
+                    ProposalApplicationProgress::BlockedOther,
+                ),
+                "party"
+            );
+            assert_eq!(
+                turn(
+                    ProposalState::Submitted,
+                    false,
+                    review,
+                    ProposalApplicationProgress::Other,
+                ),
+                "nobody"
+            );
+        }
+    }
+
+    #[test]
+    fn draft_and_terminal_turns_ignore_submitted_progress() {
+        let context = (
+            true,
+            ProposalReviewProgress::Pending,
+            ProposalApplicationProgress::Manual,
+        );
+        assert_eq!(
+            turn(ProposalState::Draft, context.0, context.1, context.2),
+            "party"
+        );
+        for state in [
+            ProposalState::Cancelled,
+            ProposalState::Applied,
+            ProposalState::Rejected,
+        ] {
+            assert_eq!(turn(state, context.0, context.1, context.2), "nobody");
+        }
+    }
+
+    #[test]
+    fn lifecycle_lists_exactly_the_turns_the_pure_rule_can_return() {
+        let lifecycle = proposal_lifecycle();
+        let states = [
+            ProposalState::Draft,
+            ProposalState::Submitted,
+            ProposalState::Cancelled,
+            ProposalState::Applied,
+            ProposalState::Rejected,
+        ];
+        let reviews = [
+            ProposalReviewProgress::NotRequired,
+            ProposalReviewProgress::Pending,
+            ProposalReviewProgress::Retrying,
+            ProposalReviewProgress::Failed,
+            ProposalReviewProgress::Approved,
+            ProposalReviewProgress::ApprovalExpired,
+            ProposalReviewProgress::Rejected,
+            ProposalReviewProgress::ChangesRequested,
+            ProposalReviewProgress::Answered,
+            ProposalReviewProgress::Ended,
+        ];
+        let applications = [
+            ProposalApplicationProgress::Manual,
+            ProposalApplicationProgress::BlockedRetry,
+            ProposalApplicationProgress::BlockedOther,
+            ProposalApplicationProgress::Other,
+        ];
+        for state in states {
+            let described = lifecycle
+                .states
+                .iter()
+                .find(|item| item.id == proposal_state_id(state))
+                .unwrap()
+                .turns
+                .iter()
+                .map(|turn| turn.turn)
+                .collect::<Vec<_>>();
+            let mut observed = Vec::new();
+            for blocked in [false, true] {
+                for review in reviews {
+                    for application in applications {
+                        let actual = turn(state, blocked, review, application);
+                        assert!(
+                            described.contains(&actual),
+                            "{} omits runtime turn {actual}",
+                            proposal_state_id(state)
+                        );
+                        if !observed.contains(&actual) {
+                            observed.push(actual);
+                        }
+                    }
+                }
+            }
+            for declared in described {
+                assert!(
+                    observed.contains(&declared),
+                    "{} declares unreachable turn {declared}",
+                    proposal_state_id(state)
+                );
+            }
+        }
     }
     #[test]
     fn draft_edges_match_workflow_state_checks() {

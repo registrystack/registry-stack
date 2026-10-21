@@ -4,6 +4,7 @@ mod model;
 use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::model::{CompiledActionExecution, CompiledEventOwner};
+use registry_breg::package::{compiled_registry_change_set, CompiledRegistryChangeCode};
 use serde_json::{json, Value};
 
 fn compile(source: &Value, assets: &[ModuleAssetSource]) -> registry_breg::CompiledRegistry {
@@ -79,6 +80,54 @@ fn observer_changes_bind_the_package_without_changing_frozen_action_semantics() 
     assert_ne!(
         original.artifacts().canonical_inventory_bytes().unwrap(),
         changed.artifacts().canonical_inventory_bytes().unwrap()
+    );
+}
+
+#[test]
+fn observer_presentation_is_not_an_action_authority_change() {
+    let mut before_hook = model::url_hook();
+    before_hook["display"] = json!({"label":"Proposal submitted"});
+    let before = compile(&model::source(json!([before_hook.clone()])), &[]);
+
+    let mut presented_hook = before_hook.clone();
+    presented_hook["display"] = json!({"label":"Proposal sent","description":"Presentation only"});
+    let presented = compile(&model::source(json!([presented_hook.clone()])), &[]);
+    let CompiledActionExecution::Proposal { proposal } = &presented.actions().actions[0].execution
+    else {
+        panic!("Proposal")
+    };
+    assert_eq!(
+        proposal.hooks[0].display.label.as_deref(),
+        Some("Proposal sent")
+    );
+    assert_ne!(before.revision(), presented.revision());
+    assert!(
+        compiled_registry_change_set(&before, &presented, "sha256:before")
+            .changes
+            .iter()
+            .all(|change| change.code != CompiledRegistryChangeCode::ActionChanged),
+        "Proposal-hook display is retained without changing Action authority"
+    );
+
+    let mut changed_destination = presented_hook.clone();
+    changed_destination["handler"]["destinationId"] = json!("other-observer");
+    let changed_destination = compile(&model::source(json!([changed_destination])), &[]);
+    assert!(
+        compiled_registry_change_set(&presented, &changed_destination, "sha256:before")
+            .changes
+            .iter()
+            .any(|change| change.code == CompiledRegistryChangeCode::ActionChanged),
+        "Proposal-hook destination changes remain operational"
+    );
+
+    presented_hook["transitions"] = json!(["submitted", "applied"]);
+    let changed_transitions = compile(&model::source(json!([presented_hook])), &[]);
+    assert!(
+        compiled_registry_change_set(&presented, &changed_transitions, "sha256:before")
+            .changes
+            .iter()
+            .any(|change| change.code == CompiledRegistryChangeCode::ActionChanged),
+        "Proposal-hook transition changes remain operational"
     );
 }
 

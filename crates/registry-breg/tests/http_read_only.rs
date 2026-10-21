@@ -208,7 +208,12 @@ recordTypes:
         key: id
         execution: live
         fields:
-          - {id: eligibility-score, type: int64, classification: restricted}
+          - id: eligibility-score
+            type: int64
+            classification: restricted
+            display:
+              label: Reviewed eligibility score
+              description: Calculated eligibility points.
 datasets:
   - {id: test-dataset}
 
@@ -1982,6 +1987,28 @@ async fn derived_fields_are_discoverable_as_read_only_response_properties() {
         json!({"type": "string", "minLength": 0, "maxLength": 100})
     );
     assert_eq!(schema["required"], json!(["label"]));
+
+    let metadata = body_json(
+        send_to(
+            &app,
+            Method::GET,
+            "/v1/registry?accessProfile=operator",
+            Some(caseworker_claims("case-management")),
+        )
+        .await,
+    )
+    .await;
+    let derived = metadata_operation(&metadata, "records.benefit-record.get")["fields"]
+        .as_array()
+        .expect("operation fields")
+        .iter()
+        .find(|field| field["id"] == "eligibility-score")
+        .expect("readable derived field metadata");
+    assert_eq!(derived["label"], "Reviewed eligibility score");
+    assert_eq!(
+        derived["schema"]["description"],
+        "Calculated eligibility points."
+    );
 
     let response = send_to(
         &app,

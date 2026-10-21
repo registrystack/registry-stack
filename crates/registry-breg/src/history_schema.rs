@@ -1340,6 +1340,7 @@ mod tests {
             "risk-score".to_owned(),
             CompiledDerivedField {
                 logical: logical("risk-score", "riskScore", FieldTypeSource::Int64),
+                display: Default::default(),
                 derivation_id: "risk".to_owned(),
             },
         );

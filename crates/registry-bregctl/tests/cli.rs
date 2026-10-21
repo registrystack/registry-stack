@@ -47,6 +47,223 @@ mod module_consent_tests;
 mod file_check_tests;
 
 #[test]
+fn duplicate_profile_display_warns_once_and_deny_warnings_refuses_it() {
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    source["accessProfiles"][0]["display"] = json!({"label":"Café"});
+    source["recordTypes"][0]["display"]["label"] = json!("Café");
+    let baseline =
+        TestProject::from_registry_source(serde_norway::to_string(&source).unwrap().as_bytes());
+    let accepted = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(baseline.path()),
+        "--deny-warnings",
+    ]);
+    assert!(accepted.status.success(), "{accepted:?}");
+
+    let mut second = source["accessProfiles"][0].clone();
+    second["id"] = json!("directory-observer");
+    second["default"] = json!(false);
+    second["display"]["label"] = json!("CA\u{200b}FE\u{301}");
+    source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(second);
+    let project =
+        TestProject::from_registry_source(serde_norway::to_string(&source).unwrap().as_bytes());
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    let warning = &diagnostics[0];
+    assert_eq!(warning["code"], "breg.access-profile.duplicate-label");
+    assert_eq!(warning["severity"], "warning");
+    assert_eq!(warning["path"], "/accessProfiles/1/display/label");
+    assert_eq!(
+        warning["related"][0]["path"],
+        "/accessProfiles/0/display/label"
+    );
+    let message = warning["message"].as_str().unwrap();
+    assert!(message.contains("directory-editor"));
+    assert!(message.contains("directory-observer"));
+    assert_check_diagnostic(warning, Some("BRegProject"));
+    let denied = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(project.path()),
+        "--deny-warnings",
+    ]);
+    assert_eq!(denied.status.code(), Some(1));
+    assert_eq!(json_stdout(&denied)["diagnostics"], report["diagnostics"]);
+}
+
+#[test]
+fn cross_file_label_warnings_locate_the_second_extension_block() {
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/fixtures/authoring-display/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    source["modules"] = json!([{"id":"extension","version":"0.1.0"}]);
+    source["accessProfiles"][0]["display"]["label"] = json!("Reader");
+    source["recordTypes"][0]["hooks"][0]["display"]["label"] = json!("Notice");
+    let extension = |id: &str, profile_label: &str, hook_label: &str| {
+        json!({
+            "recordType":"entry",
+            "accessProfiles":[{
+                "id":format!("{id}-reader"),"display":{"label":profile_label},
+                "principalClaim":"registry_principal","requiredScopes":["directory:read"],
+                "operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"
+            }],
+            "hooks":[{
+                "id":format!("{id}-notice"),"display":{"label":hook_label},
+                "phase":"after","trigger":"created","projection":["code"],
+                "handler":{"type":"url","destinationId":"entry-events"}
+            }]
+        })
+    };
+    let module = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule","id":"extension","version":"0.1.0",
+        "extendRecordTypes":[
+            extension("first", "Different profile", "Different hook"),
+            extension("second", "RE\u{200b}ADER", "NO\u{200b}TICE")
+        ]
+    });
+    let project =
+        TestProject::from_registry_source(serde_norway::to_string(&source).unwrap().as_bytes());
+    let module_path = project.path().join("modules/extension/module.yaml");
+    fs::create_dir_all(module_path.parent().unwrap()).unwrap();
+    fs::write(&module_path, serde_norway::to_string(&module).unwrap()).unwrap();
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    for (code, pointer) in [
+        (
+            "breg.access-profile.duplicate-label",
+            "/extendRecordTypes/1/accessProfiles/0/display/label",
+        ),
+        (
+            "breg.hook.duplicate-label",
+            "/extendRecordTypes/1/hooks/0/display/label",
+        ),
+    ] {
+        let findings = report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|finding| finding["code"] == code)
+            .collect::<Vec<_>>();
+        assert_eq!(findings.len(), 1, "{report}");
+        assert_eq!(findings[0]["path"], pointer, "{report}");
+        assert_eq!(
+            findings[0]["source"]["file"],
+            module_path.display().to_string()
+        );
+        assert!(findings[0]["source"]["line"]
+            .as_u64()
+            .is_some_and(|line| line > 1));
+        assert!(findings[0]["source"]["column"]
+            .as_u64()
+            .is_some_and(|column| column > 0));
+    }
+}
+
+#[test]
+fn hook_labels_are_scoped_to_their_record_type_across_authored_files() {
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    source["recordTypes"][0]["hooks"] = json!([{
+        "id":"contact-notice","display":{"label":"Notice"},
+        "phase":"after","trigger":"created","projection":["name"]
+    }]);
+    for (id, route, record_label, hook_id, hook_label) in [
+        (
+            "archive",
+            "archives",
+            "Archive entry",
+            "archive-created",
+            "NO\u{200b}TICE",
+        ),
+        (
+            "ledger",
+            "ledgers",
+            "Ledger entry",
+            "ledger-created",
+            "Different notice",
+        ),
+    ] {
+        let mut record = source["recordTypes"][0].clone();
+        record["id"] = json!(id);
+        record["route"] = json!(route);
+        record["display"]["label"] = json!(record_label);
+        record["hooks"][0]["id"] = json!(hook_id);
+        record["hooks"][0]["display"]["label"] = json!(hook_label);
+        source["recordTypes"].as_array_mut().unwrap().push(record);
+    }
+    let module = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule","id":"extension","version":"0.1.0",
+        "extendRecordTypes":[{
+            "recordType":"ledger",
+            "hooks":[{
+                "id":"ledger-notice","display":{"label":"Notice"},
+                "phase":"after","trigger":"created","projection":["name"]
+            }]
+        }]
+    });
+    let module_bytes = serde_norway::to_string(&module).unwrap();
+    let module_model = parse_module_yaml(module_bytes.as_bytes()).unwrap();
+    source["modules"] = json!([{
+        "id":"extension","version":"0.1.0","digest":module_digest(&module_model)
+    }]);
+    let project =
+        TestProject::from_registry_source(serde_norway::to_string(&source).unwrap().as_bytes());
+    let module_path = project.path().join("modules/extension/module.yaml");
+    fs::create_dir_all(module_path.parent().unwrap()).unwrap();
+    fs::write(module_path, module_bytes).unwrap();
+
+    for arguments in [
+        vec!["--format", "json", "check", path(project.path())],
+        vec![
+            "--format",
+            "json",
+            "check",
+            path(project.path()),
+            "--deny-warnings",
+        ],
+    ] {
+        let output = bregctl(&arguments);
+        assert!(output.status.success(), "{output:?}");
+        let report = json_stdout(&output);
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|diagnostic| diagnostic["code"] != "breg.hook.duplicate-label"),
+            "{report}"
+        );
+    }
+}
+
+#[test]
 fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
     let source = String::from_utf8(authoring_fixture().to_vec())
         .unwrap()
@@ -103,6 +320,167 @@ fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
         .find(|diagnostic| diagnostic["code"] == "breg.field.pattern-unverified-offline")
         .expect("denied warning remains in the refusal diagnostics");
     assert_eq!(denied_finding, finding);
+}
+
+#[test]
+fn check_places_nested_compiler_diagnostics_at_the_exact_authored_members() {
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/facility");
+    let source = fs::read_to_string(fixture.join("registry.yaml"))
+        .expect("facility source reads")
+        .replace(
+            "- {id: by-operator, fields: [operator]}",
+            "- {id: by-operator, fields: [missing-field]}",
+        )
+        .replace(
+            "- {path: operators, readableFields: [operator-code, status, jurisdiction]}",
+            "- {path: operators, readableFields: [operator-code], filterableFields: [status]}",
+        )
+        .replace(
+            "readableFields: [facility, operator, jurisdiction]\n          filterableFields: [facility, operator]",
+            "readableFields: [facility, jurisdiction]\n          filterableFields: [facility, operator]",
+        );
+    let project = TestProject::from_registry_source(source.as_bytes());
+    fs::create_dir(project.path().join("plans")).expect("plans directory is created");
+    fs::copy(
+        fixture.join("plans/correct-address.rhai"),
+        project.path().join("plans/correct-address.rhai"),
+    )
+    .expect("plan source is copied");
+
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics is an array");
+    for (code, pointer) in [
+        (
+            "breg.index.fields-invalid",
+            "/recordTypes/3/indexes/1/fields",
+        ),
+        (
+            "breg.access-profile.read-path-processing-wider-than-read",
+            "/accessProfiles/1/permissions/records/1/readPaths/0/filterableFields",
+        ),
+        (
+            "breg.access-profile.processing-wider-than-read",
+            "/accessProfiles/1/permissions/records/2/filterableFields",
+        ),
+    ] {
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == code)
+            .unwrap_or_else(|| panic!("{code} is reported: {report:#?}"));
+        assert_check_diagnostic(diagnostic, Some("BRegProject"));
+        assert_eq!(diagnostic["path"], pointer, "{diagnostic:#?}");
+        assert_eq!(
+            diagnostic["source"]["file"],
+            project.path().join("registry.yaml").display().to_string()
+        );
+        assert!(diagnostic["source"]["line"].is_u64(), "{diagnostic:#?}");
+        assert!(diagnostic["source"]["column"].is_u64(), "{diagnostic:#?}");
+        assert!(
+            !diagnostic["message"]
+                .as_str()
+                .expect("message is text")
+                .contains("(in "),
+            "a complete source pointer does not carry an unresolved compiler path: {diagnostic:#?}"
+        );
+    }
+}
+
+#[test]
+fn check_places_record_extension_diagnostics_in_the_exact_module_blocks() {
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: extension-diagnostic-fixture
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://extension-diagnostic-fixture.example.test
+datasets:
+  - id: test-dataset
+modules:
+  - id: core
+    version: "1"
+"#,
+    );
+    let module_directory = project.path().join("modules/core");
+    fs::create_dir_all(&module_directory).expect("module directory is created");
+    fs::write(
+        module_directory.join("module.yaml"),
+        br#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: core
+version: "1"
+recordTypes:
+  - id: record
+    primaryDataset: test-dataset
+    route: records
+    mutationMode: create-only
+    fields:
+      - id: code
+        type: string
+        maximumLength: 64
+        classification: internal
+extendRecordTypes:
+  - recordType: record
+    indexes:
+      - id: by-missing
+        fields: [missing]
+  - recordType: record
+    readPaths:
+      - id: missing-link
+        route: missing-link
+        through: missing-association
+        to: missing-target
+"#,
+    )
+    .expect("module source is written");
+
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics is an array");
+    for (code, pointer, line, column) in [
+        (
+            "breg.index.fields-invalid",
+            "/extendRecordTypes/0/indexes/0/fields",
+            19,
+            17,
+        ),
+        (
+            "breg.read-path.through-unknown",
+            "/extendRecordTypes/1/readPaths/0/through",
+            24,
+            18,
+        ),
+    ] {
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == code)
+            .unwrap_or_else(|| panic!("{code} is reported: {report:#?}"));
+        assert_check_diagnostic(diagnostic, Some("BRegModule"));
+        assert_eq!(diagnostic["path"], pointer, "{diagnostic:#?}");
+        assert_eq!(
+            diagnostic["source"]["file"],
+            module_directory.join("module.yaml").display().to_string()
+        );
+        assert_eq!(diagnostic["source"]["line"], line, "{diagnostic:#?}");
+        assert_eq!(diagnostic["source"]["column"], column, "{diagnostic:#?}");
+        assert!(
+            !diagnostic["message"]
+                .as_str()
+                .expect("message is text")
+                .contains("(in "),
+            "an exact extension pointer does not carry an unresolved compiler path: {diagnostic:#?}"
+        );
+    }
 }
 
 #[test]

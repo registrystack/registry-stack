@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+#[cfg(feature = "runtime")]
+use registry_breg::package::{compiled_registry_change_set, CompiledRegistryChangeCode};
 use registry_breg::{
     compiler::{compile_project_with_assets, CompileProfile},
     contract::{parse_project_yaml, ModuleAssetSource, RegistryProject},
@@ -1158,6 +1160,7 @@ fn authored_action_input_display_survives_source_and_compilation() {
     );
 }
 
+#[cfg(feature = "runtime")]
 #[test]
 fn input_and_refusal_labels_are_presentation_not_frozen_meaning() {
     use serde_json::json;
@@ -1183,6 +1186,95 @@ fn input_and_refusal_labels_are_presentation_not_frozen_meaning() {
             .unwrap();
         assert_eq!(action.definition_revision, successor.definition_revision);
     }
+    assert_ne!(before.revision(), after.revision());
+    assert!(
+        compiled_registry_change_set(&before, &after, "sha256:before")
+            .changes
+            .iter()
+            .all(|change| change.code != CompiledRegistryChangeCode::ActionChanged),
+        "input display and refusal labels are retained presentation, not Action authority"
+    );
+
+    let mut changed_refusal_source = value.clone();
+    changed_refusal_source["actions"][1]["plan"]["refusals"][0]["code"] = json!("invalid-location");
+    let changed_refusal = registry_breg::contract::parse_project_json(
+        &serde_json::to_vec(&changed_refusal_source).unwrap(),
+    )
+    .unwrap();
+    let changed_refusal = compile(&changed_refusal).unwrap();
+    assert!(
+        compiled_registry_change_set(&after, &changed_refusal, "sha256:before")
+            .changes
+            .iter()
+            .any(|change| change.code == CompiledRegistryChangeCode::ActionChanged),
+        "an Action refusal code change remains operational"
+    );
+
+    let facility = value["recordTypes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|record| record["id"] == "facility")
+        .unwrap();
+    facility["fields"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|field| field["id"] == "facility-code")
+        .unwrap()["required"] = json!(false);
+    value["actions"][0]["inputs"][0]["required"] = json!(false);
+    let changed_input =
+        registry_breg::contract::parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap();
+    let changed_input = compile(&changed_input).unwrap();
+    assert!(
+        compiled_registry_change_set(&after, &changed_input, "sha256:before")
+            .changes
+            .iter()
+            .any(|change| change.code == CompiledRegistryChangeCode::ActionChanged),
+        "an Action input requiredness change remains operational"
+    );
+}
+
+#[cfg(feature = "runtime")]
+#[test]
+fn access_profile_display_is_not_an_authority_change() {
+    use serde_json::json;
+    let source = project_source();
+    let project =
+        registry_breg::contract::parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let baseline = compile(&project).unwrap();
+
+    let mut presented_source = source.clone();
+    presented_source["accessProfiles"][1]["display"] =
+        json!({"label":"Facility reader","description":"Presentation only"});
+    let project = registry_breg::contract::parse_project_json(
+        &serde_json::to_vec(&presented_source).unwrap(),
+    )
+    .unwrap();
+    let presented = compile(&project).unwrap();
+    assert_ne!(baseline.revision(), presented.revision());
+    assert!(
+        compiled_registry_change_set(&baseline, &presented, "sha256:before")
+            .changes
+            .iter()
+            .all(|change| change.code != CompiledRegistryChangeCode::AccessProfileChanged),
+        "profile display is retained without changing authority"
+    );
+
+    presented_source["accessProfiles"][1]["requiredScopes"] =
+        json!(["registry:facility:read", "registry:facility:review"]);
+    let project = registry_breg::contract::parse_project_json(
+        &serde_json::to_vec(&presented_source).unwrap(),
+    )
+    .unwrap();
+    let changed_grant = compile(&project).unwrap();
+    assert!(
+        compiled_registry_change_set(&presented, &changed_grant, "sha256:before")
+            .changes
+            .iter()
+            .any(|change| change.code == CompiledRegistryChangeCode::AccessProfileChanged),
+        "verified-scope authority changes remain reported"
+    );
 }
 
 #[test]

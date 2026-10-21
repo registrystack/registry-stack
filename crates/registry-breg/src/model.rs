@@ -101,6 +101,8 @@ pub struct CompiledStoredField {
 pub struct CompiledDerivedField {
     #[serde(flatten)]
     pub logical: CompiledLogicalField,
+    #[serde(default, skip_serializing_if = "display_is_empty")]
+    pub display: crate::contract::DisplaySource,
     pub derivation_id: String,
 }
 
@@ -126,6 +128,11 @@ pub struct CompiledDerivedRelation {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledStatisticalDataset {
     pub id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::contract::PresentationSource::is_empty"
+    )]
+    pub display: crate::contract::PresentationSource,
     pub unit_entity_id: String,
     pub population: String,
     pub period: CompiledStatisticalPeriod,
@@ -1183,6 +1190,11 @@ pub enum CompiledEventOwner {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompiledProposalHook {
     pub id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::contract::PresentationSource::is_empty"
+    )]
+    pub display: crate::contract::PresentationSource,
     pub transitions: BTreeSet<crate::contract::ProposalEventTransition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub destination_id: Option<String>,
@@ -1466,6 +1478,15 @@ pub struct CompiledModuleIdentity {
     pub digest: Option<String>,
 }
 
+/// Presentation of a project access profile, including profiles with no grants.
+/// The identifier remains the sole identity used by authorization.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledAccessProfileDisplay {
+    pub id: String,
+    pub display: crate::contract::PresentationSource,
+}
+
 /// Immutable result consumed by runtime, migration, and authoring surfaces.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -1477,6 +1498,10 @@ pub struct CompiledRegistry {
     display: crate::contract::DisplaySource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     review_authorities: Vec<crate::contract::ReviewAuthoritySource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    datasets: Vec<crate::contract::DatasetSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    access_profile_displays: Vec<CompiledAccessProfileDisplay>,
     package: Option<PackageIdentitySource>,
     manifest_projection: Option<CompiledManifestProjection>,
     module_order: Vec<String>,
@@ -1507,6 +1532,8 @@ impl CompiledRegistry {
         default_language: String,
         display: crate::contract::DisplaySource,
         review_authorities: Vec<crate::contract::ReviewAuthoritySource>,
+        datasets: Vec<crate::contract::DatasetSource>,
+        access_profile_displays: Vec<CompiledAccessProfileDisplay>,
         package: Option<PackageIdentitySource>,
         manifest_projection: Option<CompiledManifestProjection>,
         module_order: Vec<String>,
@@ -1532,6 +1559,8 @@ impl CompiledRegistry {
             default_language,
             display,
             review_authorities,
+            datasets,
+            access_profile_displays,
             package,
             manifest_projection,
             module_order,
@@ -1591,6 +1620,14 @@ impl CompiledRegistry {
 
     pub fn review_authorities(&self) -> &[crate::contract::ReviewAuthoritySource] {
         &self.review_authorities
+    }
+
+    pub fn datasets(&self) -> &[crate::contract::DatasetSource] {
+        &self.datasets
+    }
+
+    pub fn access_profile_displays(&self) -> &[CompiledAccessProfileDisplay] {
+        &self.access_profile_displays
     }
 
     pub fn package(&self) -> Option<&PackageIdentitySource> {

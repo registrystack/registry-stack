@@ -683,6 +683,6 @@
       "revision": "sha256:9237300ee419a0014c3b123cc7ac90eb9623cb4c45bba4a65c03936083299f1d"
     }
   ],
-  "apiVersion": "id.registrystack.org/formats/breg/proposals-explanation/v1alpha1",
+  "apiVersion": "id.registrystack.org/formats/breg/proposals-explanation/v1alpha2",
   "kind": "BRegProposalsExplanation"
 }

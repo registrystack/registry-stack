@@ -1,0 +1,704 @@
+{
+  "accessProfiles": [
+    {
+      "display": {
+        "description": "Maintains and reads directory entries.",
+        "label": "Directory editor"
+      },
+      "id": "directory-editor"
+    }
+  ],
+  "actions": [
+    {
+      "apiName": "registerEntry",
+      "bounds": {
+        "maximumFieldMutations": 128,
+        "maximumSnapshotBytes": 2097152,
+        "maximumTargets": 16
+      },
+      "commitGuards": [],
+      "dependencies": {
+        "evidence": []
+      },
+      "display": {
+        "label": "Register entry"
+      },
+      "execution": {
+        "mode": "proposal",
+        "proposal": {
+          "application": {
+            "maximumAttempts": 3,
+            "mode": "automatic"
+          },
+          "attachments": {},
+          "hooks": [
+            {
+              "destinationId": "proposal-events",
+              "display": {
+                "description": "Announces a submitted entry proposal.",
+                "label": "Submission notification"
+              },
+              "id": "proposal-submitted",
+              "transitions": [
+                "submitted"
+              ]
+            }
+          ],
+          "permissions": [
+            {
+              "actorKind": null,
+              "default": true,
+              "operations": [
+                "get",
+                "list",
+                "edit",
+                "submit",
+                "cancel"
+              ],
+              "ownership": "caller",
+              "principalClaim": "registry_principal",
+              "profileId": "directory-editor",
+              "readableAttachments": [],
+              "readableContextFields": [],
+              "readableInputs": [
+                "active",
+                "code",
+                "recorded-on"
+              ],
+              "requesterClients": [],
+              "requiredPurposes": [],
+              "requiredScopes": [
+                "directory:write"
+              ],
+              "targets": [
+                {
+                  "recordType": "entry",
+                  "rowBoundaries": []
+                }
+              ],
+              "writableAttachments": []
+            }
+          ],
+          "retention": "retain",
+          "review": {
+            "type": "none"
+          },
+          "reviewContext": null,
+          "systemApplyGrant": {
+            "actionId": "register-entry",
+            "actionRevision": "sha256:50148480ed74a0609df9d7a66a542007522705cfb17b1dd41181721f36f31d75",
+            "revision": "sha256:6c11168bbab0d65e98564c53be6a88b8dc6af79b1ee30e9824c37b1e01c0e49d",
+            "targets": [
+              {
+                "fields": [
+                  "active",
+                  "code",
+                  "recorded-on"
+                ],
+                "operation": "create",
+                "readFields": [
+                  "active",
+                  "code",
+                  "recorded-on"
+                ],
+                "recordType": "entry"
+              }
+            ]
+          }
+        }
+      },
+      "id": "register-entry",
+      "inputs": [
+        {
+          "apiName": "code",
+          "classification": "internal",
+          "description": "The code to give the new entry.",
+          "display": {
+            "description": "The code to give the new entry.",
+            "label": "Entry reference"
+          },
+          "fieldType": {
+            "maximumLength": 80,
+            "minimumLength": 0,
+            "type": "string"
+          },
+          "id": "code",
+          "label": "Entry reference",
+          "nullable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 80,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "active",
+          "classification": "internal",
+          "fieldType": {
+            "type": "boolean"
+          },
+          "id": "active",
+          "label": "active",
+          "nullable": false,
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "apiName": "recordedOn",
+          "classification": "internal",
+          "fieldType": {
+            "type": "date"
+          },
+          "id": "recorded-on",
+          "label": "recordedOn",
+          "nullable": false,
+          "required": true,
+          "schema": {
+            "format": "date",
+            "type": "string"
+          }
+        }
+      ],
+      "permissions": [
+        {
+          "default": true,
+          "operations": [
+            "start"
+          ],
+          "principalClaim": "registry_principal",
+          "profileId": "directory-editor",
+          "requiredPurposes": [],
+          "requiredScopes": [
+            "directory:write"
+          ],
+          "results": [],
+          "targets": [
+            {
+              "operation": "create",
+              "recordType": "entry",
+              "rowBoundaries": [],
+              "source": {
+                "effect": "entry",
+                "kind": "effect"
+              }
+            }
+          ]
+        }
+      ],
+      "plan": {
+        "effects": [
+          {
+            "dependsOn": [],
+            "id": "entry",
+            "mutations": [
+              {
+                "field": "active",
+                "kind": "set",
+                "value": {
+                  "input": "active",
+                  "kind": "from-input"
+                }
+              },
+              {
+                "field": "code",
+                "kind": "set",
+                "value": {
+                  "input": "code",
+                  "kind": "from-input"
+                }
+              },
+              {
+                "field": "recorded-on",
+                "kind": "set",
+                "value": {
+                  "input": "recorded-on",
+                  "kind": "from-input"
+                }
+              }
+            ],
+            "operation": "create",
+            "target": {
+              "binding": {
+                "kind": "create"
+              },
+              "recordType": "entry"
+            }
+          }
+        ],
+        "order": [
+          "entry"
+        ],
+        "type": "fixed"
+      },
+      "revision": "sha256:50148480ed74a0609df9d7a66a542007522705cfb17b1dd41181721f36f31d75"
+    }
+  ],
+  "apiVersion": "id.registrystack.org/formats/breg/model-explanation/v1alpha6",
+  "authoring": {
+    "documents": [
+      {
+        "authoredPaths": [
+          "",
+          "/apiVersion",
+          "/kind",
+          "/project",
+          "/project/id",
+          "/project/canonicalBaseIri",
+          "/project/version",
+          "/project/defaultLanguage",
+          "/project/display",
+          "/project/display/label",
+          "/datasets",
+          "/datasets/0",
+          "/datasets/0/id",
+          "/datasets/0/display",
+          "/datasets/0/display/label",
+          "/datasets/0/display/description",
+          "/recordTypes",
+          "/recordTypes/0",
+          "/recordTypes/0/id",
+          "/recordTypes/0/primaryDataset",
+          "/recordTypes/0/route",
+          "/recordTypes/0/mutationMode",
+          "/recordTypes/0/display",
+          "/recordTypes/0/display/label",
+          "/recordTypes/0/fields",
+          "/recordTypes/0/fields/0",
+          "/recordTypes/0/fields/0/id",
+          "/recordTypes/0/fields/0/type",
+          "/recordTypes/0/fields/0/required",
+          "/recordTypes/0/fields/0/maximumLength",
+          "/recordTypes/0/fields/0/classification",
+          "/recordTypes/0/fields/0/display",
+          "/recordTypes/0/fields/0/display/label",
+          "/recordTypes/0/fields/0/display/description",
+          "/recordTypes/0/fields/1",
+          "/recordTypes/0/fields/1/id",
+          "/recordTypes/0/fields/1/type",
+          "/recordTypes/0/fields/1/required",
+          "/recordTypes/0/fields/1/classification",
+          "/recordTypes/0/fields/2",
+          "/recordTypes/0/fields/2/id",
+          "/recordTypes/0/fields/2/type",
+          "/recordTypes/0/fields/2/required",
+          "/recordTypes/0/fields/2/classification",
+          "/recordTypes/0/hooks",
+          "/recordTypes/0/hooks/0",
+          "/recordTypes/0/hooks/0/id",
+          "/recordTypes/0/hooks/0/display",
+          "/recordTypes/0/hooks/0/display/label",
+          "/recordTypes/0/hooks/0/display/description",
+          "/recordTypes/0/hooks/0/phase",
+          "/recordTypes/0/hooks/0/trigger",
+          "/recordTypes/0/hooks/0/projection",
+          "/recordTypes/0/hooks/0/projection/0",
+          "/recordTypes/0/hooks/0/handler",
+          "/recordTypes/0/hooks/0/handler/type",
+          "/recordTypes/0/hooks/0/handler/destinationId",
+          "/statisticalDatasets",
+          "/statisticalDatasets/0",
+          "/statisticalDatasets/0/id",
+          "/statisticalDatasets/0/display",
+          "/statisticalDatasets/0/display/label",
+          "/statisticalDatasets/0/display/description",
+          "/statisticalDatasets/0/unit",
+          "/statisticalDatasets/0/population",
+          "/statisticalDatasets/0/period",
+          "/statisticalDatasets/0/period/type",
+          "/statisticalDatasets/0/period/field",
+          "/statisticalDatasets/0/period/granularity",
+          "/statisticalDatasets/0/period/firstPeriod",
+          "/statisticalDatasets/0/dimensions",
+          "/statisticalDatasets/0/dimensions/0",
+          "/statisticalDatasets/0/disclosure",
+          "/statisticalDatasets/0/disclosure/minimumCount",
+          "/statisticalDatasets/0/disclosure/roundingBase",
+          "/actions",
+          "/actions/0",
+          "/actions/0/id",
+          "/actions/0/display",
+          "/actions/0/display/label",
+          "/actions/0/execution",
+          "/actions/0/execution/mode",
+          "/actions/0/execution/proposal",
+          "/actions/0/execution/proposal/review",
+          "/actions/0/execution/proposal/review/type",
+          "/actions/0/execution/proposal/retention",
+          "/actions/0/execution/proposal/retention/mode",
+          "/actions/0/execution/proposal/hooks",
+          "/actions/0/execution/proposal/hooks/0",
+          "/actions/0/execution/proposal/hooks/0/id",
+          "/actions/0/execution/proposal/hooks/0/display",
+          "/actions/0/execution/proposal/hooks/0/display/label",
+          "/actions/0/execution/proposal/hooks/0/display/description",
+          "/actions/0/execution/proposal/hooks/0/transitions",
+          "/actions/0/execution/proposal/hooks/0/transitions/0",
+          "/actions/0/execution/proposal/hooks/0/handler",
+          "/actions/0/execution/proposal/hooks/0/handler/type",
+          "/actions/0/execution/proposal/hooks/0/handler/destinationId",
+          "/actions/0/inputs",
+          "/actions/0/inputs/0",
+          "/actions/0/inputs/0/id",
+          "/actions/0/inputs/0/type",
+          "/actions/0/inputs/0/required",
+          "/actions/0/inputs/0/maximumLength",
+          "/actions/0/inputs/0/classification",
+          "/actions/0/inputs/0/display",
+          "/actions/0/inputs/0/display/label",
+          "/actions/0/inputs/0/display/description",
+          "/actions/0/inputs/1",
+          "/actions/0/inputs/1/id",
+          "/actions/0/inputs/1/type",
+          "/actions/0/inputs/1/required",
+          "/actions/0/inputs/1/classification",
+          "/actions/0/inputs/2",
+          "/actions/0/inputs/2/id",
+          "/actions/0/inputs/2/type",
+          "/actions/0/inputs/2/required",
+          "/actions/0/inputs/2/classification",
+          "/actions/0/plan",
+          "/actions/0/plan/type",
+          "/actions/0/plan/effects",
+          "/actions/0/plan/effects/0",
+          "/actions/0/plan/effects/0/id",
+          "/actions/0/plan/effects/0/target",
+          "/actions/0/plan/effects/0/target/recordType",
+          "/actions/0/plan/effects/0/operation",
+          "/actions/0/plan/effects/0/set",
+          "/actions/0/plan/effects/0/set/code",
+          "/actions/0/plan/effects/0/set/code/fromInput",
+          "/actions/0/plan/effects/0/set/active",
+          "/actions/0/plan/effects/0/set/active/fromInput",
+          "/actions/0/plan/effects/0/set/recorded-on",
+          "/actions/0/plan/effects/0/set/recorded-on/fromInput",
+          "/accessProfiles",
+          "/accessProfiles/0",
+          "/accessProfiles/0/id",
+          "/accessProfiles/0/display",
+          "/accessProfiles/0/display/label",
+          "/accessProfiles/0/display/description",
+          "/accessProfiles/0/default",
+          "/accessProfiles/0/principalClaim",
+          "/accessProfiles/0/requiredScopes",
+          "/accessProfiles/0/requiredScopes/0",
+          "/accessProfiles/0/permissions",
+          "/accessProfiles/0/permissions/datasets",
+          "/accessProfiles/0/permissions/datasets/0",
+          "/accessProfiles/0/permissions/datasets/0/dataset",
+          "/accessProfiles/0/permissions/datasets/0/operations",
+          "/accessProfiles/0/permissions/datasets/0/operations/0",
+          "/accessProfiles/0/permissions/datasets/0/operations/1",
+          "/accessProfiles/0/permissions/records",
+          "/accessProfiles/0/permissions/records/0",
+          "/accessProfiles/0/permissions/records/0/recordType",
+          "/accessProfiles/0/permissions/records/0/operations",
+          "/accessProfiles/0/permissions/records/0/operations/0",
+          "/accessProfiles/0/permissions/records/0/operations/1",
+          "/accessProfiles/0/permissions/records/0/operations/2",
+          "/accessProfiles/0/permissions/records/0/readableFields",
+          "/accessProfiles/0/permissions/records/0/readableFields/0",
+          "/accessProfiles/0/permissions/records/0/readableFields/1",
+          "/accessProfiles/0/permissions/records/0/readableFields/2",
+          "/accessProfiles/0/permissions/records/0/writableFields",
+          "/accessProfiles/0/permissions/records/0/writableFields/0",
+          "/accessProfiles/0/permissions/records/0/writableFields/1",
+          "/accessProfiles/0/permissions/records/0/writableFields/2",
+          "/accessProfiles/0/permissions/records/0/filterableFields",
+          "/accessProfiles/0/permissions/records/0/filterableFields/0",
+          "/accessProfiles/0/permissions/records/0/filterableFields/1",
+          "/accessProfiles/0/permissions/records/0/allowCount",
+          "/accessProfiles/0/permissions/records/0/rowBoundaries",
+          "/accessProfiles/0/permissions/actions",
+          "/accessProfiles/0/permissions/actions/0",
+          "/accessProfiles/0/permissions/actions/0/action",
+          "/accessProfiles/0/permissions/actions/0/operations",
+          "/accessProfiles/0/permissions/actions/0/operations/0",
+          "/accessProfiles/0/permissions/actions/0/targets",
+          "/accessProfiles/0/permissions/actions/0/targets/0",
+          "/accessProfiles/0/permissions/actions/0/targets/0/recordType",
+          "/accessProfiles/0/permissions/actions/0/targets/0/rowBoundaries",
+          "/accessProfiles/0/permissions/proposals",
+          "/accessProfiles/0/permissions/proposals/0",
+          "/accessProfiles/0/permissions/proposals/0/action",
+          "/accessProfiles/0/permissions/proposals/0/operations",
+          "/accessProfiles/0/permissions/proposals/0/operations/0",
+          "/accessProfiles/0/permissions/proposals/0/operations/1",
+          "/accessProfiles/0/permissions/proposals/0/operations/2",
+          "/accessProfiles/0/permissions/proposals/0/operations/3",
+          "/accessProfiles/0/permissions/proposals/0/operations/4",
+          "/accessProfiles/0/permissions/proposals/0/readableInputs",
+          "/accessProfiles/0/permissions/proposals/0/readableInputs/0",
+          "/accessProfiles/0/permissions/proposals/0/readableInputs/1",
+          "/accessProfiles/0/permissions/proposals/0/readableInputs/2",
+          "/accessProfiles/0/permissions/proposals/0/ownership",
+          "/accessProfiles/0/permissions/proposals/0/targets",
+          "/accessProfiles/0/permissions/proposals/0/targets/0",
+          "/accessProfiles/0/permissions/proposals/0/targets/0/recordType",
+          "/accessProfiles/0/permissions/proposals/0/targets/0/rowBoundaries"
+        ],
+        "bindings": [
+          {
+            "explanationPointer": "",
+            "sourcePointer": "/project"
+          },
+          {
+            "explanationPointer": "/datasets/0",
+            "sourcePointer": "/datasets/0"
+          },
+          {
+            "explanationPointer": "/accessProfiles/0",
+            "sourcePointer": "/accessProfiles/0"
+          },
+          {
+            "explanationPointer": "/statisticalDatasets/0",
+            "sourcePointer": "/statisticalDatasets/0"
+          },
+          {
+            "explanationPointer": "/recordTypes/0",
+            "sourcePointer": "/recordTypes/0"
+          },
+          {
+            "explanationPointer": "/recordTypes/0/fields/0",
+            "sourcePointer": "/recordTypes/0/fields/0"
+          },
+          {
+            "explanationPointer": "/recordTypes/0/fields/1",
+            "sourcePointer": "/recordTypes/0/fields/1"
+          },
+          {
+            "explanationPointer": "/recordTypes/0/fields/2",
+            "sourcePointer": "/recordTypes/0/fields/2"
+          },
+          {
+            "explanationPointer": "/recordTypes/0/hooks/entry-created",
+            "sourcePointer": "/recordTypes/0/hooks/0"
+          },
+          {
+            "explanationPointer": "/actions/0",
+            "sourcePointer": "/actions/0"
+          },
+          {
+            "explanationPointer": "/actions/0/inputs/0",
+            "sourcePointer": "/actions/0/inputs/0"
+          },
+          {
+            "explanationPointer": "/actions/0/inputs/1",
+            "sourcePointer": "/actions/0/inputs/1"
+          },
+          {
+            "explanationPointer": "/actions/0/inputs/2",
+            "sourcePointer": "/actions/0/inputs/2"
+          },
+          {
+            "explanationPointer": "/actions/0/execution/proposal/hooks/0",
+            "sourcePointer": "/actions/0/execution/proposal/hooks/0"
+          }
+        ],
+        "file": "registry.yaml",
+        "kind": "BRegProject"
+      }
+    ]
+  },
+  "datasets": [
+    {
+      "display": {
+        "description": "Entries maintained in the directory.",
+        "label": "Directory records"
+      },
+      "id": "directory"
+    }
+  ],
+  "display": {
+    "label": "Labelled directory"
+  },
+  "kind": "BRegModelExplanation",
+  "moduleClosure": [],
+  "moduleOrder": [],
+  "recordTypes": [
+    {
+      "accessLog": null,
+      "apiName": "Entry",
+      "batch": null,
+      "canonicalId": {
+        "apiName": "id",
+        "classification": "internal",
+        "fieldType": {
+          "type": "uuid"
+        },
+        "id": "id",
+        "schema": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "classification": "internal",
+      "constraints": {},
+      "derivedRelations": [],
+      "display": {
+        "label": "Directory entry"
+      },
+      "fields": [
+        {
+          "apiName": "code",
+          "classification": "internal",
+          "display": {
+            "description": "The institution's reference for this entry.",
+            "label": "Entry code"
+          },
+          "fieldType": {
+            "maximumLength": 80,
+            "minimumLength": 0,
+            "type": "string"
+          },
+          "id": "code",
+          "required": true,
+          "schema": {
+            "maxLength": 80,
+            "minLength": 0,
+            "type": "string"
+          },
+          "validTimeRole": null
+        },
+        {
+          "apiName": "active",
+          "classification": "internal",
+          "display": {},
+          "fieldType": {
+            "type": "boolean"
+          },
+          "id": "active",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          },
+          "validTimeRole": null
+        },
+        {
+          "apiName": "recordedOn",
+          "classification": "internal",
+          "display": {},
+          "fieldType": {
+            "type": "date"
+          },
+          "id": "recorded-on",
+          "required": true,
+          "schema": {
+            "format": "date",
+            "type": "string"
+          },
+          "validTimeRole": null
+        }
+      ],
+      "geojson": null,
+      "hooks": {
+        "entry-created": {
+          "display": {
+            "description": "Announces a committed directory entry.",
+            "label": "Entry notification"
+          },
+          "handler": {
+            "destinationId": "entry-events",
+            "type": "url"
+          },
+          "id": "entry-created",
+          "phase": "after",
+          "projection": [
+            "code"
+          ],
+          "trigger": "created"
+        }
+      },
+      "id": "entry",
+      "indexes": {},
+      "moduleOrigins": {},
+      "mutationMode": "create-only",
+      "mutationPolicy": {},
+      "primaryDataset": "directory",
+      "readPaths": {},
+      "relationships": {},
+      "revision": "sha256:bdcf1267345e2ee7cf42136ba3b21271700046a3f29cf2ead885559ebdc3109e",
+      "route": "entries",
+      "selectorProfiles": {},
+      "sourceModule": null,
+      "temporal": null,
+      "tombstone": false
+    }
+  ],
+  "registryId": "labelled-directory",
+  "reviewAuthorities": [],
+  "revision": "sha256:d438aa9e4522d31c5a92b64a18b5eabda5b0eb30a520c11faea6d88d533b948e",
+  "statisticalDatasets": [
+    {
+      "accessProfiles": {
+        "directory-editor": {
+          "allowDataExport": false,
+          "default": true,
+          "display": {
+            "description": "Maintains and reads directory entries.",
+            "label": "Directory editor"
+          },
+          "filterableFields": [],
+          "id": "directory-editor",
+          "operations": [],
+          "principalClaim": "registry_principal",
+          "readableFields": [],
+          "requiredPurposes": [],
+          "requiredScopes": [
+            "directory:write"
+          ],
+          "revisionAccess": false,
+          "rowBoundaries": [],
+          "sortableFields": [],
+          "writableFields": []
+        }
+      },
+      "definitionDigest": "sha256:3230b4c026ee0f84cd547c4b3bfdc0eaa46e0bf38fc4a65d30a77e44705bf54c",
+      "dependencyEntities": [
+        "entry"
+      ],
+      "dimensions": [
+        {
+          "codes": [
+            "false",
+            "true"
+          ],
+          "domain": {
+            "kind": "boolean"
+          },
+          "field": "active",
+          "includeUnknown": false
+        }
+      ],
+      "disclosure": {
+        "minimumCount": 5,
+        "roundingBase": 5
+      },
+      "display": {
+        "description": "Counts active entries by recording month.",
+        "label": "Monthly entry counts"
+      },
+      "evaluationDateDependent": false,
+      "id": "entry-counts",
+      "period": {
+        "field": "recorded-on",
+        "firstPeriod": "2025-01",
+        "granularity": "month",
+        "kind": "flow"
+      },
+      "population": "active eq true",
+      "referencedFields": [
+        "active",
+        "recorded-on"
+      ],
+      "releases": {
+        "publisher": "directory-editor",
+        "readers": []
+      },
+      "unitEntityId": "entry"
+    }
+  ],
+  "version": "0.1.0"
+}

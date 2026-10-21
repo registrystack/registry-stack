@@ -515,6 +515,8 @@ fn ungated_client_findings(entity: &CompiledEntity, findings: &mut Vec<Diagnosti
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccessExplanation {
+    /// Authored project profile presentation, including profiles granting nothing.
+    pub access_profiles: Vec<crate::model::CompiledAccessProfileDisplay>,
     pub scope_matching: &'static str,
     pub purpose_matching: &'static str,
     pub row_matching: &'static str,
@@ -542,6 +544,7 @@ pub struct AccessExplanation {
 #[serde(rename_all = "camelCase")]
 pub struct StatisticalDatasetAccessExplanation {
     pub dataset: String,
+    pub display: crate::contract::PresentationSource,
     /// Authentication requirements for every dataset profile, including dataset-only readers.
     pub access_profiles: Vec<AccessProfileSource>,
     /// Profiles that read live counts.
@@ -833,6 +836,7 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
             Err(error) => (None, Some(error)),
         };
     AccessExplanation {
+        access_profiles: registry.access_profile_displays().to_vec(),
         scope_matching: "all required scopes must be present",
         purpose_matching: "one allowed purpose must match; a profile that names none accepts every purpose",
         row_matching: "all claim-bound and current membership row predicates must hold; rowBoundaries written as unrestricted mean no claim-bound row restriction; Proposal caller ownership additionally limits Proposal operations",
@@ -868,6 +872,7 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
                 let releases = dataset.releases.as_ref();
                 StatisticalDatasetAccessExplanation {
                     dataset: dataset.id.clone(),
+                    display: dataset.display.clone(),
                     access_profiles: dataset.access_profiles.values().cloned().collect(),
                     read_live: dataset.live_profiles.iter().cloned().collect(),
                     publish: releases

@@ -16,6 +16,19 @@ documents.
 Per-product release notes live in each product repository; the entries below link to the
 relevant product pages on this site rather than duplicating release notes.
 
+## Unreleased
+
+- Base Registry Engine (BReg) inspection retains authored labels on fields, datasets, access
+  profiles, and hooks. Model inspection links objects to per-document source paths so a tool can
+  distinguish authored members from compiled defaults where those members correspond to source.
+  Lifecycle inspection describes each state's responsibility,
+  including the conditions for submitted work. The model, access, and actions formats advance
+  to `v1alpha6`, proposals to `v1alpha2`, and lifecycle to `v1alpha7`; select their matching schemas
+  and rebuild packages. See [authored values and display](../reference/breg-configuration/#authored-values-and-display).
+
+{/* Evidence: products/breg/CHANGELOG.md, the Unreleased entries for display,
+    authored JSON Pointers, and explanation format versions. */}
+
 ## v0.42.0 beta-54
 
 - BREAKING: v0.42.0 reads no state that v0.41.0 wrote. The Base Registry Engine (BReg) carries no

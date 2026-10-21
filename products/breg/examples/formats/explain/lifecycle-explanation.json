@@ -1,5 +1,5 @@
 {
-  "apiVersion": "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha6",
+  "apiVersion": "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha7",
   "kind": "BRegLifecycleExplanation",
   "lifecycles": [
     {
@@ -88,6 +88,12 @@
           "initial": true,
           "outgoingTransitions": 4,
           "terminal": false,
+          "turns": [
+            {
+              "condition": "Always while the Proposal is in this state.",
+              "turn": "party"
+            }
+          ],
           "unreachable": false
         },
         {
@@ -96,6 +102,20 @@
           "initial": false,
           "outgoingTransitions": 6,
           "terminal": false,
+          "turns": [
+            {
+              "condition": "The submission package is blocked; Review ended without a usable approval; or, after approval or when Review is not required, application is not manual and is blocked without recovery retry.",
+              "turn": "party"
+            },
+            {
+              "condition": "The submission package is not blocked, and either Review is pending or being retried, or, after approval or when Review is not required, application is manual or is blocked with recovery retry.",
+              "turn": "official"
+            },
+            {
+              "condition": "The submission package is not blocked, Review is approved or not required, and application is neither manual nor blocked, including queued, running, or unreported application status.",
+              "turn": "nobody"
+            }
+          ],
           "unreachable": false
         },
         {
@@ -104,6 +124,12 @@
           "initial": false,
           "outgoingTransitions": 0,
           "terminal": true,
+          "turns": [
+            {
+              "condition": "Always while the Proposal is in this state.",
+              "turn": "nobody"
+            }
+          ],
           "unreachable": false
         },
         {
@@ -112,6 +138,12 @@
           "initial": false,
           "outgoingTransitions": 0,
           "terminal": true,
+          "turns": [
+            {
+              "condition": "Always while the Proposal is in this state.",
+              "turn": "nobody"
+            }
+          ],
           "unreachable": false
         },
         {
@@ -120,6 +152,12 @@
           "initial": false,
           "outgoingTransitions": 0,
           "terminal": true,
+          "turns": [
+            {
+              "condition": "Always while the Proposal is in this state.",
+              "turn": "nobody"
+            }
+          ],
           "unreachable": false
         }
       ],

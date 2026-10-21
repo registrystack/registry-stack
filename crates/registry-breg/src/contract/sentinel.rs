@@ -411,6 +411,8 @@ pub(super) struct AuthoredModuleProfile {
     #[serde(deserialize_with = "super::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     id: String,
+    #[serde(default, skip_serializing_if = "super::PresentationSource::is_empty")]
+    display: super::PresentationSource,
     #[serde(default)]
     default: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -496,6 +498,7 @@ impl From<AuthoredModuleProfile> for AccessProfileSource {
     fn from(authored: AuthoredModuleProfile) -> Self {
         Self {
             id: authored.id,
+            display: authored.display,
             default: authored.default,
             actor_kind: authored.actor_kind,
             requester_clients: authored.requester_clients,
@@ -526,6 +529,7 @@ impl From<AccessProfileSource> for AuthoredModuleProfile {
     fn from(profile: AccessProfileSource) -> Self {
         Self {
             id: profile.id,
+            display: profile.display,
             default: profile.default,
             actor_kind: profile.actor_kind,
             requester_clients: profile.requester_clients,

@@ -1,0 +1,232 @@
+{
+  "actions": [
+    {
+      "apiName": "registerEntry",
+      "bounds": {
+        "maximumFieldMutations": 128,
+        "maximumSnapshotBytes": 2097152,
+        "maximumTargets": 16
+      },
+      "commitGuards": [],
+      "dependencies": {
+        "evidence": []
+      },
+      "display": {
+        "label": "Register entry"
+      },
+      "execution": {
+        "mode": "proposal",
+        "proposal": {
+          "application": {
+            "maximumAttempts": 3,
+            "mode": "automatic"
+          },
+          "attachments": {},
+          "hooks": [
+            {
+              "destinationId": "proposal-events",
+              "display": {
+                "description": "Announces a submitted entry proposal.",
+                "label": "Submission notification"
+              },
+              "id": "proposal-submitted",
+              "transitions": [
+                "submitted"
+              ]
+            }
+          ],
+          "permissions": [
+            {
+              "actorKind": null,
+              "default": true,
+              "operations": [
+                "get",
+                "list",
+                "edit",
+                "submit",
+                "cancel"
+              ],
+              "ownership": "caller",
+              "principalClaim": "registry_principal",
+              "profileId": "directory-editor",
+              "readableAttachments": [],
+              "readableContextFields": [],
+              "readableInputs": [
+                "active",
+                "code",
+                "recorded-on"
+              ],
+              "requesterClients": [],
+              "requiredPurposes": [],
+              "requiredScopes": [
+                "directory:write"
+              ],
+              "targets": [
+                {
+                  "recordType": "entry",
+                  "rowBoundaries": []
+                }
+              ],
+              "writableAttachments": []
+            }
+          ],
+          "retention": "retain",
+          "review": {
+            "type": "none"
+          },
+          "reviewContext": null,
+          "systemApplyGrant": {
+            "actionId": "register-entry",
+            "actionRevision": "sha256:50148480ed74a0609df9d7a66a542007522705cfb17b1dd41181721f36f31d75",
+            "revision": "sha256:6c11168bbab0d65e98564c53be6a88b8dc6af79b1ee30e9824c37b1e01c0e49d",
+            "targets": [
+              {
+                "fields": [
+                  "active",
+                  "code",
+                  "recorded-on"
+                ],
+                "operation": "create",
+                "readFields": [
+                  "active",
+                  "code",
+                  "recorded-on"
+                ],
+                "recordType": "entry"
+              }
+            ]
+          }
+        }
+      },
+      "id": "register-entry",
+      "inputs": [
+        {
+          "apiName": "code",
+          "classification": "internal",
+          "description": "The code to give the new entry.",
+          "display": {
+            "description": "The code to give the new entry.",
+            "label": "Entry reference"
+          },
+          "fieldType": {
+            "maximumLength": 80,
+            "minimumLength": 0,
+            "type": "string"
+          },
+          "id": "code",
+          "label": "Entry reference",
+          "nullable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 80,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "active",
+          "classification": "internal",
+          "fieldType": {
+            "type": "boolean"
+          },
+          "id": "active",
+          "label": "active",
+          "nullable": false,
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "apiName": "recordedOn",
+          "classification": "internal",
+          "fieldType": {
+            "type": "date"
+          },
+          "id": "recorded-on",
+          "label": "recordedOn",
+          "nullable": false,
+          "required": true,
+          "schema": {
+            "format": "date",
+            "type": "string"
+          }
+        }
+      ],
+      "permissions": [
+        {
+          "default": true,
+          "operations": [
+            "start"
+          ],
+          "principalClaim": "registry_principal",
+          "profileId": "directory-editor",
+          "requiredPurposes": [],
+          "requiredScopes": [
+            "directory:write"
+          ],
+          "results": [],
+          "targets": [
+            {
+              "operation": "create",
+              "recordType": "entry",
+              "rowBoundaries": [],
+              "source": {
+                "effect": "entry",
+                "kind": "effect"
+              }
+            }
+          ]
+        }
+      ],
+      "plan": {
+        "effects": [
+          {
+            "dependsOn": [],
+            "id": "entry",
+            "mutations": [
+              {
+                "field": "active",
+                "kind": "set",
+                "value": {
+                  "input": "active",
+                  "kind": "from-input"
+                }
+              },
+              {
+                "field": "code",
+                "kind": "set",
+                "value": {
+                  "input": "code",
+                  "kind": "from-input"
+                }
+              },
+              {
+                "field": "recorded-on",
+                "kind": "set",
+                "value": {
+                  "input": "recorded-on",
+                  "kind": "from-input"
+                }
+              }
+            ],
+            "operation": "create",
+            "target": {
+              "binding": {
+                "kind": "create"
+              },
+              "recordType": "entry"
+            }
+          }
+        ],
+        "order": [
+          "entry"
+        ],
+        "type": "fixed"
+      },
+      "revision": "sha256:50148480ed74a0609df9d7a66a542007522705cfb17b1dd41181721f36f31d75"
+    }
+  ],
+  "apiVersion": "id.registrystack.org/formats/breg/proposals-explanation/v1alpha2",
+  "kind": "BRegProposalsExplanation"
+}

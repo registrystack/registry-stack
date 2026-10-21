@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/proposals-explanation/proposals-explanation.v1alpha1.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/proposals-explanation/proposals-explanation.v1alpha2.schema.json",
   "title": "ProposalsExplanation",
   "type": "object",
   "additionalProperties": false,
@@ -8,6 +8,33 @@
     "LocalId": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+    },
+    "Display": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "titleField": {
+          "type": "string"
+        }
+      }
+    },
+    "Presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      }
     }
   },
   "description": "Author inspection of normalized Action definitions. Reviewed asset paths and module identities are included; program bytes are absent.",
@@ -18,7 +45,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/proposals-explanation/v1alpha1"
+      "const": "id.registrystack.org/formats/breg/proposals-explanation/v1alpha2"
     },
     "kind": {
       "const": "BRegProposalsExplanation"
@@ -78,6 +105,24 @@
             "properties": {
               "mode": {
                 "const": "proposal"
+              },
+              "proposal": {
+                "type": "object",
+                "properties": {
+                  "hooks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "display": {
+                          "$ref": "#/$defs/Presentation"
+                        }
+                      },
+                      "x-registry-passthrough": "Compiled Proposal hook, including optional authored display."
+                    }
+                  }
+                },
+                "x-registry-passthrough": "Compiled Proposal policy; display is presentation only."
               }
             },
             "x-registry-passthrough": "The fixed mode and complete typed Proposal policy are owned by the compiled engine contract."
@@ -113,6 +158,9 @@
                 },
                 "nullable": {
                   "type": "boolean"
+                },
+                "display": {
+                  "$ref": "#/$defs/Display"
                 }
               },
               "x-registry-passthrough": "Normalized compiled logical field metadata; its field type and schema are owned by the engine."
