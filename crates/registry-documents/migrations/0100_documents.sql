@@ -17,12 +17,26 @@ CREATE TABLE IF NOT EXISTS documents_documents (
     policy_id text NOT NULL CHECK (policy_id <> ''),
     policy_version text NOT NULL CHECK (policy_version <> ''),
     policy_digest text NOT NULL CHECK (policy_digest ~ '^sha256:[0-9a-f]{64}$'),
+    custodian_issuer text NOT NULL CHECK (custodian_issuer <> ''),
     custodian_subject text NOT NULL CHECK (custodian_subject <> ''),
+    custodian_kind text NOT NULL CHECK (custodian_kind IN ('service', 'human')),
+    -- The person on whose behalf custody is held, when the custody profile
+    -- names one. Never used to decide release by itself.
+    represented_principal_subject text
+        CHECK (represented_principal_subject <> ''),
+    -- An untrusted caller-supplied label: stored and returned, never used
+    -- for authorization.
+    label text CHECK (octet_length(label) BETWEEN 1 AND 256),
     created_at timestamptz NOT NULL
 );
 
+-- The custodian quota sums bytes per custodian and policy.
 CREATE INDEX IF NOT EXISTS documents_documents_custodian_idx
-    ON documents_documents (custodian_subject, policy_id);
+    ON documents_documents (custodian_issuer, custodian_subject, policy_id);
+
+-- The caller's documents, listed in creation order.
+CREATE INDEX IF NOT EXISTS documents_documents_custodian_list_idx
+    ON documents_documents (custodian_issuer, custodian_subject, created_at, document_id);
 
 -- One immutable document version. The upload, verification, and eligibility
 -- dimensions move independently; the status a reader sees is derived from
@@ -45,7 +59,7 @@ CREATE TABLE IF NOT EXISTS documents_versions (
     actor_kind text NOT NULL CHECK (actor_kind IN ('service', 'human')),
     client_id text NOT NULL CHECK (client_id <> ''),
     access_profile_id text NOT NULL CHECK (access_profile_id <> ''),
-    issuing_institution text NOT NULL CHECK (issuing_institution <> ''),
+    issuing_institution text CHECK (issuing_institution <> ''),
     reserved_at timestamptz NOT NULL,
     upload_expires_at timestamptz NOT NULL CHECK (upload_expires_at > reserved_at),
     computed_digest text CHECK (computed_digest ~ '^sha256:[0-9a-f]{64}$'),
@@ -95,6 +109,46 @@ CREATE TABLE IF NOT EXISTS documents_versions (
 
 CREATE INDEX IF NOT EXISTS documents_versions_document_idx
     ON documents_versions (document_id);
+
+-- Documents a caller reserved for another custodian, listed in creation
+-- order.
+CREATE INDEX IF NOT EXISTS documents_versions_actor_idx
+    ON documents_versions (actor_issuer, actor_subject, reserved_at, document_id);
+
+-- One document grant: a named recipient, one exact version, and an expiry
+-- frozen at issue. A grant is never extended; revocation is final.
+CREATE TABLE IF NOT EXISTS documents_grants (
+    grant_id uuid PRIMARY KEY,
+    document_id uuid NOT NULL REFERENCES documents_documents (document_id),
+    version_id uuid NOT NULL REFERENCES documents_versions (version_id),
+    grantee_issuer text NOT NULL CHECK (grantee_issuer <> ''),
+    grantee_subject text NOT NULL CHECK (grantee_subject <> ''),
+    granted_by_issuer text NOT NULL CHECK (granted_by_issuer <> ''),
+    granted_by_subject text NOT NULL CHECK (granted_by_subject <> ''),
+    granted_by_profile text NOT NULL CHECK (granted_by_profile <> ''),
+    issued_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL CHECK (expires_at > issued_at),
+    revoked_at timestamptz CHECK (revoked_at >= issued_at)
+);
+
+CREATE INDEX IF NOT EXISTS documents_grants_document_idx
+    ON documents_grants (document_id, issued_at, grant_id);
+CREATE INDEX IF NOT EXISTS documents_grants_grantee_idx
+    ON documents_grants (grantee_issuer, grantee_subject, issued_at, grant_id);
+CREATE INDEX IF NOT EXISTS documents_grants_version_idx
+    ON documents_grants (version_id, grantee_issuer, grantee_subject);
+
+-- One idempotency key, scoped to the caller and the operation and stored
+-- only as a digest. The request digest is the canonical body's; the
+-- resource is the one the first request created. A key expires with the
+-- receipt retention period.
+CREATE TABLE IF NOT EXISTS documents_idempotency (
+    key_digest text PRIMARY KEY CHECK (key_digest ~ '^[0-9a-f]{64}$'),
+    request_digest text NOT NULL CHECK (request_digest ~ '^[0-9a-f]{64}$'),
+    resource_id uuid NOT NULL,
+    created_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL CHECK (expires_at > created_at)
+);
 
 -- Content held in PostgreSQL, one row per finalized version.
 CREATE TABLE IF NOT EXISTS documents_contents (
