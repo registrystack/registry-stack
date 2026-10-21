@@ -2285,6 +2285,32 @@ fn attachment_destinations_are_named_url_and_the_endpoint_key_is_refused() {
 }
 
 #[test]
+fn the_endpoint_key_is_an_ordinary_unknown_key_under_variants_without_a_url() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    for (block, pointer) in [
+        (
+            "attachmentStorage:\n  type: database\n  endpoint: https://storage.example\n",
+            "/attachmentStorage/endpoint",
+        ),
+        (
+            "attachmentVerification:\n  type: disabled\n  endpoint: https://scanner.example/verify\n",
+            "/attachmentVerification/endpoint",
+        ),
+    ] {
+        let error = parse_runtime_config_with_env(&format!("{base}\n{block}"), env_lookup)
+            .expect_err("the endpoint member is refused");
+        assert_eq!(
+            reader_refusal(&error),
+            ("config.unknown-key", pointer),
+            "{block}"
+        );
+        let rendered = format!("{error} {}", error.render_human(None));
+        assert!(!rendered.contains(".url"), "{rendered}");
+    }
+}
+
+#[test]
 fn a_runtime_union_names_its_variant_in_a_type_member() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);

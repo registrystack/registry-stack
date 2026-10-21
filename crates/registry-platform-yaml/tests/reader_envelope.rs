@@ -430,6 +430,39 @@ fn cfg_change_2_a_wildcard_removed_key_matches_every_member() {
 }
 
 #[test]
+fn cfg_change_2_a_guarded_removed_key_matches_only_the_named_variant() {
+    const GUARDED: FormatSpec = FormatSpec {
+        kind: "ExampleRuntimeConfig",
+        envelope: FORMAT.envelope,
+        removed_keys: &[RemovedKey {
+            pointer: "/store[type=s3]/endpoint",
+            replacement: "Rename `endpoint` to `url`.",
+        }],
+    };
+    let read =
+        |body: &str| Reader::new(FILE).read(with_envelope(body).as_bytes(), &Expect::one(&GUARDED));
+
+    let report = read("store:\n  type: s3\n  endpoint: https://a.example\n").unwrap_err();
+    let diagnostic = only(&report);
+    assert_eq!(
+        (diagnostic.code.as_str(), diagnostic.path.as_str()),
+        ("config.removed-key", "/store/endpoint")
+    );
+    assert_eq!(diagnostic.suggested_action, "Rename `endpoint` to `url`.");
+
+    // Under another variant, or with no tag, the key is not the renamed one:
+    // the reader leaves it to the ordinary unknown-key refusal.
+    for body in [
+        "store:\n  type: database\n  endpoint: https://a.example\n",
+        "store:\n  endpoint: https://a.example\n",
+    ] {
+        if let Err(report) = read(body) {
+            panic!("{report}");
+        }
+    }
+}
+
+#[test]
 fn cfg_change_2_decoding_reports_a_removed_key_once_beside_unknown_keys() {
     let body = "oidc:\n  jwksUri: https://a.example\n  jwksUrl: https://a.example\nnmae: a\n";
     let report = refusal::<Runtime>(body);
