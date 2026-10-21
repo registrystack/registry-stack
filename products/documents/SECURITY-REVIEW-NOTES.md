@@ -93,22 +93,25 @@ deployment pinned.
 `verification.rs` enforce, with the invariant rows DOCUMENTS-SEC-09 and
 DOCUMENTS-SEC-14 to DOCUMENTS-SEC-20:
 
-- Reservation (`POST /documents`) refuses an unknown policy, a length above
-  the policy or deployment ceiling, a media type outside the policy list by
+- Reservation (`POST /documents`) refuses an unknown policy, an empty
+  document, a length above the policy or deployment ceiling, a media type outside the policy list by
   exact match, and a custodian over its per-policy byte quota. The quota sum
   runs under a transaction advisory lock per custodian and policy, so
   concurrent reservations cannot overrun it.
-- Upload (`PUT /uploads/{id}/content`) has its own body limit at the
-  deployment ceiling and a five-minute transfer deadline, requires
-  `Content-Type` to equal the reserved type, never inspects the bytes for a
-  type, refuses a declared length other than the reserved one, and stops
-  reading at the reserved length plus one byte. The body is hashed while read
+- Upload (`PUT /uploads/{id}/content`) has no body-limit layer of its own
+  and a five-minute transfer deadline. It requires `Content-Type` to equal
+  the reserved type, never inspects the bytes for a type, refuses a declared
+  length above the deployment ceiling or other than the reserved one before
+  reading, and stops reading at the reserved length plus one byte, so the
+  reservation's policy bound is what limits the body. The body is hashed while read
   and buffered under a fixed 256 MiB budget of concurrent uploads; past it the
   upload answers 503. Nothing is written until digest and length match, and
   no database transaction is open while bytes arrive. Finalization locks the
   version row, so concurrent uploads finalize once.
-- On S3, each attempt commits a staged row naming a fresh, server-chosen
-  object before writing it. Identical content is never shared between
+- On S3, credentials are resolved and the bucket is checked for versioning
+  once, at startup; each object's store is derived from that activation.
+  Each attempt commits a staged row naming a fresh, server-chosen object
+  before writing it, and the write checks versioning again before it sends. Identical content is never shared between
   documents.
 - The storage binding is pinned at the first write; a later start under
   another backend, bucket, or scope is refused, and a running deployment
@@ -118,18 +121,27 @@ DOCUMENTS-SEC-14 to DOCUMENTS-SEC-20:
   digest. Backoff starts at 30 seconds, doubles to at most one hour with
   equal jitter, and gives up after about seven days. An unavailable verifier
   never releases; a dead-lettered job leaves the version pending and
-  suspended. At startup, every finalized version verified or queued under
-  another binding is suspended and re-queued, and a job under a superseded
-  binding dead-letters without a verdict.
+  suspended. At startup, every finalized version not rejected and recorded
+  under another binding is suspended and re-queued, and its pending job under
+  the old binding is cancelled; a job already leased under it ends without a
+  verdict. A worker whose binding differs from the version's retries the job
+  rather than ending it, so instances with different verifiers can run side
+  by side during a rollout. A verdict that changes no row while the version
+  is still under the same binding and not rejected is not delivered; the job
+  is retried once its lease lapses.
 - Download releases only an approved version whose verdict is bound to its
-  computed digest, media type, and the current binding. It reads the whole
+  computed digest, media type, and the binding it is currently recorded
+  under; the database refuses a releasable row that breaks any of the
+  three. It reads the whole
   content and checks digest and length before the first byte; a mismatch
   answers 503, sends no byte, and writes a `storage-integrity` audit entry.
 - Reservation, upload, verification, and download each write an audit
   request entry before they act and a response entry with outcome and byte
   count after. The journal names a caller only by a keyed reference. A
-  request whose audit entry cannot be written is refused with 503; a
-  verification attempt whose entry cannot be written logs an error.
+  request whose audit entry cannot be written is refused with 503. A
+  verification attempt whose leasing entry cannot be written is refused
+  before the verifier is asked and records no verdict; a result entry that
+  cannot be written after the verdict commits logs an error.
 - Startup refuses a package other than the one `package.expectedDigest`
   pins.
 
@@ -154,6 +166,12 @@ against a loopback fake object store and verifier. The rows in
   such objects and rows stay in place.
 - Replaying a dead-lettered verification job is owed by WP7; until then an
   operator cannot release a version whose job dead-lettered.
+- During a verifier rollout, an older instance may still finalize a version
+  under its binding after a newer instance swept. That version can be
+  approved and released under the older binding by a worker that holds it,
+  and stays so until the next restart sweeps it; a worker under the newer
+  binding only retries its job. Finish a verifier change by restarting every
+  instance.
 - There is no operator command to apply the schema yet; serving refuses a
   database without it.
 - The shared runtime configuration conformance gate has no Document Store

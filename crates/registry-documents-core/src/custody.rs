@@ -319,7 +319,10 @@ pub fn admit_reservation<'p>(
         .find(|(id, _)| id.as_str() == ask.policy_id)
         .ok_or(ProblemCode::DocumentPolicyUnknown)?;
     let restrictions = &policy.mandatory_restrictions;
-    if ask.declared_length == 0 || ask.declared_length > restrictions.maximum_document_bytes.get() {
+    if ask.declared_length == 0 {
+        return Err(ProblemCode::RequestUnprocessable);
+    }
+    if ask.declared_length > restrictions.maximum_document_bytes.get() {
         return Err(ProblemCode::DocumentTooLarge);
     }
     if !restrictions.allowed_content_types.admits(ask.media_type) {
@@ -430,7 +433,12 @@ mod tests {
     #[test]
     fn a_zero_or_oversized_length_is_refused_before_any_bytes() {
         let project = starter();
-        for length in [0, 16_777_217, u64::MAX] {
+        assert_eq!(
+            admit_reservation(&project, ask("citizen-delivery", 0, "application/pdf")),
+            Err(ProblemCode::RequestUnprocessable),
+            "an empty document is not a size problem"
+        );
+        for length in [16_777_217, u64::MAX] {
             assert_eq!(
                 admit_reservation(&project, ask("citizen-delivery", length, "application/pdf")),
                 Err(ProblemCode::DocumentTooLarge),
