@@ -17,7 +17,6 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
 use registry_documents::package::{package_limits, PACKAGE_COMMAND, PROJECT_FILE};
-use registry_documents::store::PostgresStore;
 use registry_platform_config::write_package;
 use uuid::Uuid;
 
@@ -195,16 +194,17 @@ audit:
         std::fs::write(&self.runtime, document).unwrap();
     }
 
-    /// Apply the schema over the migration credential.
+    /// Apply the schema and activate the package over the migration
+    /// credential, as `documentsctl apply` does.
     pub async fn migrate(&self) {
         let config = registry_documents::config::RuntimeConfig::load(&self.runtime)
             .expect("the test runtime document loads");
-        let secrets = config.secret_resolver().unwrap();
-        PostgresStore::connect_migration(&config.database, &secrets)
-            .unwrap()
-            .migrate()
-            .await
-            .expect("the schema applies");
+        registry_documents::runtime::apply_activation(
+            &config,
+            &registry_documents::activation::ApplyRequest::default(),
+        )
+        .await
+        .expect("the package applies");
     }
 
     /// The audit entries written so far, one JSON value per line.

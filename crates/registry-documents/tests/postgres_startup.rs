@@ -12,6 +12,7 @@ mod support;
 
 use std::time::Duration;
 
+use registry_documents::activation::ActivationError;
 use registry_documents::runtime::{prepare, RuntimeError};
 use registry_documents_client::{DocumentsClient, DocumentsClientConfig, ProblemCode};
 use support::{
@@ -148,10 +149,13 @@ async fn a_runtime_over_a_database_without_the_schema_does_not_start() {
     let error = prepare(&deployment.runtime)
         .await
         .expect_err("startup is refused");
-    let RuntimeError::Database { stage, .. } = error else {
-        panic!("a database refusal, not {error}");
-    };
-    assert_eq!(stage, "runtime database schema check");
+    assert!(
+        matches!(
+            error,
+            RuntimeError::Activation(ActivationError::NotActivated)
+        ),
+        "an unactivated database refusal, not {error}"
+    );
 }
 
 #[tokio::test]

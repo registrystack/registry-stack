@@ -3,9 +3,9 @@
 //! The PostgreSQL store: connections, the versioned schema, and readiness.
 //!
 //! The runtime serves over the runtime URL and never changes the schema;
-//! [`PostgresStore::migrate`] applies it over the migration URL, and
-//! [`PostgresStore::ready`] refuses a database whose applied versions are not
-//! exactly the ones this release carries.
+//! `documentsctl apply` applies it over the migration URL inside the
+//! activation transaction, and [`PostgresStore::ready`] refuses a database
+//! whose applied versions are not exactly the ones this release carries.
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -55,8 +55,8 @@ pub enum StoreError {
     SecretConfiguration(String),
     #[error("the Document Store database schema is not the version this runtime expects; apply the schema with the migration connection")]
     SchemaVersion,
-    #[error("the Document Store migration lock was not held when it was released")]
-    MigrationLock,
+    #[error("the Document Store database server is older than PostgreSQL 17, which the activation ledger requires")]
+    UnsupportedPostgres,
     // Both carry the driver's own account of what went wrong. Neither the
     // pool nor the driver repeats the connection string in its message, so
     // naming the cause costs no credential.
@@ -164,23 +164,13 @@ impl PostgresStore {
             .ok_or(StoreError::Configuration)
     }
 
-    /// Apply every schema version not yet applied, under the migration lock.
-    /// Running it again, or twice at once, applies nothing twice.
-    pub async fn migrate(&self) -> Result<(), StoreError> {
-        let mut client = self.client().await?;
-        client
-            .query_one("SELECT pg_advisory_lock($1)", &[&MIGRATION_LOCK_KEY])
-            .await?;
-        let applied = apply_migrations(&mut client).await;
-        let released = client
-            .query_one("SELECT pg_advisory_unlock($1)", &[&MIGRATION_LOCK_KEY])
-            .await;
-        applied?;
-        if released?.get::<_, bool>(0) {
-            Ok(())
-        } else {
-            Err(StoreError::MigrationLock)
-        }
+    /// The role this store's sessions run as.
+    pub async fn current_user(&self) -> Result<String, StoreError> {
+        let client = self.client().await?;
+        Ok(client
+            .query_one("SELECT current_user::text", &[])
+            .await?
+            .try_get(0)?)
     }
 
     /// Whether the store answers and carries exactly the schema versions
@@ -223,15 +213,19 @@ impl PostgresStore {
     }
 }
 
-async fn apply_migrations(client: &mut deadpool_postgres::Client) -> Result<(), StoreError> {
-    client
+/// Apply every schema version not yet applied inside `transaction`, which
+/// holds the migration lock, and return the versions it applied.
+pub(crate) async fn migrate_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+) -> Result<Vec<i64>, StoreError> {
+    transaction
         .batch_execute(
             "CREATE TABLE IF NOT EXISTS documents_schema_migrations (\
              version bigint PRIMARY KEY CHECK (version > 0),\
              applied_at timestamptz NOT NULL);",
         )
         .await?;
-    let applied = client
+    let applied = transaction
         .query(
             "SELECT version FROM documents_schema_migrations ORDER BY version",
             &[],
@@ -247,28 +241,21 @@ async fn apply_migrations(client: &mut deadpool_postgres::Client) -> Result<(), 
     {
         return Err(StoreError::SchemaVersion);
     }
+    let mut added = Vec::new();
     for (version, migration) in MIGRATIONS {
-        let transaction = client.transaction().await?;
-        let applied: bool = transaction
-            .query_one(
-                "SELECT EXISTS(SELECT 1 FROM documents_schema_migrations WHERE version=$1)",
+        if applied.contains(&version) {
+            continue;
+        }
+        transaction.batch_execute(migration).await?;
+        transaction
+            .execute(
+                "INSERT INTO documents_schema_migrations(version,applied_at) VALUES($1,now())",
                 &[&version],
             )
-            .await?
-            .get(0);
-        if !applied {
-            transaction.batch_execute(migration).await?;
-            transaction
-                .execute(
-                    "INSERT INTO documents_schema_migrations(version,applied_at) \
-                     VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
-                    &[&version],
-                )
-                .await?;
-        }
-        transaction.commit().await?;
+            .await?;
+        added.push(version);
     }
-    Ok(())
+    Ok(added)
 }
 
 fn tls_connector(

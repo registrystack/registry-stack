@@ -24,8 +24,10 @@ pub const CONTENT_DOWNLOAD_EVENT: &str = "documents.content-download";
 pub const CONTENT_VERIFICATION_EVENT: &str = "documents.content-verification";
 pub const GRANT_ISSUE_EVENT: &str = "documents.grant-issue";
 pub const GRANT_REVOKE_EVENT: &str = "documents.grant-revoke";
+pub const PACKAGE_ACTIVATION_EVENT: &str = "documents.package-activation";
 
 const ACTOR_REFERENCE_CLASS: &str = "documents-actor-v1";
+const ACTIVATION_REFERENCE_CLASS: &str = "documents-activation-reference-v1";
 
 /// The actor reference could not be computed.
 #[derive(Debug, Error)]
@@ -115,6 +117,21 @@ impl DocumentsAudit {
             .keys
             .audit_reference_hash(ACTOR_REFERENCE_CLASS, "", canonical)?)
     }
+
+    /// The keyed reference of an operator's change reference, bound to the
+    /// activation it was given for: the ledger and the journal carry the
+    /// reference, never the text.
+    pub fn activation_reference(
+        &self,
+        activation_id: Uuid,
+        reference: &str,
+    ) -> Result<String, AuditReferenceHashError> {
+        self.keys.audit_reference_hash(
+            ACTIVATION_REFERENCE_CLASS,
+            &activation_id.to_string(),
+            reference,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -141,5 +158,23 @@ mod tests {
         assert_ne!(first, audit.actor_reference(issuer, "custodian-2").unwrap());
         assert!(!first.contains("custodian-1"));
         assert!(!first.contains("identity.example.test"));
+    }
+
+    #[test]
+    fn an_activation_reference_is_bound_to_its_activation_and_hides_the_text() {
+        let audit = audit();
+        let activation = Uuid::new_v4();
+        let first = audit.activation_reference(activation, "CHG-1042").unwrap();
+        assert_eq!(
+            first,
+            audit.activation_reference(activation, "CHG-1042").unwrap()
+        );
+        assert_ne!(
+            first,
+            audit
+                .activation_reference(Uuid::new_v4(), "CHG-1042")
+                .unwrap()
+        );
+        assert!(!first.contains("CHG-1042"));
     }
 }

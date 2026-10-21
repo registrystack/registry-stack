@@ -5662,6 +5662,7 @@ dependencies = [
  "jsonwebtoken",
  "registry-documents-client",
  "registry-documents-core",
+ "registry-platform-activation",
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-buildinfo",

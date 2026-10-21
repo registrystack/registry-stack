@@ -94,6 +94,147 @@ pub fn job_table(schema: &str) -> Result<JobTable, ConfigError> {
     JobTable::new(schema, JOB_TABLE, "version_id", "part")
 }
 
+/// The most dead letters one operator listing returns.
+pub const MAXIMUM_DEAD_LETTER_LISTING: u16 = 500;
+
+/// A dead-lettered content verification job, as an operator lists it.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeadLetter {
+    pub version_id: Uuid,
+    /// The generation a replay names as `--expected-generation`.
+    pub generation: i64,
+    pub attempt: i16,
+    /// When the job was dead-lettered, in UTC, RFC 3339 to the second.
+    pub dead_lettered_at: String,
+}
+
+/// A replayed job: pending again, at attempt zero, under a new generation.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Replayed {
+    pub version_id: Uuid,
+    pub generation: i64,
+}
+
+/// Why an operator replay was refused. A refused replay changes nothing.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum ReplayRefusal {
+    #[error("the version has no content verification job under its verifier binding")]
+    NotFound,
+    #[error("the content verification job is {state}; only a dead-lettered job is replayed")]
+    NotDeadLettered { state: String },
+    #[error("the content verification job is at generation {current}; name it with --expected-generation {current}")]
+    StaleGeneration { current: i64 },
+    #[error("the content verification job changed while it was replayed; list the dead letters and try again")]
+    Changed,
+}
+
+/// A replay that was refused, or that could not reach the database.
+#[derive(Debug, thiserror::Error)]
+pub enum ReplayError {
+    #[error(transparent)]
+    Refused(#[from] ReplayRefusal),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
+
+impl From<tokio_postgres::Error> for ReplayError {
+    fn from(error: tokio_postgres::Error) -> Self {
+        Self::Store(StoreError::Query(error))
+    }
+}
+
+/// The oldest `limit` dead-lettered jobs under each version's current
+/// verifier binding. It reads and changes nothing else.
+pub async fn dead_letters(
+    store: &PostgresStore,
+    limit: u16,
+) -> Result<Vec<DeadLetter>, StoreError> {
+    let limit = i64::from(limit.min(MAXIMUM_DEAD_LETTER_LISTING));
+    let client = store.client().await?;
+    let rows = client
+        .query(
+            "SELECT j.version_id, j.part, j.generation, j.attempt,
+                    to_char(j.dead_lettered_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'),
+                    v.verification_binding_digest
+               FROM documents_verification_jobs j
+               JOIN documents_versions v ON v.version_id = j.version_id
+              WHERE j.state = 'dead-lettered'
+              ORDER BY j.dead_lettered_at, j.version_id
+              LIMIT $1",
+            &[&limit],
+        )
+        .await?;
+    let mut letters = Vec::with_capacity(rows.len());
+    for row in rows {
+        let version_id: Uuid = row.try_get(0)?;
+        let part: String = row.try_get(1)?;
+        let binding: Option<String> = row.try_get(5)?;
+        // A job under a binding the version no longer carries is not the
+        // one a replay reaches; the startup sweep gave the version another.
+        if binding.is_some_and(|binding| job_part(version_id, &binding) == part) {
+            letters.push(DeadLetter {
+                version_id,
+                generation: row.try_get(2)?,
+                attempt: row.try_get(3)?,
+                dead_lettered_at: row.try_get(4)?,
+            });
+        }
+    }
+    Ok(letters)
+}
+
+/// Return the dead-lettered job of `version_id` under its current verifier
+/// binding to pending, at attempt zero under the next generation, through
+/// the dispatcher's generation-checked replay. The version stays pending
+/// and suspended until the job's verdict. Every other job is refused.
+pub async fn replay(
+    store: &PostgresStore,
+    dispatcher: &Dispatcher<VerificationStore>,
+    version_id: Uuid,
+    expected_generation: i64,
+) -> Result<Replayed, ReplayError> {
+    let client = store.client().await?;
+    let binding: Option<String> = client
+        .query_opt(
+            "SELECT verification_binding_digest FROM documents_versions WHERE version_id = $1",
+            &[&version_id],
+        )
+        .await?
+        .map(|row| row.try_get(0))
+        .transpose()?
+        .flatten();
+    let binding = binding.ok_or(ReplayRefusal::NotFound)?;
+    let part = job_part(version_id, &binding);
+    let row = client
+        .query_opt(
+            "SELECT state, generation FROM documents_verification_jobs
+              WHERE version_id = $1 AND part = $2",
+            &[&version_id, &part],
+        )
+        .await?
+        .ok_or(ReplayRefusal::NotFound)?;
+    drop(client);
+    let state: String = row.try_get(0)?;
+    let current: i64 = row.try_get(1)?;
+    if state != JobState::DeadLettered.as_str() {
+        return Err(ReplayRefusal::NotDeadLettered { state }.into());
+    }
+    if current != expected_generation {
+        return Err(ReplayRefusal::StaleGeneration { current }.into());
+    }
+    let key = JobKey::new(version_id, part).map_err(|_| ReplayRefusal::NotFound)?;
+    let generation = dispatcher
+        .replay(&key, expected_generation)
+        .await
+        .map_err(|_| ReplayRefusal::Changed)?;
+    Ok(Replayed {
+        version_id,
+        generation,
+    })
+}
+
 /// Where a verdict comes from: the configured HTTP verifier, or no
 /// verifier at all.
 #[async_trait]
@@ -382,14 +523,16 @@ impl DispatchStore for VerificationStore {
         Ok(row.try_get(0)?)
     }
 
+    /// The record of a targeted job is its version. The target row leads
+    /// with the dispatch columns, so the version is read from the key.
     fn decode_target(
         &self,
-        row: &Row,
+        _row: &Row,
         _first: usize,
-        _key: &JobKey,
+        key: &JobKey,
         _action: TargetAction,
     ) -> Result<Option<Uuid>, DispatchError> {
-        Ok(Some(row.try_get(0)?))
+        Ok(Some(key.id()))
     }
 
     async fn write_attempt(
