@@ -793,42 +793,32 @@ fn add_project_display_warnings(
     project: &RegistryProject,
 ) {
     if let Some(recipients) = &project.recipients {
-        for (code, kind, values) in [
+        let mut names = recipients
+            .organizations
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                (
+                    item.id.clone(),
+                    item.name.clone(),
+                    format!("/recipients/organizations/{index}/name"),
+                )
+            })
+            .collect::<Vec<_>>();
+        names.extend(recipients.groups.iter().enumerate().map(|(index, item)| {
             (
-                "breg.recipient-organization.duplicate-name",
-                "recipient organizations",
-                recipients
-                    .organizations
-                    .iter()
-                    .enumerate()
-                    .map(|(index, item)| {
-                        (
-                            item.id.clone(),
-                            item.name.clone(),
-                            format!("/recipients/organizations/{index}/name"),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-            (
-                "breg.recipient-group.duplicate-name",
-                "recipient groups",
-                recipients
-                    .groups
-                    .iter()
-                    .enumerate()
-                    .map(|(index, item)| {
-                        (
-                            item.id.clone(),
-                            item.name.clone(),
-                            format!("/recipients/groups/{index}/name"),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-        ] {
-            add_duplicate_labels(document, warnings, code, kind, &values);
-        }
+                item.id.clone(),
+                item.name.clone(),
+                format!("/recipients/groups/{index}/name"),
+            )
+        }));
+        add_duplicate_labels(
+            document,
+            warnings,
+            "breg.recipient.duplicate-name",
+            "recipients",
+            &names,
+        );
     }
 
     let Some(projection) = &project.manifest_projection else {

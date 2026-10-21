@@ -639,6 +639,20 @@ fn recipient_ids_are_unique_codes() {
         value["recipients"]["organizations"][0][field] = json!("");
         assert_refused(&value, "breg.recipients.id");
     }
+
+    let mut direct = registry_breg::parse_project_yaml(consent_fixture::PROJECT.as_bytes())
+        .expect("consent fixture parses");
+    direct.recipients.as_mut().unwrap().organizations[0].contact = "safe\u{202e}text".to_owned();
+    let failure =
+        registry_breg::compile_project(&direct, &[], registry_breg::CompileProfile::Authoring)
+            .expect_err("direct construction cannot bypass recipient display-text validation");
+    assert!(
+        failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "breg.recipients.id"),
+        "{failure:?}"
+    );
 }
 
 #[test]
