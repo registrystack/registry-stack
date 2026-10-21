@@ -16,13 +16,18 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use registry_documents::activation::{ActivationChange, ActivationError, ApplyRequest};
+use registry_documents::audit::DocumentsAudit;
 use registry_documents::config::RuntimeConfig;
 use registry_documents::runtime::{
     activation_plan, activation_status, apply_activation, dead_lettered_verifications, prepare,
     prepare_with_verifier, replay_verification, Prepared, RuntimeError,
 };
-use registry_documents::verification::{ReplayRefusal, MAXIMUM_ATTEMPTS};
+use registry_documents::store::PostgresStore;
+use registry_documents::verification::{
+    replay, ReplayError, ReplayFailure, ReplayRefusal, VerificationStore, MAXIMUM_ATTEMPTS,
+};
 use registry_platform_activation::{DatabaseIdCheck, PlanKind, RoleMode};
+use registry_platform_audit::{AuditProfile, AuditWriter};
 use support::{
     database_url, pdf, reservation, Api, Deployment, FakeVerifier, APP, APPROVE, CITIZEN,
     DATABASE_STORAGE, DISABLED_VERIFIER, STARTER_PROJECT, UNAVAILABLE,
@@ -560,4 +565,136 @@ async fn replay_refuses_an_unknown_version_and_an_unactivated_database() {
         matches!(error, RuntimeError::Replay(ReplayRefusal::NotFound)),
         "{error}"
     );
+}
+
+/// An audit sink that keeps its first `lines` lines and refuses every
+/// write after them.
+struct LimitedSink {
+    lines: usize,
+}
+
+impl std::io::Write for LimitedSink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.lines == 0 {
+            return Err(std::io::Error::other("the audit sink refuses"));
+        }
+        self.lines -= bytes.iter().filter(|byte| **byte == b'\n').count();
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Replay `version` at generation 1 with an audit journal that accepts
+/// only its first `lines` lines.
+async fn replay_audited(
+    deployment: &Deployment,
+    version: Uuid,
+    lines: usize,
+) -> Result<registry_documents::verification::Replayed, ReplayError> {
+    let config = config(deployment);
+    let secrets = config.secret_resolver().unwrap();
+    let store = PostgresStore::connect_runtime(&config.database, &secrets).unwrap();
+    let audit = DocumentsAudit::new(
+        AuditWriter::from_line_sink(Box::new(LimitedSink { lines })),
+        AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+            b"documents-test-audit-key-not-a-secret".to_vec(),
+        ))
+        .unwrap()
+        .key_hasher(),
+    );
+    let verification = VerificationStore::new(store.clone(), deployment.schema.clone(), audit);
+    replay(&store, verification, version, 1).await
+}
+
+/// The job's state and generation.
+async fn job(deployment: &Deployment) -> (String, i64) {
+    (
+        deployment
+            .scalar("SELECT state FROM documents_verification_jobs")
+            .await,
+        deployment
+            .scalar("SELECT generation FROM documents_verification_jobs")
+            .await,
+    )
+}
+
+#[tokio::test]
+async fn a_replay_whose_audit_request_is_refused_changes_nothing() {
+    let deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    deployment.migrate().await;
+    let verifier = FakeVerifier::new("binding-a", UNAVAILABLE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let version = dead_lettered(&deployment, &prepared, &api).await;
+
+    let error = replay_audited(&deployment, version, 0)
+        .await
+        .expect_err("an unaudited replay is refused");
+    assert!(
+        matches!(error, ReplayError::Failed(ReplayFailure::AuditUnavailable)),
+        "{error}"
+    );
+    assert_eq!(job(&deployment).await, ("dead-lettered".to_owned(), 1));
+}
+
+#[tokio::test]
+async fn a_replay_whose_audit_response_is_refused_stands_and_says_so() {
+    let deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    deployment.migrate().await;
+    let verifier = FakeVerifier::new("binding-a", UNAVAILABLE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let version = dead_lettered(&deployment, &prepared, &api).await;
+
+    let error = replay_audited(&deployment, version, 1)
+        .await
+        .expect_err("a replay whose response was not audited is reported");
+    assert!(
+        matches!(
+            &error,
+            ReplayError::Failed(ReplayFailure::Unaudited { version_id, generation: 2 })
+                if *version_id == version
+        ),
+        "{error}"
+    );
+    assert_eq!(job(&deployment).await, ("pending".to_owned(), 2));
+}
+
+/// Move the runtime's audit journal under `name`, where the `documentsctl`
+/// companion journal is a directory and cannot be opened for writing.
+fn block_operator_journal(deployment: &Deployment, name: &str) {
+    let blocked = deployment.path().join(name);
+    std::fs::create_dir_all(blocked.join("audit.documentsctl.ndjson")).unwrap();
+    rewrite_runtime(
+        deployment,
+        &format!("path: {}", deployment.audit_path().display()),
+        &format!("path: {}", blocked.join("audit.ndjson").display()),
+    );
+}
+
+#[tokio::test]
+async fn apply_fails_closed_on_an_unwritable_audit_journal() {
+    let deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    block_operator_journal(&deployment, "blocked");
+    let error = apply_activation(&config(&deployment), &ApplyRequest::default())
+        .await
+        .expect_err("apply refuses an unwritable audit journal");
+    assert!(matches!(error, RuntimeError::AuditJournal(_)), "{error}");
+    assert_eq!(relations(&deployment).await, 0, "apply wrote nothing");
+}
+
+#[tokio::test]
+async fn replay_fails_closed_on_an_unwritable_audit_journal() {
+    let deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    deployment.migrate().await;
+    let verifier = FakeVerifier::new("binding-a", UNAVAILABLE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let version = dead_lettered(&deployment, &prepared, &api).await;
+    block_operator_journal(&deployment, "blocked");
+    let error = replay_verification(&config(&deployment), version, 1)
+        .await
+        .expect_err("replay refuses an unwritable audit journal");
+    assert!(matches!(error, RuntimeError::AuditJournal(_)), "{error}");
+    assert_eq!(job(&deployment).await, ("dead-lettered".to_owned(), 1));
 }

@@ -169,6 +169,7 @@ entries:
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: apply_requires_the_migration_credential}
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: invalid_operator_references_are_refused_before_anything_is_written}
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: plan_reports_the_change_and_writes_nothing}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: apply_fails_closed_on_an_unwritable_audit_journal}
   - id: DOCUMENTS-SEC-35
     tests:
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_fresh_database_is_refused_by_serve_until_the_package_is_applied}
@@ -179,5 +180,8 @@ entries:
     tests:
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_refuses_an_unknown_version_and_an_unactivated_database}
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_returns_a_dead_lettered_verification_to_pending}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_replay_whose_audit_request_is_refused_changes_nothing}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_replay_whose_audit_response_is_refused_stands_and_says_so}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_fails_closed_on_an_unwritable_audit_journal}
       - {path: crates/registry-documentsctl/tests/postgres_cli.rs, name: the_dead_letter_verbs_refuse_a_database_that_is_not_activated}
       - {path: crates/registry-documents/src/http.rs, name: every_other_route_is_not_found}

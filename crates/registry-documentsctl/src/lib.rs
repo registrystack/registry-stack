@@ -345,7 +345,11 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
         ),
         "audit.unconfirmed" => (
             "audit",
-            "Do not apply the change again; restore the audit destination and confirm with documentsctl status.",
+            "The change stands, so do not repeat it; restore the audit destination and confirm with documentsctl status or documentsctl verification list.",
+        ),
+        "documents.verification.outcome-unknown" => (
+            "verification-job",
+            "Run documentsctl verification list to see whether the job is still dead-lettered before replaying it again.",
         ),
         "audit.unavailable" => (
             "audit",
@@ -385,15 +389,15 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
             "database",
             "Restore the database or the credential the message names, then retry.",
         ),
-        "verification.not-found" => (
+        "documents.verification.not-found" => (
             "verification-job",
             "Find the version id with documentsctl verification list.",
         ),
-        "verification.not-dead-lettered" | "verification.changed" => (
+        "documents.verification.not-dead-lettered" | "documents.verification.changed" => (
             "verification-job",
             "Run documentsctl verification list and replay only a job it reports.",
         ),
-        "verification.stale-generation" => (
+        "documents.verification.stale-generation" => (
             "verification-job",
             "Run documentsctl verification list and pass the generation it reports as --expected-generation.",
         ),
@@ -1313,10 +1317,11 @@ mod tests {
             "documentsctl.activation.schema-newer",
             "documentsctl.activation.schema-invalid",
             "documentsctl.activation.invalid-reference",
-            "verification.not-found",
-            "verification.not-dead-lettered",
-            "verification.stale-generation",
-            "verification.changed",
+            "documents.verification.not-found",
+            "documents.verification.not-dead-lettered",
+            "documents.verification.stale-generation",
+            "documents.verification.changed",
+            "documents.verification.outcome-unknown",
             "audit.unconfirmed",
             "audit.unavailable",
             "package.outcome-unknown",

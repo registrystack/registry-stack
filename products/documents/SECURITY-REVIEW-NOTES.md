@@ -356,7 +356,14 @@ than the operator, or by a replay issued from a stale listing.
 - Apply and replay write their audit records to the `documentsctl`
   companion journal. An apply whose ledger row committed but whose audit
   record was not accepted reports `audit.unconfirmed` with the
-  activation id, and `status` confirms it.
+  activation id, and `status` confirms it. Either command refuses with
+  `audit.unavailable` and changes nothing when its journal cannot be
+  opened. A replay whose audit request is not accepted changes nothing and
+  reports `audit.unavailable`; one that committed but whose audit response
+  was not accepted reports `audit.unconfirmed` with the job's new
+  generation, and `verification list` confirms it; one the database failed
+  reports `database.unavailable`. Only a job someone else changed during
+  the replay is refused as `documents.verification.changed`.
 
 ### Tests
 

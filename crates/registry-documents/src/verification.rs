@@ -27,7 +27,8 @@ use registry_platform_config::SecretResolver;
 use registry_platform_dispatch::postgres::{
     AttemptAudit, ClaimRefusal, Decoded, DispatchConfig, DispatchConnection, DispatchEvent,
     DispatchSql, DispatchStore, DispatchTransport, Dispatcher, JobKey, JobState, JobTable,
-    LeasedJob, ReplayAudit, SelectSql, TargetAction, TransitionAudit, TransitionOutcome,
+    LeasedJob, ReplayAudit, ReplayOutcome, SelectSql, TargetAction, TransitionAudit,
+    TransitionOutcome,
 };
 use registry_platform_dispatch::{
     idempotency_key, AttemptTimeoutBound, Backoff, ConfigError, DispatchError, FailureCode, Jitter,
@@ -130,13 +131,36 @@ pub enum ReplayRefusal {
     Changed,
 }
 
-/// A replay that was refused, or that could not reach the database.
+/// A replay the dispatcher did not finish, and what it left behind.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum ReplayFailure {
+    /// The replay's audit request was not written, so nothing was changed.
+    #[error("the replay audit request could not be written; the job was not changed")]
+    AuditUnavailable,
+    /// The replay committed but its audit response was not written: the
+    /// change stands.
+    #[error("the content verification job of {version_id} is pending at generation {generation}, but the replay's audit response was not written")]
+    Unaudited { version_id: Uuid, generation: i64 },
+    /// The database did not confirm whether the replay committed.
+    #[error("the database did not confirm whether the replay of {version_id} committed")]
+    OutcomeUnknown { version_id: Uuid },
+    /// The database refused or lost the replay; the job is unchanged.
+    #[error("the database did not complete the replay; the job is still dead-lettered")]
+    DatabaseUnavailable,
+}
+
+/// A replay that was refused, that did not finish, or that could not reach
+/// the database.
 #[derive(Debug, thiserror::Error)]
 pub enum ReplayError {
     #[error(transparent)]
     Refused(#[from] ReplayRefusal),
     #[error(transparent)]
+    Failed(ReplayFailure),
+    #[error(transparent)]
     Store(#[from] StoreError),
+    #[error("the content verification dispatcher could not be built: {0}")]
+    Dispatch(#[from] ConfigError),
 }
 
 impl From<tokio_postgres::Error> for ReplayError {
@@ -189,9 +213,14 @@ pub async fn dead_letters(
 /// binding to pending, at attempt zero under the next generation, through
 /// the dispatcher's generation-checked replay. The version stays pending
 /// and suspended until the job's verdict. Every other job is refused.
+///
+/// A replay the dispatcher did not finish is told apart by the last audit
+/// entry `verification` was asked to write and, when that does not decide
+/// it, by reading the job again: only a job someone else changed is
+/// refused as changed.
 pub async fn replay(
     store: &PostgresStore,
-    dispatcher: &Dispatcher<VerificationStore>,
+    verification: VerificationStore,
     version_id: Uuid,
     expected_generation: i64,
 ) -> Result<Replayed, ReplayError> {
@@ -224,14 +253,62 @@ pub async fn replay(
     if current != expected_generation {
         return Err(ReplayRefusal::StaleGeneration { current }.into());
     }
-    let key = JobKey::new(version_id, part).map_err(|_| ReplayRefusal::NotFound)?;
-    let generation = dispatcher
-        .replay(&key, expected_generation)
-        .await
-        .map_err(|_| ReplayRefusal::Changed)?;
+    let key = JobKey::new(version_id, part.clone()).map_err(|_| ReplayRefusal::NotFound)?;
+    let trace = Arc::clone(&verification.replay_trace);
+    let dispatcher = dispatcher(verification)?;
+    let Ok(generation) = dispatcher.replay(&key, expected_generation).await else {
+        let last = *trace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        return Err(match last {
+            Some((ReplayOutcome::Requested, false)) => {
+                ReplayError::Failed(ReplayFailure::AuditUnavailable)
+            }
+            Some((ReplayOutcome::Committed, _)) => ReplayError::Failed(ReplayFailure::Unaudited {
+                version_id,
+                generation: expected_generation + 1,
+            }),
+            Some((ReplayOutcome::Unfinished, _)) => {
+                ReplayError::Failed(ReplayFailure::OutcomeUnknown { version_id })
+            }
+            _ => unfinished_replay(store, version_id, &part, expected_generation).await?,
+        });
+    };
     Ok(Replayed {
         version_id,
         generation,
+    })
+}
+
+/// Why a replay the dispatcher refused before or without committing did
+/// not finish: a job still dead-lettered at the expected generation was
+/// not changed by anyone, so the database failed it; any other job was
+/// changed by someone else.
+async fn unfinished_replay(
+    store: &PostgresStore,
+    version_id: Uuid,
+    part: &str,
+    expected_generation: i64,
+) -> Result<ReplayError, ReplayError> {
+    let client = store.client().await?;
+    let row = client
+        .query_opt(
+            "SELECT state, generation FROM documents_verification_jobs
+              WHERE version_id = $1 AND part = $2",
+            &[&version_id, &part],
+        )
+        .await?;
+    let unchanged = match row {
+        Some(row) => {
+            row.try_get::<_, String>(0)? == JobState::DeadLettered.as_str()
+                && row.try_get::<_, i64>(1)? == expected_generation
+        }
+        None => false,
+    };
+    Ok(if unchanged {
+        ReplayError::Failed(ReplayFailure::DatabaseUnavailable)
+    } else {
+        ReplayRefusal::Changed.into()
     })
 }
 
@@ -417,6 +494,9 @@ pub struct VerificationStore {
     store: PostgresStore,
     schema: String,
     audit: DocumentsAudit,
+    /// The last replay audit entry this store was asked to write, and
+    /// whether it was written.
+    replay_trace: Arc<std::sync::Mutex<Option<(ReplayOutcome, bool)>>>,
 }
 
 impl VerificationStore {
@@ -426,6 +506,7 @@ impl VerificationStore {
             store,
             schema,
             audit,
+            replay_trace: Arc::default(),
         }
     }
 
@@ -675,9 +756,14 @@ impl DispatchStore for VerificationStore {
             "from": audit.from.as_str(),
             "outcome": format!("{:?}", audit.outcome).to_lowercase(),
         });
-        let request =
-            audit.outcome == registry_platform_dispatch::postgres::ReplayOutcome::Requested;
-        self.append(request, correlation, record).await
+        let request = audit.outcome == ReplayOutcome::Requested;
+        let written = self.append(request, correlation, record).await;
+        *self
+            .replay_trace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((audit.outcome, written.is_ok()));
+        written
     }
 
     fn operational_event(&self, event: DispatchEvent) {
