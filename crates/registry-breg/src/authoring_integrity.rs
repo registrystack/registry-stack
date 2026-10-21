@@ -1043,7 +1043,7 @@ fn add_profile_and_hook_display_warnings(
     project_profiles: &[crate::contract::ProjectAccessProfileSource],
 ) {
     let mut profiles = BTreeMap::<&str, Vec<LocatedDisplayText>>::new();
-    let mut hooks = Vec::new();
+    let mut hooks = BTreeMap::<&str, Vec<LocatedDisplayText>>::new();
     let members = entities
         .iter()
         .enumerate()
@@ -1070,7 +1070,7 @@ fn add_profile_and_hook_display_warnings(
             |profile| &profile.id,
             |profile| profile.display.label.as_deref(),
         ));
-        hooks.extend(display_labels(
+        hooks.entry(entity).or_default().extend(display_labels(
             &format!("{base}/hooks"),
             local_hooks,
             |hook| &hook.id,
@@ -1116,13 +1116,15 @@ fn add_profile_and_hook_display_warnings(
             }
         }
     }
-    add_duplicate_labels(
-        document,
-        warnings,
-        "breg.hook.duplicate-label",
-        "record hooks",
-        &hooks,
-    );
+    for values in hooks.values() {
+        add_duplicate_labels(
+            document,
+            warnings,
+            "breg.hook.duplicate-label",
+            "record hooks",
+            values,
+        );
+    }
 }
 
 #[allow(clippy::too_many_lines)]

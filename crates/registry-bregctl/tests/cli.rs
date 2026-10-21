@@ -181,6 +181,89 @@ fn cross_file_label_warnings_locate_the_second_extension_block() {
 }
 
 #[test]
+fn hook_labels_are_scoped_to_their_record_type_across_authored_files() {
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    source["recordTypes"][0]["hooks"] = json!([{
+        "id":"contact-notice","display":{"label":"Notice"},
+        "phase":"after","trigger":"created","projection":["name"]
+    }]);
+    for (id, route, record_label, hook_id, hook_label) in [
+        (
+            "archive",
+            "archives",
+            "Archive entry",
+            "archive-created",
+            "NO\u{200b}TICE",
+        ),
+        (
+            "ledger",
+            "ledgers",
+            "Ledger entry",
+            "ledger-created",
+            "Different notice",
+        ),
+    ] {
+        let mut record = source["recordTypes"][0].clone();
+        record["id"] = json!(id);
+        record["route"] = json!(route);
+        record["display"]["label"] = json!(record_label);
+        record["hooks"][0]["id"] = json!(hook_id);
+        record["hooks"][0]["display"]["label"] = json!(hook_label);
+        source["recordTypes"].as_array_mut().unwrap().push(record);
+    }
+    let module = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule","id":"extension","version":"0.1.0",
+        "extendRecordTypes":[{
+            "recordType":"ledger",
+            "hooks":[{
+                "id":"ledger-notice","display":{"label":"Notice"},
+                "phase":"after","trigger":"created","projection":["name"]
+            }]
+        }]
+    });
+    let module_bytes = serde_norway::to_string(&module).unwrap();
+    let module_model = parse_module_yaml(module_bytes.as_bytes()).unwrap();
+    source["modules"] = json!([{
+        "id":"extension","version":"0.1.0","digest":module_digest(&module_model)
+    }]);
+    let project =
+        TestProject::from_registry_source(serde_norway::to_string(&source).unwrap().as_bytes());
+    let module_path = project.path().join("modules/extension/module.yaml");
+    fs::create_dir_all(module_path.parent().unwrap()).unwrap();
+    fs::write(module_path, module_bytes).unwrap();
+
+    for arguments in [
+        vec!["--format", "json", "check", path(project.path())],
+        vec![
+            "--format",
+            "json",
+            "check",
+            path(project.path()),
+            "--deny-warnings",
+        ],
+    ] {
+        let output = bregctl(&arguments);
+        assert!(output.status.success(), "{output:?}");
+        let report = json_stdout(&output);
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|diagnostic| diagnostic["code"] != "breg.hook.duplicate-label"),
+            "{report}"
+        );
+    }
+}
+
+#[test]
 fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
     let source = String::from_utf8(authoring_fixture().to_vec())
         .unwrap()

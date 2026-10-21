@@ -1107,7 +1107,7 @@ fn validate_cross_file_duplicate_display_labels(
         .collect::<Vec<_>>();
     let mut fields = BTreeMap::<&str, Vec<SourcedDisplayText<'_>>>::new();
     let mut profiles = BTreeMap::<&str, Vec<SourcedDisplayText<'_>>>::new();
-    let mut hooks = Vec::new();
+    let mut hooks = BTreeMap::<&str, Vec<SourcedDisplayText<'_>>>::new();
     for profile in &project.access_profiles {
         if let Some(text) = profile.display.label.as_deref() {
             for grant in &profile.permissions.entities {
@@ -1132,7 +1132,7 @@ fn validate_cross_file_duplicate_display_labels(
             &format!("recordTypes[id={}]", entity.id),
             None,
             profiles.entry(&entity.id).or_default(),
-            &mut hooks,
+            hooks.entry(&entity.id).or_default(),
         );
         collect_entity_field_labels(
             entity,
@@ -1189,7 +1189,7 @@ fn validate_cross_file_duplicate_display_labels(
                 &format!("modules[id={}].recordTypes[id={}]", module.id, entity.id),
                 Some(source),
                 profiles.entry(&entity.id).or_default(),
-                &mut hooks,
+                hooks.entry(&entity.id).or_default(),
             );
             collect_entity_field_labels(
                 entity,
@@ -1208,7 +1208,7 @@ fn validate_cross_file_duplicate_display_labels(
                 ),
                 Some(source),
                 profiles.entry(&extension.entity).or_default(),
-                &mut hooks,
+                hooks.entry(&extension.entity).or_default(),
             );
             collect_extension_field_labels(
                 extension,
@@ -1248,12 +1248,14 @@ fn validate_cross_file_duplicate_display_labels(
             findings,
         );
     }
-    add_cross_file_duplicate_labels(
-        "breg.hook.duplicate-label",
-        "record hooks",
-        &hooks,
-        findings,
-    );
+    for labels in hooks.values() {
+        add_cross_file_duplicate_labels(
+            "breg.hook.duplicate-label",
+            "record hooks",
+            labels,
+            findings,
+        );
+    }
 
     if let Some(recipients) = &project.recipients {
         let mut names = recipients
