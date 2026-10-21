@@ -4173,7 +4173,7 @@
       "description": "Registry Coordinator runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/runtime.rs",
-        "sha256": "4e05c080eeaccf0a54da1057222550c97c7a2c390d424e16d4a55ead331c6ebe"
+        "sha256": "5095df87476c778de7733f7ecc6779de0aee4e3e8c86b9f565763810aa2dc8ce"
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
