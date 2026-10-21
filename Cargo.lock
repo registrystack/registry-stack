@@ -6344,11 +6344,17 @@ version = "0.43.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
+ "deadpool-postgres",
+ "registry-platform-activation",
+ "registry-platform-audit",
  "registry-platform-canonical-json",
+ "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-dispatch",
  "registry-platform-httputil",
+ "registry-platform-script",
  "registry-platform-yaml",
+ "rhai",
  "schemars",
  "serde",
  "serde_json",
@@ -6357,7 +6363,9 @@ dependencies = [
  "time",
  "tokio",
  "tokio-postgres",
+ "url",
  "uuid",
+ "wat",
 ]
 
 [[package]]
