@@ -2788,6 +2788,85 @@ async fn a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_byte
     assert_eq!(count_events(&deployment, "documents.erasure", "erased"), 1);
 }
 
+/// Removal ends every active grant on the document whatever its version's
+/// state. A version rejected under a later verifier binding already has its
+/// erasure armed, yet a grant issued while it was approved is still listed
+/// as active; the custodian's first removal revokes it, and a second removal
+/// is a repeat that changes nothing.
+#[tokio::test]
+async fn removing_a_rejected_document_revokes_its_grants() {
+    let deployment = deployment().await;
+    let first = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &first).await;
+    let (document, version) = ready(&prepared, &api, &pdf(900, 96)).await;
+    let grant = grant_id(
+        &api.grant(APP, &document, &version, READER.subject, None)
+            .await,
+    );
+    drop((prepared, api));
+
+    let second = FakeVerifier::new("binding-b", REJECT);
+    let (restarted, api) = start(&deployment, &second).await;
+    deployment
+        .execute(
+            "UPDATE documents_verification_jobs SET next_attempt_at = now()
+              WHERE state = 'pending'",
+        )
+        .await;
+    restarted.verify_due().await;
+    assert_eq!(status(&api.read(CITIZEN, &document).await), "rejected");
+    let listed = api.get(APP, &format!("/documents/{document}/grants")).await;
+    assert_eq!(listed.json()["items"][0]["state"], "active");
+
+    assert_eq!(api.erase(CITIZEN, &document).await.status, 200);
+    let listed = api.get(APP, &format!("/documents/{document}/grants")).await;
+    assert_eq!(listed.json()["items"][0]["id"], grant.as_str());
+    assert_eq!(listed.json()["items"][0]["state"], "revoked");
+    assert_eq!(
+        api.get(READER, "/documents").await.json()["items"],
+        json!([])
+    );
+    let entries = deployment.audit_entries();
+    let first_removal = entries
+        .iter()
+        .rfind(|entry| entry["record"]["event"] == "documents.erasure-request")
+        .unwrap();
+    assert_eq!(first_removal["record"]["repeated"], false);
+    assert_eq!(first_removal["record"]["revokedGrants"], 1);
+
+    let before: (
+        Option<chrono::DateTime<chrono::Utc>>,
+        chrono::DateTime<chrono::Utc>,
+    ) = (
+        deployment
+            .scalar("SELECT revoked_at FROM documents_grants")
+            .await,
+        deployment
+            .scalar("SELECT erasure_due_at FROM documents_versions")
+            .await,
+    );
+    assert_eq!(api.erase(CITIZEN, &document).await.status, 200);
+    let after: (
+        Option<chrono::DateTime<chrono::Utc>>,
+        chrono::DateTime<chrono::Utc>,
+    ) = (
+        deployment
+            .scalar("SELECT revoked_at FROM documents_grants")
+            .await,
+        deployment
+            .scalar("SELECT erasure_due_at FROM documents_versions")
+            .await,
+    );
+    assert_eq!(after, before, "a repeated removal changes nothing");
+    let entries = deployment.audit_entries();
+    let repeat = entries
+        .iter()
+        .rfind(|entry| entry["record"]["event"] == "documents.erasure-request")
+        .unwrap();
+    assert_eq!(repeat["record"]["repeated"], true);
+    assert_eq!(repeat["record"]["revokedGrants"], 0);
+}
+
 /// A removed document whose upload never finished takes no content: the
 /// reserved upload answers as expired.
 #[tokio::test]

@@ -622,9 +622,10 @@ invariants:
       commits, through a grant issued before the request or one issued
       while it commits.
     enforcementPoint: >-
-      The removal request moves the version to erasure pending, suspends
-      it, and revokes every active grant on the document in one
-      transaction; grant issue holds the version row and refuses a version
+      The removal request records the document's removal, moves the
+      version to erasure pending, suspends it, and revokes every active
+      grant on the document in one transaction, whatever the version's
+      state, including a version a rejection already armed; grant issue holds the version row and refuses a version
       under erasure; the database refuses a releasable version whose
       erasure state is not none. A download admitted before the request
       commits is not interrupted and may finish within its transfer
