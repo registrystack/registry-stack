@@ -8,23 +8,20 @@ purpose: >-
   than rediscovering the question.
 decisions:
   - id: DOCUMENTS-DEC-01
-    subject: The served runtime answers only its health route until authentication lands
+    subject: Every document route is served, and only behind access-token verification
     decision: >-
-      The documents binary serves GET /health and answers request.not-found
-      for every other route. The document routes (reserve, upload, read, and
-      download) exist, but only builds with the postgres-test feature compile
-      the router that carries them, and there a synthetic caller stands in for
-      the verified token.
+      The documents binary serves GET /health without a credential and every
+      document route behind bearer-token verification through platform-oidc
+      and access-profile resolution. No route is compiled only into test
+      builds, and the PostgreSQL suites call the served router with tokens a
+      test issuer signs.
     reasoning: >-
-      Authentication and access profiles arrive in WP4. A document route
-      served without them would answer callers no authorization rule
-      governs, which is worse than no route. Proving the document invariants
-      now, behind a test-only router, keeps them from waiting on the token
-      work.
+      A document route served without authorization would answer callers no
+      rule governs, so the routes waited for the token work. Proving the
+      invariants through the router operators run, with real tokens, leaves
+      no synthetic caller whose behaviour could drift from the verifier's.
     evidence:
-      - {path: crates/registry-documents/src/http.rs, name: every_other_route_is_not_found}
-      - {path: crates/registry-documents/src/http.rs, name: the_served_router_carries_no_document_route}
-      - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_prepared_runtime_answers_health_and_refuses_every_other_route}
+      - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_prepared_runtime_serves_documents_only_to_a_verified_caller}
   - id: DOCUMENTS-DEC-02
     subject: Serving never applies the schema
     decision: >-
@@ -45,9 +42,9 @@ decisions:
       PostgreSQL storage accepts no more; S3 storage accepts up to 64 MiB. A
       document policy may only set a lower ceiling.
     reasoning: >-
-      The upload is hashed and bounded while read, then buffered under a
-      fixed budget of concurrent uploads, so the ceiling stays a small
-      multiple of what one buffer may hold. 16 MiB matches the Base Registry
+      The upload is hashed and bounded while read, then buffered under one
+      transfer budget shared by uploads, downloads, and verification, so the
+      ceiling stays a small fraction of what the budget may hold. 16 MiB matches the Base Registry
       Engine's attachment ceiling.
     evidence:
       - {path: crates/registry-documents/src/config.rs, name: a_database_ceiling_above_sixteen_mebibytes_is_out_of_range}
@@ -132,3 +129,89 @@ decisions:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_verifier_binding_change_at_restart_suspends_and_verifies_again}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_verdict_that_records_nothing_under_the_current_binding_is_retried}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_a_releasable_version_under_a_stale_or_mismatched_verdict}
+  - id: DOCUMENTS-DEC-09
+    subject: A document grant is pushed to one named recipient and never evaluated live
+    decision: >-
+      A grant names one exact version, one recipient by issuer and subject, and
+      an expiry fixed at issue from the policy default within its maximum. It
+      cannot be extended, cannot name an organization or a role, and cannot be
+      an invitation; release checks only the stored grant, never a predicate
+      over current claims. A grant's recipient issuer is the granting caller's
+      issuer.
+    reasoning: >-
+      A pushed grant is reviewable as a row: who may read which bytes until
+      when. A live predicate would let a change in an issuer's claims widen
+      release silently, and an organizational recipient would move the choice of
+      reader out of the Store's audit. A new grant is the way to extend access.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_grant_releases_one_exact_version_to_its_named_recipient_until_expiry_or_revocation}
+  - id: DOCUMENTS-DEC-10
+    subject: A caller learns a document exists only when it already holds standing on it
+    decision: >-
+      Read, download, and every grant route answer 404 resource.not-found for a
+      document the caller holds no standing on, the same as an unknown
+      identifier. A caller who sees the document but lacks the authority an
+      action needs gets 403 profile.not-authorized. Download answers 404 to
+      everyone but the custodian and an active grant holder, including the
+      system that reserved the document for another custodian.
+    reasoning: >-
+      A 403 to a stranger would confirm the identifier names a document. A
+      caller who already sees the document learns nothing from 403 and is better
+      told why. The reserving system keeps metadata and grant authority but not
+      the bytes, so custody, not reservation, decides who reads content.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_authority_and_unknown_ids_answer_without_disclosing_a_document}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_uploaded_document_is_released_only_after_it_is_verified}
+  - id: DOCUMENTS-DEC-11
+    subject: A transfer admitted before a revocation completes
+    decision: >-
+      Revoking a grant stops every download that has not yet passed its
+      authorization check. A download already authorized and streaming finishes
+      within its transfer deadline.
+    reasoning: >-
+      Cutting an admitted transfer mid-stream would need a revocation check per
+      chunk and still could not recall bytes already sent. The transfer deadline
+      bounds how long an admitted download may run after revocation.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_transfer_admitted_before_a_revocation_completes}
+  - id: DOCUMENTS-DEC-12
+    subject: A grant retried after revocation answers the revoked grant
+    decision: >-
+      An Idempotency-Key replay of a grant issue re-runs authorization and
+      answers the grant as it now stands, 201 with state revoked or expired,
+      rather than issuing a new grant or the first answer. Revoking a revoked
+      grant answers 200 with the same view.
+    reasoning: >-
+      Re-issuing on replay would let a client's retry undo a revocation;
+      replaying the first answer would report a grant the Store no longer
+      honours. Answering the current state keeps the retry safe and truthful.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_idempotent_grant_retry_after_revocation_releases_nothing}
+  - id: DOCUMENTS-DEC-13
+    subject: Lists page in a stable order and may return short pages
+    decision: >-
+      Every list orders by creation time and identifier, pages by an opaque
+      cursor, and caps a page at 100 items. A page is fetched in that order and
+      then filtered to what the caller may see, so a page may hold fewer items
+      than the limit while a next cursor remains. The received-grants list shows
+      active grants only.
+    reasoning: >-
+      Filtering in the query would duplicate the standing rules in SQL, where
+      they could drift from the ones release enforces. A short page costs a
+      client one more request; a drifted rule could disclose a document.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_and_document_lists_page_in_a_stable_order}
+  - id: DOCUMENTS-DEC-14
+    subject: A transfer that finds the budget spent is refused, not queued
+    decision: >-
+      An upload, download, or verification attempt that finds no room in the
+      transfer budget is refused at once with 503 service.unavailable and Retry-
+      After. A malformed cursor, limit, query key, or Idempotency-Key answers
+      400 request.invalid, and a grant expiry outside the policy bounds answers
+      422 request.unprocessable; the vocabulary has no narrower code for either.
+    reasoning: >-
+      A queue would hold connections and memory for callers the Store cannot yet
+      serve, the exhaustion the budget exists to prevent. Retry-After lets a
+      client back off without a second mechanism.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_exhausted_transfer_budget_refuses_uploads_and_downloads}

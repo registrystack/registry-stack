@@ -13,10 +13,9 @@ reviewRule: >-
   says why. A row may not lose its negative test. A pending row names the work
   package that owes its enforcement and carries no test until that package
   lands; it becomes partial or enforced only in the change that adds the
-  negative test that earns it. Until authentication lands, the served runtime
-  answers only its health route; the document invariants are proven through a
-  router that only test builds compile, with a synthetic caller standing in
-  for the verified token.
+  negative test that earns it. The PostgreSQL suites prove the document
+  invariants through the served router, with access tokens a test issuer
+  signs and the runtime verifies.
 invariants:
   - id: DOCUMENTS-SEC-01
     state: enforced
@@ -40,8 +39,9 @@ invariants:
       A route the product has not designed yet answers, so a caller reaches
       behaviour that no authorization, verification, or audit rule governs.
     enforcementPoint: >-
-      The router declares the health route and nothing else; every other path
-      and method falls through to the request-edge problem answers.
+      The router declares the health route and the document routes the
+      OpenAPI document describes, and nothing else; every other path and
+      method falls through to the request-edge problem answers.
     refusal: >-
       Answer 404 request.not-found or 405 request.method-not-allowed as
       application/problem+json, with the caller's trace echoed.
@@ -151,22 +151,24 @@ invariants:
       path: crates/registry-documents/tests/postgres_documents.rs
       name: an_uploaded_document_is_released_only_after_it_is_verified
   - id: DOCUMENTS-SEC-10
-    state: pending
-    plannedSlice: WP4
+    state: enforced
     threat: >-
       A document route answers a caller without a verified bearer token, or
       tells an unauthorized caller whether a document exists.
     enforcementPoint: >-
-      Token verification through platform-oidc and access-profile resolution
-      run before any document route reads the store, with one uniform 404 for
-      a missing and an invisible document.
+      Every document route verifies the bearer token through platform-oidc and
+      resolves one access profile from its client, scopes, and actor kind
+      before it reads the body or the store. A document the caller holds no
+      standing on answers exactly as a document that does not exist, on read,
+      download, and every grant route.
     refusal: >-
-      Answer 401 without a verified token and 404 for every document the
-      caller may not see.
-    pendingNote: >-
-      WP4 adds authentication, access profiles, and document grants, with
-      negative tests for an absent token, a foreign client, and the existence
-      oracle.
+      Answer 401 authentication.refused with a Bearer challenge without a
+      verified token, 403 profile.not-authorized for a token no profile
+      admits, and 404 resource.not-found for every document the caller may
+      not see.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_startup.rs
+      name: a_prepared_runtime_serves_documents_only_to_a_verified_caller
   - id: DOCUMENTS-SEC-11
     state: enforced
     threat: >-
@@ -309,17 +311,21 @@ invariants:
   - id: DOCUMENTS-SEC-19
     state: enforced
     threat: >-
-      Concurrent uploads to one reservation finalize more than once, leaving
-      two contents or two verification jobs behind one version.
+      Concurrent or repeated uploads to one reservation finalize more than
+      once, leaving two contents or two verification jobs behind one version,
+      or a retry replaces the content already finalized.
     enforcementPoint: >-
       Finalization locks the version row and finalizes only a reservation
-      still open; no transaction is held while bytes arrive.
+      still open; no transaction is held while bytes arrive. An upload to a
+      finalized reservation compares its computed digest and length with the
+      finalized version's.
     refusal: >-
-      A later attempt with the same content gets the one finalized version;
-      an attempt after finalization gets 409 upload.finalized.
+      An attempt with the same content, during or after finalization, gets
+      200 and the one finalized version's view; an attempt with other content
+      after finalization gets 409 upload.finalized and changes nothing.
     negativeTest:
       path: crates/registry-documents/tests/postgres_documents.rs
-      name: concurrent_uploads_of_one_reservation_finalize_once
+      name: a_retry_after_finalize_with_the_same_content_is_answered_and_other_content_is_refused
   - id: DOCUMENTS-SEC-20
     state: enforced
     threat: >-
@@ -334,3 +340,169 @@ invariants:
     negativeTest:
       path: crates/registry-documents/tests/postgres_documents.rs
       name: the_custodian_quota_holds_against_concurrent_reservations
+  - id: DOCUMENTS-SEC-21
+    state: enforced
+    threat: >-
+      A caller places a document in custody it may not hold: a profile the
+      policy does not list as a custody profile reserves, or a human caller
+      reserves into another person's custody.
+    enforcementPoint: >-
+      Reservation requires the caller's access profile among the policy's
+      custodyProfiles. A service may name any custodian; a human caller may name
+      only itself, compared by issuer, subject, and kind.
+    refusal: >-
+      Answer 403 custody.not-permitted and reserve nothing.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: custody_is_placed_only_by_a_custody_profile_and_a_human_only_into_its_own
+  - id: DOCUMENTS-SEC-22
+    state: enforced
+    threat: >-
+      A caller claims a document was issued by an institution it does not act
+      for, so a recipient trusts a version under another institution's name.
+    enforcementPoint: >-
+      The issuing institution recorded on a version is the access profile's
+      institution, never the request body's; a body that names an institution
+      must name the profile's own.
+    refusal: >-
+      Answer 403 custody.not-permitted when the body names any other
+      institution, including when the profile names none, and reserve nothing.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: the_issuing_institution_comes_from_the_profile_and_a_differing_body_is_refused
+  - id: DOCUMENTS-SEC-23
+    state: enforced
+    threat: >-
+      A retried reservation or grant reserves twice, a reused key answers
+      another request's outcome, or a retry after the caller lost authority is
+      answered with the earlier success.
+    enforcementPoint: >-
+      An Idempotency-Key is scoped to the caller's issuer and subject, the
+      operation, and the key, and stores the request body's digest. A replay re-
+      runs authorization before it answers, and a key is held for
+      retention.receiptRetentionDays.
+    refusal: >-
+      Answer 409 idempotency.key-reused for another body under a held key and
+      410 idempotency.expired after the key lapses, reserving nothing in either
+      case; a replay the caller is no longer authorized for gets that refusal.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: an_idempotency_key_replays_its_reservation_and_refuses_another_body
+  - id: DOCUMENTS-SEC-24
+    state: enforced
+    threat: >-
+      A grant releases more than it names: another version of the document,
+      another recipient, a recipient under another profile, or any recipient
+      after the grant expired or was revoked.
+    enforcementPoint: >-
+      Download releases a version only to its custodian, or to a caller holding
+      an unrevoked, unexpired grant whose version, recipient issuer, subject,
+      and kind match exactly, under a profile with the recipient role. The grant
+      expiry is fixed at issue within the policy maximum and never extended.
+    refusal: >-
+      Answer 404 resource.not-found to every other caller, and record the
+      refusal in the audit journal.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: a_grant_releases_one_exact_version_to_its_named_recipient_until_expiry_or_revocation
+  - id: DOCUMENTS-SEC-25
+    state: enforced
+    threat: >-
+      A grant retried with its idempotency key after revocation revives it and
+      releases bytes again.
+    enforcementPoint: >-
+      A grant replay re-runs authorization and answers the grant's current
+      state; revocation is final, and release reads the grant's state, not the
+      replayed answer.
+    refusal: >-
+      Answer the revoked grant, and 404 resource.not-found on download.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: an_idempotent_grant_retry_after_revocation_releases_nothing
+  - id: DOCUMENTS-SEC-26
+    state: enforced
+    threat: >-
+      A caller without authority over a document issues, lists, or revokes its
+      grants, or learns from the answer that the document exists.
+    enforcementPoint: >-
+      Grant issue, list, and revoke require the custodian or a granting
+      profile's owner of the document; a caller with no standing on the document
+      gets the answer an unknown identifier gets.
+    refusal: >-
+      Answer 403 profile.not-authorized only to a caller who already sees the
+      document, and 404 resource.not-found to every other caller.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: grant_authority_and_unknown_ids_answer_without_disclosing_a_document
+  - id: DOCUMENTS-SEC-27
+    state: enforced
+    threat: >-
+      A version approved under a verifier the deployment no longer uses is
+      released before the current verifier re-checks it.
+    enforcementPoint: >-
+      Download requires the releasable row's verdict binding to equal the
+      running verifier binding.
+    refusal: >-
+      Answer 409 document-version.not-releasable to the custodian and to every
+      grant holder.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: a_version_approved_under_another_binding_is_released_to_nobody
+  - id: DOCUMENTS-SEC-28
+    state: enforced
+    threat: >-
+      Concurrent uploads, downloads, and verifications hold more document bytes
+      in memory than the host can bear.
+    enforcementPoint: >-
+      One transfer budget, the larger of 256 MiB and the deployment ceiling, is
+      shared by uploads, downloads, and verification; a transfer that finds no
+      room is refused at once rather than queued.
+    refusal: >-
+      Answer 503 service.unavailable with Retry-After, keep nothing, and release
+      nothing.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: an_exhausted_transfer_budget_refuses_uploads_and_downloads
+  - id: DOCUMENTS-SEC-29
+    state: enforced
+    threat: >-
+      A slow caller holds a share of the transfer budget indefinitely by
+      stalling an upload or a download.
+    enforcementPoint: >-
+      Every transfer carries a deadline of a configured floor plus an allowance
+      per started mebibyte; at the deadline the transfer is cut off and its
+      budget share returns.
+    refusal: >-
+      Answer 503 service.unavailable for a stalled upload and keep nothing; end
+      a stalled download in a body error.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: a_stalled_upload_is_cut_off_at_its_deadline
+  - id: DOCUMENTS-SEC-30
+    state: enforced
+    threat: >-
+      An upload is finalized or bytes are released without an audit record
+      because the audit journal could not be written.
+    enforcementPoint: >-
+      The upload and the download write their audit record before they finalize
+      or send the first byte.
+    refusal: >-
+      Answer 503 service.unavailable, finalize nothing, and release no byte.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: a_request_audit_failure_refuses_the_upload_and_the_download
+  - id: DOCUMENTS-SEC-31
+    state: enforced
+    threat: >-
+      A caller-supplied label is treated as trusted text, or grows without
+      bound, and misleads a recipient or exhausts storage.
+    enforcementPoint: >-
+      The label is bounded at reservation by length and character class and
+      returned exactly as written; the Store never interprets it or derives
+      anything from it.
+    refusal: >-
+      Answer 422 request.unprocessable for a label outside its bounds and
+      reserve nothing.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: a_label_is_bounded_and_returned_untouched
