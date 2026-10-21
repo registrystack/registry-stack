@@ -83,7 +83,8 @@ impl Grant {
             document_id: self.document_id.to_string(),
             version_id: self.version_id.to_string(),
             grantee: GranteeRef {
-                subject: ExternalId::new(self.grantee.clone()).map_err(|error| error.to_string())?,
+                subject: ExternalId::new(self.grantee.clone())
+                    .map_err(|error| error.to_string())?,
             },
             state,
             issued_at: timestamp(self.issued_at),

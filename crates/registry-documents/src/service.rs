@@ -25,8 +25,8 @@ use registry_documents_core::{
     admit_reservation, allowed_actions, check_custodian_quota, place_custody, standing, ActorKind,
     Caller, CustodianRef, Custody, CustodyAsk, DocumentPage, DocumentPolicy, DocumentPolicyList,
     DocumentPolicyView, DocumentStatus, DocumentVersionView, DocumentView, DocumentsProject,
-    Eligibility, PolicyBinding, ProblemCode, ReservationAsk, ReservationView, Reserver,
-    ReserveDocumentRequest, Standing, UploadState, VerificationState, MAXIMUM_PAGE_SIZE,
+    Eligibility, PolicyBinding, ProblemCode, ReservationAsk, ReservationView,
+    ReserveDocumentRequest, Reserver, Standing, UploadState, VerificationState, MAXIMUM_PAGE_SIZE,
 };
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_dispatch::postgres::{enqueue, JobKey, JobTable};
@@ -122,6 +122,9 @@ impl PageRequest {
     }
 }
 
+/// The longest cursor a caller may hand back.
+pub const MAXIMUM_CURSOR_BYTES: usize = 256;
+
 /// A position in a list: the ordering instant and the identifier that
 /// breaks its ties. Encoded opaquely; a caller only hands it back.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -136,7 +139,7 @@ impl Cursor {
     }
 
     fn decode(text: &str) -> Option<Self> {
-        if text.len() > 256 {
+        if text.len() > MAXIMUM_CURSOR_BYTES {
             return None;
         }
         let bytes = hex::decode(text).ok()?;
@@ -155,11 +158,7 @@ impl Cursor {
 
 /// The cursor of the next page when `rows` holds more than `limit` rows,
 /// at the last row of this page.
-fn next_cursor<T>(
-    rows: &[T],
-    limit: u32,
-    position: impl Fn(&T) -> Cursor,
-) -> Option<String> {
+fn next_cursor<T>(rows: &[T], limit: u32, position: impl Fn(&T) -> Cursor) -> Option<String> {
     let limit = usize::try_from(limit).ok()?;
     (rows.len() > limit).then(|| position(&rows[limit - 1]).encode())
 }
@@ -615,12 +614,16 @@ impl DocumentService {
     ) -> Result<Option<Record>, ProblemCode> {
         client
             .query_opt(
-                &format!("SELECT {RECORD_COLUMNS} FROM {RECORD_FROM} WHERE document.document_id = $1"),
+                &format!(
+                    "SELECT {RECORD_COLUMNS} FROM {RECORD_FROM} WHERE document.document_id = $1"
+                ),
                 &[&document_id],
             )
             .await
             .map_err(|error| unavailable("document read", &error))?
-            .map(|row| Record::from_row(&row).map_err(|error| unavailable("document decode", &error)))
+            .map(|row| {
+                Record::from_row(&row).map_err(|error| unavailable("document decode", &error))
+            })
             .transpose()
     }
 
@@ -797,7 +800,9 @@ impl DocumentService {
         if let Replay::Repeat(document_id) = replay(&transaction, &key, &digest).await? {
             let record = Self::record_in(&*transaction, document_id)
                 .await?
-                .ok_or_else(|| unavailable("idempotency replay", &"the recorded document is missing"))?;
+                .ok_or_else(|| {
+                    unavailable("idempotency replay", &"the recorded document is missing")
+                })?;
             transaction
                 .commit()
                 .await
@@ -828,7 +833,11 @@ impl DocumentService {
                     AND (version.upload_state = 'finalized'
                          OR (version.upload_state = 'reserved'
                              AND version.upload_expires_at > transaction_timestamp()))",
-                &[&custody.issuer, &custody.subject, &admitted.policy_id.as_str()],
+                &[
+                    &custody.issuer,
+                    &custody.subject,
+                    &admitted.policy_id.as_str(),
+                ],
             )
             .await
             .and_then(|row| row.try_get(0))
@@ -969,7 +978,11 @@ impl DocumentService {
 
     /// The reservation `caller` made under `upload_id`. An upload another
     /// principal reserved answers as one that does not exist.
-    async fn reservation(&self, caller: &Caller, upload_id: Uuid) -> Result<Reservation, ProblemCode> {
+    async fn reservation(
+        &self,
+        caller: &Caller,
+        upload_id: Uuid,
+    ) -> Result<Reservation, ProblemCode> {
         let client = self.client().await?;
         let row = client
             .query_opt(
@@ -1046,7 +1059,9 @@ impl DocumentService {
         let digest = body.digest();
         if finalized {
             return if record.computed_digest.as_deref() == Some(digest.as_str()) {
-                Ok(UploadOutcome::Repeated(self.current_view(caller, record.document_id).await?))
+                Ok(UploadOutcome::Repeated(
+                    self.current_view(caller, record.document_id).await?,
+                ))
             } else {
                 Err(ProblemCode::UploadFinalized)
             };
@@ -1070,7 +1085,11 @@ impl DocumentService {
         })
     }
 
-    async fn current_view(&self, caller: &Caller, document_id: Uuid) -> Result<DocumentView, ProblemCode> {
+    async fn current_view(
+        &self,
+        caller: &Caller,
+        document_id: Uuid,
+    ) -> Result<DocumentView, ProblemCode> {
         let record = self
             .record(document_id)
             .await?
@@ -1230,7 +1249,11 @@ impl DocumentService {
     /// The document `caller` may see: as its custodian, as the caller that
     /// reserved it, or as the holder of a grant that releases its version
     /// now. Every other caller is answered as if it did not exist.
-    pub async fn read(&self, caller: &Caller, document_id: Uuid) -> Result<DocumentView, ProblemCode> {
+    pub async fn read(
+        &self,
+        caller: &Caller,
+        document_id: Uuid,
+    ) -> Result<DocumentView, ProblemCode> {
         let record = self
             .record(document_id)
             .await?
@@ -1243,7 +1266,11 @@ impl DocumentService {
     }
 
     /// The documents `caller` holds in custody or reserved, oldest first.
-    pub async fn list(&self, caller: &Caller, page: &PageRequest) -> Result<DocumentPage, ProblemCode> {
+    pub async fn list(
+        &self,
+        caller: &Caller,
+        page: &PageRequest,
+    ) -> Result<DocumentPage, ProblemCode> {
         let (after, after_id) = Cursor::bounds(page.cursor);
         let rows = {
             let client = self.client().await?;
@@ -1434,7 +1461,13 @@ mod tests {
             id: Uuid::new_v4(),
         };
         assert_eq!(Cursor::decode(&cursor.encode()), Some(cursor));
-        for refused in ["", "zz", "00", &hex::encode("12:not-a-uuid"), &"a".repeat(300)] {
+        for refused in [
+            "",
+            "zz",
+            "00",
+            &hex::encode("12:not-a-uuid"),
+            &"a".repeat(300),
+        ] {
             assert_eq!(Cursor::decode(refused), None, "{refused}");
         }
     }
