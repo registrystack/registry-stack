@@ -6,13 +6,23 @@
         "properties": {
           "code": {
             "enum": [
+              "custody.quota-exceeded",
+              "document-policy.unknown",
+              "document-version.not-releasable",
+              "document.content-type-not-allowed",
+              "document.too-large",
               "request.body-too-large",
               "request.invalid",
               "request.method-not-allowed",
               "request.not-found",
               "request.unprocessable",
               "request.unsupported-media-type",
-              "service.unavailable"
+              "service.unavailable",
+              "upload.content-type-mismatch",
+              "upload.digest-mismatch",
+              "upload.expired",
+              "upload.finalized",
+              "upload.length-mismatch"
             ],
             "type": "string"
           },
@@ -30,13 +40,23 @@
           },
           "type": {
             "enum": [
+              "https://id.registrystack.org/problems/registry-documents/custody/quota-exceeded",
+              "https://id.registrystack.org/problems/registry-documents/document-policy/unknown",
+              "https://id.registrystack.org/problems/registry-documents/document-version/not-releasable",
+              "https://id.registrystack.org/problems/registry-documents/document/content-type-not-allowed",
+              "https://id.registrystack.org/problems/registry-documents/document/too-large",
               "https://id.registrystack.org/problems/registry-documents/request/body-too-large",
               "https://id.registrystack.org/problems/registry-documents/request/invalid",
               "https://id.registrystack.org/problems/registry-documents/request/method-not-allowed",
               "https://id.registrystack.org/problems/registry-documents/request/not-found",
               "https://id.registrystack.org/problems/registry-documents/request/unprocessable",
               "https://id.registrystack.org/problems/registry-documents/request/unsupported-media-type",
-              "https://id.registrystack.org/problems/registry-documents/service/unavailable"
+              "https://id.registrystack.org/problems/registry-documents/service/unavailable",
+              "https://id.registrystack.org/problems/registry-documents/upload/content-type-mismatch",
+              "https://id.registrystack.org/problems/registry-documents/upload/digest-mismatch",
+              "https://id.registrystack.org/problems/registry-documents/upload/expired",
+              "https://id.registrystack.org/problems/registry-documents/upload/finalized",
+              "https://id.registrystack.org/problems/registry-documents/upload/length-mismatch"
             ],
             "type": "string"
           }

@@ -16,8 +16,9 @@ use registry_platform_yaml::{
     FormatSpec, Identified, Invalid, LocalId, ProjectIdentity, Reader, Report, UniqueIdList,
     UniqueList,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
+use crate::custody::AllowedContentTypes;
 use crate::naming::{DOCUMENTS_PROJECT_API_VERSION, DOCUMENTS_PROJECT_KIND};
 
 /// The format a `documents.yaml` file declares (CFG-ENV-1).
@@ -32,6 +33,10 @@ pub const DOCUMENTS_PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
 
 /// The largest document a deployment or a policy may admit: one gibibyte.
 pub const MAXIMUM_DOCUMENT_BYTES: u64 = 1_073_741_824;
+
+/// The largest byte quota one custodian may hold under one policy: one
+/// tebibyte.
+pub const MAXIMUM_CUSTODIAN_BYTES: u64 = 1_099_511_627_776;
 
 /// The longest any grant or cleanup period may run, in hours: one year.
 pub const MAXIMUM_PERIOD_HOURS: u32 = 8_760;
@@ -158,7 +163,7 @@ pub enum AccessRole {
 
 /// One document policy: who may hold, grant, and receive a document held
 /// under it, and the restrictions every such document carries.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DocumentPolicy {
@@ -179,7 +184,7 @@ pub struct DocumentPolicy {
 }
 
 /// Whether a represented principal may issue document grants itself.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum RepresentedPrincipalGrants {
@@ -188,12 +193,20 @@ pub enum RepresentedPrincipalGrants {
 }
 
 /// The restrictions every document held under a policy carries.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MandatoryRestrictions {
+    /// The largest document a reservation may declare. It may not exceed
+    /// the deployment ceiling `storage.maximumDocumentBytes`; the runtime
+    /// refuses to start otherwise.
     pub maximum_document_bytes: BoundedU64<1, MAXIMUM_DOCUMENT_BYTES>,
-    pub allowed_content_types: UniqueList<ExternalId>,
+    /// The bytes one custodian may hold under this policy, counted over
+    /// every reserved or stored version not yet erased and checked at
+    /// reservation.
+    pub maximum_custodian_bytes: BoundedU64<1, MAXIMUM_CUSTODIAN_BYTES>,
+    /// The media types a document may be declared as, matched exactly.
+    pub allowed_content_types: AllowedContentTypes,
     pub grant_expiry_hours: BoundedU32<1, MAXIMUM_PERIOD_HOURS>,
     pub maximum_grant_expiry_hours: BoundedU32<1, MAXIMUM_PERIOD_HOURS>,
     /// Time between expiry or revocation and erasure of what it released.
@@ -375,6 +388,46 @@ mod tests {
                 .collect();
             assert_eq!(paths, [format!("/accessProfiles/custodian-app/{member}")]);
         }
+    }
+
+    #[test]
+    fn allowed_content_types_follow_the_exact_match_grammar() {
+        let written = "      allowedContentTypes: [application/pdf]\n";
+        assert!(STARTER.contains(written));
+        let seventeen = (0..17)
+            .map(|index| format!("application/x-{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        for refused in [
+            "[]".to_owned(),
+            "[application/*]".to_owned(),
+            "[Application/PDF]".to_owned(),
+            "[\"application/pdf; charset=binary\"]".to_owned(),
+            "[application/pdf, application/pdf]".to_owned(),
+            format!("[{seventeen}]"),
+        ] {
+            let text = STARTER.replacen(
+                written,
+                &format!("      allowedContentTypes: {refused}\n"),
+                1,
+            );
+            assert!(!refusal_codes(&text).is_empty(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn every_policy_names_a_custodian_quota() {
+        let text = STARTER.replacen("      maximumCustodianBytes: 1073741824\n", "", 1);
+        assert_ne!(text, STARTER);
+        assert!(!refusal_codes(&text).is_empty());
+        let text = STARTER.replacen(
+            "maximumCustodianBytes: 1073741824",
+            "maximumCustodianBytes: 0",
+            1,
+        );
+        assert!(refusal_codes(&text)
+            .iter()
+            .any(|code| code == "config.out-of-range"));
     }
 
     #[test]
