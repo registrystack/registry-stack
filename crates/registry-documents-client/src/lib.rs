@@ -36,10 +36,10 @@ pub use client::{
 };
 pub use error::{DocumentsClientError, DocumentsProtocolFailure};
 pub use registry_documents_core::{
-    type_uri, ContentType, CustodianRef, DocumentAction, DocumentGrantPage, DocumentGrantView,
-    DocumentLabel, DocumentPage, DocumentPolicyList, DocumentPolicyView, DocumentStatus,
-    DocumentVersionView, DocumentView, GrantState, GranteeRef, IssueGrantRequest, PolicyBinding,
-    ProblemCode, ReservationView, ReserveDocumentRequest, DEFAULT_PAGE_SIZE,
+    type_uri, ActorKind, ContentType, CustodianRef, DocumentAction, DocumentGrantPage,
+    DocumentGrantView, DocumentLabel, DocumentPage, DocumentPolicyList, DocumentPolicyView,
+    DocumentStatus, DocumentVersionView, DocumentView, GrantState, GranteeRef, IssueGrantRequest,
+    PolicyBinding, ProblemCode, ReservationView, ReserveDocumentRequest, DEFAULT_PAGE_SIZE,
     DOCUMENTS_PROBLEM_TYPE_BASE, HEALTH_PATH, MAXIMUM_LABEL_BYTES, MAXIMUM_PAGE_SIZE,
 };
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};
