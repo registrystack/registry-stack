@@ -5730,10 +5730,14 @@ dependencies = [
  "registry-documents",
  "registry-documents-core",
  "registry-platform-buildinfo",
+ "registry-platform-config",
  "registry-platform-yaml",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "tokio-postgres",
+ "uuid",
 ]
 
 [[package]]
