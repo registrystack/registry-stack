@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:5632c2834b80613df203438f0b7a229e53c70cb41be8130dd7bd2d77d60d9656"
+      "sha256:8c3fa5c66077e64a5b0bd22dae2cfe418b96611e8860e2a65bbe30ea33f1a907"
     ],
     "config": {
       "user": "65532",
@@ -50,7 +50,7 @@
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc"
+    "definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809"
   },
   "policies": [
     {
@@ -73,8 +73,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 discovery local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-19",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 discovery local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -91,14 +91,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
-      "component_layer_id": "sha256:5632c2834b80613df203438f0b7a229e53c70cb41be8130dd7bd2d77d60d9656",
+      "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
+      "component_layer_id": "sha256:8c3fa5c66077e64a5b0bd22dae2cfe418b96611e8860e2a65bbe30ea33f1a907",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:bdfc806432ddf119ebeb68eaa896a3e25afdc03dac79f986fa58abf7bb57542c",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:004787e61f96c1664616e577458225d98748cb8f69286d8eef727c3202bbcab1",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+        "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -118,10 +118,10 @@
           },
           {
             "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:094476f44990adecd91c828a4b618c85627cb6d1ac3063592fde2195c2d6940f"
+            "sha256": "sha256:c8a8cc13e9fe04edbd0c8709ae38cc6fb533312185ba4313c2ac07d5ad83312a"
           }
         ],
-        "definition_digest": "sha256:0e25ee7178ace4ad6e1001af4e89d67dcceddc6d1b0d379bd5f18e5845ca7f97"
+        "definition_digest": "sha256:507eb7adedbfc3767fbb60657e3d27c83f7d4918d9d01394e334aadf2c5a5f77"
       }
     },
     {
@@ -131,8 +131,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 discovery local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-19",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 discovery local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -149,14 +149,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
-      "component_layer_id": "sha256:5632c2834b80613df203438f0b7a229e53c70cb41be8130dd7bd2d77d60d9656",
+      "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
+      "component_layer_id": "sha256:8c3fa5c66077e64a5b0bd22dae2cfe418b96611e8860e2a65bbe30ea33f1a907",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:bdfc806432ddf119ebeb68eaa896a3e25afdc03dac79f986fa58abf7bb57542c",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:004787e61f96c1664616e577458225d98748cb8f69286d8eef727c3202bbcab1",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+        "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -176,10 +176,10 @@
           },
           {
             "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:094476f44990adecd91c828a4b618c85627cb6d1ac3063592fde2195c2d6940f"
+            "sha256": "sha256:c8a8cc13e9fe04edbd0c8709ae38cc6fb533312185ba4313c2ac07d5ad83312a"
           }
         ],
-        "definition_digest": "sha256:0e25ee7178ace4ad6e1001af4e89d67dcceddc6d1b0d379bd5f18e5845ca7f97"
+        "definition_digest": "sha256:507eb7adedbfc3767fbb60657e3d27c83f7d4918d9d01394e334aadf2c5a5f77"
       }
     },
     {
@@ -189,8 +189,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 discovery local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports not-fixed with no fixed version for zlib1g 1:1.3.dfsg+really1.3.1-1+b1. The base carries zlib, including gzwrite, gzfwrite, gzprintf and gzvprintf. The reviewed application executables neither need libz nor contain libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. No reviewed dynamic lookup opens that closure, and the bounded source paths expose no stalled gzip-write followed by formatted-output operation. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-19",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 discovery local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports not-fixed with no fixed version for zlib1g 1:1.3.dfsg+really1.3.1-1+b1. The base carries zlib, including gzwrite, gzfwrite, gzprintf and gzvprintf. The reviewed application executables neither need libz nor contain libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. No reviewed dynamic lookup opens that closure, and the bounded source paths expose no stalled gzip-write followed by formatted-output operation. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -207,14 +207,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+      "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:bdfc806432ddf119ebeb68eaa896a3e25afdc03dac79f986fa58abf7bb57542c",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:004787e61f96c1664616e577458225d98748cb8f69286d8eef727c3202bbcab1",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+        "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -234,10 +234,10 @@
           },
           {
             "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:094476f44990adecd91c828a4b618c85627cb6d1ac3063592fde2195c2d6940f"
+            "sha256": "sha256:c8a8cc13e9fe04edbd0c8709ae38cc6fb533312185ba4313c2ac07d5ad83312a"
           }
         ],
-        "definition_digest": "sha256:0e25ee7178ace4ad6e1001af4e89d67dcceddc6d1b0d379bd5f18e5845ca7f97"
+        "definition_digest": "sha256:507eb7adedbfc3767fbb60657e3d27c83f7d4918d9d01394e334aadf2c5a5f77"
       }
     },
     {
@@ -247,8 +247,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 discovery local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-19",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 discovery local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -265,14 +265,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+      "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:bdfc806432ddf119ebeb68eaa896a3e25afdc03dac79f986fa58abf7bb57542c",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:004787e61f96c1664616e577458225d98748cb8f69286d8eef727c3202bbcab1",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+        "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -292,10 +292,10 @@
           },
           {
             "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:094476f44990adecd91c828a4b618c85627cb6d1ac3063592fde2195c2d6940f"
+            "sha256": "sha256:c8a8cc13e9fe04edbd0c8709ae38cc6fb533312185ba4313c2ac07d5ad83312a"
           }
         ],
-        "definition_digest": "sha256:0e25ee7178ace4ad6e1001af4e89d67dcceddc6d1b0d379bd5f18e5845ca7f97"
+        "definition_digest": "sha256:507eb7adedbfc3767fbb60657e3d27c83f7d4918d9d01394e334aadf2c5a5f77"
       }
     },
     {
@@ -305,8 +305,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 discovery local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-19",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 discovery local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -323,14 +323,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+      "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:bdfc806432ddf119ebeb68eaa896a3e25afdc03dac79f986fa58abf7bb57542c",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:004787e61f96c1664616e577458225d98748cb8f69286d8eef727c3202bbcab1",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+        "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -350,10 +350,10 @@
           },
           {
             "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:094476f44990adecd91c828a4b618c85627cb6d1ac3063592fde2195c2d6940f"
+            "sha256": "sha256:c8a8cc13e9fe04edbd0c8709ae38cc6fb533312185ba4313c2ac07d5ad83312a"
           }
         ],
-        "definition_digest": "sha256:0e25ee7178ace4ad6e1001af4e89d67dcceddc6d1b0d379bd5f18e5845ca7f97"
+        "definition_digest": "sha256:507eb7adedbfc3767fbb60657e3d27c83f7d4918d9d01394e334aadf2c5a5f77"
       }
     },
     {
@@ -363,8 +363,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 discovery local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-19",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 discovery local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -381,14 +381,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+      "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:bdfc806432ddf119ebeb68eaa896a3e25afdc03dac79f986fa58abf7bb57542c",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:004787e61f96c1664616e577458225d98748cb8f69286d8eef727c3202bbcab1",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+        "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -408,10 +408,10 @@
           },
           {
             "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:094476f44990adecd91c828a4b618c85627cb6d1ac3063592fde2195c2d6940f"
+            "sha256": "sha256:c8a8cc13e9fe04edbd0c8709ae38cc6fb533312185ba4313c2ac07d5ad83312a"
           }
         ],
-        "definition_digest": "sha256:0e25ee7178ace4ad6e1001af4e89d67dcceddc6d1b0d379bd5f18e5845ca7f97"
+        "definition_digest": "sha256:507eb7adedbfc3767fbb60657e3d27c83f7d4918d9d01394e334aadf2c5a5f77"
       }
     },
     {
@@ -421,8 +421,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 discovery local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-19",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 discovery local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -439,14 +439,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+      "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:bdfc806432ddf119ebeb68eaa896a3e25afdc03dac79f986fa58abf7bb57542c",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:004787e61f96c1664616e577458225d98748cb8f69286d8eef727c3202bbcab1",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+        "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -466,10 +466,10 @@
           },
           {
             "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:094476f44990adecd91c828a4b618c85627cb6d1ac3063592fde2195c2d6940f"
+            "sha256": "sha256:c8a8cc13e9fe04edbd0c8709ae38cc6fb533312185ba4313c2ac07d5ad83312a"
           }
         ],
-        "definition_digest": "sha256:0e25ee7178ace4ad6e1001af4e89d67dcceddc6d1b0d379bd5f18e5845ca7f97"
+        "definition_digest": "sha256:507eb7adedbfc3767fbb60657e3d27c83f7d4918d9d01394e334aadf2c5a5f77"
       }
     },
     {
@@ -479,8 +479,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 discovery local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-19",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 discovery local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -497,14 +497,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+      "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:bdfc806432ddf119ebeb68eaa896a3e25afdc03dac79f986fa58abf7bb57542c",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:004787e61f96c1664616e577458225d98748cb8f69286d8eef727c3202bbcab1",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+        "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -524,10 +524,10 @@
           },
           {
             "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:094476f44990adecd91c828a4b618c85627cb6d1ac3063592fde2195c2d6940f"
+            "sha256": "sha256:c8a8cc13e9fe04edbd0c8709ae38cc6fb533312185ba4313c2ac07d5ad83312a"
           }
         ],
-        "definition_digest": "sha256:0e25ee7178ace4ad6e1001af4e89d67dcceddc6d1b0d379bd5f18e5845ca7f97"
+        "definition_digest": "sha256:507eb7adedbfc3767fbb60657e3d27c83f7d4918d9d01394e334aadf2c5a5f77"
       }
     },
     {
@@ -537,8 +537,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 discovery local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-19",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 discovery local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -555,14 +555,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+      "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:bdfc806432ddf119ebeb68eaa896a3e25afdc03dac79f986fa58abf7bb57542c",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:004787e61f96c1664616e577458225d98748cb8f69286d8eef727c3202bbcab1",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+        "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -582,10 +582,10 @@
           },
           {
             "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:094476f44990adecd91c828a4b618c85627cb6d1ac3063592fde2195c2d6940f"
+            "sha256": "sha256:c8a8cc13e9fe04edbd0c8709ae38cc6fb533312185ba4313c2ac07d5ad83312a"
           }
         ],
-        "definition_digest": "sha256:0e25ee7178ace4ad6e1001af4e89d67dcceddc6d1b0d379bd5f18e5845ca7f97"
+        "definition_digest": "sha256:507eb7adedbfc3767fbb60657e3d27c83f7d4918d9d01394e334aadf2c5a5f77"
       }
     },
     {
@@ -595,8 +595,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 discovery local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-19",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 discovery local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -613,14 +613,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+      "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:bdfc806432ddf119ebeb68eaa896a3e25afdc03dac79f986fa58abf7bb57542c",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:004787e61f96c1664616e577458225d98748cb8f69286d8eef727c3202bbcab1",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+        "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -640,10 +640,10 @@
           },
           {
             "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:094476f44990adecd91c828a4b618c85627cb6d1ac3063592fde2195c2d6940f"
+            "sha256": "sha256:c8a8cc13e9fe04edbd0c8709ae38cc6fb533312185ba4313c2ac07d5ad83312a"
           }
         ],
-        "definition_digest": "sha256:0e25ee7178ace4ad6e1001af4e89d67dcceddc6d1b0d379bd5f18e5845ca7f97"
+        "definition_digest": "sha256:507eb7adedbfc3767fbb60657e3d27c83f7d4918d9d01394e334aadf2c5a5f77"
       }
     },
     {
@@ -653,8 +653,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 discovery local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
-      "reviewed_at": "2026-10-19",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 discovery local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -671,14 +671,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+      "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:bdfc806432ddf119ebeb68eaa896a3e25afdc03dac79f986fa58abf7bb57542c",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:004787e61f96c1664616e577458225d98748cb8f69286d8eef727c3202bbcab1",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:c214d0d5be180038611d6159c6fe0f5ab466b0a71b0b9a166c18831f1076bffc",
+        "runtime_definition_digest": "sha256:9cd580e7ea4574f1a412d0f720fa5e2a528dac83239452231ef98bffd8172809",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -698,10 +698,10 @@
           },
           {
             "path": "/usr/local/bin/discovery",
-            "sha256": "sha256:094476f44990adecd91c828a4b618c85627cb6d1ac3063592fde2195c2d6940f"
+            "sha256": "sha256:c8a8cc13e9fe04edbd0c8709ae38cc6fb533312185ba4313c2ac07d5ad83312a"
           }
         ],
-        "definition_digest": "sha256:0e25ee7178ace4ad6e1001af4e89d67dcceddc6d1b0d379bd5f18e5845ca7f97"
+        "definition_digest": "sha256:507eb7adedbfc3767fbb60657e3d27c83f7d4918d9d01394e334aadf2c5a5f77"
       }
     }
   ]
