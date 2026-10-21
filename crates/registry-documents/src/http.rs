@@ -278,11 +278,16 @@ struct PageQuery {
 }
 
 fn page(uri: &Uri) -> Result<PageRequest, ProblemCode> {
-    let Query(query) = Query::<PageQuery>::try_from_uri(uri).map_err(|_| ProblemCode::RequestInvalid)?;
+    let Query(query) =
+        Query::<PageQuery>::try_from_uri(uri).map_err(|_| ProblemCode::RequestInvalid)?;
     PageRequest::parse(query.cursor.as_deref(), query.limit.as_deref())
 }
 
-async fn reserve(State(routes): State<DocumentRoutes>, headers: HeaderMap, body: Bytes) -> Response {
+async fn reserve(
+    State(routes): State<DocumentRoutes>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     answer(
         async {
             let caller = routes.caller(&headers).await?;
@@ -296,7 +301,11 @@ async fn reserve(State(routes): State<DocumentRoutes>, headers: HeaderMap, body:
     )
 }
 
-async fn list_documents(State(routes): State<DocumentRoutes>, headers: HeaderMap, uri: Uri) -> Response {
+async fn list_documents(
+    State(routes): State<DocumentRoutes>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
     answer(
         async {
             let caller = routes.caller(&headers).await?;
@@ -315,7 +324,10 @@ async fn read(
     answer(
         async {
             let caller = routes.caller(&headers).await?;
-            let view = routes.service.read(&caller, identifier(&document_id)?).await?;
+            let view = routes
+                .service
+                .read(&caller, identifier(&document_id)?)
+                .await?;
             Ok(Json(view).into_response())
         }
         .await,
@@ -434,7 +446,11 @@ async fn document_grants(
     )
 }
 
-async fn received_grants(State(routes): State<DocumentRoutes>, headers: HeaderMap, uri: Uri) -> Response {
+async fn received_grants(
+    State(routes): State<DocumentRoutes>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
     answer(
         async {
             let caller = routes.caller(&headers).await?;
@@ -615,7 +631,10 @@ mod tests {
                 "{refused}"
             );
         }
-        assert_eq!(idempotency_key(&with(&"k".repeat(128))), Ok("k".repeat(128).as_str()));
+        assert_eq!(
+            idempotency_key(&with(&"k".repeat(128))),
+            Ok("k".repeat(128).as_str())
+        );
     }
 
     #[test]
@@ -650,8 +669,15 @@ mod tests {
     #[test]
     fn a_page_query_names_only_a_cursor_and_a_limit() {
         assert!(page(&"/documents".parse().unwrap()).is_ok());
-        assert_eq!(page(&"/documents?limit=10".parse().unwrap()).unwrap().limit, 10);
-        for refused in ["/documents?limit=0", "/documents?other=1", "/documents?cursor=zz"] {
+        assert_eq!(
+            page(&"/documents?limit=10".parse().unwrap()).unwrap().limit,
+            10
+        );
+        for refused in [
+            "/documents?limit=0",
+            "/documents?other=1",
+            "/documents?cursor=zz",
+        ] {
             assert_eq!(
                 page(&refused.parse().unwrap()).unwrap_err(),
                 ProblemCode::RequestInvalid,

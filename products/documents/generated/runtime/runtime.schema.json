@@ -587,6 +587,29 @@
       ],
       "type": "string"
     },
+    "TransfersConfig": {
+      "additionalProperties": false,
+      "description": "How long one upload or download may take: a floor, plus an allowance\nfor every mebibyte the document carries. A transfer still running at its\ndeadline is cut off and lets go of its bytes.",
+      "properties": {
+        "mebibyteAllowanceSeconds": {
+          "default": 8,
+          "description": "The time added for every started mebibyte of the document.",
+          "format": "uint32",
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "minimumDeadlineSeconds": {
+          "default": 60,
+          "description": "The deadline of the smallest transfer.",
+          "format": "uint32",
+          "maximum": 3600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "Url": {
       "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
       "format": "uri",
@@ -749,6 +772,9 @@
     },
     "storage": {
       "$ref": "#/$defs/StorageConfig"
+    },
+    "transfers": {
+      "$ref": "#/$defs/TransfersConfig"
     }
   },
   "required": [

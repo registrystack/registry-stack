@@ -192,7 +192,10 @@ async fn s3_content_is_staged_verified_over_http_and_released() {
     let (key, stored) = objects.iter().next().unwrap();
     assert_eq!(stored, &content);
     assert!(key.starts_with("/synthetic-documents/"), "{key}");
-    assert!(!key.contains(CITIZEN.subject) && !key.contains(&document), "{key}");
+    assert!(
+        !key.contains(CITIZEN.subject) && !key.contains(&document),
+        "{key}"
+    );
     assert_eq!(
         fixture
             .count("SELECT count(*) FROM documents_staged_objects WHERE committed")

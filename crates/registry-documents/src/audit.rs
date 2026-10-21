@@ -108,7 +108,7 @@ impl DocumentsAudit {
         subject: &str,
     ) -> Result<String, ActorReferenceError> {
         let canonical = canonicalize_json(&Value::from(vec![issuer, subject]))
-        .map_err(|_| ActorReferenceError::Canonical)?;
+            .map_err(|_| ActorReferenceError::Canonical)?;
         let canonical =
             std::str::from_utf8(&canonical).map_err(|_| ActorReferenceError::Canonical)?;
         Ok(self
