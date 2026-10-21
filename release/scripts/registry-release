@@ -2111,6 +2111,22 @@ def selected_docsets(
     products = selected.get("products")
     if not isinstance(products, dict):
         raise ReleasePlanError(f"docset {tag} products must be an object")
+    release_artifacts = required_yaml(
+        repo / "docs/site/src/data" / DOCSET_RELEASE_ARTIFACTS_NAME
+    )
+    product_artifacts = (
+        release_artifacts.get("products") if isinstance(release_artifacts, dict) else None
+    )
+    applies_from = docset_tag_version(
+        release_artifacts.get("applies_from") if isinstance(release_artifacts, dict) else None
+    )
+    if not isinstance(product_artifacts, dict) or applies_from is None:
+        raise ReleasePlanError(
+            f"{DOCSET_RELEASE_ARTIFACTS_NAME} must declare a release tag "
+            "applies_from and a products map"
+        )
+    held_to_shipped_products = release_version_tuple(version) >= applies_from
+    shipped = record["data"]["artifacts"]
     for name, product in sorted(products.items()):
         if not isinstance(product, dict):
             raise ReleasePlanError(f"docset {tag} product {name} must be an object")
@@ -2120,10 +2136,22 @@ def selected_docsets(
                 raise ReleasePlanError(
                     f"docset {tag} external {name} ref must match the selected manifest"
                 )
-        elif product.get("version") != tag or product.get("ref") != source_ref:
-            raise ReleasePlanError(
-                f"docset {tag} product {name} must use version {tag} and selected source_ref"
-            )
+        else:
+            expected_version = tag
+            if held_to_shipped_products:
+                artifact = product_artifacts.get(name)
+                if not isinstance(artifact, str) or not artifact:
+                    raise ReleasePlanError(
+                        f"docset {tag} product {name} names no release "
+                        f"artifact in {DOCSET_RELEASE_ARTIFACTS_NAME}"
+                    )
+                if artifact not in shipped:
+                    expected_version = UNRELEASED_PRODUCT_VERSION
+            if product.get("version") != expected_version or product.get("ref") != source_ref:
+                raise ReleasePlanError(
+                    f"docset {tag} product {name} must use version "
+                    f"{expected_version} and selected source_ref"
+                )
     for name in external:
         if name not in products:
             raise ReleasePlanError(f"docset {tag} is missing external product {name}")

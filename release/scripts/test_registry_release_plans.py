@@ -350,7 +350,7 @@ version = "1.1.0"
                             "ref": self.candidate,
                         },
                         "registry-relay-v2": {
-                            "version": "v1.1.0",
+                            "version": "main source (unreleased)",
                             "ref": self.candidate,
                         },
                         "crosswalk": {
@@ -380,6 +380,20 @@ version = "1.1.0"
             ],
         }
         data = root / "docs/site/src/data"
+        write_yaml(
+            data / "docset-release-artifacts.yaml",
+            {
+                "applies_from": "v0.43.0",
+                "products": {
+                    "registry-stack": "registry-docs",
+                    "registry-platform": "registry-docs",
+                    "registry-manifest": "registry-manifest",
+                    "registry-evidence": "evidence",
+                    "registry-relay-v2": "relay",
+                    "registry-coordinator": "coordinator",
+                },
+            },
+        )
         write_yaml(data / "docsets.yaml", docsets)
         write_json(data / "generated/docsets.json", docsets)
         write_yaml(
@@ -1242,10 +1256,56 @@ version = "1.0.0"
         }
         write_yaml(docsets_path, docsets)
         write_json(data_dir / "generated/docsets.json", docsets)
+        artifacts_path = data_dir / "docset-release-artifacts.yaml"
+        artifacts = yaml.safe_load(artifacts_path.read_text(encoding="utf-8"))
+        artifacts["products"]["archived-example"] = "registry-docs"
+        write_yaml(artifacts_path, artifacts)
 
         result = self.prepare()
 
         self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_prepare_binds_unshipped_docset_labels_and_refs(self) -> None:
+        data_dir = self.repo.root / "docs/site/src/data"
+        docsets_path = data_dir / "docsets.yaml"
+        docsets = yaml.safe_load(docsets_path.read_text(encoding="utf-8"))
+        selected = next(item for item in docsets["docsets"] if item["id"] == "v1.1.0")
+        for label, ref, succeeds in (
+            ("main source (unreleased)", self.repo.candidate, True),
+            ("v1.1.0", self.repo.candidate, False),
+            ("main source (unreleased)", "HEAD", False),
+        ):
+            with self.subTest(label=label, ref=ref):
+                selected["products"]["registry-coordinator"] = {"version": label, "ref": ref}
+                write_yaml(docsets_path, docsets)
+                write_json(data_dir / "generated/docsets.json", docsets)
+                result = self.prepare()
+                self.assertEqual(0 if succeeds else 1, result.returncode, result.stderr)
+                if not succeeds:
+                    self.assertIn("docset v1.1.0 product registry-coordinator", result.stderr)
+
+    def test_prepare_rejects_unreleased_label_for_shipped_product(self) -> None:
+        docsets_path = self.repo.root / "docs/site/src/data/docsets.yaml"
+        docsets = yaml.safe_load(docsets_path.read_text(encoding="utf-8"))
+        selected = next(item for item in docsets["docsets"] if item["id"] == "v1.1.0")
+        selected["products"]["registry-stack"]["version"] = "main source (unreleased)"
+        write_yaml(docsets_path, docsets)
+
+        result = self.prepare()
+
+        self.assertEqual(1, result.returncode)
+        self.assertIn("product registry-stack must use version v1.1.0", result.stderr)
+
+    def test_prepare_rejects_product_without_release_artifact_mapping(self) -> None:
+        artifacts_path = self.repo.root / "docs/site/src/data/docset-release-artifacts.yaml"
+        artifacts = yaml.safe_load(artifacts_path.read_text(encoding="utf-8"))
+        del artifacts["products"]["registry-stack"]
+        write_yaml(artifacts_path, artifacts)
+
+        result = self.prepare()
+
+        self.assertEqual(1, result.returncode)
+        self.assertIn("product registry-stack names no release artifact", result.stderr)
 
     def test_prepare_rejects_missing_required_artifacts(self) -> None:
         target = self.repo.root / "release/manifests/registry-stack-beta-9.yaml"
