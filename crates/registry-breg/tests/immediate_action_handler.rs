@@ -6,7 +6,7 @@ use registry_breg::{
         ActionHandlerOutcome,
     },
     compiler::{compile_project_with_assets, CompileProfile},
-    contract::{parse_project_json, ModuleAssetSource},
+    contract::{parse_project_json, ActionPlanSource, ModuleAssetSource},
     model::{CompiledAction, CompiledPlanMutation, CompiledPlanValue},
 };
 use serde_json::{json, Value};
@@ -898,6 +898,59 @@ fn handler_compiler_diagnostics_name_the_authored_handler_boundary() {
         source,
         "breg.action.bounds-snapshot-bytes",
         "actions[register-person].plan.writes",
+    );
+}
+
+#[test]
+fn directly_constructed_refusal_labels_follow_display_text_rules() {
+    let script = result(r#"#{effects:[#{id:"person",set:#{name:"Mina"}}]}"#);
+    let mut source = parse_project_json(&serde_json::to_vec(&project()).unwrap()).unwrap();
+
+    for label in ["unsafe\u{202e}text", "unsafe\u{fdd0}text"] {
+        let ActionPlanSource::Function { refusals, .. } = &mut source.actions[0].plan else {
+            panic!("the fixture uses a function plan")
+        };
+        refusals[0].label = label.to_owned();
+        let failure = compile_project_with_assets(
+            &source,
+            &[],
+            &[ModuleAssetSource {
+                module: None,
+                path: "handlers/register.rhai".into(),
+                bytes: script.as_bytes().to_vec(),
+            }],
+            CompileProfile::Authoring,
+        )
+        .unwrap_err();
+        assert!(failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "breg.action.handler-refusal-invalid"
+                && diagnostic.path == "actions[id=register-person].plan.refusals"
+        }));
+    }
+
+    let ActionPlanSource::Function { refusals, .. } = &mut source.actions[0].plan else {
+        panic!("the fixture uses a function plan")
+    };
+    let accepted = "الاسم مطلوب\u{200f}.";
+    refusals[0].label = accepted.to_owned();
+    let compiled = compile_project_with_assets(
+        &source,
+        &[],
+        &[ModuleAssetSource {
+            module: None,
+            path: "handlers/register.rhai".into(),
+            bytes: script.as_bytes().to_vec(),
+        }],
+        CompileProfile::Authoring,
+    )
+    .expect("a multilingual label with an allowed direction mark compiles");
+    assert_eq!(
+        compiled.actions().actions[0]
+            .handler
+            .as_ref()
+            .unwrap()
+            .refusals["blank-name"],
+        accepted
     );
 }
 
