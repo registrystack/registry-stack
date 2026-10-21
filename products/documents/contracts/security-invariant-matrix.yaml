@@ -800,3 +800,108 @@ invariants:
     negativeTest:
       path: crates/registry-documents-client/tests/document_routes.rs
       name: a_download_whose_digest_disagrees_hands_the_caller_nothing
+  - id: DOCUMENTS-SEC-48
+    state: enforced
+    threat: >-
+      An observer receives document content, a label, a media type, a name,
+      a subject, or anything else about the person a document describes,
+      because a hook projects a field outside its trigger's closed set or
+      the event builder carries more than the projection names.
+    enforcementPoint: >-
+      Each trigger has a closed field inventory: documentId, versionId,
+      versionDigest, policyId, policyVersion, and actorKind, with grantId and
+      change added for document-grant.changed. The project reader and hook
+      compilation refuse a projection naming any other field, and the
+      envelope data is built from the projection alone. Each family publishes
+      a generated closed data schema the projection is checked against.
+    refusal: >-
+      Refuse the project at load naming the hook and the field; an event
+      field outside the inventory refuses the capture and rolls the
+      transition back.
+    negativeTest:
+      path: crates/registry-documents/src/hooks_tests.rs
+      name: no_forbidden_field_can_be_projected
+  - id: DOCUMENTS-SEC-49
+    state: enforced
+    threat: >-
+      An observer is told a version became ready, was rejected, or that a
+      grant changed when the transition never committed, so a downstream
+      system acts on a state the Document Store does not hold.
+    enforcementPoint: >-
+      The outbox row and the delivery rows are written inside the same
+      transaction as the verification verdict, the grant issue, or the grant
+      revocation, and the delivery worker only sees committed rows. A
+      transition that did not change state (a repeated verdict, an issue
+      replay, a repeated revocation) captures nothing.
+    refusal: >-
+      A rolled-back transition leaves no outbox row and no delivery; a
+      capture that cannot be written rolls the transition back and the
+      caller sees service-unavailable.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_hooks.rs
+      name: a_rolled_back_transition_captures_nothing
+  - id: DOCUMENTS-SEC-50
+    state: enforced
+    threat: >-
+      A slow, failing, or hostile observer delays or blocks a verification
+      verdict or a grant change, so a destination outside the Document
+      Store's control governs whether documents are released or revoked.
+    enforcementPoint: >-
+      Delivery runs after commit in the shared hook delivery worker under the
+      destination's deployed timeout and attempt budget, with a bounded
+      exponential backoff, and never inside a transition. A delivery that
+      spends its attempts is dead-lettered.
+    refusal: >-
+      Retry later, then dead-letter the delivery; the transition it reports
+      stays committed and released.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_hooks.rs
+      name: a_failing_destination_is_retried_then_dead_lettered_without_touching_the_transition
+  - id: DOCUMENTS-SEC-51
+    state: enforced
+    threat: >-
+      A project author runs code inside the Document Store, or narrows or
+      widens an event by condition or principal, through a Rhai or Wasm
+      handler, a when condition, a principal, or a before phase.
+    enforcementPoint: >-
+      Hook compilation accepts only the shared URL-only capability set: an
+      after-phase URL handler with no condition and no principal.
+    refusal: >-
+      Refuse the project at load, naming the hook and the refused capability.
+    negativeTest:
+      path: crates/registry-documents/src/hooks_tests.rs
+      name: compile_refuses_a_rhai_handler
+  - id: DOCUMENTS-SEC-52
+    state: enforced
+    threat: >-
+      An observer answers a delivery with a proposal, and the answer changes
+      a document, a version, or a grant without the caller authorization
+      every Document Store change requires.
+    enforcementPoint: >-
+      The delivery seams refuse every proposal an observer returns before
+      anything is applied, and record the refusal on the delivery.
+    refusal: >-
+      Record proposal disposition refused with
+      documents.hook.proposal-unsupported; the delivery itself completes and
+      nothing in the Document Store changes.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_hooks.rs
+      name: delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal
+  - id: DOCUMENTS-SEC-53
+    state: enforced
+    threat: >-
+      A project file, an observer, or a caller chooses where events go or
+      how they are signed, so a project change or a request redirects events
+      to an endpoint the operator never approved.
+    enforcementPoint: >-
+      A hook names only a destination id. The URL, the HMAC signing key
+      reference, the timeout, and the attempt budget come from
+      destinations.hooks in the operator's runtime configuration, through
+      the shared URL hook destination block. Activation requires every named
+      destination to be bound and every signing key to resolve, and retained
+      deliveries must match their current binding before the worker starts.
+    refusal: >-
+      Refuse startup naming the unbound destination or the unresolved key.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_hooks.rs
+      name: startup_refuses_a_project_hook_whose_destination_is_not_bound

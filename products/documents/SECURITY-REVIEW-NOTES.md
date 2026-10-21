@@ -523,3 +523,72 @@ names each test.
   stays listed as active until it expires or is revoked.
 - A paused deployment keeps due bytes for as long as it stays paused, and
   orphan S3 objects accumulate meanwhile.
+
+## Document events for after-commit observers (2026-10-22)
+
+### Threat
+
+An observer learns more about a document or the person it describes than
+the event needs; an observer is told about a transition that never
+committed; a slow or hostile observer delays or blocks a verdict or a grant
+change; a project author runs code inside the Store or chooses where events
+go; an observer's answer changes a document, a version, or a grant.
+
+### Enforcement and defaults
+
+- Three triggers, `document-version.ready`, `document-version.rejected`, and
+  `document-grant.changed`, each with a closed field inventory. A hook
+  projects a subset of it, and the project reader and hook compilation refuse
+  any other field (DOCUMENTS-SEC-48). No field carries content, a label, a
+  media type, a name, a subject, or anything about the described person.
+  `actorKind` is only `service` or `human` (DOCUMENTS-DEC-30). Each family
+  publishes a generated closed data schema under `generated/events/`
+  (DOCUMENTS-DEC-32).
+- The outbox and delivery rows are written in the transaction of the verdict,
+  the grant issue, or the grant revocation, so a rollback reports nothing; a
+  capture that cannot be written fails the transition (DOCUMENTS-SEC-49,
+  DOCUMENTS-DEC-29). Only a change of state emits: a repeated verdict, an
+  issue replay, and a repeated revocation do not, and grant expiry and
+  erasure emit nothing (DOCUMENTS-DEC-28).
+- Delivery runs after commit in the shared `registry-platform-hooks` worker:
+  a signed Version 1 envelope with source
+  `urn:registrystack:documents:<project id>` and type the hook id
+  (DOCUMENTS-DEC-27), under the destination's timeout (100 to 10000 ms) and
+  attempt budget (1 to 20), with backoff from 30 seconds to an hour, then a
+  dead letter. Delivery never touches the transition (DOCUMENTS-SEC-50).
+- Hooks accept only the shared URL-only capabilities: `phase: after`, a `url`
+  handler, no `when`, no `principal` (DOCUMENTS-SEC-51). Every proposal an
+  observer returns is refused and recorded as
+  `documents.hook.proposal-unsupported` (DOCUMENTS-SEC-52).
+- A hook names only a destination id; the URL, the signing key reference,
+  the timeout, and the attempt budget come from `destinations.hooks` in the
+  operator's runtime configuration. Startup refuses an unbound destination,
+  an unresolved key, and a retained delivery whose binding no longer matches
+  (DOCUMENTS-SEC-53). Plain `http` is accepted only to a loopback address.
+- Hooks are part of the package, so changing one takes `documentsctl apply`;
+  the delivery tables come with the embedded schema, and a split runtime role
+  is granted them with the rest of what serving needs (DOCUMENTS-DEC-31).
+- Each delivery attempt and its outcome are written to the Document Store
+  audit journal as `documents.hook-delivery`, carrying ids, the package
+  digest, and the outcome, never the payload.
+
+### Tests
+
+`crates/registry-documents/src/hooks_tests.rs` covers compilation refusals,
+projections, the published schemas, and destination activation without a
+database. `crates/registry-documents/tests/postgres_hooks.rs` runs capture,
+rollback, delivery to a local receiver, proposal refusal, retry and dead
+letter, and a split runtime role against a disposable database under the
+`postgres-test` feature. `contracts/security-test-traceability.yaml` names
+each test under DOCUMENTS-SEC-48 to DOCUMENTS-SEC-53.
+
+### Residual risk
+
+- An observer learns that a document exists, when it became ready or was
+  rejected, and when grants on it change, keyed by stable ids. Bind only
+  destinations entitled to that timing.
+- Terminal delivery rows and their payloads are not yet pruned; a captured
+  payload stops being sent after `retention.hookPayloadRetentionDays` but
+  stays in the database until pruning lands.
+- A database activated before the delivery tables were part of the embedded
+  schema does not gain them; pre-1.0 deployments are recreated.
