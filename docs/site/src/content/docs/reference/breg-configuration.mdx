@@ -158,8 +158,10 @@ The verifier answers HTTP 200 with at most 1,024 bytes holding exactly one of:
 {"verdict":"rejected"}
 ```
 
-Anything else, a timeout, or an unreachable verifier leaves the file pending; the worker retries
-and logs `attachment_verification.retry_pending`. The request follows no redirect and uses no proxy.
+Anything else, a timeout, or an unreachable verifier leaves the file pending; the worker logs
+`attachment_verification.retry_pending` and retries after a delay that starts at 30 seconds and
+doubles, with jitter, up to one hour. Each attempt has 60 seconds. The request follows no redirect
+and uses no proxy.
 
 A pending or rejected file blocks its download and the submission of its Proposal, optional slots
 included. A verdict is reused for the same digest, content type, and verification binding, so
@@ -170,7 +172,8 @@ its logging and retention separately.
     RawAttachmentVerificationConfig and AttachmentVerificationConfig;
     crates/registry-platform-objectstore/src/verifier.rs, HttpVerifier, VerdictResponse, and
     MAXIMUM_VERDICT_BYTES;
-    crates/registry-breg/src/attachment_verification_worker.rs, AttachmentVerificationRetryPending;
+    crates/registry-breg/src/attachment_verification_worker.rs, AttachmentVerificationRetryPending
+    and verification_policy();
     crates/registry-breg/src/startup.rs, AttachmentVerificationRetryPending;
     crates/registry-breg/src/attachment_store.rs, verification_status(), permits_content(), and
     manifest();

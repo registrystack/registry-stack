@@ -1323,12 +1323,22 @@ async fn native_verifier_worker_releases_only_exact_approved_bytes() {
         raw_download(&fixture.http, &pending).await.status(),
         StatusCode::NOT_FOUND
     );
-    let rows = fixture.database.admin.query(
-        "SELECT verdict,attempts FROM registry_internal.registry_attachment_verification ORDER BY verdict", &[],
-    ).await.unwrap();
+    let rows = fixture
+        .database
+        .admin
+        .query(
+            "SELECT verdict.verdict, job.attempt
+           FROM registry_internal.registry_attachment_verification AS verdict
+           JOIN registry_internal.registry_attachment_verification_jobs AS job
+             ON job.verification_id = verdict.verification_id
+          ORDER BY verdict.verdict",
+            &[],
+        )
+        .await
+        .unwrap();
     assert_eq!(
         rows.iter()
-            .map(|row| (row.get::<_, String>(0), row.get::<_, i64>(1)))
+            .map(|row| (row.get::<_, String>(0), row.get::<_, i16>(1)))
             .collect::<Vec<_>>(),
         vec![("pending".into(), 1)]
     );
@@ -1364,5 +1374,279 @@ async fn native_verifier_worker_releases_only_exact_approved_bytes() {
     assert!(audit
         .iter()
         .any(|record| record.to_string().contains("retry-pending")));
+    fixture.finish().await;
+}
+
+/// The verification job of one verdict row, read through the shared dispatch
+/// job table: `(state, attempt, due in the future)`.
+async fn verification_jobs(fixture: &client_http::ClientFixture) -> Vec<(String, i16, bool)> {
+    fixture
+        .database
+        .admin
+        .query(
+            "SELECT job.state, job.attempt,
+                    COALESCE(job.next_attempt_at > transaction_timestamp(), false)
+               FROM registry_internal.registry_attachment_verification_jobs AS job
+              ORDER BY job.updated_at, job.verification_id",
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2)))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn verification_runs_on_the_shared_dispatch_job_table() {
+    use registry_breg::attachment_verification_worker::AttachmentVerificationWorker;
+    use registry_breg::postgres::RegistryLockKey;
+    use registry_platform_audit::AuditProfile;
+    let s3 = S3Fixture::new().await;
+    let storage = s3.storage.clone();
+    let verification = s3.config.activate_attachment_verification().unwrap();
+    let configured_verification = verification.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        registry(false),
+        claims("synthetic-author", "zone-a"),
+        move |mutations| {
+            mutations
+                .with_attachment_storage(storage)
+                .with_attachment_verification(configured_verification)
+        },
+    )
+    .await;
+    let (audit, capture) = registry_breg::audit::test_support::capturing(
+        AuditProfile::production_from_secret_bytes(vec![0x63; 32].into()).unwrap(),
+    );
+    let worker = || {
+        AttachmentVerificationWorker::new(
+            fixture.pool.clone(),
+            fixture.identity.clone(),
+            RegistryLockKey::derive(fixture.registry.registry_id()).unwrap(),
+            Duration::from_secs(2),
+            audit.clone(),
+            s3.storage.clone(),
+            verification.clone(),
+        )
+    };
+
+    // The verdict row carries no lease of its own: the job table does.
+    let lease_columns: i64 = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM information_schema.columns
+              WHERE table_schema = 'registry_internal'
+                AND table_name = 'registry_attachment_verification'
+                AND column_name IN ('lease_id', 'lease_expires_at', 'attempts', 'next_attempt_at')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(lease_columns, 0);
+
+    // Nothing due and nothing waiting is a success.
+    let idle = worker();
+    assert!(!idle.run_once().await.unwrap());
+    assert!(idle.last_success().age().is_some());
+
+    // The upload enqueues exactly one due job in the same transaction.
+    let draft = start(&fixture, "After", "dispatch-start").await;
+    let client = &fixture.http.client;
+    let draft = client
+        .upload_proposal_attachment(
+            &draft,
+            "support",
+            "text/plain",
+            b"dispatch-first",
+            &key("dispatch-upload"),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(
+        verification_jobs(&fixture).await,
+        vec![("pending".into(), 0, false)]
+    );
+    let joined: i64 = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT count(*)
+               FROM registry_internal.registry_attachment_verification_jobs AS job
+               JOIN registry_internal.registry_attachment_verification AS verdict
+                 ON verdict.verification_id = job.verification_id",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(joined, 1);
+
+    // A verifier that does not answer schedules a backed-off retry, and a
+    // pass that finds only that retry waiting is no success.
+    s3.state.verifier_mode.store(2, Ordering::SeqCst);
+    let failing = worker();
+    assert!(failing.run_once().await.unwrap());
+    assert!(failing.last_success().age().is_none());
+    assert_eq!(
+        verification_jobs(&fixture).await,
+        vec![("pending".into(), 1, true)]
+    );
+    assert!(!failing.run_once().await.unwrap());
+    assert!(failing.last_success().age().is_none());
+
+    // Once due again, an approval delivers the job and releases the bytes.
+    s3.state.verifier_mode.store(0, Ordering::SeqCst);
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_attachment_verification_jobs
+                SET next_attempt_at = transaction_timestamp()",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(failing.run_once().await.unwrap());
+    assert!(failing.last_success().age().is_some());
+    assert_eq!(
+        verification_jobs(&fixture).await,
+        vec![("delivered".into(), 2, false)]
+    );
+    let draft = client.read_proposal(&draft).await.unwrap().value;
+    assert_eq!(
+        client
+            .download_proposal_attachment(&draft, "support")
+            .await
+            .unwrap()
+            .value
+            .as_bytes(),
+        b"dispatch-first"
+    );
+
+    // Retiring a verdict row removes its finished job with it.
+    let draft = client
+        .upload_proposal_attachment(
+            &draft,
+            "support",
+            "text/plain",
+            b"dispatch-second",
+            &key("dispatch-replace"),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(
+        verification_jobs(&fixture).await,
+        vec![("pending".into(), 0, false)]
+    );
+
+    // A worker that stopped mid-attempt leaves a lapsed lease. The verdict
+    // row it was verifying is retired while it holds the lease, which leaves
+    // the leased job in place.
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_attachment_verification_jobs
+                SET state = 'leased', attempt = 1, next_attempt_at = NULL,
+                    attempt_started_at = transaction_timestamp() - interval '2 minutes',
+                    lease_expires_at = transaction_timestamp() - interval '1 minute',
+                    lease_token = gen_random_uuid()",
+            &[],
+        )
+        .await
+        .unwrap();
+    let _draft = client
+        .upload_proposal_attachment(
+            &draft,
+            "support",
+            "text/plain",
+            b"dispatch-third",
+            &key("dispatch-replace-again"),
+        )
+        .await
+        .unwrap()
+        .value;
+    let jobs = verification_jobs(&fixture).await;
+    assert_eq!(
+        jobs,
+        vec![("leased".into(), 1, false), ("pending".into(), 0, false)]
+    );
+    let requests_before = s3.state.verifier_bytes.lock().await.len();
+
+    // The next pass recovers the lapsed lease to a backed-off retry, then
+    // verifies the current upload.
+    let recovering = worker();
+    assert!(recovering.run_once().await.unwrap());
+    let mut jobs = verification_jobs(&fixture).await;
+    jobs.sort();
+    assert_eq!(
+        jobs,
+        vec![("delivered".into(), 1, false), ("pending".into(), 1, true)]
+    );
+
+    // Once due, the job of the retired row is discarded without a verifier
+    // request, and its job row goes with it.
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_attachment_verification_jobs
+                SET next_attempt_at = transaction_timestamp() WHERE state = 'pending'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(recovering.run_once().await.unwrap());
+    assert_eq!(
+        verification_jobs(&fixture).await,
+        vec![("delivered".into(), 1, false)]
+    );
+    assert_eq!(
+        s3.state.verifier_bytes.lock().await.len(),
+        requests_before + 1,
+        "only the current upload reached the verifier"
+    );
+    let verdicts = fixture
+        .database
+        .admin
+        .query(
+            "SELECT verdict FROM registry_internal.registry_attachment_verification",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(verdicts.len(), 1);
+    assert_eq!(verdicts[0].get::<_, String>(0), "approved");
+
+    let audit = capture.entries();
+    postgres_harness::assert_audit_identity_goldens(&audit);
+    let outcomes = audit
+        .iter()
+        .filter(|entry| entry["record"]["kind"] == "attachmentVerification")
+        .map(|entry| {
+            format!(
+                "{}:{}",
+                entry["record"]["phase"].as_str().unwrap(),
+                entry["record"]["outcome"].as_str().unwrap()
+            )
+        })
+        .collect::<Vec<_>>();
+    for expected in [
+        "attempt:started",
+        "terminal:retry-pending",
+        "terminal:approved",
+        "terminal:unfinished",
+        "terminal:discarded",
+    ] {
+        assert!(
+            outcomes.iter().any(|outcome| outcome == expected),
+            "{expected} in {outcomes:?}"
+        );
+    }
     fixture.finish().await;
 }

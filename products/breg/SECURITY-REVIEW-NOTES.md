@@ -62,6 +62,95 @@ its own.
 - The crate's own notes are in the "Security review notes" section of
   `crates/registry-platform-objectstore/README.md`.
 
+## Attachment verification on the shared dispatch core
+
+Attachment verification moved from a lease, attempt counter, and retry time
+held on each verdict row to the shared `registry-platform-dispatch` job core,
+the same core the Document Store's verification uses. The threat is a weaker
+worker: a verdict committed for bytes, a media type, or a verifier binding it
+was not given, a verdict committed by a worker whose lease another worker
+has taken over, an attempt the audit journal never records, or a file that
+leaves quarantine without a verdict.
+
+### Enforcement and defaults
+
+- `attachment_store::install` creates
+  `registry_internal.registry_attachment_verification_jobs` from the
+  dispatch table declaration, and `put` enqueues one job in the upload
+  transaction that creates a pending verdict row, so every pending row has
+  exactly one job. The verdict row loses its lease, attempt, and retry
+  columns and gains `verification_id`, the job's key.
+- The claim selects a due job only when its verdict row is gone or decided,
+  so the job can end, or when the row waits under the pinned verifier
+  binding for live bytes a live reference holds
+  (`CLAIM_PREDICATE` in
+  `crates/registry-breg/src/attachment_verification_worker.rs`). Every
+  dispatch transaction, and the transaction that reads the bytes, is
+  admitted as before: bounded lock and statement waits, the shared registry
+  lock, the ready registry identity, the attachment row-level security
+  scope, and the pinned storage and verifier bindings.
+- The attempt's `request` audit entry is accepted before the lease commits,
+  and so before any byte is read or sent. The content read
+  (`load_verification_content`) and the verdict write
+  (`record_verification_verdict`) each require the job's lease token to be
+  live, so a worker whose lease lapsed and was taken over cannot read or
+  decide. Bytes are checked against the blob's size and SHA-256 before the
+  verifier sees them.
+- Only an `approved` or `rejected` answer from the configured verifier ends
+  a job with a verdict. A verifier failure, a content read or integrity
+  failure, or the 60-second attempt budget running out leaves the row
+  pending and retries the job after 30 seconds doubling, with equal jitter,
+  to one hour. The policy has no expiry, treats an uncertain outcome as a
+  retry, and allows 32,767 attempts, so a quarantined file waits for a
+  verdict rather than for an operator; a job that stops anyway fails the
+  worker pass visibly.
+- A lease a stopped worker left behind is recovered by the next claim to a
+  backed-off retry, and the recovering worker writes that attempt's
+  `unfinished` terminal entry. A verdict that arrives after its row was
+  retired commits nothing and is audited as `discarded`, and the job of a
+  retired row is deleted with the row unless a worker holds it, in which
+  case that worker deletes it when it finishes.
+- The audit schema stays `breg-attachment-verification-audit/v2` with the
+  same record fields; the keyed verification reference is derived from the
+  verification id and the lease token.
+- The worker records its last success, as before, only for a pass that
+  reached a verdict, or that found no due job while no job an earlier
+  attempt failed, or a lapsed lease, waits for its retry.
+
+### Tests
+
+`crates/registry-breg/tests/postgres_proposal_s3.rs`:
+`verification_runs_on_the_shared_dispatch_job_table` pins the job table and
+the removed verdict columns, the retry wait without a success, the verdict
+after the retry, the lapsed-lease recovery and its `unfinished` entry, and a
+single verifier request and verdict for a recovered job;
+`native_verifier_worker_releases_only_exact_approved_bytes` keeps the exact
+bytes, media type, binding, quarantine, and refusal checks against the
+shared dispatcher. The unit tests in
+`crates/registry-breg/src/attachment_verification_worker.rs` pin the policy
+and the mapping of verifier answers. The new suite test was written first
+and did not compile against the code before it.
+
+### Accepted residuals
+
+- **No row-level security on the job table.** The job table holds only job
+  keys, states, attempts, and timestamps. The runtime role can read and
+  change it without an admitted transaction, as it can the hook delivery
+  state table. A changed job row can cause an extra
+  verifier request or stall a verification; it cannot release bytes,
+  because a verdict is written only into the admitted verdict row under a
+  live lease, and a pending row stays quarantined.
+- **No outer iteration bound.** The 180-second bound on a whole worker pass
+  is gone. Each database statement is bounded by the 30-second statement
+  timeout and the configured lock timeout, and the content read and
+  verifier request by the 60-second attempt budget.
+- **Uncertain finish.** When the commit of a finished attempt cannot be
+  confirmed, the worker writes an `unfinished` entry, and if the lease then
+  lapses the recovering worker writes a second `unfinished` entry for the
+  same attempt.
+- **Longer retry wait.** A verifier that recovers after a long outage may
+  wait up to an hour, plus jitter, before a quarantined file is retried.
+
 ## Immediate Action availability and guard refusal disclosure
 
 An application may ask whether one referenced target currently satisfies an
@@ -1401,10 +1490,9 @@ which covers every stop code and the review and metrics events.
 and `an_unreadable_queue_omits_every_queue_age_and_emits_a_closed_value_free_event`.
 `crates/registry-breg/tests/postgres_webhook_delivery.rs`:
 `real_postgres_webhook_worker_records_its_last_success_on_an_idle_iteration`.
-`crates/registry-breg/tests/postgres_change_requests.rs`:
-`real_postgres_attachment_verification_worker_records_its_last_success_when_idle`,
-`real_postgres_attachment_verification_worker_records_no_success_while_the_verifier_fails`,
-and `real_postgres_attachment_verification_worker_claims_the_next_due_job_without_waiting`.
+`crates/registry-breg/tests/postgres_proposal_s3.rs`:
+`verification_runs_on_the_shared_dispatch_job_table`, which pins the
+attachment verification worker's success only when idle or after a verdict.
 `crates/registry-breg/tests/postgres_access_log.rs`:
 `a_retention_tick_without_failure_records_its_last_success`.
 `crates/registry-breg/tests/postgres_startup.rs`:
@@ -1445,9 +1533,8 @@ added codes.
   keeps routing to a process until it exits. Between a task stopping and the
   exit, the process drains within the shutdown grace.
 - **Attachment queue.** The attachment verification queue is not sampled by
-  `breg_queue_oldest_pending_age_seconds`, because its row policy admits
-  only a transaction the attachment worker has admitted; its worker progress
-  age is published.
+  `breg_queue_oldest_pending_age_seconds`; its worker progress age is
+  published.
 - **Retention failures.** A failed subject access log retention pass still
   writes a raw error record without a closed `code`; only its last-success
   age and its stop code are closed.
