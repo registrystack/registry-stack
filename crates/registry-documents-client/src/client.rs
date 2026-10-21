@@ -6,9 +6,9 @@ use std::time::Duration;
 use registry_documents_core::{
     type_uri, DocumentGrantPage, DocumentGrantView, DocumentPage, DocumentPolicyList, DocumentView,
     IssueGrantRequest, ProblemCode, ReservationView, ReserveDocumentRequest, DOCUMENTS_PATH,
-    DOCUMENT_CONTENT_PATH, DOCUMENT_GRANTS_PATH, DOCUMENT_PATH, GRANTS_PATH, GRANT_PATH,
-    HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_IDEMPOTENCY_KEY_BYTES, MAXIMUM_PAGE_SIZE,
-    POLICIES_PATH, UPLOAD_CONTENT_PATH,
+    DOCUMENT_CONTENT_PATH, DOCUMENT_ERASURE_PATH, DOCUMENT_GRANTS_PATH, DOCUMENT_PATH, GRANTS_PATH,
+    GRANT_PATH, HEALTH_PATH, IDEMPOTENCY_KEY_HEADER, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
+    MAXIMUM_PAGE_SIZE, POLICIES_PATH, UPLOAD_CONTENT_PATH,
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
@@ -545,6 +545,30 @@ impl DocumentsClient {
             StatusCode::OK,
         )
         .await
+    }
+
+    /// Ask, as the document's custodian, for its erasure, and answer the
+    /// document as the request left it. Release stops at once and every
+    /// grant on the document is revoked. The route takes no idempotency key
+    /// because it is idempotent by design: only the first request moves
+    /// anything, and a repeat answers the document as it stands. A retry
+    /// after an unknown outcome is therefore safe, and stays the caller's
+    /// decision; the client never resends it. A caller who sees the document
+    /// without being its custodian is answered 403 `ProfileNotAuthorized`,
+    /// and one who cannot see it 404 `ResourceNotFound`. `document_id` is
+    /// checked as `document` checks it.
+    pub async fn request_erasure(
+        &self,
+        token: &BearerToken,
+        document_id: &str,
+    ) -> Result<DocumentsComplete<DocumentView>, DocumentsClientError> {
+        require_id(
+            document_id,
+            "the document identifier is not a lowercase hyphenated UUID",
+        )?;
+        let url = self.url(DOCUMENT_ERASURE_PATH, &[document_id])?;
+        self.json_answer(self.authorized(self.http.post(url), token), StatusCode::OK)
+            .await
     }
 
     /// The document policies the caller may place documents under, with
