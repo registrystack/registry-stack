@@ -33,7 +33,7 @@ contract.
 | `GET /documents/{documentId}/grants` | List every grant on a document |
 | `GET /document-grants` | List the active grants naming the caller |
 | `DELETE /document-grants/{grantId}` | Revoke a grant |
-| `POST /documents/{documentId}/erasure` | Remove a document from custody; only its custodian may, and a repeat answers the same view |
+| `POST /documents/{documentId}/erasure` | Remove a document from custody; only its custodian may. Takes no `Idempotency-Key`: a repeat moves nothing and answers the same view |
 | `GET /document-policies` | List the policies the caller may reserve under, with their bounds |
 
 A document the caller may not see answers `resource.not-found`, the same as
@@ -42,18 +42,27 @@ stable order.
 
 ## Retention and erasure
 
-A document is kept until its custodian removes it. Nothing expires on a
-timer: a grant that expires or is revoked erases nothing held in custody, and
-there is no sliding expiry. A citizen-held document is kept until the citizen
-removes it.
+A document is kept until its custodian removes it or the verifier rejects
+it. Nothing expires on a timer: a grant that expires or is revoked erases
+nothing held in custody, and there is no sliding expiry. A citizen-held
+document is kept until the citizen removes it.
 
-`POST /documents/{documentId}/erasure` starts the only custody clock. In one
+`POST /documents/{documentId}/erasure` starts the custody clock. In one
 transaction it suspends release, revokes every active grant on the document,
 cancels any pending verification, and marks the version `erasure-pending` with
-a due time of now plus the policy's `cleanupGraceHours`. No grant, download,
-or verdict that starts after the request commits releases the version. A
-download admitted before the commit is not interrupted and may finish after
-it, bounded by its transfer deadline.
+a due time of now plus the policy's `cleanupGraceHours`, which is at least one
+hour, so the operator always has a window to restore from a mistaken request
+(a project that sets it to 0 is refused). No grant, download, or verdict that
+starts after the request commits releases the version. A download admitted
+before the commit is not interrupted and may finish after it, bounded by its
+transfer deadline.
+
+A rejection schedules the erasure of the rejected bytes the same way, due
+`cleanupGraceHours` after the verdict. The version reads `rejected` until its
+bytes are erased and `erased` after; the record stays. A verification that
+dead-letters is not a verdict, so its bytes are kept until an operator replays
+it or the custodian removes the document. A rejection revokes no grant;
+removing a rejected document revokes them and keeps the rejection's due time.
 
 A cleanup sweep runs every minute. Each pass:
 

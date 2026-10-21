@@ -1708,6 +1708,7 @@
     },
     "/documents/{documentId}/erasure": {
       "post": {
+        "description": "Takes no `Idempotency-Key`: the request is repeat-safe by construction. The first request moves the version to erasure; a repeat moves nothing, revokes nothing, keeps the first due time, and answers the document as it stands, so a client that lost the answer may simply send it again.",
         "operationId": "requestDocumentErasure",
         "parameters": [
           {

@@ -56,6 +56,8 @@ pub struct Operation {
     pub path: &'static str,
     pub operation_id: &'static str,
     pub summary: &'static str,
+    /// What the summary leaves out that a client needs, if anything.
+    pub description: Option<&'static str>,
     /// Whether the caller must present a bearer access token.
     pub authenticated: bool,
     /// Whether the request carries a required `Idempotency-Key` header.
@@ -170,6 +172,7 @@ pub const OPERATIONS: &[Operation] = &[
         path: HEALTH_PATH,
         operation_id: "health",
         summary: "Report that the process is serving.",
+        description: None,
         authenticated: false,
         idempotent: false,
         paged: false,
@@ -183,6 +186,7 @@ pub const OPERATIONS: &[Operation] = &[
         path: DOCUMENTS_PATH,
         operation_id: "reserveDocument",
         summary: "Reserve a document under a policy and receive its upload path.",
+        description: None,
         authenticated: true,
         idempotent: true,
         paged: false,
@@ -196,6 +200,7 @@ pub const OPERATIONS: &[Operation] = &[
         path: DOCUMENTS_PATH,
         operation_id: "listDocuments",
         summary: "List the documents the caller holds in custody or reserved.",
+        description: None,
         authenticated: true,
         idempotent: false,
         paged: true,
@@ -209,6 +214,7 @@ pub const OPERATIONS: &[Operation] = &[
         path: DOCUMENT_PATH,
         operation_id: "readDocument",
         summary: "Read one document's metadata and the actions the caller may take.",
+        description: None,
         authenticated: true,
         idempotent: false,
         paged: false,
@@ -222,6 +228,7 @@ pub const OPERATIONS: &[Operation] = &[
         path: DOCUMENT_CONTENT_PATH,
         operation_id: "downloadDocumentVersion",
         summary: "Download one releasable document version, as the custodian or a grant holder.",
+        description: None,
         authenticated: true,
         idempotent: false,
         paged: false,
@@ -235,6 +242,7 @@ pub const OPERATIONS: &[Operation] = &[
         path: UPLOAD_CONTENT_PATH,
         operation_id: "uploadDocumentContent",
         summary: "Send the reserved content; a repeat of the same content answers the same view.",
+        description: None,
         authenticated: true,
         idempotent: false,
         paged: false,
@@ -248,6 +256,7 @@ pub const OPERATIONS: &[Operation] = &[
         path: DOCUMENT_GRANTS_PATH,
         operation_id: "issueDocumentGrant",
         summary: "Grant one named recipient one exact document version until a fixed expiry.",
+        description: None,
         authenticated: true,
         idempotent: true,
         paged: false,
@@ -261,6 +270,7 @@ pub const OPERATIONS: &[Operation] = &[
         path: DOCUMENT_GRANTS_PATH,
         operation_id: "listDocumentGrants",
         summary: "List every grant on one document, in any state.",
+        description: None,
         authenticated: true,
         idempotent: false,
         paged: true,
@@ -274,6 +284,7 @@ pub const OPERATIONS: &[Operation] = &[
         path: GRANTS_PATH,
         operation_id: "listReceivedGrants",
         summary: "List the active grants that name the caller.",
+        description: None,
         authenticated: true,
         idempotent: false,
         paged: true,
@@ -287,6 +298,7 @@ pub const OPERATIONS: &[Operation] = &[
         path: GRANT_PATH,
         operation_id: "revokeDocumentGrant",
         summary: "Revoke one grant; revoking a revoked grant answers the same view.",
+        description: None,
         authenticated: true,
         idempotent: false,
         paged: false,
@@ -300,6 +312,12 @@ pub const OPERATIONS: &[Operation] = &[
         path: DOCUMENT_ERASURE_PATH,
         operation_id: "requestDocumentErasure",
         summary: "Ask, as the custodian, for a document's erasure; release stops at once.",
+        description: Some(
+            "Takes no `Idempotency-Key`: the request is repeat-safe by construction. \
+             The first request moves the version to erasure; a repeat moves nothing, \
+             revokes nothing, keeps the first due time, and answers the document as \
+             it stands, so a client that lost the answer may simply send it again.",
+        ),
         authenticated: true,
         idempotent: false,
         paged: false,
@@ -313,6 +331,7 @@ pub const OPERATIONS: &[Operation] = &[
         path: POLICIES_PATH,
         operation_id: "listDocumentPolicies",
         summary: "List the policies the caller may place documents under, with their bounds.",
+        description: None,
         authenticated: true,
         idempotent: false,
         paged: false,
@@ -543,6 +562,9 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
             "security": if operation.authenticated { json!([{"bearer": []}]) } else { json!([]) },
             "responses": responses,
         });
+        if let Some(description) = operation.description {
+            entry["description"] = json!(description);
+        }
         let parameters = parameters(operation);
         if !parameters.is_empty() {
             entry["parameters"] = Value::Array(parameters);
@@ -985,6 +1007,19 @@ mod tests {
                 .for_each(|value| collect_references(value, references)),
             _ => {}
         }
+    }
+
+    #[test]
+    fn the_erasure_route_states_why_it_takes_no_idempotency_key() {
+        let openapi = schema(&openapi_documents().unwrap(), OPENAPI_FILE);
+        let operation = &openapi["paths"][DOCUMENT_ERASURE_PATH]["post"];
+        let description = operation["description"].as_str().unwrap();
+        assert!(description.contains("Idempotency-Key"), "{description}");
+        assert!(description.contains("repeat"), "{description}");
+        let parameters = operation["parameters"].as_array().unwrap();
+        assert!(!parameters
+            .iter()
+            .any(|parameter| parameter["name"] == "Idempotency-Key"));
     }
 
     #[test]

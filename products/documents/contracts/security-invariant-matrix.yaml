@@ -622,9 +622,10 @@ invariants:
       commits, through a grant issued before the request or one issued
       while it commits.
     enforcementPoint: >-
-      The removal request moves the version to erasure pending, suspends
-      it, and revokes every active grant on the document in one
-      transaction; grant issue holds the version row and refuses a version
+      The removal request records the document's removal, moves the
+      version to erasure pending, suspends it, and revokes every active
+      grant on the document in one transaction, whatever the version's
+      state, including a version a rejection already armed; grant issue holds the version row and refuses a version
       under erasure; the database refuses a releasable version whose
       erasure state is not none. A download admitted before the request
       commits is not interrupted and may finish within its transfer
@@ -659,9 +660,9 @@ invariants:
       so a document its custodian keeps disappears when its last share
       lapses.
     enforcementPoint: >-
-      Only a removal request sets a version's erasure state, and the sweep
-      arms erasure only for versions pending removal whose grace has
-      ended.
+      Only a removal request or a rejection sets a version's erasure
+      state, and the sweep arms erasure only for versions pending erasure
+      whose grace has ended.
     refusal: >-
       Keep the content and the version's state; the expired or revoked
       grant alone stops releasing.
@@ -675,7 +676,9 @@ invariants:
       backup restore, and destroys bytes the restore was meant to recover.
     enforcementPoint: >-
       With cleanup.erasure paused, no erasure job is armed or attempted
-      and no orphaned object is erased; the erasure worker is not started.
+      and no orphaned object is erased; the erasure worker is not started,
+      so a job armed before the pause waits too. The serving runtime and
+      the test sweep start the worker through one gate.
     refusal: >-
       Erase nothing and arm no job; the version stays erasure pending and
       unservable.
@@ -736,9 +739,13 @@ invariants:
     enforcementPoint: >-
       The sweep reads only uncommitted staged rows older than the longest
       transfer deadline plus ten minutes, locks each row while it deletes
-      the object, and deletes the row only after the delete is confirmed.
+      the object, and deletes the row only after the delete is confirmed;
+      a commit that arrives after the row is deleted finds none and is
+      refused. An object whose delete fails is skipped for the rest of the
+      pass, so it holds back no other.
     refusal: >-
-      Leave a younger or committed object and its row in place.
+      Leave a younger or committed object and its row in place, and refuse
+      a commit whose staged row the sweep deleted.
     negativeTest:
       path: crates/registry-documents/tests/postgres_s3.rs
       name: the_orphan_sweep_erases_only_old_uncommitted_objects

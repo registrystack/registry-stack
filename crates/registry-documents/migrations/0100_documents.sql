@@ -35,7 +35,12 @@ CREATE TABLE IF NOT EXISTS documents_documents (
     -- An untrusted caller-supplied label: stored and returned, never used
     -- for authorization.
     label text CHECK (octet_length(label) BETWEEN 1 AND 256),
-    created_at timestamptz NOT NULL
+    created_at timestamptz NOT NULL,
+    -- When the custodian asked for the document's removal. Set once, by the
+    -- first request: a later request is a repeat. A rejection arms its
+    -- version's erasure without setting it, so a removal after a rejection
+    -- is still the first.
+    removal_requested_at timestamptz CHECK (removal_requested_at >= created_at)
 );
 
 -- The custodian quota sums bytes per custodian and policy.

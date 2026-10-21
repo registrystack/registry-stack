@@ -70,8 +70,9 @@ documentPolicies:
       allowedContentTypes: [application/pdf]
       grantExpiryHours: 24
       maximumGrantExpiryHours: 24
-      # Time between the custodian's removal request and erasure of the
-      # bytes. Grant expiry and revocation erase nothing.
+      # Time between the custodian's removal request, or a rejection, and
+      # erasure of the bytes; at least one hour. Grant expiry and
+      # revocation erase nothing.
       cleanupGraceHours: 24
   institutional-custody:
     version: "1"

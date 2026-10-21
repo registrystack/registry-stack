@@ -45,7 +45,7 @@ use crate::store::{PostgresStore, StoreError};
 use crate::transfer::{TransferBudget, TransferDeadline};
 use crate::verification::{
     activate_verifier, dead_letters, dispatcher, job_table, replay, sweep_bindings, DeadLetter,
-    ReplayError, ReplayFailure, ReplayRefusal, Replayed, VerdictSource, VerificationStore,
+    Graces, ReplayError, ReplayFailure, ReplayRefusal, Replayed, VerdictSource, VerificationStore,
     VerificationTransport,
 };
 
@@ -167,6 +167,13 @@ impl Cleanup {
         .await
     }
 
+    /// The erasure worker, only while erasure is active. The serving
+    /// runtime and the test sweep both start it through here, so a paused
+    /// deployment runs no erasure job, even one armed before the pause.
+    fn worker_if_active(&self) -> Option<DispatchWorker<ErasureStore, ErasureTransport>> {
+        (self.erasure == Erasure::Active).then(|| self.worker())
+    }
+
     fn worker(&self) -> DispatchWorker<ErasureStore, ErasureTransport> {
         DispatchWorker::new(
             self.dispatcher.clone(),
@@ -188,6 +195,7 @@ impl Cleanup {
                         expired_uploads = pass.expired_uploads,
                         armed_erasures = pass.armed_erasures,
                         erased_orphans = pass.erased_orphans,
+                        failed_orphans = pass.failed_orphans,
                         "a cleanup pass finished"
                     );
                 }
@@ -297,8 +305,13 @@ async fn prepare_with(
         audit.clone(),
     ))
     .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
-    let dispatcher = dispatcher(VerificationStore::new(store.clone(), schema, audit.clone()))
-        .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
+    let dispatcher = dispatcher(VerificationStore::new(
+        store.clone(),
+        schema,
+        audit.clone(),
+        Graces::of(&package.project),
+    ))
+    .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
     let deadline = TransferDeadline::new(&config.transfers);
     let cleanup = Cleanup {
         store: store.clone(),
@@ -479,7 +492,8 @@ pub async fn replay_verification(
             source,
         })?;
     let audit = open_audit(config, &secrets, Some(OPERATOR_PROCESS)).await?;
-    let verification = VerificationStore::new(store.clone(), schema, audit);
+    let graces = Graces::of(&load_package(config)?.project);
+    let verification = VerificationStore::new(store.clone(), schema, audit, graces);
     replay(&store, verification, version_id, expected_generation)
         .await
         .map_err(|error| match error {
@@ -602,15 +616,21 @@ impl Prepared {
         self.worker().drain(&shutdown).await
     }
 
+    /// Run one cleanup pass alone and return what it answered.
+    #[cfg(feature = "postgres-test")]
+    pub async fn cleanup_pass(&self) -> Result<CleanupPass, crate::erasure::CleanupError> {
+        self.cleanup.pass().await
+    }
+
     /// Run one cleanup pass and then every due erasure attempt, as the
     /// serving runtime would, and return the pass. Erasure attempts run only
     /// while erasure is active.
     #[cfg(feature = "postgres-test")]
     pub async fn sweep_due(&self) -> CleanupPass {
-        let pass = self.cleanup.pass().await.expect("the cleanup pass runs");
-        if self.cleanup.erasure == Erasure::Active {
+        let pass = self.cleanup_pass().await.expect("the cleanup pass runs");
+        if let Some(worker) = self.cleanup.worker_if_active() {
             let (_sender, shutdown) = watch::channel(false);
-            self.cleanup.worker().drain(&shutdown).await;
+            worker.drain(&shutdown).await;
         }
         pass
     }
@@ -638,9 +658,9 @@ impl Prepared {
         }
         let (stop, stopped) = watch::channel(false);
         let worker = tokio::spawn(self.worker().run(stopped.clone()));
-        let erasure_worker = match self.cleanup.erasure {
-            Erasure::Active => Some(tokio::spawn(self.cleanup.worker().run(stopped.clone()))),
-            Erasure::Paused => {
+        let erasure_worker = match self.cleanup.worker_if_active() {
+            Some(erasure) => Some(tokio::spawn(erasure.run(stopped.clone()))),
+            None => {
                 tracing::warn!(
                     "cleanup.erasure is paused: no erasure runs and no orphaned object is erased until it is active again"
                 );
