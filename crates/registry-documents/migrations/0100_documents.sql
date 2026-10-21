@@ -104,7 +104,10 @@ CREATE TABLE IF NOT EXISTS documents_versions (
     ),
     CONSTRAINT documents_versions_rejection_shape CHECK (
         verification_state <> 'rejected' OR eligibility = 'suspended'
-    )
+    ),
+    -- The pair a grant names, so a grant cannot name another document's
+    -- version.
+    CONSTRAINT documents_versions_document_version UNIQUE (document_id, version_id)
 );
 
 CREATE INDEX IF NOT EXISTS documents_versions_document_idx
@@ -123,20 +126,24 @@ CREATE TABLE IF NOT EXISTS documents_grants (
     version_id uuid NOT NULL REFERENCES documents_versions (version_id),
     grantee_issuer text NOT NULL CHECK (grantee_issuer <> ''),
     grantee_subject text NOT NULL CHECK (grantee_subject <> ''),
+    grantee_kind text NOT NULL
+        CONSTRAINT documents_grants_grantee_kind CHECK (grantee_kind IN ('service', 'human')),
     granted_by_issuer text NOT NULL CHECK (granted_by_issuer <> ''),
     granted_by_subject text NOT NULL CHECK (granted_by_subject <> ''),
     granted_by_profile text NOT NULL CHECK (granted_by_profile <> ''),
     issued_at timestamptz NOT NULL,
     expires_at timestamptz NOT NULL CHECK (expires_at > issued_at),
-    revoked_at timestamptz CHECK (revoked_at >= issued_at)
+    revoked_at timestamptz CHECK (revoked_at >= issued_at),
+    CONSTRAINT documents_grants_document_version FOREIGN KEY (document_id, version_id)
+        REFERENCES documents_versions (document_id, version_id)
 );
 
 CREATE INDEX IF NOT EXISTS documents_grants_document_idx
     ON documents_grants (document_id, issued_at, grant_id);
 CREATE INDEX IF NOT EXISTS documents_grants_grantee_idx
-    ON documents_grants (grantee_issuer, grantee_subject, issued_at, grant_id);
+    ON documents_grants (grantee_issuer, grantee_subject, grantee_kind, issued_at, grant_id);
 CREATE INDEX IF NOT EXISTS documents_grants_version_idx
-    ON documents_grants (version_id, grantee_issuer, grantee_subject);
+    ON documents_grants (version_id, grantee_issuer, grantee_subject, grantee_kind);
 
 -- One idempotency key, scoped to the caller and the operation and stored
 -- only as a digest. The request digest is the canonical body's; the

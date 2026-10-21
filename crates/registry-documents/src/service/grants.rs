@@ -13,7 +13,7 @@
 
 use chrono::{DateTime, Utc};
 use registry_documents_core::{
-    grant_expiry_hours, is_recipient, Caller, DocumentGrantPage, DocumentGrantView, GrantState,
+    grant_expiry_hours, ActorKind, Caller, DocumentGrantPage, DocumentGrantView, GrantState,
     GranteeRef, IssueGrantRequest, ProblemCode,
 };
 use registry_platform_yaml::ExternalId;
@@ -22,14 +22,15 @@ use tokio_postgres::Row;
 use uuid::Uuid;
 
 use super::{
-    key_digest, next_cursor, record_key, replay, request_digest, timestamp, unavailable, Cursor,
-    DocumentService, PageRequest, Record, Replay,
+    checked, key_digest, next_cursor, record_key, replay, request_digest, timestamp, unavailable,
+    Cursor, DocumentService, PageRequest, Record, Replay,
 };
 use crate::audit::{GRANT_ISSUE_EVENT, GRANT_REVOKE_EVENT};
 
 /// The columns [`Grant::from_row`] reads, by name.
 const GRANT_COLUMNS: &str = "grant_record.grant_id, grant_record.document_id,
-    grant_record.version_id, grant_record.grantee_subject, grant_record.issued_at,
+    grant_record.version_id, grant_record.grantee_subject, grant_record.grantee_kind,
+    grant_record.issued_at,
     grant_record.expires_at, grant_record.revoked_at,
     grant_record.expires_at <= now() AS lapsed";
 
@@ -39,6 +40,7 @@ struct Grant {
     document_id: Uuid,
     version_id: Uuid,
     grantee: String,
+    grantee_kind: ActorKind,
     issued_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
     revoked_at: Option<DateTime<Utc>>,
@@ -58,6 +60,8 @@ impl Grant {
             document_id: get(row, "document_id")?,
             version_id: get(row, "version_id")?,
             grantee: get(row, "grantee_subject")?,
+            grantee_kind: ActorKind::from_str_exact(&get::<String>(row, "grantee_kind")?)
+                .ok_or("an unknown grantee kind")?,
             issued_at: get(row, "issued_at")?,
             expires_at: get(row, "expires_at")?,
             revoked_at: get(row, "revoked_at")?,
@@ -85,6 +89,7 @@ impl Grant {
             grantee: GranteeRef {
                 subject: ExternalId::new(self.grantee.clone())
                     .map_err(|error| error.to_string())?,
+                kind: self.grantee_kind,
             },
             state,
             issued_at: timestamp(self.issued_at),
@@ -156,6 +161,7 @@ impl DocumentService {
         request: &IssueGrantRequest,
     ) -> Result<DocumentGrantView, ProblemCode> {
         let reference = self.actor_reference(caller)?;
+        let version_id = Uuid::parse_str(&request.version_id).ok();
         let audit = self
             .begin(
                 GRANT_ISSUE_EVENT,
@@ -164,11 +170,13 @@ impl DocumentService {
                     "actor": reference,
                     "profile": caller.profile_id,
                     "documentId": document_id.to_string(),
-                    "versionId": request.version_id,
+                    "versionId": checked(version_id),
                 }),
             )
             .await?;
-        let result = self.issue_inner(caller, key, document_id, request).await;
+        let result = self
+            .issue_inner(caller, key, document_id, version_id, request)
+            .await;
         let success = match &result {
             Ok(view) => json!({
                 "event": GRANT_ISSUE_EVENT,
@@ -187,11 +195,11 @@ impl DocumentService {
         caller: &Caller,
         key: &str,
         document_id: Uuid,
+        version_id: Option<Uuid>,
         request: &IssueGrantRequest,
     ) -> Result<DocumentGrantView, ProblemCode> {
         let record = self.grantable(caller, document_id, true).await?;
-        let version_id = Uuid::parse_str(&request.version_id)
-            .ok()
+        let version_id = version_id
             .filter(|id| *id == record.version_id)
             .ok_or(ProblemCode::ResourceNotFound)?;
         if record
@@ -222,16 +230,17 @@ impl DocumentService {
                     .execute(
                         "INSERT INTO documents_grants
                              (grant_id, document_id, version_id, grantee_issuer, grantee_subject,
-                              granted_by_issuer, granted_by_subject, granted_by_profile,
-                              issued_at, expires_at)
-                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, transaction_timestamp(),
-                                 transaction_timestamp() + make_interval(hours => $9))",
+                              grantee_kind, granted_by_issuer, granted_by_subject,
+                              granted_by_profile, issued_at, expires_at)
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, transaction_timestamp(),
+                                 transaction_timestamp() + make_interval(hours => $10))",
                         &[
                             &grant_id,
                             &document_id,
                             &version_id,
                             &caller.issuer,
                             &request.grantee.subject.as_str(),
+                            &request.grantee.kind.as_str(),
                             &caller.issuer,
                             &caller.subject,
                             &caller.profile_id.as_str(),
@@ -364,34 +373,52 @@ impl DocumentService {
         })
     }
 
-    /// The active grants that name `caller` under a profile the policy
-    /// admits as a recipient, oldest first.
+    /// The active grants that name `caller`, on a version releasable now
+    /// under a policy that admits `caller`'s profile as a recipient, oldest
+    /// first. Every condition is in the query, before its limit, so a page
+    /// is short only at the end of the list.
     pub async fn received_grants(
         &self,
         caller: &Caller,
         page: &PageRequest,
     ) -> Result<DocumentGrantPage, ProblemCode> {
         let (after, after_id) = Cursor::bounds(page.cursor);
+        let policies: Vec<&str> = self
+            .project
+            .document_policies
+            .iter()
+            .filter(|(_, policy)| policy.recipient_profiles.contains(&caller.profile_id))
+            .map(|(id, _)| id.as_str())
+            .collect();
         let client = self.client().await?;
         let rows = client
             .query(
                 &format!(
-                    "SELECT {GRANT_COLUMNS}, document.policy_id
+                    "SELECT {GRANT_COLUMNS}
                        FROM documents_grants AS grant_record
                        JOIN documents_documents AS document
                          ON document.document_id = grant_record.document_id
+                       JOIN documents_versions AS version
+                         ON version.version_id = grant_record.version_id
                       WHERE grant_record.grantee_issuer = $1
                         AND grant_record.grantee_subject = $2
+                        AND grant_record.grantee_kind = $3
                         AND grant_record.revoked_at IS NULL
                         AND grant_record.expires_at > now()
-                        AND ($3::timestamptz IS NULL
-                             OR (grant_record.issued_at, grant_record.grant_id) > ($3, $4))
+                        AND document.policy_id = ANY($4)
+                        AND version.eligibility = 'releasable'
+                        AND version.verified_binding_digest = $5
+                        AND ($6::timestamptz IS NULL
+                             OR (grant_record.issued_at, grant_record.grant_id) > ($6, $7))
                       ORDER BY grant_record.issued_at, grant_record.grant_id
-                      LIMIT $5"
+                      LIMIT $8"
                 ),
                 &[
                     &caller.issuer,
                     &caller.subject,
+                    &caller.kind.as_str(),
+                    &policies,
+                    &self.settings.verifier_binding,
                     &after,
                     &after_id,
                     &page.fetch(),
@@ -401,24 +428,10 @@ impl DocumentService {
             .map_err(|error| unavailable("grant list", &error))?;
         drop(client);
         let grants = decode_grants(&rows)?;
-        let next_cursor = next_cursor(&grants, page.limit, Grant::cursor);
-        let mut items = Vec::new();
-        for (grant, row) in grants.iter().zip(&rows).take(page.limit as usize) {
-            let policy_id: String = row
-                .try_get("policy_id")
-                .map_err(|error| unavailable("grant decode", &error))?;
-            if self
-                .policy(&policy_id)
-                .is_some_and(|policy| is_recipient(policy, caller))
-            {
-                items.push(
-                    grant
-                        .view()
-                        .map_err(|error| unavailable("grant decode", &error))?,
-                );
-            }
-        }
-        Ok(DocumentGrantPage { items, next_cursor })
+        Ok(DocumentGrantPage {
+            next_cursor: next_cursor(&grants, page.limit, Grant::cursor),
+            items: grant_views(&grants, page.limit)?,
+        })
     }
 }
 
