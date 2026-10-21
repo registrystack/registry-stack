@@ -3155,6 +3155,82 @@ async fn an_approval_after_a_removal_request_releases_nothing() {
         .assert_problem(ProblemCode::DocumentVersionNotReleasable);
 }
 
+/// A verifier that sees the version's removal requested while it decides,
+/// and then cannot answer.
+struct RemovedThenUnavailable {
+    client: tokio_postgres::Client,
+    schema: String,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl VerdictSource for RemovedThenUnavailable {
+    fn binding_digest(&self) -> &str {
+        "binding-a"
+    }
+
+    async fn verdict(&self, _: &str, _: &str, _: Vec<u8>) -> Result<Verdict, VerifierError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.client
+            .batch_execute(&format!(
+                "UPDATE {}.documents_versions
+                    SET erasure_state = 'pending', eligibility = 'suspended',
+                        erasure_requested_at = now(),
+                        erasure_due_at = now() + interval '1 day'",
+                self.schema
+            ))
+            .await
+            .expect("the removal is recorded under the verifier");
+        Err(VerifierError::Unavailable)
+    }
+}
+
+/// A removal that commits while a verification job is leased cancels
+/// nothing, since only a pending job is cancelled. The job's next attempt
+/// ends it without reading the bytes or asking the verifier again.
+#[tokio::test]
+async fn a_verification_job_leased_across_a_removal_is_set_aside() {
+    let deployment = deployment().await;
+    let (client, connection) =
+        tokio_postgres::connect(&support::database_url(), tokio_postgres::NoTls)
+            .await
+            .unwrap();
+    tokio::spawn(async move { connection.await.expect("the removing connection") });
+    let verifier = Arc::new(RemovedThenUnavailable {
+        client,
+        schema: deployment.schema.clone(),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let prepared = prepare_with_verifier(&deployment.runtime, Arc::clone(&verifier) as _)
+        .await
+        .expect("the runtime prepares");
+    let api = Api::new(&prepared);
+    upload(&api, &pdf(300, 77)).await;
+    prepared.verify_due().await;
+    let retrying: String = deployment
+        .scalar("SELECT state FROM documents_verification_jobs")
+        .await;
+    assert_eq!(retrying, "pending");
+    deployment
+        .execute("UPDATE documents_verification_jobs SET next_attempt_at = now()")
+        .await;
+    prepared.verify_due().await;
+    assert_eq!(verifier.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let (job, verification): (String, String) = (
+        deployment
+            .scalar("SELECT state FROM documents_verification_jobs")
+            .await,
+        deployment
+            .scalar("SELECT verification_state FROM documents_versions")
+            .await,
+    );
+    assert!(
+        !matches!(job.as_str(), "pending" | "leased"),
+        "the job is set aside, not {job}"
+    );
+    assert_eq!(verification, "pending");
+}
+
 /// Under `institutional-custody` the institution is the custodian, so it
 /// alone may remove the document; the person the document names has no
 /// standing and is answered as if the document did not exist.
