@@ -454,6 +454,59 @@ ROWS: tuple[Row, ...] = (
         ),
     ),
     Row(
+        product="documents",
+        loader_sources=("crates/registry-documents/src",),
+        runtime_schema="products/documents/generated/runtime/runtime.schema.json",
+        shared_blocks=(
+            "DatabaseConfig",
+            "Digest",
+            "EnvironmentSecretProviderConfig",
+            "ExternalId",
+            "FileSecretProviderConfig",
+            "JwksSource",
+            "ListenerBind",
+            "ListenerNetworkExposure",
+            "PackageConfig",
+            "PrivateListenerConfig",
+            "SecretProvidersConfig",
+            "SecretReference",
+            "TlsTermination",
+            "Url",
+        ),
+        reference_refusal=TestRef(
+            "crates/registry-documents/src/config.rs",
+            "shared_runtime_loader_refuses_environment_expressions_in_secret_references",
+        ),
+        authored_refusal=TestRef(
+            "crates/registry-documents-core/src/project.rs",
+            "a_substitution_expression_is_refused_in_the_authored_file",
+        ),
+        digest_mismatch=TestRef(
+            "crates/registry-documents/src/package.rs",
+            "a_package_digest_mismatch_is_refused_in_the_shared_shape",
+        ),
+        rust_blocks=(
+            RustBlock(
+                "crates/registry-documents/src/config.rs",
+                "OidcConfig",
+                "provider",
+                "OidcIssuerConfig",
+            ),
+            RustBlock(
+                "crates/registry-documents/src/config.rs",
+                "OidcConfig",
+                "clients",
+                "OidcClientsConfig",
+            ),
+            RustBlock(
+                "crates/registry-documents/src/config.rs",
+                "AuditConfig",
+                "key",
+                "AuditKeyConfig",
+            ),
+        ),
+    ),
+    Row(
         product="messaging",
         loader_sources=("crates/registry-messaging/src",),
         runtime_schema="products/messaging/generated/runtime/runtime.schema.json",
@@ -613,7 +666,8 @@ ROWS: tuple[Row, ...] = (
 
 EXPECTED_PRODUCTS = frozenset(
     {"render", "discovery", "evidence", "breg", "casework", "scheduling",
-     "messaging", "breg-mcp", "breg-review", "evidence-oid4vci", "coordinator"}
+     "messaging", "breg-mcp", "breg-review", "evidence-oid4vci", "coordinator",
+     "documents"}
 )
 
 
