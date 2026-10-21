@@ -24,8 +24,9 @@ use registry_platform_hooks::delivery::{
 };
 use registry_platform_hooks::{
     exponential_retry_delays_ms, validate_hooks, BoundedText, Causation, EnvelopeLimits,
-    EventSubject, HookCapabilities, HookDeclaration, HookEnvelope, HookHandlerKind,
-    HookHandlerSource, HookPhase, MAX_REFUSAL_CODE_BYTES, MAX_REFUSAL_SUMMARY_BYTES,
+    EventSubject, HookCapabilities, HookCapability, HookCapabilityError, HookDeclaration,
+    HookEnvelope, HookHandlerKind, HookHandlerSource, HookPhase, MAX_REFUSAL_CODE_BYTES,
+    MAX_REFUSAL_SUMMARY_BYTES,
 };
 use registry_platform_httputil::destination::{
     EventDestinationPolicy, MAX_DESTINATION_REQUEST_BODY_BYTES,
@@ -73,6 +74,18 @@ pub enum HookActivationError {
     InvalidDeclaration,
     #[error("the Scheduling hook contract is unsupported")]
     UnsupportedContract,
+    /// A declaration uses a part of the shared hook declaration outside the
+    /// url-only capabilities Scheduling runs. The message leads with the
+    /// shared `hook.capability.unsupported` code.
+    #[error(
+        "{}: Scheduling hook {index} uses `{}`, outside the url-only hook capabilities Scheduling runs",
+        HookCapabilityError::CODE,
+        capability.as_str()
+    )]
+    UnsupportedCapability {
+        index: usize,
+        capability: HookCapability,
+    },
     #[error("the Scheduling hook destination inventory is incomplete")]
     DestinationInventoryMismatch,
     #[error("a Scheduling hook destination binding is invalid")]
@@ -83,6 +96,26 @@ pub enum HookActivationError {
     InvalidSigningMaterial,
     #[error("the Scheduling hook runtime identity is invalid")]
     InvalidIdentity,
+}
+
+impl HookActivationError {
+    /// The shared diagnostic code a refusal carries, when it has one.
+    #[must_use]
+    pub const fn code(&self) -> Option<&'static str> {
+        match self {
+            Self::UnsupportedCapability { .. } => Some(HookCapabilityError::CODE),
+            _ => None,
+        }
+    }
+}
+
+impl From<HookCapabilityError> for HookActivationError {
+    fn from(error: HookCapabilityError) -> Self {
+        Self::UnsupportedCapability {
+            index: error.index,
+            capability: error.capability,
+        }
+    }
 }
 
 /// Value-free refusal while capturing a committed appointment event.
@@ -131,9 +164,7 @@ impl CompiledHooks {
     /// capture.
     pub fn compile(declarations: &[HookDeclaration]) -> Result<Self, HookActivationError> {
         validate_hooks(declarations).map_err(|_| HookActivationError::InvalidDeclaration)?;
-        HookCapabilities::URL_ONLY
-            .check_declarations(declarations)
-            .map_err(|_| HookActivationError::UnsupportedContract)?;
+        HookCapabilities::URL_ONLY.check_declarations(declarations)?;
 
         let mut hooks = Vec::with_capacity(declarations.len());
         let mut destination_ids = BTreeSet::new();
@@ -856,6 +887,7 @@ fn bounded_proposal_summary(value: &'static str) -> BoundedText<MAX_REFUSAL_SUMM
 mod tests {
     use chrono::{TimeDelta, Utc};
     use registry_platform_config::SecretProvider;
+    use registry_platform_hooks::HOOK_HANDLER_ABI_V1;
     use registry_scheduling_core::LedgerKind;
 
     use super::*;
@@ -872,6 +904,69 @@ mod tests {
                     })
             })
             && word.starts_with(|character: char| character.is_ascii_lowercase())
+    }
+
+    fn confirmed_observer() -> HookDeclaration {
+        HookDeclaration {
+            id: "notify".to_owned(),
+            phase: HookPhase::After,
+            trigger: APPOINTMENT_CONFIRMED_TRIGGER.to_owned(),
+            when: None,
+            principal: None,
+            projection: ["appointmentId".to_owned()].into_iter().collect(),
+            handler: HookHandlerSource::Url {
+                destination_id: "receiver".to_owned(),
+            },
+        }
+    }
+
+    fn assert_capability_refused(mut declaration: HookDeclaration, capability: HookCapability) {
+        declaration.id = "refused".to_owned();
+        let error = CompiledHooks::compile(&[confirmed_observer(), declaration])
+            .expect_err("a declaration outside the url-only capabilities is refused");
+        assert_eq!(
+            error,
+            HookActivationError::UnsupportedCapability {
+                index: 1,
+                capability,
+            }
+        );
+        assert_eq!(error.code(), Some("hook.capability.unsupported"));
+        assert!(
+            error
+                .to_string()
+                .starts_with("hook.capability.unsupported: "),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn compile_accepts_a_url_observer() {
+        CompiledHooks::compile(&[confirmed_observer()]).expect("a url observer compiles");
+    }
+
+    #[test]
+    fn compile_refuses_a_when_condition_as_an_unsupported_capability() {
+        let mut declaration = confirmed_observer();
+        declaration.when = Some(json!({"type": "fields"}));
+        assert_capability_refused(declaration, HookCapability::When);
+    }
+
+    #[test]
+    fn compile_refuses_a_principal_as_an_unsupported_capability() {
+        let mut declaration = confirmed_observer();
+        declaration.principal = Some("clerk".to_owned());
+        assert_capability_refused(declaration, HookCapability::Principal);
+    }
+
+    #[test]
+    fn compile_refuses_a_local_rhai_handler_as_an_unsupported_capability() {
+        let mut declaration = confirmed_observer();
+        declaration.handler = HookHandlerSource::Rhai {
+            script: "hooks/notify.rhai".to_owned(),
+            abi: Some(HOOK_HANDLER_ABI_V1.to_owned()),
+        };
+        assert_capability_refused(declaration, HookCapability::RhaiHandler);
     }
 
     #[test]
