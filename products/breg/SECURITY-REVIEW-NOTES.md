@@ -4244,9 +4244,13 @@ match the compiled package, and its message is still applied through
 
 **Hook Rhai engine.** Hook programs now run on the bare
 `registry-platform-script` engine, without the action planner helpers. Rhai
-resolves functions when a call runs, so a hook program calling `join`
-compiles and fails at execution as a source failure, which dead-letters the
-delivery; it does not reach a different helper. Action handlers keep the
+resolves functions when a call runs, so a package whose hook program calls
+`join` still compiles and activates, and the call fails at execution as an
+execution failure (dead-letter reason `handler-execution`), which
+dead-letters every delivery of that hook; it does not reach a different
+helper. No admission-time walk of called functions is added; the BReg
+changelog tells operators to look for `handler-execution` dead letters after
+upgrading. Action handlers keep the
 planner engine. `a_hook_program_calling_a_planner_helper_fails_on_the_bare_engine`
 in `crates/registry-breg/src/tests/hooks_tests.rs` pins this.
 
