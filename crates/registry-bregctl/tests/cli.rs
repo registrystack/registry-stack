@@ -253,6 +253,204 @@ fn missing_action_script_identifies_action_and_safe_relative_path() {
 }
 
 #[test]
+fn capture_failure_shares_the_registry_warning_budget() {
+    let mut source: Value = serde_json::from_slice(include_bytes!(
+        "../../../products/breg/acceptance/person-registration-rhai/registry.yaml"
+    ))
+    .expect("acceptance project is JSON");
+    source["recipients"] = json!({
+        "organizations": (0..102)
+            .map(|index| json!({
+                "id": format!("recipient-{index}"),
+                "name": "Review",
+                "contact": format!("recipient-{index}@example.test"),
+                "clients": []
+            }))
+            .collect::<Vec<_>>(),
+        "groups": []
+    });
+    let project = TestProject::from_registry_source(
+        &serde_json::to_vec_pretty(&source).expect("project serializes"),
+    );
+    fs::create_dir(project.path().join("scripts")).expect("scripts directory creates");
+    fs::write(
+        project
+            .path()
+            .join("scripts/register-person-with-registration.rhai"),
+        include_bytes!("../../../products/breg/acceptance/person-registration-rhai/scripts/register-person-with-registration.rhai"),
+    )
+    .expect("the later planner source is present");
+
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    let registry_file = project.path().join("registry.yaml").display().to_string();
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .expect("check returns diagnostics")
+        .iter()
+        .filter(|diagnostic| diagnostic["source"]["file"] == registry_file)
+        .collect::<Vec<_>>();
+    assert_eq!(diagnostics.len(), 101, "{report}");
+    let capture = diagnostics
+        .iter()
+        .position(|diagnostic| diagnostic["code"] == "breg.source.planner-asset-missing")
+        .expect("the capture failure remains inside the file budget");
+    assert!(capture < 100, "{report}");
+    assert_eq!(diagnostics[capture]["path"], "/functions/0/source");
+    assert_eq!(
+        diagnostics[..100]
+            .iter()
+            .filter(|diagnostic| diagnostic["code"] == "breg.recipient.duplicate-name")
+            .count(),
+        99,
+        "{report}"
+    );
+    let overflow = diagnostics[100];
+    assert_eq!(overflow["code"], "config.too-many-problems");
+    assert_eq!(overflow["severity"], "warning");
+    assert_eq!(
+        overflow["message"],
+        "2 more problems in this file are not shown"
+    );
+
+    let human = bregctl(&["check", path(project.path())]);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    assert!(
+        String::from_utf8_lossy(&human.stderr).ends_with(" in 1 file\n"),
+        "{}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+}
+
+#[test]
+fn capture_fallback_retains_warnings_from_documents_read_before_or_after_a_refusal() {
+    let project_warning = TestProject::from_registry_source(
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: fallback-project-warning
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://fallback-project-warning.example.test
+datasets:
+  - id: records
+modules:
+  - id: core
+    version: "1"
+recordTypes: []
+recipients:
+  organizations:
+    - {id: first, name: Review, contact: first@example.test, clients: []}
+    - {id: second, name: review, contact: second@example.test, clients: []}
+"#,
+    );
+    let module_directory = project_warning.path().join("modules/core");
+    fs::create_dir_all(&module_directory).expect("module directory creates");
+    fs::write(
+        module_directory.join("module.yaml"),
+        br#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: core
+version: "1"
+recordTypes: invalid
+"#,
+    )
+    .expect("invalid module writes");
+
+    let output = bregctl(&["--format", "json", "check", path(project_warning.path())]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic["code"] == "breg.recipient.duplicate-name"
+                    && diagnostic["source"]["file"]
+                        == project_warning
+                            .path()
+                            .join("registry.yaml")
+                            .display()
+                            .to_string()
+            })
+            .count(),
+        1,
+        "the decoded project warning is retained once: {report}"
+    );
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic["severity"] == "error"
+            && diagnostic["source"]["file"]
+                == module_directory.join("module.yaml").display().to_string()
+    }));
+
+    let module_warning = TestProject::from_registry_source(
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: fallback-module-warning
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://fallback-module-warning.example.test
+datasets: []
+modules: []
+recordTypes: invalid
+"#,
+    );
+    let module_directory = module_warning.path().join("modules/core");
+    fs::create_dir_all(&module_directory).expect("module directory creates");
+    fs::write(
+        module_directory.join("module.yaml"),
+        br#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: core
+version: "1"
+recordTypes:
+  - id: first
+    display: {label: Review}
+    primaryDataset: records
+    route: first
+    mutationMode: mutable
+    fields: []
+  - id: second
+    display: {label: review}
+    primaryDataset: records
+    route: second
+    mutationMode: mutable
+    fields: []
+"#,
+    )
+    .expect("warning module writes");
+
+    let output = bregctl(&["--format", "json", "check", path(module_warning.path())]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic["severity"] == "error"
+            && diagnostic["source"]["file"]
+                == module_warning
+                    .path()
+                    .join("registry.yaml")
+                    .display()
+                    .to_string()
+    }));
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic["code"] == "breg.record-type.duplicate-label"
+                    && diagnostic["source"]["file"]
+                        == module_directory.join("module.yaml").display().to_string()
+            })
+            .count(),
+        1,
+        "the decoded module warning is retained once: {report}"
+    );
+}
+
+#[test]
 fn access_review_example_explains_simulates_and_refuses_footguns_without_live_data() {
     let project = TestProject::from_registry_source(include_bytes!(
         "fixtures/retained-native/access-review/registry.yaml"
