@@ -744,3 +744,51 @@ async fn a_commit_after_the_orphan_sweep_is_refused() {
     assert_eq!(staged, 0);
     assert_eq!(state, "reserved");
 }
+
+/// An erasure job that used every attempt dead-letters, and the sweeps
+/// after it neither re-arm it nor erase the bytes: the version stays
+/// pending until an operator replays the job.
+#[tokio::test]
+async fn a_dead_lettered_erasure_waits_for_a_replay() {
+    let fixture = Fixture::new().await;
+    let (prepared, api) = fixture.start().await;
+    let (document, _) = upload(&api, &pdf(400, 90)).await;
+    prepared.verify_due().await;
+    assert_eq!(api.erase(CITIZEN, &document).await.status, 200);
+    fixture.state.mode.store(DELETE_FAILS, Ordering::SeqCst);
+    erasure_due(&fixture).await;
+    prepared.sweep_due().await;
+    fixture
+        .deployment
+        .execute(&format!(
+            "UPDATE documents_erasure_jobs
+                SET attempt = {}, next_attempt_at = now()",
+            registry_documents::erasure::MAXIMUM_ATTEMPTS - 1
+        ))
+        .await;
+    prepared.sweep_due().await;
+    let dead: String = fixture
+        .deployment
+        .scalar("SELECT state FROM documents_erasure_jobs")
+        .await;
+    assert_eq!(dead, "dead-lettered");
+    fixture.state.mode.store(NORMAL, Ordering::SeqCst);
+    for _ in 0..2 {
+        prepared.sweep_due().await;
+    }
+    let (jobs, state, generation): (i64, String, i64) = (
+        fixture
+            .count("SELECT count(*) FROM documents_erasure_jobs")
+            .await,
+        fixture
+            .deployment
+            .scalar("SELECT state FROM documents_erasure_jobs")
+            .await,
+        fixture
+            .count("SELECT generation::bigint FROM documents_erasure_jobs")
+            .await,
+    );
+    assert_eq!((jobs, state.as_str(), generation), (1, "dead-lettered", 1));
+    assert_eq!(erasure_state(&fixture).await, "pending");
+    assert_eq!(fixture.state.bytes.lock().await.len(), 1);
+}

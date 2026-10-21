@@ -167,6 +167,13 @@ impl Cleanup {
         .await
     }
 
+    /// The erasure worker, only while erasure is active. The serving
+    /// runtime and the test sweep both start it through here, so a paused
+    /// deployment runs no erasure job, even one armed before the pause.
+    fn worker_if_active(&self) -> Option<DispatchWorker<ErasureStore, ErasureTransport>> {
+        (self.erasure == Erasure::Active).then(|| self.worker())
+    }
+
     fn worker(&self) -> DispatchWorker<ErasureStore, ErasureTransport> {
         DispatchWorker::new(
             self.dispatcher.clone(),
@@ -609,9 +616,9 @@ impl Prepared {
     #[cfg(feature = "postgres-test")]
     pub async fn sweep_due(&self) -> CleanupPass {
         let pass = self.cleanup.pass().await.expect("the cleanup pass runs");
-        if self.cleanup.erasure == Erasure::Active {
+        if let Some(worker) = self.cleanup.worker_if_active() {
             let (_sender, shutdown) = watch::channel(false);
-            self.cleanup.worker().drain(&shutdown).await;
+            worker.drain(&shutdown).await;
         }
         pass
     }
@@ -639,9 +646,9 @@ impl Prepared {
         }
         let (stop, stopped) = watch::channel(false);
         let worker = tokio::spawn(self.worker().run(stopped.clone()));
-        let erasure_worker = match self.cleanup.erasure {
-            Erasure::Active => Some(tokio::spawn(self.cleanup.worker().run(stopped.clone()))),
-            Erasure::Paused => {
+        let erasure_worker = match self.cleanup.worker_if_active() {
+            Some(erasure) => Some(tokio::spawn(erasure.run(stopped.clone()))),
+            None => {
                 tracing::warn!(
                     "cleanup.erasure is paused: no erasure runs and no orphaned object is erased until it is active again"
                 );

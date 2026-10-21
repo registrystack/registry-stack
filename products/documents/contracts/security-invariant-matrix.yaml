@@ -675,7 +675,9 @@ invariants:
       backup restore, and destroys bytes the restore was meant to recover.
     enforcementPoint: >-
       With cleanup.erasure paused, no erasure job is armed or attempted
-      and no orphaned object is erased; the erasure worker is not started.
+      and no orphaned object is erased; the erasure worker is not started,
+      so a job armed before the pause waits too. The serving runtime and
+      the test sweep start the worker through one gate.
     refusal: >-
       Erase nothing and arm no job; the version stays erasure pending and
       unservable.

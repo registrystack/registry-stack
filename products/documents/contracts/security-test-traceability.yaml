@@ -206,6 +206,7 @@ entries:
   - id: DOCUMENTS-SEC-40
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_paused_deployment_erases_nothing}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_job_armed_before_a_pause_erases_nothing}
   - id: DOCUMENTS-SEC-41
     tests:
       - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_unconfirmed_s3_delete_keeps_the_version_pending}

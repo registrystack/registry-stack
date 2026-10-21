@@ -2795,6 +2795,49 @@ async fn a_paused_deployment_erases_nothing() {
     assert_eq!(status(&api.read(CITIZEN, &document).await), "erased");
 }
 
+/// An erasure job already armed when the deployment is paused is not run:
+/// a paused runtime starts no erasure worker, so the job waits and the
+/// bytes stay.
+#[tokio::test]
+async fn a_job_armed_before_a_pause_erases_nothing() {
+    let mut deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, _) = ready(&prepared, &api, &pdf(500, 91)).await;
+    assert_eq!(api.erase(CITIZEN, &document).await.status, 200);
+    drop(api);
+    drop(prepared);
+    deployment
+        .execute(&format!(
+            "UPDATE documents_versions
+                SET erasure_requested_at = erasure_requested_at - interval '2 days',
+                    erasure_due_at = now() - interval '1 second';
+             INSERT INTO documents_erasure_jobs
+                 (version_id, part, generation, state, attempt, next_attempt_at)
+             SELECT version_id, '{}', 1, 'pending', 0, now() FROM documents_versions",
+            registry_documents::erasure::JOB_PART
+        ))
+        .await;
+    deployment.set_erasure("paused");
+    let (paused, api) = start(&deployment, &verifier).await;
+    paused.sweep_due().await;
+    paused.sweep_due().await;
+    let (held, job): (i64, String) = (
+        deployment
+            .scalar("SELECT count(*) FROM documents_contents")
+            .await,
+        deployment
+            .scalar("SELECT state FROM documents_erasure_jobs")
+            .await,
+    );
+    assert_eq!(held, 1, "a paused runtime runs no armed erasure");
+    assert_eq!(job, "pending");
+    assert_eq!(
+        status(&api.read(CITIZEN, &document).await),
+        "erasure-pending"
+    );
+}
+
 /// The grant clock and the custody clock are distinct: a grant that
 /// expires or is revoked stops releasing and erases nothing in custody.
 #[tokio::test]

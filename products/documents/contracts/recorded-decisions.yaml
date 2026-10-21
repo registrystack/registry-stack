@@ -400,7 +400,7 @@ decisions:
       endless retry. A dead-letter is visible, and the version releases nothing
       while it waits.
     evidence:
-      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_interrupted_erasure_batch_resumes_without_double_erasure}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: a_dead_lettered_erasure_waits_for_a_replay}
   - id: DOCUMENTS-DEC-25
     subject: Erasure deletes bytes and keeps every record
     decision: >-
