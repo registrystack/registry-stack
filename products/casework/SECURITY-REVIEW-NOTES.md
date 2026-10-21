@@ -1021,3 +1021,75 @@ guards, and the removed-key refusals are unchanged.
   than the review tables it is what lets `caseworkctl plan` and `apply`
   reach the named hosted-work and audit-outbox drop refusals instead of a
   database error. It leaves with the decision on those guards.
+
+## Review completion delivery on the shared dispatch core
+
+Threat: The review completion outbox sends a payload-free wake-up to a
+producer's configured destination after a review settles. A hand-rolled
+claim, lease, and retry loop can send twice under a stale lease, keep
+retrying past the result window, send to a destination the runtime no longer
+configures, or finish a row another worker has since re-leased.
+
+Enforcement: `casework_review_completion_outbox` in
+`crates/registry-casework/migrations/0100_reviews.sql` is the
+`registry-platform-dispatch` job table shape keyed by `event_id` and
+`destination_id`, with Casework's own columns and constraints added after it.
+`CompletionStore` and `completion_policy()` in
+`crates/registry-casework/src/runtime/completion.rs` give the dispatch core
+its claim, lapsed-lease, and finish SQL and one frozen policy per configured
+destination; `review_completion_worker()` in
+`crates/registry-casework/src/runtime.rs` runs one `DispatchWorker` beside
+the serve loop. Casework keeps the table name, the payload rows, the send
+(`deliver_review_completion`), and the retention erase by `retained_until`.
+
+| Aspect | Hand-rolled loop | Dispatch core |
+|---|---|---|
+| Claim and lease | One row per claim: `pending`, or leased with a lapsed lease; due and `retained_until > now()`; `ORDER BY next_attempt_at, event_id`; `FOR UPDATE SKIP LOCKED`; a fixed 60-second lease fenced by the attempt count and `lease_until` | The same selection and lock rule; the lease lasts the attempt timeout plus 5 seconds and a finish is fenced by `lease_token`, `generation`, and `attempt` |
+| Attempt timeout | Per destination, 100 milliseconds to 30 seconds | `AttemptTimeoutBound` of 100 milliseconds to 30 seconds; the policy is read from the live runtime configuration at claim |
+| Retry schedule | A constant `retryDelaySeconds` | A frozen schedule of `maximumAttempts - 1` copies of `retryDelaySeconds` |
+| Maximum attempts and expiry | `maximumAttempts` from 1 to 100; no attempt once `retained_until` passes | `maximum_attempts` from the same setting; `expires_at` is `retained_until` |
+| Terminal states | `delivered`, `exhausted` | `delivered`; `dead-lettered` when attempts run out; `expired` when the window closes first |
+| Uncertain outcome | A lapsed lease is retried | `UncertainOutcome::Retry`: a lapsed lease counts as a failed attempt and waits the retry delay |
+| Producer dedup and idempotency | `idempotency-key` is the `event_id`; the body carries no review content | Unchanged; `generation` stays 1 and `UNIQUE (event_id)` keeps one wake-up per terminal event |
+| Audit lifecycle | No audit event for delivery | Unchanged; dispatch operational events go to tracing only |
+| Ordering | `next_attempt_at`, then `event_id` | `next_attempt_at`, `event_id`, `destination_id`, equivalent because each event has one destination |
+
+Behaviour that differs from the hand-rolled loop:
+
+- A lapsed lease now waits the retry delay before the next attempt, and a
+  lapsed final attempt dead-letters the row instead of being tried again.
+- The lease lasts the destination's attempt timeout plus 5 seconds instead of
+  a fixed 60 seconds.
+- A due row whose result window has closed is stamped `expired` at claim
+  instead of being skipped until retention erases it.
+- A row whose destination the runtime no longer configures, or whose joined
+  terminal event cannot be read, is quarantined without a send:
+  `dead-lettered` when it has had an attempt, else `expired`, with
+  `last_failure_class` `destination_unconfigured` or `delivery_unreadable`.
+- A finish under a lease another worker has replaced, or on a row retention
+  erased while it was leased, returns an error the worker logs instead of
+  updating zero rows silently.
+- Column and state names follow the dispatch core: `attempt` is a
+  `smallint`, the lease carries `lease_token`, and `exhausted` becomes
+  `dead-lettered` or `expired`. Casework applies only to a fresh database,
+  so no migration carries old rows.
+
+Verification: In `crates/registry-casework/tests/review_postgres.rs`,
+`completion_dispatcher_leases_one_at_a_time_and_fences_a_stale_owner` holds
+one lease at a time and refuses a stale owner's finish,
+`retained_completion_work_requires_its_runtime_destination_until_drain` keeps
+the destination required while work remains, and
+`completion_delivery_stops_at_its_window_and_never_sends_to_an_unconfigured_destination`
+expires a closed-window row at claim, expires a retry that would land past
+the window, and quarantines a row for an unconfigured destination without
+leasing it, so no send can start. In `crates/registry-casework/src/runtime/completion.rs`,
+`the_completion_outbox_migration_is_exactly_the_dispatch_core_shape` holds the
+migration to the dispatch core's DDL, and the policy tests prove every
+configurable destination maps to a valid frozen policy and that a destination
+outside the dispatch bounds has none.
+
+Residual: Delivery stays at-least-once. A send whose response is lost is
+retried under the same `idempotency-key`, so a producer that ignores the key
+may see the same wake-up twice. One worker serves each runtime process with a
+one-second idle poll, so a settled review's wake-up can wait up to that poll
+after its retry time. Dispatch operational events are not audited.

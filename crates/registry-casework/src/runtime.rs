@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,12 +9,16 @@ use clap::{Arg, Command};
 use registry_casework_core::ReviewContextProvider;
 use registry_platform_audit::{AuditProfile, AuditWriter};
 use registry_platform_config::SecretResolver;
+#[cfg(feature = "postgres-test")]
+use registry_platform_dispatch::postgres::DispatchOutcome;
+use registry_platform_dispatch::postgres::{DispatchWorker, WorkerConfig};
 use registry_platform_httputil::{read_bounded, BearerToken, OutboundClientBuilder};
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio::time::MissedTickBehavior;
 use tracing_subscriber::filter::LevelFilter;
+
+mod completion;
 
 use crate::{
     router, CaseworkAuthenticator, CaseworkService, HttpState, PostgresStore, RuntimeConfig,
@@ -70,169 +75,64 @@ impl ReviewCompletionCredential {
     }
 }
 
-struct ReviewCompletionDispatcher {
+/// Resolve every configured completion destination and its credential.
+fn review_completion_targets(
+    configured: &BTreeMap<String, crate::ReviewCompletionRuntimeConfig>,
+    secrets: &SecretResolver,
+) -> Result<BTreeMap<String, Arc<ReviewCompletionTarget>>, RuntimeError> {
+    let mut targets = BTreeMap::new();
+    for (id, target) in configured {
+        let reference = target
+            .secret_ref()
+            .ok_or(RuntimeError::CompletionConfiguration)?;
+        let secret = secrets
+            .resolve(reference)
+            .map_err(|_| RuntimeError::CompletionConfiguration)?;
+        let credential = ReviewCompletionCredential::from_config(
+            target.secret_header(),
+            secret.expose_secret(),
+        )?;
+        targets.insert(
+            id.clone(),
+            Arc::new(ReviewCompletionTarget {
+                url: target.url.clone(),
+                credential,
+                timeout: Duration::from_millis(target.attempt_timeout_milliseconds),
+                maximum_attempts: target.maximum_attempts,
+                retry: Duration::from_secs(target.retry_delay_seconds),
+            }),
+        );
+    }
+    Ok(targets)
+}
+
+fn review_completion_client() -> Result<reqwest::Client, RuntimeError> {
+    OutboundClientBuilder::new()
+        .try_build()
+        .map_err(|_| RuntimeError::CompletionConfiguration)
+}
+
+/// The completion delivery worker: one lane, so each delivery is leased
+/// immediately before its remote call and a slow receiver never holds a
+/// lease on the rows behind it.
+async fn review_completion_worker(
     store: PostgresStore,
-    client: reqwest::Client,
     targets: BTreeMap<String, Arc<ReviewCompletionTarget>>,
-}
-
-struct OwnedReviewCompletion {
-    delivery: crate::LeasedReviewCompletion,
-    attempt_count: i32,
-    lease_until: chrono::DateTime<chrono::Utc>,
-}
-
-impl ReviewCompletionDispatcher {
-    fn new(
-        store: PostgresStore,
-        configured: &BTreeMap<String, crate::ReviewCompletionRuntimeConfig>,
-        secrets: &SecretResolver,
-    ) -> Result<Self, RuntimeError> {
-        let mut targets = BTreeMap::new();
-        for (id, target) in configured {
-            let reference = target
-                .secret_ref()
-                .ok_or(RuntimeError::CompletionConfiguration)?;
-            let secret = secrets
-                .resolve(reference)
-                .map_err(|_| RuntimeError::CompletionConfiguration)?;
-            let credential = ReviewCompletionCredential::from_config(
-                target.secret_header(),
-                secret.expose_secret(),
-            )?;
-            targets.insert(
-                id.clone(),
-                Arc::new(ReviewCompletionTarget {
-                    url: target.url.clone(),
-                    credential,
-                    timeout: Duration::from_millis(target.attempt_timeout_milliseconds),
-                    maximum_attempts: target.maximum_attempts,
-                    retry: Duration::from_secs(target.retry_delay_seconds),
-                }),
-            );
-        }
-        Ok(Self {
-            store,
-            client: OutboundClientBuilder::new()
-                .try_build()
-                .map_err(|_| RuntimeError::CompletionConfiguration)?,
-            targets,
-        })
-    }
-
-    async fn pass(&self) -> Result<(), crate::ReviewRuntimeError> {
-        // Lease immediately before each remote call. Pre-leasing the whole pass
-        // would let later rows expire while earlier receivers are still slow.
-        for _ in 0..50 {
-            let Some(owned) = self.lease_one().await? else {
-                break;
-            };
-            let Some(target) = self.targets.get(&owned.delivery.destination_id) else {
-                self.finish(&owned, false, 1, chrono::Utc::now()).await?;
-                continue;
-            };
-            let delivered = deliver_review_completion(&self.client, target, &owned.delivery).await;
-            let retry_at = chrono::Utc::now()
-                + chrono::TimeDelta::from_std(target.retry)
-                    .unwrap_or_else(|_| chrono::TimeDelta::seconds(30));
-            self.finish(&owned, delivered, target.maximum_attempts, retry_at)
-                .await?;
-        }
-        Ok(())
-    }
-
-    async fn lease_one(&self) -> Result<Option<OwnedReviewCompletion>, crate::ReviewRuntimeError> {
-        let client = self.store.client().await?;
-        // Runtime validation caps receiver timeouts at 30 seconds. The longer
-        // lease avoids ordinary timeout overlap; the finish fence below still
-        // protects a replacement owner after a process stall or lease recovery.
-        let row = client
-            .query_opt(
-                "WITH due AS (
-                    SELECT event_id FROM casework_review_completion_outbox
-                    WHERE retained_until>transaction_timestamp()
-                      AND next_attempt_at<=transaction_timestamp()
-                      AND (state='pending' OR
-                           (state='leased' AND lease_until<=transaction_timestamp()))
-                    ORDER BY next_attempt_at,event_id LIMIT 1 FOR UPDATE SKIP LOCKED
-                 ), leased AS (
-                    UPDATE casework_review_completion_outbox o
-                    SET state='leased',
-                        lease_until=transaction_timestamp()+interval '60 seconds',
-                        attempt_count=attempt_count+1
-                    FROM due WHERE o.event_id=due.event_id
-                    RETURNING o.event_id,o.destination_id,o.recipient_binding,
-                              o.attempt_count,o.lease_until
-                 )
-                 SELECT l.event_id,e.request_id,e.result_id,e.completed_at,
-                        l.destination_id,l.recipient_binding,l.attempt_count,l.lease_until
-                 FROM leased l JOIN casework_review_terminal_events e ON e.event_id=l.event_id",
-                &[],
-            )
-            .await?;
-        Ok(row.map(|row| OwnedReviewCompletion {
-            delivery: crate::LeasedReviewCompletion {
-                event: registry_casework_core::ReviewCompletion {
-                    event_type: registry_casework_core::ReviewCompletionType::ReviewCompleted,
-                    event_id: row.get(0),
-                    request_id: row.get(1),
-                    result_id: row.get(2),
-                    completed_at: row.get(3),
-                },
-                destination_id: row.get(4),
-                recipient_binding: row.get(5),
-            },
-            attempt_count: row.get(6),
-            lease_until: row.get(7),
-        }))
-    }
-
-    async fn finish(
-        &self,
-        owned: &OwnedReviewCompletion,
-        delivered: bool,
-        maximum_attempts: u32,
-        retry_at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<(), crate::ReviewRuntimeError> {
-        let client = self.store.client().await?;
-        if delivered {
-            client
-                .execute(
-                    "UPDATE casework_review_completion_outbox
-                     SET state='delivered',delivered_at=transaction_timestamp(),
-                         lease_until=NULL,last_failure_class=NULL
-                     WHERE event_id=$1 AND state='leased'
-                       AND attempt_count=$2 AND lease_until=$3",
-                    &[
-                        &owned.delivery.event.event_id,
-                        &owned.attempt_count,
-                        &owned.lease_until,
-                    ],
-                )
-                .await?;
-        } else {
-            client
-                .execute(
-                    "UPDATE casework_review_completion_outbox
-                     SET state=CASE WHEN attempt_count >= $2 OR $3>=retained_until
-                                    THEN 'exhausted' ELSE 'pending' END,
-                         next_attempt_at=LEAST($3,retained_until - interval '1 microsecond'),
-                         lease_until=NULL,last_failure_class='delivery_failed'
-                     WHERE event_id=$1 AND state='leased'
-                       AND attempt_count=$4 AND lease_until=$5",
-                    &[
-                        &owned.delivery.event.event_id,
-                        &i32::try_from(maximum_attempts)
-                            .map_err(|_| crate::ReviewRuntimeError::Invalid)?,
-                        &retry_at,
-                        &owned.attempt_count,
-                        &owned.lease_until,
-                    ],
-                )
-                .await?;
-        }
-        Ok(())
-    }
+) -> Result<
+    DispatchWorker<completion::CompletionStore, completion::CompletionTransport>,
+    RuntimeError,
+> {
+    let targets = Arc::new(targets);
+    let dispatcher = completion::completion_dispatcher(store, Arc::clone(&targets)).await?;
+    let transport = completion::CompletionTransport::new(review_completion_client()?, targets);
+    Ok(DispatchWorker::new(
+        dispatcher,
+        Arc::new(transport),
+        WorkerConfig {
+            concurrency: NonZeroUsize::MIN,
+            idle_poll: Duration::from_secs(1),
+        },
+    ))
 }
 
 fn completion_bearer_token(bytes: &[u8]) -> Result<BearerToken, RuntimeError> {
@@ -291,6 +191,29 @@ pub async fn validate_retained_completion_destinations_for_test(
 }
 
 #[cfg(feature = "postgres-test")]
+fn test_completion_targets(
+    destination_id: &str,
+    url: String,
+    bearer_token: &str,
+) -> Result<completion::CompletionTargets, crate::ReviewRuntimeError> {
+    Ok(Arc::new(BTreeMap::from([(
+        destination_id.to_owned(),
+        Arc::new(ReviewCompletionTarget {
+            url,
+            credential: ReviewCompletionCredential::Bearer(
+                BearerToken::new(bearer_token.to_owned())
+                    .map_err(|_| crate::ReviewRuntimeError::Invalid)?,
+            ),
+            timeout: Duration::from_secs(30),
+            maximum_attempts: 3,
+            retry: Duration::from_secs(1),
+        }),
+    )])))
+}
+
+/// Deliver due completions to one destination until none is due, one at a
+/// time, as the worker's single lane does.
+#[cfg(feature = "postgres-test")]
 #[doc(hidden)]
 pub async fn dispatch_review_completions_once_for_test(
     store: PostgresStore,
@@ -298,26 +221,95 @@ pub async fn dispatch_review_completions_once_for_test(
     url: String,
     bearer_token: &str,
 ) -> Result<(), crate::ReviewRuntimeError> {
-    let dispatcher = ReviewCompletionDispatcher {
-        store,
-        client: OutboundClientBuilder::new()
-            .try_build()
-            .expect("build test review completion client"),
-        targets: BTreeMap::from([(
-            destination_id.to_owned(),
-            Arc::new(ReviewCompletionTarget {
-                url,
-                credential: ReviewCompletionCredential::Bearer(
-                    BearerToken::new(bearer_token.to_owned())
-                        .map_err(|_| crate::ReviewRuntimeError::Invalid)?,
-                ),
-                timeout: Duration::from_secs(30),
-                maximum_attempts: 3,
-                retry: Duration::from_secs(1),
-            }),
-        )]),
+    let targets = test_completion_targets(destination_id, url, bearer_token)?;
+    let dispatcher = completion::completion_dispatcher(store, Arc::clone(&targets)).await?;
+    let client = review_completion_client().map_err(|_| crate::ReviewRuntimeError::Invalid)?;
+    let transport = completion::CompletionTransport::new(client, targets);
+    for _ in 0..50 {
+        match dispatcher.dispatch_once(&transport).await {
+            Ok(DispatchOutcome::Idle) => break,
+            Ok(_) => {}
+            Err(_) => return Err(crate::StoreError::Unavailable.into()),
+        }
+    }
+    Ok(())
+}
+
+/// One leased completion delivery, held by a test between its claim and
+/// its finish.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub struct ReviewCompletionLeaseForTest(
+    registry_platform_dispatch::postgres::LeasedJob<crate::LeasedReviewCompletion>,
+);
+
+#[cfg(feature = "postgres-test")]
+impl ReviewCompletionLeaseForTest {
+    #[must_use]
+    pub fn attempt(&self) -> i16 {
+        self.0.attempt
+    }
+
+    #[must_use]
+    pub fn event(&self) -> &registry_casework_core::ReviewCompletion {
+        &self.0.job.event
+    }
+}
+
+/// Lease the next due completion delivery as a worker configured with only
+/// `destination_id` would, without sending it.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn claim_review_completion_for_test(
+    store: PostgresStore,
+    destination_id: &str,
+) -> Result<Option<ReviewCompletionLeaseForTest>, crate::ReviewRuntimeError> {
+    let targets = test_completion_targets(
+        destination_id,
+        "http://127.0.0.1/completion".to_owned(),
+        "completion-secret",
+    )?;
+    let dispatcher = completion::completion_dispatcher(store, targets).await?;
+    let claim = dispatcher
+        .claim()
+        .await
+        .map_err(|_| crate::StoreError::Unavailable)?;
+    Ok(claim.leased().map(ReviewCompletionLeaseForTest))
+}
+
+/// Record the outcome of a leased completion delivery under its lease.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn finish_review_completion_for_test(
+    store: PostgresStore,
+    destination_id: &str,
+    lease: &ReviewCompletionLeaseForTest,
+    delivered: bool,
+) -> Result<(), crate::ReviewRuntimeError> {
+    let targets = test_completion_targets(
+        destination_id,
+        "http://127.0.0.1/completion".to_owned(),
+        "completion-secret",
+    )?;
+    let dispatcher = completion::completion_dispatcher(store, targets).await?;
+    let outcome = if delivered {
+        registry_platform_dispatch::SendOutcome::Accepted {
+            receiver_reference: None,
+        }
+    } else {
+        registry_platform_dispatch::SendOutcome::Transient { retry_after: None }
     };
-    dispatcher.pass().await
+    dispatcher
+        .finish(
+            &lease.0,
+            registry_platform_dispatch::Sent {
+                outcome,
+                detail: (),
+            },
+        )
+        .await
+        .map_err(|_| crate::StoreError::Unavailable)?;
+    Ok(())
 }
 
 async fn deliver_review_completion(
@@ -551,11 +543,11 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         .transpose()?;
     let service = CaseworkService::new(store.clone(), project.clone(), providers)?
         .with_task_authority(task_authority);
-    let completion_dispatcher = Arc::new(ReviewCompletionDispatcher::new(
+    let completion_worker = review_completion_worker(
         store.clone(),
-        &config.review_completion_destinations,
-        &secrets,
-    )?);
+        review_completion_targets(&config.review_completion_destinations, &secrets)?,
+    )
+    .await?;
 
     let (worker_stopped, worker_stops) = mpsc::channel(WORKER_STOP_CAPACITY);
     let mut workers = Vec::new();
@@ -591,19 +583,14 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             }
         }
     }));
-    let completion_worker = Arc::clone(&completion_dispatcher);
     workers.push(supervise(
         "review completion delivery",
         worker_stopped.clone(),
         async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(1));
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-            loop {
-                interval.tick().await;
-                if let Err(error) = completion_worker.pass().await {
-                    tracing::warn!(error = %error, "Casework review completion pass did not complete");
-                }
-            }
+            // The worker runs until its shutdown sender closes, so the task
+            // holds the sender for as long as it runs.
+            let (_shutdown, shutdown) = tokio::sync::watch::channel(false);
+            completion_worker.run(shutdown).await;
         },
     ));
     drop(worker_stopped);
