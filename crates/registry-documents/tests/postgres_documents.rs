@@ -28,9 +28,9 @@ use registry_platform_dispatch::DispatchError;
 use registry_platform_objectstore::{Verdict, VerifierError};
 use serde_json::json;
 use support::{
-    pdf, reservation, reservation_body, sha256, Api, Deployment, FakeVerifier, APP, APPROVE,
-    CITIZEN, DATABASE_STORAGE, DISABLED_VERIFIER, OTHER_APP, OTHER_CITIZEN, READER, REJECT, STAFF,
-    STARTER_PROJECT, STRANGER, UNAVAILABLE,
+    access_project, pdf, reservation, reservation_body, sha256, Api, Deployment, FakeVerifier, APP,
+    APPROVE, CITIZEN, CITIZEN_AS_READER, DATABASE_STORAGE, DISABLED_VERIFIER, OTHER_APP,
+    OTHER_CITIZEN, PARTNER_SERVICE, READER, REJECT, STAFF, STARTER_PROJECT, STRANGER, UNAVAILABLE,
 };
 use uuid::Uuid;
 
@@ -111,7 +111,8 @@ async fn an_uploaded_document_is_released_only_after_it_is_verified() {
     assert_eq!(released.headers["cache-control"], "no-store");
 
     // The reserving system sees the metadata it placed, never the content:
-    // custody went to the citizen.
+    // custody went to the citizen. It is refused as unauthorized, since it
+    // already knows the document exists.
     let placed = api.read(APP, &document).await;
     assert_eq!(placed.status, 200);
     assert_eq!(
@@ -120,7 +121,7 @@ async fn an_uploaded_document_is_released_only_after_it_is_verified() {
     );
     api.download(APP, &document, &version)
         .await
-        .assert_problem(ProblemCode::ResourceNotFound);
+        .assert_problem(ProblemCode::ProfileNotAuthorized);
 
     // A caller that is neither the custodian nor the reserving caller learns
     // nothing, and a request with no credential is refused before anything
@@ -1063,6 +1064,63 @@ async fn the_database_refuses_a_finalized_version_without_a_computed_digest() {
     );
 }
 
+/// A grant names one version of the document it is on: the database
+/// refuses a grant whose version belongs to another document, and a grant
+/// whose grantee kind is outside the closed vocabulary.
+#[tokio::test]
+async fn the_database_refuses_a_grant_on_another_document_s_version_or_of_an_unknown_kind() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, version) = ready(&prepared, &api, &pdf(300, 64)).await;
+    let (_, other_version) = ready(&prepared, &api, &pdf(300, 65)).await;
+
+    let insert = |version: &str, kind: &str| {
+        format!(
+            "INSERT INTO {}.documents_grants
+                 (grant_id, document_id, version_id, grantee_issuer, grantee_subject,
+                  grantee_kind, granted_by_issuer, granted_by_subject, granted_by_profile,
+                  issued_at, expires_at)
+             VALUES ('{}', '{document}', '{version}', 'https://issuer.example.test',
+                     'reader-1', '{kind}', 'https://issuer.example.test', 'custodian-app',
+                     'custodian-app', now(), now() + interval '1 hour')",
+            deployment.schema,
+            Uuid::new_v4()
+        )
+    };
+    let error = deployment
+        .admin
+        .batch_execute(&insert(&other_version, "human"))
+        .await
+        .expect_err("a grant on another document's version");
+    let constraint = error
+        .as_db_error()
+        .and_then(|error| error.constraint())
+        .map(str::to_owned);
+    assert_eq!(
+        constraint.as_deref(),
+        Some("documents_grants_document_version"),
+        "{error}"
+    );
+    let error = deployment
+        .admin
+        .batch_execute(&insert(&version, "organization"))
+        .await
+        .expect_err("a grant of an unknown grantee kind");
+    assert!(
+        error
+            .as_db_error()
+            .and_then(|error| error.constraint())
+            .is_some_and(|name| name.starts_with("documents_grants_grantee_kind")),
+        "{error}"
+    );
+    deployment
+        .admin
+        .batch_execute(&insert(&version, "service"))
+        .await
+        .expect("a grant on the document's own version");
+}
+
 #[tokio::test]
 async fn identical_content_uploaded_twice_gives_two_documents() {
     let deployment = deployment().await;
@@ -1158,6 +1216,207 @@ async fn custody_is_placed_only_by_a_custody_profile_and_a_human_only_into_its_o
         .scalar("SELECT count(*) FROM documents_documents")
         .await;
     assert_eq!(reserved, 1);
+}
+
+/// A deployment of [`access_project`], migrated.
+async fn access_deployment() -> Deployment {
+    let deployment =
+        Deployment::with_project(DATABASE_STORAGE, DISABLED_VERIFIER, &access_project()).await;
+    deployment.migrate().await;
+    deployment
+}
+
+/// Reserve `content` as the owning system under `policy` for `named`,
+/// upload it, and let the verifier approve it.
+async fn ready_under(
+    prepared: &Prepared,
+    api: &Api,
+    policy: &str,
+    named: &str,
+    content: &[u8],
+) -> (String, String) {
+    let reserved = api.reserve(APP, policy, named, content, PDF).await;
+    let (document, version, path) = reservation(&reserved);
+    let put = api.put(APP, &path, PDF, Body::from(content.to_vec())).await;
+    assert_eq!(put.status, 200, "{}", String::from_utf8_lossy(&put.body));
+    assert_eq!(prepared.verify_due().await, 1);
+    (document, version)
+}
+
+/// Under `institutional-custody` custody stays with the reserving system
+/// for its institution: the person a document names is recorded as the
+/// represented principal and has no standing on it. Only a grant releases
+/// it to them. Under `citizen-delivery` that person is the custodian.
+#[tokio::test]
+async fn under_institutional_custody_the_named_person_has_no_standing_without_a_grant() {
+    let deployment = access_deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let content = pdf(800, 60);
+    let (document, version) = ready_under(
+        &prepared,
+        &api,
+        "institutional-custody",
+        CITIZEN.subject,
+        &content,
+    )
+    .await;
+    let (subject, kind, represented): (String, String, String) = (
+        deployment
+            .scalar("SELECT custodian_subject FROM documents_documents")
+            .await,
+        deployment
+            .scalar("SELECT custodian_kind FROM documents_documents")
+            .await,
+        deployment
+            .scalar("SELECT represented_principal_subject FROM documents_documents")
+            .await,
+    );
+    assert_eq!(
+        (subject.as_str(), kind.as_str(), represented.as_str()),
+        (APP.subject, "service", CITIZEN.subject)
+    );
+
+    for person in [CITIZEN, CITIZEN_AS_READER] {
+        api.read(person, &document)
+            .await
+            .assert_problem(ProblemCode::ResourceNotFound);
+        api.download(person, &document, &version)
+            .await
+            .assert_problem(ProblemCode::ResourceNotFound);
+        api.get(person, &format!("/documents/{document}/grants"))
+            .await
+            .assert_problem(ProblemCode::ResourceNotFound);
+    }
+    assert_eq!(
+        api.get(CITIZEN, "/documents").await.json()["items"],
+        json!([])
+    );
+    // The institution holds it and releases it to itself.
+    let held = api.read(APP, &document).await;
+    assert_eq!(held.json()["custodian"]["subject"], APP.subject);
+    assert_eq!(api.download(APP, &document, &version).await.body, content);
+
+    grant_id(
+        &api.grant(APP, &document, &version, CITIZEN.subject, None)
+            .await,
+    );
+    let released = api.download(CITIZEN_AS_READER, &document, &version).await;
+    assert_eq!(released.status, 200);
+    assert_eq!(released.body, content);
+    // The grant names a recipient profile; the person's represented
+    // principal profile still has no standing.
+    api.download(CITIZEN, &document, &version)
+        .await
+        .assert_problem(ProblemCode::ResourceNotFound);
+
+    // Under citizen-delivery the same reservation makes the person the
+    // custodian.
+    let delivered = pdf(700, 61);
+    let (document, version) = ready_under(
+        &prepared,
+        &api,
+        "citizen-delivery",
+        CITIZEN.subject,
+        &delivered,
+    )
+    .await;
+    assert_eq!(
+        api.read(CITIZEN, &document).await.json()["custodian"]["subject"],
+        CITIZEN.subject
+    );
+    assert_eq!(
+        api.download(CITIZEN, &document, &version).await.body,
+        delivered
+    );
+}
+
+/// The reserving system sees a document it holds for a person and may
+/// share it, but is not released its content: it is answered
+/// `profile.not-authorized`, never the not-found a stranger gets.
+#[tokio::test]
+async fn the_owning_system_that_is_not_the_custodian_is_refused_the_content_as_unauthorized() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, version) = ready(&prepared, &api, &pdf(600, 62)).await;
+    assert_eq!(api.read(APP, &document).await.status, 200);
+    api.download(APP, &document, &version)
+        .await
+        .assert_problem(ProblemCode::ProfileNotAuthorized);
+    api.download(OTHER_APP, &document, &version)
+        .await
+        .assert_problem(ProblemCode::ResourceNotFound);
+}
+
+/// A grant names its grantee's actor kind as well as its subject, and
+/// releases to no caller of another kind at the same subject.
+#[tokio::test]
+async fn a_grant_releases_only_to_a_caller_of_the_actor_kind_it_names() {
+    let deployment = access_deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let content = pdf(600, 63);
+    let (document, version) =
+        ready_under(&prepared, &api, "named-share", CITIZEN.subject, &content).await;
+
+    let human = api
+        .grant(APP, &document, &version, READER.subject, None)
+        .await;
+    grant_id(&human);
+    assert_eq!(human.json()["grantee"]["kind"], "human");
+    assert_eq!(
+        api.download(READER, &document, &version).await.body,
+        content
+    );
+    api.read(PARTNER_SERVICE, &document)
+        .await
+        .assert_problem(ProblemCode::ResourceNotFound);
+    api.download(PARTNER_SERVICE, &document, &version)
+        .await
+        .assert_problem(ProblemCode::ResourceNotFound);
+    assert_eq!(
+        api.get(PARTNER_SERVICE, "/document-grants").await.json()["items"],
+        json!([])
+    );
+
+    let service = api
+        .grant_kind(
+            APP,
+            &Uuid::new_v4().to_string(),
+            &document,
+            &version,
+            PARTNER_SERVICE.subject,
+            "service",
+            None,
+        )
+        .await;
+    let service_grant = grant_id(&service);
+    assert_eq!(
+        api.download(PARTNER_SERVICE, &document, &version)
+            .await
+            .body,
+        content
+    );
+    let received = api.get(PARTNER_SERVICE, "/document-grants").await.json();
+    assert_eq!(received["items"].as_array().unwrap().len(), 1);
+    assert_eq!(received["items"][0]["id"], service_grant.as_str());
+    let kinds: String = deployment
+        .scalar("SELECT string_agg(grantee_kind, ',' ORDER BY issued_at) FROM documents_grants")
+        .await;
+    assert_eq!(kinds, "human,service");
+
+    api.grant_kind(
+        APP,
+        &Uuid::new_v4().to_string(),
+        &document,
+        &version,
+        READER.subject,
+        "organization",
+        None,
+    )
+    .await
+    .assert_problem(ProblemCode::RequestUnprocessable);
 }
 
 /// DD18: the issuing institution is the profile's, never the body's.
@@ -1530,7 +1789,8 @@ async fn an_idempotent_grant_retry_after_revocation_releases_nothing() {
     )
     .await
     .assert_problem(ProblemCode::ProfileNotAuthorized);
-    let mut other = json!({"versionId": version, "grantee": {"subject": STAFF.subject}});
+    let mut other =
+        json!({"versionId": version, "grantee": {"subject": STAFF.subject, "kind": "human"}});
     other["expiryHours"] = json!(2);
     api.send_json(
         APP,
@@ -1658,6 +1918,61 @@ async fn grant_and_document_lists_page_in_a_stable_order() {
         api.get(STRANGER, "/documents").await.json()["items"],
         json!([])
     );
+}
+
+/// A recipient's own grant list holds only grants it may redeem now, and
+/// filters before its limit: a page is short only at the end of the list.
+#[tokio::test]
+async fn a_recipient_s_grant_list_pages_only_grants_it_may_redeem() {
+    let deployment = access_deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    // Staff is no recipient under citizen-delivery: these grants name it
+    // but release nothing to it.
+    let (delivered, delivered_version) = ready(&prepared, &api, &pdf(500, 66)).await;
+    for _ in 0..2 {
+        grant_id(
+            &api.grant(APP, &delivered, &delivered_version, STAFF.subject, None)
+                .await,
+        );
+    }
+    // A grant on a version that is no longer releasable.
+    let (suspended, suspended_version) = ready_under(
+        &prepared,
+        &api,
+        "named-share",
+        CITIZEN.subject,
+        &pdf(500, 67),
+    )
+    .await;
+    grant_id(
+        &api.grant(APP, &suspended, &suspended_version, STAFF.subject, None)
+            .await,
+    );
+    deployment
+        .execute(&format!(
+            "UPDATE documents_versions SET eligibility = 'suspended' WHERE version_id = '{suspended_version}'"
+        ))
+        .await;
+    let (shared, shared_version) = ready_under(
+        &prepared,
+        &api,
+        "named-share",
+        CITIZEN.subject,
+        &pdf(500, 68),
+    )
+    .await;
+    let redeemable = grant_id(
+        &api.grant(APP, &shared, &shared_version, STAFF.subject, None)
+            .await,
+    );
+
+    let page = api.get(STAFF, "/document-grants?limit=1").await;
+    assert_eq!(page.status, 200, "{}", String::from_utf8_lossy(&page.body));
+    let page = page.json();
+    assert_eq!(page["items"].as_array().unwrap().len(), 1, "{page}");
+    assert_eq!(page["items"][0]["id"], redeemable.as_str());
+    assert!(page["nextCursor"].is_null(), "{page}");
 }
 
 /// The placeable policies are read with the bounds a caller needs before

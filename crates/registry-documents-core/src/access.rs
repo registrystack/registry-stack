@@ -19,7 +19,7 @@ use serde_json::{Map, Value};
 use crate::custody::DocumentStatus;
 use crate::problem::ProblemCode;
 use crate::project::{
-    AccessProfile, AccessRole, ActorKind, DocumentPolicy, DocumentsProject,
+    AccessProfile, AccessRole, ActorKind, CustodianRule, DocumentPolicy, DocumentsProject,
     RepresentedPrincipalGrants,
 };
 
@@ -215,8 +215,11 @@ pub struct CustodyAsk<'a> {
 ///
 /// The caller's profile must be one of the policy's custody profiles. A
 /// human may place a document only in its own custody; a service may name
-/// any subject at its own issuer, and a subject other than its own is a
-/// person whose documents the service holds on their behalf. A body that
+/// any subject at its own issuer, and a subject other than its own is the
+/// person the document is held for. Under [`CustodianRule::Institution`]
+/// custody stays with the service and that person is recorded only as the
+/// represented principal; under [`CustodianRule::RepresentedPrincipal`]
+/// that person is the custodian. A body that
 /// names an issuing institution other than the profile's is refused: the
 /// institution is the profile's, never the request's.
 pub fn place_custody(
@@ -243,11 +246,19 @@ pub fn place_custody(
             kind: caller.kind,
             represented_principal: represented,
         }),
-        (ActorKind::Service, false) => Ok(Custody {
-            issuer: caller.issuer.clone(),
-            subject: ask.subject.to_owned(),
-            kind: ActorKind::Human,
-            represented_principal: Some(ask.subject.to_owned()),
+        (ActorKind::Service, false) => Ok(match policy.custodian {
+            CustodianRule::Institution => Custody {
+                issuer: caller.issuer.clone(),
+                subject: caller.subject.clone(),
+                kind: caller.kind,
+                represented_principal: Some(ask.subject.to_owned()),
+            },
+            CustodianRule::RepresentedPrincipal => Custody {
+                issuer: caller.issuer.clone(),
+                subject: ask.subject.to_owned(),
+                kind: ActorKind::Human,
+                represented_principal: Some(ask.subject.to_owned()),
+            },
         }),
     }
 }
@@ -257,6 +268,7 @@ pub fn place_custody(
 pub struct Reserver<'a> {
     pub issuer: &'a str,
     pub subject: &'a str,
+    pub kind: ActorKind,
 }
 
 /// What one caller is to one document.
@@ -298,6 +310,7 @@ pub fn standing(
         && (in_custody || represented);
     let owner = caller.issuer == reserver.issuer
         && caller.subject == reserver.subject
+        && caller.kind == reserver.kind
         && in_custody
         && !custodian;
     let granting = policy.granting_profiles.contains(profile);
@@ -552,6 +565,19 @@ mod tests {
     }
 
     #[test]
+    fn under_institutional_custody_the_reserving_system_stays_the_custodian() {
+        let policy = policy("institutional-custody");
+        let custody = place_custody(&policy, &app(), ask("citizen-1")).unwrap();
+        assert_eq!(custody.subject, "registry-app");
+        assert_eq!(custody.kind, ActorKind::Service);
+        assert_eq!(custody.represented_principal.as_deref(), Some("citizen-1"));
+        let named = standing(&policy, &custody, BY_APP, &citizen("citizen-1"));
+        assert!(!named.sees() && !named.may_grant);
+        let institution = standing(&policy, &custody, BY_APP, &app());
+        assert!(institution.custodian && institution.may_grant && !institution.owner);
+    }
+
+    #[test]
     fn a_human_may_place_a_document_only_in_its_own_custody() {
         let policy = policy("named-share");
         let own = place_custody(&policy, &citizen("citizen-1"), ask("citizen-1")).unwrap();
@@ -621,6 +647,7 @@ mod tests {
     const BY_APP: Reserver<'static> = Reserver {
         issuer: ISSUER,
         subject: "registry-app",
+        kind: ActorKind::Service,
     };
 
     #[test]
@@ -641,6 +668,15 @@ mod tests {
         );
         let standing = standing(&policy, &custody, BY_APP, &impostor);
         assert!(!standing.custodian);
+    }
+
+    #[test]
+    fn the_owner_matches_the_reserver_s_kind_as_well_as_its_subject() {
+        let policy = policy("named-share");
+        // A person whose subject happens to equal the reserving service's.
+        let lookalike = citizen("registry-app");
+        let standing = standing(&policy, &held_for("citizen-2"), BY_APP, &lookalike);
+        assert!(!standing.owner && !standing.sees());
     }
 
     #[test]

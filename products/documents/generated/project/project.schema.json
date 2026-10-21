@@ -69,7 +69,7 @@
       ]
     },
     "ActorKind": {
-      "description": "The actor kind an access profile admits.",
+      "description": "An actor kind: a service, or a human person.",
       "enum": [
         "service",
         "human"
@@ -80,6 +80,21 @@
       "description": "A lowercase concrete media type `type/subtype` without parameters or wildcards, matched exactly.",
       "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
       "type": "string"
+    },
+    "CustodianRule": {
+      "description": "Who holds a document a service places for a named person.",
+      "oneOf": [
+        {
+          "const": "institution",
+          "description": "Custody stays with the reserving system, acting for its\ninstitution. The named person is recorded as the represented\nprincipal and has no standing on the document; only a document\ngrant releases it to them.",
+          "type": "string"
+        },
+        {
+          "const": "represented-principal",
+          "description": "The named person is the custodian, and the reserving system owns\nthe document without being released its content.",
+          "type": "string"
+        }
+      ]
     },
     "DisplayText": {
       "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
@@ -92,6 +107,10 @@
       "additionalProperties": false,
       "description": "One document policy: who may hold, grant, and receive a document held\nunder it, and the restrictions every such document carries.",
       "properties": {
+        "custodian": {
+          "$ref": "#/$defs/CustodianRule",
+          "description": "Who holds a document a service places for a named person: the\nreserving system for its institution, or that person."
+        },
         "custodyProfiles": {
           "description": "Profiles that may place a document in custody under this policy.",
           "items": {
@@ -141,6 +160,7 @@
         "grantingProfiles",
         "representedPrincipalProfile",
         "representedPrincipalGrants",
+        "custodian",
         "recipientProfiles",
         "mandatoryRestrictions"
       ],

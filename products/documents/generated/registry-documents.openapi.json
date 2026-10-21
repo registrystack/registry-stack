@@ -1,6 +1,14 @@
 {
   "components": {
     "schemas": {
+      "ActorKind": {
+        "description": "An actor kind: a service, or a human person.",
+        "enum": [
+          "service",
+          "human"
+        ],
+        "type": "string"
+      },
       "ContentType": {
         "description": "A lowercase concrete media type `type/subtype` without parameters or wildcards, matched exactly.",
         "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
@@ -306,14 +314,18 @@
       },
       "GranteeRef": {
         "additionalProperties": false,
-        "description": "The recipient a grant names: a subject at the configured token issuer.",
+        "description": "The recipient a grant names: a subject at the configured token issuer,\nand the actor kind a caller must resolve to for the grant to release\nanything to it.",
         "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ActorKind"
+          },
           "subject": {
             "$ref": "#/components/schemas/ExternalId"
           }
         },
         "required": [
-          "subject"
+          "subject",
+          "kind"
         ],
         "type": "object"
       },

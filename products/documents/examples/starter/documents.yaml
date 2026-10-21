@@ -57,6 +57,10 @@ documentPolicies:
     representedPrincipalProfile: citizen
     # Whether the represented principal may issue document grants itself.
     representedPrincipalGrants: refused
+    # Who holds a document placed for a named person: represented-principal
+    # makes that person its custodian; institution keeps it with the
+    # reserving system.
+    custodian: represented-principal
     # Profiles a document grant may name as its recipient (named persons only).
     recipientProfiles: [reader]
     mandatoryRestrictions:
@@ -78,6 +82,7 @@ documentPolicies:
     # The person the document concerns, when one is named; never a custodian here.
     representedPrincipalProfile: citizen
     representedPrincipalGrants: refused
+    custodian: institution
     recipientProfiles: [staff]
     mandatoryRestrictions:
       maximumDocumentBytes: 16777216
@@ -93,6 +98,7 @@ documentPolicies:
     grantingProfiles: [custodian-app]
     representedPrincipalProfile: citizen
     representedPrincipalGrants: permitted
+    custodian: represented-principal
     recipientProfiles: [reader, staff]
     mandatoryRestrictions:
       maximumDocumentBytes: 10485760
