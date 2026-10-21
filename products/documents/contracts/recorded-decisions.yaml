@@ -151,17 +151,22 @@ decisions:
       Read, download, and every grant route answer 404 resource.not-found for a
       document the caller holds no standing on, the same as an unknown
       identifier. A caller who sees the document but lacks the authority an
-      action needs gets 403 profile.not-authorized. Download answers 404 to
-      everyone but the custodian and an active grant holder, including the
-      system that reserved the document for another custodian.
+      action needs gets 403 profile.not-authorized. Download releases bytes
+      only to the custodian and an active grant holder. The system that
+      reserved the document for another custodian sees it, so its download
+      answers 403 profile.not-authorized; every caller without standing gets
+      404.
     reasoning: >-
       A 403 to a stranger would confirm the identifier names a document. A
       caller who already sees the document learns nothing from 403 and is better
       told why. The reserving system keeps metadata and grant authority but not
-      the bytes, so custody, not reservation, decides who reads content.
+      the bytes, so custody, not reservation, decides who reads content. It
+      already knows the document exists, so a 404 would hide nothing and only
+      misstate why it gets no bytes.
     evidence:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_authority_and_unknown_ids_answer_without_disclosing_a_document}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_uploaded_document_is_released_only_after_it_is_verified}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_owning_system_that_is_not_the_custodian_is_refused_the_content_as_unauthorized}
   - id: DOCUMENTS-DEC-11
     subject: A transfer admitted before a revocation completes
     decision: >-
@@ -188,30 +193,75 @@ decisions:
     evidence:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_idempotent_grant_retry_after_revocation_releases_nothing}
   - id: DOCUMENTS-DEC-13
-    subject: Lists page in a stable order and may return short pages
+    subject: Lists page in a stable order, and the documents list may return short pages
     decision: >-
       Every list orders by creation time and identifier, pages by an opaque
-      cursor, and caps a page at 100 items. A page is fetched in that order and
-      then filtered to what the caller may see, so a page may hold fewer items
-      than the limit while a next cursor remains. The received-grants list shows
-      active grants only.
+      cursor, and caps a page at 100 items. The received-grants list selects,
+      before its limit, only grants the caller may redeem: naming the caller's
+      issuer, subject, and actor kind, unrevoked and unexpired, under a policy
+      whose recipient profiles include the caller's, on a version releasable
+      under the current verifier binding; its pages are full while more remain.
+      The documents list selects by the caller's identity and kind in the
+      query and then filters each row by the policy's standing rules, so its
+      page may hold fewer items than the limit while a next cursor remains.
     reasoning: >-
-      Filtering in the query would duplicate the standing rules in SQL, where
-      they could drift from the ones release enforces. A short page costs a
+      The received-grants conditions are the release conditions themselves and
+      are row facts, so the query states them exactly. The documents list's
+      remaining conditions are per-policy profile rules; repeating them in SQL
+      could let them drift from the ones release enforces. A short page costs a
       client one more request; a drifted rule could disclose a document.
     evidence:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_and_document_lists_page_in_a_stable_order}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_recipient_s_grant_list_pages_only_grants_it_may_redeem}
   - id: DOCUMENTS-DEC-14
-    subject: A transfer that finds the budget spent is refused, not queued
+    subject: A request that finds the budget spent is refused, not queued
     decision: >-
-      An upload, download, or verification attempt that finds no room in the
-      transfer budget is refused at once with 503 service.unavailable and Retry-
-      After. A malformed cursor, limit, query key, or Idempotency-Key answers
+      An upload or download that finds no room in the transfer budget is
+      refused at once with 503 service.unavailable and Retry-After. A
+      verification attempt, which no caller waits on, waits for room only
+      within its attempt timeout and then ends as a transient failure to be
+      retried. A malformed cursor, limit, query key, or Idempotency-Key answers
       400 request.invalid, and a grant expiry outside the policy bounds answers
       422 request.unprocessable; the vocabulary has no narrower code for either.
     reasoning: >-
       A queue would hold connections and memory for callers the Store cannot yet
       serve, the exhaustion the budget exists to prevent. Retry-After lets a
-      client back off without a second mechanism.
+      client back off without a second mechanism. Bounding the verifier's wait
+      by its attempt timeout keeps a job from holding its lease past the
+      attempt deadline.
     evidence:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_exhausted_transfer_budget_refuses_uploads_and_downloads}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_verification_attempt_waits_for_transfer_budget_only_within_its_attempt_timeout}
+  - id: DOCUMENTS-DEC-15
+    subject: A document policy states who holds custody when a service names a person
+    decision: >-
+      A document policy carries a required custodian rule. Under institution, a
+      service that reserves a document naming a person keeps custody itself
+      and records the person only as the represented principal, who has no
+      standing until granted. Under represented-principal, the named person
+      becomes the custodian. The starter project uses institution for
+      institutional-custody and represented-principal for citizen-delivery and
+      named-share.
+    reasoning: >-
+      Two policies of the same shape, a service reserving a document about a
+      person, can mean opposite things: a certificate delivered to a citizen,
+      or an institution's own file about them. Inferring custody from policy
+      names or profile roles would hide the choice; a required member makes the
+      author state it, and the runtime enforces the stated rule.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: under_institutional_custody_the_named_person_has_no_standing_without_a_grant}
+      - {path: crates/registry-documents-core/src/access.rs, name: under_institutional_custody_the_reserving_system_stays_the_custodian}
+  - id: DOCUMENTS-DEC-16
+    subject: A grant names its recipient's actor kind
+    decision: >-
+      A grant request names the recipient as a subject and a required actor
+      kind, service or human, and the grant stores it. Release matches the
+      caller's issuer, subject, and kind against the grant.
+    reasoning: >-
+      An issuer may use one subject namespace for people and services, so a
+      subject alone could release a person's grant to a service that shares the
+      value. The granting caller knows which recipient it means; requiring the
+      kind makes it say so instead of the Store guessing.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_grant_releases_only_to_a_caller_of_the_actor_kind_it_names}
+      - {path: crates/registry-documents-core/src/wire.rs, name: a_grant_request_names_one_version_and_one_subject_of_one_kind}
