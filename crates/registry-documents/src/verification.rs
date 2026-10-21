@@ -66,6 +66,9 @@ pub const MAXIMUM_ATTEMPTS: i16 = 231;
 /// The failure code of a job whose verifier binding is no longer current.
 const SUPERSEDED: &str = "binding-superseded";
 
+/// The failure code of a job whose version's removal was requested.
+const UNDER_REMOVAL: &str = "version-under-removal";
+
 /// The part of a version's job under one verifier binding.
 #[must_use]
 pub fn job_part(version_id: Uuid, binding: &str) -> String {
@@ -806,6 +809,29 @@ impl VerificationTransport {
             tracing::error!("the transfer budget is closed; verification will retry");
             return failed();
         };
+        // A removal that committed while this job was leased cancelled
+        // nothing, since it cancels only pending jobs; the job ends here
+        // before the bytes are read, and no verdict is asked for.
+        match self.under_removal(version_id).await {
+            Ok(false) => {}
+            Ok(true) => {
+                return match FailureCode::new(UNDER_REMOVAL) {
+                    Ok(code) => Sent {
+                        outcome: SendOutcome::Permanent { code },
+                        detail: VerificationDetail::Superseded,
+                    },
+                    Err(_) => failed(),
+                };
+            }
+            Err(error) => {
+                tracing::error!(
+                    version = %version_id,
+                    error = %error,
+                    "the version's removal state could not be read; verification will retry"
+                );
+                return failed();
+            }
+        }
         let content = self
             .storage
             .read(
@@ -835,6 +861,20 @@ impl VerificationTransport {
             .verdict(sha256, &job.job.media_type, bytes)
             .await;
         outcome_for(result, binding)
+    }
+}
+
+impl VerificationTransport {
+    /// Whether removal of `version_id` was requested.
+    async fn under_removal(&self, version_id: Uuid) -> Result<bool, StoreError> {
+        let client = self.store.client().await?;
+        let row = client
+            .query_one(
+                "SELECT erasure_state <> 'none' FROM documents_versions WHERE version_id = $1",
+                &[&version_id],
+            )
+            .await?;
+        Ok(row.try_get(0)?)
     }
 }
 

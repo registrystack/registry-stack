@@ -406,8 +406,10 @@ DOCUMENTS-DEC-26:
   pending and suspended, every active grant on the document is revoked, and
   pending verification is cancelled. Grant issue holds the version row and
   refuses an erasing version; download needs a releasable version, which
-  the database refuses for a version under removal; and a verdict that
-  arrives later records nothing. No release that starts after the request
+  the database refuses for a version under removal; a verdict that
+  arrives later records nothing; and a verification job leased across the
+  request ends at its next attempt, before the bytes are read, without
+  asking the verifier. No release that starts after the request
   commits serves the version; a download admitted before it may finish (see
   Residual risk).
 - Grant expiry and revocation erase nothing. The grace is frozen at the
