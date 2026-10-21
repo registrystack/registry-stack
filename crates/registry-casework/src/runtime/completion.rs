@@ -24,8 +24,8 @@ use async_trait::async_trait;
 use registry_platform_dispatch::postgres::{
     AttemptAudit, ClaimRefusal, Decoded, DispatchConfig, DispatchConnection, DispatchEvent,
     DispatchSql, DispatchStore, DispatchTransport, Dispatcher, Disposition, JobKey, JobState,
-    JobTable, LapsedJob, LeasedJob, Quarantine, QuarantineDisposition, ReplayAudit, SelectSql,
-    TargetAction, TransitionAudit, TransitionOutcome,
+    JobTable, LapsedJob, LeasedJob, Quarantine, QuarantineDisposition, QuarantineReason,
+    ReplayAudit, SelectSql, TargetAction, TransitionAudit, TransitionOutcome,
 };
 use registry_platform_dispatch::{
     AttemptTimeoutBound, DispatchError, FailureCode, JobPolicy, RetrySchedule, SendOutcome, Sent,
@@ -52,6 +52,21 @@ const DESTINATION_UNCONFIGURED: &str = "destination_unconfigured";
 
 /// The failure class of a row the claim could not read as a delivery.
 const DELIVERY_UNREADABLE: &str = "delivery_unreadable";
+
+/// The failure class of a row whose attempts already reach its
+/// destination's configured `maximumAttempts`, as after an operator lowers
+/// it.
+const ATTEMPTS_EXHAUSTED: &str = "attempts_exhausted";
+
+/// The failure class of a row whose destination configuration does not fit
+/// a dispatch policy.
+const POLICY_REFUSED: &str = "policy_refused";
+
+/// The failure class of a row whose lapsed lease could not be recovered.
+const RECOVERY_FAILED: &str = "recovery_failed";
+
+/// The failure class of a row that could not be expired past its window.
+const EXPIRY_FAILED: &str = "expiry_failed";
 
 /// The configured completion destinations, by destination id.
 pub(super) type CompletionTargets = Arc<BTreeMap<String, Arc<ReviewCompletionTarget>>>;
@@ -121,6 +136,30 @@ fn completion_policy(
         on_uncertain: UncertainOutcome::Retry,
         expires_at: Some(retained_until),
     })
+}
+
+/// The failure class a row set aside for `reason`, after `attempt`
+/// attempts, records, given its destination's configuration when this
+/// runtime has one.
+fn quarantine_class(
+    reason: QuarantineReason,
+    attempt: i16,
+    target: Option<&ReviewCompletionTarget>,
+) -> &'static str {
+    let Some(target) = target else {
+        return DESTINATION_UNCONFIGURED;
+    };
+    match reason {
+        QuarantineReason::ClaimUnreadable
+            if u32::try_from(attempt).is_ok_and(|made| made >= target.maximum_attempts) =>
+        {
+            ATTEMPTS_EXHAUSTED
+        }
+        QuarantineReason::ClaimUnreadable => DELIVERY_UNREADABLE,
+        QuarantineReason::PolicyRefused => POLICY_REFUSED,
+        QuarantineReason::RecoveryFailed => RECOVERY_FAILED,
+        QuarantineReason::ExpiryFailed | QuarantineReason::ClaimExpiryFailed => EXPIRY_FAILED,
+    }
 }
 
 /// The attempt timeouts the runtime configuration accepts.
@@ -305,7 +344,7 @@ impl DispatchStore for CompletionStore {
                 );
             }
             DispatchEvent::JobQuarantined(reason) => {
-                tracing::warn!(
+                tracing::info!(
                     reason = ?reason,
                     "a Casework review completion delivery was set aside without a send"
                 );
@@ -378,11 +417,11 @@ impl DispatchStore for CompletionStore {
         } else {
             (JobState::Expired, "expired_at = transaction_timestamp(), ")
         };
-        let class = if self.targets.contains_key(quarantine.key.part()) {
-            DELIVERY_UNREADABLE
-        } else {
-            DESTINATION_UNCONFIGURED
-        };
+        let class = quarantine_class(
+            quarantine.reason,
+            quarantine.attempt,
+            self.targets.get(quarantine.key.part()).map(Arc::as_ref),
+        );
         let changed = transaction
             .execute(
                 &format!(
@@ -405,6 +444,18 @@ impl DispatchStore for CompletionStore {
         if changed != 1 {
             return Err(DispatchError::Unavailable);
         }
+        // The core reports a committed quarantine without its row, so the
+        // row is named here, once the claim transaction has set it aside
+        // and before that transaction commits.
+        tracing::warn!(
+            event_id = %quarantine.key.id(),
+            destination_id = quarantine.key.part(),
+            attempt = quarantine.attempt,
+            reason = ?quarantine.reason,
+            failure_class = class,
+            state = state.as_str(),
+            "setting a Casework review completion delivery aside without a send"
+        );
         Ok(QuarantineDisposition::Quarantined(state))
     }
 }
@@ -526,5 +577,66 @@ mod tests {
             retained_until
         )
         .is_none());
+    }
+
+    #[test]
+    fn a_set_aside_delivery_records_the_class_of_its_reason() {
+        let configured = target(3, Duration::from_secs(1));
+        for (reason, attempt, target, class) in [
+            (
+                QuarantineReason::ClaimUnreadable,
+                1,
+                None,
+                DESTINATION_UNCONFIGURED,
+            ),
+            (
+                QuarantineReason::RecoveryFailed,
+                1,
+                None,
+                DESTINATION_UNCONFIGURED,
+            ),
+            (
+                QuarantineReason::ClaimUnreadable,
+                3,
+                Some(&configured),
+                ATTEMPTS_EXHAUSTED,
+            ),
+            (
+                QuarantineReason::ClaimUnreadable,
+                2,
+                Some(&configured),
+                DELIVERY_UNREADABLE,
+            ),
+            (
+                QuarantineReason::PolicyRefused,
+                0,
+                Some(&configured),
+                POLICY_REFUSED,
+            ),
+            (
+                QuarantineReason::RecoveryFailed,
+                1,
+                Some(&configured),
+                RECOVERY_FAILED,
+            ),
+            (
+                QuarantineReason::ExpiryFailed,
+                0,
+                Some(&configured),
+                EXPIRY_FAILED,
+            ),
+            (
+                QuarantineReason::ClaimExpiryFailed,
+                0,
+                Some(&configured),
+                EXPIRY_FAILED,
+            ),
+        ] {
+            assert_eq!(
+                quarantine_class(reason, attempt, target),
+                class,
+                "{reason:?} after {attempt} attempts"
+            );
+        }
     }
 }
