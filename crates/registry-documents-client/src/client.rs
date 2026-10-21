@@ -417,6 +417,11 @@ impl DocumentsClient {
     /// any of it is returned: content that does not match is a
     /// `DocumentsProtocolFailure::ContentDigest` failure, and the caller
     /// receives none of its bytes.
+    ///
+    /// Seeing a document does not entitle a caller to its content: the
+    /// system that reserved a document it holds for someone else may read
+    /// the document but is refused the download with
+    /// `ProblemCode::ProfileNotAuthorized`.
     pub async fn download_content(
         &self,
         token: &BearerToken,
@@ -469,7 +474,9 @@ impl DocumentsClient {
     }
 
     /// Issue a grant releasing one exact version of a document to one named
-    /// recipient, under the caller's idempotency key. The service answers
+    /// recipient, under the caller's idempotency key. The grantee names a
+    /// subject and an actor kind; a caller of another kind with the same
+    /// subject is not released anything. The service answers
     /// `201 Created` with the grant; a replay under the same key answers the
     /// grant as it stands now. The key is checked and an unknown outcome is
     /// resent exactly as `reserve_document` does; `document_id` is checked

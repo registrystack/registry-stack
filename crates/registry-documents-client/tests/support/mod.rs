@@ -211,7 +211,7 @@ pub fn grant_json() -> serde_json::Value {
         "id": GRANT_ID,
         "documentId": DOCUMENT_ID,
         "versionId": VERSION_ID,
-        "grantee": { "subject": "clerk-0001" },
+        "grantee": { "subject": "clerk-0001", "kind": "human" },
         "state": "active",
         "issuedAt": "2026-10-22T08:05:00Z",
         "expiresAt": "2026-10-23T08:05:00Z",
