@@ -805,19 +805,23 @@ invariants:
     threat: >-
       An observer receives document content, a label, a media type, a name,
       a subject, or anything else about the person a document describes,
-      because a hook projects a field outside its trigger's closed set or
-      the event builder carries more than the projection names.
+      because a hook projects a field outside its trigger's closed set, the
+      event builder carries more than the projection names, or a hook hears
+      about documents held under a policy it was not declared for.
     enforcementPoint: >-
       Each trigger has a closed field inventory: documentId, versionId,
-      versionDigest, policyId, policyVersion, and actorKind, with grantId and
-      change added for document-grant.changed. The project reader and hook
-      compilation refuse a projection naming any other field, and the
-      envelope data is built from the projection alone. Each family publishes
-      a generated closed data schema the projection is checked against.
+      versionDigest, policyId, and policyVersion, with grantId, change,
+      actorKind, and expiresAt added for document-grant.changed. The project
+      reader and hook compilation refuse a projection naming any other field,
+      and the envelope data is built from the projection alone. Each family
+      publishes a generated closed data schema the projection is checked
+      against. Each hook names a required, non-empty list of declared
+      policies, and capture matches the document's policy against it.
     refusal: >-
-      Refuse the project at load naming the hook and the field; an event
-      field outside the inventory refuses the capture and rolls the
-      transition back.
+      Refuse the project at load naming the hook and the field, or the
+      missing, empty, repeated, or undeclared policy; an event field outside
+      the inventory refuses the capture and rolls the transition back; a
+      document under a policy no hook names captures nothing.
     negativeTest:
       path: crates/registry-documents/src/hooks_tests.rs
       name: no_forbidden_field_can_be_projected
@@ -829,17 +833,18 @@ invariants:
       system acts on a state the Document Store does not hold.
     enforcementPoint: >-
       The outbox row and the delivery rows are written inside the same
-      transaction as the verification verdict, the grant issue, or the grant
-      revocation, and the delivery worker only sees committed rows. A
-      transition that did not change state (a repeated verdict, an issue
-      replay, a repeated revocation) captures nothing.
+      transaction as the verification verdict, the grant issue, the grant
+      revocation, or the removal request that revokes a version's grants,
+      and the delivery worker only sees committed rows. A transition that
+      did not change state (a repeated verdict, an issue replay, a repeated
+      revocation, a repeated removal) captures nothing.
     refusal: >-
       A rolled-back transition leaves no outbox row and no delivery; a
-      capture that cannot be written rolls the transition back and the
-      caller sees service-unavailable.
+      capture that cannot be written or committed rolls the transition back
+      and the caller sees service-unavailable.
     negativeTest:
       path: crates/registry-documents/tests/postgres_hooks.rs
-      name: a_rolled_back_transition_captures_nothing
+      name: a_capture_that_cannot_commit_rolls_its_transition_back
   - id: DOCUMENTS-SEC-50
     state: enforced
     threat: >-
@@ -901,7 +906,8 @@ invariants:
       destination to be bound and every signing key to resolve, and retained
       deliveries must match their current binding before the worker starts.
     refusal: >-
-      Refuse startup naming the unbound destination or the unresolved key.
+      Refuse startup naming the unbound destination or the unresolved key,
+      or a retained delivery whose binding is no longer configured.
     negativeTest:
       path: crates/registry-documents/tests/postgres_hooks.rs
       name: startup_refuses_a_project_hook_whose_destination_is_not_bound
