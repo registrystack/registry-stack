@@ -452,3 +452,95 @@ decisions:
       restores the declaration.
     evidence:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_document_under_an_undeclared_policy_cannot_be_removed}
+  - id: DOCUMENTS-DEC-27
+    subject: An event's type is its hook id, and its family is its data schema
+    decision: >-
+      The envelope type of a document event is the id of the hook that
+      captured it, as the shared hook envelope defines it, and its
+      dataschema names the event family. Two hooks on one trigger deliver
+      two events with different types and the same data schema.
+    reasoning: >-
+      The shared delivery worker re-reads the stored envelope and refuses
+      one whose type disagrees with the outbox row it was captured under,
+      and every product follows the same envelope contract. The data schema
+      already tells a receiver which family it holds, so no second type
+      vocabulary is needed.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_verdict_captures_one_delivery_per_matching_observer_with_the_closed_projection}
+  - id: DOCUMENTS-DEC-28
+    subject: Only a change of state emits, and grant expiry emits nothing
+    decision: >-
+      document-version.ready is emitted when a verdict makes a version
+      ready that was not ready, including a version approved again after a
+      verifier binding change suspended it. document-version.rejected is
+      emitted when a version becomes rejected. document-grant.changed is
+      emitted once on issue and once on revocation; an issue replayed under
+      its idempotency key and a repeated revocation emit nothing. A grant
+      reaching its expiry emits nothing, and erasure emits nothing.
+    reasoning: >-
+      An event reports a transition the Store committed. Expiry is not a
+      transition anyone performs: the grant stops releasing at a time the
+      observer already received as part of the policy terms, and emitting
+      it would need a timer outside any transaction. Erasure events belong
+      with the erasure work, which owns that transition.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: grant_issue_and_revoke_each_capture_one_event_and_repeats_capture_none}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rejection_captures_the_rejected_event_once}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_version_approved_again_after_a_verifier_rebind_reports_ready_again}
+  - id: DOCUMENTS-DEC-29
+    subject: A capture that cannot be written rolls the transition back
+    decision: >-
+      If the outbox or delivery rows cannot be written, the verdict or grant
+      change fails with them. Once committed, a delivery failure never
+      reaches the transition.
+    reasoning: >-
+      Committing a transition without its event would leave observers
+      permanently out of step with no record to replay. The capture is a
+      local insert in the same database, so failing it is as rare as failing
+      the transition itself, while delivery depends on an outside endpoint
+      and stays after commit.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rolled_back_transition_captures_nothing}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: an_unreachable_destination_never_blocks_a_transition}
+  - id: DOCUMENTS-DEC-30
+    subject: actorKind is the kind of the caller whose act the event reports
+    decision: >-
+      For a version event, actorKind is the kind of the caller that reserved
+      the version; the verifier is not a caller. For a grant event, it is the
+      kind of the caller that issued or revoked the grant. It is service or
+      human, never a subject.
+    reasoning: >-
+      A receiver needs to tell an institution's own system from a person
+      acting for themselves without learning who either is. The reserving
+      caller is the only principal behind a verdict.
+    evidence:
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: each_family_projects_exactly_its_closed_fields}
+  - id: DOCUMENTS-DEC-31
+    subject: Hooks are part of the package, so changing one is a successor activation
+    decision: >-
+      Hook declarations live in the project file and change the package
+      digest; serve refuses a package that is not the active one, so adding,
+      removing, or changing a hook takes documentsctl apply before restart.
+      Rebinding a destination URL or key in the runtime configuration does
+      not change the package. The delivery tables are created by the
+      embedded schema apply installs, and the runtime role is granted them
+      with the rest of what serving needs.
+    reasoning: >-
+      What is observed, and with which fields, is a reviewed governance
+      choice like a policy; where it is sent is an operator binding. Keeping
+      the first in the activated package gives it the same review trail.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_split_runtime_role_captures_and_delivers_under_its_own_grants}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal}
+  - id: DOCUMENTS-DEC-32
+    subject: Event data schemas are closed and require no member
+    decision: >-
+      Each family's published data schema forbids every property outside
+      the family's inventory and requires none, because each hook projects
+      the subset it chose.
+    reasoning: >-
+      Closing the schema lets a receiver reject a field it never agreed to;
+      requiring a member would make a narrower, privacy-preserving
+      projection invalid.
+    evidence:
+      - {path: crates/registry-documents/src/schema.rs, name: event_schemas_are_deterministic_closed_and_one_per_trigger, features: [schema]}

@@ -169,6 +169,7 @@ entries:
   - id: DOCUMENTS-SEC-34
     tests:
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: apply_requires_the_migration_credential}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_split_runtime_role_captures_and_delivers_under_its_own_grants}
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: invalid_operator_references_are_refused_before_anything_is_written}
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: plan_reports_the_change_and_writes_nothing}
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: apply_fails_closed_on_an_unwritable_audit_journal}
@@ -246,3 +247,44 @@ entries:
   - id: DOCUMENTS-SEC-47
     tests:
       - {path: crates/registry-documents-client/tests/document_routes.rs, name: a_download_whose_digest_disagrees_hands_the_caller_nothing}
+  - id: DOCUMENTS-SEC-48
+    tests:
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: no_forbidden_field_can_be_projected}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: each_family_projects_exactly_its_closed_fields}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: a_projection_carries_only_the_fields_it_names}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: every_projection_conforms_to_its_published_data_schema}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: compile_refuses_an_unknown_trigger_and_a_field_outside_its_trigger}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_hook_projection_names_only_its_trigger_s_closed_fields}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_grant_field_is_refused_on_a_version_trigger}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_verdict_captures_one_delivery_per_matching_observer_with_the_closed_projection}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: grant_issue_and_revoke_each_capture_one_event_and_repeats_capture_none}
+  - id: DOCUMENTS-SEC-49
+    tests:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rolled_back_transition_captures_nothing}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: grant_issue_and_revoke_each_capture_one_event_and_repeats_capture_none}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rejection_captures_the_rejected_event_once}
+  - id: DOCUMENTS-SEC-50
+    tests:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_failing_destination_is_retried_then_dead_lettered_without_touching_the_transition}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: an_unreachable_destination_never_blocks_a_transition}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: retries_back_off_from_thirty_seconds_to_an_hour}
+  - id: DOCUMENTS-SEC-51
+    tests:
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: compile_refuses_a_rhai_handler}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: compile_refuses_a_wasm_handler}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: compile_refuses_a_condition}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: compile_refuses_a_principal}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: compile_refuses_a_phase_other_than_after}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_local_hook_handler_kind_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_hook_condition_or_principal_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_before_phase_hook_is_refused}
+  - id: DOCUMENTS-SEC-52
+    tests:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: an_observer_proposal_is_refused_with_a_kebab_case_code}
+  - id: DOCUMENTS-SEC-53
+    tests:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: startup_refuses_a_project_hook_whose_destination_is_not_bound}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: activation_refuses_a_hook_whose_destination_is_not_bound}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: activation_refuses_a_signing_secret_it_cannot_resolve}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: hook_destination_binding_digests_are_pinned}

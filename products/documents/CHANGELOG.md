@@ -105,3 +105,11 @@ The Document Store is held out of releases.
 - `measure-volume-fit.sh` measures `bytea` database, dump, and restore size
   and time; indicative results and a rehearsal of the restore drill are in
   the README.
+- Document events for after-commit URL observers: `document-version.ready`,
+  `document-version.rejected`, and `document-grant.changed`, each captured
+  in the transaction that commits it and projecting only its closed fields.
+  Destinations come from `destinations.hooks`; delivery is signed, retried,
+  and dead-lettered by the shared hook worker; every observer proposal is
+  refused. A removal from custody captures one revoked
+  `document-grant.changed` event for each grant it revokes. Each family
+  publishes a generated data schema under `generated/events/`.
