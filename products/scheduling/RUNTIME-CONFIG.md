@@ -316,8 +316,9 @@ on the shared dispatch core, with a five-second attempt timeout and a fixed
 back-off of thirty seconds doubling to 1920 seconds; a transport failure
 schedules a retry, an authorization or routing refusal sets the intent aside
 as failed for the operator, and the eighth failed attempt sets it aside. A
-reminder superseded by a cancellation or a reschedule is set aside without a
-send when it falls due. An absent reminders destination is a supported
+cancellation or a reschedule cancels the superseded reminder in its own
+transaction when no attempt has started on it; one a dispatcher already
+holds is set aside without a send by a liveness read under its lease. An absent reminders destination is a supported
 deployment: the intents stay readable in the outbox and are set aside as
 local, never pretended delivered. The README documents the envelope and the
 event types.
@@ -349,14 +350,16 @@ The reference grants no authority: the claim is no longer readable, listable,
 or actionable by its former owner, and a receipt containing that claim cannot be observed or replayed even if
 the independent receipt window remains open. Live claims
 keep their owner across audit-key rotation. Claim and history rows remain;
-their retention is deferred. Each retention tick prunes up to 256 delivered
+their retention is deferred. Each retention tick prunes up to 256 settled
 outbox intents of any purpose (confirmation, change, cancellation, reminder)
-whose delivery time is at or before the receipt-period cutoff,
+at or before the receipt-period cutoff: a delivered intent by its delivery
+time, a reminder cancelled before any attempt by its cancellation time, and
+a reminder set aside as superseded by its dead-letter time,
 and up to 256 terminal observer deliveries whose last transition is at or
 before that cutoff. Observer dead letters and expired deliveries also require
 completed payload expiry and erasure before their metadata ages out. Pending,
-leased, retryable and uncertain work remains, including local, failed and
-superseded outbox intents. Hook state is removed before delivery metadata;
+leased, retryable and uncertain work remains, including local and failed
+outbox intents. Hook state is removed before delivery metadata;
 a shared event remains until its last delivery is removed. These deletions
 share one transaction and never erase audit entries or spent-key tombstones. `audit.retentionDays` bounds rotated
 audit files. An idempotency receipt past its period is erased, so an

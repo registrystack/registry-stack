@@ -210,9 +210,10 @@ so a binary that cannot run leaves the installed toolset selected.
    seconds remaining without checking revocation, including the final 900 seconds of a deferred
    grant. Use it only when the deployment accepts that stale-authority window.
    Run `schedulingctl check PROJECT --runtime-config FILE`. Keep the previous runtime serving
-   long enough for its reminder and observer deliveries to run; no command shows pending
-   deliveries (`schedulingctl intents` lists only the ones the sweep stopped carrying), and
-   shutdown abandons the rest, so record the deliveries you accept losing before you stop it.
+   long enough for its reminder and observer deliveries to run. No command lists the deliveries
+   still waiting (`schedulingctl intents` lists only the ones the dispatcher set aside as local or
+   failed), and shutdown abandons the rest, so record the deliveries you accept losing before you
+   stop it.
    Point the runtime file at a fresh database,
    then run `schedulingctl plan --runtime-config FILE` and `schedulingctl apply --runtime-config
    FILE`. Apply the environment records with `schedulingctl records apply --runtime-config FILE

@@ -7,12 +7,14 @@
   shape: the attempt count is `attempt`, a lease carries `lease_token`, and an
   intent that stops without delivery ends `dead-lettered` with a
   `last_failure_class` instead of `local` or `failed`. A cancellation or
-  reschedule no longer marks the obsolete reminder `suppressed`: the reminder
-  is read just before its send and set aside as `superseded` without one. A
-  lapsed lease counts as a failed attempt and waits the next back-off, and
-  the longest back-off is 1920 seconds instead of an hour.
-  `schedulingctl intents` reports the same `local` and `failed` delivery
-  states as before. Apply this release to a fresh database.
+  reschedule cancels the obsolete reminder in its own transaction, ending it
+  `cancelled` instead of `suppressed`; a reminder a dispatcher already holds
+  is read under its lease just before its send and set aside as `superseded`
+  without one. Delivered, cancelled, and superseded intents age out on the
+  receipt retention cutoff. A lapsed lease counts as a failed attempt and
+  waits the next back-off. `schedulingctl intents` reports the same `local`
+  and `failed` delivery states as before. Apply this release to a fresh
+  database.
 - `destinations.hooks` entries are the shared `UrlHookDestinationConfig`
   block from `registry-platform-config`, activated by
   `registry-platform-hooks`. The keys, bounds, defaults, refusals, and the
