@@ -7,6 +7,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-10-21
+
+- BREAKING: metadata display fields use the shared display-text rules, and
+  checked definition namespaces reject identifiers differing only by `-` versus
+  `_`. Equivalent peer labels produce warnings. Run metadata and profile
+  validation before upgrading; see [the upgrade notes](../../release/notes/v0.43.0.md#authored-text-and-identifier-checks).
+
 - BREAKING: profile descriptor names, descriptions, and unsupported-mapping explanations
   now reject prohibited display controls and Unicode noncharacters, with the
   same rule in the reader and editor schema. Remove the prohibited character

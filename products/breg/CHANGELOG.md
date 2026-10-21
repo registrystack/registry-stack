@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.43.0 - 2026-10-21
+
+- BREAKING: authored display fields reject prohibited Unicode controls and
+  checked definition namespaces reject identifiers differing only by `-` versus
+  `_`. Equivalent peer labels produce warnings. Run product checks and repair
+  the reported locations; see [the upgrade notes](../../release/notes/v0.43.0.md#authored-text-and-identifier-checks).
+
 - Preserve authored display on access profiles, statistical datasets, record and
   Proposal hooks, and derived fields. Model inspection includes native datasets,
   all project access-profile labels, field display, and module origins.

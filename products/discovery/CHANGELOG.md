@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.43.0 - 2026-10-21
+
+- BREAKING: the current provider-publication parser rejects prohibited display
+  controls and Unicode noncharacters in `title` and `description`. Remove the
+  character from the field named by the current tooling before rebuilding the index. The
+  immutable v1alpha1 schema, context, and SHACL bytes are unchanged; historical
+  schema acceptance alone does not establish current parser acceptance.
+
 ## 0.42.0 - 2026-10-20
 
 - BREAKING: the Discovery Node.js binding and the `@registrystack/client`

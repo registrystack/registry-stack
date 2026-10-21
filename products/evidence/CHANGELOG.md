@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.43.0 - 2026-10-21
+
+- BREAKING: authored display fields reject prohibited Unicode controls, and
+  checked project, target, authority, runtime, and fixture definition namespaces
+  reject identifiers differing only by `-` versus `_`. Equivalent peer labels
+  produce warnings. Run the applicable checks before upgrading; see
+  [the upgrade notes](../../release/notes/v0.43.0.md#authored-text-and-identifier-checks).
+
 ## 0.42.0 - 2026-10-20
 
 - `authentication.oidc.allowInsecureHttp` permits plain HTTP to the issuer and

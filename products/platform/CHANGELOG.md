@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.43.0 - 2026-10-21
+
+- BREAKING: the shared `DisplayText` reader rejects bidi embedding, override,
+  and isolate controls, line and paragraph separators, U+FEFF, and Unicode
+  noncharacters while retaining supported multilingual shaping and direction
+  marks. Accepted text is preserved exactly. Equivalent peer labels warn without
+  disclosing their text; checked definition namespaces reject identifiers
+  differing only by `-` versus `_`. See
+  [the upgrade notes](../../release/notes/v0.43.0.md#authored-text-and-identifier-checks).
+- Update Wasmtime LTS to 48.0.7 for RUSTSEC-2026-0378 and RUSTSEC-2026-0379.
+
 ## 0.42.0 - 2026-10-20
 
 - BREAKING: token-verifying runtimes use one issuer network policy. Endpoints the operator
