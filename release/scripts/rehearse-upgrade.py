@@ -11,9 +11,10 @@ runs the upgrade an operator runs, and fails unless the state is still served
 unchanged and no table lost a row.
 A product the previous release did not ship, or whose contract starts at a
 new baseline, has no supported state to carry forward. Its leg is omitted and
-the report says why. The forward state path starts at 0.42.0: Evidence's
-normalized baseline and the Messaging and Scheduling fresh schema baselines all
-start there, and no product reads state a release before it wrote.
+the report says why. The forward state path started at 0.42.0 with Evidence's
+normalized baseline and the Messaging and Scheduling fresh schema baselines.
+Release 0.43.0 continued that path from 0.42.0. This source reads state from
+0.43.0, its immediate predecessor.
 
 While no release on the forward state path is published, there is no
 predecessor to download: the rehearsal then runs every leg with this source's
@@ -80,13 +81,14 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # minor line, so a patch release does not move it, or to a later release up to
 # the workspace version: the forward state path then starts at that release,
 # and this source reads no state an earlier release wrote.
-# The forward state path starts at 0.42.0. BReg and Casework start on a fresh
+# The forward state path started at 0.42.0. BReg and Casework start on a fresh
 # database (RETIRED_PRODUCTS). Evidence's normalized project, target, and
 # separately activated complete authority replace the split question/source
 # projects and bundled authority, which the current compiler refuses. Messaging
 # and Scheduling each install one schema baseline and refuse a pre-1.0 ledger by
-# name.
-FORWARD_PATH_FLOOR = (0, 42, 0)
+# name. Release 0.43.0 continued that path from 0.42.0; this source reads state
+# from 0.43.0, its immediate predecessor.
+FORWARD_PATH_FLOOR = (0, 43, 0)
 
 STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
 STACK_RELEASED = re.compile(r"\Astack:\n(?:  .*\n)*?  status: released\n")
@@ -208,8 +210,9 @@ def check_forward_path(from_tag: str, version: str) -> None:
         raise RehearsalError(
             f"refusing {from_tag}: before 1.0 a release reads only the state its "
             "immediate predecessor wrote, and this source reads no state written "
-            f"before {floor}. Bring the state to {floor} first; a product that starts "
-            "a fresh baseline there installs on fresh state instead, as the upgrade "
+            f"before {floor}. Bring the state to {floor} first through each "
+            "intermediate release; a product whose release starts a fresh baseline "
+            "installs on fresh state instead, as the upgrade "
             "section of release/OPERATIONS.md describes"
         )
 
