@@ -72,10 +72,12 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
   const hasMessaging = Boolean(selectedDocset.products?.['registry-messaging']);
   const hasBregServices = Boolean(selectedDocset.products?.['registry-breg-services']);
   const hasCoordinator = Boolean(selectedDocset.products?.['registry-coordinator']);
+  const hasDocuments = Boolean(selectedDocset.products?.['registry-documents']);
   const currentDocset = docsets.docsets.find((entry) => entry.id === docsets.current);
   if (!currentDocset) throw new Error(`current docs docset "${docsets.current}" not found`);
   const currentHasMessaging = Boolean(currentDocset.products?.['registry-messaging']);
   const currentHasCoordinator = Boolean(currentDocset.products?.['registry-coordinator']);
+  const currentHasDocuments = Boolean(currentDocset.products?.['registry-documents']);
   /** @param {string} path */
   const internalRedirect = (path) => basePath ? `${basePath}${path}` : path;
   /** @param {string} path */
@@ -97,8 +99,10 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
     hasMessaging,
     hasBregServices,
     hasCoordinator,
+    hasDocuments,
     currentHasMessaging,
     currentHasCoordinator,
+    currentHasDocuments,
     selectedDocset,
     internalRedirect,
     currentDocsetRedirect,
@@ -116,8 +120,10 @@ const {
   hasMessaging,
   hasBregServices,
   hasCoordinator,
+  hasDocuments,
   currentHasMessaging,
   currentHasCoordinator,
+  currentHasDocuments,
   selectedDocset,
   internalRedirect,
   currentDocsetRedirect,
@@ -303,6 +309,34 @@ export function coordinatorRedirects(hasCoordinator, currentHasCoordinator, curr
     ];
   }));
 }
+const documentsOpenApiSidebarGroup = createOpenAPISidebarGroup();
+const documentsOpenApiSchema = {
+  base: 'reference/apis/documents',
+  schema: './openapi/registry-documents.render.openapi.json',
+  sidebar: {
+    group: documentsOpenApiSidebarGroup,
+    label: 'API operations',
+    collapsed: true,
+    operations: { labels: /** @type {'path'} */ ('path'), badges: true },
+  },
+};
+// The Document Store pages follow the same rule as the Coordinator pages.
+const documentsRoutes = productRoutes('registry-documents');
+/**
+ * @param {boolean} hasDocuments
+ * @param {boolean} currentHasDocuments
+ * @param {(path: string) => string} currentDocsetRedirect
+ */
+export function documentsRedirects(hasDocuments, currentHasDocuments, currentDocsetRedirect) {
+  if (hasDocuments) return {};
+  return Object.fromEntries(documentsRoutes.flatMap((route) => {
+    const target = currentDocsetRedirect(currentHasDocuments ? route : '/');
+    return [
+      [route, target],
+      [`${route.slice(0, -1)}.md`, target],
+    ];
+  }));
+}
 const caseworkRoutes = [
   '/start/casework/',
   '/tutorials/first-casework/',
@@ -380,6 +414,7 @@ export default defineConfig({
     ...renderRedirects(hasRender, currentDocsetRedirect),
     ...messagingRedirects(hasMessaging, currentHasMessaging, currentDocsetRedirect),
     ...coordinatorRedirects(hasCoordinator, currentHasCoordinator, currentDocsetRedirect),
+    ...documentsRedirects(hasDocuments, currentHasDocuments, currentDocsetRedirect),
     '/start/': internalRedirect('/'),
     '/start/see-it-live/': internalRedirect('/'),
     '/explanation/publishing-pipeline/': internalRedirect('/products/registry-manifest/'),
@@ -530,6 +565,7 @@ export default defineConfig({
           ...[schedulingOpenApiSchema].filter(() => hasScheduling),
           ...[messagingOpenApiSchema].filter(() => hasMessaging),
           ...[coordinatorOpenApiSchema].filter(() => hasCoordinator),
+          ...[documentsOpenApiSchema].filter(() => hasDocuments),
           ...[bregOpenApiSchema].filter(() => hasBregOpenApi),
         ]),
       ],
@@ -807,6 +843,17 @@ export default defineConfig({
             { label: 'Configuration reference', slug: 'reference/coordinator-configuration' },
             { label: 'API contract', slug: 'reference/apis/registry-coordinator' },
             coordinatorOpenApiSidebarGroup,
+          ],
+        }] : []),
+        ...(hasDocuments ? [{
+          label: 'Registry Document Store',
+          collapsed: true,
+          items: [
+            { label: 'Overview', slug: 'start/documents' },
+            { label: 'Check your first project', slug: 'tutorials/first-documents' },
+            { label: 'Deploy and operate the Document Store', slug: 'operate/documents' },
+            { label: 'Configuration reference', slug: 'reference/documents-configuration' },
+            documentsOpenApiSidebarGroup,
           ],
         }] : []),
         {

@@ -109,7 +109,8 @@ test('gates formats by the docset product that publishes them', async () => {
     assert.ok(latest.products[gate] || gated.has(gate), `${gate} is not a docsets.yaml product key`);
   }
   assert.equal(product('documents').docsetProduct, 'registry-documents');
-  assert.ok(!docsets.docsets.some((entry) => entry.products?.['registry-documents']));
+  assert.ok(latest.products['registry-documents'], 'the current docset publishes the Document Store');
+  assert.equal(product('documents').checkPage, 'reference/documents-configuration');
 });
 
 test('publishes the three Coordinator formats with their owned check commands', async () => {

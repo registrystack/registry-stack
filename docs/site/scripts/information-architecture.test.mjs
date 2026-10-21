@@ -61,6 +61,14 @@ const coordinatorRedirects = new Function(
   'productRoutes',
   `${coordinatorRoutesSource}; ${coordinatorRedirectsSource.replace(/^export /, '')}; return coordinatorRedirects;`,
 )(productRoutes);
+const documentsRedirectsSource = configSource.match(/export function documentsRedirects[\s\S]*?^}\n/m)?.[0];
+const documentsRoutesSource = configSource.match(/const documentsRoutes = productRoutes\('registry-documents'\);/)?.[0];
+assert.ok(documentsRedirectsSource && documentsRoutesSource,
+  'could not isolate Document Store docset routing');
+const documentsRedirects = new Function(
+  'productRoutes',
+  `${documentsRoutesSource}; ${documentsRedirectsSource.replace(/^export /, '')}; return documentsRedirects;`,
+)(productRoutes);
 const bregRewriteRedirectsSource = configSource.match(/export function bregRewriteRedirects[\s\S]*?^}\n/m)?.[0];
 const bregRewriteMovesSource = configSource.match(/const bregRewriteMoves = \[[\s\S]*?\n\];/)?.[0];
 assert.ok(bregRewriteRedirectsSource && bregRewriteMovesSource,
@@ -117,6 +125,8 @@ const messagingOpenApiSidebarGroup = openApiGroup('reference/apis/messaging', 'A
 const messagingOpenApiSchema = openApiSchema('reference/apis/messaging', messagingOpenApiSidebarGroup);
 const coordinatorOpenApiSidebarGroup = openApiGroup('reference/apis/coordinator', 'API operations');
 const coordinatorOpenApiSchema = openApiSchema('reference/apis/coordinator', coordinatorOpenApiSidebarGroup);
+const documentsOpenApiSidebarGroup = openApiGroup('reference/apis/documents', 'API operations');
+const documentsOpenApiSchema = openApiSchema('reference/apis/documents', documentsOpenApiSidebarGroup);
 const bregOpenApiSidebarGroup = openApiGroup('reference/apis/breg', 'API operations (facility template)');
 const bregOpenApiSchema = openApiSchema('reference/apis/breg', bregOpenApiSidebarGroup);
 // The product groups in the order the sidebar factory takes them; BReg's
@@ -128,6 +138,7 @@ const productOpenApiSidebarGroups = [
   schedulingOpenApiSidebarGroup,
   messagingOpenApiSidebarGroup,
   coordinatorOpenApiSidebarGroup,
+  documentsOpenApiSidebarGroup,
 ];
 const openApiSidebarGroups = [...productOpenApiSidebarGroups, bregOpenApiSidebarGroup];
 const apiSchemaFactory = new Function(
@@ -137,12 +148,14 @@ const apiSchemaFactory = new Function(
   'hasScheduling',
   'hasMessaging',
   'hasCoordinator',
+  'hasDocuments',
   'evidenceOpenApiSchema',
   'evidenceOid4vciOpenApiSchema',
   'caseworkOpenApiSchema',
   'schedulingOpenApiSchema',
   'messagingOpenApiSchema',
   'coordinatorOpenApiSchema',
+  'documentsOpenApiSchema',
   'bregOpenApiSchema',
   `return ${apiConfigSource};`,
 );
@@ -153,9 +166,10 @@ const apiSchemaArguments = [
   schedulingOpenApiSchema,
   messagingOpenApiSchema,
   coordinatorOpenApiSchema,
+  documentsOpenApiSchema,
   bregOpenApiSchema,
 ];
-const apiSchemas = apiSchemaFactory(true, true, true, true, true, true, ...apiSchemaArguments);
+const apiSchemas = apiSchemaFactory(true, true, true, true, true, true, true, ...apiSchemaArguments);
 assert.ok(apiSchemas.includes(bregOpenApiSchema), 'the current docset registers the BReg OpenAPI schema');
 const sidebarFactory = new Function(
   'cliReferenceSidebar',
@@ -169,6 +183,7 @@ const sidebarFactory = new Function(
   'hasMessaging',
   'hasBregServices',
   'hasCoordinator',
+  'hasDocuments',
   'selectedDocset',
   'hasBregOpenApi',
   'bregOpenApiSidebarGroup',
@@ -179,6 +194,7 @@ const sidebarFactory = new Function(
   'schedulingOpenApiSidebarGroup',
   'messagingOpenApiSidebarGroup',
   'coordinatorOpenApiSidebarGroup',
+  'documentsOpenApiSidebarGroup',
   `return [${sidebarSource}];`,
 );
 const sidebarArguments = [
@@ -200,9 +216,10 @@ const everyProductDocset = {
     'registry-messaging': {},
     'registry-breg-services': {},
     'registry-coordinator': {},
+    'registry-documents': {},
   },
 };
-const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true, true, everyProductDocset,
+const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true, true, true, everyProductDocset,
   true, bregOpenApiSidebarGroup, true, ...productOpenApiSidebarGroups);
 
 const messagingPageRoutes = [
@@ -221,6 +238,12 @@ const coordinatorPageRoutes = [
   '/operate/coordinator/',
   '/reference/coordinator-configuration/',
   '/reference/apis/registry-coordinator/',
+];
+const documentsPageRoutes = [
+  '/start/documents/',
+  '/tutorials/first-documents/',
+  '/operate/documents/',
+  '/reference/documents-configuration/',
 ];
 
 function section(label) {
@@ -336,6 +359,7 @@ test('uses the product navigation in its published order', () => {
     'Registry Render',
     'Registry Messaging',
     'Registry Coordinator',
+    'Registry Document Store',
     'Registry Discovery',
     'Operations',
     'Design',
@@ -362,17 +386,21 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       { id: 'v0.41.0', status: 'archived', availability: 'candidate', path: '/v/0.41.0/', products: { 'registry-casework': { ref: 'v0.41.0' }, 'registry-messaging': { ref: 'v0.41.0' }, 'registry-coordinator': { ref: 'v0.41.0' } } },
       // The first archive that publishes the Base Registry Engine facility API.
       { id: 'v0.42.0', status: 'archived', availability: 'candidate', path: '/v/0.42.0/', products: {} },
+      // A docset that carries the Document Store beside Casework alone, so its
+      // operations follow skipped product schemas and precede the BReg one.
+      { id: 'v0.44.0', status: 'archived', availability: 'candidate', path: '/v/0.44.0/', products: { 'registry-casework': { ref: 'v0.44.0' }, 'registry-documents': { ref: 'v0.44.0' } } },
     ],
   };
-  for (const [id, env, hasCasework, hasScheduling, hasRender, hasMessaging, hasBregServices, hasCoordinator] of [
-    ['latest', {}, true, true, true, false, false, false],
-    ['v0.19.0', {}, false, false, false, false, false, false],
-    ['v0.29.0', {}, false, false, false, false, false, false],
-    ['v0.30.0', {}, true, false, false, false, false, false],
-    ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false, false, false, false, false],
-    ['v0.31.0', {}, true, false, false, true, true, false],
-    ['v0.41.0', {}, true, false, false, true, false, true],
-    ['v0.42.0', {}, false, false, false, false, false, false],
+  for (const [id, env, hasCasework, hasScheduling, hasRender, hasMessaging, hasBregServices, hasCoordinator, hasDocuments] of [
+    ['latest', {}, true, true, true, false, false, false, false],
+    ['v0.19.0', {}, false, false, false, false, false, false, false],
+    ['v0.29.0', {}, false, false, false, false, false, false, false],
+    ['v0.30.0', {}, true, false, false, false, false, false, false],
+    ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false, false, false, false, false, false],
+    ['v0.31.0', {}, true, false, false, true, true, false, false],
+    ['v0.41.0', {}, true, false, false, true, false, true, false],
+    ['v0.42.0', {}, false, false, false, false, false, false, false],
+    ['v0.44.0', {}, true, false, false, false, false, false, true],
   ]) {
     const context = resolveDocsetBuildContext(docsets, { DOCS_DOCSET: id, ...env });
     const hasBregOpenApi = docsetPublishesBregOpenApi(context.selectedDocset, docsets.current);
@@ -383,6 +411,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     assert.equal(context.hasMessaging, hasMessaging, id);
     assert.equal(context.hasBregServices, hasBregServices, id);
     assert.equal(context.hasCoordinator, hasCoordinator, id);
+    assert.equal(context.hasDocuments, hasDocuments, id);
     const docsetSidebar = sidebarFactory(
       ...sidebarArguments,
       context.hasCasework,
@@ -391,6 +420,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       context.hasMessaging,
       context.hasBregServices,
       context.hasCoordinator,
+      context.hasDocuments,
       context.selectedDocset,
       hasBregOpenApi,
       bregOpenApiSidebarGroup,
@@ -402,6 +432,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Render'), hasRender, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Messaging'), hasMessaging, id);
     assert.equal(docsetSidebar.some((item) => item.label === 'Registry Coordinator'), hasCoordinator, id);
+    assert.equal(docsetSidebar.some((item) => item.label === 'Registry Document Store'), hasDocuments, id);
     // The citizen services are seated inside the Base Registry Engine section,
     // which every docset publishes.
     const docsetBreg = docsetSidebar.find((item) => item.label === 'Base Registry Engine');
@@ -409,7 +440,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     assert.equal(docsetBreg.items.some((item) => item.label === 'Citizen chat assistant'), hasBregServices, id);
     // The BReg facility API is published by the current docset and by release
     // docsets from v0.42.0 onward, archived or not.
-    assert.equal(hasBregOpenApi, id === 'latest' || id === 'v0.42.0', id);
+    assert.equal(hasBregOpenApi, id === 'latest' || id === 'v0.42.0' || id === 'v0.44.0', id);
     assert.equal(docsetBreg.items.includes(bregOpenApiSidebarGroup), hasBregOpenApi, id);
     // The OID4VCI document is published by the current docset and by release
     // docsets from v0.20.0 onward.
@@ -421,12 +452,13 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       context.hasScheduling,
       context.hasMessaging,
       context.hasCoordinator,
+      context.hasDocuments,
       ...apiSchemaArguments,
     );
     assert.equal(
       docsetSchemas.length,
       1 + Number(hasEvidenceOid4vciOpenApi) + Number(hasCasework) + Number(hasScheduling) +
-        Number(hasMessaging) + Number(hasCoordinator) + Number(hasBregOpenApi),
+        Number(hasMessaging) + Number(hasCoordinator) + Number(hasDocuments) + Number(hasBregOpenApi),
       id,
     );
     // Each product group seats the group of its own schema and no other,
@@ -446,6 +478,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       ['Registry Scheduling', hasScheduling, schedulingOpenApiSidebarGroup],
       ['Registry Messaging', hasMessaging, messagingOpenApiSidebarGroup],
       ['Registry Coordinator', hasCoordinator, coordinatorOpenApiSidebarGroup],
+      ['Registry Document Store', hasDocuments, documentsOpenApiSidebarGroup],
     ]) {
       if (!present) continue;
       assert.deepEqual(seatedGroups(docsetSidebar.find((item) => item.label === label)), [group], `${id} ${label}`);
@@ -488,6 +521,18 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       const twin = `${route.slice(0, -1)}.md`;
       assert.equal(coordinatorRedirectsResult[route], hasCoordinator ? undefined : home, `${id} ${route}`);
       assert.equal(coordinatorRedirectsResult[twin], hasCoordinator ? undefined : home, `${id} ${twin}`);
+    }
+    // The same rule for the Document Store pages while the current docset
+    // does not publish the Document Store.
+    const documentsRedirectsResult = documentsRedirects(
+      context.hasDocuments,
+      context.currentHasDocuments,
+      context.currentDocsetRedirect,
+    );
+    for (const route of documentsPageRoutes) {
+      const twin = `${route.slice(0, -1)}.md`;
+      assert.equal(documentsRedirectsResult[route], hasDocuments ? undefined : home, `${id} ${route}`);
+      assert.equal(documentsRedirectsResult[twin], hasDocuments ? undefined : home, `${id} ${twin}`);
     }
   }
   // When the current docset publishes Messaging, a docset without it sends each
@@ -553,7 +598,30 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
   ))) {
     assert.equal(target, '/dev/', route);
   }
-  assert.match(fetchOpenapiSource, /\(repoId === 'registry-casework' \|\| repoId === 'registry-scheduling' \|\| repoId === 'registry-messaging' \|\| repoId === 'registry-coordinator'\) && !docset\.products\[repoId\]/);
+  // When the current docset publishes the Document Store, a docset without it
+  // sends each Document Store route to the same route of the current docset.
+  const documentsActivated = {
+    ...docsets,
+    docsets: docsets.docsets.map((docset) => docset.id === 'latest'
+      ? { ...docset, products: { ...docset.products, 'registry-documents': { ref: 'HEAD' } } }
+      : docset),
+  };
+  for (const [id, env, expected] of [
+    ['latest', {}, {}],
+    ['v0.29.0', {}, Object.fromEntries(documentsPageRoutes.flatMap((route) => {
+      const target = `https://docs.registrystack.org/dev${route}`;
+      return [[route, target], [`${route.slice(0, -1)}.md`, target]];
+    }))],
+  ]) {
+    const context = resolveDocsetBuildContext(documentsActivated, { DOCS_DOCSET: id, ...env });
+    assert.equal(context.currentHasDocuments, true, id);
+    assert.deepEqual(
+      documentsRedirects(context.hasDocuments, context.currentHasDocuments, context.currentDocsetRedirect),
+      expected,
+      id,
+    );
+  }
+  assert.match(fetchOpenapiSource, /\(repoId === 'registry-casework' \|\| repoId === 'registry-scheduling' \|\| repoId === 'registry-messaging' \|\| repoId === 'registry-coordinator' \|\| repoId === 'registry-documents'\) && !docset\.products\[repoId\]/);
   for (const route of [
     '/start/casework/',
     '/tutorials/first-casework/',
@@ -569,6 +637,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
   assert.match(configSource, /\.\.\.renderRedirects\(hasRender, currentDocsetRedirect\)/);
   assert.match(configSource, /\.\.\.messagingRedirects\(hasMessaging, currentHasMessaging, currentDocsetRedirect\)/);
   assert.match(configSource, /\.\.\.coordinatorRedirects\(hasCoordinator, currentHasCoordinator, currentDocsetRedirect\)/);
+  assert.match(configSource, /\.\.\.documentsRedirects\(hasDocuments, currentHasDocuments, currentDocsetRedirect\)/);
 });
 
 test('starts with only Start expanded and all secondary groups collapsed', () => {
@@ -641,6 +710,7 @@ test('uses the formal product names for top-level sections', () => {
     'Registry Render',
     'Registry Messaging',
     'Registry Coordinator',
+    'Registry Document Store',
     'Registry Discovery',
   ]) {
     assert.ok(topLevelSection(sidebarSource, product), `could not isolate ${product}`);
@@ -675,6 +745,7 @@ test('publishes one overview route for every section that has one', () => {
     ['Registry Render', "slug: 'start/registry-render'"],
     ['Registry Messaging', "slug: 'start/messaging'"],
     ['Registry Coordinator', "slug: 'start/coordinator'"],
+    ['Registry Document Store', "slug: 'start/documents'"],
     ['Operations', "slug: 'operate/advanced'"],
     ['Reference', "slug: 'reference'"],
   ]) {
@@ -1053,6 +1124,28 @@ test('keeps the Coordinator journey in one product lane', () => {
     1,
   );
   assert.match(coordinator, /coordinatorOpenApiSidebarGroup,/);
+});
+
+// The Document Store's four pages and its generated operations sit in one
+// lane, so a reader adopting the Document Store never leaves it.
+test('keeps the Document Store journey in one product lane', () => {
+  const documents = topLevelSection(sidebarSource, 'Registry Document Store');
+  assert.ok(documents, 'could not isolate the Registry Document Store section');
+  const slugs = [...documents.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]);
+  assert.deepEqual(slugs, [
+    'start/documents',
+    'tutorials/first-documents',
+    'operate/documents',
+    'reference/documents-configuration',
+  ]);
+  for (const slug of slugs) {
+    assert.ok(hasDocForSlug(slug), `${slug} must be reachable from the Document Store journey`);
+  }
+  assert.equal(
+    [...sidebarSource.matchAll(/slug: 'reference\/documents-configuration'/g)].length,
+    1,
+  );
+  assert.match(documents, /documentsOpenApiSidebarGroup,/);
 });
 
 // The plugin maps every schema without its own group to one shared

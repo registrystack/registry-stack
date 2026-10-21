@@ -1,0 +1,160 @@
+---
+title: Check your first Document Store project
+description: Scaffold a Registry Document Store project, check it offline, read a refusal, and package it with the digest a deployment pins.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: tutorial
+persona:
+  - operator
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+You will scaffold a Registry Document Store project, check it with no database or network, watch
+the check refuse an unsafe setting, and package the project for a deployment to pin.
+
+<QuickstartMeta
+  outcome="A checked Document Store project and its package digest."
+  time="About 10 minutes, plus the build"
+  level="Local evaluation only"
+  prerequisites={['A Registry Stack checkout and the Rust toolchain']}
+/>
+
+## Build documentsctl
+
+The Document Store is held out of releases, so build its tooling from the checkout. From the
+checkout's root:
+
+```sh test-skip="builds from source; the gate puts the binary under test on PATH"
+. scripts/cargo-runtime-library-path.sh
+registry_cargo_build "$PWD" --locked -p registry-documentsctl
+export PATH="$PWD/target/debug:$PATH"
+```
+
+The helper also sets the library path the binary needs on macOS, so run every `documentsctl`
+command in this terminal. Change to an empty directory in it, then:
+
+```sh
+documentsctl --version
+```
+
+```text test-expect
+documentsctl <version>
+```
+
+{/* Evidence: scripts/cargo-runtime-library-path.sh, registry_cargo_build. */}
+
+## Scaffold a project
+
+```sh
+documentsctl init my-documents
+```
+
+```text test-expect
+created: my-documents
+  documents.yaml
+  runtime.example.yaml
+next: Run documentsctl check --project DIRECTORY --runtime-config DIRECTORY/runtime.example.yaml.
+next: Run documentsctl package DIRECTORY --output PACKAGE, point runtime.yaml at PACKAGE and pin its digest, run documentsctl plan, then documentsctl apply, then documents serve.
+```
+
+`documents.yaml` is the project: access profiles and three document policies, each commented.
+`runtime.example.yaml` is a starting runtime configuration for the operator. `init` never
+overwrites a directory that already exists.
+
+{/* Evidence: crates/registry-documentsctl/src/lib.rs, init;
+    products/documents/examples/starter/documents.yaml. */}
+
+## Check it
+
+```sh
+documentsctl check --project my-documents --runtime-config my-documents/runtime.example.yaml
+```
+
+```text test-expect
+checked: 0 errors, 0 warnings in 2 files
+```
+
+The check needs no database, network, or secret, so you can run it anywhere the files are,
+including in continuous integration.
+
+## Read a refusal
+
+Every policy waits a grace period between a removal request and erasing the bytes, so an operator
+can still restore from a mistaken request. Set the first policy's grace period to zero in
+`my-documents/documents.yaml`:
+
+```diff lang="yaml" title="my-documents/documents.yaml" test-edit
+       # erasure of the bytes; at least one hour. Grant expiry and
+       # revocation erase nothing.
+-      cleanupGraceHours: 24
++      cleanupGraceHours: 0
+```
+
+Check the project again:
+
+```sh test-exit="1"
+documentsctl check --project my-documents
+```
+
+```text test-expect
+documentsctl check refused the input.
+error[config.out-of-range] my-documents/documents.yaml:<line>:<column> /documentPolicies/citizen-delivery/mandatoryRestrictions/cleanupGraceHours
+  the value is outside its bounds; expected a whole number of hours from 1 to 8760
+  next: Write a whole number of hours from 1 to 8760.
+1 error, 0 warnings in 1 file
+```
+
+The check names the file, the position, the key, the allowed range, and what to write, and exits
+with status 1. Put the value back:
+
+```diff lang="yaml" title="my-documents/documents.yaml" test-edit
+       # erasure of the bytes; at least one hour. Grant expiry and
+       # revocation erase nothing.
+-      cleanupGraceHours: 0
++      cleanupGraceHours: 24
+```
+
+```sh
+documentsctl check --project my-documents
+```
+
+```text test-expect
+checked: 0 errors, 0 warnings in 1 file
+```
+
+{/* Evidence: crates/registry-documents-core/src/project.rs, MandatoryRestrictions. */}
+
+## Package it
+
+A deployment runs a package, not your working directory. `package` checks the project again and
+writes it with a digest:
+
+```sh
+documentsctl package my-documents --output package
+```
+
+```text test-expect
+created: package
+package digest: sha256:<digest>
+```
+
+The operator points `package.root` in the runtime configuration at this directory and pins the
+digest as `package.expectedDigest`, so the service refuses to start on any other project.
+
+{/* Evidence: crates/registry-documentsctl/src/lib.rs, package;
+    products/documents/RUNTIME-CONFIG.md, Startup. */}
+
+## Next
+
+- [Registry Document Store overview](../../start/documents/) explains custody, verification, and
+  grants.
+- [Deploy and operate the Document Store](../../operate/documents/) applies this package to
+  PostgreSQL and starts the service.
+- [Document Store configuration reference](../../reference/documents-configuration/) lists every
+  key.

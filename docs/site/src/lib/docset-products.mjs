@@ -50,6 +50,12 @@ export const PRODUCT_PAGES = Object.freeze({
     'reference/coordinator-configuration',
     'reference/apis/registry-coordinator',
   ]),
+  'registry-documents': Object.freeze([
+    'start/documents',
+    'tutorials/first-documents',
+    'operate/documents',
+    'reference/documents-configuration',
+  ]),
 });
 
 /**

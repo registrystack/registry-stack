@@ -38,6 +38,9 @@ docsets:
       registry-coordinator:
         version: main source (unreleased)
         ref: HEAD
+      registry-documents:
+        version: main source (unreleased)
+        ref: HEAD
   - id: v0.43.0
     label: v0.43.0
     path: /v/0.43.0/
