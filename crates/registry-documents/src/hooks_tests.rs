@@ -41,6 +41,17 @@ fn observer(trigger: HookTrigger) -> HookDeclaration {
     }
 }
 
+/// `declarations`, each scoped to the one policy the test events name.
+fn scoped(declarations: impl IntoIterator<Item = HookDeclaration>) -> Vec<ScopedHook> {
+    declarations
+        .into_iter()
+        .map(|declaration| ScopedHook {
+            declaration,
+            policies: vec!["civil-record".to_owned()],
+        })
+        .collect()
+}
+
 fn version_event(trigger: HookTrigger) -> DocumentEvent {
     DocumentEvent {
         trigger,
@@ -81,8 +92,11 @@ fn full_projection(trigger: HookTrigger) -> Vec<String> {
 
 fn assert_capability_refused(mut declaration: HookDeclaration, capability: HookCapability) {
     declaration.id = "refused".to_owned();
-    let error = CompiledHooks::compile(&[observer(HookTrigger::DocumentVersionReady), declaration])
-        .expect_err("a declaration outside the url-only capabilities is refused");
+    let error = CompiledHooks::compile(&scoped([
+        observer(HookTrigger::DocumentVersionReady),
+        declaration,
+    ]))
+    .expect_err("a declaration outside the url-only capabilities is refused");
     assert_eq!(
         error,
         HookActivationError::UnsupportedCapability {
@@ -109,9 +123,49 @@ fn compile_accepts_a_url_observer_on_every_trigger() {
             ..observer(*trigger)
         })
         .collect::<Vec<_>>();
-    let compiled = CompiledHooks::compile(&declarations).expect("url observers compile");
+    let compiled = CompiledHooks::compile(&scoped(declarations)).expect("url observers compile");
     assert!(!compiled.is_empty());
     assert!(compiled.schema_fingerprint().starts_with("sha256:"));
+}
+
+#[test]
+fn compile_refuses_a_hook_scoped_to_no_policy_or_to_one_twice() {
+    for policies in [
+        vec![],
+        vec!["civil-record".to_owned(), "civil-record".to_owned()],
+        vec!["Civil Record".to_owned()],
+    ] {
+        let hook = ScopedHook {
+            declaration: observer(HookTrigger::DocumentVersionReady),
+            policies: policies.clone(),
+        };
+        assert_eq!(
+            CompiledHooks::compile(&[hook]).err(),
+            Some(HookActivationError::UnsupportedContract),
+            "{policies:?}"
+        );
+    }
+}
+
+#[test]
+fn the_compiled_fingerprint_covers_the_policy_scope_but_not_its_order() {
+    let fingerprint = |policies: &[&str]| {
+        CompiledHooks::compile(&[ScopedHook {
+            declaration: observer(HookTrigger::DocumentVersionReady),
+            policies: policies.iter().map(|policy| (*policy).to_owned()).collect(),
+        }])
+        .unwrap()
+        .schema_fingerprint()
+        .to_owned()
+    };
+    assert_ne!(
+        fingerprint(&["civil-record"]),
+        fingerprint(&["named-share"])
+    );
+    assert_eq!(
+        fingerprint(&["civil-record", "named-share"]),
+        fingerprint(&["named-share", "civil-record"])
+    );
 }
 
 #[test]
@@ -152,14 +206,14 @@ fn compile_refuses_a_wasm_handler() {
 fn compile_refuses_a_phase_other_than_after() {
     let mut declaration = observer(HookTrigger::DocumentVersionReady);
     declaration.phase = HookPhase::Before;
-    assert!(CompiledHooks::compile(&[declaration]).is_err());
+    assert!(CompiledHooks::compile(&scoped([declaration])).is_err());
 }
 
 #[test]
 fn compile_refuses_an_unknown_trigger_and_a_field_outside_its_trigger() {
     let mut unknown = observer(HookTrigger::DocumentVersionReady);
     unknown.trigger = "document.erased".to_owned();
-    assert!(CompiledHooks::compile(&[unknown]).is_err());
+    assert!(CompiledHooks::compile(&scoped([unknown])).is_err());
 
     for field in [
         "actorKind",
@@ -174,7 +228,7 @@ fn compile_refuses_an_unknown_trigger_and_a_field_outside_its_trigger() {
         let mut declaration = observer(HookTrigger::DocumentVersionRejected);
         declaration.projection.insert(field.to_owned());
         assert!(
-            CompiledHooks::compile(&[declaration]).is_err(),
+            CompiledHooks::compile(&scoped([declaration])).is_err(),
             "a version observer may not project {field}"
         );
     }
@@ -431,7 +485,7 @@ fn hook_destination_binding_digests_are_pinned() {
 fn activation_refuses_a_hook_whose_destination_is_not_bound() {
     let (_directory, secrets) = file_secrets();
     let error = ActivatedHooks::activate(
-        &[observer(HookTrigger::DocumentVersionReady)],
+        &scoped([observer(HookTrigger::DocumentVersionReady)]),
         &configured(json!({
             "other-events": {
                 "url": "https://events.example.test/documents",
@@ -452,7 +506,7 @@ fn activation_refuses_a_signing_secret_it_cannot_resolve() {
     let secrets =
         SecretResolver::new([SecretProvider::Environment], "/").expect("the test secret resolver");
     let error = ActivatedHooks::activate(
-        &[observer(HookTrigger::DocumentVersionReady)],
+        &scoped([observer(HookTrigger::DocumentVersionReady)]),
         &configured(json!({
             "owning-system-events": {
                 "url": "https://events.example.test/documents",
@@ -480,7 +534,7 @@ fn activation_refuses_an_invalid_identity_or_retention() {
     let day = Duration::from_secs(24 * 60 * 60);
     let activate = |identity: HookRuntimeIdentity, schema: &str, retention: Duration| {
         ActivatedHooks::activate(
-            &[observer(HookTrigger::DocumentVersionReady)],
+            &scoped([observer(HookTrigger::DocumentVersionReady)]),
             &destinations,
             &secrets,
             identity,
@@ -521,7 +575,7 @@ fn activation_refuses_an_invalid_identity_or_retention() {
 fn the_event_source_names_the_project() {
     let (_directory, secrets) = file_secrets();
     let activated = ActivatedHooks::activate(
-        &[observer(HookTrigger::DocumentGrantChanged)],
+        &scoped([observer(HookTrigger::DocumentGrantChanged)]),
         &configured(json!({
             "owning-system-events": {
                 "url": "https://events.example.test/documents",

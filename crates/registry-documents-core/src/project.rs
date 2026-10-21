@@ -154,6 +154,17 @@ impl DocumentsProject {
             }
         }
         for (index, hook) in self.hooks.iter().enumerate() {
+            for (position, policy) in hook.policies.as_slice().iter().enumerate() {
+                if !self.document_policies.contains_key(policy) {
+                    findings.push(document.diagnostic_at_value(
+                        Severity::Error,
+                        "documents.project.unknown-hook-policy",
+                        &format!("/hooks/{index}/policies/{position}"),
+                        "this names a document policy the project does not declare",
+                        "Name a policy declared under documentPolicies, or declare it.",
+                    ));
+                }
+            }
             let allowed = hook.trigger.fields();
             for (position, field) in hook.projection.iter().enumerate() {
                 if !allowed.contains(&field.as_str()) {
@@ -239,21 +250,25 @@ pub struct AccessProfile {
     pub institution: Option<ExternalId>,
 }
 
-/// A list of at least one distinct external identifier. An empty list is
-/// refused, because it reads as both "none" and "any" (CFG-EMPTY-2).
+/// A list of at least one distinct identifier, external unless named
+/// otherwise. An empty list is refused, because it reads as both "none" and
+/// "any" (CFG-EMPTY-2).
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ListedIds(Vec<ExternalId>);
+pub struct ListedIds<T = ExternalId>(Vec<T>);
 
-impl ListedIds {
+impl<T> ListedIds<T> {
     /// The listed identifiers, in authored order.
-    pub fn as_slice(&self) -> &[ExternalId] {
+    pub fn as_slice(&self) -> &[T] {
         &self.0
     }
 }
 
-impl<'de> Deserialize<'de> for ListedIds {
+impl<'de, T> Deserialize<'de> for ListedIds<T>
+where
+    T: Deserialize<'de> + Eq + std::hash::Hash,
+{
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let items = UniqueList::<ExternalId>::deserialize(deserializer)?.into_vec();
+        let items = UniqueList::<T>::deserialize(deserializer)?.into_vec();
         if items.is_empty() {
             return Err(Invalid::expected(
                 "a list of at least one entry",
@@ -266,17 +281,17 @@ impl<'de> Deserialize<'de> for ListedIds {
 }
 
 #[cfg(feature = "schema")]
-impl schemars::JsonSchema for ListedIds {
+impl<T: schemars::JsonSchema> schemars::JsonSchema for ListedIds<T> {
     fn inline_schema() -> bool {
         true
     }
 
     fn schema_name() -> std::borrow::Cow<'static, str> {
-        "ListedIds".into()
+        format!("ListedIds_{}", T::schema_name()).into()
     }
 
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        let mut schema = generator.subschema_for::<UniqueList<ExternalId>>();
+        let mut schema = generator.subschema_for::<UniqueList<T>>();
         schema.insert("minItems".to_owned(), 1.into());
         schema
     }
@@ -407,6 +422,11 @@ pub struct HookPolicy {
     pub id: LocalId,
     pub phase: HookPhase,
     pub trigger: HookTrigger,
+    /// The document policies whose documents the observer hears about: a
+    /// change to a document held under any other policy captures nothing
+    /// for it. Listing them is the operator's declaration of who may
+    /// receive which documents' events.
+    pub policies: ListedIds<LocalId>,
     /// The fields of the trigger's projection the observer receives.
     pub projection: UniqueList<ExternalId>,
     pub handler: HookHandler,
@@ -934,6 +954,68 @@ mod tests {
         assert!(refusal_codes(&text)
             .iter()
             .any(|code| code == "config.duplicate-id"));
+    }
+
+    /// The first hook's `policies` line in the starter, rewritten to `with`.
+    fn first_hook_policies(with: &str) -> String {
+        let written = "    policies: [citizen-delivery, institutional-custody, named-share]\n";
+        assert!(STARTER.contains(written));
+        STARTER.replacen(written, with, 1)
+    }
+
+    #[test]
+    fn a_hook_names_the_policies_whose_documents_it_hears_about() {
+        let project = DocumentsProject::decode("documents.yaml", STARTER.as_bytes())
+            .expect("the starter reads")
+            .value;
+        for hook in project.hooks.iter() {
+            let policies: Vec<&str> = hook
+                .policies
+                .as_slice()
+                .iter()
+                .map(LocalId::as_str)
+                .collect();
+            assert_eq!(
+                policies,
+                ["citizen-delivery", "institutional-custody", "named-share"]
+            );
+        }
+    }
+
+    #[test]
+    fn a_hook_without_policies_is_refused() {
+        assert!(!refusal_codes(&first_hook_policies("")).is_empty());
+    }
+
+    #[test]
+    fn an_empty_hook_policy_list_is_refused_at_its_member() {
+        let text = first_hook_policies("    policies: []\n");
+        let report = DocumentsProject::decode("documents.yaml", text.as_bytes())
+            .expect_err("an empty list is refused");
+        let paths: Vec<&str> = report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.path.as_str())
+            .collect();
+        assert_eq!(paths, ["/hooks/0/policies"]);
+    }
+
+    #[test]
+    fn a_repeated_hook_policy_is_refused() {
+        let text = first_hook_policies("    policies: [named-share, named-share]\n");
+        assert_eq!(refusal_codes(&text), ["config.duplicate-item"]);
+    }
+
+    #[test]
+    fn a_hook_policy_the_project_does_not_declare_is_refused() {
+        let text = first_hook_policies("    policies: [named-share, passport-renewal]\n");
+        assert_eq!(
+            refusals(&text),
+            [(
+                "documents.project.unknown-hook-policy".to_owned(),
+                "/hooks/0/policies/1".to_owned()
+            )]
+        );
     }
 
     #[test]
