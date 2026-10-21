@@ -133,6 +133,37 @@ Rehearse a restore before relying on one:
    erased after the backup stays gone if the bucket was not restored, and
    its restored version refuses download until it is removed again.
 
+`restore_drill` rehearses these steps once on database storage, with
+`pg_dump` and `pg_restore` on `PATH`:
+
+```bash
+DOCUMENTS_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-documents --features postgres-test --test restore_drill \
+  -- --ignored --nocapture
+```
+
+It takes a custom-format dump of its schema, then revokes a grant, removes
+and erases a document, and uploads a new one. It pauses erasure, drops the
+schema, and restores the dump while keeping the audit file, as when the
+journal is backed up apart from the database. On 2026-10-21 against
+PostgreSQL 17.10, the rehearsal found what step 4 says:
+
+- the revoked grant was active again and its recipient could download;
+- the document removed after the backup was `ready` in custody, its bytes
+  back;
+- the document uploaded after the backup was unknown (404); on database
+  storage its bytes went with its row, so nothing was left for step 5;
+- a version whose removal predated the backup stayed `erasure-pending`,
+  and a paused sweep armed nothing even after it was made due;
+- the audit file still recorded the lost revocation, removal, and erasure.
+
+Repeating the revocation and the removal from the audit file worked. The
+repeated removal was due 24 hours after the repeat, the starter policy's
+full `cleanupGraceHours`, not after the original request. After erasure was
+set back to `active` and the runtime restarted, the first sweep erased the
+due version and kept the repeated removal's bytes. Step 5 is not rehearsed:
+the rehearsal does not restore an S3 bucket.
+
 ## Crates
 
 | Crate | Owns |
@@ -206,6 +237,41 @@ returns it to pending under the next generation, to be verified like any
 other. A generation other than the current one is refused. The replay is
 written to the `documentsctl` companion audit journal. No HTTP route lists or
 replays a job.
+
+## Volume fit
+
+`products/documents/scripts/measure-volume-fit.sh COUNT BYTES` measures what
+`bytea` storage costs at a stated count and size. It creates two databases
+with libpq's environment (`PGHOST`, `PGPORT`, `PGUSER`, and `PGPASSWORD` or
+`PGPASSFILE`; no credential on the command line), fills one through the
+runtime's own routes with `COUNT` verified documents of `BYTES` pseudo-random
+bytes each, dumps it with `pg_dump --format=custom`, restores the dump into
+the other, checks that both hold the same content, prints the sizes and
+times as JSON, and drops both databases. Random bytes do not compress, which
+is close to real PDFs, whose streams are already compressed.
+
+Indicative results, 2026-10-21, PostgreSQL 17.10 in an OrbStack container on
+an Apple M5 Max (18 cores, 128 GiB) shared with many other workloads (load
+average between 6.7 and 27.5 during the runs), `pg_dump` and `pg_restore` 18.4 over
+loopback TCP:
+
+| Documents | Size | Payload | Database | Dump file | Dump | Restore |
+|---|---|---|---|---|---|---|
+| 1,000 | 1 MiB | 1.05 GB | 1.10 GB | 1.20 GB | 41.6 s | 7.8 s |
+| 10,000 | 64 KiB | 655 MB | 718 MB | 751 MB | 25.8 s | 7.1 s |
+
+The sizes do not depend on the machine. The database is the payload plus
+about 44 KB a document at 1 MiB and about 5.4 KB at 64 KiB (1.04 and 1.08
+times the payload). TOAST stores incompressible content as is. The
+custom-format dump is larger than the payload, about 1.14 times in both
+runs: `pg_dump` writes `bytea` as hex text and its compression wins back
+less than the hex encoding added. Plan backup space at more than the
+database size. Each restored database held the same content as its source, by count,
+total length, and a digest over every version's content.
+
+The times are indicative only: the machine was contended and the database
+ran in a VM. An authoritative run on a dedicated host is still owed before
+the times are quoted for sizing.
 
 ## Generated files
 
