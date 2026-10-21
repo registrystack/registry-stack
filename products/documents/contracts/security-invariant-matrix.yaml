@@ -239,13 +239,15 @@ invariants:
       A caller exhausts memory or storage by sending a body far larger than
       the length it reserved, or than the deployment ceiling.
     enforcementPoint: >-
-      The upload route has its own body limit at the deployment ceiling,
-      refuses a declared Content-Length above it or different from the
-      reserved length, and stops reading at the reserved length plus one
-      byte.
+      The upload route has no body-limit layer of its own. It refuses a
+      declared Content-Length above the deployment ceiling or different from
+      the reserved length before reading the body, and reads any body only up
+      to the reserved length plus one byte, a length reservation already
+      bounds by the policy maximum.
     refusal: >-
-      Answer 413 request.body-too-large or 422 upload.length-mismatch and keep
-      nothing.
+      Answer 413 request.body-too-large for a declared length above the
+      ceiling, or 422 upload.length-mismatch for any other length difference,
+      and keep nothing.
     negativeTest:
       path: crates/registry-documents/tests/postgres_documents.rs
       name: a_body_over_the_reserved_length_is_cut_off_and_keeps_nothing
@@ -274,24 +276,30 @@ invariants:
       from a verifier the deployment no longer uses, or a job that gave up.
     enforcementPoint: >-
       Release requires the approved state with a verdict recorded against the
-      version's computed digest, its media type, and the current verifier
-      binding digest; an unavailable verifier schedules a retry, and a
+      version's computed digest, its media type, and the verifier binding
+      digest the version is currently recorded under, and the database refuses
+      a releasable row whose verdict differs in any of the three; an
+      unavailable verifier schedules a retry, a verdict that matches no row
+      under the current binding is retried rather than delivered, and a
       dead-lettered job records no verdict.
     refusal: >-
       Answer 409 document-version.not-releasable; a dead-lettered job leaves
       the version pending and suspended, never approved or rejected.
     negativeTest:
       path: crates/registry-documents/tests/postgres_documents.rs
-      name: an_unavailable_verifier_never_releases_and_a_dead_letter_neither_approves_nor_rejects
+      name: the_database_refuses_a_releasable_version_under_a_stale_or_mismatched_verdict
   - id: DOCUMENTS-SEC-18
     state: enforced
     threat: >-
       An operator replaces the content verifier and versions approved under
       the old one keep being released without the new verifier's verdict.
     enforcementPoint: >-
-      At startup, every finalized version verified or queued under another
-      binding digest is suspended and re-enqueued under the current binding;
-      a job keyed to a superseded binding is dead-lettered without a verdict.
+      At startup, every finalized version not rejected and recorded under
+      another binding digest is suspended and re-enqueued under the current
+      binding, and its pending job under the old binding is cancelled; a
+      rejected version stays rejected. A job already leased under a
+      superseded binding ends without a verdict, and a worker under another
+      binding retries a current job rather than ending it.
     refusal: >-
       Answer 409 document-version.not-releasable until the current verifier
       approves the version again.

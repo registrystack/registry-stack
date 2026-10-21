@@ -34,3 +34,9 @@ The Document Store is held out of releases.
 - Audit entries for reservation, upload, verification, and download.
 - The served runtime still answers only `GET /health`: the document routes
   are compiled only into test builds until authentication lands.
+- Verification under mixed verifier bindings: a worker under another binding
+  retries a job rather than ending it, a restart cancels the jobs it
+  supersedes, a verdict that records nothing is retried, and the database
+  refuses a releasable version whose verdict binding is not its current one.
+  S3 storage is activated once at startup, and an empty reservation is
+  refused as `request.unprocessable`.

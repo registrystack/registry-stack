@@ -57,8 +57,11 @@ CREATE TABLE IF NOT EXISTS documents_versions (
     verified_digest text,
     verified_media_type text,
     verified_at timestamptz,
+    -- A CHECK passes when its expression is NULL, so every equality on a
+    -- nullable column in the shape checks below carries its own IS NOT NULL.
     CONSTRAINT documents_versions_finalized_shape CHECK (
         (upload_state = 'finalized'
+            AND computed_digest IS NOT NULL
             AND computed_digest = expected_digest
             AND finalized_at IS NOT NULL
             AND storage_backend IS NOT NULL
@@ -76,7 +79,12 @@ CREATE TABLE IF NOT EXISTS documents_versions (
         eligibility = 'suspended'
         OR (verification_state = 'approved'
             AND verified_binding_digest IS NOT NULL
+            AND verification_binding_digest IS NOT NULL
+            AND verified_binding_digest = verification_binding_digest
+            AND verified_digest IS NOT NULL
+            AND computed_digest IS NOT NULL
             AND verified_digest = computed_digest
+            AND verified_media_type IS NOT NULL
             AND verified_media_type = media_type
             AND verified_at IS NOT NULL)
     ),

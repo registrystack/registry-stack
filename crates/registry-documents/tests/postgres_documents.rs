@@ -7,13 +7,22 @@
 
 mod support;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
+use registry_documents::audit::DocumentsAudit;
+use registry_documents::config::RuntimeConfig;
+use registry_documents::content::ContentStorage;
 use registry_documents::runtime::{prepare_with_verifier, Prepared, RuntimeError};
-use registry_documents::verification::MAXIMUM_ATTEMPTS;
+use registry_documents::store::PostgresStore;
+use registry_documents::verification::{
+    dispatcher, VerdictSource, VerificationStore, VerificationTransport, MAXIMUM_ATTEMPTS,
+};
 use registry_documents_core::ProblemCode;
+use registry_platform_audit::{AuditProfile, AuditWriter};
+use registry_platform_dispatch::DispatchError;
+use registry_platform_objectstore::{Verdict, VerifierError};
 use support::{
     pdf, reservation, sha256, Api, Deployment, FakeVerifier, APPROVE, DATABASE_STORAGE,
     DISABLED_VERIFIER, REJECT, STARTER_PROJECT, UNAVAILABLE,
@@ -314,6 +323,9 @@ async fn a_document_above_the_policy_size_is_refused_before_any_byte_moves() {
     api.reserve_declared(APP, "no-such-policy", CITIZEN, &digest, 10, PDF)
         .await
         .assert_problem(ProblemCode::DocumentPolicyUnknown);
+    api.reserve_declared(APP, "citizen-delivery", CITIZEN, &digest, 0, PDF)
+        .await
+        .assert_problem(ProblemCode::RequestUnprocessable);
     let reserved: i64 = deployment
         .scalar("SELECT count(*) FROM documents_versions")
         .await;
@@ -602,13 +614,16 @@ async fn a_verifier_binding_change_at_restart_suspends_and_verifies_again() {
     let jobs: i64 = deployment
         .scalar("SELECT count(*) FROM documents_verification_jobs WHERE state = 'pending'")
         .await;
+    assert_eq!(jobs, 2, "one job per version under the new binding");
+    let cancelled: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_verification_jobs WHERE state = 'cancelled'")
+        .await;
     assert_eq!(
-        jobs, 3,
-        "one job per version under the new binding, plus the stale one"
+        cancelled, 1,
+        "the stale job under the old binding is cancelled"
     );
 
-    // The stale job under the old binding is dead-lettered without a
-    // verdict; the new binding's verdict is the one recorded.
+    // The new binding's verdict is the one recorded.
     deployment
         .execute(
             "UPDATE documents_verification_jobs SET next_attempt_at = now()
@@ -617,10 +632,10 @@ async fn a_verifier_binding_change_at_restart_suspends_and_verifies_again() {
         .await;
     second.answer(APPROVE);
     restarted.verify_due().await;
-    let superseded: i64 = deployment
+    let dead_lettered: i64 = deployment
         .scalar("SELECT count(*) FROM documents_verification_jobs WHERE state = 'dead-lettered'")
         .await;
-    assert_eq!(superseded, 1);
+    assert_eq!(dead_lettered, 0);
     assert_eq!(status(&api.read(APP, &ready).await), "ready");
     assert_eq!(status(&api.read(APP, &waiting).await), "ready");
     assert_eq!(second.calls.load(Ordering::SeqCst), 2);
@@ -631,6 +646,336 @@ async fn a_verifier_binding_change_at_restart_suspends_and_verifies_again() {
         .await;
     assert_eq!(binding, "binding-b");
     assert_eq!(api.download(APP, &ready, &ready_version).await.status, 200);
+}
+
+/// SEC-18: while two instances run under different verifier bindings, a
+/// job is never dead-lettered only because the worker that claimed it holds
+/// the other binding. It stays pending for a worker under the version's own
+/// binding, and the stale job a restart supersedes is cancelled.
+#[tokio::test]
+async fn a_worker_under_another_binding_leaves_the_job_pending_for_its_own() {
+    let deployment = deployment().await;
+    let old = FakeVerifier::new("binding-a", APPROVE);
+    let (old_instance, old_api) = start(&deployment, &old).await;
+    let (swept, _) = upload(&old_api, &pdf(300, 31)).await;
+
+    // A second instance starts under a new binding while the first runs,
+    // writing its own audit journal.
+    let audit = deployment.audit_path();
+    let second_runtime = deployment.directory.path().join("runtime-second.yaml");
+    std::fs::write(
+        &second_runtime,
+        std::fs::read_to_string(&deployment.runtime)
+            .unwrap()
+            .replace(
+                &audit.display().to_string(),
+                &audit.with_extension("second.ndjson").display().to_string(),
+            ),
+    )
+    .unwrap();
+    let new = FakeVerifier::new("binding-b", APPROVE);
+    let new_instance = prepare_with_verifier(&second_runtime, new.clone())
+        .await
+        .expect("the second instance prepares");
+    let new_api = Api::new(&new_instance);
+    let states: Vec<String> = deployment
+        .admin
+        .query(
+            &format!(
+                "SELECT state FROM {}.documents_verification_jobs ORDER BY state",
+                deployment.schema
+            ),
+            &[],
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(states, ["cancelled", "pending"]);
+
+    // The old instance finalizes a version under its own binding.
+    let (late, late_version) = upload(&old_api, &pdf(300, 32)).await;
+    let due = "UPDATE documents_verification_jobs SET next_attempt_at = now()
+                WHERE state = 'pending'";
+
+    // The new instance claims both jobs; only the one under its binding is
+    // verified, and the other is retried rather than dead-lettered.
+    deployment.execute(due).await;
+    new_instance.verify_due().await;
+    assert_eq!(new.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(status(&new_api.read(APP, &swept).await), "ready");
+    assert_eq!(status(&new_api.read(APP, &late).await), "pending");
+    let late_job: String = deployment
+        .scalar(&format!(
+            "SELECT state FROM documents_verification_jobs WHERE version_id = '{late_version}'"
+        ))
+        .await;
+    assert_eq!(late_job, "pending");
+    let dead_lettered: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_verification_jobs WHERE state = 'dead-lettered'")
+        .await;
+    assert_eq!(dead_lettered, 0);
+
+    // A worker under the version's own binding verifies it.
+    deployment.execute(due).await;
+    old_instance.verify_due().await;
+    assert_eq!(old.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(status(&old_api.read(APP, &late).await), "ready");
+}
+
+/// A verifier that approves, and while it answers changes the version's
+/// recorded media type once, as a concurrent writer would.
+struct TamperingVerifier {
+    client: tokio_postgres::Client,
+    schema: String,
+    tampered: AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl VerdictSource for TamperingVerifier {
+    fn binding_digest(&self) -> &str {
+        "binding-a"
+    }
+
+    async fn verdict(&self, _: &str, _: &str, _: Vec<u8>) -> Result<Verdict, VerifierError> {
+        if !self.tampered.swap(true, Ordering::SeqCst) {
+            self.client
+                .batch_execute(&format!(
+                    "UPDATE {}.documents_versions SET media_type = 'image/png'",
+                    self.schema
+                ))
+                .await
+                .expect("the version is changed under the verifier");
+        }
+        Ok(Verdict::Approved)
+    }
+}
+
+/// A verdict that records nothing while the version is still under the
+/// verifier's binding is not taken as delivered: the attempt is not
+/// committed, and the job is retried once its lease lapses.
+#[tokio::test]
+async fn a_verdict_that_records_nothing_under_the_current_binding_is_retried() {
+    let deployment = deployment().await;
+    let (client, connection) =
+        tokio_postgres::connect(&support::database_url(), tokio_postgres::NoTls)
+            .await
+            .unwrap();
+    tokio::spawn(async move { connection.await.expect("the tampering connection") });
+    let verifier = Arc::new(TamperingVerifier {
+        client,
+        schema: deployment.schema.clone(),
+        tampered: AtomicBool::new(false),
+    });
+    let prepared = prepare_with_verifier(&deployment.runtime, verifier)
+        .await
+        .expect("the runtime prepares");
+    let api = Api::new(&prepared);
+    let (document, _) = upload(&api, &pdf(300, 33)).await;
+
+    prepared.verify_due().await;
+    let job: String = deployment
+        .scalar("SELECT state FROM documents_verification_jobs")
+        .await;
+    assert_eq!(job, "leased", "the attempt is not committed");
+    assert_eq!(status(&api.read(APP, &document).await), "pending");
+
+    // Once the version matches again and the lease lapses, the job is
+    // verified.
+    deployment
+        .execute(
+            "UPDATE documents_versions SET media_type = 'application/pdf';
+             UPDATE documents_verification_jobs
+                SET attempt_started_at = now() - interval '2 hours',
+                    lease_expires_at = now() - interval '1 hour'",
+        )
+        .await;
+    prepared.verify_due().await;
+    deployment
+        .execute(
+            "UPDATE documents_verification_jobs SET next_attempt_at = now()
+              WHERE state = 'pending'",
+        )
+        .await;
+    prepared.verify_due().await;
+    assert_eq!(status(&api.read(APP, &document).await), "ready");
+}
+
+/// An audit sink that refuses every line.
+struct FailingSink;
+
+impl std::io::Write for FailingSink {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("the audit sink refuses"))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(std::io::Error::other("the audit sink refuses"))
+    }
+}
+
+/// A verification attempt whose audit entry cannot be written is
+/// refused before the verifier is asked, and records no verdict.
+#[tokio::test]
+async fn a_verification_audit_failure_refuses_the_claim_and_records_no_verdict() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    let (document, _) = upload(&api, &pdf(300, 34)).await;
+
+    let config = RuntimeConfig::load(&deployment.runtime).unwrap();
+    let secrets = Arc::new(config.secret_resolver().unwrap());
+    let store = PostgresStore::connect_runtime(&config.database, &secrets).unwrap();
+    let audit = DocumentsAudit::new(
+        AuditWriter::from_line_sink(Box::new(FailingSink)),
+        AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+            b"documents-test-audit-key-not-a-secret".to_vec(),
+        ))
+        .unwrap()
+        .key_hasher(),
+    );
+    let storage = Arc::new(
+        ContentStorage::activate(&config.storage, "registry-documents-test", secrets)
+            .await
+            .unwrap(),
+    );
+    let failing = dispatcher(VerificationStore::new(
+        store.clone(),
+        deployment.schema.clone(),
+        audit,
+    ))
+    .unwrap();
+    let transport = VerificationTransport::new(store, storage, verifier.clone());
+
+    let outcome = failing.dispatch_once(&transport).await;
+    assert!(
+        matches!(outcome, Err(DispatchError::Unavailable)),
+        "{outcome:?}"
+    );
+    assert_eq!(verifier.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(status(&api.read(APP, &document).await), "pending");
+    let verdicts: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_versions WHERE verified_at IS NOT NULL")
+        .await;
+    assert_eq!(verdicts, 0);
+    let job: String = deployment
+        .scalar("SELECT state || ':' || attempt FROM documents_verification_jobs")
+        .await;
+    assert_eq!(job, "pending:0", "the claim is not committed");
+}
+
+/// SEC-17 and SEC-18: the database refuses a releasable version whose
+/// verdict is not bound to its digest, its media type, and the verifier
+/// binding it is currently recorded under, whichever writer tries it.
+#[tokio::test]
+async fn the_database_refuses_a_releasable_version_under_a_stale_or_mismatched_verdict() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, version) = upload(&api, &pdf(300, 35)).await;
+    prepared.verify_due().await;
+    assert_eq!(status(&api.read(APP, &document).await), "ready");
+
+    for change in [
+        "verification_binding_digest = 'binding-b'",
+        "verified_digest = 'sha256:' || repeat('0', 64)",
+        "verified_media_type = 'image/png'",
+    ] {
+        let error = deployment
+            .admin
+            .batch_execute(&format!(
+                "UPDATE {}.documents_versions SET {change} WHERE version_id = '{version}'",
+                deployment.schema
+            ))
+            .await
+            .expect_err(change);
+        let constraint = error
+            .as_db_error()
+            .and_then(|error| error.constraint())
+            .map(str::to_owned);
+        assert_eq!(
+            constraint.as_deref(),
+            Some("documents_versions_release_shape"),
+            "{change}: {error}"
+        );
+    }
+    assert_eq!(api.download(APP, &document, &version).await.status, 200);
+}
+
+#[tokio::test]
+async fn the_database_refuses_a_releasable_version_with_a_null_verdict_column() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, version) = upload(&api, &pdf(300, 36)).await;
+    prepared.verify_due().await;
+    assert_eq!(status(&api.read(APP, &document).await), "ready");
+
+    // Each write runs in its own rolled-back transaction, so every variant is
+    // tried against the same releasable row.
+    let mut accepted = Vec::new();
+    for column in [
+        "verified_binding_digest",
+        "verified_digest",
+        "verified_media_type",
+    ] {
+        let outcome = deployment
+            .admin
+            .batch_execute(&format!(
+                "BEGIN; UPDATE {}.documents_versions SET {column} = NULL \
+                 WHERE version_id = '{version}'; ROLLBACK",
+                deployment.schema
+            ))
+            .await;
+        match outcome {
+            Ok(()) => accepted.push(column),
+            Err(error) => {
+                deployment
+                    .admin
+                    .batch_execute("ROLLBACK")
+                    .await
+                    .expect("rolls back the refused write");
+                let constraint = error
+                    .as_db_error()
+                    .and_then(|error| error.constraint())
+                    .map(str::to_owned);
+                assert_eq!(
+                    constraint.as_deref(),
+                    Some("documents_versions_release_shape"),
+                    "{column}: {error}"
+                );
+            }
+        }
+    }
+    assert!(accepted.is_empty(), "accepted NULL in {accepted:?}");
+    assert_eq!(api.download(APP, &document, &version).await.status, 200);
+}
+
+#[tokio::test]
+async fn the_database_refuses_a_finalized_version_without_a_computed_digest() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    let (_, version) = upload(&api, &pdf(300, 37)).await;
+
+    let error = deployment
+        .admin
+        .batch_execute(&format!(
+            "UPDATE {}.documents_versions SET computed_digest = NULL WHERE version_id = '{version}'",
+            deployment.schema
+        ))
+        .await
+        .expect_err("a finalized version without a computed digest");
+    let constraint = error
+        .as_db_error()
+        .and_then(|error| error.constraint())
+        .map(str::to_owned);
+    assert_eq!(
+        constraint.as_deref(),
+        Some("documents_versions_finalized_shape"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
