@@ -21,7 +21,7 @@ use registry_platform_hooks::delivery::DeliveryOutcome;
 use serde_json::{json, Value};
 use support::{
     pdf, reservation, Api, Deployment, FakeVerifier, APP, APPROVE, CITIZEN, DATABASE_STORAGE,
-    DISABLED_VERIFIER, READER, REJECT, STARTER_PROJECT,
+    DISABLED_VERIFIER, READER, REJECT, STARTER_PROJECT, UNREACHABLE_HOOKS_URL,
 };
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -842,6 +842,49 @@ async fn startup_refuses_a_project_hook_whose_destination_is_not_bound() {
         .await
         .expect_err("an unbound hook destination refuses startup");
     assert!(error.to_string().contains("destinations.hooks"), "{error}");
+}
+
+#[tokio::test]
+async fn a_destination_changed_under_a_pending_delivery_refuses_startup_until_it_drains() {
+    let mut deployment = deployment(STARTER_PROJECT).await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    upload(&api, 10).await;
+    assert_eq!(prepared.verify_due().await, 1);
+    assert_eq!(delivery_count(&deployment).await, 1);
+    drop((prepared, api));
+
+    // Changing the URL in place while the delivery is pending is refused.
+    deployment.bind_hooks("https://moved.example.test/document-events");
+    let error = prepare_with_verifier(&deployment.runtime, verifier.clone())
+        .await
+        .expect_err("a pending delivery pins its destination binding");
+    assert!(
+        error.to_string().contains("retained hook delivery"),
+        "{error}"
+    );
+
+    // Restored, the pending delivery runs out its attempts.
+    deployment.bind_hooks(UNREACHABLE_HOOKS_URL);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    assert_eq!(
+        prepared.deliver_hooks_once().await.unwrap(),
+        DeliveryOutcome::RetryScheduled
+    );
+    deployment
+        .execute("UPDATE registry_webhook_delivery_state SET next_attempt_at = now()")
+        .await;
+    assert_eq!(
+        prepared.deliver_hooks_once().await.unwrap(),
+        DeliveryOutcome::DeadLettered
+    );
+    drop((prepared, api));
+
+    // Once it has drained, the same change starts.
+    deployment.bind_hooks("https://moved.example.test/document-events");
+    prepare_with_verifier(&deployment.runtime, verifier)
+        .await
+        .expect("no retained delivery needs the old binding");
 }
 
 #[tokio::test]
