@@ -72,6 +72,11 @@
       ],
       "type": "string"
     },
+    "ContentType": {
+      "description": "A lowercase concrete media type `type/subtype` without parameters or wildcards, matched exactly.",
+      "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
+      "type": "string"
+    },
     "DisplayText": {
       "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
       "not": {
@@ -226,9 +231,12 @@
       "description": "The restrictions every document held under a policy carries.",
       "properties": {
         "allowedContentTypes": {
+          "description": "The media types a document may be declared as, matched exactly.",
           "items": {
-            "$ref": "#/$defs/ExternalId"
+            "$ref": "#/$defs/ContentType"
           },
+          "maxItems": 16,
+          "minItems": 1,
           "type": "array",
           "uniqueItems": true
         },
@@ -245,7 +253,15 @@
           "minimum": 1,
           "type": "integer"
         },
+        "maximumCustodianBytes": {
+          "description": "The bytes one custodian may hold under this policy, counted over\nevery reserved or stored version not yet erased and checked at\nreservation.",
+          "format": "uint64",
+          "maximum": 1099511627776,
+          "minimum": 1,
+          "type": "integer"
+        },
         "maximumDocumentBytes": {
+          "description": "The largest document a reservation may declare. It may not exceed\nthe deployment ceiling `storage.maximumDocumentBytes`; the runtime\nrefuses to start otherwise.",
           "format": "uint64",
           "maximum": 1073741824,
           "minimum": 1,
@@ -260,6 +276,7 @@
       },
       "required": [
         "maximumDocumentBytes",
+        "maximumCustodianBytes",
         "allowedContentTypes",
         "grantExpiryHours",
         "maximumGrantExpiryHours",

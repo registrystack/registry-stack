@@ -58,6 +58,8 @@ documentPolicies:
     recipientProfiles: [reader]
     mandatoryRestrictions:
       maximumDocumentBytes: 16777216
+      # Bytes one custodian may hold under this policy, reserved or stored.
+      maximumCustodianBytes: 1073741824
       allowedContentTypes: [application/pdf]
       grantExpiryHours: 24
       maximumGrantExpiryHours: 24
@@ -76,6 +78,7 @@ documentPolicies:
     recipientProfiles: [staff]
     mandatoryRestrictions:
       maximumDocumentBytes: 16777216
+      maximumCustodianBytes: 107374182400
       allowedContentTypes: [application/pdf, image/jpeg, image/png]
       grantExpiryHours: 24
       maximumGrantExpiryHours: 168
@@ -90,6 +93,7 @@ documentPolicies:
     recipientProfiles: [reader, staff]
     mandatoryRestrictions:
       maximumDocumentBytes: 10485760
+      maximumCustodianBytes: 268435456
       allowedContentTypes: [application/pdf, image/jpeg, image/png]
       grantExpiryHours: 24
       maximumGrantExpiryHours: 168
