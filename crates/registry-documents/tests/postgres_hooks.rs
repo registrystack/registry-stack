@@ -602,6 +602,68 @@ async fn a_rolled_back_transition_captures_nothing() {
     allow_commits_on(&deployment, "documents_grants").await;
 }
 
+/// A capture that cannot commit takes its transition down with it: the
+/// refusal is raised by the delivery row itself, after the transition's
+/// own writes succeeded, and each transition is found as it was before.
+#[tokio::test]
+async fn a_capture_that_cannot_commit_rolls_its_transition_back() {
+    const DELIVERIES: &str = "registry_webhook_deliveries";
+    let deployment = deployment(STARTER_PROJECT).await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, version) = upload(&api, 15).await;
+
+    fail_commits_on(&deployment, DELIVERIES).await;
+    prepared.verify_due().await;
+    allow_commits_on(&deployment, DELIVERIES).await;
+    let state: String = deployment
+        .scalar("SELECT verification_state FROM documents_versions")
+        .await;
+    assert_eq!(state, "pending", "the verdict rolled back with its capture");
+    assert_eq!(delivery_count(&deployment).await, 0);
+    deployment
+        .execute(
+            "UPDATE documents_verification_jobs
+                SET state = 'pending', next_attempt_at = now(), attempt_started_at = NULL,
+                    lease_expires_at = NULL, lease_token = NULL",
+        )
+        .await;
+    prepared.verify_due().await;
+    assert_eq!(delivery_count(&deployment).await, 1);
+
+    fail_commits_on(&deployment, DELIVERIES).await;
+    let refused = api
+        .grant(APP, &document, &version, READER.subject, None)
+        .await;
+    allow_commits_on(&deployment, DELIVERIES).await;
+    assert_eq!(refused.status, 503);
+    let grants: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_grants")
+        .await;
+    assert_eq!(grants, 0, "the issue rolled back with its capture");
+
+    let issued = api
+        .grant(APP, &document, &version, READER.subject, None)
+        .await;
+    assert_eq!(issued.status, 201);
+    let grant = issued.json()["id"].as_str().unwrap().to_owned();
+    fail_commits_on(&deployment, DELIVERIES).await;
+    let refused = api.revoke(APP, &grant).await;
+    let removal = api.erase(CITIZEN, &document).await;
+    allow_commits_on(&deployment, DELIVERIES).await;
+    assert_eq!(refused.status, 503);
+    assert_eq!(removal.status, 503);
+    let active: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_grants WHERE revoked_at IS NULL")
+        .await;
+    assert_eq!(active, 1, "the revocation and the removal rolled back");
+    let removed: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_documents WHERE removal_requested_at IS NOT NULL")
+        .await;
+    assert_eq!(removed, 0);
+    assert_eq!(delivery_count(&deployment).await, 2);
+}
+
 #[tokio::test]
 async fn delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal() {
     let receiver = MockServer::start().await;
