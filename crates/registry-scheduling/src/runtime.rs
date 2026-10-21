@@ -208,6 +208,8 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         &config.destinations.hooks,
         &secrets,
         HookRuntimeIdentity {
+            database_id: config.database_id().to_owned(),
+            package_digest: package_digest.clone(),
             scheduling_id: scheduling_id.clone(),
             policy_revision,
             policy_digest: policy_digest.clone(),
