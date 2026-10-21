@@ -658,6 +658,8 @@ async fn successor_activation_checks_retained_hook_bindings_on_the_version_100_b
         &config.destinations.hooks,
         &resolver,
         HookRuntimeIdentity {
+            database_id: config.database_id().to_owned(),
+            package_digest: loaded.package_digest.clone(),
             scheduling_id: loaded.policy.project.id.to_string(),
             policy_revision,
             policy_digest,

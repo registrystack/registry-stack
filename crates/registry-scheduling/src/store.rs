@@ -64,11 +64,11 @@ use crate::hooks::{ActivatedHooks, HookCaptureError};
 
 mod activation;
 mod attempt_key;
-use activation::{apply_migrations_in, check_active_package_in, schema_state_in};
 pub use activation::{
-    policy_pool_ids, Activation, ActivationOutcome, ActivationPlan, ActivationRequest,
-    ActivePackage, DeployedPolicy, RoleMode, SchemaState, SINGLE_ROLE_STATEMENT,
+    activation_layout, policy_pool_ids, Activation, ActivationOutcome, ActivationPlan,
+    ActivationRequest, ActivePackage, DeployedPolicy, RoleMode, SchemaState, SINGLE_ROLE_STATEMENT,
 };
+use activation::{apply_migrations_in, check_active_package_in, schema_state_in};
 pub use attempt_key::attempt_key_reference;
 
 const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0100_scheduling.sql");

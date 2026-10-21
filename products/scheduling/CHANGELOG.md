@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- BREAKING: the hook delivery worker checks its identity against the
+  activation record instead of the `scheduling_meta` row. Every claim,
+  finalization, and replay transaction now requires the active activation in
+  `scheduling_activations` to name the database and package the worker was
+  started with; a worker left running after a later activation stops
+  delivering instead of serving the superseded package. Migration: none for a
+  deployment activated with `schedulingctl apply`, which records the
+  activation the runtime starts from; restart the runtime after each apply, as
+  before.
+- The URL hook destination, signing, pooled connection, audit mapping, and
+  retry schedule come from `registry-platform-hooks`, and the runtime
+  re-checks every hook declaration against the url-only hook capability set,
+  refusing anything else with `hook.capability.unsupported`. The policy shape,
+  the `destinations.hooks` keys, the audit schema and the
+  `scheduling.hook-delivery` event, the envelope, and the delivery refusals
+  are unchanged.
+
 ## 0.43.0 - 2026-10-21
 
 - BREAKING: authored display fields reject prohibited Unicode controls, and
