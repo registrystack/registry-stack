@@ -7,7 +7,7 @@ python3 "$script_dir/validate_product.py"
 python3 "$script_dir/check_source_neutrality.py"
 "$script_dir/check-generated.sh"
 "$script_dir/check-tool-schemas.sh"
-cargo test --locked -p registry-breg --features schema --test native_source_conventions --test refactor_contract
+cargo test --locked -p registry-breg --features schema --test native_source_conventions --test refactor_contract --test access_log
 cargo test --locked -p registry-bregctl --test explain_contract
 cargo test --locked -p registry-bregctl --test refactor_cli_contract
 python3 -m unittest \
