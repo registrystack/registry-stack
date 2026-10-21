@@ -554,6 +554,9 @@ pub struct CleanupPass {
     pub armed_erasures: u64,
     /// Orphaned objects erased.
     pub erased_orphans: u64,
+    /// Orphaned objects whose erasure was not confirmed; the next pass
+    /// retries them.
+    pub failed_orphans: u64,
 }
 
 /// One cleanup pass. Uploads past their deadline are expired whatever the
@@ -572,7 +575,9 @@ pub async fn cleanup_once(
     };
     if erasure == Erasure::Active {
         pass.armed_erasures = arm_due_erasures(store).await?;
-        pass.erased_orphans = erase_orphans(store, storage, audit, orphan_age).await?;
+        let orphans = erase_orphans(store, storage, audit, orphan_age).await?;
+        pass.erased_orphans = orphans.erased;
+        pass.failed_orphans = orphans.failed;
     }
     Ok(pass)
 }
@@ -657,21 +662,32 @@ async fn arm_due_erasures(store: &PostgresStore) -> Result<u64, CleanupError> {
     Ok(armed)
 }
 
+/// What one orphan sweep did.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Orphans {
+    erased: u64,
+    failed: u64,
+}
+
 /// Erase objects an unfinished upload left uncommitted once they are older
 /// than `orphan_age`. Each object's row is locked for the length of its
 /// erasure, so a late commit of the same object waits and then finds no
-/// row, and the row is deleted only once the object is confirmed gone.
+/// row, and the row is deleted only once the object is confirmed gone. An
+/// object whose erasure is not confirmed is skipped for the rest of the
+/// pass, so it cannot hold back the objects staged after it; the failures
+/// are logged once, at the end of the pass, and the next pass retries them.
 async fn erase_orphans(
     store: &PostgresStore,
     storage: &ContentStorage,
     audit: &DocumentsAudit,
     orphan_age: Duration,
-) -> Result<u64, CleanupError> {
+) -> Result<Orphans, CleanupError> {
     if matches!(storage, ContentStorage::Database { .. }) {
-        return Ok(0);
+        return Ok(Orphans::default());
     }
     let age = i64::try_from(orphan_age.as_secs()).unwrap_or(i64::MAX);
     let mut erased = 0;
+    let mut failed: Vec<Uuid> = Vec::new();
     for _ in 0..ORPHAN_BATCH {
         let mut client = store.client().await?;
         let transaction = client.transaction().await?;
@@ -682,9 +698,10 @@ async fn erase_orphans(
                    FROM documents_staged_objects
                   WHERE NOT committed
                     AND staged_at <= transaction_timestamp() - make_interval(secs => $1::bigint)
+                    AND NOT (object_id = ANY($2))
                   ORDER BY staged_at
                   LIMIT 1 FOR UPDATE SKIP LOCKED",
-                &[&age],
+                &[&age, &failed],
             )
             .await?
         else {
@@ -704,14 +721,15 @@ async fn erase_orphans(
             .await
             .map_err(|_| CleanupError::Audit)?;
         if let Err(error) = delete_object(storage, object_id, &binding, &sha256).await {
-            tracing::warn!(object = %object_id, error = %error, "an orphaned object was not confirmed erased; the next pass retries it");
+            tracing::debug!(object = %object_id, error = %error, "an orphaned object was not confirmed erased");
             let mut refused = record;
             refused["outcome"] = json!("refused");
             request
                 .finish(refused)
                 .await
                 .map_err(|_| CleanupError::Audit)?;
-            return Err(error);
+            failed.push(object_id);
+            continue;
         }
         transaction
             .execute(
@@ -728,7 +746,16 @@ async fn erase_orphans(
             .map_err(|_| CleanupError::Audit)?;
         erased += 1;
     }
-    Ok(erased)
+    if !failed.is_empty() {
+        tracing::warn!(
+            failed = failed.len(),
+            "orphaned objects were not confirmed erased; the next pass retries them"
+        );
+    }
+    Ok(Orphans {
+        erased,
+        failed: failed.len() as u64,
+    })
 }
 
 /// What an operator sees of erasure: the setting, and how many versions

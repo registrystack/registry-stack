@@ -213,6 +213,8 @@ entries:
   - id: DOCUMENTS-SEC-44
     tests:
       - {path: crates/registry-documents/tests/postgres_s3.rs, name: the_orphan_sweep_erases_only_old_uncommitted_objects}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: a_commit_after_the_orphan_sweep_is_refused}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_orphan_whose_delete_fails_does_not_hold_back_the_others}
   - id: DOCUMENTS-SEC-45
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_upload_to_a_removed_document_is_refused}

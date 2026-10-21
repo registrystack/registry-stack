@@ -736,9 +736,13 @@ invariants:
     enforcementPoint: >-
       The sweep reads only uncommitted staged rows older than the longest
       transfer deadline plus ten minutes, locks each row while it deletes
-      the object, and deletes the row only after the delete is confirmed.
+      the object, and deletes the row only after the delete is confirmed;
+      a commit that arrives after the row is deleted finds none and is
+      refused. An object whose delete fails is skipped for the rest of the
+      pass, so it holds back no other.
     refusal: >-
-      Leave a younger or committed object and its row in place.
+      Leave a younger or committed object and its row in place, and refuse
+      a commit whose staged row the sweep deleted.
     negativeTest:
       path: crates/registry-documents/tests/postgres_s3.rs
       name: the_orphan_sweep_erases_only_old_uncommitted_objects

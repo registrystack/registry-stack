@@ -46,6 +46,16 @@ struct Objects {
     mode: AtomicUsize,
     verifier_mode: AtomicUsize,
     verified: tokio::sync::Mutex<Vec<(String, Vec<u8>)>>,
+    /// The key scope whose deletes fail whatever the mode.
+    stuck: std::sync::Mutex<Option<String>>,
+}
+
+/// The key scope of `object_id` under the test deployment's database id.
+fn scope_of(object_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(
+        format!("registry-documents-test/{object_id}").as_bytes(),
+    ))
 }
 
 async fn object_request(
@@ -104,6 +114,16 @@ async fn object_request(
             StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
         Method::DELETE if mode == DELETE_FAILS => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Method::DELETE
+            if state
+                .stuck
+                .lock()
+                .unwrap()
+                .as_deref()
+                .is_some_and(|scope| path.contains(scope)) =>
+        {
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
         // A delete the store acknowledges without removing anything.
         Method::DELETE if mode == DELETE_KEEPS => StatusCode::NO_CONTENT.into_response(),
         Method::DELETE => {
@@ -525,11 +545,21 @@ async fn an_s3_erasure_interrupted_after_the_delete_resumes_once() {
 
 /// An object an unfinished upload left behind is erased by the orphan
 /// sweep once it is older than the longest transfer, and its staged row
-/// goes with it; a younger one is left for a write still in flight.
+/// goes with it; a younger one is left for a write still in flight, and a
+/// committed one, however old, is left to erasure. A commit racing the
+/// sweep is `a_commit_after_the_orphan_sweep_is_refused`.
 #[tokio::test]
 async fn the_orphan_sweep_erases_only_old_uncommitted_objects() {
     let fixture = Fixture::new().await;
     let (prepared, api) = fixture.start().await;
+    upload(&api, &pdf(400, 88)).await;
+    fixture
+        .deployment
+        .execute(
+            "UPDATE documents_staged_objects SET staged_at = now() - interval '1 day'
+              WHERE committed",
+        )
+        .await;
     let content = pdf(400, 83);
     let (_, _, path) = reservation(
         &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &content, PDF)
@@ -542,12 +572,12 @@ async fn the_orphan_sweep_erases_only_old_uncommitted_objects() {
             .assert_problem(ProblemCode::ServiceUnavailable);
     }
     fixture.state.mode.store(NORMAL, Ordering::SeqCst);
-    assert_eq!(fixture.state.bytes.lock().await.len(), 2);
+    assert_eq!(fixture.state.bytes.lock().await.len(), 3);
     let old: String = fixture
         .deployment
         .scalar(
             "SELECT object_id::text FROM documents_staged_objects
-              ORDER BY staged_at LIMIT 1",
+              WHERE NOT committed ORDER BY staged_at LIMIT 1",
         )
         .await;
     fixture
@@ -558,12 +588,23 @@ async fn the_orphan_sweep_erases_only_old_uncommitted_objects() {
         ))
         .await;
     prepared.sweep_due().await;
-    assert_eq!(fixture.state.bytes.lock().await.len(), 1);
+    let stored = fixture.state.bytes.lock().await;
+    assert_eq!(stored.len(), 2);
+    assert!(stored.keys().all(|key| !key.contains(&scope_of(&old))));
+    drop(stored);
     let left: String = fixture
         .deployment
-        .scalar("SELECT object_id::text FROM documents_staged_objects")
+        .scalar("SELECT object_id::text FROM documents_staged_objects WHERE NOT committed")
         .await;
     assert_ne!(left, old);
+    let committed: i64 = fixture
+        .deployment
+        .scalar(
+            "SELECT count(*) FROM documents_staged_objects
+              WHERE committed AND staged_at < now() - interval '23 hours'",
+        )
+        .await;
+    assert_eq!(committed, 1);
     let audited = fixture
         .deployment
         .audit_entries()
@@ -575,4 +616,131 @@ async fn the_orphan_sweep_erases_only_old_uncommitted_objects() {
         })
         .count();
     assert_eq!(audited, 1);
+}
+
+/// Two uncommitted objects, both a day old, left by failed writes of one
+/// reservation. Returns them oldest first.
+async fn two_old_orphans(fixture: &Fixture, api: &Api, seed: u8) -> (String, String) {
+    let content = pdf(400, seed);
+    let (_, _, path) = reservation(
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &content, PDF)
+            .await,
+    );
+    fixture.state.mode.store(PUT_STORES_FAILS, Ordering::SeqCst);
+    for _ in 0..2 {
+        api.put(APP, &path, PDF, Body::from(content.clone()))
+            .await
+            .assert_problem(ProblemCode::ServiceUnavailable);
+    }
+    fixture.state.mode.store(NORMAL, Ordering::SeqCst);
+    let first: String = fixture
+        .deployment
+        .scalar(
+            "SELECT object_id::text FROM documents_staged_objects
+              WHERE NOT committed ORDER BY staged_at LIMIT 1",
+        )
+        .await;
+    let second: String = fixture
+        .deployment
+        .scalar(&format!(
+            "SELECT object_id::text FROM documents_staged_objects
+              WHERE NOT committed AND object_id <> '{first}'"
+        ))
+        .await;
+    fixture
+        .deployment
+        .execute(
+            "UPDATE documents_staged_objects SET staged_at = now() - interval '1 day'
+              WHERE NOT committed",
+        )
+        .await;
+    (first, second)
+}
+
+/// An orphan whose delete keeps failing is skipped for the rest of the
+/// pass, so the objects staged after it are still erased, and the pass
+/// counts the failure.
+#[tokio::test]
+async fn an_orphan_whose_delete_fails_does_not_hold_back_the_others() {
+    let fixture = Fixture::new().await;
+    let (prepared, api) = fixture.start().await;
+    let (stuck, other) = two_old_orphans(&fixture, &api, 87).await;
+    *fixture.state.stuck.lock().unwrap() = Some(scope_of(&stuck));
+    let pass = prepared.sweep_due().await;
+    assert_eq!(pass.erased_orphans, 1);
+    assert_eq!(pass.failed_orphans, 1);
+    let left: String = fixture
+        .deployment
+        .scalar("SELECT string_agg(object_id::text, ',') FROM documents_staged_objects")
+        .await;
+    assert_eq!(left, stuck);
+    let stored = fixture.state.bytes.lock().await;
+    assert_eq!(stored.len(), 1);
+    assert!(stored.keys().all(|key| !key.contains(&scope_of(&other))));
+}
+
+/// A commit that arrives after the orphan sweep erased its object finds no
+/// staged row and is refused, so the version stays unfinalized and no
+/// object is left that no row names. The commit is held back by a lock on
+/// the version row that the staged row's foreign key check does not wait
+/// for, so the object is written first.
+#[tokio::test]
+async fn a_commit_after_the_orphan_sweep_is_refused() {
+    let fixture = Fixture::new().await;
+    let (prepared, api) = fixture.start().await;
+    let content = pdf(400, 89);
+    let (_, version, path) = reservation(
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &content, PDF)
+            .await,
+    );
+    let (mut holder, connection) =
+        tokio_postgres::connect(&support::database_url(), tokio_postgres::NoTls)
+            .await
+            .unwrap();
+    tokio::spawn(async move { connection.await.expect("the holding connection") });
+    let hold = holder.transaction().await.unwrap();
+    hold.execute(
+        &format!(
+            "SELECT 1 FROM {}.documents_versions WHERE version_id = '{version}' FOR NO KEY UPDATE",
+            fixture.deployment.schema
+        ),
+        &[],
+    )
+    .await
+    .unwrap();
+    let writer = api.clone();
+    let late = tokio::spawn(async move {
+        writer
+            .put(APP, &path, PDF, Body::from(content.clone()))
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while fixture.state.bytes.lock().await.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the object is written before the commit waits");
+    fixture
+        .deployment
+        .execute("UPDATE documents_staged_objects SET staged_at = now() - interval '1 day'")
+        .await;
+    let pass = prepared.sweep_due().await;
+    assert_eq!(pass.erased_orphans, 1);
+    hold.rollback().await.unwrap();
+    late.await
+        .unwrap()
+        .assert_problem(ProblemCode::ServiceUnavailable);
+    assert!(fixture.state.bytes.lock().await.is_empty());
+    let (staged, state): (i64, String) = (
+        fixture
+            .count("SELECT count(*) FROM documents_staged_objects")
+            .await,
+        fixture
+            .deployment
+            .scalar("SELECT upload_state FROM documents_versions")
+            .await,
+    );
+    assert_eq!(staged, 0);
+    assert_eq!(state, "reserved");
 }
