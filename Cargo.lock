@@ -5694,11 +5694,14 @@ dependencies = [
 name = "registry-documents-core"
 version = "0.43.0"
 dependencies = [
+ "hex",
+ "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-yaml",
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
 ]
 
 [[package]]

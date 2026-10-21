@@ -14,11 +14,13 @@
 //! `registry-platform-*` primitives, and never on another product's runtime
 //! or protocol types.
 
+mod custody;
 mod naming;
 mod problem;
 mod project;
 mod wire;
 
+pub use custody::*;
 pub use naming::*;
 pub use problem::*;
 pub use project::*;

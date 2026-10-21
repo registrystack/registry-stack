@@ -6,7 +6,8 @@
 //! this product can ever return, and a problem code outside this list is a
 //! defect, not a compatibility event. A code joins the list in the same change
 //! that first returns it, so the list holds only what the runtime answers
-//! today: the request-edge rejections and an unavailable service.
+//! today: the request-edge rejections, the upload and release refusals, and
+//! an unavailable service.
 //!
 //! The `request.*` family carries the request-edge rejections (a route that
 //! does not exist, a method the route refuses, a body too large or not JSON)
@@ -16,6 +17,11 @@
 
 use crate::naming::DOCUMENTS_PROBLEM_TYPE_BASE;
 
+pub const CUSTODY_QUOTA_EXCEEDED_PROBLEM: &str = "custody.quota-exceeded";
+pub const DOCUMENT_POLICY_UNKNOWN_PROBLEM: &str = "document-policy.unknown";
+pub const DOCUMENT_VERSION_NOT_RELEASABLE_PROBLEM: &str = "document-version.not-releasable";
+pub const DOCUMENT_CONTENT_TYPE_NOT_ALLOWED_PROBLEM: &str = "document.content-type-not-allowed";
+pub const DOCUMENT_TOO_LARGE_PROBLEM: &str = "document.too-large";
 pub const REQUEST_BODY_TOO_LARGE_PROBLEM: &str = "request.body-too-large";
 pub const REQUEST_INVALID_PROBLEM: &str = "request.invalid";
 pub const REQUEST_METHOD_NOT_ALLOWED_PROBLEM: &str = "request.method-not-allowed";
@@ -23,10 +29,20 @@ pub const REQUEST_NOT_FOUND_PROBLEM: &str = "request.not-found";
 pub const REQUEST_UNPROCESSABLE_PROBLEM: &str = "request.unprocessable";
 pub const REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM: &str = "request.unsupported-media-type";
 pub const SERVICE_UNAVAILABLE_PROBLEM: &str = "service.unavailable";
+pub const UPLOAD_CONTENT_TYPE_MISMATCH_PROBLEM: &str = "upload.content-type-mismatch";
+pub const UPLOAD_DIGEST_MISMATCH_PROBLEM: &str = "upload.digest-mismatch";
+pub const UPLOAD_EXPIRED_PROBLEM: &str = "upload.expired";
+pub const UPLOAD_FINALIZED_PROBLEM: &str = "upload.finalized";
+pub const UPLOAD_LENGTH_MISMATCH_PROBLEM: &str = "upload.length-mismatch";
 
 /// Every problem code the Document Store can return, in code-string order.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ProblemCode {
+    CustodyQuotaExceeded,
+    DocumentPolicyUnknown,
+    DocumentVersionNotReleasable,
+    DocumentContentTypeNotAllowed,
+    DocumentTooLarge,
     RequestBodyTooLarge,
     RequestInvalid,
     RequestMethodNotAllowed,
@@ -34,11 +50,21 @@ pub enum ProblemCode {
     RequestUnprocessable,
     RequestUnsupportedMediaType,
     ServiceUnavailable,
+    UploadContentTypeMismatch,
+    UploadDigestMismatch,
+    UploadExpired,
+    UploadFinalized,
+    UploadLengthMismatch,
 }
 
 impl ProblemCode {
     /// The complete closed vocabulary, in code-string order.
     pub const ALL: &'static [Self] = &[
+        Self::CustodyQuotaExceeded,
+        Self::DocumentPolicyUnknown,
+        Self::DocumentVersionNotReleasable,
+        Self::DocumentContentTypeNotAllowed,
+        Self::DocumentTooLarge,
         Self::RequestBodyTooLarge,
         Self::RequestInvalid,
         Self::RequestMethodNotAllowed,
@@ -46,11 +72,21 @@ impl ProblemCode {
         Self::RequestUnprocessable,
         Self::RequestUnsupportedMediaType,
         Self::ServiceUnavailable,
+        Self::UploadContentTypeMismatch,
+        Self::UploadDigestMismatch,
+        Self::UploadExpired,
+        Self::UploadFinalized,
+        Self::UploadLengthMismatch,
     ];
 
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
+            Self::CustodyQuotaExceeded => CUSTODY_QUOTA_EXCEEDED_PROBLEM,
+            Self::DocumentPolicyUnknown => DOCUMENT_POLICY_UNKNOWN_PROBLEM,
+            Self::DocumentVersionNotReleasable => DOCUMENT_VERSION_NOT_RELEASABLE_PROBLEM,
+            Self::DocumentContentTypeNotAllowed => DOCUMENT_CONTENT_TYPE_NOT_ALLOWED_PROBLEM,
+            Self::DocumentTooLarge => DOCUMENT_TOO_LARGE_PROBLEM,
             Self::RequestBodyTooLarge => REQUEST_BODY_TOO_LARGE_PROBLEM,
             Self::RequestInvalid => REQUEST_INVALID_PROBLEM,
             Self::RequestMethodNotAllowed => REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
@@ -58,6 +94,11 @@ impl ProblemCode {
             Self::RequestUnprocessable => REQUEST_UNPROCESSABLE_PROBLEM,
             Self::RequestUnsupportedMediaType => REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM,
             Self::ServiceUnavailable => SERVICE_UNAVAILABLE_PROBLEM,
+            Self::UploadContentTypeMismatch => UPLOAD_CONTENT_TYPE_MISMATCH_PROBLEM,
+            Self::UploadDigestMismatch => UPLOAD_DIGEST_MISMATCH_PROBLEM,
+            Self::UploadExpired => UPLOAD_EXPIRED_PROBLEM,
+            Self::UploadFinalized => UPLOAD_FINALIZED_PROBLEM,
+            Self::UploadLengthMismatch => UPLOAD_LENGTH_MISMATCH_PROBLEM,
         }
     }
 
@@ -73,13 +114,23 @@ impl ProblemCode {
     #[must_use]
     pub const fn http_status(self) -> u16 {
         match self {
-            Self::RequestInvalid => 400,
-            Self::RequestNotFound => 404,
-            Self::RequestMethodNotAllowed => 405,
+            Self::CustodyQuotaExceeded => 422,
+            Self::DocumentPolicyUnknown => 422,
+            Self::DocumentVersionNotReleasable => 409,
+            Self::DocumentContentTypeNotAllowed => 422,
+            Self::DocumentTooLarge => 422,
             Self::RequestBodyTooLarge => 413,
-            Self::RequestUnsupportedMediaType => 415,
+            Self::RequestInvalid => 400,
+            Self::RequestMethodNotAllowed => 405,
+            Self::RequestNotFound => 404,
             Self::RequestUnprocessable => 422,
+            Self::RequestUnsupportedMediaType => 415,
             Self::ServiceUnavailable => 503,
+            Self::UploadContentTypeMismatch => 422,
+            Self::UploadDigestMismatch => 422,
+            Self::UploadExpired => 410,
+            Self::UploadFinalized => 409,
+            Self::UploadLengthMismatch => 422,
         }
     }
 
@@ -87,6 +138,11 @@ impl ProblemCode {
     #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
+            Self::CustodyQuotaExceeded => "Custody quota exceeded",
+            Self::DocumentPolicyUnknown => "Document policy unknown",
+            Self::DocumentVersionNotReleasable => "Document version not releasable",
+            Self::DocumentContentTypeNotAllowed => "Content type not allowed",
+            Self::DocumentTooLarge => "Document too large",
             Self::RequestBodyTooLarge => "Payload too large",
             Self::RequestInvalid => "Request invalid",
             Self::RequestMethodNotAllowed => "Method not allowed",
@@ -94,6 +150,11 @@ impl ProblemCode {
             Self::RequestUnprocessable => "Request unprocessable",
             Self::RequestUnsupportedMediaType => "Unsupported media type",
             Self::ServiceUnavailable => "Document Store unavailable",
+            Self::UploadContentTypeMismatch => "Content type mismatch",
+            Self::UploadDigestMismatch => "Digest mismatch",
+            Self::UploadExpired => "Upload expired",
+            Self::UploadFinalized => "Upload finalized",
+            Self::UploadLengthMismatch => "Length mismatch",
         }
     }
 
@@ -101,6 +162,11 @@ impl ProblemCode {
     #[must_use]
     pub const fn detail(self) -> &'static str {
         match self {
+            Self::CustodyQuotaExceeded => "The upload would exceed the bytes this custodian may hold under the policy.",
+            Self::DocumentPolicyUnknown => "The request names a document policy this deployment does not hold.",
+            Self::DocumentVersionNotReleasable => "The document version is not ready for release. Read its status and try again once it is ready.",
+            Self::DocumentContentTypeNotAllowed => "The declared media type is not one the document policy allows.",
+            Self::DocumentTooLarge => "The declared length is zero or exceeds the document policy maximum.",
             Self::RequestBodyTooLarge => "The request body exceeds the accepted size.",
             Self::RequestInvalid => "The request could not be read as a Document Store request.",
             Self::RequestMethodNotAllowed => "The route exists but not for this method.",
@@ -110,6 +176,11 @@ impl ProblemCode {
             Self::ServiceUnavailable => {
                 "The Document Store is unavailable. Try again after the service recovers."
             }
+            Self::UploadContentTypeMismatch => "The content type differs from the media type the upload reserved.",
+            Self::UploadDigestMismatch => "The content does not match the expected digest. Nothing was kept; send the reserved content again.",
+            Self::UploadExpired => "The upload reservation has expired. Reserve a new upload.",
+            Self::UploadFinalized => "The upload already holds other content and cannot be replaced.",
+            Self::UploadLengthMismatch => "The content length differs from the reserved length. Nothing was kept; send the reserved content again.",
         }
     }
 }
@@ -126,7 +197,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 7);
+        assert_eq!(ProblemCode::ALL.len(), 17);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }
@@ -191,5 +262,25 @@ mod tests {
         assert_eq!(ProblemCode::RequestUnsupportedMediaType.http_status(), 415);
         assert_eq!(ProblemCode::RequestUnprocessable.http_status(), 422);
         assert_eq!(ProblemCode::ServiceUnavailable.http_status(), 503);
+    }
+
+    /// The upload and release refusals pin the statuses the deposit design
+    /// settled, so a client can branch on the status alone.
+    #[test]
+    fn the_upload_and_release_refusals_pin_their_statuses() {
+        for (code, status) in [
+            (ProblemCode::CustodyQuotaExceeded, 422),
+            (ProblemCode::DocumentPolicyUnknown, 422),
+            (ProblemCode::DocumentVersionNotReleasable, 409),
+            (ProblemCode::DocumentContentTypeNotAllowed, 422),
+            (ProblemCode::DocumentTooLarge, 422),
+            (ProblemCode::UploadContentTypeMismatch, 422),
+            (ProblemCode::UploadDigestMismatch, 422),
+            (ProblemCode::UploadExpired, 410),
+            (ProblemCode::UploadFinalized, 409),
+            (ProblemCode::UploadLengthMismatch, 422),
+        ] {
+            assert_eq!(code.http_status(), status, "{}", code.code());
+        }
     }
 }
