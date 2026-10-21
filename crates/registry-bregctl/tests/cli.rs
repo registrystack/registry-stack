@@ -4983,7 +4983,7 @@ recordTypes:
     );
     assert!(
         rendered.contains(&format!(
-            "related  {}:14:9 /recordTypes/0/id",
+            "note:  {}:14:9 /recordTypes/0/id",
             project.path().join("registry.yaml").display()
         )),
         "{rendered}"
