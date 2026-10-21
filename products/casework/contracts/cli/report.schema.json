@@ -1754,13 +1754,9 @@
           "type": "string"
         },
         "description": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DisplayText"
-            },
-            {
-              "type": "null"
-            }
+          "type": [
+            "string",
+            "null"
           ]
         },
         "id": {
