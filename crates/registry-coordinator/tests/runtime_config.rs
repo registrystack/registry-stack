@@ -1164,7 +1164,20 @@ fn observation_signing_reference_requires_the_enabled_file_provider_offline() {
     assert_eq!(error.code, "coordinator.runtime-config.refused");
     assert_eq!(
         error.field.as_deref(),
-        Some("/connections/bookings/observationAuthorization/signingKeyRef")
+        Some("/connections/bookings/authorization/signingKeyRef")
+    );
+    let signing_key_paths = error
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.path.ends_with("/signingKeyRef"))
+        .map(|diagnostic| diagnostic.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        signing_key_paths,
+        [
+            "/connections/bookings/authorization/signingKeyRef",
+            "/connections/bookings/observationAuthorization/signingKeyRef",
+        ]
     );
     assert!(!error.to_string().contains(CANARY));
     assert!(error

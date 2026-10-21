@@ -1132,7 +1132,7 @@ pub fn check_runtime_file(
 ) -> RuntimeCheck {
     let check =
         RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, substitute, stand_in_for);
-    let mut diagnostics = check.diagnostics.clone();
+    let mut diagnostics = Vec::new();
     let mut unavailable = check.unavailable;
     let mut named = None;
     let mut refused_package = Report::default();
@@ -1166,7 +1166,8 @@ pub fn check_runtime_file(
         );
         diagnostics.extend(runtime_identifier_collision_diagnostics(&check, config));
     }
-    in_file_order(&mut diagnostics);
+    let runtime_report = check.report_with(MESSAGING_RUNTIME_KIND, diagnostics);
+    let mut diagnostics = runtime_report.into_diagnostics();
     let mut files_checked = 1 + refused_package.files_checked().unwrap_or(0);
     diagnostics.extend(refused_package.into_diagnostics());
     let given = match against {
@@ -1213,25 +1214,8 @@ pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report>
         .map(|finding| positioned(&check, finding))
         .collect();
     diagnostics.extend(runtime_identifier_collision_diagnostics(&check, config));
-    in_file_order(&mut diagnostics);
-    (!diagnostics.is_empty()).then(|| Report::new(diagnostics))
-}
-
-/// Order `diagnostics` as the shared reader orders its own: those without a
-/// line first, then by line and column, keeping the order in which equal
-/// positions were found.
-fn in_file_order(diagnostics: &mut [Diagnostic]) {
-    diagnostics.sort_by_key(|diagnostic| {
-        diagnostic
-            .source
-            .as_ref()
-            .and_then(|source| {
-                source
-                    .line
-                    .map(|line| (1, line, source.column.unwrap_or(0)))
-            })
-            .unwrap_or((0, 0, 0))
-    });
+    let report = check.report_with(MESSAGING_RUNTIME_KIND, diagnostics);
+    (!report.is_empty()).then_some(report)
 }
 
 /// `finding` at the value of its member, or, for a member that is absent, at
@@ -1735,6 +1719,7 @@ pub(crate) mod tests {
         reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
     )]
     use super::*;
+    use registry_platform_yaml::{Severity, MAXIMUM_DIAGNOSTICS_PER_FILE};
     use serde_json::{json, Value};
 
     /// The starter package's manifest, as a value a test may change.
@@ -2982,6 +2967,64 @@ pub(crate) mod tests {
             .diagnostics
             .iter()
             .all(|diagnostic| !diagnostic.code.ends_with("-id-collision")));
+    }
+
+    fn runtime_with_provider_collisions(root: &Path, pairs: usize) -> (Value, Value) {
+        let mut runtime = runtime_value(root);
+        let mut package = package_value();
+        let connection = provider_connections()["mail-relay"].clone();
+        runtime["providers"] = json!({});
+        let providers = runtime["providers"]
+            .as_object_mut()
+            .expect("providers is a mapping");
+        let declarations = package["providers"]
+            .as_array_mut()
+            .expect("package providers is a list");
+        for index in 0..pairs {
+            for id in [format!("relay-{index:03}"), format!("relay_{index:03}")] {
+                providers.insert(id.clone(), connection.clone());
+                declarations.push(json!({"id": id, "type": "smtp"}));
+            }
+        }
+        (runtime, package)
+    }
+
+    #[test]
+    fn runtime_collision_reports_are_sorted_and_bounded_per_file() {
+        let root = tempfile::tempdir().unwrap();
+        let hidden = 21;
+        let pairs = MAXIMUM_DIAGNOSTICS_PER_FILE + hidden;
+        let (runtime, package) = runtime_with_provider_collisions(root.path(), pairs);
+        let path = write_project(root.path(), &runtime, &package);
+
+        let checked = check_runtime_file(&path, CheckedAgainst::Nothing, true);
+        assert_eq!(checked.diagnostics.len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
+        assert!(checked.diagnostics[..MAXIMUM_DIAGNOSTICS_PER_FILE]
+            .iter()
+            .all(|diagnostic| diagnostic.code == "messaging.runtime.provider-id-collision"));
+        let marker = checked.diagnostics.last().unwrap();
+        assert_eq!(marker.severity, Severity::Error);
+        assert_eq!(marker.code, "config.too-many-problems");
+        assert_eq!(
+            marker.message,
+            format!("{hidden} more problems in this file are not shown")
+        );
+        assert_eq!(marker.path, "");
+        assert_eq!(marker.artifact.as_deref(), Some(MESSAGING_RUNTIME_KIND));
+        let source = marker.source.as_ref().unwrap();
+        assert_eq!(source.file, path.display().to_string());
+        assert_eq!((source.line, source.column), (None, None));
+        assert_eq!(checked.files_checked, 1);
+
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
+        assert!(matches!(error, RuntimeConfigError::ProviderIdCollision));
+        let startup = startup_report(&path, &error).expect("a file-owned refusal has a report");
+        assert_eq!(
+            startup.diagnostics().len(),
+            MAXIMUM_DIAGNOSTICS_PER_FILE + 1
+        );
+        assert_eq!(startup.files_checked(), Some(1));
+        assert_eq!(startup.diagnostics().last(), Some(marker));
     }
 
     #[test]

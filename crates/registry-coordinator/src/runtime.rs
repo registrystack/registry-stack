@@ -511,15 +511,14 @@ impl RuntimeConfig {
     /// Check syntax, references and offline values without reading secret material.
     pub fn check_file(path: &Path, substitute: bool) -> RuntimeFileCheck<Self> {
         let mut checked = Self::loader().check_offline::<Self>(path, substitute, stand_in);
-        let integrity = checked.loaded.as_ref().map_or_else(Vec::new, |loaded| {
+        let mut diagnostics = checked.loaded.as_ref().map_or_else(Vec::new, |loaded| {
             runtime_id_collision_diagnostics(&checked, &loaded.config)
         });
-        checked.diagnostics.extend(integrity);
         if let Some(loaded) = &checked.loaded {
             for error in loaded.config.findings() {
                 let pointer = pointer(error.field.as_deref().unwrap_or(""));
                 if !checked.defers_within(&pointer) {
-                    checked.diagnostics.push(
+                    diagnostics.push(
                         checked.error_at(
                             KIND,
                             &error.code,
@@ -533,6 +532,7 @@ impl RuntimeConfig {
                 }
             }
         }
+        checked.diagnostics = checked.report_with(KIND, diagnostics).into_diagnostics();
         checked
     }
 
