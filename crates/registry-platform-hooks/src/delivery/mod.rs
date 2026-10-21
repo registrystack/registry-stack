@@ -19,26 +19,44 @@
 //! kind the worker signs and sends, and the bounded response body is the
 //! answer. For the local kinds the worker resolves the product's runnable
 //! handler for the row's binding and reads the answer back from it; the
-//! reviewed program, the engine, and its budgets stay with the product. The
+//! reviewed program is the product's, and the engine that runs it is this
+//! crate's `executor` module when the product enables it. The
 //! answer is the same [`crate::HookMessage`] either way: bounded, canonical,
 //! digested, and recorded in the delivery state. An answer that proposes
 //! hands the proposal to the product's apply seam between the answer and
 //! finalization, and the row records what became of it: nothing proposed,
 //! applied, refused, or dead-lettered.
 //!
-//! Everything product-owned enters through [`DeliverySeams`]: the signing
-//! scheme and its key material, the idempotency domain, the audit journal and
-//! its vocabulary, the operational-event vocabulary, the registry identity
-//! preflight, and the activated destinations. The library carries no product
+//! Everything product-owned enters through [`DeliverySeams`]: the key
+//! material, the idempotency domain, the audit journal, the operational-event
+//! vocabulary, the registry identity preflight, and the activated
+//! destinations. The pieces every product fills the same way live beside the
+//! seams so no product re-implements them: the `url` destination
+//! ([`UrlDestination`]: Version 1 signing, the closed request template, and
+//! the bounded answer read), the pooled connection, the uninhabited
+//! [`NoLocalHandler`], the audit words and entry shape
+//! ([`hook_audit_entry`]), and the activation-record identity preflight
+//! ([`verify_active_package`]). The library carries no product
 //! name and no product policy; [`DeliveryConfig`] carries the product's
 //! schema name, idempotency domain, and delivery source identity.
 
+mod audit;
+mod connection;
+mod destination;
+mod identity;
 mod insert;
 mod retention;
 mod seams;
 mod service;
 mod store;
 
+pub use audit::{hook_audit_entry, InvalidDeliveryAudit, MAX_AUDIT_COMPILED_DELIVERY_ID_BYTES};
+pub use connection::{NoLocalHandler, PooledConnection};
+pub use destination::{
+    answer_read_category, url_destination_address, SharedUrlDestination, UrlDestination,
+    UrlDestinationAddress, UrlDestinationError, UrlDestinationParts, MIN_HMAC_SHA256_KEY_BYTES,
+};
+pub use identity::verify_active_package;
 pub use insert::{insert_delivery, DeliveryCapture};
 pub use registry_platform_dispatch::postgres::RetentionError;
 pub use retention::prune_terminal_deliveries;
