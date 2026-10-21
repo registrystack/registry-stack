@@ -144,6 +144,7 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
         "registry-render",
         "registry-scheduling",
         "registry-messaging",
+        "registry-documents",
     }
 )
 # The configuration conformance corpus runs the registered `check` command of
@@ -178,6 +179,7 @@ CONFIG_CONFORMANCE_INPUTS = (
     "products/casework/generated/runtime/*",
     "products/scheduling/generated/runtime/*",
     "products/messaging/generated/runtime/*",
+    "products/documents/generated/runtime/*",
     "products/evidence/generated/oid4vci-runtime/*",
 )
 

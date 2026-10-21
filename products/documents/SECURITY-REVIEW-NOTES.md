@@ -174,6 +174,3 @@ against a loopback fake object store and verifier. The rows in
   instance.
 - There is no operator command to apply the schema yet; serving refuses a
   database without it.
-- The shared runtime configuration conformance gate has no Document Store
-  row, so DOCUMENTS-SEC-13 is partial: the package pin is enforced and
-  tested, but the shared gate does not yet require it.

@@ -199,7 +199,7 @@ invariants:
       path: crates/registry-documents-core/src/project.rs
       name: an_empty_scope_or_client_list_is_refused_at_its_member
   - id: DOCUMENTS-SEC-13
-    state: partial
+    state: enforced
     threat: >-
       The runtime serves a project other than the one package.expectedDigest
       pins, so a reviewed package is silently replaced.
@@ -213,10 +213,6 @@ invariants:
     negativeTest:
       path: crates/registry-documents/src/package.rs
       name: a_package_digest_mismatch_is_refused_in_the_shared_shape
-    partialNote: >-
-      The shared runtime configuration conformance gate has no Document Store
-      row yet, so the gate does not require this test of the runtime. Adding
-      the row is a change to the shared platform gate, outside this product.
   - id: DOCUMENTS-SEC-14
     state: enforced
     threat: >-
