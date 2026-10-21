@@ -2,8 +2,10 @@
 
 //! The commands that reach a deployment's database through the runtime
 //! configuration: `plan`, `apply`, and `status` over the package activation
-//! ledger, and `verification list` and `verification replay` over the
-//! dead-lettered content verification jobs.
+//! ledger, `verification list` and `verification replay` over the
+//! dead-lettered content verification jobs, and `erasure status`,
+//! `erasure list`, and `erasure replay` over erasure and its dead-lettered
+//! jobs.
 //!
 //! Each reads the runtime configuration and the package it names exactly as
 //! `documents serve` does, pinned digest included, and each refusal names
@@ -12,20 +14,21 @@
 use std::path::{Path, PathBuf};
 
 use registry_documents::activation::{ActivationError, ActivationRefusal, ApplyRequest};
+use registry_documents::config::Erasure;
 use registry_documents::config::{startup_report, RuntimeConfig, RuntimeConfigError};
 use registry_documents::package::PackageLoadError;
+use registry_documents::replay::{ReplayFailure, ReplayRefusal};
 use registry_documents::runtime::{
-    activation_plan, activation_status, apply_activation, dead_lettered_verifications,
-    replay_verification, RuntimeError,
+    activation_plan, activation_status, apply_activation, dead_lettered_erasures,
+    dead_lettered_verifications, erasure_report, replay_erasure, replay_verification, RuntimeError,
 };
-use registry_documents::verification::{ReplayFailure, ReplayRefusal};
 use registry_platform_config::PackageErrorKind;
 use registry_platform_yaml::{Diagnostic, Report};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::report::{DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT};
-use crate::{guidance, Outcome, View};
+use crate::{guidance, Job, Outcome, View};
 
 /// The runtime configuration a database command reads, resolved against the
 /// working directory, as an operator means a relative path.
@@ -160,12 +163,40 @@ pub(crate) fn status(path: &Path) -> Outcome {
     }
 }
 
-pub(crate) fn dead_letters(path: &Path, limit: u16) -> Outcome {
+pub(crate) fn erasure_status(path: &Path) -> Outcome {
     let runtime = match load(path) {
         Ok(runtime) => runtime,
         Err(refused) => return refused,
     };
-    match block_on(dead_lettered_verifications(&runtime.config, limit)) {
+    match block_on(erasure_report(&runtime.config)) {
+        Err(refused) => refused,
+        Ok(Err(error)) => failure(&runtime.given, error),
+        Ok(Ok(status)) => Outcome::new(
+            json!({
+                "runtimeConfig": runtime.given,
+                "erasure": match status.erasure {
+                    Erasure::Active => "active",
+                    Erasure::Paused => "paused",
+                },
+                "awaitingGrace": status.awaiting_grace,
+                "due": status.due,
+                "deadLettered": status.dead_lettered,
+            }),
+            View::Erasure,
+        ),
+    }
+}
+
+pub(crate) fn dead_letters(job: Job, path: &Path, limit: u16) -> Outcome {
+    let runtime = match load(path) {
+        Ok(runtime) => runtime,
+        Err(refused) => return refused,
+    };
+    let listed = match job {
+        Job::Verification => block_on(dead_lettered_verifications(&runtime.config, limit)),
+        Job::Erasure => block_on(dead_lettered_erasures(&runtime.config, limit)),
+    };
+    match listed {
         Err(refused) => refused,
         Ok(Err(error)) => failure(&runtime.given, error),
         Ok(Ok(dead_letters)) => Outcome::new(
@@ -174,21 +205,29 @@ pub(crate) fn dead_letters(path: &Path, limit: u16) -> Outcome {
                 "limit": limit,
                 "deadLetters": dead_letters,
             }),
-            View::DeadLetters,
+            View::DeadLetters(job),
         ),
     }
 }
 
-pub(crate) fn replay(path: &Path, version: Uuid, expected_generation: i64) -> Outcome {
+pub(crate) fn replay(job: Job, path: &Path, version: Uuid, expected_generation: i64) -> Outcome {
     let runtime = match load(path) {
         Ok(runtime) => runtime,
         Err(refused) => return refused,
     };
-    match block_on(replay_verification(
-        &runtime.config,
-        version,
-        expected_generation,
-    )) {
+    let replayed = match job {
+        Job::Verification => block_on(replay_verification(
+            &runtime.config,
+            version,
+            expected_generation,
+        )),
+        Job::Erasure => block_on(replay_erasure(
+            &runtime.config,
+            version,
+            expected_generation,
+        )),
+    };
+    match replayed {
         Err(refused) => refused,
         Ok(Err(error)) => failure(&runtime.given, error),
         Ok(Ok(replayed)) => Outcome::new(
@@ -277,35 +316,75 @@ fn failure(path: &Path, error: RuntimeError) -> Outcome {
         | RuntimeError::AuditJournal(_) => {
             refused(OPERATIONAL_FAILURE_EXIT, "audit.unavailable", "audit")
         }
-        RuntimeError::Replay(refusal) => {
-            let code = match refusal {
-                ReplayRefusal::NotFound => "documents.verification.not-found",
-                ReplayRefusal::NotDeadLettered { .. } => "documents.verification.not-dead-lettered",
-                ReplayRefusal::StaleGeneration { .. } => "documents.verification.stale-generation",
-                ReplayRefusal::Changed => "documents.verification.changed",
-            };
-            refused(DOMAIN_REFUSAL_EXIT, code, "verification")
+        RuntimeError::Replay(refusal) => replay_refusal(Job::Verification, refusal, refused),
+        RuntimeError::ErasureReplay(refusal) => replay_refusal(Job::Erasure, refusal, refused),
+        RuntimeError::ReplayFailed(failure) => replay_failure(Job::Verification, failure, refused),
+        RuntimeError::ErasureReplayFailed(failure) => {
+            replay_failure(Job::Erasure, failure, refused)
         }
-        RuntimeError::ReplayFailed(failure) => match failure {
-            ReplayFailure::AuditUnavailable => {
-                refused(OPERATIONAL_FAILURE_EXIT, "audit.unavailable", "audit")
-            }
-            ReplayFailure::Unaudited { .. } => {
-                refused(OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed", "audit")
-            }
-            ReplayFailure::OutcomeUnknown { .. } => refused(
-                OPERATIONAL_FAILURE_EXIT,
-                "documents.verification.outcome-unknown",
-                "verification",
-            ),
-            ReplayFailure::DatabaseUnavailable => {
-                refused(OPERATIONAL_FAILURE_EXIT, "database.unavailable", "database")
-            }
-        },
         RuntimeError::Activation(ActivationError::Store(_)) | RuntimeError::Database { .. } => {
             refused(OPERATIONAL_FAILURE_EXIT, "database.unavailable", "database")
         }
         _ => refused(OPERATIONAL_FAILURE_EXIT, "runtime.unavailable", "/"),
+    }
+}
+
+/// The report of a replay of `job` that was refused.
+fn replay_refusal(
+    job: Job,
+    refusal: &ReplayRefusal,
+    refused: impl Fn(u8, &'static str, &'static str) -> Outcome,
+) -> Outcome {
+    let code = match (job, refusal) {
+        (Job::Verification, ReplayRefusal::NotFound) => "documents.verification.not-found",
+        (Job::Verification, ReplayRefusal::NotDeadLettered { .. }) => {
+            "documents.verification.not-dead-lettered"
+        }
+        (Job::Verification, ReplayRefusal::StaleGeneration { .. }) => {
+            "documents.verification.stale-generation"
+        }
+        (Job::Verification, ReplayRefusal::Changed) => "documents.verification.changed",
+        (Job::Verification, ReplayRefusal::RemovalRequested { .. }) => {
+            "documents.verification.removal-requested"
+        }
+        (Job::Erasure, ReplayRefusal::NotFound) => "documents.erasure.not-found",
+        (Job::Erasure, ReplayRefusal::NotDeadLettered { .. }) => {
+            "documents.erasure.not-dead-lettered"
+        }
+        (Job::Erasure, ReplayRefusal::StaleGeneration { .. }) => {
+            "documents.erasure.stale-generation"
+        }
+        // An erasure replay never refuses a removal; it carries one out.
+        (Job::Erasure, ReplayRefusal::Changed | ReplayRefusal::RemovalRequested { .. }) => {
+            "documents.erasure.changed"
+        }
+    };
+    refused(DOMAIN_REFUSAL_EXIT, code, job.path())
+}
+
+/// The report of a replay of `job` that did not finish.
+fn replay_failure(
+    job: Job,
+    failure: &ReplayFailure,
+    refused: impl Fn(u8, &'static str, &'static str) -> Outcome,
+) -> Outcome {
+    match failure {
+        ReplayFailure::AuditUnavailable => {
+            refused(OPERATIONAL_FAILURE_EXIT, "audit.unavailable", "audit")
+        }
+        ReplayFailure::Unaudited { .. } => {
+            refused(OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed", "audit")
+        }
+        ReplayFailure::OutcomeUnknown { .. } => {
+            let code = match job {
+                Job::Verification => "documents.verification.outcome-unknown",
+                Job::Erasure => "documents.erasure.outcome-unknown",
+            };
+            refused(OPERATIONAL_FAILURE_EXIT, code, job.path())
+        }
+        ReplayFailure::DatabaseUnavailable => {
+            refused(OPERATIONAL_FAILURE_EXIT, "database.unavailable", "database")
+        }
     }
 }
 
@@ -346,4 +425,118 @@ fn activation_diagnostics(refusals: &[ActivationRefusal]) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::*;
+
+    /// The code, exit, and path each replay outcome of `job` reports.
+    fn reported(job: Job) -> Vec<(u8, &'static str, &'static str)> {
+        let seen = RefCell::new(Vec::new());
+        let refused = |exit, code, member| {
+            seen.borrow_mut().push((exit, code, member));
+            Outcome::refused(exit, code, member, String::new())
+        };
+        let version_id = Uuid::nil();
+        for refusal in [
+            ReplayRefusal::NotFound,
+            ReplayRefusal::NotDeadLettered {
+                state: "pending".to_owned(),
+            },
+            ReplayRefusal::StaleGeneration { current: 1 },
+            ReplayRefusal::Changed,
+            ReplayRefusal::RemovalRequested {
+                reason: "the version is erased",
+            },
+        ] {
+            replay_refusal(job, &refusal, refused);
+        }
+        for failure in [
+            ReplayFailure::AuditUnavailable,
+            ReplayFailure::Unaudited {
+                version_id,
+                generation: 2,
+            },
+            ReplayFailure::OutcomeUnknown { version_id },
+            ReplayFailure::DatabaseUnavailable,
+        ] {
+            replay_failure(job, &failure, refused);
+        }
+        seen.into_inner()
+    }
+
+    #[test]
+    fn each_replay_outcome_reports_its_own_job_code() {
+        assert_eq!(
+            reported(Job::Verification),
+            [
+                (
+                    DOMAIN_REFUSAL_EXIT,
+                    "documents.verification.not-found",
+                    "verification"
+                ),
+                (
+                    DOMAIN_REFUSAL_EXIT,
+                    "documents.verification.not-dead-lettered",
+                    "verification"
+                ),
+                (
+                    DOMAIN_REFUSAL_EXIT,
+                    "documents.verification.stale-generation",
+                    "verification"
+                ),
+                (
+                    DOMAIN_REFUSAL_EXIT,
+                    "documents.verification.changed",
+                    "verification"
+                ),
+                (
+                    DOMAIN_REFUSAL_EXIT,
+                    "documents.verification.removal-requested",
+                    "verification"
+                ),
+                (OPERATIONAL_FAILURE_EXIT, "audit.unavailable", "audit"),
+                (OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed", "audit"),
+                (
+                    OPERATIONAL_FAILURE_EXIT,
+                    "documents.verification.outcome-unknown",
+                    "verification"
+                ),
+                (OPERATIONAL_FAILURE_EXIT, "database.unavailable", "database"),
+            ]
+        );
+        assert_eq!(
+            reported(Job::Erasure),
+            [
+                (
+                    DOMAIN_REFUSAL_EXIT,
+                    "documents.erasure.not-found",
+                    "erasure"
+                ),
+                (
+                    DOMAIN_REFUSAL_EXIT,
+                    "documents.erasure.not-dead-lettered",
+                    "erasure"
+                ),
+                (
+                    DOMAIN_REFUSAL_EXIT,
+                    "documents.erasure.stale-generation",
+                    "erasure"
+                ),
+                (DOMAIN_REFUSAL_EXIT, "documents.erasure.changed", "erasure"),
+                (DOMAIN_REFUSAL_EXIT, "documents.erasure.changed", "erasure"),
+                (OPERATIONAL_FAILURE_EXIT, "audit.unavailable", "audit"),
+                (OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed", "audit"),
+                (
+                    OPERATIONAL_FAILURE_EXIT,
+                    "documents.erasure.outcome-unknown",
+                    "erasure"
+                ),
+                (OPERATIONAL_FAILURE_EXIT, "database.unavailable", "database"),
+            ]
+        );
+    }
 }

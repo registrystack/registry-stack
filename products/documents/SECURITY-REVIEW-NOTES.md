@@ -325,8 +325,9 @@ each test.
 The serving process changes the schema or records a package as active
 nobody reviewed; the runtime serves a database no operator activated, one
 belonging to another deployment, or one whose active package is not the
-configured one; a dead-lettered verification is re-queued by a caller other
-than the operator, or by a replay issued from a stale listing.
+configured one; a dead-lettered verification or erasure is re-queued by a
+caller other than the operator, or by a replay issued from a stale listing;
+content whose removal was requested is verified again.
 
 ### Enforcement and defaults
 
@@ -353,6 +354,21 @@ than the operator, or by a replay issued from a stale listing.
   generation, bumps it, and returns the job to pending; the version stays
   pending and suspended until a verifier approves it. No HTTP route lists or
   replays a job (DOCUMENTS-DEC-18).
+- A verification replay refuses a version whose erasure is pending or done,
+  or whose document has a removal requested, with
+  `documents.verification.removal-requested`. The check reads the version
+  before the dispatcher's replay transaction; a removal that commits between
+  the two is still safe, because the verification
+  worker records no verdict for a version under removal and sets its job
+  aside before reading the bytes.
+- `documentsctl erasure list` and `erasure replay` mirror the verification
+  verbs over the erasure jobs, with the same generation fence, companion
+  audit, and outcome reports under `documents.erasure.*`. The sweep never
+  re-arms a dead-lettered erasure, so replay is the only way back; a replay
+  while `cleanup.erasure` is paused returns the job to pending and it waits
+  for the worker. `documentsctl erasure status` reports whether erasure is
+  active or paused and counts the versions awaiting their grace, those due,
+  and the dead-lettered erasure jobs.
 - Apply and replay write their audit records to the `documentsctl`
   companion journal. An apply whose ledger row committed but whose audit
   record was not accepted reports `audit.unconfirmed` with the
@@ -368,7 +384,7 @@ than the operator, or by a replay issued from a stale listing.
 ### Tests
 
 `crates/registry-documents/tests/postgres_operator.rs` runs plan, apply,
-status, serve, and replay against a disposable database, including a limited
+status, serve, both replays, and the erasure status against a disposable database, including a limited
 role that cannot apply the schema. `crates/registry-documentsctl/tests/postgres_cli.rs`
 runs the built `documentsctl` binary from `init` to `status`. Both run only
 under the `postgres-test` feature. `contracts/security-test-traceability.yaml`
@@ -380,8 +396,10 @@ names each test under DOCUMENTS-SEC-34 to DOCUMENTS-SEC-36.
   serving host; when the two credentials name the same role, apply records a
   single-role activation and the runtime keeps that authority.
 - Anyone holding the runtime credential can replay a dead-lettered job. A
-  replay only re-queues verification and releases nothing, so the risk is
-  repeated verifier load, not disclosure.
+  verification replay only re-queues verification and releases nothing, so
+  the risk is repeated verifier load, not disclosure. An erasure replay only
+  re-queues an erasure the custodian or a rejection already armed; it
+  cannot choose what is erased.
 - The companion journal lives on the host the operator command runs on;
   collect it with the runtime's journal.
 - `documentsctl init` refuses an existing path before it stages the
@@ -474,14 +492,6 @@ does not honour, and store an object while answering 503. The unit tests in
 standing and the erasure retry window. `contracts/security-test-traceability.yaml`
 names each test.
 
-### Owed in this pull request
-
-The `documentsctl` erasure status report, over
-`registry_documents::erasure::erasure_status` (its counts are proven by
-`the_erasure_status_counts_grace_due_and_dead_lettered`), lands in the
-same pull request as the sweep. It is not a residual risk to carry past
-the merge.
-
 ### Residual risk
 
 - "Erased" means the Store can no longer serve the bytes. PostgreSQL keeps
@@ -499,8 +509,9 @@ the merge.
   lost on restore unless the audit file is restored too and its requests
   are repeated. The restore drill in `README.md` runs with serving stopped
   and erasure paused.
-- Replaying a dead-lettered erasure job is owed by WP7; until then a
-  version whose erasure dead-lettered stays pending and unservable.
+- A version whose erasure dead-lettered stays pending and unservable until
+  an operator replays it with `documentsctl erasure replay`; `documentsctl
+  erasure status` counts the dead letters and `erasure list` names them.
 - The Rust client has no method for the erasure route yet.
 - Removal ends every active grant on the document whatever state its
   version is in. The document row records the first request, so a removal

@@ -118,7 +118,8 @@ documentsctl verification replay --runtime-config /etc/registry-documents/runtim
 ```
 
 A generation other than the current one is refused, so two operators cannot replay the same job
-twice. No HTTP route lists or replays a job.
+twice. A version whose removal was requested, or whose bytes are being or have been erased, is
+refused too. No HTTP route lists or replays a job.
 
 {/* Evidence: crates/registry-documents/src/verification.rs, dead_letters, replay, and
     ReplayRefusal. */}
@@ -143,7 +144,12 @@ them. Set their retention to the longest period your retention schedule allows e
 survive; nothing in the runtime file controls it.
 
 An erasure job retries for about seven days before it dead-letters, and its version stays
-`erasure-pending`.
+`erasure-pending`; the sweep never retries it on its own. `documentsctl erasure status` shows
+whether erasure is active or paused and counts the versions in their grace, those due, and the
+dead-lettered jobs. `documentsctl erasure list` names the dead-lettered jobs with their
+generation, and `documentsctl erasure replay`, with the same `--version-id` and
+`--expected-generation` options as a verification replay, returns one to pending once the
+storage answers again.
 
 To halt erasure without stopping the service, set `cleanup.erasure: paused` and restart. The
 service still serves, still takes removal requests, and logs a warning at startup. Due versions
@@ -151,7 +157,7 @@ wait until you set it back to `active` and restart.
 
 {/* Evidence: products/documents/README.md, Retention and erasure;
     products/documents/RUNTIME-CONFIG.md, Keys;
-    crates/registry-documents/src/erasure.rs, cleanup_once. */}
+    crates/registry-documents/src/erasure.rs, cleanup_once, dead_letters, and replay. */}
 
 ## Events
 
