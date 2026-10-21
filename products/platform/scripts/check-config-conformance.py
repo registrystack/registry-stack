@@ -417,6 +417,7 @@ ROWS: tuple[Row, ...] = (
             "SecretReference",
             "TaskGrantStatusConfig",
             "TlsTermination",
+            "UrlHookDestinationConfig",
         ),
         reference_refusal=TestRef(
             "crates/registry-scheduling/src/config.rs",

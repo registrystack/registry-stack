@@ -16,16 +16,16 @@ use registry_platform_audit::{
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::package::is_envelope_file;
 use registry_platform_config::{
-    sha256_uri, ConfigBlockError, ConfigBlockErrorKind, PackageDigestMismatch, PackageError,
-    PackageErrorKind, PackageLimits, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
-    RuntimeFileCheck, SecretReference, SecretResolver, VerifiedPackage, DEFAULT_STAND_IN,
-    REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
+    sha256_uri, url_hook_destinations, ConfigBlockError, ConfigBlockErrorKind,
+    PackageDigestMismatch, PackageError, PackageErrorKind, PackageLimits, RemovedKey,
+    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver,
+    VerifiedPackage, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
     JwksSource, ListenerNetworkExposure, OidcClientsConfig, OidcIssuerConfig, PackageConfig,
     PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TaskGrantStatusConfig,
-    TlsTermination,
+    TlsTermination, UrlHookDestinationConfig,
 };
 use registry_platform_oidc::task_grant::{TaskGrantStatusEndpoint, TaskGrantStatusRegistry};
 use registry_platform_oidc::{
@@ -33,7 +33,7 @@ use registry_platform_oidc::{
     JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
 };
 use registry_platform_yaml::{
-    escape_pointer_segment, Diagnostic, Invalid, LocalId, Report, RetiredApiVersion,
+    escape_pointer_segment, Diagnostic, Invalid, Report, RetiredApiVersion,
 };
 use registry_scheduling_core::{
     bounded_u32, ObserverHandler, SchedulingPolicy, AUTHORED_POLICY_FILE,
@@ -65,17 +65,11 @@ pub const MAX_CLAIM_OWNER_RETENTION_DAYS: u32 = 365;
 /// dead-letter inspection, in days.
 pub const MAX_HOOK_PAYLOAD_RETENTION_DAYS: u32 = 30;
 
-/// The most hook destinations one deployment may bind.
-pub const MAX_HOOK_DESTINATIONS: usize = 128;
-
-/// The shortest one hook delivery attempt may be bounded to, in milliseconds.
-pub const MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS: u32 = 100;
-
-/// The longest one hook delivery attempt may be bounded to, in milliseconds.
-pub const MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS: u32 = 10_000;
-
-/// The most delivery attempts a hook destination may allow one event.
-pub const MAX_HOOK_ATTEMPTS: u8 = 20;
+/// The hook destination bounds, from the shared URL hook destination block.
+pub use registry_platform_config::{
+    MAX_HOOK_ATTEMPTS, MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS, MAX_HOOK_DESTINATIONS,
+    MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
+};
 
 /// The largest `audit.rotateBytes` the shared audit writer accepts.
 const MAXIMUM_AUDIT_ROTATE_BYTES: u64 = u32::MAX as u64;
@@ -458,41 +452,12 @@ pub struct DestinationsConfig {
     /// Logical URL hook destinations. The governed policy names only these
     /// ids; URL, signing secret, and retry ceilings stay deployment-owned.
     /// At most 128 are bound, each keyed by a local identifier.
-    #[serde(default, deserialize_with = "hook_destinations")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "hook_destinations_schema"))]
-    pub hooks: BTreeMap<String, HookDestinationConfig>,
-}
-
-/// The hook destination map: at most [`MAX_HOOK_DESTINATIONS`] bindings,
-/// each keyed by a local identifier (CFG-ID-1).
-fn hook_destinations<'de, D>(
-    deserializer: D,
-) -> Result<BTreeMap<String, HookDestinationConfig>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let hooks = BTreeMap::<LocalId, HookDestinationConfig>::deserialize(deserializer)?;
-    if hooks.len() > MAX_HOOK_DESTINATIONS {
-        return Err(Invalid::expected(
-            "at most 128 hook destinations",
-            "Remove hook destinations until at most 128 remain.",
-        )
-        .into_error());
-    }
-    Ok(hooks
-        .into_iter()
-        .map(|(id, destination)| (id.into_string(), destination))
-        .collect())
-}
-
-#[cfg(feature = "schema")]
-fn hook_destinations_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    schemars::json_schema!({
-        "type": "object",
-        "maxProperties": MAX_HOOK_DESTINATIONS,
-        "propertyNames": generator.subschema_for::<LocalId>(),
-        "additionalProperties": generator.subschema_for::<HookDestinationConfig>()
-    })
+    #[serde(default, deserialize_with = "url_hook_destinations")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_config::url_hook_destinations_schema")
+    )]
+    pub hooks: BTreeMap<String, UrlHookDestinationConfig>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -507,70 +472,6 @@ pub struct ReminderDestinationConfig {
     #[serde(default, deserialize_with = "optional_secret_reference")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<SecretReference>"))]
     pub bearer_token_ref: Option<String>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HookDestinationConfig {
-    /// An https URL, or http on 127.0.0.1, localhost, or [::1], without a
-    /// query or fragment.
-    #[serde(deserialize_with = "registry_scheduling_core::url")]
-    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
-    pub url: String,
-    #[serde(deserialize_with = "secret_reference")]
-    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
-    pub hmac_sha256_key_ref: String,
-    /// How long one delivery attempt may take, from 100 through 10000
-    /// milliseconds.
-    #[serde(
-        default = "default_hook_attempt_timeout_milliseconds",
-        deserialize_with = "bounded_u32::<_, MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS, MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS>"
-    )]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(range(
-            min = MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
-            max = MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS
-        ))
-    )]
-    pub attempt_timeout_milliseconds: u32,
-    /// How many delivery attempts one event gets, from 1 through 20.
-    #[serde(
-        default = "default_hook_maximum_attempts",
-        deserialize_with = "hook_attempts"
-    )]
-    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = MAX_HOOK_ATTEMPTS)))]
-    pub maximum_attempts: u8,
-}
-
-/// A hook destination's attempt count, from 1 through [`MAX_HOOK_ATTEMPTS`].
-fn hook_attempts<'de, D>(deserializer: D) -> Result<u8, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    const MAX: u32 = MAX_HOOK_ATTEMPTS as u32;
-    let attempts = bounded_u32::<D, 1, MAX>(deserializer)?;
-    u8::try_from(attempts).map_err(|_| Invalid::out_of_range(1, MAX).into_error())
-}
-
-impl HookDestinationConfig {
-    /// Whether the attempt timeout and attempt count stay inside the
-    /// delivery budget: the bound the reader enforces at load and hook
-    /// activation enforces again before it binds the destination.
-    pub(crate) fn within_delivery_budget(&self) -> bool {
-        (MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS..=MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS)
-            .contains(&self.attempt_timeout_milliseconds)
-            && (1..=MAX_HOOK_ATTEMPTS).contains(&self.maximum_attempts)
-    }
-}
-
-const fn default_hook_attempt_timeout_milliseconds() -> u32 {
-    5_000
-}
-
-const fn default_hook_maximum_attempts() -> u8 {
-    8
 }
 
 /// Retention periods the retention sweep enforces. Every value is deployment
@@ -881,7 +782,7 @@ impl RuntimeConfig {
             self.check_binding_reference(
                 findings,
                 &["destinations", "hooks", id, "hmacSha256KeyRef"],
-                &destination.hmac_sha256_key_ref,
+                destination.hmac_sha256_key_ref.as_str(),
             );
         }
     }

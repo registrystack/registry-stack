@@ -273,7 +273,7 @@ mod tests {
         }
         for (definition, property) in [
             ("ReminderDestinationConfig", "bearerTokenRef"),
-            ("HookDestinationConfig", "hmacSha256KeyRef"),
+            ("UrlHookDestinationConfig", "hmacSha256KeyRef"),
         ] {
             assert_eq!(
                 document["$defs"][definition]["properties"][property]["$ref"],
