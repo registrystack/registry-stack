@@ -4155,7 +4155,7 @@
       "description": "Registry Coordinator portable project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/authoring.rs",
-        "sha256": "3202cbf1a6109ae79bba5a362fe0e3d2039136f09291f206247093e59bb615f9"
+        "sha256": "a17ce5230cfa08ec66ec73c90837a1035a995e37e719036eba43fb9cf7e5cf26"
       },
       "artifact": {
         "path": "products/coordinator/generated/project/project.schema.json",
