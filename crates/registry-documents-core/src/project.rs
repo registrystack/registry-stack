@@ -369,10 +369,12 @@ pub struct MandatoryRestrictions {
     pub allowed_content_types: AllowedContentTypes,
     pub grant_expiry_hours: BoundedU32<1, MAXIMUM_PERIOD_HOURS>,
     pub maximum_grant_expiry_hours: BoundedU32<1, MAXIMUM_PERIOD_HOURS>,
-    /// Time between the custodian's removal request and erasure of the
-    /// bytes. Grant expiry and revocation erase nothing: they only stop a
-    /// grant releasing.
-    pub cleanup_grace_hours: BoundedU32<0, MAXIMUM_PERIOD_HOURS>,
+    /// Time between the custodian's removal request, or a rejection, and
+    /// erasure of the bytes, and the length of a reservation's upload
+    /// window. At least one hour, so an operator always has a window to
+    /// restore from a mistaken request. Grant expiry and revocation erase
+    /// nothing: they only stop a grant releasing.
+    pub cleanup_grace_hours: BoundedU32<1, MAXIMUM_PERIOD_HOURS>,
 }
 
 /// One after-commit observer hook.
@@ -514,6 +516,20 @@ mod tests {
         assert!(refusal_codes(&text)
             .iter()
             .any(|code| code == "config.out-of-range"));
+    }
+
+    #[test]
+    fn a_zero_hour_cleanup_grace_is_refused_at_its_path() {
+        let text = STARTER.replacen("cleanupGraceHours: 24", "cleanupGraceHours: 0", 1);
+        assert_ne!(text, STARTER);
+        assert_eq!(
+            refusals(&text),
+            [(
+                "config.out-of-range".to_owned(),
+                "/documentPolicies/citizen-delivery/mandatoryRestrictions/cleanupGraceHours"
+                    .to_owned()
+            )]
+        );
     }
 
     #[test]

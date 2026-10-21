@@ -50,10 +50,12 @@ document is kept until the citizen removes it.
 `POST /documents/{documentId}/erasure` starts the custody clock. In one
 transaction it suspends release, revokes every active grant on the document,
 cancels any pending verification, and marks the version `erasure-pending` with
-a due time of now plus the policy's `cleanupGraceHours`. No grant, download,
-or verdict that starts after the request commits releases the version. A
-download admitted before the commit is not interrupted and may finish after
-it, bounded by its transfer deadline.
+a due time of now plus the policy's `cleanupGraceHours`, which is at least one
+hour, so the operator always has a window to restore from a mistaken request
+(a project that sets it to 0 is refused). No grant, download, or verdict that
+starts after the request commits releases the version. A download admitted
+before the commit is not interrupted and may finish after it, bounded by its
+transfer deadline.
 
 A rejection schedules the erasure of the rejected bytes the same way, due
 `cleanupGraceHours` after the verdict. The version reads `rejected` until its
