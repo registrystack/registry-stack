@@ -470,15 +470,21 @@ decisions:
       The envelope type of a document event is the id of the hook that
       captured it, as the shared hook envelope defines it, and its
       dataschema names the event family. Two hooks on one trigger deliver
-      two events with different types and the same data schema.
+      two events with different types and the same data schema. The
+      subject's recordRevision is the version's or grant's revision, which
+      every recorded change of that record raises by one, so events about
+      one record carry strictly increasing revisions.
     reasoning: >-
       The shared delivery worker re-reads the stored envelope and refuses
       one whose type disagrees with the outbox row it was captured under,
       and every product follows the same envelope contract. The data schema
       already tells a receiver which family it holds, so no second type
-      vocabulary is needed.
+      vocabulary is needed. A receiver that sees deliveries out of order or
+      twice needs a per-record order to keep the latest state, and a fixed
+      revision would give it none.
     evidence:
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_verdict_captures_one_delivery_per_matching_observer_with_the_closed_projection}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_version_approved_again_after_a_verifier_rebind_reports_ready_again}
   - id: DOCUMENTS-DEC-28
     subject: Only a change of state emits, and grant expiry emits nothing
     decision: >-
@@ -486,17 +492,24 @@ decisions:
       ready that was not ready, including a version approved again after a
       verifier binding change suspended it. document-version.rejected is
       emitted when a version becomes rejected. document-grant.changed is
-      emitted once on issue and once on revocation; an issue replayed under
-      its idempotency key and a repeated revocation emit nothing. A grant
-      reaching its expiry emits nothing, and erasure emits nothing.
+      emitted once on issue and once on revocation, including one revoked
+      event for each grant a removal request revokes; an issue replayed
+      under its idempotency key, a repeated revocation, and a repeated
+      removal emit nothing. A grant reaching its expiry is not a recorded
+      transition and emits nothing: the issued event carries expiresAt, and
+      a receiver reads the lapse from it. This departs from the design
+      handoff, which had expiry recorded as expired; no sweep records it.
+      The version's own erasure steps emit nothing.
     reasoning: >-
       An event reports a transition the Store committed. Expiry is not a
-      transition anyone performs: the grant stops releasing at a time the
-      observer already received as part of the policy terms, and emitting
-      it would need a timer outside any transaction. Erasure events belong
-      with the erasure work, which owns that transition.
+      transition anyone performs: the grant stops releasing at the time the
+      issued event already carried, and recording it would need a sweep
+      outside any caller's transaction for a fact the receiver already
+      holds. A removal does revoke grants, and an observer that tracks them
+      must hear about it as it would about any revocation.
     evidence:
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: grant_issue_and_revoke_each_capture_one_event_and_repeats_capture_none}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_removal_captures_one_revoked_event_per_grant_it_revokes_and_a_repeat_none}
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rejection_captures_the_rejected_event_once}
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_version_approved_again_after_a_verifier_rebind_reports_ready_again}
   - id: DOCUMENTS-DEC-29
@@ -513,18 +526,21 @@ decisions:
       and stays after commit.
     evidence:
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rolled_back_transition_captures_nothing}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_capture_that_cannot_commit_rolls_its_transition_back}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rolled_back_removal_captures_nothing}
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: an_unreachable_destination_never_blocks_a_transition}
   - id: DOCUMENTS-DEC-30
-    subject: actorKind is the kind of the caller whose act the event reports
+    subject: actorKind appears on grant events only, as the kind of the caller whose act they report
     decision: >-
-      For a version event, actorKind is the kind of the caller that reserved
-      the version; the verifier is not a caller. For a grant event, it is the
-      kind of the caller that issued or revoked the grant. It is service or
-      human, never a subject.
+      A grant event's actorKind is the kind of the caller that issued or
+      revoked the grant, or that requested the removal which revoked it. It
+      is service or human, never a subject. A version event carries no
+      actorKind.
     reasoning: >-
       A receiver needs to tell an institution's own system from a person
-      acting for themselves without learning who either is. The reserving
-      caller is the only principal behind a verdict.
+      acting for themselves without learning who either is. A verdict is the
+      verifier's, not a caller's; reporting the reserving caller's kind on
+      it would attribute the verdict to someone who did not make it.
     evidence:
       - {path: crates/registry-documents/src/hooks_tests.rs, name: each_family_projects_exactly_its_closed_fields}
   - id: DOCUMENTS-DEC-31
@@ -533,17 +549,26 @@ decisions:
       Hook declarations live in the project file and change the package
       digest; serve refuses a package that is not the active one, so adding,
       removing, or changing a hook takes documentsctl apply before restart.
-      Rebinding a destination URL or key in the runtime configuration does
-      not change the package. The delivery tables are created by the
-      embedded schema apply installs, and the runtime role is granted them
-      with the rest of what serving needs.
+      A destination's binding in the runtime configuration does not change
+      the package, but every pending or leased delivery pins the binding it
+      was captured under, and startup refuses while one remains whose
+      binding is gone. A hook moves to a new URL or key by binding a new
+      destination id, pointing the hook at it, and applying, while the old
+      entry stays until its deliveries drain or expire. No command abandons
+      pending deliveries. The delivery tables are created by the embedded
+      schema apply installs, and the runtime role is granted them with the
+      rest of what serving needs.
     reasoning: >-
       What is observed, and with which fields, is a reviewed governance
       choice like a policy; where it is sent is an operator binding. Keeping
       the first in the activated package gives it the same review trail.
+      Sending retained work to a binding it was not captured under would
+      deliver signed events somewhere the capture never approved, so the
+      shared delivery worker refuses that rather than guess.
     evidence:
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_split_runtime_role_captures_and_delivers_under_its_own_grants}
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_destination_changed_under_a_pending_delivery_refuses_startup_until_it_drains}
   - id: DOCUMENTS-DEC-32
     subject: Event data schemas are closed and require no member
     decision: >-
@@ -556,3 +581,23 @@ decisions:
       projection invalid.
     evidence:
       - {path: crates/registry-documents/src/schema.rs, name: event_schemas_are_deterministic_closed_and_one_per_trigger, features: [schema]}
+  - id: DOCUMENTS-DEC-33
+    subject: A hook hears only about documents under the policies it names
+    decision: >-
+      Every hook carries a required, non-empty policies list naming
+      policies the project declares, each once, and is captured only for a
+      document held under one of them. The list is part of the hook's
+      compiled fingerprint. Eligibility is the operator's per-policy
+      declaration, reviewed with the package; it is a plain list, not a
+      when condition. Routing by custodian is deferred.
+    reasoning: >-
+      A project may hold documents for several owning systems under
+      different policies, and a hook that heard about all of them would tell
+      one system about another's documents. The policy is the unit the
+      project already governs, so scoping by it adds no new vocabulary and
+      no run-time evaluation; per-custodian routing would need a custodian
+      model on the event the Store does not yet carry.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_hook_hears_nothing_about_a_document_under_a_policy_it_does_not_name}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_hook_without_policies_is_refused}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: the_compiled_fingerprint_covers_the_policy_scope_but_not_its_order}

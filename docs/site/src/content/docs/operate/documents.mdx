@@ -204,7 +204,11 @@ commands write their own audit journal beside the service's.
 A grant keeps its expiry; who may hold it follows the active package, so a change to a policy's
 recipients applies to grants already issued. To change a policy, a profile, or a hook, edit
 `documents.yaml`, check it, and run `package`, `plan`, and `apply` again, then restart `serve`.
-Changing only the runtime file, such as a hook destination's URL or key, needs only a restart.
+Changing only the runtime file needs only a restart, with one exception: a delivery not yet sent
+keeps the destination binding it was captured under, and `serve` refuses to start while one waits on
+a binding the file no longer holds. To move a hook to a new URL or key, add a destination under a new
+id, point the hook at it, apply, and restart; remove the old entry once its deliveries have been sent,
+dead-lettered, or expired.
 
 Changing the verifier's `url` or `policyId` changes its binding. At the next start, every version
 verified under the old binding is suspended and verified again under the new one, so plan the
@@ -320,7 +324,8 @@ wait until you set it back to `active` and restart, and a replayed job waits wit
 ## Events
 
 A project's `hooks` send after-commit events to a URL destination the runtime file binds under
-`destinations.hooks`, with its HMAC key. Three triggers exist:
+`destinations.hooks`, with its HMAC key. Each hook lists the `policies` whose documents it hears
+about, and hears nothing about a document under any other policy. Three triggers exist:
 
 | Trigger | Sent when |
 | ------- | --------- |
@@ -328,13 +333,15 @@ A project's `hooks` send after-commit events to a URL destination the runtime fi
 | `document-version.rejected` | A verdict rejects a version |
 | `document-grant.changed` | A grant is issued or revoked, including each grant a removal revokes |
 
-An event carries identifiers, the version digest, the policy, and the kind of actor, never content,
-a label, a media type, a name, or a subject. A grant reaching its expiry sends nothing. A failed
+An event carries identifiers, the version digest, and the policy, never content, a label, a media
+type, a name, or a subject. A grant event also carries the kind of actor and the grant's `expiresAt`.
+A grant reaching its expiry sends nothing; the receiver reads the lapse from `expiresAt`. A failed
 delivery is retried with backoff up to the destination's `maximumAttempts` and never delays or
 undoes the change it reports. An observer cannot answer with a change of its own: the Store refuses
 it and records the refusal.
 
 {/* Evidence: products/documents/examples/starter/documents.yaml, hooks;
+    products/documents/README.md, Events and observers;
     products/documents/RUNTIME-CONFIG.md, Keys. */}
 
 ## Restore from a backup
