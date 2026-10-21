@@ -401,7 +401,7 @@ pub struct VerificationStore {
     /// The last replay audit entry this store was asked to write.
     replay_trace: ReplayTrace,
     graces: Graces,
-    hooks: Option<ActivatedHooks>,
+    hooks: ActivatedHooks,
 }
 
 /// Each declared policy's `cleanupGraceHours`, as the two parallel arrays
@@ -428,15 +428,16 @@ impl Graces {
 }
 
 impl VerificationStore {
-    /// A store that records verdicts and captures no document event. An
-    /// operator command that never writes a verdict uses it as is; `serve`
-    /// adds its hooks with [`VerificationStore::with_hooks`].
+    /// A store that records verdicts and captures each document event a
+    /// verdict reports through `hooks`, inside the transaction that records
+    /// the verdict.
     #[must_use]
     pub fn new(
         store: PostgresStore,
         schema: String,
         audit: DocumentsAudit,
         graces: Graces,
+        hooks: ActivatedHooks,
     ) -> Self {
         Self {
             store,
@@ -444,17 +445,8 @@ impl VerificationStore {
             audit,
             replay_trace: ReplayTrace::default(),
             graces,
-            hooks: None,
+            hooks,
         }
-    }
-
-    /// Capture a `document-version.ready` or `document-version.rejected`
-    /// event through `hooks` inside the transaction that records the
-    /// verdict.
-    #[must_use]
-    pub fn with_hooks(mut self, hooks: ActivatedHooks) -> Self {
-        self.hooks = Some(hooks);
-        self
     }
 
     async fn append(
@@ -657,13 +649,13 @@ impl DispatchStore for VerificationStore {
             HookTrigger::DocumentVersionReady => !was_ready,
             _ => !was_rejected,
         };
-        if let (true, Some(hooks)) = (emits, &self.hooks) {
+        if emits {
             // A capture that fails rolls the verdict back with it, so the
             // job is retried rather than recorded without its event.
             let event = DocumentEvent::version(transaction, verdict, version_id)
                 .await
                 .map_err(|_| DispatchError::Unavailable)?;
-            hooks
+            self.hooks
                 .capture(transaction, &event)
                 .await
                 .map_err(|_| DispatchError::Unavailable)?;
