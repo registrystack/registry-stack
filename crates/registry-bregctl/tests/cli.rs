@@ -4813,6 +4813,80 @@ recordTypes:
 }
 
 #[test]
+fn check_locates_an_unsafe_display_text_reader_refusal_in_a_module_extension() {
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: extension-display
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://extension-display.example.test
+datasets:
+  - id: records
+modules:
+  - id: core
+    version: "1"
+recordTypes:
+  - id: entry
+    primaryDataset: records
+    route: entries
+    mutationMode: mutable
+    fields:
+      - id: code
+        type: string
+        maximumLength: 32
+        classification: internal
+"#,
+    );
+    let module_directory = project.path().join("modules/core");
+    fs::create_dir_all(&module_directory).unwrap();
+    let module = r#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: core
+version: "1"
+extendRecordTypes:
+  - recordType: entry
+    fields:
+      - id: first-note
+        type: text
+        maximumLength: 128
+        classification: internal
+  - recordType: entry
+    fields:
+      - id: note
+        type: text
+        maximumLength: 128
+        classification: internal
+        display:
+          label: "unsafe-placeholder"
+"#
+    .replace("unsafe-placeholder", "safe\u{202e}text");
+    fs::write(module_directory.join("module.yaml"), module).unwrap();
+
+    let check = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert_eq!(check.status.code(), Some(1), "{check:?}");
+    let report = json_stdout(&check);
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "config.invalid-value")
+        .unwrap_or_else(|| panic!("missing unsafe display-text refusal: {report}"));
+    assert_eq!(
+        diagnostic["path"],
+        "/extendRecordTypes/1/fields/0/display/label"
+    );
+    assert_eq!(
+        diagnostic["source"]["file"],
+        module_directory.join("module.yaml").display().to_string()
+    );
+    assert_eq!(diagnostic["source"]["line"], 19);
+    assert_eq!(diagnostic["source"]["column"], 18);
+    assert_check_diagnostic(diagnostic, Some("BRegModule"));
+}
+
+#[test]
 fn generate_preserves_related_compiler_paths_in_json_and_human_reports() {
     let project = TestProject::from_registry_source(
         br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
