@@ -232,3 +232,6 @@ entries:
   - id: DOCUMENTS-SEC-46
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: no_delete_cascades_through_custody_records}
+  - id: DOCUMENTS-SEC-47
+    tests:
+      - {path: crates/registry-documents-client/tests/document_routes.rs, name: a_download_whose_digest_disagrees_hands_the_caller_nothing}
