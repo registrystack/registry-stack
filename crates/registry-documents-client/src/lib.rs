@@ -12,8 +12,8 @@
 //!
 //! The client covers every route the runtime serves: liveness, reserving a
 //! document, sending its content, reading and listing documents, downloading
-//! a version's content, issuing, listing, and revoking grants, and listing
-//! the policies a caller may use. It keeps the deployment prefix of the
+//! a version's content, issuing, listing, and revoking grants, asking for a
+//! document's erasure, and listing the policies a caller may use. It keeps the deployment prefix of the
 //! configured service URL, never follows redirects, reads every answer under
 //! a bounded byte ceiling, reads one list page per call, and lands every
 //! failure in one named shape: a configuration defect, a request refused
