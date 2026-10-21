@@ -45,7 +45,7 @@ use crate::postgres::{ExpectedRegistryIdentity, RegistryLockKey, RuntimePool};
 
 /// The audit schema of the attachment-verification attempt and outcome
 /// entries.
-pub const ATTACHMENT_VERIFICATION_AUDIT_SCHEMA: &str = "breg-attachment-verification-audit/v2";
+pub const ATTACHMENT_VERIFICATION_AUDIT_SCHEMA: &str = "breg-attachment-verification-audit/v3";
 
 /// The verification job table, in the shape `registry-platform-dispatch`
 /// declares.
@@ -487,7 +487,7 @@ impl VerificationStore {
             .profile()
             .key_hasher()
             .audit_reference_hash(
-                "breg-attachment-verification-v1",
+                "breg-attachment-verification-v2",
                 &self.admission.expected.activation_id,
                 correlation,
             )

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- BREAKING: attachment verification audit entries use the schema
+  `breg-attachment-verification-audit/v3`, with the same record fields as
+  `/v2`. The keyed verification reference is derived under the
+  `breg-attachment-verification-v2` domain from the verification id and the
+  attempt's lease token, in place of the `breg-attachment-verification-v1`
+  domain over the content digest, content type, and lease id, so a reference
+  under one domain never matches one under the other for the same
+  verification. Migration: a reader joining verification entries across the
+  change branches on the schema.
 - BREAKING: one 60 second attachment verification attempt covers both the
   storage read and the verifier call, so `breg` refuses at configuration load
   an `attachmentStorage.attemptTimeoutMilliseconds` (S3 storage only) plus
