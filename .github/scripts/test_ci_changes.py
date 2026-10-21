@@ -3430,6 +3430,7 @@ class LockfileSelectionTest(unittest.TestCase):
                     "registry-evidence-authoring",
                     "registry-evidencectl",
                     "registry-messaging",
+                    "registry-platform-hooks",
                     "registry-platform-script",
                 }
             ),
