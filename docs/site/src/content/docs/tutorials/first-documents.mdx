@@ -59,8 +59,8 @@ documentsctl init my-documents
 created: my-documents
   documents.yaml
   runtime.example.yaml
-next: Run documentsctl check --project DIRECTORY --runtime-config DIRECTORY/runtime.example.yaml.
-next: Run documentsctl package DIRECTORY --output PACKAGE, point runtime.yaml at PACKAGE and pin its digest, run documentsctl plan, then documentsctl apply, then documents serve.
+next: Run documentsctl check --project my-documents --runtime-config my-documents/runtime.example.yaml.
+next: Run documentsctl package my-documents --output my-documents-package, point runtime.yaml at my-documents-package and pin its digest, run documentsctl plan, then documentsctl apply, then documents serve.
 ```
 
 `documents.yaml` is the project: access profiles and three document policies, each commented.
