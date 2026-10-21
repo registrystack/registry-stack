@@ -5294,11 +5294,11 @@
       "description": "Registry Scheduling runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling/src/schema.rs",
-        "sha256": "95ed07d3de2d4259a94b34c5254015272f973d9c7bc6ec7dceea4d3c34e735a9"
+        "sha256": "c2b892dbabea581b983f28991dd206a00f252076357f033a7164c2599a92ac5c"
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "1500f7e2e90ad90139df9141d3d8ff1d850f9dca54469f469f7493ad96550103",
+        "sha256": "66ee663ec4f54e72590d2fc5a94c094b0e6342d39ae05ceda0e824bef7292d40",
         "mediaType": "application/schema+json"
       }
     },
