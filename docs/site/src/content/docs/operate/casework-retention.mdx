@@ -117,8 +117,8 @@ readable until `availableUntil`.
 
 An attempt interrupted by a crash or restart counts as a failed attempt, so an interrupted final
 attempt is not tried again. The producer still learns the result from the result feed,
-`GET /v1/review-results`, which BReg polls. With `maximumAttempts: 1`, any interrupted attempt ends
-the delivery as `dead-lettered`.
+`GET /v1/review-results`, which the Base Registry Engine polls. With `maximumAttempts: 1`, any
+interrupted attempt ends the delivery as `dead-lettered`.
 
 {/* Evidence: products/casework/generated/runtime/runtime.schema.json, ReviewCompletionRuntimeConfig;
     crates/registry-casework/src/runtime/completion.rs, CompletionStore and completion_policy();
