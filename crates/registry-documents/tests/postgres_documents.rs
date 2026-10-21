@@ -2243,3 +2243,43 @@ async fn an_authenticated_json_body_over_the_limit_is_refused_as_too_large() {
         .await;
     answer.assert_problem(ProblemCode::RequestBodyTooLarge);
 }
+
+#[tokio::test]
+async fn an_upload_to_an_unknown_or_another_caller_s_reservation_is_journalled() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    let content = pdf(128, 15);
+    let (_, _, path) = reservation(
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &content, PDF)
+            .await,
+    );
+    let unknown = "00000000-0000-4000-8000-000000000000";
+    api.put(STRANGER, &path, PDF, Body::from(content.clone()))
+        .await
+        .assert_problem(ProblemCode::ResourceNotFound);
+    api.put(
+        APP,
+        &format!("/uploads/{unknown}/content"),
+        PDF,
+        Body::from(content),
+    )
+    .await
+    .assert_problem(ProblemCode::ResourceNotFound);
+
+    let entries = deployment.audit_entries();
+    let content_entries = entries
+        .iter()
+        .filter(|entry| entry["record"]["event"] == "documents.upload-content")
+        .collect::<Vec<_>>();
+    assert_eq!(content_entries.len(), 4, "{content_entries:#?}");
+    let reserved = path
+        .trim_start_matches("/uploads/")
+        .trim_end_matches("/content");
+    assert_eq!(content_entries[0]["record"]["uploadId"], reserved);
+    assert_eq!(content_entries[2]["record"]["uploadId"], unknown);
+    for refusal in [content_entries[1], content_entries[3]] {
+        assert_eq!(refusal["record"]["outcome"], "refused");
+        assert_eq!(refusal["record"]["code"], "resource.not-found");
+    }
+}
