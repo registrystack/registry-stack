@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::artifacts::{event_data_schema_binding, generate_artifacts};
 use crate::contract::{
     parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource, ActionSource,
-    Classification, ConstraintSource, DerivedExecutionSource, DerivedFieldSource,
+    Classification, ConstraintSource, DerivedExecutionSource, DerivedFieldSource, DisplaySource,
     EntityExtensionSource, EntitySource, EventConditionSource, EventTrigger, FieldSource,
     FieldTypeSource, GeoJsonSource, HookHandlerSource, HookPhase, LookupValueOrigin,
     ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
@@ -263,6 +263,7 @@ pub fn compile_project_with_assets(
     let (module_order, module_map) = order_modules(project, modules, &mut diagnostics);
     validate_cross_file_local_id_collisions(project, modules, &mut diagnostics);
     validate_cross_file_duplicate_display_labels(project, modules, &mut findings);
+    validate_authored_display_text(project, modules, &mut diagnostics);
     let mut functions = BTreeMap::new();
     for (module, function) in project
         .functions
@@ -1280,6 +1281,128 @@ fn validate_cross_file_duplicate_display_labels(
     }
 }
 
+/// Reapply the authoring reader's display-text boundary to public source
+/// values that a Rust caller can construct without deserializing them.
+fn validate_authored_display_text(
+    project: &RegistryProject,
+    modules: &[RegistryModule],
+    errors: &mut Vec<Diagnostic>,
+) {
+    validate_display_source(&project.project.display, "project.project.display", errors);
+    for dataset in &project.datasets {
+        validate_display_source(
+            &dataset.display,
+            &format!("datasets[id={}].display", dataset.id),
+            errors,
+        );
+    }
+    for authority in &project.review_authorities {
+        validate_display_source(
+            &authority.display,
+            &format!("reviewAuthorities[id={}].display", authority.id),
+            errors,
+        );
+    }
+    for entity in &project.entities {
+        validate_entity_display_text(entity, &format!("recordTypes[id={}]", entity.id), errors);
+    }
+    for action in &project.actions {
+        validate_action_display_text(action, &format!("actions[id={}]", action.id), errors);
+    }
+
+    for module in modules {
+        for entity in &module.entities {
+            validate_entity_display_text(
+                entity,
+                &format!("modules[id={}].recordTypes[id={}]", module.id, entity.id),
+                errors,
+            );
+        }
+        for (index, extension) in module.extend_entities.iter().enumerate() {
+            let path = format!("modules[id={}].extendRecordTypes[{index}]", module.id);
+            for field in &extension.fields {
+                validate_display_source(
+                    &field.display,
+                    &format!("{path}.fields[id={}].display", field.id),
+                    errors,
+                );
+            }
+            for derived in &extension.derived {
+                for field in &derived.fields {
+                    validate_display_source(
+                        &field.display,
+                        &format!(
+                            "{path}.derived[id={}].fields[id={}].display",
+                            derived.id, field.id
+                        ),
+                        errors,
+                    );
+                }
+            }
+        }
+        for action in &module.actions {
+            validate_action_display_text(
+                action,
+                &format!("modules[id={}].actions[id={}]", module.id, action.id),
+                errors,
+            );
+        }
+    }
+}
+
+fn validate_entity_display_text(entity: &EntitySource, path: &str, errors: &mut Vec<Diagnostic>) {
+    validate_display_source(&entity.display, &format!("{path}.display"), errors);
+    for field in &entity.fields {
+        validate_display_source(
+            &field.display,
+            &format!("{path}.fields[id={}].display", field.id),
+            errors,
+        );
+    }
+    for derived in &entity.derived {
+        for field in &derived.fields {
+            validate_display_source(
+                &field.display,
+                &format!(
+                    "{path}.derived[id={}].fields[id={}].display",
+                    derived.id, field.id
+                ),
+                errors,
+            );
+        }
+    }
+}
+
+fn validate_action_display_text(action: &ActionSource, path: &str, errors: &mut Vec<Diagnostic>) {
+    validate_display_source(&action.display, &format!("{path}.display"), errors);
+    for input in &action.inputs {
+        validate_display_source(
+            &input.display,
+            &format!("{path}.inputs[id={}].display", input.id),
+            errors,
+        );
+    }
+}
+
+fn validate_display_source(display: &DisplaySource, path: &str, errors: &mut Vec<Diagnostic>) {
+    if let Some(label) = display.label.as_deref() {
+        validate_display_text(label, &format!("{path}.label"), errors);
+    }
+    if let Some(description) = display.description.as_deref() {
+        validate_display_text(description, &format!("{path}.description"), errors);
+    }
+}
+
+fn validate_display_text(value: &str, path: &str, errors: &mut Vec<Diagnostic>) {
+    if DisplayText::new(value).is_err() {
+        errors.push(Diagnostic::error(
+            "breg.display-text.invalid",
+            path,
+            "display text contains a character that cannot be shown safely",
+        ));
+    }
+}
+
 fn validate_project_header(
     project: &RegistryProject,
     profile: CompileProfile,
@@ -1378,6 +1501,11 @@ fn validate_project_header(
                 "breg.manifest-projection.catalog-publisher-name-empty",
                 errors,
             );
+            validate_display_text(
+                &projection.catalog.publisher.name,
+                "project.manifestProjection.catalog.publisher.name",
+                errors,
+            );
             if let Some(description) = projection.catalog.description.as_ref() {
                 validate_projection_text(
                     description,
@@ -1419,6 +1547,9 @@ fn validate_project_header(
                         format!("{path}.owner"),
                         "optional Registry Manifest projection text must not be empty",
                     ));
+                }
+                if let Some(owner) = dataset.owner.as_deref() {
+                    validate_display_text(owner, &format!("{path}.owner"), errors);
                 }
                 if let Some(access_profile) = dataset.access_profile.as_deref() {
                     validate_id(access_profile, &format!("{path}.accessProfile"), errors);

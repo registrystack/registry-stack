@@ -1003,15 +1003,7 @@ pub struct ManifestProjectionDataServiceSource {
     #[serde(deserialize_with = "url_text")]
     #[cfg_attr(feature = "schema", schemars(with = "Url"))]
     pub endpoint_url: String,
-    #[serde(
-        default,
-        deserialize_with = "registry_platform_yaml::optional_display_text",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::DisplayText>")
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint_description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conforms_to: Option<String>,
