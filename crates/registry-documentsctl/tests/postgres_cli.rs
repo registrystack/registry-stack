@@ -49,6 +49,10 @@ impl Deployment {
                 "documents-audit-key",
                 "documentsctl-test-audit-key-not-a-secret",
             ),
+            (
+                "hook-key",
+                "documentsctl-test-hook-key-not-a-secret-0123456789",
+            ),
         ] {
             let path = secrets.join(name);
             std::fs::write(&path, value).unwrap();
@@ -107,6 +111,11 @@ contentVerification:
   type: disabled
 cleanup:
   erasure: active
+destinations:
+  hooks:
+    owning-system-events:
+      url: http://127.0.0.1:9/document-events
+      hmacSha256KeyRef: secret:file/hook-key
 ",
             package = package.display(),
             secrets = self.path("secrets").display(),

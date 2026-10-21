@@ -35,7 +35,7 @@ fn observer(trigger: HookTrigger) -> HookDeclaration {
             .map(|field| (*field).to_owned())
             .collect(),
         handler: HookHandlerSource::Url {
-            destination_id: "custodian-events".to_owned(),
+            destination_id: "owning-system-events".to_owned(),
         },
     }
 }
@@ -386,7 +386,7 @@ fn identity() -> HookRuntimeIdentity {
 fn hook_destination_binding_digests_are_pinned() {
     let (_directory, secrets) = file_secrets();
     let configured = configured(json!({
-        "custodian-events": {
+        "owning-system-events": {
             "url": "https://events.example.test/documents",
             "hmacSha256KeyRef": "secret:file/hook-key",
         },
@@ -397,18 +397,18 @@ fn hook_destination_binding_digests_are_pinned() {
             "maximumAttempts": 3,
         },
     }));
-    let expected = ["custodian-events".to_owned()].into_iter().collect();
+    let expected = ["owning-system-events".to_owned()].into_iter().collect();
 
     let activated = activate_destinations(&expected, &configured, &secrets)
         .expect("the pinned hook destinations activate");
 
     assert_eq!(
         activated.binding_digest,
-        "sha256:f54e8e4683eb6bfcdd742ffbe05146f4212d6ec4a274e5878f595bd5c196184a"
+        "sha256:dc81f68b54c313d5cc310258dbefd0743b5e35e7e53f65ad2a0b89dc93f5b40f"
     );
     assert_eq!(
-        activated.bindings["custodian-events"].binding_digest(),
-        "sha256:4b77b43f78bb0bade2a0c99faa0284f38b26bcfb1627269c823c2e1fe232f4a2"
+        activated.bindings["owning-system-events"].binding_digest(),
+        "sha256:cd4da816b206e19dfa0a04a81c09b9fee12cac3edd1efaaffdecfa55c8e76a58"
     );
     assert_eq!(
         activated.bindings["audit-mirror"].binding_digest(),
@@ -443,7 +443,7 @@ fn activation_refuses_a_signing_secret_it_cannot_resolve() {
     let error = ActivatedHooks::activate(
         &[observer(HookTrigger::DocumentVersionReady)],
         &configured(json!({
-            "custodian-events": {
+            "owning-system-events": {
                 "url": "https://events.example.test/documents",
                 "hmacSha256KeyRef": "secret:file/hook-key",
             },
@@ -461,7 +461,7 @@ fn activation_refuses_a_signing_secret_it_cannot_resolve() {
 fn activation_refuses_an_invalid_identity_or_retention() {
     let (_directory, secrets) = file_secrets();
     let destinations = configured(json!({
-        "custodian-events": {
+        "owning-system-events": {
             "url": "https://events.example.test/documents",
             "hmacSha256KeyRef": "secret:file/hook-key",
         },
@@ -512,7 +512,7 @@ fn the_event_source_names_the_project() {
     let activated = ActivatedHooks::activate(
         &[observer(HookTrigger::DocumentGrantChanged)],
         &configured(json!({
-            "custodian-events": {
+            "owning-system-events": {
                 "url": "https://events.example.test/documents",
                 "hmacSha256KeyRef": "secret:file/hook-key",
             },

@@ -984,6 +984,7 @@ async fn a_verification_audit_failure_refuses_the_claim_and_records_no_verdict()
         deployment.schema.clone(),
         audit,
         Graces::default(),
+        registry_documents::runtime::activated_hooks(&config, deployment.schema.clone()).unwrap(),
     ))
     .unwrap();
     let transport = VerificationTransport::new(

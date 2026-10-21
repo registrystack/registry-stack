@@ -43,7 +43,7 @@ use crate::erasure::{
 };
 use crate::hooks::{ActivatedHooks, HookActivationError, HookDeliveryService, HookRuntimeIdentity};
 use crate::http::{router, DocumentRoutes};
-use crate::package::{load_package, PackageLoadError};
+use crate::package::{load_package, LoadedPackage, PackageLoadError};
 use crate::service::{DocumentService, ServiceSettings};
 use crate::store::{PostgresStore, StoreError};
 use crate::transfer::{TransferBudget, TransferDeadline};
@@ -307,20 +307,7 @@ async fn prepare_with(
     // included, before the listener binds, and prove every retained
     // delivery can still use the exact destination binding captured for
     // it. A deployment may keep extra bindings while old deliveries drain.
-    let hooks = ActivatedHooks::activate(
-        &package.project.hook_declarations(),
-        &config.destinations.hooks,
-        &secrets,
-        HookRuntimeIdentity {
-            project_id: package.project.project.id.as_str().to_owned(),
-            package_digest: package.digest.clone(),
-            database_id: database_id.clone(),
-        },
-        schema.clone(),
-        Duration::from_secs(
-            u64::from(config.retention.hook_payload_retention_days.get()) * 24 * 60 * 60,
-        ),
-    )?;
+    let hooks = activate_hooks(&config, &package, &secrets, &database_id, schema.clone())?;
     let hook_delivery = hooks.delivery_service(store.clone(), audit.clone());
     hook_delivery
         .verify_retained_bindings()
@@ -333,15 +320,13 @@ async fn prepare_with(
         audit.clone(),
     ))
     .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
-    let dispatcher = dispatcher(
-        VerificationStore::new(
-            store.clone(),
-            schema,
-            audit.clone(),
-            Graces::of(&package.project),
-        )
-        .with_hooks(hooks.clone()),
-    )
+    let dispatcher = dispatcher(VerificationStore::new(
+        store.clone(),
+        schema,
+        audit.clone(),
+        Graces::of(&package.project),
+        hooks.clone(),
+    ))
     .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
     let deadline = TransferDeadline::new(&config.transfers);
     let cleanup = Cleanup {
@@ -525,8 +510,16 @@ pub async fn replay_verification(
             source,
         })?;
     let audit = open_audit(config, &secrets, Some(OPERATOR_PROCESS)).await?;
-    let graces = Graces::of(&load_package(config)?.project);
-    let verification = VerificationStore::new(store.clone(), schema, audit, graces);
+    let package = load_package(config)?;
+    let hooks = activate_hooks(
+        config,
+        &package,
+        &secrets,
+        &database_id(config)?,
+        schema.clone(),
+    )?;
+    let graces = Graces::of(&package.project);
+    let verification = VerificationStore::new(store.clone(), schema, audit, graces, hooks);
     replay(&store, verification, version_id, expected_generation)
         .await
         .map_err(|error| match error {
@@ -601,6 +594,41 @@ pub async fn replay_erasure(
             },
             ReplayError::Dispatch(error) => RuntimeError::Dispatch(error.to_string()),
         })
+}
+
+/// The hooks the deployed package declares, activated against the
+/// destinations `config` binds and the database schema `schema`, after
+/// every signing secret they name resolves.
+pub fn activated_hooks(
+    config: &RuntimeConfig,
+    schema: String,
+) -> Result<ActivatedHooks, RuntimeError> {
+    let secrets = config.secret_resolver()?;
+    let package = load_package(config)?;
+    activate_hooks(config, &package, &secrets, &database_id(config)?, schema)
+}
+
+fn activate_hooks(
+    config: &RuntimeConfig,
+    package: &LoadedPackage,
+    secrets: &registry_platform_config::SecretResolver,
+    database_id: &str,
+    schema: String,
+) -> Result<ActivatedHooks, RuntimeError> {
+    Ok(ActivatedHooks::activate(
+        &package.project.hook_declarations(),
+        &config.destinations.hooks,
+        secrets,
+        HookRuntimeIdentity {
+            project_id: package.project.project.id.as_str().to_owned(),
+            package_digest: package.digest.clone(),
+            database_id: database_id.to_owned(),
+        },
+        schema,
+        Duration::from_secs(
+            u64::from(config.retention.hook_payload_retention_days.get()) * 24 * 60 * 60,
+        ),
+    )?)
 }
 
 /// The logical database id the runtime document names. A document without

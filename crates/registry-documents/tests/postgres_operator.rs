@@ -755,6 +755,7 @@ async fn replay_audited(
         deployment.schema.clone(),
         audit,
         Graces::default(),
+        registry_documents::runtime::activated_hooks(&config, deployment.schema.clone()).unwrap(),
     );
     replay(&store, verification, version, 1).await
 }
