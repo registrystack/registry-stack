@@ -12,9 +12,9 @@
 use std::collections::BTreeMap;
 
 use registry_platform_yaml::{
-    ApiVersion, BoundedU32, BoundedU64, Decoded, DisplayText, EnvelopeRule, Expect, ExternalId,
-    FormatSpec, Identified, Invalid, LocalId, ProjectIdentity, Reader, Report, UniqueIdList,
-    UniqueList,
+    ApiVersion, BoundedU32, BoundedU64, Decoded, Diagnostic, DisplayText, Document, EnvelopeRule, Expect, ExternalId,
+    FormatSpec, Identified, Invalid, LocalId, ProjectIdentity, Reader, Report, Severity,
+    UniqueIdList, UniqueList,
 };
 use serde::{Deserialize, Serialize};
 
@@ -71,13 +71,121 @@ impl DocumentsProject {
     /// the name diagnostics carry. A refusal is the report a check command
     /// prints unchanged. A `${...}` expression is refused: substitution
     /// applies to the runtime configuration only (CFG-SEC-2).
+    ///
+    /// Every reference is resolved here too (CFG-ID-4): a policy that names
+    /// an undeclared profile, a profile listed against its role, a
+    /// requester client two profiles share, or a default grant expiry above
+    /// the policy maximum is refused at the member that carries it, every
+    /// finding in one report.
     pub fn decode(file: &str, bytes: &[u8]) -> Result<Decoded<Self>, Report> {
         let mut hook = registry_platform_config::AuthoredExpressions;
-        Reader::new(file)
+        let decoded = Reader::new(file)
             .with_hook(&mut hook)
-            .decode::<Self>(bytes, &Expect::one(&DOCUMENTS_PROJECT_FORMAT))
+            .decode::<Self>(bytes, &Expect::one(&DOCUMENTS_PROJECT_FORMAT))?;
+        let findings = decoded.value.reference_findings(&decoded.document);
+        if findings.is_empty() {
+            Ok(decoded)
+        } else {
+            Err(decoded.document.report_with(findings))
+        }
+    }
+
+    /// The reference and consistency findings of a decoded project.
+    fn reference_findings(&self, document: &Document) -> Vec<Diagnostic> {
+        let mut findings = Vec::new();
+        let mut clients: BTreeMap<&str, &LocalId> = BTreeMap::new();
+        for (id, profile) in &self.access_profiles {
+            for (index, client) in profile.requester_clients.as_slice().iter().enumerate() {
+                if clients.insert(client.as_str(), id).is_some() {
+                    findings.push(document.diagnostic_at_value(
+                        Severity::Error,
+                        "documents.project.shared-requester-client",
+                        &format!("/accessProfiles/{id}/requesterClients/{index}"),
+                        "this requester client already resolves to another access profile",
+                        "List each OAuth client in exactly one access profile, so a token never resolves to two authorities.",
+                    ));
+                }
+            }
+        }
+        for (id, policy) in &self.document_policies {
+            let base = format!("/documentPolicies/{id}");
+            let lists = [
+                ("custodyProfiles", &policy.custody_profiles, CUSTODY_ROLES),
+                ("grantingProfiles", &policy.granting_profiles, GRANTING_ROLES),
+                ("recipientProfiles", &policy.recipient_profiles, RECIPIENT_ROLES),
+            ];
+            for (member, list, roles) in lists {
+                for (index, profile) in list.iter().enumerate() {
+                    let pointer = format!("{base}/{member}/{index}");
+                    if let Some(finding) = self.profile_finding(document, &pointer, profile, roles)
+                    {
+                        findings.push(finding);
+                    }
+                }
+            }
+            let pointer = format!("{base}/representedPrincipalProfile");
+            if let Some(finding) = self.profile_finding(
+                document,
+                &pointer,
+                &policy.represented_principal_profile,
+                REPRESENTED_PRINCIPAL_ROLES,
+            ) {
+                findings.push(finding);
+            }
+            let restrictions = &policy.mandatory_restrictions;
+            if restrictions.grant_expiry_hours.get() > restrictions.maximum_grant_expiry_hours.get()
+            {
+                findings.push(document.diagnostic_at_value(
+                    Severity::Error,
+                    "documents.project.grant-expiry-above-maximum",
+                    &format!("{base}/mandatoryRestrictions/grantExpiryHours"),
+                    "the default grant expiry is above the policy's maximum grant expiry",
+                    "Lower grantExpiryHours to at most maximumGrantExpiryHours, or raise the maximum.",
+                ));
+            }
+        }
+        findings
+    }
+
+    /// The finding for one profile reference, if it names no declared
+    /// profile or a profile whose role the member does not admit.
+    fn profile_finding(
+        &self,
+        document: &Document,
+        pointer: &str,
+        profile: &LocalId,
+        roles: &[AccessRole],
+    ) -> Option<Diagnostic> {
+        match self.access_profiles.get(profile) {
+            None => Some(document.diagnostic_at_value(
+                Severity::Error,
+                "documents.project.unknown-profile",
+                pointer,
+                "this names an access profile the project does not declare",
+                "Name a profile declared under accessProfiles, or declare it.",
+            )),
+            Some(declared) if !roles.contains(&declared.role) => {
+                Some(document.diagnostic_at_value(
+                    Severity::Error,
+                    "documents.project.profile-role-mismatch",
+                    pointer,
+                    "this names an access profile whose role this member does not admit",
+                    "Custody profiles have the custodian or represented-principal role, granting profiles the custodian role, the represented principal profile the represented-principal role, and recipient profiles the recipient role.",
+                ))
+            }
+            Some(_) => None,
+        }
     }
 }
+
+/// The roles a policy's custody profiles may have.
+const CUSTODY_ROLES: &[AccessRole] = &[AccessRole::Custodian, AccessRole::RepresentedPrincipal];
+/// The roles a policy's granting profiles may have.
+const GRANTING_ROLES: &[AccessRole] = &[AccessRole::Custodian];
+/// The roles a policy's represented principal profile may have.
+const REPRESENTED_PRINCIPAL_ROLES: &[AccessRole] = &[AccessRole::RepresentedPrincipal];
+/// The roles a policy's recipient profiles may have.
+const RECIPIENT_ROLES: &[AccessRole] = &[AccessRole::Recipient];
 
 /// One declared caller profile.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -94,6 +202,11 @@ pub struct AccessProfile {
     pub actor_kind: ActorKind,
     /// What a caller resolved to this profile is to a document.
     pub role: AccessRole,
+    /// The institution this profile acts for. The Document Store records it
+    /// as the issuing institution of every document version a caller under
+    /// this profile reserves; a profile that names none records none.
+    #[serde(default)]
+    pub institution: Option<ExternalId>,
 }
 
 /// A list of at least one distinct external identifier. An empty list is
@@ -428,6 +541,183 @@ mod tests {
         assert!(refusal_codes(&text)
             .iter()
             .any(|code| code == "config.out-of-range"));
+    }
+
+    #[test]
+    fn a_profile_names_the_institution_it_acts_for() {
+        let project = DocumentsProject::decode("documents.yaml", STARTER.as_bytes())
+            .unwrap()
+            .value;
+        let profile = |id: &str| &project.access_profiles[&LocalId::new(id).unwrap()];
+        assert_eq!(
+            profile("custodian-app")
+                .institution
+                .as_ref()
+                .map(ExternalId::as_str),
+            Some("civil-registry")
+        );
+        assert_eq!(profile("citizen").institution, None);
+    }
+
+    fn refusals(text: &str) -> Vec<(String, String)> {
+        let report = DocumentsProject::decode("documents.yaml", text.as_bytes())
+            .expect_err("the document is refused");
+        report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_policy_naming_an_undeclared_profile_is_refused_at_the_reference() {
+        for (written, replaced, path) in [
+            (
+                "    custodyProfiles: [custodian-app]
+    # Profiles that may issue",
+                "    custodyProfiles: [archive-app]
+    # Profiles that may issue",
+                "/documentPolicies/citizen-delivery/custodyProfiles/0",
+            ),
+            (
+                "    grantingProfiles: [custodian-app]
+    # The profile a represented",
+                "    grantingProfiles: [archive-app]
+    # The profile a represented",
+                "/documentPolicies/citizen-delivery/grantingProfiles/0",
+            ),
+            (
+                "    representedPrincipalProfile: citizen
+    # Whether",
+                "    representedPrincipalProfile: resident
+    # Whether",
+                "/documentPolicies/citizen-delivery/representedPrincipalProfile",
+            ),
+            (
+                "    recipientProfiles: [reader, staff]
+",
+                "    recipientProfiles: [reader, auditor]
+",
+                "/documentPolicies/named-share/recipientProfiles/1",
+            ),
+        ] {
+            let text = STARTER.replacen(written, replaced, 1);
+            assert_ne!(text, STARTER, "{path}");
+            assert_eq!(
+                refusals(&text),
+                [("documents.project.unknown-profile".to_owned(), path.to_owned())]
+            );
+        }
+    }
+
+    #[test]
+    fn a_requester_client_shared_by_two_profiles_is_refused() {
+        let text = STARTER.replacen(
+            "requesterClients: [citizen-portal]",
+            "requesterClients: [civil-registry-app]",
+            1,
+        );
+        assert_eq!(
+            refusals(&text),
+            [(
+                "documents.project.shared-requester-client".to_owned(),
+                "/accessProfiles/custodian-app/requesterClients/0".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_profile_listed_against_its_role_is_refused() {
+        for (written, replaced, path) in [
+            (
+                "    recipientProfiles: [reader]
+",
+                "    recipientProfiles: [custodian-app]
+",
+                "/documentPolicies/citizen-delivery/recipientProfiles/0",
+            ),
+            (
+                "    custodyProfiles: [custodian-app, citizen]
+",
+                "    custodyProfiles: [custodian-app, reader]
+",
+                "/documentPolicies/named-share/custodyProfiles/1",
+            ),
+            (
+                "    grantingProfiles: [custodian-app]
+    representedPrincipalProfile: citizen
+    representedPrincipalGrants: permitted
+",
+                "    grantingProfiles: [staff]
+    representedPrincipalProfile: citizen
+    representedPrincipalGrants: permitted
+",
+                "/documentPolicies/named-share/grantingProfiles/0",
+            ),
+            (
+                "    representedPrincipalProfile: citizen
+    # Whether",
+                "    representedPrincipalProfile: reader
+    # Whether",
+                "/documentPolicies/citizen-delivery/representedPrincipalProfile",
+            ),
+        ] {
+            let text = STARTER.replacen(written, replaced, 1);
+            assert_ne!(text, STARTER, "{path}");
+            assert_eq!(
+                refusals(&text),
+                [(
+                    "documents.project.profile-role-mismatch".to_owned(),
+                    path.to_owned()
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn a_default_grant_expiry_above_the_maximum_is_refused() {
+        let text = STARTER.replacen(
+            "      grantExpiryHours: 24
+      maximumGrantExpiryHours: 24
+",
+            "      grantExpiryHours: 48
+      maximumGrantExpiryHours: 24
+",
+            1,
+        );
+        assert_ne!(text, STARTER);
+        assert_eq!(
+            refusals(&text),
+            [(
+                "documents.project.grant-expiry-above-maximum".to_owned(),
+                "/documentPolicies/citizen-delivery/mandatoryRestrictions/grantExpiryHours"
+                    .to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn every_reference_finding_is_reported_in_one_run() {
+        let text = STARTER
+            .replacen(
+                "    recipientProfiles: [reader]
+",
+                "    recipientProfiles: [auditor]
+",
+                1,
+            )
+            .replacen(
+                "      grantExpiryHours: 24
+      maximumGrantExpiryHours: 24
+",
+                "      grantExpiryHours: 48
+      maximumGrantExpiryHours: 24
+",
+                1,
+            );
+        let codes: Vec<String> = refusals(&text).into_iter().map(|(code, _)| code).collect();
+        assert!(codes.contains(&"documents.project.unknown-profile".to_owned()));
+        assert!(codes.contains(&"documents.project.grant-expiry-above-maximum".to_owned()));
     }
 
     #[test]
