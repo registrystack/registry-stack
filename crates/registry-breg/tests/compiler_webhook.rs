@@ -2,11 +2,12 @@
 
 use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{
-    parse_module_json, parse_project_json, parse_project_yaml, Classification, ModuleLockSource,
-    RegistryModule, RegistryProject, WebhookAuthenticationProfile, WebhookDeadLetterMode,
+    parse_module_json, parse_project_json, parse_project_yaml, Classification,
+    HookAuthenticationProfile, HookDeadLetterMode, ModuleLockSource, RegistryModule,
+    RegistryProject,
 };
 use registry_breg::diagnostics::CompileFailure;
-use registry_breg::model::{CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile};
+use registry_breg::model::{CompiledHookDeliveryMode, CompiledHookRetryProfile};
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde_json::{json, Value};
 
@@ -61,7 +62,7 @@ fn compile(value: &Value) -> Result<registry_breg::CompiledRegistry, CompileFail
 }
 
 fn assert_compile_code(value: &Value, code: &str) {
-    let failure = compile(value).expect_err("invalid webhook contract is refused");
+    let failure = compile(value).expect_err("invalid hook contract is refused");
     assert!(
         failure
             .diagnostics()
@@ -75,14 +76,14 @@ fn assert_compile_code(value: &Value, code: &str) {
 fn webhook_mut(value: &mut Value) -> &mut serde_json::Map<String, Value> {
     value["recordTypes"][0]["hooks"][0]["handler"]
         .as_object_mut()
-        .expect("webhook object")
+        .expect("hook object")
 }
 
 #[test]
 fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
     let source = project_value();
-    let first = compile(&source).expect("governed webhook compiles");
-    let second = compile(&source).expect("same governed webhook compiles twice");
+    let first = compile(&source).expect("governed hook compiles");
+    let second = compile(&source).expect("same governed hook compiles twice");
     assert_eq!(first, second);
 
     let inventory = first.event_deliveries();
@@ -107,16 +108,13 @@ fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
     );
     assert_eq!(
         delivery.authentication_profile,
-        WebhookAuthenticationProfile::HmacSha256V1
+        HookAuthenticationProfile::HmacSha256V1
     );
     assert_eq!(
         delivery.delivery_mode,
-        CompiledWebhookDeliveryMode::AfterCommit
+        CompiledHookDeliveryMode::AfterCommit
     );
-    assert_eq!(
-        delivery.retry_profile,
-        CompiledWebhookRetryProfile::RegistryV1
-    );
+    assert_eq!(delivery.retry_profile, CompiledHookRetryProfile::RegistryV1);
     assert_eq!(delivery.attempt_timeout_ms, 5000);
     assert_eq!(delivery.initial_backoff_ms, 1000);
     assert_eq!(delivery.maximum_backoff_ms, 8000);
@@ -126,7 +124,7 @@ fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
     // The data object's worst case plus the envelope wrapper this project's
     // identifiers produce: 2292 + 644. The recordType key adds four bytes to data.
     assert_eq!(delivery.maximum_payload_bytes, 2936);
-    assert_eq!(delivery.dead_letter, WebhookDeadLetterMode::Required);
+    assert_eq!(delivery.dead_letter, HookDeadLetterMode::Required);
     assert!(delivery.operator_replay);
 
     let artifact = first
@@ -171,7 +169,7 @@ fn destination_auth_delivery_and_deployed_members_are_closed_and_value_free() {
         assert!(failure
             .diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.code == "breg.event.webhook-destination-invalid"));
+            .any(|diagnostic| diagnostic.code == "breg.event.hook-destination-invalid"));
         if !destination.is_empty() {
             assert!(!serde_json::to_string(&failure)
                 .expect("failure serializes")
@@ -274,7 +272,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
 
     let mut oversized = project_value();
     oversized["recordTypes"][0]["fields"][0]["maximumLength"] = json!(300_000);
-    assert_compile_code(&oversized, "breg.event.webhook-projection-too-large");
+    assert_compile_code(&oversized, "breg.event.hook-projection-too-large");
 
     let mut exact_envelope_boundary = project_value();
     exact_envelope_boundary["recordTypes"][0]["fields"][0] = json!({
@@ -305,7 +303,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     exact_envelope_boundary["recordTypes"][0]["fields"][0]["maximumBytes"] = json!(1_046_231);
     assert_compile_code(
         &exact_envelope_boundary,
-        "breg.event.webhook-projection-too-large",
+        "breg.event.hook-projection-too-large",
     );
 
     let mut exact_transport_mismatch = project_value();
@@ -322,7 +320,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     });
     assert_compile_code(
         &exact_transport_mismatch,
-        "breg.event.webhook-projection-too-large",
+        "breg.event.hook-projection-too-large",
     );
 
     let mut decimal_quote_boundary = project_value();
@@ -346,7 +344,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     decimal_quote_boundary["recordTypes"][0]["hooks"][0]["projection"] = json!(["amount", "label"]);
     assert_compile_code(
         &decimal_quote_boundary,
-        "breg.event.webhook-projection-too-large",
+        "breg.event.hook-projection-too-large",
     );
 
     let mut all_fractional_decimal_boundary = project_value();
@@ -369,7 +367,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
         json!(["a", "amount"]);
     assert_compile_code(
         &all_fractional_decimal_boundary,
-        "breg.event.webhook-projection-too-large",
+        "breg.event.hook-projection-too-large",
     );
 
     let mut optional_null_boundary = project_value();
@@ -390,7 +388,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     optional_null_boundary["recordTypes"][0]["hooks"][0]["projection"] = json!(["a", "b"]);
     assert_compile_code(
         &optional_null_boundary,
-        "breg.event.webhook-projection-too-large",
+        "breg.event.hook-projection-too-large",
     );
 }
 
@@ -678,7 +676,7 @@ fn the_compiled_payload_proof_measures_envelope_bytes_not_data_bytes() {
         .remove("when");
     assert_compile_code(
         &data_object_at_the_bound,
-        "breg.event.webhook-projection-too-large",
+        "breg.event.hook-projection-too-large",
     );
 
     let mut envelope_at_the_bound = data_object_at_the_bound.clone();
@@ -698,6 +696,6 @@ fn the_compiled_payload_proof_measures_envelope_bytes_not_data_bytes() {
         structured_label(DATA_OBJECT_AT_THE_TRANSPORT_BOUND - ENVELOPE_WRAPPER_BYTES + 1);
     assert_compile_code(
         &envelope_one_byte_over,
-        "breg.event.webhook-projection-too-large",
+        "breg.event.hook-projection-too-large",
     );
 }

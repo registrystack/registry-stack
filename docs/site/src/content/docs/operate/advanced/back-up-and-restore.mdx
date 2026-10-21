@@ -210,12 +210,12 @@ Once the copy serves, work through these:
   `bregctl evidence-retention erase-expired --runtime-config /etc/breg/runtime.yaml --before
   <now>`. The same 24-hour acceptance window applies. See
   [What cannot be undone](../../breg-retention/#what-cannot-be-undone).
-- **Webhooks.** Deliveries still pending at the backup point are sent again once the copy serves,
+- **Hooks.** Deliveries still pending at the backup point are sent again once the copy serves,
   under the same `Idempotency-Key` they carried the first time, so a receiver that deduplicates by
   that key accepts each one once. Their attempt count is rewound with the rest of the row, so the
   audit records the same attempt number for each of them twice. Deliveries completed before the backup point are
   not sent again, and delivered events are not recalled. Inspect what is pending with
-  `bregctl webhook list`; see [Inspect and recover deliveries](../../breg-webhooks/#inspect-and-recover-deliveries).
+  `bregctl hook list`; see [Inspect and recover deliveries](../../breg-webhooks/#inspect-and-recover-deliveries).
 - **The audit is not rewound.** The runtime audit file and its companion keep every entry the
   original wrote after the backup point, including the commits and deliveries the restore lost, and
   the adopted copy appends to the same files. A delivery pending at the backup point is therefore

@@ -26,8 +26,8 @@ use thiserror::Error;
 use crate::contract::Classification;
 use crate::{
     compiler::{
-        MAX_WEBHOOK_ATTEMPTS, MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS, MAX_WEBHOOK_PAYLOAD_BYTES,
-        MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS,
+        MAX_HOOK_ATTEMPTS, MAX_HOOK_ATTEMPT_TIMEOUT_MS, MAX_HOOK_PAYLOAD_BYTES,
+        MIN_HOOK_ATTEMPT_TIMEOUT_MS,
     },
     model::CompiledRegistry,
 };
@@ -37,7 +37,7 @@ const MAX_EVENT_REQUEST_BYTES: usize = MAX_DESTINATION_TARGET_BYTES
     + MAX_DESTINATION_REQUEST_HEADER_BYTES
     + MAX_DESTINATION_REQUEST_BODY_BYTES;
 
-const _: () = assert!(MAX_WEBHOOK_PAYLOAD_BYTES as usize == MAX_DESTINATION_REQUEST_BODY_BYTES);
+const _: () = assert!(MAX_HOOK_PAYLOAD_BYTES as usize == MAX_DESTINATION_REQUEST_BODY_BYTES);
 
 /// Value-free refusal while activating deployed event destinations.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
@@ -564,22 +564,22 @@ struct RawEventDestinationTlsConfig {
 struct RawEventDestinationDeliveryCeilings {
     /// Maximum time allowed for one attempt, in milliseconds.
     #[serde(
-        deserialize_with = "crate::contract::bounded_u32::<_, MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS, MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS>"
+        deserialize_with = "crate::contract::bounded_u32::<_, MIN_HOOK_ATTEMPT_TIMEOUT_MS, MAX_HOOK_ATTEMPT_TIMEOUT_MS>"
     )]
     #[cfg_attr(
         feature = "schema",
         schemars(
-            with = "registry_platform_yaml::BoundedU32<MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS, MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS>"
+            with = "registry_platform_yaml::BoundedU32<MIN_HOOK_ATTEMPT_TIMEOUT_MS, MAX_HOOK_ATTEMPT_TIMEOUT_MS>"
         )
     )]
     attempt_timeout_milliseconds: u32,
     /// Maximum total attempts in one delivery generation, including the first attempt.
     #[serde(
-        deserialize_with = "crate::contract::bounded_u8::<_, 1, { MAX_WEBHOOK_ATTEMPTS as u32 }>"
+        deserialize_with = "crate::contract::bounded_u8::<_, 1, { MAX_HOOK_ATTEMPTS as u32 }>"
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "registry_platform_yaml::BoundedU32<1, { MAX_WEBHOOK_ATTEMPTS as u32 }>")
+        schemars(with = "registry_platform_yaml::BoundedU32<1, { MAX_HOOK_ATTEMPTS as u32 }>")
     )]
     maximum_attempts: u8,
 }

@@ -3,7 +3,7 @@
 This is the sender side of the Version 1 delivery signature, written with the
 Python standard library so tests can produce requests without a runtime. A
 receiver never uses it: `receiver.py` verifies with the client binding's
-`verify_webhook_delivery`, which runs the shared Rust verifier.
+`verify_hook_delivery`, which runs the shared Rust verifier.
 """
 from __future__ import annotations
 

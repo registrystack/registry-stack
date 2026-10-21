@@ -2444,11 +2444,8 @@ async fn begin_successor_in(
     // successor could add new flip rows while an erase lifecycle is using
     // the current durable flip manifest for crash-resumable correlation.
     verify_complete_history_coverage(transaction).await?;
-    verify_retained_webhook_delivery_bindings(
-        transaction,
-        event_destination_compatibility_inventory,
-    )
-    .await?;
+    verify_retained_hook_delivery_bindings(transaction, event_destination_compatibility_inventory)
+        .await?;
     let changed = transaction
         .execute(
             "UPDATE registry_internal.registry_state
@@ -2580,7 +2577,7 @@ pub(crate) async fn retained_local_hook_deliveries(
 /// delivery. The package session's exclusive advisory lock prevents Registry
 /// workers or mutations from changing this inventory while the check and
 /// maintenance transition commit together.
-async fn verify_retained_webhook_delivery_bindings(
+async fn verify_retained_hook_delivery_bindings(
     transaction: &impl GenericClient,
     inventory: Option<&EventDestinationCompatibilityInventory>,
 ) -> Result<()> {

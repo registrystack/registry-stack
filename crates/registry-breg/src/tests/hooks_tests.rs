@@ -12,7 +12,7 @@ use registry_platform_hooks::{ErrorCategory, HookHandlerKind};
 use serde_json::{json, Value};
 
 use super::local_hook_handlers;
-use crate::compiler::{compile_project_with_assets, CompileProfile, WEBHOOK_ATTEMPT_TIMEOUT_MS};
+use crate::compiler::{compile_project_with_assets, CompileProfile, HOOK_ATTEMPT_TIMEOUT_MS};
 use crate::contract::{parse_project_json, ModuleAssetSource};
 use crate::model::CompiledRegistry;
 
@@ -102,7 +102,7 @@ fn a_local_delivery_binds_to_its_reviewed_program_under_its_compiled_budget() {
         .expect("the running package holds the bound program");
     assert_eq!(digest, handler.handler_digest());
     assert_eq!(
-        Duration::from_millis(u64::from(WEBHOOK_ATTEMPT_TIMEOUT_MS)),
+        Duration::from_millis(u64::from(HOOK_ATTEMPT_TIMEOUT_MS)),
         handler.attempt_timeout()
     );
     let answer = handler

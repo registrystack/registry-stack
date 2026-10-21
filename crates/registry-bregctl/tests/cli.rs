@@ -5613,7 +5613,7 @@ recordTypes:
     assert!(outbox.status.success(), "{outbox:?}");
     assert_eq!(json_stdout(&outbox)["explanation"]["deliveries"], json!([]));
 
-    let webhook = TestProject::from_registry_source(
+    let hook = TestProject::from_registry_source(
         br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project:
@@ -5648,7 +5648,7 @@ recordTypes:
         "json",
         "explain",
         "events",
-        webhook.path().to_str().expect("path is UTF-8"),
+        hook.path().to_str().expect("path is UTF-8"),
     ];
     let first = bregctl(&arguments);
     let second = bregctl(&arguments);
@@ -7801,7 +7801,7 @@ fn lifecycle_parser_surfaces_are_exact_and_value_free() {
     let help = bregctl(&["--help"]);
     assert!(help.status.success());
     let rendered = String::from_utf8(help.stdout).expect("top-level help is UTF-8");
-    for available in ["package", "apply", "verify", "migration", "data", "webhook"] {
+    for available in ["package", "apply", "verify", "migration", "data", "hook"] {
         assert!(rendered
             .lines()
             .any(|line| line.trim_start().starts_with(available)));
@@ -8095,9 +8095,9 @@ fn assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
 fn webhook_operations_name_both_digests_when_the_active_package_misses_its_pin() {
     for command in ["list", "drain"] {
         assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
-            &["webhook", command],
+            &["hook", command],
             &[],
-            "webhook.package.refused",
+            "hook.package.refused",
         );
     }
 }

@@ -288,7 +288,7 @@ def run(args):
         native.private(keys / "event-key", key)
         owner = write_source(journey, keys, proxy.url, paths)
         journey.ctl("bregctl", "check", owner)
-        sample = {trigger: journey.ctl("bregctl", "webhook", "sample", owner, "--event", "application-" + trigger + "-v1")["request"]
+        sample = {trigger: journey.ctl("bregctl", "hook", "sample", owner, "--event", "application-" + trigger + "-v1")["request"]
                   for trigger in ("created", "patched")}
         schemas = root / "producer-schemas"
         journey.ctl("bregctl", "generate", "schemas", owner, "--output", schemas)
@@ -367,7 +367,7 @@ def run(args):
         previous_ca = journey.env.get("SSL_CERT_FILE")
         try:
             journey.env["SSL_CERT_FILE"] = str(owner / ".breg/dev/tls/ca.pem")
-            wait_for(lambda: not journey.ctl("bregctl", "webhook", "list", "--runtime-config", report["runtimeConfig"])["deliveries"],
+            wait_for(lambda: not journey.ctl("bregctl", "hook", "list", "--runtime-config", report["runtimeConfig"])["deliveries"],
                      "the producer delivery queue did not drain")
         finally:
             if previous_ca is None:

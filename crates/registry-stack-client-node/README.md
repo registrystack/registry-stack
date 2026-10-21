@@ -100,12 +100,12 @@ attempt under the key was answered and may have committed: reconcile that
 attempt before choosing a new key.
 See [Unknown outcomes](https://docs.registrystack.org/reference/client-api/#unknown-outcomes-and-the-same-key-retry).
 
-`breg.verifyWebhookDelivery({ method, path, headers, body, key })` authenticates
-the exact bytes of one Version 1 webhook delivery. The result returns
+`breg.verifyHookDelivery({ method, path, headers, body, key })` authenticates
+the exact bytes of one Version 1 hook delivery. The result returns
 `deliveryTime` and `idempotencyKey`; the receiver must bound clock skew and
 deduplicate once-only effects on authenticated `source` plus `id`, or on an
 application business key. See
-[Verify a webhook delivery](https://docs.registrystack.org/reference/client-api/#verify-a-webhook-delivery)
+[Verify a hook delivery](https://docs.registrystack.org/reference/client-api/#verify-a-webhook-delivery)
 for a receiver example.
 
 ## Versioning
