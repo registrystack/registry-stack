@@ -508,6 +508,20 @@ pub fn routing_policy_findings(
                 ));
                 continue;
             }
+            let schema = source_fields.as_ref().and_then(|fields| {
+                fields.get(field.as_str()).and_then(|descriptor| {
+                    JSONSchema::options()
+                        .with_draft(Draft::Draft202012)
+                        .compile(&descriptor.schema)
+                        .ok()
+                })
+            });
+            if source_fields.is_some() && schema.is_none() {
+                findings.push(RoutingDiagnostic::new(
+                    path.clone(),
+                    RoutingDiagnosticReason::UnknownField,
+                ));
+            }
             let values = predicate_values(predicate);
             if values.is_empty() || values.len() > MAXIMUM_ROUTING_VALUES {
                 findings.push(RoutingDiagnostic::new(
@@ -523,19 +537,7 @@ pub fn routing_policy_findings(
                 ));
                 continue;
             }
-            if let Some(fields) = &source_fields {
-                let Some(schema) = fields.get(field.as_str()).and_then(|descriptor| {
-                    JSONSchema::options()
-                        .with_draft(Draft::Draft202012)
-                        .compile(&descriptor.schema)
-                        .ok()
-                }) else {
-                    findings.push(RoutingDiagnostic::new(
-                        path,
-                        RoutingDiagnosticReason::UnknownField,
-                    ));
-                    continue;
-                };
+            if let Some(schema) = schema {
                 if values.iter().any(|value| schema.validate(value).is_err()) {
                     findings.push(RoutingDiagnostic::new(
                         path,
