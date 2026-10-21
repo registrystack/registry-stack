@@ -1254,7 +1254,7 @@ fn validate_cross_file_duplicate_display_labels(
     );
 
     if let Some(recipients) = &project.recipients {
-        let organizations = recipients
+        let mut names = recipients
             .organizations
             .iter()
             .map(|item| SourcedDisplayText {
@@ -1264,26 +1264,16 @@ fn validate_cross_file_duplicate_display_labels(
                 source: None,
             })
             .collect::<Vec<_>>();
-        let groups = recipients
-            .groups
-            .iter()
-            .map(|item| SourcedDisplayText {
-                id: Some(&item.id),
-                text: &item.name,
-                path: format!("recipients.groups[id={}].name", item.id),
-                source: None,
-            })
-            .collect::<Vec<_>>();
+        names.extend(recipients.groups.iter().map(|item| SourcedDisplayText {
+            id: Some(&item.id),
+            text: &item.name,
+            path: format!("recipients.groups[id={}].name", item.id),
+            source: None,
+        }));
         add_cross_file_duplicate_labels(
-            "breg.recipient-organization.duplicate-name",
-            "recipient organizations",
-            &organizations,
-            findings,
-        );
-        add_cross_file_duplicate_labels(
-            "breg.recipient-group.duplicate-name",
-            "recipient groups",
-            &groups,
+            "breg.recipient.duplicate-name",
+            "recipients",
+            &names,
             findings,
         );
     }

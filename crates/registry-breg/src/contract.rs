@@ -822,6 +822,11 @@ pub struct RecipientOrganizationSource {
         schemars(with = "registry_platform_yaml::DisplayText")
     )]
     pub name: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub contact: String,
     pub clients: Vec<String>,
 }

@@ -278,6 +278,25 @@ fn display_text_is_refused_at_each_breg_authoring_boundary() {
         "/manifestProjection/catalog/title",
         "config.invalid-value",
     );
+
+    let mut source = facility();
+    source["recipients"] = json!({
+        "organizations":[{
+            "id":"privacy-office",
+            "name":"Privacy office",
+            "contact":"safe\u{202e}text",
+            "clients":[]
+        }]
+    });
+    refusal(
+        &source,
+        "/recipients/organizations/0/contact",
+        "config.invalid-value",
+    );
+
+    source["recipients"]["organizations"][0]["contact"] = json!("مكتب الخصوصية");
+    read_project_yaml("registry.yaml", &bytes(&source))
+        .expect("multilingual recipient contact remains accepted");
 }
 
 #[test]
@@ -665,7 +684,8 @@ fn duplicate_presentation_text_warns_in_each_breg_namespace() {
         ],
         "groups":[
             {"id":"north","name":"Reviewers","members":["alpha"]},
-            {"id":"south","name":"reviewers","members":["beta"]}
+            {"id":"south","name":"reviewers","members":["beta"]},
+            {"id":"shared","name":"CA\u{200b}FÉ","members":["alpha"]}
         ]
     });
     source["manifestProjection"] = json!({
@@ -712,13 +732,11 @@ fn duplicate_presentation_text_warns_in_each_breg_namespace() {
             "/actions/1/plan/refusals/1/label",
         ),
         (
-            "breg.recipient-organization.duplicate-name",
+            "breg.recipient.duplicate-name",
             "/recipients/organizations/1/name",
         ),
-        (
-            "breg.recipient-group.duplicate-name",
-            "/recipients/groups/1/name",
-        ),
+        ("breg.recipient.duplicate-name", "/recipients/groups/1/name"),
+        ("breg.recipient.duplicate-name", "/recipients/groups/2/name"),
         (
             "breg.manifest-dataset.duplicate-title",
             "/manifestProjection/datasets/1/title/en",
@@ -747,6 +765,19 @@ fn duplicate_presentation_text_warns_in_each_breg_namespace() {
             .unwrap_or_else(|| panic!("expected {code} at {path}"));
         assert_eq!(diagnostic.related.len(), 1);
     }
+
+    let cross_kind = diagnostics
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.code == "breg.recipient.duplicate-name"
+                && diagnostic.path == "/recipients/groups/2/name"
+        })
+        .expect("organization and group names share one warning namespace");
+    assert_eq!(
+        cross_kind.related[0].path,
+        "/recipients/organizations/0/name"
+    );
     assert_eq!(
         diagnostics
             .diagnostics()

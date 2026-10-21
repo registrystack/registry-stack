@@ -4378,7 +4378,7 @@
           "type": "array"
         },
         "contact": {
-          "type": "string"
+          "$ref": "#/$defs/DisplayText"
         },
         "id": {
           "$ref": "#/$defs/LocalId"

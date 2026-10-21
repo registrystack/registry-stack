@@ -57,11 +57,12 @@ pub enum PolicyCheckReason {
     InvalidIdentifier,
     /// The same identifier appears twice in one collection.
     DuplicateIdentifier,
-    /// A required `because` is missing, blank, or longer than 256 bytes.
+    /// A required `because` is missing, blank, longer than 256 bytes, or not
+    /// valid display text.
     InvalidBecause,
     /// A required text member, such as the project version, is blank.
     EmptyText,
-    /// A label is blank or longer than 128 bytes.
+    /// A label is blank, longer than 128 bytes, or not valid display text.
     InvalidLabel,
     /// A collection that must carry at least one entry is empty.
     EmptyCollection,
@@ -184,9 +185,13 @@ impl PolicyCheckReason {
                  digits, '-', or '_'"
             }
             Self::DuplicateIdentifier => "this repeats an entry already listed",
-            Self::InvalidBecause => "a because must be 1 to 256 bytes and not blank",
+            Self::InvalidBecause => {
+                "a because must be 1 to 256 bytes, not blank, and valid display text"
+            }
             Self::EmptyText => "this text is blank",
-            Self::InvalidLabel => "a label must be 1 to 128 bytes and not blank",
+            Self::InvalidLabel => {
+                "a label must be 1 to 128 bytes, not blank, and valid display text"
+            }
             Self::EmptyCollection => "this list must carry at least one entry",
             Self::TooManyEntries => "this list carries more than 256 entries",
             Self::UnknownService => "no service under services has this id",
@@ -244,9 +249,13 @@ impl PolicyCheckReason {
             Self::UnsupportedKind => "Write the kind the format documents.",
             Self::InvalidIdentifier => "Write a lowercase identifier, such as front-desk.",
             Self::DuplicateIdentifier => "Remove the repeated entry, or give it its own id.",
-            Self::InvalidBecause => "Write why this rule exists in at most 256 bytes.",
+            Self::InvalidBecause => {
+                "Write why this rule exists in at most 256 bytes without forbidden invisible or reordering characters."
+            }
             Self::EmptyText => "Write the text, such as 2026.1.",
-            Self::InvalidLabel => "Write a label of at most 128 bytes.",
+            Self::InvalidLabel => {
+                "Write a label of at most 128 bytes without forbidden invisible or reordering characters."
+            }
             Self::EmptyCollection => "Add at least one entry.",
             Self::TooManyEntries => "Keep the list to at most 256 entries.",
             Self::UnknownService => "Name a service declared under services, or declare it.",

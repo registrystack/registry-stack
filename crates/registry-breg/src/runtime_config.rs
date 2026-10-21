@@ -29,9 +29,11 @@ use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, ClaimNames, IssuerNetworkPolicy, JwksFetcher,
     JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
 };
+use registry_platform_yaml::{
+    lookalike_local_id_pairs, Diagnostic, Report, RetiredApiVersion, Severity, Source, Url,
+};
 #[cfg(feature = "schema")]
 use registry_platform_yaml::{BoundedU32, BoundedU64};
-use registry_platform_yaml::{Diagnostic, Report, RetiredApiVersion, Severity, Source, Url};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -327,6 +329,18 @@ pub enum RuntimeConfigError {
     InvalidCursor,
     #[error("runtime configuration contains an invalid event destination binding")]
     InvalidEventDestination,
+    #[error(
+        "runtime configuration eventDestinations contains identifiers that differ only by `-` versus `_`"
+    )]
+    EventDestinationIdCollision,
+    #[error(
+        "runtime configuration evidenceProviders contains identifiers that differ only by `-` versus `_`"
+    )]
+    EvidenceProviderIdCollision,
+    #[error(
+        "runtime configuration reviewAuthorities contains identifiers that differ only by `-` versus `_`"
+    )]
+    ReviewAuthorityIdCollision,
     #[error("runtime configuration contains an invalid attachment storage binding")]
     InvalidAttachmentStorage,
     #[error("runtime configuration contains an invalid attachment verification binding")]
@@ -367,6 +381,9 @@ impl RuntimeConfigError {
             Self::InvalidAudit => "breg.runtime.invalid-audit",
             Self::InvalidCursor => "breg.runtime.invalid-cursor",
             Self::InvalidEventDestination => "breg.runtime.invalid-event-destination",
+            Self::EventDestinationIdCollision => "breg.runtime.event-destination-id-collision",
+            Self::EvidenceProviderIdCollision => "breg.runtime.evidence-provider-id-collision",
+            Self::ReviewAuthorityIdCollision => "breg.runtime.review-authority-id-collision",
             Self::InvalidAttachmentStorage => "breg.runtime.invalid-attachment-storage",
             Self::InvalidAttachmentVerification => "breg.runtime.invalid-attachment-verification",
             Self::InvalidFieldEncryption => "breg.runtime.invalid-field-encryption",
@@ -400,6 +417,9 @@ impl RuntimeConfigError {
             Self::InvalidAudit => "/audit",
             Self::InvalidCursor => "/cursor",
             Self::InvalidEventDestination => "/eventDestinations",
+            Self::EventDestinationIdCollision => "/eventDestinations",
+            Self::EvidenceProviderIdCollision => "/evidenceProviders",
+            Self::ReviewAuthorityIdCollision => "/reviewAuthorities",
             Self::InvalidAttachmentStorage => "/attachmentStorage",
             Self::InvalidAttachmentVerification => "/attachmentVerification",
             Self::InvalidFieldEncryption => "/fieldEncryption",
@@ -466,6 +486,11 @@ impl RuntimeConfigError {
             Self::InvalidCursor => "Name cursor.secretRef by secret reference.",
             Self::InvalidEventDestination => {
                 "Correct the event destination bindings: an https origin, a path that starts with `/`, and secret references for keys and TLS material."
+            }
+            Self::EventDestinationIdCollision
+            | Self::EvidenceProviderIdCollision
+            | Self::ReviewAuthorityIdCollision => {
+                "Rename one identifier so the two definitions remain distinct after separator normalization."
             }
             Self::InvalidAttachmentStorage => {
                 "Correct attachmentStorage: name every credential by secret reference and give the S3 endpoint as an https URL."
@@ -615,6 +640,19 @@ pub fn check_runtime_config(
         substitute,
         runtime_stand_in,
     );
+    let id_collisions = check
+        .loaded
+        .as_ref()
+        .map(|loaded| runtime_definition_id_diagnostics(&check, &loaded.config))
+        .unwrap_or_default();
+    if !id_collisions.is_empty() {
+        return RuntimeConfigCheck {
+            diagnostics: check
+                .report_with(RUNTIME_CONFIG_KIND, id_collisions)
+                .into_diagnostics(),
+            unavailable: check.unavailable,
+        };
+    }
     let mut diagnostics = std::mem::take(&mut check.diagnostics);
     if let Some(loaded) = check.loaded.take() {
         match RuntimeConfig::from_raw(loaded.config) {
@@ -677,6 +715,62 @@ pub fn check_runtime_config(
         diagnostics,
         unavailable: check.unavailable,
     }
+}
+
+fn runtime_definition_id_diagnostics(
+    check: &registry_platform_config::RuntimeFileCheck<RawRuntimeConfig>,
+    raw: &RawRuntimeConfig,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for (namespace, code, ids) in [
+        (
+            "eventDestinations",
+            "breg.runtime.event-destination-id-collision",
+            raw.event_destinations
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "evidenceProviders",
+            "breg.runtime.evidence-provider-id-collision",
+            raw.evidence_providers
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "reviewAuthorities",
+            "breg.runtime.review-authority-id-collision",
+            raw.review_authorities
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        ),
+    ] {
+        for (first, second) in lookalike_local_id_pairs(ids.iter().copied()) {
+            let first = ids[first];
+            let second = ids[second];
+            let first_pointer = format!("/{namespace}/{first}");
+            let second_pointer = format!("/{namespace}/{second}");
+            let mut diagnostic = check.error_at_key(
+                RUNTIME_CONFIG_KIND,
+                code,
+                &second_pointer,
+                format!(
+                    "local identifiers `{first}` and `{second}` differ only by `-` versus `_`"
+                ),
+                "Rename one identifier so the two definitions remain distinct after separator normalization.",
+            );
+            check.add_related_key(
+                &mut diagnostic,
+                &first_pointer,
+                format!("the other definition is `{first}`"),
+            );
+            diagnostics.push(diagnostic);
+        }
+    }
+    diagnostics
 }
 
 /// The member of the runtime file an authentication refusal is about, and its
@@ -775,6 +869,7 @@ pub struct RuntimeConfig {
 
 impl RuntimeConfig {
     fn from_raw(raw: RawRuntimeConfig) -> Result<Self> {
+        validate_runtime_definition_ids(&raw)?;
         let listener = ListenerConfig::from_raw(raw.listener)?;
         let identity = DeploymentIdentity::from_raw(raw.identity)?;
         let secret_providers = SecretProvidersConfig::from_raw(raw.secret_providers)?;
@@ -1226,6 +1321,37 @@ impl RuntimeConfig {
         }
         Ok(())
     }
+}
+
+fn validate_runtime_definition_ids(raw: &RawRuntimeConfig) -> Result<()> {
+    for (ids, error) in [
+        (
+            raw.event_destinations
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            RuntimeConfigError::EventDestinationIdCollision,
+        ),
+        (
+            raw.evidence_providers
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            RuntimeConfigError::EvidenceProviderIdCollision,
+        ),
+        (
+            raw.review_authorities
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            RuntimeConfigError::ReviewAuthorityIdCollision,
+        ),
+    ] {
+        if !lookalike_local_id_pairs(ids).is_empty() {
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 impl fmt::Debug for RuntimeConfig {

@@ -191,7 +191,13 @@ fn validate_recipients(project: &RegistryProject, errors: &mut Vec<Diagnostic>) 
                 "organization and group ids share one namespace; each must be unique and use the lowercase identifier grammar",
             ));
         }
-        if name.trim().is_empty() || contact.is_some_and(|contact| contact.trim().is_empty()) {
+        if name.trim().is_empty()
+            || registry_platform_yaml::DisplayText::new(name.as_str()).is_err()
+            || contact.is_some_and(|contact| {
+                contact.trim().is_empty()
+                    || registry_platform_yaml::DisplayText::new(contact.as_str()).is_err()
+            })
+        {
             errors.push(Diagnostic::error(
                 "breg.recipients.id",
                 path,
