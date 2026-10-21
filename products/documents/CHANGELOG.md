@@ -98,3 +98,10 @@ The Document Store is held out of releases.
 - Every foreign key is `ON DELETE RESTRICT`; erasure keeps documents,
   versions, grants, and verification history.
 - `products/documents/README.md` gains a restore drill.
+- A golden-journey PostgreSQL suite, `postgres_journey`, from a letter
+  rendered by the `registry-render` binary to a share that expired and
+  erased nothing; the database-isolation gate refuses a database suite that
+  can skip.
+- `measure-volume-fit.sh` measures `bytea` database, dump, and restore size
+  and time; indicative results and a rehearsal of the restore drill are in
+  the README.
