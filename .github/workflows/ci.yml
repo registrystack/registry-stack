@@ -1196,10 +1196,10 @@ jobs:
         env:
           DOCUMENTSCTL_BIN: ${{ github.workspace }}/target/debug/documentsctl
         run: uv run --no-project --with PyYAML==6.0.2 products/documents/scripts/check-checkpoint.sh
-      - name: Verify database readiness, activation, and the served runtime
+      - name: Verify database readiness, activation, the served runtime, and S3 storage
         env:
           DOCUMENTS_TEST_DATABASE_URL: postgresql://documents:documents_test@localhost:${{ job.services.postgres.ports['5432'] }}/documents
-        run: cargo test --locked -p registry-documents --features postgres-test --test postgres_startup --test postgres_operator
+        run: cargo test --locked -p registry-documents --features postgres-test --test postgres_startup --test postgres_operator --test postgres_documents --test postgres_s3
       - name: Verify the documentsctl activation verbs against PostgreSQL
         env:
           DOCUMENTS_TEST_DATABASE_URL: postgresql://documents:documents_test@localhost:${{ job.services.postgres.ports['5432'] }}/documents
