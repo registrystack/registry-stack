@@ -84,8 +84,8 @@ audit entries. The threats this surface answers:
   `RUNTIME-CONFIG.md`).
   Rotated audit files are removed after `audit.retentionDays`, 90 days by
   default, which is equally a placeholder.
-- Reminder intents with no configured destination stay local and readable
-  in place; nothing is delivered by default.
+- Reminder intents with no configured destination are set aside as local
+  and stay readable in place; nothing is delivered by default.
 
 ### Test evidence
 
@@ -1250,8 +1250,8 @@ bounds each table family to 256 rows and commits dependent deletions together.
 Shared Dispatch rechecks terminal state and cutoff; Hooks requires completed
 payload expiry for dead letters, locks state and shared events with SKIP LOCKED,
 and deletes state, delivery metadata, then unreferenced events. Pending, leased,
-retryable and uncertain work remains. Outbox local, failed and suppressed
-states stay readable, whatever the intent's purpose. No migration credential or grant change is introduced.
+retryable and uncertain work remains. Outbox local, failed and superseded
+intents stay readable, whatever the intent's purpose. No migration credential or grant change is introduced.
 
 The tests in the `terminal_retention` module in `tests/postgres_commitments.rs` cover cutoff boundaries,
 protected row snapshots, shared siblings, receipt tombstones and repeated
@@ -1306,3 +1306,86 @@ each of the last two also proves the delivery has no lease.
 `compile_refuses_a_local_rhai_handler_as_an_unsupported_capability`.
 `crates/registry-platform-hooks/src/capability.rs`:
 `the_url_only_set_refuses_each_other_part_with_the_one_shared_diagnostic`.
+
+## Delivery intents on the shared dispatch core
+
+Threat: The outbox carries confirmation, change, cancellation, and reminder
+intents to the operator's reminder destination after a commitment. A
+hand-rolled claim, lease, and retry loop can send twice under a stale lease,
+finish an intent another worker has since re-leased, or send a reminder for
+an appointment that was cancelled or moved.
+
+Enforcement: `scheduling_outbox` in
+`crates/registry-scheduling/migrations/0100_scheduling.sql` is the
+`registry-platform-dispatch` job table shape keyed by `outbox_id` and
+`purpose`, with Scheduling's own columns and constraints added after it; a
+row set aside must name its `last_failure_class`, and a delivered row names
+none. `IntentStore` and `intent_policy()` in
+`crates/registry-scheduling/src/runtime/intents.rs` give the dispatch core its
+claim, lapsed-lease, and finish SQL and one frozen policy for every intent;
+the runtime runs one `DispatchWorker` beside the serve loop. Scheduling keeps
+the table name, the payload rows, the envelope rendering, the send, and the
+retention erase. Observer hooks already ride the core through
+`registry-platform-hooks` and are unchanged.
+
+| Aspect | Hand-rolled loop | Dispatch core |
+|---|---|---|
+| Claim and lease | Up to 100 pending rows due by `due_at` and `next_attempt_at`, `ORDER BY due_at`, `FOR UPDATE SKIP LOCKED`; the claim adds one attempt and pushes `next_attempt_at` 600 seconds out as the lease | One row per claim, `pending` and due on the database clock, `ORDER BY next_attempt_at, outbox_id, purpose`; the lease lasts the attempt timeout plus 5 seconds and a finish is fenced by `lease_token`, `generation`, and `attempt` |
+| Attempt timeout | 5 seconds | `attempt_timeout` 5 seconds, bound 5 to 5 seconds |
+| Retry schedule | 30 seconds doubling, capped at 3600 seconds; `Retry-After` ignored | `RetrySchedule::Frozen` of 30, 60, 120, 240, 480, 960, and 1920 seconds; pause hints ignored |
+| Maximum attempts and expiry | 8; no expiry | `maximum_attempts` 8; `expires_at` none |
+| Terminal states | `delivered`, `local`, `failed`, `suppressed` | `delivered`; `dead-lettered` with `destination_unconfigured`, `destination_refused`, `delivery_failed`, `event_unrenderable`, `superseded`, or a quarantine class |
+| Uncertain outcome | A send error is retried; a crash leaves the row to be reclaimed after the 600-second lease | `UncertainOutcome::Retry`: a lapsed lease counts as a failed attempt and waits the next back-off; a lapsed eighth attempt is dead-lettered |
+| Receiver dedup | The envelope `id` is the `outbox_id` | Unchanged; `generation` stays 1 and `UNIQUE (outbox_id)` keeps one intent per identifier |
+| Audit lifecycle | No audit event for intent delivery | Unchanged; dispatch operational events go to tracing only |
+
+Behaviour that differs from the hand-rolled loop:
+
+- A cancellation or reschedule no longer marks the obsolete reminder
+  `suppressed` in its own transaction. The transport reads
+  `PostgresStore::intent_is_current` immediately before each send and sets a
+  reminder that no longer describes an active appointment at its current
+  revision aside as `superseded`, without a send. The obsolete reminder
+  stays `pending` until it falls due, then ends `dead-lettered` after one
+  attempt. The dispatch core has no cancel a caller can run inside its own
+  transaction, so the earlier, immediate suppression cannot be kept without
+  changing the core.
+- The lease lasts 10 seconds instead of 600 seconds per batch, and a lapsed
+  lease waits the next back-off instead of being reclaimed as soon as it
+  passes.
+- The longest back-off is 1920 seconds instead of 3600 seconds, because the
+  schedule is frozen at seven delays.
+- An intent whose event cannot be rendered is set aside as
+  `event_unrenderable` instead of being retried.
+- Due time is judged on the database clock rather than the runtime's.
+- A finish under a lease another worker has replaced returns an error the
+  worker logs instead of updating zero rows silently.
+- Column and state names follow the dispatch core. `undelivered_intents`
+  maps `destination_unconfigured` to `local` and every other set-aside class
+  but `superseded` to `failed`, so `schedulingctl intents` reports what it
+  did. Scheduling applies only to a fresh database, so no migration carries
+  old rows.
+
+Verification: In `crates/registry-scheduling/tests/postgres_commitments.rs`,
+`a_failing_reminder_intent_waits_out_its_back_off` pins the first two
+back-offs, `a_claimed_intent_is_leased_and_its_outcome_is_fenced_by_the_lease`
+holds one lease at a time, recovers a lapsed lease as a failed attempt, and
+refuses a stale owner's finish,
+`a_lapsed_final_attempt_is_set_aside_for_an_operator` dead-letters a lapsed
+eighth attempt, `the_intents_nobody_will_deliver_are_readable_by_an_operator`
+covers the unconfigured and exhausted branches,
+`a_cancelled_appointments_reminder_is_set_aside_without_a_send` and
+`a_reschedule_supersedes_the_obsolete_reminder_and_mints_its_replacement`
+prove a superseded reminder is never sent, and
+`a_dispatch_pass_delivers_retries_and_holds_by_what_the_destination_answers`
+pins the refused, retried, and delivered outcomes. In
+`crates/registry-scheduling/src/runtime/intents.rs`, unit tests hold the
+migration to the dispatch core's DDL, the policy to its bounds and delays,
+and every set-aside reason to its class.
+`crates/registry-schedulingctl/tests/intents_postgres.rs` holds the operator
+listing to the same states.
+
+Residual: Delivery stays at-least-once. A send whose response is lost is
+retried under the same envelope `id`, so a destination that ignores it may
+see an event twice. A superseded reminder waits until it falls due before it
+is set aside. One worker serves each runtime process.

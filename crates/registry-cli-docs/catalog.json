@@ -16835,7 +16835,7 @@
         {
           "name": "intents",
           "invocation": "schedulingctl intents",
-          "about": "List delivery intents a deployment's sweep has stopped carrying",
+          "about": "List delivery intents a deployment's dispatcher has stopped carrying",
           "long_about": null,
           "usage": "schedulingctl intents [OPTIONS] --runtime-config <FILE>",
           "arguments": [],

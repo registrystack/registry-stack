@@ -312,12 +312,15 @@ section), with `bearerTokenRef` as the optional bearer secret. The URL is one re
 absolute endpoint without userinfo, query, or fragment; plain `http` is
 accepted only for an explicit loopback host, so a plaintext destination can
 never silently point at another machine. Delivery is attempted once per claim
-with exponential backoff from half a minute capped at an hour; a transport
-failure schedules a retry, an authorization or routing refusal holds the
-intent as failed for the operator, and eight failed attempts hold it. An
-absent reminders destination is a supported deployment: the intents stay
-readable in the outbox and are marked local, never pretended delivered. The
-README documents the envelope and the event types.
+on the shared dispatch core, with a five-second attempt timeout and a fixed
+back-off of thirty seconds doubling to 1920 seconds; a transport failure
+schedules a retry, an authorization or routing refusal sets the intent aside
+as failed for the operator, and the eighth failed attempt sets it aside. A
+reminder superseded by a cancellation or a reschedule is set aside without a
+send when it falls due. An absent reminders destination is a supported
+deployment: the intents stay readable in the outbox and are set aside as
+local, never pretended delivered. The README documents the envelope and the
+event types.
 
 `destinations.hooks` binds the logical destination ids named by policy hooks to
 deployment-owned URLs and HMAC-SHA256 keys. It holds at most 128 bindings, and
@@ -353,7 +356,7 @@ and up to 256 terminal observer deliveries whose last transition is at or
 before that cutoff. Observer dead letters and expired deliveries also require
 completed payload expiry and erasure before their metadata ages out. Pending,
 leased, retryable and uncertain work remains, including local, failed and
-suppressed outbox intents. Hook state is removed before delivery metadata;
+superseded outbox intents. Hook state is removed before delivery metadata;
 a shared event remains until its last delivery is removed. These deletions
 share one transaction and never erase audit entries or spent-key tombstones. `audit.retentionDays` bounds rotated
 audit files. An idempotency receipt past its period is erased, so an
