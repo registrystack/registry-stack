@@ -35,6 +35,7 @@ const READY_MIRROR: &str = "
   - id: ready-mirror
     phase: after
     trigger: document-version.ready
+    policies: [citizen-delivery]
     projection: [documentId]
     handler:
       type: url
@@ -243,6 +244,42 @@ async fn a_version_approved_again_after_a_verifier_rebind_reports_ready_again() 
         .scalar("SELECT revision FROM documents_versions")
         .await;
     assert_eq!(stored, second);
+}
+
+#[tokio::test]
+async fn a_hook_hears_nothing_about_a_document_under_a_policy_it_does_not_name() {
+    // Every starter hook names every starter policy; narrow them all to one
+    // policy the citizen's upload is not held under.
+    let all = "policies: [citizen-delivery, institutional-custody, named-share]";
+    assert_eq!(STARTER_PROJECT.matches(all).count(), 3);
+    let project = STARTER_PROJECT.replace(all, "policies: [institutional-custody]");
+    let deployment = deployment(&project).await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, version) = upload(&api, 14).await;
+    let policy: String = deployment
+        .scalar("SELECT policy_id FROM documents_documents")
+        .await;
+    assert_eq!(policy, "citizen-delivery");
+
+    assert_eq!(prepared.verify_due().await, 1);
+    let issued = api
+        .grant(APP, &document, &version, READER.subject, None)
+        .await;
+    assert_eq!(
+        issued.status,
+        201,
+        "{}",
+        String::from_utf8_lossy(&issued.body)
+    );
+    let grant = issued.json()["id"].as_str().unwrap().to_owned();
+    assert_eq!(api.revoke(APP, &grant).await.status, 200);
+    assert_eq!(api.erase(CITIZEN, &document).await.status, 200);
+    assert!(
+        captured(&deployment).await.is_empty(),
+        "no transition under an unnamed policy captures a delivery"
+    );
+    assert_eq!(delivery_count(&deployment).await, 0);
 }
 
 #[tokio::test]

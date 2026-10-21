@@ -110,13 +110,15 @@ documentPolicies:
       maximumGrantExpiryHours: 168
       cleanupGraceHours: 24
 
-# After-commit URL observers. Each receives only its trigger's closed
-# projection and delivers to a destination the runtime configuration binds
-# under destinations.hooks; this file carries no endpoint or secret.
+# After-commit URL observers. Each hears only about documents held under the
+# policies it lists, receives only its trigger's closed projection, and
+# delivers to a destination the runtime configuration binds under
+# destinations.hooks; this file carries no endpoint or secret.
 hooks:
   - id: document-version-ready
     phase: after
     trigger: document-version.ready
+    policies: [citizen-delivery, institutional-custody, named-share]
     projection: [documentId, versionId, versionDigest, policyId, policyVersion]
     handler:
       type: url
@@ -124,6 +126,7 @@ hooks:
   - id: document-version-rejected
     phase: after
     trigger: document-version.rejected
+    policies: [citizen-delivery, institutional-custody, named-share]
     projection: [documentId, versionId, policyId, policyVersion]
     handler:
       type: url
@@ -131,6 +134,7 @@ hooks:
   - id: document-grant-changed
     phase: after
     trigger: document-grant.changed
+    policies: [citizen-delivery, institutional-custody, named-share]
     projection: [grantId, change, documentId, versionId, actorKind, expiresAt]
     handler:
       type: url
