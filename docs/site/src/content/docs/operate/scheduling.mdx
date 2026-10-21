@@ -260,9 +260,10 @@ schemaVersion: 100
 verifiedPackageDigest: sha256:<digest>
 ```
 
-`intents` lists the reminders and confirmations nobody is delivering: every intent, when no
-reminder destination is configured, and any intent a destination refused until its attempts ran
-out.
+`intents` lists the intents nobody is delivering: each one that fell due while no reminder
+destination is configured, and any intent the destination refused, that failed every attempt, or
+that could not be read or rendered. A reminder dropped because its appointment was cancelled or
+moved is not listed.
 
 ```sh
 schedulingctl intents --runtime-config /etc/registry-scheduling/runtime.yaml
