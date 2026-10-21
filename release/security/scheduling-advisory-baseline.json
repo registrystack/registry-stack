@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:23fee8480690f3fbfd9b8b637ffdcfe5b3cceae7d29b2e03744d3607312d5cd1",
+      "sha256:7f6d56e0ea81b18f4ddfef8a1bea90206b0925794df0ee159e62b74c4c09f64a",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
@@ -52,7 +52,7 @@
       ],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e"
+    "definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651"
   },
   "policies": [
     {
@@ -75,7 +75,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-10-19",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -92,15 +92,15 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
-      "component_layer_id": "sha256:23fee8480690f3fbfd9b8b637ffdcfe5b3cceae7d29b2e03744d3607312d5cd1",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 scheduling local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
+      "component_layer_id": "sha256:7f6d56e0ea81b18f4ddfef8a1bea90206b0925794df0ee159e62b74c4c09f64a",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 scheduling local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:950f45c4ee4d70047874c3461c2d0360dd27127a056c50e40f640b9e01b0fe39",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:ba449952d89e6146db9e4be1794c7c6f916d7ec82eb19193ccf4fd71b53a9f7a",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+        "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -120,10 +120,10 @@
           },
           {
             "path": "/usr/local/bin/scheduling",
-            "sha256": "sha256:7fd82e81ed4c6e56ce024eae1c65b314c6cfbfb19b0b03cb4b0161f27e55d762"
+            "sha256": "sha256:952f66dbd71a5a49686f791d0c14a3c555308f771af5b0c45fbe4a08b7b8ab69"
           }
         ],
-        "definition_digest": "sha256:275a40551f667a740affb0a9592d4b8d13ac06939b214f40be0c9ba45c3ff900"
+        "definition_digest": "sha256:282b59f78ff97d9c8dd90166833d9f703eed73368b475bc530c197d439976024"
       }
     },
     {
@@ -133,7 +133,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-10-19",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -150,15 +150,15 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
-      "component_layer_id": "sha256:23fee8480690f3fbfd9b8b637ffdcfe5b3cceae7d29b2e03744d3607312d5cd1",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 scheduling local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
+      "component_layer_id": "sha256:7f6d56e0ea81b18f4ddfef8a1bea90206b0925794df0ee159e62b74c4c09f64a",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 scheduling local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:950f45c4ee4d70047874c3461c2d0360dd27127a056c50e40f640b9e01b0fe39",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:ba449952d89e6146db9e4be1794c7c6f916d7ec82eb19193ccf4fd71b53a9f7a",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+        "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -178,10 +178,10 @@
           },
           {
             "path": "/usr/local/bin/scheduling",
-            "sha256": "sha256:7fd82e81ed4c6e56ce024eae1c65b314c6cfbfb19b0b03cb4b0161f27e55d762"
+            "sha256": "sha256:952f66dbd71a5a49686f791d0c14a3c555308f771af5b0c45fbe4a08b7b8ab69"
           }
         ],
-        "definition_digest": "sha256:275a40551f667a740affb0a9592d4b8d13ac06939b214f40be0c9ba45c3ff900"
+        "definition_digest": "sha256:282b59f78ff97d9c8dd90166833d9f703eed73368b475bc530c197d439976024"
       }
     },
     {
@@ -191,7 +191,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-10-19",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -208,15 +208,15 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+      "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 scheduling local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports not-fixed with no fixed version for zlib1g 1:1.3.dfsg+really1.3.1-1+b1. The base carries zlib, including gzwrite, gzfwrite, gzprintf and gzvprintf. The reviewed application executables neither need libz nor contain libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. No reviewed dynamic lookup opens that closure, and the bounded source paths expose no stalled gzip-write followed by formatted-output operation. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 scheduling local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports not-fixed with no fixed version for zlib1g 1:1.3.dfsg+really1.3.1-1+b1. The base carries zlib, including gzwrite, gzfwrite, gzprintf and gzvprintf. The reviewed application executables neither need libz nor contain libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. No reviewed dynamic lookup opens that closure, and the bounded source paths expose no stalled gzip-write followed by formatted-output operation. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:950f45c4ee4d70047874c3461c2d0360dd27127a056c50e40f640b9e01b0fe39",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:ba449952d89e6146db9e4be1794c7c6f916d7ec82eb19193ccf4fd71b53a9f7a",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+        "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -236,10 +236,10 @@
           },
           {
             "path": "/usr/local/bin/scheduling",
-            "sha256": "sha256:7fd82e81ed4c6e56ce024eae1c65b314c6cfbfb19b0b03cb4b0161f27e55d762"
+            "sha256": "sha256:952f66dbd71a5a49686f791d0c14a3c555308f771af5b0c45fbe4a08b7b8ab69"
           }
         ],
-        "definition_digest": "sha256:275a40551f667a740affb0a9592d4b8d13ac06939b214f40be0c9ba45c3ff900"
+        "definition_digest": "sha256:282b59f78ff97d9c8dd90166833d9f703eed73368b475bc530c197d439976024"
       }
     },
     {
@@ -249,7 +249,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-10-19",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -266,15 +266,15 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+      "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 scheduling local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 scheduling local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:950f45c4ee4d70047874c3461c2d0360dd27127a056c50e40f640b9e01b0fe39",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:ba449952d89e6146db9e4be1794c7c6f916d7ec82eb19193ccf4fd71b53a9f7a",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+        "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -294,10 +294,10 @@
           },
           {
             "path": "/usr/local/bin/scheduling",
-            "sha256": "sha256:7fd82e81ed4c6e56ce024eae1c65b314c6cfbfb19b0b03cb4b0161f27e55d762"
+            "sha256": "sha256:952f66dbd71a5a49686f791d0c14a3c555308f771af5b0c45fbe4a08b7b8ab69"
           }
         ],
-        "definition_digest": "sha256:275a40551f667a740affb0a9592d4b8d13ac06939b214f40be0c9ba45c3ff900"
+        "definition_digest": "sha256:282b59f78ff97d9c8dd90166833d9f703eed73368b475bc530c197d439976024"
       }
     },
     {
@@ -307,7 +307,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-10-19",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -324,15 +324,15 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+      "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 scheduling local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 scheduling local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:950f45c4ee4d70047874c3461c2d0360dd27127a056c50e40f640b9e01b0fe39",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:ba449952d89e6146db9e4be1794c7c6f916d7ec82eb19193ccf4fd71b53a9f7a",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+        "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -352,10 +352,10 @@
           },
           {
             "path": "/usr/local/bin/scheduling",
-            "sha256": "sha256:7fd82e81ed4c6e56ce024eae1c65b314c6cfbfb19b0b03cb4b0161f27e55d762"
+            "sha256": "sha256:952f66dbd71a5a49686f791d0c14a3c555308f771af5b0c45fbe4a08b7b8ab69"
           }
         ],
-        "definition_digest": "sha256:275a40551f667a740affb0a9592d4b8d13ac06939b214f40be0c9ba45c3ff900"
+        "definition_digest": "sha256:282b59f78ff97d9c8dd90166833d9f703eed73368b475bc530c197d439976024"
       }
     },
     {
@@ -365,7 +365,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-10-19",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -382,15 +382,15 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+      "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 scheduling local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 scheduling local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:950f45c4ee4d70047874c3461c2d0360dd27127a056c50e40f640b9e01b0fe39",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:ba449952d89e6146db9e4be1794c7c6f916d7ec82eb19193ccf4fd71b53a9f7a",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+        "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -410,10 +410,10 @@
           },
           {
             "path": "/usr/local/bin/scheduling",
-            "sha256": "sha256:7fd82e81ed4c6e56ce024eae1c65b314c6cfbfb19b0b03cb4b0161f27e55d762"
+            "sha256": "sha256:952f66dbd71a5a49686f791d0c14a3c555308f771af5b0c45fbe4a08b7b8ab69"
           }
         ],
-        "definition_digest": "sha256:275a40551f667a740affb0a9592d4b8d13ac06939b214f40be0c9ba45c3ff900"
+        "definition_digest": "sha256:282b59f78ff97d9c8dd90166833d9f703eed73368b475bc530c197d439976024"
       }
     },
     {
@@ -423,7 +423,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-10-19",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -440,15 +440,15 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+      "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 scheduling local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 scheduling local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:950f45c4ee4d70047874c3461c2d0360dd27127a056c50e40f640b9e01b0fe39",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:ba449952d89e6146db9e4be1794c7c6f916d7ec82eb19193ccf4fd71b53a9f7a",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+        "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -468,10 +468,10 @@
           },
           {
             "path": "/usr/local/bin/scheduling",
-            "sha256": "sha256:7fd82e81ed4c6e56ce024eae1c65b314c6cfbfb19b0b03cb4b0161f27e55d762"
+            "sha256": "sha256:952f66dbd71a5a49686f791d0c14a3c555308f771af5b0c45fbe4a08b7b8ab69"
           }
         ],
-        "definition_digest": "sha256:275a40551f667a740affb0a9592d4b8d13ac06939b214f40be0c9ba45c3ff900"
+        "definition_digest": "sha256:282b59f78ff97d9c8dd90166833d9f703eed73368b475bc530c197d439976024"
       }
     },
     {
@@ -481,7 +481,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-10-19",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -498,15 +498,15 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+      "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 scheduling local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 scheduling local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:950f45c4ee4d70047874c3461c2d0360dd27127a056c50e40f640b9e01b0fe39",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:ba449952d89e6146db9e4be1794c7c6f916d7ec82eb19193ccf4fd71b53a9f7a",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+        "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -526,10 +526,10 @@
           },
           {
             "path": "/usr/local/bin/scheduling",
-            "sha256": "sha256:7fd82e81ed4c6e56ce024eae1c65b314c6cfbfb19b0b03cb4b0161f27e55d762"
+            "sha256": "sha256:952f66dbd71a5a49686f791d0c14a3c555308f771af5b0c45fbe4a08b7b8ab69"
           }
         ],
-        "definition_digest": "sha256:275a40551f667a740affb0a9592d4b8d13ac06939b214f40be0c9ba45c3ff900"
+        "definition_digest": "sha256:282b59f78ff97d9c8dd90166833d9f703eed73368b475bc530c197d439976024"
       }
     },
     {
@@ -539,7 +539,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-10-19",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -556,15 +556,15 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+      "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 scheduling local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 scheduling local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:950f45c4ee4d70047874c3461c2d0360dd27127a056c50e40f640b9e01b0fe39",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:ba449952d89e6146db9e4be1794c7c6f916d7ec82eb19193ccf4fd71b53a9f7a",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+        "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -584,10 +584,10 @@
           },
           {
             "path": "/usr/local/bin/scheduling",
-            "sha256": "sha256:7fd82e81ed4c6e56ce024eae1c65b314c6cfbfb19b0b03cb4b0161f27e55d762"
+            "sha256": "sha256:952f66dbd71a5a49686f791d0c14a3c555308f771af5b0c45fbe4a08b7b8ab69"
           }
         ],
-        "definition_digest": "sha256:275a40551f667a740affb0a9592d4b8d13ac06939b214f40be0c9ba45c3ff900"
+        "definition_digest": "sha256:282b59f78ff97d9c8dd90166833d9f703eed73368b475bc530c197d439976024"
       }
     },
     {
@@ -597,7 +597,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-10-19",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -614,15 +614,15 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+      "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 scheduling local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 scheduling local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:950f45c4ee4d70047874c3461c2d0360dd27127a056c50e40f640b9e01b0fe39",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:ba449952d89e6146db9e4be1794c7c6f916d7ec82eb19193ccf4fd71b53a9f7a",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+        "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -642,10 +642,10 @@
           },
           {
             "path": "/usr/local/bin/scheduling",
-            "sha256": "sha256:7fd82e81ed4c6e56ce024eae1c65b314c6cfbfb19b0b03cb4b0161f27e55d762"
+            "sha256": "sha256:952f66dbd71a5a49686f791d0c14a3c555308f771af5b0c45fbe4a08b7b8ab69"
           }
         ],
-        "definition_digest": "sha256:275a40551f667a740affb0a9592d4b8d13ac06939b214f40be0c9ba45c3ff900"
+        "definition_digest": "sha256:282b59f78ff97d9c8dd90166833d9f703eed73368b475bc530c197d439976024"
       }
     },
     {
@@ -655,7 +655,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "reviewed_at": "2026-10-19",
+      "reviewed_at": "2026-10-21",
       "expires_at": "2026-11-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -672,15 +672,15 @@
         "runtime_base_changed",
         "runtime_config_changed"
       ],
-      "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+      "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
-      "rationale": "Reviewed the v0.42.0 Linux amd64 scheduling local reproduction from rehearsal 39322045686 on 2026-10-19. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the expiry is extended to 2026-11-03.",
+      "rationale": "Reviewed the v0.43.0 Linux amd64 scheduling local reproduction from rehearsal 39628787124 on 2026-10-21. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/scheduling.json and exposure/scheduling.schedulingctl.json record no review-required dynamic lookup in /usr/local/bin/scheduling and /usr/local/bin/schedulingctl; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, getrandom, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner, invalidation triggers, and 2026-11-03 expiry remain unchanged.",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:950f45c4ee4d70047874c3461c2d0360dd27127a056c50e40f640b9e01b0fe39",
-        "reference_source_revision": "fe638af2eca4a14a6a98a85ab51585e98af54130",
+        "reference_image_digest": "sha256:ba449952d89e6146db9e4be1794c7c6f916d7ec82eb19193ccf4fd71b53a9f7a",
+        "reference_source_revision": "4c56be90b2a50f3f0118d3d7c109c8b017117591",
         "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:499ca9bbb99615e0ceb243af6e10ccbaf69b9fae70bf0f9c846b8d7e73c6c91e",
+        "runtime_definition_digest": "sha256:a6d7ed574cdac4c2f018c2ec9a4397ea85acca335183f33dd5c8d691378a8651",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -700,10 +700,10 @@
           },
           {
             "path": "/usr/local/bin/scheduling",
-            "sha256": "sha256:7fd82e81ed4c6e56ce024eae1c65b314c6cfbfb19b0b03cb4b0161f27e55d762"
+            "sha256": "sha256:952f66dbd71a5a49686f791d0c14a3c555308f771af5b0c45fbe4a08b7b8ab69"
           }
         ],
-        "definition_digest": "sha256:275a40551f667a740affb0a9592d4b8d13ac06939b214f40be0c9ba45c3ff900"
+        "definition_digest": "sha256:282b59f78ff97d9c8dd90166833d9f703eed73368b475bc530c197d439976024"
       }
     }
   ]
