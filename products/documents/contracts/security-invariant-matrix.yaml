@@ -618,14 +618,17 @@ invariants:
     state: enforced
     threat: >-
       A document whose custodian asked for its removal is still released,
-      through a grant issued before the request or one issued while it
-      commits.
+      by a grant, download, or verdict that starts after the request
+      commits, through a grant issued before the request or one issued
+      while it commits.
     enforcementPoint: >-
       The removal request moves the version to erasure pending, suspends
       it, and revokes every active grant on the document in one
       transaction; grant issue holds the version row and refuses a version
       under erasure; the database refuses a releasable version whose
-      erasure state is not none.
+      erasure state is not none. A download admitted before the request
+      commits is not interrupted and may finish within its transfer
+      deadline, the residual DOCUMENTS-DEC-11 records for revocation.
     refusal: >-
       Answer resource.not-found to a former grant holder,
       document.version-not-releasable to the custodian and to a new grant,

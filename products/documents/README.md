@@ -50,13 +50,16 @@ removes it.
 `POST /documents/{documentId}/erasure` starts the only custody clock. In one
 transaction it suspends release, revokes every active grant on the document,
 cancels any pending verification, and marks the version `erasure-pending` with
-a due time of now plus the policy's `cleanupGraceHours`. From that commit no
-grant, download, or verdict releases the version.
+a due time of now plus the policy's `cleanupGraceHours`. No grant, download,
+or verdict that starts after the request commits releases the version. A
+download admitted before the commit is not interrupted and may finish after
+it, bounded by its transfer deadline.
 
 A cleanup sweep runs every minute. Each pass:
 
-- expires uploads whose transfer deadline lapsed, so a lapsed reservation
-  takes no more bytes;
+- expires uploads whose upload window lapsed, so a lapsed reservation takes
+  no more bytes. The window is the reservation time plus the policy's
+  `cleanupGraceHours`;
 - arms an erasure job on `registry-platform-dispatch` for each version past
   its due time;
 - on S3, deletes objects an upload staged but never committed once they are
@@ -67,17 +70,19 @@ dead-lettered erasure stays `erasure-pending` until an operator replays it.
 The version moves to `erased` only once erasure is confirmed:
 
 - PostgreSQL `bytea`: the content row is deleted in the same transaction that
-  records `erased`. PostgreSQL reclaims the space at its next vacuum; until
-  then the bytes sit in dead tuples no query reaches.
+  records `erased`. No query reaches the bytes after that commit, but they
+  stay on disk: vacuum only marks the space reusable, so the bytes remain
+  until PostgreSQL overwrites those pages or `VACUUM FULL` rewrites the
+  table, and WAL archives and replicas keep their own copies.
 - S3: the object is deleted and a following read must answer 404. A delete
   the store accepts but does not honour leaves the version pending and is
   retried.
 
 "Erased" means the Store can no longer serve the bytes. It does not reach
-backups, database pages before vacuum, or object-store versions the bucket
-keeps outside the Store's key. Records are kept: documents, versions, grants,
-verification history, and the audit file survive erasure, and every foreign
-key between them is `ON DELETE RESTRICT`.
+backups, WAL archives, replicas, database pages not yet overwritten, or
+object-store versions the bucket keeps outside the Store's key. Records are
+kept: documents, versions, grants, verification history, and the audit file
+survive erasure, and every foreign key between them is `ON DELETE RESTRICT`.
 
 Set `cleanup.erasure: paused` in the runtime configuration to halt erasure
 without halting the rest of the runtime. A paused deployment still serves,
@@ -99,8 +104,20 @@ Rehearse a restore before relying on one:
    requests newer than the backup are lost unless the audit file was
    restored too: the database no longer knows about them, so a grant revoked
    after the backup is active again and a document removed after the backup
-   is in custody again. Repeat them from the audit file before serving.
-5. Set `cleanup.erasure: active` and restart. The next pass handles every
+   is in custody again. Repeat them from the audit file before serving. A
+   removal repeated here gets a fresh due time, so its bytes stay for
+   another full `cleanupGraceHours` after the repeat, not after the
+   original request.
+5. On S3, if the database was restored and the bucket was not, remove the
+   objects uploaded after the backup: no row names them, so no sweep ever
+   reaches them. Each object key is `documents/<scope>/<sha256>`, where
+   `<scope>` is the lowercase hex SHA-256 of `<identity.databaseId>/<objectId>`
+   with the object id in lowercase hyphenated form. Compute the scope of
+   every `object_id` in `documents_staged_objects`,
+   list the keys under `documents/`, and delete every key whose scope none
+   of them produces. Run this only on a bucket the deployment uses alone:
+   another deployment's keys under the same prefix are indistinguishable.
+6. Set `cleanup.erasure: active` and restart. The next pass handles every
    version that became due after the backup was taken; the drill needs no
    step for them. Bytes erased after the backup are back in the restored
    database or bucket until their version is erased again. An S3 object

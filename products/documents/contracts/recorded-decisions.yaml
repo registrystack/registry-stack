@@ -350,7 +350,9 @@ decisions:
   - id: DOCUMENTS-DEC-22
     subject: Lapsed uploads are expired; orphaned objects are swept after the longest transfer
     decision: >-
-      Each cleanup pass marks every reserved upload past its deadline expired,
+      Each cleanup pass marks every reserved upload past its upload window
+      expired, the window being the reservation time plus the policy's
+      cleanupGraceHours,
       in audited batches, whether erasure is active or paused; an expired
       upload stops counting against the custodian's quota and cannot be
       finalized. A lapsed upload never stored bytes the Store serves, so
@@ -374,8 +376,10 @@ decisions:
       answer 404 before its staged row is deleted and the version recorded
       erased; an unconfirmed delete leaves the version pending and the job
       retries. Erased means this Store can no longer serve the bytes:
-      PostgreSQL returns the space only after vacuum, and backups and a
-      provider's own copies keep them until they age out.
+      PostgreSQL keeps them on disk until their pages are overwritten or
+      VACUUM FULL rewrites the table, since vacuum only makes the space
+      reusable, and backups, WAL archives, replicas, and a provider's own
+      copies keep them until they age out.
     reasoning: >-
       Recording an erasure the store did not confirm would let the Store claim
       a removal it cannot prove. Recording in the same transaction as the
