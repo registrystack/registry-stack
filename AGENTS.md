@@ -31,6 +31,10 @@ The maintained runtime products include:
   Authenticated product events may start a run through an authored typed trigger.
   A run may submit its own Review request to Casework as a producer; Coordinator is not a Review provider.
   Neither admission path grants authority to mutate the source or another product.
+- **Document Store** holds document bytes in custody for an owning system and
+  releases an exact, verified document version to a recipient a document grant
+  names. It is a bootstrap skeleton held out of releases: the runtime checks
+  its configuration and database and serves only its liveness route.
 
 The products compose without merging their boundaries. Evidence may use a Base
 Registry Engine route or another bounded HTTP endpoint as a fixed source and
@@ -90,6 +94,11 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-coordinator-client-node` | Internal napi-rs binding for the Coordinator client, built from source and not part of the unified Node.js client |
 | `crates/registry-coordinator-client-py` | Internal PyO3 binding for the Coordinator client, built from source and not part of the unified Python client |
 | `products/coordinator` | Coordinator product contract, deployment runbook, example projects, generated schemas, OpenAPI and operation contracts, and contributor check and test scripts |
+| `crates/registry-documents-core` | Source-neutral Document Store project model, problem codes, and wire constants |
+| `crates/registry-documents` | PostgreSQL-backed Document Store runtime and the `documents` binary |
+| `crates/registry-documentsctl` | Document Store operator tooling and the `documentsctl` binary |
+| `crates/registry-documents-client` | Bounded Rust Document Store client over the runtime's HTTP contract |
+| `products/documents` | Document Store product contracts, starter example, generated schemas and OpenAPI document, and contributor check scripts |
 | `crates/registry-discovery` | Immutable Registry Discovery index runtime and the `discovery` binary |
 | `crates/registry-discovery-profile` | Closed provider-publication profile implemented by Evidence; published v1alpha1 resources retain their historical broader vocabulary |
 | `crates/registry-discovery-client` | Rust relying-party SDK for bounded search, resolution, and inert exact selections |
@@ -157,6 +166,7 @@ Before editing crates in these areas, also read the owning guide:
 - `registry-platform-*`: `products/platform/AGENTS.md`
 - `registry-evidence*` and `registry-language-server`: `products/evidence/AGENTS.md`
 - `registry-coordinator*`: `products/coordinator/AGENTS.md`
+- `registry-documents*`: `products/documents/AGENTS.md`
 - product clients, their language bindings, `registry-record`, and
   `registry-stack-client*`: `crates/CLIENTS.md` plus the owning product guide
 
@@ -279,6 +289,22 @@ gate enforces both directions on the whole forward closure, and the Casework,
 Scheduling, and Messaging gates refuse the Coordinator from their side. The
 Coordinator reaches Casework through `registry-casework-client` alone, never
 `registry-casework-core` directly.
+
+Document Store is implemented by `registry-documents`,
+`registry-documents-core`, `registry-documentsctl`, and its Rust client crate,
+`registry-documents-client`. Its product contracts, generated schemas and
+OpenAPI document, starter example, and focused gates live under
+`products/documents`. It is held out of releases while
+`DOCUMENTS_FIRST_RELEASE` in `release/scripts/release_roster.py` is unset. The
+Document Store owns its custody records, document grants, stored bytes,
+content verification state, and audit journal; why a document exists, who it
+concerns, and whether a recipient is entitled to it stay with the owning
+system. No Document Store crate reaches a BReg, Casework, Coordinator,
+Evidence, Messaging, or Scheduling crate, and no product crate reaches the
+Document Store runtime or `documentsctl`: products reach it over its public
+HTTP contract like any external caller, and its dependency-direction gate
+enforces that on the whole forward closure. The source-neutral core depends on
+no other Document Store crate, and the client never reaches the runtime.
 
 Registry Discovery is a curated index over public provider descriptions, not
 a trust broker, authorization service, protocol adapter, or data proxy.
@@ -593,6 +619,20 @@ Root CI runs the dependency gate on every Rust change, so a crate anywhere in
 the workspace that starts depending on a Coordinator crate fails it.
 `products/coordinator/README.md` names the focused runtime test targets and
 the native-service journeys.
+
+Document Store product and gates:
+
+```bash
+products/documents/scripts/check-checkpoint.sh
+products/documents/scripts/check-contracts.sh
+DOCUMENTS_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-documents --features postgres-test --test postgres_startup
+```
+
+The checkpoint runs the dependency-direction and database-isolation gates,
+the drift test for the committed schemas and OpenAPI document, and the
+offline `documentsctl check` journeys. The PostgreSQL suite fails, rather than
+skips, without `DOCUMENTS_TEST_DATABASE_URL`.
 
 The unified Node.js and Python packages are generated from the maintained product
 bindings. After changing a binding or facade, run:

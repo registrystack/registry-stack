@@ -337,6 +337,18 @@ The Messaging PostgreSQL suites fail, rather than skip, without
 `MESSAGING_TEST_DATABASE_URL`; point it at a server whose databases you can
 discard.
 
+Document Store product checks:
+
+```bash
+products/documents/scripts/check-checkpoint.sh
+products/documents/scripts/check-contracts.sh
+DOCUMENTS_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-documents --features postgres-test --test postgres_startup
+```
+
+The Document Store PostgreSQL suite fails, rather than skips, without
+`DOCUMENTS_TEST_DATABASE_URL`.
+
 Release source checks:
 
 These checks require Python 3.11 or later.

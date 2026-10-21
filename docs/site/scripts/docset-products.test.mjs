@@ -239,10 +239,10 @@ test('drops a gated product\'s pages and CLI references from the docs collection
   }
   assert.deepEqual(omittedCliBinaries(withoutMessaging), [
     'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render',
-    'messaging', 'messagingctl', 'coordinator', 'coordinatorctl',
+    'messaging', 'messagingctl', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
   ]);
   assert.deepEqual(omittedCliBinaries(withMessaging), [
-    'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render', 'coordinator', 'coordinatorctl',
+    'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
   ]);
 });
 
@@ -264,7 +264,7 @@ test('drops Registry Scheduling\'s and Registry Render\'s pages and CLI referenc
     assert.equal(isEntryGatedOut(id, withoutSchedulingAndRender), false, id);
   }
   assert.deepEqual(omittedCliBinaries(withSchedulingAndRender), [
-    'breg-mcp', 'breg-review', 'messaging', 'messagingctl', 'coordinator', 'coordinatorctl',
+    'breg-mcp', 'breg-review', 'messaging', 'messagingctl', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
   ]);
 });
 
@@ -289,7 +289,7 @@ test('drops the citizen services\' pages and CLI references from the docs collec
     assert.equal(isEntryGatedOut(id, withoutBregServices), false, id);
   }
   assert.deepEqual(omittedCliBinaries(withBregServices), [
-    'scheduling', 'schedulingctl', 'registry-render', 'messaging', 'messagingctl', 'coordinator', 'coordinatorctl',
+    'scheduling', 'schedulingctl', 'registry-render', 'messaging', 'messagingctl', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
   ]);
 });
 
@@ -308,6 +308,7 @@ test('drops Registry Coordinator\'s pages and CLI references from the docs colle
   }
   assert.deepEqual(omittedCliBinaries(withCoordinator), [
     'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render', 'messaging', 'messagingctl',
+    'documents', 'documentsctl',
   ]);
 });
 

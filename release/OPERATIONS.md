@@ -152,7 +152,8 @@ Registry Relay's final numbered release is `v0.38.0`; releases from `v0.39.0`
 exclude its image, binaries, installers, and client namespace.
 `BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,
 `RENDER_FIRST_RELEASE`, and `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE` in
-`release/scripts/release_roster.py` own those boundaries. The existing
+`release/scripts/release_roster.py` own those boundaries. The Document Store
+is held out of every release while `DOCUMENTS_FIRST_RELEASE` is `None`. The existing
 OID4VCI binary stays in earlier inventories. v0.38.0 also adds the Linux amd64
 `discoveryctl` asset beside the existing Discovery runtime asset, completing
 the released authoring and runtime pair. Earlier releases require operators to
