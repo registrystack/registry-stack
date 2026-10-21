@@ -187,12 +187,14 @@ fn statistical_dataset_direction(
     };
 
     let mut before_definition = before.clone();
+    before_definition.display = Default::default();
     before_definition.live_profiles.clear();
     before_definition.access_profiles.clear();
     if let Some(releases) = &mut before_definition.releases {
         releases.readers.clear();
     }
     let mut after_definition = after.clone();
+    after_definition.display = Default::default();
     after_definition.live_profiles.clear();
     after_definition.access_profiles.clear();
     if let Some(releases) = &mut after_definition.releases {
@@ -202,10 +204,9 @@ fn statistical_dataset_direction(
         return DiffClassification::AccessChange;
     }
     if before.access_profiles.iter().any(|(profile, definition)| {
-        after
-            .access_profiles
-            .get(profile)
-            .is_some_and(|candidate| candidate != definition)
+        after.access_profiles.get(profile).is_some_and(|candidate| {
+            !crate::package::access_profile_behavior_eq(definition, candidate)
+        })
     }) {
         return DiffClassification::AccessChange;
     }
@@ -697,7 +698,10 @@ fn access_profile_direction(
     before_without_disclosure.readable_fields.clear();
     let mut after_without_disclosure = after.clone();
     after_without_disclosure.readable_fields.clear();
-    if before_without_disclosure != after_without_disclosure {
+    if !crate::package::access_profile_behavior_eq(
+        &before_without_disclosure,
+        &after_without_disclosure,
+    ) {
         return DiffClassification::AccessChange;
     }
     if before.readable_fields.is_subset(&after.readable_fields) {
@@ -794,6 +798,20 @@ mod tests {
         let before = event("first-destination", r#"["code"]"#);
         let after = event("second-destination", r#"["code"]"#);
         let projected = event("first-destination", r#"["code","note"]"#);
+        let presented = compiled(
+            "1",
+            "internal",
+            extra,
+            r#", "hooks":[{"id":"notify","display":{"label":"A clearer notification"},"phase":"after","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"first-destination"}}]"#,
+            "principal",
+        );
+        let conditioned = compiled(
+            "1",
+            "internal",
+            extra,
+            r#", "hooks":[{"id":"notify","phase":"after","trigger":"created","when":{"type":"fields","afterEquals":{"code":"active"}},"projection":["code"],"handler":{"type":"url","destinationId":"first-destination"}}]"#,
+            "principal",
+        );
         assert_class(
             &without,
             &before,
@@ -825,6 +843,20 @@ mod tests {
                 .any(|detail| detail.field == field
                     && detail.direction == AccessChangeDirection::ReviewRequired));
         }
+        assert_ne!(before.revision(), presented.revision());
+        assert!(
+            classify_registry_diff(&before, &presented, PACKAGE_REVISION)
+                .changes
+                .iter()
+                .all(|change| change.change.code != CompiledRegistryChangeCode::EventChanged),
+            "record-hook presentation is retained in package identity without becoming an authority change"
+        );
+        assert_class(
+            &before,
+            &conditioned,
+            CompiledRegistryChangeCode::EventChanged,
+            DiffClassification::AccessChange,
+        );
         for (baseline, candidate) in [
             (&without, &before),
             (&before, &without),
@@ -1087,6 +1119,36 @@ mod tests {
         assert!(diff.changes.iter().any(|change| {
             change.change.code == code && change.classification == classification
         }));
+    }
+
+    #[test]
+    fn profile_presentation_does_not_hide_readable_field_direction() {
+        let extra =
+            r#",{"id":"note","type":"string","maximumLength":16,"classification":"internal"}"#;
+        let baseline = compiled_temporal_with_profile_fields(
+            r#""list""#,
+            extra,
+            r#""readableFields":["subject","valid-from","valid-to"],"filterableFields":["subject","valid-from"]"#,
+            "",
+        );
+        let candidate = compiled_temporal_with_profile_fields(
+            r#""list""#,
+            extra,
+            r#""readableFields":["subject","valid-from","valid-to","note"],"filterableFields":["subject","valid-from"]"#,
+            r#","display":{"label":"Reader presentation"}"#,
+        );
+        assert_class(
+            &baseline,
+            &candidate,
+            CompiledRegistryChangeCode::AccessProfileChanged,
+            DiffClassification::DisclosureWidening,
+        );
+        assert_class(
+            &candidate,
+            &baseline,
+            CompiledRegistryChangeCode::AccessProfileChanged,
+            DiffClassification::DisclosureNarrowing,
+        );
     }
 
     fn compiled_temporal_with_profile(operations: &str, profile_extra: &str) -> CompiledRegistry {

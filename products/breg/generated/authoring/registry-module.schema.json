@@ -100,6 +100,9 @@
           "default": false,
           "type": "boolean"
         },
+        "display": {
+          "$ref": "#/$defs/PresentationSource"
+        },
         "filterableFields": {
           "default": [],
           "items": {
@@ -2805,6 +2808,10 @@
       "additionalProperties": false,
       "description": "One declared hook on an entity.\n\nThe shape is [`registry_platform_hooks::HookDeclaration`] with `trigger`\nand `when` closed to the vocabulary this compiler validates, and with\n`handler` optional. A hook that declares no handler is still recorded in\nthe outbox and delivered nowhere; production compilation refuses that.\n\nEntity hooks run after the triggering transaction commits, so `phase` is\nwritten and the compiler refuses any value it cannot run.",
       "properties": {
+        "display": {
+          "$ref": "#/$defs/PresentationSource",
+          "description": "Authored presentation only; labels never establish identity or authority."
+        },
         "handler": {
           "$ref": "#/$defs/HookHandlerSource",
           "description": "Governed, destination-neutral delivery. `destinationId` is a key in\nruntime `eventDestinations`; the project carries no URL or secret, and\ndeployment configuration may tighten the bounds it binds but cannot\nsupply or widen this authority. Production compilation requires it."
@@ -3074,6 +3081,19 @@
       ],
       "type": "object"
     },
+    "PresentationSource": {
+      "additionalProperties": false,
+      "description": "Authored words for an object without a Record's title-field selection.",
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/DisplayText"
+        },
+        "label": {
+          "$ref": "#/$defs/DisplayText"
+        }
+      },
+      "type": "object"
+    },
     "ProposalApplicationSource": {
       "oneOf": [
         {
@@ -3212,6 +3232,10 @@
     "ProposalHookSource": {
       "additionalProperties": false,
       "properties": {
+        "display": {
+          "$ref": "#/$defs/PresentationSource",
+          "description": "Authored presentation only; labels never establish identity or authority."
+        },
         "handler": {
           "$ref": "#/$defs/HookHandlerSource"
         },

@@ -1,0 +1,436 @@
+{
+  "accessProfiles": [
+    {
+      "display": {
+        "description": "Maintains and reads directory entries.",
+        "label": "Directory editor"
+      },
+      "id": "directory-editor"
+    }
+  ],
+  "actions": [
+    {
+      "apiName": "registerEntry",
+      "bounds": {
+        "maximumFieldMutations": 128,
+        "maximumSnapshotBytes": 2097152,
+        "maximumTargets": 16
+      },
+      "commitGuards": [],
+      "dependencies": {
+        "evidence": []
+      },
+      "display": {
+        "label": "Register entry"
+      },
+      "execution": {
+        "mode": "proposal",
+        "proposal": {
+          "application": {
+            "maximumAttempts": 3,
+            "mode": "automatic"
+          },
+          "attachments": {},
+          "hooks": [
+            {
+              "destinationId": "proposal-events",
+              "display": {
+                "description": "Announces a submitted entry proposal.",
+                "label": "Submission notification"
+              },
+              "id": "proposal-submitted",
+              "transitions": [
+                "submitted"
+              ]
+            }
+          ],
+          "permissions": [
+            {
+              "actorKind": null,
+              "default": true,
+              "operations": [
+                "get",
+                "list",
+                "edit",
+                "submit",
+                "cancel"
+              ],
+              "ownership": "caller",
+              "principalClaim": "registry_principal",
+              "profileId": "directory-editor",
+              "readableAttachments": [],
+              "readableContextFields": [],
+              "readableInputs": [
+                "active",
+                "code",
+                "recorded-on"
+              ],
+              "requesterClients": [],
+              "requiredPurposes": [],
+              "requiredScopes": [
+                "directory:write"
+              ],
+              "targets": [
+                {
+                  "recordType": "entry",
+                  "rowBoundaries": []
+                }
+              ],
+              "writableAttachments": []
+            }
+          ],
+          "retention": "retain",
+          "review": {
+            "type": "none"
+          },
+          "reviewContext": null,
+          "systemApplyGrant": {
+            "actionId": "register-entry",
+            "actionRevision": "sha256:50148480ed74a0609df9d7a66a542007522705cfb17b1dd41181721f36f31d75",
+            "revision": "sha256:6c11168bbab0d65e98564c53be6a88b8dc6af79b1ee30e9824c37b1e01c0e49d",
+            "targets": [
+              {
+                "fields": [
+                  "active",
+                  "code",
+                  "recorded-on"
+                ],
+                "operation": "create",
+                "readFields": [
+                  "active",
+                  "code",
+                  "recorded-on"
+                ],
+                "recordType": "entry"
+              }
+            ]
+          }
+        }
+      },
+      "id": "register-entry",
+      "inputs": [
+        {
+          "apiName": "code",
+          "classification": "internal",
+          "description": "The code to give the new entry.",
+          "display": {
+            "description": "The code to give the new entry.",
+            "label": "Entry reference"
+          },
+          "fieldType": {
+            "maximumLength": 80,
+            "minimumLength": 0,
+            "type": "string"
+          },
+          "id": "code",
+          "label": "Entry reference",
+          "nullable": false,
+          "required": true,
+          "schema": {
+            "maxLength": 80,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        {
+          "apiName": "active",
+          "classification": "internal",
+          "fieldType": {
+            "type": "boolean"
+          },
+          "id": "active",
+          "label": "active",
+          "nullable": false,
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "apiName": "recordedOn",
+          "classification": "internal",
+          "fieldType": {
+            "type": "date"
+          },
+          "id": "recorded-on",
+          "label": "recordedOn",
+          "nullable": false,
+          "required": true,
+          "schema": {
+            "format": "date",
+            "type": "string"
+          }
+        }
+      ],
+      "permissions": [
+        {
+          "default": true,
+          "operations": [
+            "start"
+          ],
+          "principalClaim": "registry_principal",
+          "profileId": "directory-editor",
+          "requiredPurposes": [],
+          "requiredScopes": [
+            "directory:write"
+          ],
+          "results": [],
+          "targets": [
+            {
+              "operation": "create",
+              "recordType": "entry",
+              "rowBoundaries": [],
+              "source": {
+                "effect": "entry",
+                "kind": "effect"
+              }
+            }
+          ]
+        }
+      ],
+      "plan": {
+        "effects": [
+          {
+            "dependsOn": [],
+            "id": "entry",
+            "mutations": [
+              {
+                "field": "active",
+                "kind": "set",
+                "value": {
+                  "input": "active",
+                  "kind": "from-input"
+                }
+              },
+              {
+                "field": "code",
+                "kind": "set",
+                "value": {
+                  "input": "code",
+                  "kind": "from-input"
+                }
+              },
+              {
+                "field": "recorded-on",
+                "kind": "set",
+                "value": {
+                  "input": "recorded-on",
+                  "kind": "from-input"
+                }
+              }
+            ],
+            "operation": "create",
+            "target": {
+              "binding": {
+                "kind": "create"
+              },
+              "recordType": "entry"
+            }
+          }
+        ],
+        "order": [
+          "entry"
+        ],
+        "type": "fixed"
+      },
+      "revision": "sha256:50148480ed74a0609df9d7a66a542007522705cfb17b1dd41181721f36f31d75"
+    }
+  ],
+  "apiVersion": "id.registrystack.org/formats/breg/actions-explanation/v1alpha6",
+  "datasets": [
+    {
+      "display": {
+        "description": "Entries maintained in the directory.",
+        "label": "Directory records"
+      },
+      "id": "directory"
+    }
+  ],
+  "display": {
+    "label": "Labelled directory"
+  },
+  "kind": "BRegActionsExplanation",
+  "recordTypes": [
+    {
+      "accessLog": null,
+      "apiName": "Entry",
+      "batch": null,
+      "canonicalId": {
+        "apiName": "id",
+        "classification": "internal",
+        "fieldType": {
+          "type": "uuid"
+        },
+        "id": "id",
+        "schema": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "classification": "internal",
+      "constraints": {},
+      "derivedRelations": [],
+      "display": {
+        "label": "Directory entry"
+      },
+      "fields": [
+        {
+          "apiName": "code",
+          "classification": "internal",
+          "display": {
+            "description": "The institution's reference for this entry.",
+            "label": "Entry code"
+          },
+          "fieldType": {
+            "maximumLength": 80,
+            "minimumLength": 0,
+            "type": "string"
+          },
+          "id": "code",
+          "required": true,
+          "schema": {
+            "maxLength": 80,
+            "minLength": 0,
+            "type": "string"
+          },
+          "validTimeRole": null
+        },
+        {
+          "apiName": "active",
+          "classification": "internal",
+          "display": {},
+          "fieldType": {
+            "type": "boolean"
+          },
+          "id": "active",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          },
+          "validTimeRole": null
+        },
+        {
+          "apiName": "recordedOn",
+          "classification": "internal",
+          "display": {},
+          "fieldType": {
+            "type": "date"
+          },
+          "id": "recorded-on",
+          "required": true,
+          "schema": {
+            "format": "date",
+            "type": "string"
+          },
+          "validTimeRole": null
+        }
+      ],
+      "geojson": null,
+      "hooks": {
+        "entry-created": {
+          "display": {
+            "description": "Announces a committed directory entry.",
+            "label": "Entry notification"
+          },
+          "handler": {
+            "destinationId": "entry-events",
+            "type": "url"
+          },
+          "id": "entry-created",
+          "phase": "after",
+          "projection": [
+            "code"
+          ],
+          "trigger": "created"
+        }
+      },
+      "id": "entry",
+      "indexes": {},
+      "moduleOrigins": {},
+      "mutationMode": "create-only",
+      "mutationPolicy": {},
+      "primaryDataset": "directory",
+      "readPaths": {},
+      "relationships": {},
+      "revision": "sha256:bdcf1267345e2ee7cf42136ba3b21271700046a3f29cf2ead885559ebdc3109e",
+      "route": "entries",
+      "selectorProfiles": {},
+      "sourceModule": null,
+      "temporal": null,
+      "tombstone": false
+    }
+  ],
+  "registryId": "labelled-directory",
+  "reviewAuthorities": [],
+  "revision": "sha256:d438aa9e4522d31c5a92b64a18b5eabda5b0eb30a520c11faea6d88d533b948e",
+  "statisticalDatasets": [
+    {
+      "accessProfiles": {
+        "directory-editor": {
+          "allowDataExport": false,
+          "default": true,
+          "display": {
+            "description": "Maintains and reads directory entries.",
+            "label": "Directory editor"
+          },
+          "filterableFields": [],
+          "id": "directory-editor",
+          "operations": [],
+          "principalClaim": "registry_principal",
+          "readableFields": [],
+          "requiredPurposes": [],
+          "requiredScopes": [
+            "directory:write"
+          ],
+          "revisionAccess": false,
+          "rowBoundaries": [],
+          "sortableFields": [],
+          "writableFields": []
+        }
+      },
+      "definitionDigest": "sha256:3230b4c026ee0f84cd547c4b3bfdc0eaa46e0bf38fc4a65d30a77e44705bf54c",
+      "dependencyEntities": [
+        "entry"
+      ],
+      "dimensions": [
+        {
+          "codes": [
+            "false",
+            "true"
+          ],
+          "domain": {
+            "kind": "boolean"
+          },
+          "field": "active",
+          "includeUnknown": false
+        }
+      ],
+      "disclosure": {
+        "minimumCount": 5,
+        "roundingBase": 5
+      },
+      "display": {
+        "description": "Counts active entries by recording month.",
+        "label": "Monthly entry counts"
+      },
+      "evaluationDateDependent": false,
+      "id": "entry-counts",
+      "period": {
+        "field": "recorded-on",
+        "firstPeriod": "2025-01",
+        "granularity": "month",
+        "kind": "flow"
+      },
+      "population": "active eq true",
+      "referencedFields": [
+        "active",
+        "recorded-on"
+      ],
+      "releases": {
+        "publisher": "directory-editor",
+        "readers": []
+      },
+      "unitEntityId": "entry"
+    }
+  ]
+}

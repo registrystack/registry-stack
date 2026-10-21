@@ -82,6 +82,8 @@ pub(crate) struct EffectiveModel<'a> {
     pub display: &'a crate::contract::DisplaySource,
     #[serde(skip_serializing_if = "<[crate::contract::ReviewAuthoritySource]>::is_empty")]
     pub review_authorities: &'a [crate::contract::ReviewAuthoritySource],
+    pub datasets: &'a [crate::contract::DatasetSource],
+    pub access_profiles: &'a [crate::model::CompiledAccessProfileDisplay],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest_projection: Option<&'a CompiledManifestProjection>,
     pub module_order: &'a [String],
@@ -107,6 +109,8 @@ pub(crate) fn generate_artifacts(
     default_language: &str,
     display: &crate::contract::DisplaySource,
     review_authorities: &[crate::contract::ReviewAuthoritySource],
+    datasets: &[crate::contract::DatasetSource],
+    access_profiles: &[crate::model::CompiledAccessProfileDisplay],
     manifest_projection: Option<&CompiledManifestProjection>,
     module_order: &[String],
     module_closure: &[CompiledModuleIdentity],
@@ -129,6 +133,8 @@ pub(crate) fn generate_artifacts(
         default_language,
         display,
         review_authorities,
+        datasets,
+        access_profiles,
         manifest_projection,
         module_order,
         module_closure,
@@ -615,18 +621,24 @@ pub fn inspect_events(registry: &crate::model::CompiledRegistry) -> Value {
 
 /// Author inspection uses exactly the normalized definitions used by execution.
 pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
-    json!({"registryId": registry.registry_id(), "revision": registry.revision(),
-        "display": registry.display(), "reviewAuthorities": registry.review_authorities(),
-        "recordTypes": registry.entities().values().map(|record_type| {
-            let hooks = record_type.hooks.iter().map(|(id, hook)| {
-                let mut value = serde_json::to_value(hook).expect("compiled hook serializes");
-                compact_event_condition(&mut value);
-                (id, value)
-            }).collect::<BTreeMap<_, _>>();
+    let record_types = registry
+        .entities()
+        .values()
+        .map(|record_type| {
+            let hooks = record_type
+                .hooks
+                .iter()
+                .map(|(id, hook)| {
+                    let mut value = serde_json::to_value(hook).expect("compiled hook serializes");
+                    compact_event_condition(&mut value);
+                    (id, value)
+                })
+                .collect::<BTreeMap<_, _>>();
             json!({
                 "id": record_type.id, "apiName": record_type.api_name,
                 "revision": record_type.definition_revision, "display": record_type.display,
                 "sourceModule": record_type.source_module,
+                "moduleOrigins": record_type.module_origins,
                 "primaryDataset": record_type.primary_dataset, "route": record_type.route,
                 "mutationMode": record_type.mutation_mode,
                 "mutationPolicy": render_mutation_policy(record_type),
@@ -652,19 +664,26 @@ pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
                 })).collect::<Vec<_>>(),
                 "fields": record_type.stored_fields.iter().map(|field| json!({
                     "id": field.logical.id, "apiName": field.logical.api_name,
+                    "display": record_type.fields[&field.logical.id].display,
                     "fieldType": field.logical.field_type,
                     "schema": field_value_schema(&field.logical.field_type, !field.required),
                     "classification": field.logical.classification,
                     "required": field.required, "validTimeRole": field.valid_time_role,
                 })).chain(record_type.derived_fields.values().map(|field| json!({
                     "id": field.logical.id, "apiName": field.logical.api_name,
+                    "display": field.display,
                     "fieldType": field.logical.field_type,
                     "schema": field_value_schema(&field.logical.field_type, true),
                     "classification": field.logical.classification,
                     "required": false, "derivation": field.derivation_id,
                 }))).collect::<Vec<_>>()
             })
-        }).collect::<Vec<_>>(),
+        })
+        .collect::<Vec<_>>();
+    json!({"registryId": registry.registry_id(), "revision": registry.revision(),
+        "display": registry.display(), "reviewAuthorities": registry.review_authorities(),
+        "datasets": registry.datasets(), "accessProfiles": registry.access_profile_displays(),
+        "recordTypes": record_types,
         "statisticalDatasets": registry.statistical_datasets().values().collect::<Vec<_>>(),
         "actions": registry.actions().actions.iter().map(inspect_action).collect::<Vec<_>>()})
 }
@@ -1400,6 +1419,9 @@ fn action_input_metadata(input: &CompiledActionInput, handler: bool) -> Value {
         "nullable": handler && !input.required,
         "classification": input.classification,
     });
+    if !crate::model::display_is_empty(&input.display) {
+        metadata["display"] = json!(input.display);
+    }
     if let Some(description) = &input.display.description {
         metadata["description"] = json!(description);
     }

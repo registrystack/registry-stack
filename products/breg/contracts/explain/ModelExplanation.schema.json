@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha5.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha6.schema.json",
   "title": "ModelExplanation",
   "description": "Wire shape of the native compiled model inspector and module closure.",
   "type": "object",
@@ -17,11 +17,14 @@
     "actions",
     "statisticalDatasets",
     "display",
-    "reviewAuthorities"
+    "reviewAuthorities",
+    "datasets",
+    "accessProfiles",
+    "authoring"
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/model-explanation/v1alpha5"
+      "const": "id.registrystack.org/formats/breg/model-explanation/v1alpha6"
     },
     "kind": {
       "const": "BRegModelExplanation"
@@ -92,7 +95,8 @@
           "selectorProfiles",
           "readPaths",
           "hooks",
-          "derivedRelations"
+          "derivedRelations",
+          "moduleOrigins"
         ],
         "properties": {
           "id": {
@@ -133,12 +137,16 @@
                 "schema",
                 "fieldType",
                 "required",
-                "classification"
+                "classification",
+                "display"
               ],
               "properties": {
                 "fieldType": {
                   "type": "object",
                   "x-registry-passthrough": "The compiled FieldTypeSource, as in query field summaries; its internal shape follows the engine's field type contract."
+                },
+                "display": {
+                  "$ref": "#/$defs/Display"
                 }
               },
               "x-registry-passthrough": "Normalized logical field schema and effective classification; compiler-owned metadata."
@@ -150,7 +158,98 @@
           },
           "hooks": {
             "type": "object",
-            "x-registry-passthrough": "Compiled hook declarations, with empty condition tests omitted."
+            "x-registry-passthrough": "Compiled hook declarations, with empty condition tests omitted.",
+            "propertyNames": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "display": {
+                  "$ref": "#/$defs/Presentation"
+                }
+              },
+              "x-registry-passthrough": "Compiled hook declaration, including optional authored display."
+            }
+          },
+          "moduleOrigins": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "fields": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              },
+              "constraints": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              },
+              "hooks": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              },
+              "derivedRelations": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              },
+              "indexes": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              },
+              "accessProfiles": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              },
+              "selectorProfiles": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              },
+              "readPaths": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/LocalId"
+                }
+              }
+            },
+            "description": "Module ids that contributed members of this Record type. An absent member originated in the project root."
           }
         },
         "x-registry-passthrough": "Source-free normalized definition owned by the compiler; identity and revision are pinned here."
@@ -174,6 +273,69 @@
           },
           "revision": {
             "$ref": "#/$defs/Digest"
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "apiName",
+                "label",
+                "schema",
+                "required",
+                "nullable"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/LocalId"
+                },
+                "apiName": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "schema": {
+                  "type": "object",
+                  "x-registry-foreign": "json-schema-2020-12"
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "nullable": {
+                  "type": "boolean"
+                },
+                "display": {
+                  "$ref": "#/$defs/Display"
+                }
+              },
+              "x-registry-passthrough": "Normalized compiled logical field metadata; its field type and schema are owned by the engine."
+            }
+          },
+          "execution": {
+            "type": "object",
+            "x-registry-passthrough": "The compiled Action execution policy is owned by the engine.",
+            "properties": {
+              "proposal": {
+                "type": "object",
+                "properties": {
+                  "hooks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "display": {
+                          "$ref": "#/$defs/Presentation"
+                        }
+                      },
+                      "x-registry-passthrough": "Compiled Proposal hook, including optional authored display."
+                    }
+                  }
+                },
+                "x-registry-passthrough": "Compiled Proposal policy; display is presentation only."
+              }
+            }
           }
         },
         "x-registry-passthrough": "Source-free normalized definition owned by the compiler; identity and revision are pinned here."
@@ -191,7 +353,12 @@
           "dimensions",
           "disclosure"
         ],
-        "x-registry-passthrough": "Normalized compiled statistical dataset inventory, including authority requirements; no source bytes."
+        "x-registry-passthrough": "Normalized compiled statistical dataset inventory, including authority requirements; no source bytes.",
+        "properties": {
+          "display": {
+            "$ref": "#/$defs/Presentation"
+          }
+        }
       }
     },
     "display": {
@@ -219,6 +386,145 @@
           }
         }
       }
+    },
+    "datasets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "display"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "display": {
+            "$ref": "#/$defs/Display"
+          }
+        }
+      }
+    },
+    "accessProfiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "display"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "display": {
+            "$ref": "#/$defs/Presentation"
+          }
+        }
+      }
+    },
+    "authoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "documents"
+      ],
+      "properties": {
+        "documents": {
+          "type": "array",
+          "minItems": 1,
+          "prefixItems": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "file",
+                "authoredPaths",
+                "bindings"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "BRegProject"
+                },
+                "file": {
+                  "const": "registry.yaml"
+                },
+                "authoredPaths": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "prefixItems": [
+                    {
+                      "const": ""
+                    }
+                  ],
+                  "items": {
+                    "type": "string",
+                    "pattern": "^(?:/(?:[^~]|~[01])*)?$"
+                  },
+                  "description": "Exact RFC 6901 pointers to authored nodes, in source order, including root, containers and sequence items. Presence only; compiled or derived members are not defaults merely because they are absent."
+                },
+                "bindings": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/AuthoringBinding"
+                  },
+                  "description": "Exact links from identity-bearing objects in this explanation to their authored source objects. Append only source-corresponding member paths; generated children do not imply defaults."
+                }
+              }
+            }
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "module",
+              "file",
+              "authoredPaths",
+              "bindings"
+            ],
+            "properties": {
+              "kind": {
+                "const": "BRegModule"
+              },
+              "module": {
+                "$ref": "#/$defs/LocalId"
+              },
+              "file": {
+                "type": "string",
+                "pattern": "^modules/[a-z][a-z0-9_-]{0,63}/module\\.yaml$"
+              },
+              "authoredPaths": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "prefixItems": [
+                  {
+                    "const": ""
+                  }
+                ],
+                "items": {
+                  "type": "string",
+                  "pattern": "^(?:/(?:[^~]|~[01])*)?$"
+                },
+                "description": "Exact RFC 6901 pointers to authored nodes, in source order, including root, containers and sequence items. Presence only; compiled or derived members are not defaults merely because they are absent."
+              },
+              "bindings": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/AuthoringBinding"
+                },
+                "description": "Exact links from identity-bearing objects in this explanation to their authored source objects. Append only source-corresponding member paths; generated children do not imply defaults."
+              }
+            }
+          }
+        }
+      },
+      "description": "The exact project and module documents used to compile this explanation. Files are relative to the project directory."
     }
   },
   "$defs": {
@@ -243,6 +549,38 @@
           "type": "string"
         },
         "titleField": {
+          "type": "string"
+        }
+      }
+    },
+    "AuthoringBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "explanationPointer",
+        "sourcePointer"
+      ],
+      "properties": {
+        "explanationPointer": {
+          "type": "string",
+          "pattern": "^(?:/(?:[^~]|~[01])*)?$",
+          "description": "RFC 6901 pointer against this explanation document."
+        },
+        "sourcePointer": {
+          "type": "string",
+          "pattern": "^/(?:[^~]|~[01])*$",
+          "description": "RFC 6901 pointer against the enclosing authoring document."
+        }
+      }
+    },
+    "Presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "description": {
           "type": "string"
         }
       }

@@ -14,11 +14,11 @@ use registry_breg::compiler::{
     module_digest_with_assets, CompileProfile,
 };
 use registry_breg::contract::{
-    parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml, ActionSource,
-    Classification, ComparisonOperator, ConstraintSource, DerivedFieldSource, DerivedSource,
-    DisplaySource, FieldTypeSource, ModuleAssetSource, Operation, PackageIdentitySource,
-    ReferenceDelete, RegistryModule, ReviewAuthoritySource, UniqueWhenPredicate,
-    MODULE_API_VERSION, MODULE_KIND,
+    parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml,
+    ActionExecutionSource, ActionSource, Classification, ComparisonOperator, ConstraintSource,
+    DerivedFieldSource, DerivedSource, DisplaySource, FieldTypeSource, ModuleAssetSource,
+    ModuleLockSource, Operation, PackageIdentitySource, ReferenceDelete, RegistryModule,
+    ReviewAuthoritySource, UniqueWhenPredicate, MODULE_API_VERSION, MODULE_KIND,
 };
 use registry_breg::diagnostics::{CompileFailure, DiagnosticSeverity};
 use registry_breg::generated_ddl::DdlStatementKind;
@@ -104,6 +104,41 @@ const MULTI_DATASET_PROJECT: &[u8] = br#"{"datasets":[{"id": "people"}, {"id": "
 
 fn multi_dataset_project() -> registry_breg::contract::RegistryProject {
     parse_project_json(MULTI_DATASET_PROJECT).expect("multi-dataset source parses")
+}
+
+fn authored_display_project() -> registry_breg::contract::RegistryProject {
+    parse_project_yaml(include_bytes!(
+        "../../../products/breg/fixtures/authoring-display/registry.yaml"
+    ))
+    .expect("the authored-display fixture parses")
+}
+
+fn presentation_extension_module() -> RegistryModule {
+    parse_module_json(
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"presentation","version":"1",
+          "extendRecordTypes":[
+            {"recordType":"entry"},
+            {"recordType":"entry",
+             "accessProfiles":[{
+               "id":"module-reader","principalClaim":"registry_principal","requiredScopes":["directory:read"],
+               "operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted"
+             }],
+             "hooks":[{
+               "id":"module-entry-created","phase":"after","trigger":"created","projection":["code"],
+               "handler":{"type":"url","destinationId":"entry-events"}
+             }]}
+          ]
+        }"#,
+    )
+    .expect("the presentation extension module parses")
+}
+
+fn add_presentation_module(project: &mut registry_breg::contract::RegistryProject) {
+    project.modules.push(ModuleLockSource {
+        id: "presentation".to_owned(),
+        version: "1".to_owned(),
+        digest: None,
+    });
 }
 
 #[test]
@@ -304,6 +339,118 @@ fn directly_constructed_multilingual_display_and_manifest_text_is_preserved() {
             .endpoint_description
             .as_deref(),
         Some(ENDPOINT_DESCRIPTION)
+    );
+}
+
+#[test]
+fn directly_constructed_presentation_text_is_validated_at_each_authored_owner() {
+    let unsafe_text = "reordered\u{202e}".to_owned();
+    let mut project = authored_display_project();
+    add_presentation_module(&mut project);
+    project.access_profiles[0].display.label = Some(unsafe_text.clone());
+    project.statistical_datasets[0].display.description = Some(unsafe_text.clone());
+    project.entities[0].hooks[0].display.label = Some(unsafe_text.clone());
+    let ActionExecutionSource::Proposal { proposal } = &mut project.actions[0].execution else {
+        panic!("the authored-display Action is a Proposal")
+    };
+    proposal.hooks[0].display.description = Some(unsafe_text.clone());
+
+    let mut module = presentation_extension_module();
+    module.extend_entities[1].access_profiles[0].display.label = Some(unsafe_text.clone());
+    module.extend_entities[1].hooks[0].display.description = Some(unsafe_text.clone());
+
+    let failure = compile_project(&project, &[module], CompileProfile::Authoring)
+        .expect_err("unsafe directly constructed presentation text is refused");
+    let mut paths = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "breg.display-text.invalid")
+        .map(|diagnostic| diagnostic.path.as_str())
+        .collect::<Vec<_>>();
+    paths.sort_unstable();
+    assert_eq!(
+        paths,
+        [
+            "accessProfiles[id=directory-editor].display.label",
+            "actions[id=register-entry].execution.proposal.hooks[id=proposal-submitted].display.description",
+            "modules[id=presentation].extendRecordTypes[1].accessProfiles[id=module-reader].display.label",
+            "modules[id=presentation].extendRecordTypes[1].hooks[id=module-entry-created].display.description",
+            "recordTypes[id=entry].hooks[id=entry-created].display.label",
+            "statisticalDatasets[id=entry-counts].display.description",
+        ]
+    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "breg.display-text.invalid")
+        .all(|diagnostic| !diagnostic.message.contains(&unsafe_text)));
+}
+
+#[test]
+fn directly_constructed_multilingual_presentation_text_is_preserved() {
+    const DISPLAY: &str = "\u{200f}سجل السكان";
+    let mut project = authored_display_project();
+    add_presentation_module(&mut project);
+    project.access_profiles[0].display.label = Some(DISPLAY.to_owned());
+    project.statistical_datasets[0].display.description = Some(DISPLAY.to_owned());
+    project.entities[0].hooks[0].display.label = Some(DISPLAY.to_owned());
+    let ActionExecutionSource::Proposal { proposal } = &mut project.actions[0].execution else {
+        panic!("the authored-display Action is a Proposal")
+    };
+    proposal.hooks[0].display.description = Some(DISPLAY.to_owned());
+
+    let mut module = presentation_extension_module();
+    module.extend_entities[1].access_profiles[0].display.label = Some(DISPLAY.to_owned());
+    module.extend_entities[1].hooks[0].display.description = Some(DISPLAY.to_owned());
+
+    let compiled = compile_project(&project, &[module], CompileProfile::Authoring)
+        .expect("multilingual directly constructed presentation text compiles");
+    assert_eq!(
+        compiled.access_profile_displays()[0]
+            .display
+            .label
+            .as_deref(),
+        Some(DISPLAY)
+    );
+    assert_eq!(
+        compiled.statistical_datasets()["entry-counts"]
+            .display
+            .description
+            .as_deref(),
+        Some(DISPLAY)
+    );
+    let entry = &compiled.entities()["entry"];
+    assert_eq!(
+        entry.hooks["entry-created"].display.label.as_deref(),
+        Some(DISPLAY)
+    );
+    assert_eq!(
+        entry.access_profiles["module-reader"]
+            .display
+            .label
+            .as_deref(),
+        Some(DISPLAY)
+    );
+    assert_eq!(
+        entry.hooks["module-entry-created"]
+            .display
+            .description
+            .as_deref(),
+        Some(DISPLAY)
+    );
+    let action = compiled
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "register-entry")
+        .expect("the authored-display Action compiles");
+    let registry_breg::model::CompiledActionExecution::Proposal { proposal } = &action.execution
+    else {
+        panic!("the authored-display Action remains a Proposal")
+    };
+    assert_eq!(
+        proposal.hooks[0].display.description.as_deref(),
+        Some(DISPLAY)
     );
 }
 
@@ -858,7 +1005,7 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
         "derived":[{
           "id":"demographics","sql":"sql/household-demographics.sql","key":"id","execution":"live",
           "fields":[
-            {"id":"child-count","type":"int64","classification":"restricted"},
+            {"id":"child-count","type":"int64","classification":"restricted","display":{"label":"Child count","description":"Number of linked children."}},
             {"id":"single-headed","type":"boolean","classification":"restricted"},
             {"id":"registry-derived-key-cardinality","type":"int64","classification":"restricted"}
           ]
@@ -907,6 +1054,30 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
     .expect("derived fields and relationship reads compile");
 
     let household = &compiled.entities()["household"];
+    assert_eq!(
+        household.derived_fields["child-count"]
+            .display
+            .label
+            .as_deref(),
+        Some("Child count")
+    );
+    let model = registry_breg::artifacts::inspect_registry(&compiled);
+    let fields = model["recordTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|record| record["id"] == "household")
+        .unwrap()["fields"]
+        .as_array()
+        .unwrap();
+    let derived = fields
+        .iter()
+        .find(|field| field["id"] == "child-count")
+        .unwrap();
+    assert_eq!(
+        derived["display"],
+        serde_json::json!({"label":"Child count","description":"Number of linked children."})
+    );
     assert_eq!(
         household
             .stored_fields
@@ -3242,7 +3413,7 @@ fn an_authored_index_declares_at_most_31_fields() {
         refusals(&failure),
         vec![(
             "breg.index.fields-too-many",
-            "recordTypes[].indexes[].fields"
+            "recordTypes[id=person].indexes[id=wide].fields"
         )]
     );
     assert_eq!(

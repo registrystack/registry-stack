@@ -1,0 +1,107 @@
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: labelled-directory
+  canonicalBaseIri: https://labelled-directory.example.invalid
+  version: 0.1.0
+  defaultLanguage: en
+  display: {label: Labelled directory}
+
+datasets:
+  - id: directory
+    display: {label: Directory records, description: Entries maintained in the directory.}
+
+recordTypes:
+  - id: entry
+    primaryDataset: directory
+    route: entries
+    mutationMode: create-only
+    display: {label: Directory entry}
+    fields:
+      - id: code
+        type: string
+        required: true
+        maximumLength: 80
+        classification: internal
+        display: {label: Entry code, description: The institution's reference for this entry.}
+      - {id: active, type: boolean, required: true, classification: internal}
+      - {id: recorded-on, type: date, required: true, classification: internal}
+    hooks:
+      - id: entry-created
+        display: {label: Entry notification, description: Announces a committed directory entry.}
+        phase: after
+        trigger: created
+        projection: [code]
+        handler: {type: url, destinationId: entry-events}
+
+statisticalDatasets:
+  - id: entry-counts
+    display: {label: Monthly entry counts, description: Counts active entries by recording month.}
+    unit: entry
+    population: active eq true
+    period: {type: flow, field: recorded-on, granularity: month, firstPeriod: 2025-01}
+    dimensions: [active]
+    disclosure: {minimumCount: 5, roundingBase: 5}
+
+actions:
+  - id: register-entry
+    display: {label: Register entry}
+    execution:
+      mode: proposal
+      proposal:
+        review: {type: none}
+        retention: {mode: retain}
+        hooks:
+          - id: proposal-submitted
+            display: {label: Submission notification, description: Announces a submitted entry proposal.}
+            transitions: [submitted]
+            handler: {type: url, destinationId: proposal-events}
+    inputs:
+      - id: code
+        type: string
+        required: true
+        maximumLength: 80
+        classification: internal
+        display: {label: Entry reference, description: The code to give the new entry.}
+      - {id: active, type: boolean, required: true, classification: internal}
+      - {id: recorded-on, type: date, required: true, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: entry
+          target: {recordType: entry}
+          operation: create
+          set:
+            code: {fromInput: code}
+            active: {fromInput: active}
+            recorded-on: {fromInput: recorded-on}
+
+accessProfiles:
+  - id: directory-editor
+    display: {label: Directory editor, description: Maintains and reads directory entries.}
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [directory:write]
+    permissions:
+      datasets:
+        - {dataset: entry-counts, operations: [publish, read-releases]}
+      records:
+        - recordType: entry
+          operations: [create, get, list]
+          readableFields: [code, active, recorded-on]
+          writableFields: [code, active, recorded-on]
+          filterableFields: [active, recorded-on]
+          allowCount: true
+          rowBoundaries: unrestricted
+      actions:
+        - action: register-entry
+          operations: [start]
+          targets:
+            - {recordType: entry, rowBoundaries: unrestricted}
+      proposals:
+        - action: register-entry
+          operations: [get, list, edit, submit, cancel]
+          readableInputs: [code, active, recorded-on]
+          ownership: caller
+          targets:
+            - {recordType: entry, rowBoundaries: unrestricted}

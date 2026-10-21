@@ -1910,7 +1910,7 @@
             },
             {
               "display": "-h, --help",
-              "description": "Print help",
+              "description": "Print help (see a summary with '-h')",
               "always_required": false,
               "repeatable": false,
               "default_values": [],

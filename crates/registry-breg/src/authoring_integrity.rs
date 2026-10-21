@@ -728,6 +728,26 @@ pub(crate) fn project_diagnostics(
 
     let warning_groups = [
         (
+            "breg.access-profile.duplicate-label",
+            "access profiles",
+            display_labels(
+                "/accessProfiles",
+                &project.access_profiles,
+                |item| &item.id,
+                |item| item.display.label.as_deref(),
+            ),
+        ),
+        (
+            "breg.statistical-dataset.duplicate-label",
+            "statistical datasets",
+            display_labels(
+                "/statisticalDatasets",
+                &project.statistical_datasets,
+                |item| &item.id,
+                |item| item.display.label.as_deref(),
+            ),
+        ),
+        (
             "breg.dataset.duplicate-label",
             "datasets",
             display_labels(
@@ -772,6 +792,13 @@ pub(crate) fn project_diagnostics(
         add_duplicate_labels(document, &mut warnings, code, kind, values);
     }
     add_project_display_warnings(document, &mut warnings, project);
+    add_profile_and_hook_display_warnings(
+        document,
+        &mut warnings,
+        &project.entities,
+        &[],
+        &project.access_profiles,
+    );
     add_nested_display_warnings(
         document,
         &mut warnings,
@@ -971,6 +998,21 @@ fn add_nested_display_warnings(
             "action inputs",
             &values,
         );
+        if let ActionExecutionSource::Proposal { proposal } = &action.execution {
+            let values = display_labels(
+                &format!("{action_base}/{action_index}/execution/proposal/hooks"),
+                &proposal.hooks,
+                |hook| &hook.id,
+                |hook| hook.display.label.as_deref(),
+            );
+            add_duplicate_labels(
+                document,
+                warnings,
+                "breg.proposal-hook.duplicate-label",
+                "Proposal hooks",
+                &values,
+            );
+        }
         if let ActionPlanSource::Function { refusals, .. } = &action.plan {
             let values = refusals
                 .iter()
@@ -990,6 +1032,98 @@ fn add_nested_display_warnings(
                 &values,
             );
         }
+    }
+}
+
+fn add_profile_and_hook_display_warnings(
+    document: &registry_platform_yaml::Document,
+    warnings: &mut Vec<registry_platform_yaml::Diagnostic>,
+    entities: &[EntitySource],
+    extensions: &[EntityExtensionSource],
+    project_profiles: &[crate::contract::ProjectAccessProfileSource],
+) {
+    let mut profiles = BTreeMap::<&str, Vec<LocatedDisplayText>>::new();
+    let mut hooks = BTreeMap::<&str, Vec<LocatedDisplayText>>::new();
+    let members = entities
+        .iter()
+        .enumerate()
+        .map(|(index, entity)| {
+            (
+                entity.id.as_str(),
+                format!("/recordTypes/{index}"),
+                &entity.access_profiles,
+                &entity.hooks,
+            )
+        })
+        .chain(extensions.iter().enumerate().map(|(index, extension)| {
+            (
+                extension.entity.as_str(),
+                format!("/extendRecordTypes/{index}"),
+                &extension.access_profiles,
+                &extension.hooks,
+            )
+        }));
+    for (entity, base, local_profiles, local_hooks) in members {
+        profiles.entry(entity).or_default().extend(display_labels(
+            &format!("{base}/accessProfiles"),
+            local_profiles,
+            |profile| &profile.id,
+            |profile| profile.display.label.as_deref(),
+        ));
+        hooks.entry(entity).or_default().extend(display_labels(
+            &format!("{base}/hooks"),
+            local_hooks,
+            |hook| &hook.id,
+            |hook| hook.display.label.as_deref(),
+        ));
+    }
+    for (entity, values) in profiles {
+        add_duplicate_labels(
+            document,
+            warnings,
+            "breg.access-profile.duplicate-label",
+            "access profiles",
+            &values,
+        );
+        // Root profile pairs are already checked once in their own inventory.
+        // Only compare their applicable grants with local profiles here.
+        for (index, profile) in project_profiles.iter().enumerate() {
+            if !profile
+                .permissions
+                .entities
+                .iter()
+                .any(|grant| grant.entity == entity)
+            {
+                continue;
+            }
+            if let Some(label) = &profile.display.label {
+                for local in &values {
+                    add_duplicate_labels(
+                        document,
+                        warnings,
+                        "breg.access-profile.duplicate-label",
+                        "access profiles",
+                        &[
+                            (
+                                profile.id.clone(),
+                                label.clone(),
+                                format!("/accessProfiles/{index}/display/label"),
+                            ),
+                            local.clone(),
+                        ],
+                    );
+                }
+            }
+        }
+    }
+    for values in hooks.values() {
+        add_duplicate_labels(
+            document,
+            warnings,
+            "breg.hook.duplicate-label",
+            "record hooks",
+            values,
+        );
     }
 }
 
@@ -1086,6 +1220,13 @@ pub(crate) fn module_diagnostics(
         &[],
         "/actions",
         &module.actions,
+    );
+    add_profile_and_hook_display_warnings(
+        document,
+        &mut warnings,
+        &module.entities,
+        &module.extend_entities,
+        &[],
     );
 
     let mut merged_field_labels = BTreeMap::<String, Vec<LocatedDisplayText>>::new();

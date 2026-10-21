@@ -13,18 +13,19 @@ use uuid::Uuid;
 
 use crate::artifacts::{event_data_schema_binding, generate_artifacts};
 use crate::contract::{
-    parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource, ActionSource,
-    Classification, ConstraintSource, DerivedExecutionSource, DerivedFieldSource, DisplaySource,
-    EntityExtensionSource, EntitySource, EventConditionSource, EventTrigger, FieldSource,
-    FieldTypeSource, GeoJsonSource, HookHandlerSource, HookPhase, LookupValueOrigin,
-    ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
-    ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
-    SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile,
-    WebhookDeadLetterMode, DECIMAL_BOUNDS_REQUIREMENTS, MAX_ACCESS_LOG_EXEMPTIONS,
-    MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES, MAX_ACCESS_LOG_RETENTION_DAYS,
-    MAX_ACCESS_LOG_SUBJECT_CHARACTERS, MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES,
-    MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
-    MAX_FIELD_LOOKUP_NORMALIZATION_STEPS, MAX_STRUCTURED_VALUE_BYTES,
+    parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource,
+    ActionExecutionSource, ActionSource, Classification, ConstraintSource, DerivedExecutionSource,
+    DerivedFieldSource, DisplaySource, EntityExtensionSource, EntitySource, EventConditionSource,
+    EventTrigger, FieldSource, FieldTypeSource, GeoJsonSource, HookHandlerSource, HookPhase,
+    LookupValueOrigin, ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
+    PresentationSource, ReadPathPermissionSource, RegistryModule, RegistryProject,
+    SpatialBboxPermissionSource, SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole,
+    WebhookAuthenticationProfile, WebhookDeadLetterMode, DECIMAL_BOUNDS_REQUIREMENTS,
+    MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
+    MAX_ACCESS_LOG_RETENTION_DAYS, MAX_ACCESS_LOG_SUBJECT_CHARACTERS,
+    MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
+    MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
+    MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::derived_sql::{derived_sql_dependencies, validate_derived_sql};
 use crate::diagnostics::{CompileFailure, Diagnostic};
@@ -392,12 +393,22 @@ pub fn compile_project_with_assets(
     }
     let ddl = generate_ddl_with_actions(&entities, &physical_names, &action_inventory);
     let manifest_projection = compile_manifest_projection(project, &entities);
+    let access_profile_displays = project
+        .access_profiles
+        .iter()
+        .map(|profile| crate::model::CompiledAccessProfileDisplay {
+            id: profile.id.clone(),
+            display: profile.display.clone(),
+        })
+        .collect::<Vec<_>>();
     let artifacts = generate_artifacts(
         &project.project.id,
         &project.project.version,
         &project.project.default_language,
         &project.project.display,
         &project.review_authorities,
+        &project.datasets,
+        &access_profile_displays,
         manifest_projection.as_ref(),
         &module_order,
         &module_closure,
@@ -430,6 +441,8 @@ pub fn compile_project_with_assets(
         project.project.default_language.clone(),
         project.project.display.clone(),
         project.review_authorities.clone(),
+        project.datasets.clone(),
+        access_profile_displays,
         project.package.clone(),
         manifest_projection,
         module_order,
@@ -512,6 +525,39 @@ fn add_cross_file_duplicate_labels(
                 .with_related(&first.path, "the first display text is defined here"),
         );
     }
+}
+
+fn collect_profile_and_hook_labels<'a>(
+    profiles: &'a [AccessProfileSource],
+    hooks: &'a [crate::contract::HookSource],
+    path: &str,
+    source: Option<&'a str>,
+    profile_labels: &mut Vec<SourcedDisplayText<'a>>,
+    hook_labels: &mut Vec<SourcedDisplayText<'a>>,
+) {
+    profile_labels.extend(profiles.iter().filter_map(|profile| {
+        profile
+            .display
+            .label
+            .as_deref()
+            .map(|text| SourcedDisplayText {
+                id: Some(&profile.id),
+                text,
+                path: format!("{path}.accessProfiles[id={}].display.label", profile.id),
+                source,
+            })
+    }));
+    hook_labels.extend(hooks.iter().filter_map(|hook| {
+        hook.display
+            .label
+            .as_deref()
+            .map(|text| SourcedDisplayText {
+                id: Some(&hook.id),
+                text,
+                path: format!("{path}.hooks[id={}].display.label", hook.id),
+                source,
+            })
+    }));
 }
 
 fn collect_entity_field_labels<'a>(
@@ -1060,9 +1106,34 @@ fn validate_cross_file_duplicate_display_labels(
         })
         .collect::<Vec<_>>();
     let mut fields = BTreeMap::<&str, Vec<SourcedDisplayText<'_>>>::new();
+    let mut profiles = BTreeMap::<&str, Vec<SourcedDisplayText<'_>>>::new();
+    let mut hooks = BTreeMap::<&str, Vec<SourcedDisplayText<'_>>>::new();
+    for profile in &project.access_profiles {
+        if let Some(text) = profile.display.label.as_deref() {
+            for grant in &profile.permissions.entities {
+                profiles
+                    .entry(&grant.entity)
+                    .or_default()
+                    .push(SourcedDisplayText {
+                        id: Some(&profile.id),
+                        text,
+                        path: format!("accessProfiles[id={}].display.label", profile.id),
+                        source: None,
+                    });
+            }
+        }
+    }
     let mut refusals = BTreeMap::new();
     collect_action_refusal_labels(&project.actions, "actions", None, &mut refusals);
     for entity in &project.entities {
+        collect_profile_and_hook_labels(
+            &entity.access_profiles,
+            &entity.hooks,
+            &format!("recordTypes[id={}]", entity.id),
+            None,
+            profiles.entry(&entity.id).or_default(),
+            hooks.entry(&entity.id).or_default(),
+        );
         collect_entity_field_labels(
             entity,
             &format!("recordTypes[id={}]", entity.id),
@@ -1112,6 +1183,14 @@ fn validate_cross_file_duplicate_display_labels(
             &mut refusals,
         );
         for entity in &module.entities {
+            collect_profile_and_hook_labels(
+                &entity.access_profiles,
+                &entity.hooks,
+                &format!("modules[id={}].recordTypes[id={}]", module.id, entity.id),
+                Some(source),
+                profiles.entry(&entity.id).or_default(),
+                hooks.entry(&entity.id).or_default(),
+            );
             collect_entity_field_labels(
                 entity,
                 &format!("modules[id={}].recordTypes[id={}]", module.id, entity.id),
@@ -1120,6 +1199,17 @@ fn validate_cross_file_duplicate_display_labels(
             );
         }
         for extension in &module.extend_entities {
+            collect_profile_and_hook_labels(
+                &extension.access_profiles,
+                &extension.hooks,
+                &format!(
+                    "modules[id={}].extendRecordTypes[recordType={}]",
+                    module.id, extension.entity
+                ),
+                Some(source),
+                profiles.entry(&extension.entity).or_default(),
+                hooks.entry(&extension.entity).or_default(),
+            );
             collect_extension_field_labels(
                 extension,
                 &format!(
@@ -1149,6 +1239,22 @@ fn validate_cross_file_duplicate_display_labels(
     }
     for labels in fields.values() {
         add_cross_file_duplicate_labels("breg.field.duplicate-label", "fields", labels, findings);
+    }
+    for labels in profiles.values() {
+        add_cross_file_duplicate_labels(
+            "breg.access-profile.duplicate-label",
+            "access profiles",
+            labels,
+            findings,
+        );
+    }
+    for labels in hooks.values() {
+        add_cross_file_duplicate_labels(
+            "breg.hook.duplicate-label",
+            "record hooks",
+            labels,
+            findings,
+        );
     }
 
     if let Some(recipients) = &project.recipients {
@@ -1303,6 +1409,20 @@ fn validate_authored_display_text(
             errors,
         );
     }
+    for profile in &project.access_profiles {
+        validate_presentation_source(
+            &profile.display,
+            &format!("accessProfiles[id={}].display", profile.id),
+            errors,
+        );
+    }
+    for dataset in &project.statistical_datasets {
+        validate_presentation_source(
+            &dataset.display,
+            &format!("statisticalDatasets[id={}].display", dataset.id),
+            errors,
+        );
+    }
     for entity in &project.entities {
         validate_entity_display_text(entity, &format!("recordTypes[id={}]", entity.id), errors);
     }
@@ -1339,6 +1459,20 @@ fn validate_authored_display_text(
                     );
                 }
             }
+            for profile in &extension.access_profiles {
+                validate_presentation_source(
+                    &profile.display,
+                    &format!("{path}.accessProfiles[id={}].display", profile.id),
+                    errors,
+                );
+            }
+            for hook in &extension.hooks {
+                validate_presentation_source(
+                    &hook.display,
+                    &format!("{path}.hooks[id={}].display", hook.id),
+                    errors,
+                );
+            }
         }
         for action in &module.actions {
             validate_action_display_text(
@@ -1371,6 +1505,20 @@ fn validate_entity_display_text(entity: &EntitySource, path: &str, errors: &mut 
             );
         }
     }
+    for profile in &entity.access_profiles {
+        validate_presentation_source(
+            &profile.display,
+            &format!("{path}.accessProfiles[id={}].display", profile.id),
+            errors,
+        );
+    }
+    for hook in &entity.hooks {
+        validate_presentation_source(
+            &hook.display,
+            &format!("{path}.hooks[id={}].display", hook.id),
+            errors,
+        );
+    }
 }
 
 fn validate_action_display_text(action: &ActionSource, path: &str, errors: &mut Vec<Diagnostic>) {
@@ -1382,9 +1530,31 @@ fn validate_action_display_text(action: &ActionSource, path: &str, errors: &mut 
             errors,
         );
     }
+    if let ActionExecutionSource::Proposal { proposal } = &action.execution {
+        for hook in &proposal.hooks {
+            validate_presentation_source(
+                &hook.display,
+                &format!("{path}.execution.proposal.hooks[id={}].display", hook.id),
+                errors,
+            );
+        }
+    }
 }
 
 fn validate_display_source(display: &DisplaySource, path: &str, errors: &mut Vec<Diagnostic>) {
+    if let Some(label) = display.label.as_deref() {
+        validate_display_text(label, &format!("{path}.label"), errors);
+    }
+    if let Some(description) = display.description.as_deref() {
+        validate_display_text(description, &format!("{path}.description"), errors);
+    }
+}
+
+fn validate_presentation_source(
+    display: &PresentationSource,
+    path: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
     if let Some(label) = display.label.as_deref() {
         validate_display_text(label, &format!("{path}.label"), errors);
     }
@@ -2998,6 +3168,7 @@ pub(crate) fn expand_project_access(
             }
             entity.access_profiles.push(AccessProfileSource {
                 id: profile.id.clone(),
+                display: profile.display.clone(),
                 default: profile.default,
                 actor_kind: profile.actor_kind,
                 requester_clients: profile.requester_clients.clone(),
@@ -4136,6 +4307,7 @@ fn validate_indexes(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
         .collect();
     let mut ids = BTreeSet::new();
     for index in &entity.indexes {
+        let index_path = format!("recordTypes[id={}].indexes[id={}]", entity.id, index.id);
         validate_id(&index.id, "recordTypes[].indexes[].id", errors);
         if !ids.insert(index.id.as_str()) {
             errors.push(Diagnostic::error(
@@ -4153,14 +4325,14 @@ fn validate_indexes(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
         {
             errors.push(Diagnostic::error(
                 "breg.index.fields-invalid",
-                "recordTypes[].indexes[].fields",
+                format!("{index_path}.fields"),
                 "an index has an empty, duplicate, or unresolved field set",
             ));
         }
         if index.fields.len() > MAX_AUTHORED_INDEX_FIELDS {
             errors.push(Diagnostic::error(
                 "breg.index.fields-too-many",
-                "recordTypes[].indexes[].fields",
+                format!("{index_path}.fields"),
                 &format!(
                     "an index may declare at most {MAX_AUTHORED_INDEX_FIELDS} fields; the record identifier takes the last of the 32 key columns PostgreSQL allows in an index"
                 ),
@@ -4173,7 +4345,7 @@ fn validate_indexes(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
         }) {
             errors.push(Diagnostic::error(
                 "breg.index.fields-encrypted",
-                "recordTypes[].indexes[].fields",
+                format!("{index_path}.fields"),
                 "an encrypted field cannot back an authored index; declare blind-index lookup on the field instead",
             ));
         }
@@ -4599,9 +4771,14 @@ fn validate_profiles(
         if !access.filterable_fields.is_subset(&access.readable_fields)
             || !access.sortable_fields.is_subset(&access.readable_fields)
         {
+            let member = if !access.filterable_fields.is_subset(&access.readable_fields) {
+                "filterableFields"
+            } else {
+                "sortableFields"
+            };
             errors.push(Diagnostic::error(
                 "breg.access-profile.processing-wider-than-read",
-                "recordTypes[].accessProfiles[]",
+                format!("{profile_path}.{member}"),
                 "filterable and sortable fields must be readable",
             ));
         }
@@ -4974,26 +5151,31 @@ fn validate_read_path_permission_fields(
     }
     let target_stored = stored_field_map(target);
     let target_derived = derived_field_map(target);
+    let grant_path = format!(
+        "recordTypes[id={}].accessProfiles[id={}].readPaths[path={}]",
+        source.id, access.id, grant.path
+    );
     if grant.readable_fields.is_empty() {
         errors.push(Diagnostic::error(
             "breg.access-profile.read-path-readable-fields-empty",
-            "recordTypes[].accessProfiles[].readPaths[].readableFields",
+            format!("{grant_path}.readableFields"),
             "a read-path permission must declare readable fields",
         ));
     }
     if !grant.filterable_fields.is_subset(&grant.readable_fields)
         || !grant.sortable_fields.is_subset(&grant.readable_fields)
     {
+        let member = if !grant.filterable_fields.is_subset(&grant.readable_fields) {
+            "filterableFields"
+        } else {
+            "sortableFields"
+        };
         errors.push(Diagnostic::error(
             "breg.access-profile.read-path-processing-wider-than-read",
-            "recordTypes[].accessProfiles[].readPaths[]",
+            format!("{grant_path}.{member}"),
             "read-path filterable and sortable fields must be readable",
         ));
     }
-    let grant_path = format!(
-        "recordTypes[id={}].accessProfiles[id={}].readPaths[path={}]",
-        source.id, access.id, grant.path
-    );
     for (member, referenced) in [
         ("readableFields", &grant.readable_fields),
         ("filterableFields", &grant.filterable_fields),
@@ -6145,6 +6327,7 @@ fn compile_entities(
                     field.id.clone(),
                     CompiledDerivedField {
                         logical,
+                        display: field.display.clone(),
                         derivation_id: derived.id.clone(),
                     },
                 );

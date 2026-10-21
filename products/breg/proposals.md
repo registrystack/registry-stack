@@ -163,9 +163,15 @@ declared context contract rather than parsing its current spelling.
 bregctl check ./registry
 bregctl --format json explain actions ./registry
 bregctl --format json explain proposals ./registry
+bregctl --format json explain lifecycle
 ```
 
 These commands inspect configuration without a database or review decision.
+The lifecycle explanation needs no project. Each state lists every `turn` the
+runtime can derive and the condition for it, using the same pure rule that
+serves Proposal documents and lifecycle events. These turns describe whose
+move the work waits on. They do not grant an operation; current links and
+runtime checks continue to decide caller authority.
 At runtime, select the Action from caller-filtered metadata, Start a draft, then
 use its promoted Proposal links. Refetch after each transition. Keep lifecycle
 conditions separate from record ETags.

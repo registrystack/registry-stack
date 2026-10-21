@@ -309,6 +309,7 @@ fn access_explanation_states_who_holds_each_dataset_operation() {
         audience(&source()),
         json!([{
             "dataset":"records-by-category",
+            "display":{},
             "readLive":["analyst"],
             "publish":["publisher"],
             "readReleases":["analyst","publisher","reader"]
@@ -323,6 +324,7 @@ fn access_explanation_states_who_holds_each_dataset_operation() {
         audience(&live_only),
         json!([{
             "dataset":"records-by-category",
+            "display":{},
             "readLive":["analyst"],
             "publish":[],
             "readReleases":[]
@@ -1774,7 +1776,30 @@ fn package_diff_classifies_statistical_dataset_add_change_and_removal() {
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 fn tooling_classifies_statistical_grant_direction_and_definition_review() {
     let baseline = compile(&source()).expect("baseline compiles");
+    let mut presented_source = source();
+    presented_source["statisticalDatasets"][0]["display"] =
+        json!({"label":"Records grouped by category","description":"Presentation only"});
+    let presented = compile(&presented_source).expect("presented dataset compiles");
+    assert_eq!(
+        presented.statistical_datasets()["records-by-category"]
+            .display
+            .label
+            .as_deref(),
+        Some("Records grouped by category")
+    );
+    assert_ne!(baseline.revision(), presented.revision());
+    assert!(
+        compiled_registry_change_set(&baseline, &presented, "sha256:before")
+            .changes
+            .iter()
+            .all(|change| { change.code != CompiledRegistryChangeCode::StatisticalDatasetChanged }),
+        "statistical presentation remains in artifacts without becoming an access change"
+    );
+
     let mut widened_source = source();
+    widened_source["statisticalDatasets"][0]["display"] = json!({"label":"Updated presentation"});
+    widened_source["accessProfiles"][OTHER_READER]["display"] =
+        json!({"label":"Additional reader"});
     grant(&mut widened_source, OTHER_READER, &["read-releases"]);
     let widened = compile(&widened_source).expect("widened dataset compiles");
     let diff = classify_registry_diff(&baseline, &widened, "sha256:before");

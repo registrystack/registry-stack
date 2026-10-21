@@ -139,6 +139,40 @@ pub struct DisplaySource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_field: Option<String>,
 }
+
+/// Authored words for an object without a Record's title-field selection.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PresentationSource {
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub label: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub description: Option<String>,
+}
+
+impl PresentationSource {
+    pub fn is_empty(&self) -> bool {
+        self.label.is_none() && self.description.is_none()
+    }
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -339,6 +373,9 @@ pub struct ProposalHookSource {
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub id: String,
+    /// Authored presentation only; labels never establish identity or authority.
+    #[serde(default, skip_serializing_if = "PresentationSource::is_empty")]
+    pub display: PresentationSource,
     /// Omit to observe every committed lifecycle transition.
     #[serde(default, skip_serializing_if = "UniqueSet::is_empty")]
     pub transitions: UniqueSet<ProposalEventTransition>,
@@ -646,6 +683,9 @@ fn resolve_local_value_types(value: &mut Value) -> Result<(), (String, &'static 
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatisticalDatasetSource {
     pub id: LocalId,
+    /// Authored presentation only; labels never establish identity or authority.
+    #[serde(default, skip_serializing_if = "PresentationSource::is_empty")]
+    pub display: PresentationSource,
     pub unit: String,
     pub population: String,
     pub period: StatisticalPeriodSource,
@@ -3628,6 +3668,9 @@ pub struct AccessProfileSource {
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    /// Authored presentation only; labels never establish identity or authority.
+    #[serde(default, skip_serializing_if = "PresentationSource::is_empty")]
+    pub display: PresentationSource,
     #[serde(default)]
     pub default: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3802,6 +3845,9 @@ pub struct HookSource {
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    /// Authored presentation only; labels never establish identity or authority.
+    #[serde(default, skip_serializing_if = "PresentationSource::is_empty")]
+    pub display: PresentationSource,
     /// When the hook runs relative to the triggering transaction.
     pub phase: HookPhase,
     /// Committed record change that can produce this hook.
@@ -4023,6 +4069,9 @@ pub struct ProjectAccessProfileSource {
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    /// Authored presentation only; labels never establish identity or authority.
+    #[serde(default, skip_serializing_if = "PresentationSource::is_empty")]
+    pub display: PresentationSource,
     #[serde(default)]
     pub default: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

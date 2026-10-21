@@ -363,6 +363,17 @@ fn events(value: &Value, lines: &mut Lines) {
 fn lifecycle(value: &Value, lines: &mut Lines) {
     for lifecycle in items(&value["lifecycles"]) {
         lines.heading(text(&lifecycle["label"]));
+        lines.heading("States:");
+        for state in items(&lifecycle["states"]) {
+            lines.item(text(&state["id"]));
+            for turn in items(&state["turns"]) {
+                lines.listed(
+                    2,
+                    &format!("turn {}: {}", text(&turn["turn"]), text(&turn["condition"])),
+                );
+            }
+        }
+        lines.heading("Transitions:");
         for transition in items(&lifecycle["transitions"]) {
             lines.item(&format!(
                 "{}: {} -> {}",
@@ -384,6 +395,29 @@ fn lifecycle(value: &Value, lines: &mut Lines) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn lifecycle_summary_renders_every_possible_turn_and_its_condition() {
+        let value = json!({"lifecycles": [registry_breg::lifecycle::proposal_lifecycle()]});
+        let mut lines = Lines::new();
+        lifecycle(&value, &mut lines);
+        let rendered = lines.finish();
+        for expected in [
+            "States:",
+            "draft",
+            "turn party: Always while the Proposal is in this state.",
+            "submitted",
+            "turn official:",
+            "turn nobody:",
+            "Transitions:",
+            "Enforcement:",
+        ] {
+            assert!(
+                rendered.contains(expected),
+                "missing lifecycle detail {expected}: {rendered}"
+            );
+        }
+    }
 
     #[test]
     fn event_summary_distinguishes_record_projection_from_proposal_metadata() {

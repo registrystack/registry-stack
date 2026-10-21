@@ -1770,6 +1770,7 @@ fn action_profile_from_grant(
         .ok_or(FixtureError::AuthorityWideningRefused)?;
     Ok(AccessProfileSource {
         id: grant.profile_id.clone(),
+        display: Default::default(),
         default: grant.default,
         actor_kind: grant.actor_kind,
         requester_clients: grant.requester_clients.clone().into(),

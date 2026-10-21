@@ -1,4 +1,38 @@
 {
+  "accessProfiles": [
+    {
+      "display": {},
+      "id": "operator-editor"
+    },
+    {
+      "display": {},
+      "id": "facility-reader"
+    },
+    {
+      "display": {},
+      "id": "directory-editor"
+    },
+    {
+      "display": {},
+      "id": "facility-registrar"
+    },
+    {
+      "display": {},
+      "id": "facility-correction-author"
+    },
+    {
+      "display": {},
+      "id": "facility-correction-applier"
+    },
+    {
+      "display": {},
+      "id": "proposal-reviewer"
+    },
+    {
+      "display": {},
+      "id": "casework-review-status"
+    }
+  ],
   "actions": {
     "access": [
       {
@@ -1121,7 +1155,7 @@
       }
     ]
   },
-  "apiVersion": "id.registrystack.org/formats/breg/access-explanation/v1alpha5",
+  "apiVersion": "id.registrystack.org/formats/breg/access-explanation/v1alpha6",
   "claimContract": {
     "directClaims": {
       "jurisdiction": {

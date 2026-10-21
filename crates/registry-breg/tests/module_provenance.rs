@@ -169,6 +169,20 @@ fn extension_attributes_appended_ids_to_the_extending_module_only() {
         module_case.module_origins.hooks.get("module-case-created"),
         Some(&"extender".to_owned())
     );
+
+    let model = registry_breg::artifacts::inspect_registry(&compiled);
+    let inspected = model["recordTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|record| record["id"] == "module-case")
+        .unwrap();
+    assert_eq!(inspected["sourceModule"], "declarer");
+    assert_eq!(
+        inspected["moduleOrigins"],
+        serde_json::to_value(&module_case.module_origins).unwrap(),
+        "model inspection retains per-member origins after module composition"
+    );
 }
 
 #[test]

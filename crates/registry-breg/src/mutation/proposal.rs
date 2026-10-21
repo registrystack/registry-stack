@@ -4,6 +4,10 @@
 use super::*;
 mod context_projection;
 use crate::api::proposals::ProposalMutationInput;
+use crate::lifecycle::{
+    proposal_turn as evaluate_proposal_turn, ProposalApplicationProgress, ProposalReviewProgress,
+    ProposalTurn, ProposalTurnContext,
+};
 use crate::model::{
     CompiledActionExecution, CompiledProposalReview, ProposalOperation, ProposalOwnership,
 };
@@ -14,7 +18,7 @@ use crate::proposal_prepare::{self, ProposalTargetSnapshot};
 use crate::proposal_store::{self, ProposalDocument};
 use crate::proposal_workflow::{
     ApplicationId, ApplicationResultLink, EntityId, ObservedTarget, PreparedApplication,
-    ProposalDigest, RecordId, RecordRevision, TrustedActorRef, TrustedTimestamp,
+    ProposalDigest, ProposalState, RecordId, RecordRevision, TrustedActorRef, TrustedTimestamp,
     TrustedTransitionContext,
 };
 
@@ -3313,32 +3317,7 @@ fn proposal_action<'a>(
     Ok(action)
 }
 
-/// How far the current submission's review has gone, read from BReg's
-/// retained submission and result rows only. No authority is asked.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ReviewProgress {
-    /// The submission's Action requires no review.
-    NotRequired,
-    /// The review authority holds the request, or BReg is still delivering it.
-    Pending,
-    /// Delivery or result lookup failed and Retry may resume it.
-    Retrying,
-    /// The review submission failed for good; only a later submission can
-    /// be reviewed.
-    Failed,
-    Approved,
-    /// An approval whose availability window has passed: it can no longer
-    /// authorize Apply.
-    ApprovalExpired,
-    Rejected,
-    ChangesRequested,
-    /// An `answered` result, which has no meaning for a Proposal.
-    Answered,
-    /// A withdrawn round, or a Casework `cancelled` or `superseded` result.
-    Ended,
-}
-
-impl ReviewProgress {
+impl ProposalReviewProgress {
     /// The Apply availability a review that has not approved this
     /// submission gives. `None` for an approval or no review.
     fn apply_refusal(self) -> Option<(&'static str, &'static str)> {
@@ -3363,12 +3342,12 @@ async fn review_progress(
     tx: &Transaction<'_>,
     document: &ProposalDocument,
     frozen: &crate::proposal_workflow::ProposalSnapshot,
-) -> Result<ReviewProgress, MutationError> {
+) -> Result<ProposalReviewProgress, MutationError> {
     if !matches!(
         frozen.review_requirement(),
         CompiledProposalReview::Required { .. }
     ) {
-        return Ok(ReviewProgress::NotRequired);
+        return Ok(ProposalReviewProgress::NotRequired);
     }
     let row = tx
         .query_opt(
@@ -3387,7 +3366,7 @@ async fn review_progress(
         .await
         .map_err(map_database_error)?;
     let Some(row) = row else {
-        return Ok(ReviewProgress::Pending);
+        return Ok(ProposalReviewProgress::Pending);
     };
     let state: String = row.get(0);
     let withdrawn: bool = row.get(1);
@@ -3395,21 +3374,21 @@ async fn review_progress(
     let status: Option<String> = row.get(3);
     let expired: Option<bool> = row.get(4);
     if withdrawn {
-        return Ok(ReviewProgress::Ended);
+        return Ok(ProposalReviewProgress::Ended);
     }
     Ok(match status.as_deref() {
-        Some("approved") if expired == Some(true) => ReviewProgress::ApprovalExpired,
-        Some("approved") => ReviewProgress::Approved,
-        Some("rejected") => ReviewProgress::Rejected,
-        Some("changes-requested") => ReviewProgress::ChangesRequested,
-        Some("answered") => ReviewProgress::Answered,
-        Some("cancelled" | "superseded") => ReviewProgress::Ended,
-        Some(_) => ReviewProgress::Pending,
-        None if state == "failed" => ReviewProgress::Failed,
+        Some("approved") if expired == Some(true) => ProposalReviewProgress::ApprovalExpired,
+        Some("approved") => ProposalReviewProgress::Approved,
+        Some("rejected") => ProposalReviewProgress::Rejected,
+        Some("changes-requested") => ProposalReviewProgress::ChangesRequested,
+        Some("answered") => ProposalReviewProgress::Answered,
+        Some("cancelled" | "superseded") => ProposalReviewProgress::Ended,
+        Some(_) => ProposalReviewProgress::Pending,
+        None if state == "failed" => ProposalReviewProgress::Failed,
         None if erroring && matches!(state.as_str(), "pending" | "uncertain" | "accepted") => {
-            ReviewProgress::Retrying
+            ProposalReviewProgress::Retrying
         }
-        None => ReviewProgress::Pending,
+        None => ProposalReviewProgress::Pending,
     })
 }
 
@@ -3424,7 +3403,7 @@ pub(crate) async fn current_turn(
         return Ok(proposal_turn(
             &document.header.state,
             blocked,
-            ReviewProgress::NotRequired,
+            ProposalReviewProgress::NotRequired,
             &Value::Null,
         ));
     }
@@ -3446,38 +3425,33 @@ pub(crate) async fn current_turn(
 pub(crate) fn proposal_turn(
     state: &str,
     blocked: bool,
-    review: ReviewProgress,
+    review: ProposalReviewProgress,
     application: &Value,
 ) -> &'static str {
-    match state {
-        "draft" => return "party",
-        "submitted" => {}
-        _ => return "nobody",
-    }
-    if blocked {
-        return "party";
-    }
-    match review {
-        ReviewProgress::Pending | ReviewProgress::Retrying => return "official",
-        ReviewProgress::Failed
-        | ReviewProgress::ApprovalExpired
-        | ReviewProgress::Rejected
-        | ReviewProgress::ChangesRequested
-        | ReviewProgress::Answered
-        | ReviewProgress::Ended => return "party",
-        ReviewProgress::NotRequired | ReviewProgress::Approved => {}
-    }
-    if application["mode"] == "manual" {
-        return "official";
-    }
-    match (
-        application["state"].as_str(),
-        application["recovery"].as_str(),
-    ) {
-        (Some("blocked"), Some("retry")) => "official",
-        (Some("blocked"), _) => "party",
-        _ => "nobody",
-    }
+    let Ok(state) = ProposalState::from_storage(state) else {
+        return ProposalTurn::Nobody.as_str();
+    };
+    let application = if application["mode"] == "manual" {
+        ProposalApplicationProgress::Manual
+    } else {
+        match (
+            application["state"].as_str(),
+            application["recovery"].as_str(),
+        ) {
+            (Some("blocked"), Some("retry")) => ProposalApplicationProgress::BlockedRetry,
+            (Some("blocked"), _) => ProposalApplicationProgress::BlockedOther,
+            _ => ProposalApplicationProgress::Other,
+        }
+    };
+    evaluate_proposal_turn(
+        state,
+        ProposalTurnContext {
+            submission_blocked: blocked,
+            review,
+            application,
+        },
+    )
+    .as_str()
 }
 
 /// The audit marker of a read that served a decision's public reason.
@@ -3863,37 +3837,53 @@ mod turn_tests {
         let correct = json!({"mode":"automatic","state":"blocked","recovery":"correct-input"});
         for state in ["applied", "cancelled", "rejected"] {
             assert_eq!(
-                proposal_turn(state, false, ReviewProgress::NotRequired, &Value::Null),
+                proposal_turn(
+                    state,
+                    false,
+                    ProposalReviewProgress::NotRequired,
+                    &Value::Null,
+                ),
                 "nobody",
                 "{state}"
             );
         }
         assert_eq!(
-            proposal_turn("draft", false, ReviewProgress::NotRequired, &Value::Null),
+            proposal_turn(
+                "draft",
+                false,
+                ProposalReviewProgress::NotRequired,
+                &Value::Null,
+            ),
             "party"
         );
         assert_eq!(
-            proposal_turn("submitted", true, ReviewProgress::Pending, &manual),
+            proposal_turn("submitted", true, ProposalReviewProgress::Pending, &manual,),
             "party",
             "a blocked submission waits on its party"
         );
-        for review in [ReviewProgress::Pending, ReviewProgress::Retrying] {
+        for review in [
+            ProposalReviewProgress::Pending,
+            ProposalReviewProgress::Retrying,
+        ] {
             assert_eq!(
                 proposal_turn("submitted", false, review, &queued),
                 "official"
             );
         }
         for review in [
-            ReviewProgress::Failed,
-            ReviewProgress::ApprovalExpired,
-            ReviewProgress::Rejected,
-            ReviewProgress::ChangesRequested,
-            ReviewProgress::Answered,
-            ReviewProgress::Ended,
+            ProposalReviewProgress::Failed,
+            ProposalReviewProgress::ApprovalExpired,
+            ProposalReviewProgress::Rejected,
+            ProposalReviewProgress::ChangesRequested,
+            ProposalReviewProgress::Answered,
+            ProposalReviewProgress::Ended,
         ] {
             assert_eq!(proposal_turn("submitted", false, review, &queued), "party");
         }
-        for review in [ReviewProgress::NotRequired, ReviewProgress::Approved] {
+        for review in [
+            ProposalReviewProgress::NotRequired,
+            ProposalReviewProgress::Approved,
+        ] {
             assert_eq!(
                 proposal_turn("submitted", false, review, &manual),
                 "official"
@@ -3905,5 +3895,15 @@ mod turn_tests {
             );
             assert_eq!(proposal_turn("submitted", false, review, &correct), "party");
         }
+        assert_eq!(
+            proposal_turn(
+                "future-state",
+                true,
+                ProposalReviewProgress::Pending,
+                &manual,
+            ),
+            "nobody",
+            "an unknown stored state keeps the established closed fallback"
+        );
     }
 }
