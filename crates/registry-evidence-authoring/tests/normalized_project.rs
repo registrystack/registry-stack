@@ -3,6 +3,7 @@ use registry_evidence_authoring::{
     project::{self, FunctionInterface},
     selector, target,
 };
+use registry_platform_yaml::LocalId;
 use serde_json::json;
 use std::collections::BTreeMap;
 
@@ -66,6 +67,26 @@ fn constructed_project_display_text_is_checked_before_compilation() {
         assert!(findings
             .iter()
             .all(|finding| !finding.message.contains(question)));
+    }
+}
+
+#[test]
+fn constructed_project_id_collisions_are_checked_before_compilation() {
+    let mut project = project();
+    let profile = project.selector_profiles[&LocalId::new("person-by-id").unwrap()].clone();
+    project
+        .selector_profiles
+        .insert(LocalId::new("person_by_id").unwrap(), profile);
+
+    for findings in [
+        project::validate_project(&project),
+        compile::compile(&project, &scripts())
+            .expect_err("separator-lookalike selector profiles must be refused"),
+    ] {
+        assert!(findings.iter().any(|finding| {
+            finding.code == "selector-profile-id-collision"
+                && finding.field.to_json_pointer() == "/selectorProfiles/person_by_id"
+        }));
     }
 }
 

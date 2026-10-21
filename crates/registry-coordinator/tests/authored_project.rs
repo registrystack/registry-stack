@@ -268,6 +268,44 @@ fn project_check_refuses_separator_lookalikes_in_the_function_namespace() {
 }
 
 #[test]
+fn project_check_keeps_operation_collisions_beside_compile_errors() {
+    let root = tempfile::tempdir().unwrap();
+    let mut authored = declare_test_functions(&project());
+    authored["operations"] = json!({
+        "notify-user": {
+            "uses": "unsupported.operation/v1",
+            "connection": "messages"
+        },
+        "notify_user": {
+            "uses": "unsupported.operation/v1",
+            "connection": "messages"
+        }
+    });
+    let bytes = serde_json::to_vec(&authored).unwrap();
+
+    let error = authoring::parse_project(&root.path().join("workflow.json"), &bytes)
+        .expect_err("the collision and unsupported operation must both be refused");
+    for (code, path) in [
+        (
+            "coordinator.project.operation-id-collision",
+            "/operations/notify_user",
+        ),
+        (
+            "coordinator.definition.schema-reference",
+            "/operations/notify-user/uses",
+        ),
+    ] {
+        assert!(
+            error
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == code && diagnostic.path == path),
+            "missing {code} at {path}: {error:#?}"
+        );
+    }
+}
+
+#[test]
 fn declared_refusal_edge_is_frozen_in_the_snapshot_and_restores_exactly() {
     let root = tempfile::tempdir().unwrap();
     let project = declared_refusal_project();

@@ -19,7 +19,7 @@ use registry_platform_yaml::{Diagnostic, NodeValue, Reader, Report, Severity, So
 use serde::Serialize;
 
 use crate::bundle::{bundle_file_name, read_root_manifest, Bundle};
-use crate::labels::{labels_path, read_labels, LABELS_KIND};
+use crate::labels::{labels_path, read_labels_with_warning, LABELS_KIND};
 use crate::manifest::{error_at, read_manifest, MANIFEST_FILE, MANIFEST_KIND};
 use crate::problem::{ProblemKind, RenderProblem};
 use crate::runtime::RUNTIME_KIND;
@@ -495,10 +495,6 @@ fn identify(file: &str, bytes: &[u8]) -> Vec<Diagnostic> {
     };
     match kind.as_str() {
         LABELS_KIND => {
-            let mut diagnostics = match read_labels(file, bytes) {
-                Ok(read) => read.document.warnings().into_diagnostics(),
-                Err(report) => report.into_diagnostics(),
-            };
             let mut unused = at_kind(
                 Severity::Warning,
                 "render.bundle.unused-labels",
@@ -508,8 +504,10 @@ fn identify(file: &str, bytes: &[u8]) -> Vec<Diagnostic> {
                  it.",
             );
             unused.artifact = Some(LABELS_KIND.to_owned());
-            diagnostics.push(unused);
-            diagnostics
+            match read_labels_with_warning(file, bytes, Some(unused)) {
+                Ok(read) => read.document.warnings().into_diagnostics(),
+                Err(report) => report.into_diagnostics(),
+            }
         }
         RUNTIME_KIND => vec![at_kind(
             Severity::Error,

@@ -142,6 +142,15 @@ fn project_check_refuses_separator_lookalikes_in_the_queue_namespace() {
     assert_eq!(finding.related[0].path, "/queues/decision-queue");
     assert!(finding.message.contains("`decision-queue`"));
     assert!(finding.message.contains("`decision_queue`"));
+    assert_eq!(
+        report
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "casework.project.queue-id-collision")
+            .count(),
+        1,
+        "the reader reports the collision exactly once"
+    );
     let warning = report
         .diagnostics()
         .iter()

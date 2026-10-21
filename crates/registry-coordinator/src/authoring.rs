@@ -695,16 +695,21 @@ pub fn parse_project(path: &Path, bytes: impl AsRef<[u8]>) -> Result<(Workflow, 
         .read(bytes.as_ref(), &Expect::one(&FORMAT))
         .map_err(CoordinatorError::from_report)?;
     let project: CoordinatorProject = document.decode().map_err(CoordinatorError::from_report)?;
-    let errors = project_integrity_diagnostics(&project, &mut document);
-    if !errors.is_empty() {
-        return Err(CoordinatorError::from_report(document.report_with(errors)));
-    }
+    let mut diagnostics = project_integrity_diagnostics(&project, &mut document);
     let mut workflow = match compile(project, path) {
-        Ok(workflow) => workflow,
+        Ok(workflow) => {
+            if !diagnostics.is_empty() {
+                return Err(CoordinatorError::from_report(
+                    document.report_with(diagnostics),
+                ));
+            }
+            workflow
+        }
         Err(error) => {
             let error = positioned(&document, error);
             let exit = error.exit_code;
-            let report = document.report_with(error.report().into_diagnostics());
+            diagnostics.extend(error.report().into_diagnostics());
+            let report = document.report_with(diagnostics);
             return Err(CoordinatorError::from_report(report).with_exit(exit));
         }
     };
