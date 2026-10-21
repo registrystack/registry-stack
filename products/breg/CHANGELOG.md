@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- BREAKING: `attachmentStorage` and `attachmentVerification` in `runtime.yaml`
+  name their destination `url`, not `endpoint` (CFG-VAL-7). Migration: rename
+  `endpoint:` to `url:` in both blocks and keep the value. A file that still
+  writes `endpoint` is refused with `config.removed-key` at that member, and
+  `breg` refuses to start on it. The S3 adapter and the verifier transport now
+  come from `registry-platform-objectstore`; the object keys, the storage and
+  verification binding digests a registry has pinned, the requests, the
+  timeouts, and the refusals are unchanged, so no package is rebuilt and no
+  migration runs.
 - Preserve authored display on access profiles, statistical datasets, record and
   Proposal hooks, and derived fields. Model inspection includes native datasets,
   all project access-profile labels, field display, and module origins.

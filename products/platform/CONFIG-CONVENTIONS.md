@@ -820,13 +820,14 @@ The reader refuses unknown keys in the same positions (CFG-SCHEMA-8).
 defines `ListenerConfig`, `PrivateListenerConfig`, `DatabaseConfig`,
 `OidcIssuerConfig`, `OidcClientsConfig`, `JwksSource`, `AuditKeyConfig`,
 `SecretProvidersConfig`, `SecretReference`, `TaskGrantStatusConfig`,
-`IdentityConfig`, `ProjectIdentity`, `Url`, `LocalId`, `ExternalId`, and
-`Digest`. A product
+`ObjectStorageConfig`, `AttachmentVerifierConfig`, `IdentityConfig`,
+`ProjectIdentity`, `Url`, `LocalId`, `ExternalId`, and `Digest`. A product
 embeds a shared definition unchanged under its shared name, or flattens a
 shared block from the platform crate, and never declares its own type for a
-concept a shared block covers, whatever its shape. Embedded definitions are
-compared with the platform schema; flattened blocks are checked at their Rust
-type.
+concept a shared block covers, whatever its shape. A shared block held as the
+newtype variant of a tagged union is flattened beside the union's tag.
+Embedded definitions are compared with the platform schema; flattened blocks
+are checked at their Rust type.
 
 **CFG-SCHEMA-6 (MUST). Every authored and operator format is mapped for
 editors** by

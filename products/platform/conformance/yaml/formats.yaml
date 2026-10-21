@@ -329,6 +329,8 @@ formats:
       - /fieldEncryption/provider/kind
       - /attachmentStorage/kind
       - /attachmentVerification/kind
+      - /attachmentStorage/endpoint
+      - /attachmentVerification/endpoint
       - /authentication/oidc/jwksSource/kind
   breg/dev-clients:
     init: {command: "bregctl init {directory}", file: dev-clients.yaml}
