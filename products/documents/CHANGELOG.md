@@ -55,6 +55,13 @@ The Document Store is held out of releases.
 - `GET /document-policies` lists the policies a caller may reserve under,
   with their bounds. Lists page by cursor in a stable order, at most 100
   items a page. Documents carry an optional, untrusted `label`.
+- Document policies carry a required `custodian` rule: `institution`
+  keeps custody with the reserving service and records a named person as
+  the represented principal only; `represented-principal` places custody
+  in the named person.
+- A grant request names the recipient's actor `kind`, and release matches
+  it. The owning system that is not the custodian gets
+  `profile.not-authorized` on download.
 - One transfer budget for uploads, downloads, and verification, and a
   per-transfer deadline set by the new `transfers` runtime block
   (`minimumDeadlineSeconds`, `mebibyteAllowanceSeconds`).
