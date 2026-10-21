@@ -4938,7 +4938,6 @@ dependencies = [
  "jsonschema",
  "jsonwebtoken",
  "pg_query",
- "quick-xml 0.42.0",
  "rcgen",
  "registry-breg-client",
  "registry-evidence-client",
@@ -4953,6 +4952,7 @@ dependencies = [
  "registry-platform-hooks",
  "registry-platform-httpsec",
  "registry-platform-httputil",
+ "registry-platform-objectstore",
  "registry-platform-oidc",
  "registry-platform-script",
  "registry-platform-testing",
@@ -6394,6 +6394,27 @@ dependencies = [
  "url",
  "uuid",
  "wiremock",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-platform-objectstore"
+version = "0.44.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "hex",
+ "hmac 0.13.0",
+ "quick-xml 0.42.0",
+ "registry-platform-config",
+ "registry-platform-httputil",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
  "zeroize",
 ]
 

@@ -2030,8 +2030,8 @@ fn bounds_timeouts_and_retention_are_read_under_the_shared_spellings() {
     let current = format!(
         "{base}wasmExecution:\n  maximumModuleBytes: 2097152\n  maximumGuestMemoryBytes: 33554432\n\
          fieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    attemptTimeoutMilliseconds: 5002\n\
-         attachmentStorage:\n  type: s3\n  endpoint: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 5003\n\
-         attachmentVerification:\n  type: http\n  endpoint: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n  attemptTimeoutMilliseconds: 5004\n"
+         attachmentStorage:\n  type: s3\n  url: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 5003\n\
+         attachmentVerification:\n  type: http\n  url: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n  attemptTimeoutMilliseconds: 5004\n"
     );
     parse_runtime_config_with_env(&current, env_lookup).expect("the shared spellings are read");
 
@@ -2219,13 +2219,51 @@ fn the_issuer_key_source_names_its_variant_in_a_type_member() {
 }
 
 #[test]
+fn attachment_destinations_are_named_url_and_the_endpoint_key_is_refused() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let current = format!(
+        "{base}\nattachmentStorage:\n  type: s3\n  url: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n\
+         attachmentVerification:\n  type: http\n  url: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
+    );
+    parse_runtime_config_with_env(&current, env_lookup).expect("the url member is read");
+
+    for (current_line, retired_line, pointer, replacement) in [
+        (
+            "  url: https://storage.example\n",
+            "  endpoint: https://storage.example\n",
+            "/attachmentStorage/endpoint",
+            "attachmentStorage.url",
+        ),
+        (
+            "  url: https://scanner.example/verify\n",
+            "  endpoint: https://scanner.example/verify\n",
+            "/attachmentVerification/endpoint",
+            "attachmentVerification.url",
+        ),
+    ] {
+        assert_eq!(current.matches(current_line).count(), 1, "{current_line}");
+        let retired = current.replace(current_line, retired_line);
+        let error = parse_runtime_config_with_env(&retired, env_lookup)
+            .expect_err("the endpoint member is refused");
+        assert_eq!(
+            reader_refusal(&error),
+            ("config.removed-key", pointer),
+            "{retired_line}"
+        );
+        let rendered = format!("{error} {}", error.render_human(None));
+        assert!(rendered.contains(replacement), "{rendered}");
+    }
+}
+
+#[test]
 fn a_runtime_union_names_its_variant_in_a_type_member() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let current = format!(
         "{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n\
-         attachmentStorage:\n  type: s3\n  endpoint: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n\
-         attachmentVerification:\n  type: http\n  endpoint: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
+         attachmentStorage:\n  type: s3\n  url: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n\
+         attachmentVerification:\n  type: http\n  url: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
     );
     parse_runtime_config_with_env(&current, env_lookup).expect("the type member is read");
 
@@ -4623,7 +4661,7 @@ async fn attachment_storage_defaults_to_database_and_validates_operator_binding(
         AttachmentStorage::Database
     ));
     let invalid = format!(
-        "{base}\nattachmentStorage:\n  type: s3\n  endpoint: http://public.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n"
+        "{base}\nattachmentStorage:\n  type: s3\n  url: http://public.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n"
     );
     let error = parse_runtime_config(&invalid).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentStorage);
@@ -4656,7 +4694,7 @@ fn attachment_verification_defaults_off_and_validates_operator_binding() {
         AttachmentVerification::Disabled
     ));
     let invalid = format!(
-        "{base}\nattachmentVerification:\n  type: http\n  endpoint: http://public.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
+        "{base}\nattachmentVerification:\n  type: http\n  url: http://public.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
     );
     let error = parse_runtime_config(&invalid).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentVerification);

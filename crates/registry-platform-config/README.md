@@ -115,6 +115,16 @@ accepted reference through the explicitly enabled environment or file provider.
   private-key JWT credentials for the status check. `statusPath` and
   `statusScope` default to Casework's route and scope.
 
+- `ObjectStorageConfig`: one S3-compatible bucket: a checked `url`, `bucket`,
+  `region`, `pathStyle` (default `true`), `accessKeyIdRef`,
+  `secretAccessKeyRef`, optional `sessionTokenRef` and `caBundleRef`, and
+  `attemptTimeoutMilliseconds` (default 10000, from 100 to 60000).
+  `registry-platform-objectstore` applies the HTTPS and loopback rules.
+- `AttachmentVerifierConfig`: one HTTP content verifier: a checked `url`,
+  `authorizationRef`, `policyId`, and `attemptTimeoutMilliseconds`. The block
+  has no default; a product that makes verification optional states its own
+  disabled form beside it.
+
 ## Package
 
 `package` is the one package format every runtime serves from
