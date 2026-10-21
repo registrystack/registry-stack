@@ -815,7 +815,7 @@ impl std::io::Write for FailingSink {
     }
 }
 
-/// SEC-10: a verification attempt whose audit entry cannot be written is
+/// A verification attempt whose audit entry cannot be written is
 /// refused before the verifier is asked, and records no verdict.
 #[tokio::test]
 async fn a_verification_audit_failure_refuses_the_claim_and_records_no_verdict() {
