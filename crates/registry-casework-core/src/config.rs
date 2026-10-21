@@ -976,9 +976,19 @@ impl CaseworkProject {
                     &self.queues.iter().map(|queue| queue.id.clone()).collect(),
                     Some(&metadata),
                 ) {
+                    let path = match finding.path.as_str() {
+                        // Every stage queue is already checked at its authored path.
+                        "/queue" => continue,
+                        // The projection is derived from rule predicates, not authored.
+                        // Its unknown fields are also reported at each offending rule;
+                        // only the aggregate size finding needs a project location.
+                        "/projection" => "/routing",
+                        path if path.starts_with("/projection/") => continue,
+                        path => path,
+                    };
                     findings.push(
                         finding.reason.code(),
-                        format!("{}{}", keyed("reviewPolicies", &policy.id), finding.path),
+                        format!("{}{path}", keyed("reviewPolicies", &policy.id)),
                         finding.reason.message(),
                         finding.reason.suggested_action(),
                     );
