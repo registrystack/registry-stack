@@ -597,7 +597,11 @@ async fn unrecorded_verdict(
 
 /// Reads a claimed version's content and asks the verifier. The bytes an
 /// attempt holds are counted against the transfer budget uploads and
-/// downloads share; an attempt waits for room rather than adding to it.
+/// downloads share; an attempt waits for room rather than adding to it,
+/// and waits only within its attempt timeout: `send` bounds the whole
+/// attempt, the wait included, by the attempt budget left, and an attempt
+/// that runs out of it ends as a transient failure, so a job never holds
+/// its lease past the attempt deadline.
 pub struct VerificationTransport {
     store: PostgresStore,
     storage: Arc<ContentStorage>,
@@ -645,6 +649,7 @@ impl VerificationTransport {
             );
             return failed();
         }
+        // Bounded by the attempt timeout `send` applies to this whole call.
         let Some(_permit) = self.budget.reserve(job.job.length).await else {
             tracing::error!("the transfer budget is closed; verification will retry");
             return failed();

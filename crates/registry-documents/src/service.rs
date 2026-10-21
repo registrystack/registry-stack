@@ -23,9 +23,9 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use futures::Stream;
 use registry_documents_core::{
     admit_reservation, allowed_actions, check_custodian_quota, place_custody, standing, ActorKind,
-    Caller, CustodianRef, Custody, CustodyAsk, DocumentPage, DocumentPolicy, DocumentPolicyList,
-    DocumentPolicyView, DocumentStatus, DocumentVersionView, DocumentView, DocumentsProject,
-    Eligibility, PolicyBinding, ProblemCode, ReservationAsk, ReservationView,
+    Caller, ContentType, CustodianRef, Custody, CustodyAsk, DocumentPage, DocumentPolicy,
+    DocumentPolicyList, DocumentPolicyView, DocumentStatus, DocumentVersionView, DocumentView,
+    DocumentsProject, Eligibility, PolicyBinding, ProblemCode, ReservationAsk, ReservationView,
     ReserveDocumentRequest, Reserver, Standing, UploadState, VerificationState, MAXIMUM_PAGE_SIZE,
 };
 use registry_platform_canonical_json::canonicalize_json;
@@ -195,6 +195,16 @@ impl std::fmt::Debug for DocumentService {
     }
 }
 
+/// The journal's marker for a request value that does not parse.
+const UNPARSED: &str = "unparsed";
+
+/// What the journal records for an identifier a caller sent: the value
+/// once it parses under its bounded grammar, and [`UNPARSED`] when it does
+/// not, so no unchecked text reaches the journal.
+fn checked<T: std::fmt::Display>(parsed: Option<T>) -> String {
+    parsed.map_or_else(|| UNPARSED.to_owned(), |value| value.to_string())
+}
+
 /// Log a failure the caller is answered `service.unavailable` for.
 fn unavailable(stage: &'static str, error: &dyn std::fmt::Display) -> ProblemCode {
     tracing::error!(stage, error = %error, "a document operation failed");
@@ -213,7 +223,8 @@ const RECORD_COLUMNS: &str = "document.document_id, document.policy_id, document
     version.upload_expires_at, version.upload_expires_at <= now() AS upload_lapsed,
     version.verification_state, version.eligibility, version.media_type,
     version.expected_digest, version.length, version.reserved_at, version.finalized_at,
-    version.actor_issuer, version.actor_subject, version.verified_binding_digest,
+    version.actor_issuer, version.actor_subject, version.actor_kind,
+    version.verified_binding_digest,
     version.verified_digest, version.verified_media_type, version.computed_digest,
     version.object_id";
 const RECORD_FROM: &str = "documents_documents AS document
@@ -267,6 +278,7 @@ struct Record {
     finalized_at: Option<DateTime<Utc>>,
     reserver_issuer: String,
     reserver_subject: String,
+    reserver_kind: ActorKind,
     verified_binding: Option<String>,
     verified_digest: Option<String>,
     verified_media_type: Option<String>,
@@ -321,6 +333,8 @@ impl Record {
             finalized_at: get(row, "finalized_at")?,
             reserver_issuer: text("actor_issuer")?,
             reserver_subject: text("actor_subject")?,
+            reserver_kind: ActorKind::from_str_exact(&text("actor_kind")?)
+                .ok_or("an unknown reserving actor kind")?,
             verified_binding: get(row, "verified_binding_digest")?,
             verified_digest: get(row, "verified_digest")?,
             verified_media_type: get(row, "verified_media_type")?,
@@ -333,6 +347,7 @@ impl Record {
         Reserver {
             issuer: &self.reserver_issuer,
             subject: &self.reserver_subject,
+            kind: self.reserver_kind,
         }
     }
 
@@ -632,7 +647,8 @@ impl DocumentService {
         Self::record_in(&**client, document_id).await
     }
 
-    /// Whether `caller` holds an active grant on `version_id`.
+    /// Whether `caller`, by issuer, subject, and actor kind, holds an
+    /// active grant on `version_id`.
     async fn holds_grant(&self, caller: &Caller, version_id: Uuid) -> Result<bool, ProblemCode> {
         let client = self.client().await?;
         let row = client
@@ -640,8 +656,13 @@ impl DocumentService {
                 "SELECT EXISTS (
                      SELECT 1 FROM documents_grants
                       WHERE version_id = $1 AND grantee_issuer = $2 AND grantee_subject = $3
-                        AND revoked_at IS NULL AND expires_at > now())",
-                &[&version_id, &caller.issuer, &caller.subject],
+                        AND grantee_kind = $4 AND revoked_at IS NULL AND expires_at > now())",
+                &[
+                    &version_id,
+                    &caller.issuer,
+                    &caller.subject,
+                    &caller.kind.as_str(),
+                ],
             )
             .await
             .map_err(|error| unavailable("grant read", &error))?;
@@ -732,9 +753,9 @@ impl DocumentService {
                     "event": UPLOAD_RESERVATION_EVENT,
                     "actor": reference,
                     "profile": caller.profile_id,
-                    "policyId": request.policy_id,
+                    "policyId": checked(LocalId::new(request.policy_id.as_str()).ok()),
                     "length": request.length,
-                    "mediaType": request.media_type,
+                    "mediaType": checked(ContentType::new(request.media_type.as_str()).ok()),
                 }),
             )
             .await?;
@@ -944,36 +965,41 @@ impl DocumentService {
         S: Stream<Item = Result<Bytes, E>> + Unpin,
     {
         let reference = self.actor_reference(caller)?;
-        let reservation = self.reservation(caller, upload_id).await?;
         let audit = self
             .begin(
                 UPLOAD_CONTENT_EVENT,
                 json!({
                     "event": UPLOAD_CONTENT_EVENT,
                     "actor": reference,
-                    "versionId": reservation.record.version_id.to_string(),
-                    "length": reservation.record.length,
+                    "uploadId": upload_id.to_string(),
                 }),
             )
             .await?;
-        let result = self
-            .accept_content(caller, &reservation, content_type, content_length, body)
-            .await;
+        let result = async {
+            let reservation = self.reservation(caller, upload_id).await?;
+            let outcome = self
+                .accept_content(caller, &reservation, content_type, content_length, body)
+                .await?;
+            Ok((reservation.record, outcome))
+        }
+        .await;
         let success = match &result {
-            Ok(UploadOutcome::Accepted(_)) => json!({
+            Ok((record, UploadOutcome::Accepted(_))) => json!({
                 "event": UPLOAD_CONTENT_EVENT,
                 "outcome": "finalized",
-                "byteCount": reservation.record.length,
+                "versionId": record.version_id.to_string(),
+                "byteCount": record.length,
             }),
-            Ok(UploadOutcome::Repeated(_)) => json!({
+            Ok((record, UploadOutcome::Repeated(_))) => json!({
                 "event": UPLOAD_CONTENT_EVENT,
                 "outcome": "already-finalized",
+                "versionId": record.version_id.to_string(),
                 "byteCount": 0,
             }),
             Err(_) => Value::Null,
         };
         Self::finish(audit, UPLOAD_CONTENT_EVENT, &result, success).await?;
-        result
+        result.map(|(_, outcome)| outcome)
     }
 
     /// The reservation `caller` made under `upload_id`. An upload another
@@ -994,7 +1020,10 @@ impl DocumentService {
             .ok_or(ProblemCode::ResourceNotFound)?;
         let record =
             Record::from_row(&row).map_err(|error| unavailable("reservation decode", &error))?;
-        if record.reserver_issuer != caller.issuer || record.reserver_subject != caller.subject {
+        if record.reserver_issuer != caller.issuer
+            || record.reserver_subject != caller.subject
+            || record.reserver_kind != caller.kind
+        {
             return Err(ProblemCode::ResourceNotFound);
         }
         Ok(Reservation { record })
@@ -1278,14 +1307,23 @@ impl DocumentService {
                 .query(
                     &format!(
                         "SELECT {RECORD_COLUMNS} FROM {RECORD_FROM}
-                          WHERE ((document.custodian_issuer = $1 AND document.custodian_subject = $2)
-                                 OR (version.actor_issuer = $1 AND version.actor_subject = $2))
-                            AND ($3::timestamptz IS NULL
-                                 OR (document.created_at, document.document_id) > ($3, $4))
+                          WHERE ((document.custodian_issuer = $1 AND document.custodian_subject = $2
+                                  AND document.custodian_kind = $3)
+                                 OR (version.actor_issuer = $1 AND version.actor_subject = $2
+                                     AND version.actor_kind = $3))
+                            AND ($4::timestamptz IS NULL
+                                 OR (document.created_at, document.document_id) > ($4, $5))
                           ORDER BY document.created_at, document.document_id
-                          LIMIT $5"
+                          LIMIT $6"
                     ),
-                    &[&caller.issuer, &caller.subject, &after, &after_id, &page.fetch()],
+                    &[
+                        &caller.issuer,
+                        &caller.subject,
+                        &caller.kind.as_str(),
+                        &after,
+                        &after_id,
+                        &page.fetch(),
+                    ],
                 )
                 .await
                 .map_err(|error| unavailable("document list", &error))?
@@ -1312,9 +1350,11 @@ impl DocumentService {
     /// approval is bound to its digest, its media type, and the current
     /// verifier binding is released, and its bytes are checked against the
     /// digest and length before the first byte is handed back. Every
-    /// decision is audited; a caller that may not have the content is
-    /// answered as if the version did not exist, and the audit record
-    /// carries only that answer.
+    /// decision is audited. A caller that sees the document without being
+    /// released its content, the owning system that is not its custodian,
+    /// is answered `profile.not-authorized`; every other caller that may not
+    /// have the content is answered as if the version did not exist, and the
+    /// audit record carries only that answer.
     pub async fn download(
         &self,
         caller: &Caller,
@@ -1398,6 +1438,8 @@ impl DocumentService {
             None if access.standing.custodian => {
                 return Err(ProblemCode::DocumentVersionNotReleasable.into())
             }
+            // The owning system sees the document but is never released it.
+            _ if access.standing.sees() => return Err(ProblemCode::ProfileNotAuthorized.into()),
             _ => return Err(ProblemCode::ResourceNotFound.into()),
         };
         let Some(permit) = self.settings.budget.try_reserve(record.length) else {

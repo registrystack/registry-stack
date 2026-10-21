@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRequest as _, Path, Query, Request, State};
 use axum::http::header::{
     AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, LOCATION,
     RETRY_AFTER, WWW_AUTHENTICATE,
@@ -249,6 +249,18 @@ fn idempotency_key(headers: &HeaderMap) -> Result<&str, ProblemCode> {
         .ok_or(ProblemCode::RequestInvalid)
 }
 
+/// The whole body of `request`, under the default body limit the router
+/// applies. A handler calls this only after it verifies the caller, so an
+/// unauthenticated request is refused before any of its body is read.
+async fn buffered(request: Request) -> Result<Bytes, ProblemCode> {
+    Bytes::from_request(request, &())
+        .await
+        .map_err(|rejection| match rejection.status() {
+            StatusCode::PAYLOAD_TOO_LARGE => ProblemCode::RequestBodyTooLarge,
+            _ => ProblemCode::RequestInvalid,
+        })
+}
+
 /// A JSON request body, read only after the caller is verified. A body
 /// that is not JSON is `request.invalid`; JSON of the wrong shape is
 /// `request.unprocessable`.
@@ -283,16 +295,13 @@ fn page(uri: &Uri) -> Result<PageRequest, ProblemCode> {
     PageRequest::parse(query.cursor.as_deref(), query.limit.as_deref())
 }
 
-async fn reserve(
-    State(routes): State<DocumentRoutes>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
+async fn reserve(State(routes): State<DocumentRoutes>, request: Request) -> Response {
     answer(
         async {
+            let headers = request.headers().clone();
             let caller = routes.caller(&headers).await?;
             let key = idempotency_key(&headers)?;
-            let request: ReserveDocumentRequest = json_body(&headers, &body)?;
+            let request: ReserveDocumentRequest = json_body(&headers, &buffered(request).await?)?;
             let view = routes.service.reserve(&caller, key, &request).await?;
             let location = format!("{DOCUMENTS_PATH}/{}", view.document.id);
             Ok((StatusCode::CREATED, [(LOCATION, location)], Json(view)).into_response())
@@ -402,16 +411,16 @@ async fn download(
 
 async fn issue_grant(
     State(routes): State<DocumentRoutes>,
-    headers: HeaderMap,
     Path(document_id): Path<String>,
-    body: Bytes,
+    request: Request,
 ) -> Response {
     answer(
         async {
+            let headers = request.headers().clone();
             let caller = routes.caller(&headers).await?;
             let document_id = identifier(&document_id)?;
             let key = idempotency_key(&headers)?;
-            let request: IssueGrantRequest = json_body(&headers, &body)?;
+            let request: IssueGrantRequest = json_body(&headers, &buffered(request).await?)?;
             let view = routes
                 .service
                 .issue_grant(&caller, key, document_id, &request)

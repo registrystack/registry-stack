@@ -174,7 +174,7 @@ authentication:
     issuer: https://identity.example.test/realms/registry
     audience: urn:example:documents
     scopeClaim: scope
-    allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]
+    allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal, partner-service]
     jwksSource:
       type: static
       documentRef: secret:file/jwks.json
@@ -281,6 +281,51 @@ pub const STAFF: Principal = Principal {
     scope: "documents:read",
     kind: "human",
 };
+
+/// A recipient that is a service, under the `partner-service` profile
+/// [`access_project`] adds, at the subject [`READER`] has.
+pub const PARTNER_SERVICE: Principal = Principal {
+    subject: "reader-1",
+    client: "partner-service",
+    scope: "documents:read",
+    kind: "service",
+};
+
+/// The person [`CITIZEN`] is, signed in under the `reader` recipient
+/// profile.
+pub const CITIZEN_AS_READER: Principal = Principal {
+    subject: "citizen-1",
+    ..READER
+};
+
+/// The starter project with a service recipient profile, `partner-service`,
+/// listed by `named-share`, and the `reader` profile listed as a recipient
+/// of `institutional-custody`.
+pub fn access_project() -> String {
+    let project = STARTER_PROJECT
+        .replacen(
+            "\ndocumentPolicies:\n",
+            "  partner-service:\n    principalClaim: sub\n    requiredScopes: [documents:read]\n    requesterClients: [partner-service]\n    actorKind: service\n    role: recipient\n\ndocumentPolicies:\n",
+            1,
+        )
+        .replacen(
+            "    recipientProfiles: [staff]\n",
+            "    recipientProfiles: [staff, reader]\n",
+            1,
+        )
+        .replacen(
+            "    recipientProfiles: [reader, staff]\n",
+            "    recipientProfiles: [reader, staff, partner-service]\n",
+            1,
+        );
+    assert_eq!(
+        project.matches("partner-service").count(),
+        3,
+        "the starter project changed shape"
+    );
+    assert!(project.contains("recipientProfiles: [staff, reader]"));
+    project
+}
 
 /// The test issuer: one P-256 signing key for the process and the public
 /// key set every deployment reads.
@@ -620,9 +665,33 @@ impl Api {
         grantee: &str,
         expiry_hours: Option<u32>,
     ) -> Answer {
+        self.grant_kind(
+            principal,
+            key,
+            document,
+            version,
+            grantee,
+            "human",
+            expiry_hours,
+        )
+        .await
+    }
+
+    /// Issue a grant naming `grantee` of actor kind `kind`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn grant_kind(
+        &self,
+        principal: Principal,
+        key: &str,
+        document: &str,
+        version: &str,
+        grantee: &str,
+        kind: &str,
+        expiry_hours: Option<u32>,
+    ) -> Answer {
         let mut body = serde_json::json!({
             "versionId": version,
-            "grantee": {"subject": grantee},
+            "grantee": {"subject": grantee, "kind": kind},
         });
         if let Some(hours) = expiry_hours {
             body["expiryHours"] = serde_json::json!(hours);

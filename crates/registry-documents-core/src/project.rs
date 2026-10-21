@@ -260,8 +260,8 @@ impl schemars::JsonSchema for ListedIds {
     }
 }
 
-/// The actor kind an access profile admits.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+/// An actor kind: a service, or a human person.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ActorKind {
@@ -320,9 +320,27 @@ pub struct DocumentPolicy {
     pub represented_principal_profile: LocalId,
     /// Whether the represented principal may issue document grants itself.
     pub represented_principal_grants: RepresentedPrincipalGrants,
+    /// Who holds a document a service places for a named person: the
+    /// reserving system for its institution, or that person.
+    pub custodian: CustodianRule,
     /// Profiles a document grant may name as its recipient.
     pub recipient_profiles: UniqueList<LocalId>,
     pub mandatory_restrictions: MandatoryRestrictions,
+}
+
+/// Who holds a document a service places for a named person.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum CustodianRule {
+    /// Custody stays with the reserving system, acting for its
+    /// institution. The named person is recorded as the represented
+    /// principal and has no standing on the document; only a document
+    /// grant releases it to them.
+    Institution,
+    /// The named person is the custodian, and the reserving system owns
+    /// the document without being released its content.
+    RepresentedPrincipal,
 }
 
 /// Whether a represented principal may issue document grants itself.
