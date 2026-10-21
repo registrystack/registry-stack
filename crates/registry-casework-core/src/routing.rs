@@ -265,7 +265,9 @@ impl RoutingDiagnosticReason {
                 "a rule id is 1 to 64 lowercase letters, digits, or hyphens, starting with a letter"
             }
             Self::DuplicateRuleId => "another rule of this request already uses this id",
-            Self::InvalidReason => "`because` is empty or longer than 256 bytes",
+            Self::InvalidReason => {
+                "`because` is empty, longer than 256 bytes, or contains a character that cannot be shown safely"
+            }
             Self::UnknownQueue => "the queue is not declared under `queues`",
             Self::UnknownStage => "the stage is not one the source description declares",
             Self::UnknownField => "the field is not one the source description declares",
@@ -297,7 +299,7 @@ impl RoutingDiagnosticReason {
             }
             Self::InvalidIdentifier => "Rename the rule with a valid id.",
             Self::DuplicateRuleId => "Give each rule of the request its own id.",
-            Self::InvalidReason => "Write one sentence of at most 256 bytes saying why the rule routes here.",
+            Self::InvalidReason => "Write one display-safe sentence of at most 256 bytes saying why the rule routes here.",
             Self::UnknownQueue => "Declare the queue under `queues`, or route to a declared queue.",
             Self::UnknownStage => {
                 "Use a stage the source description lists, or import a description that declares it."
@@ -459,7 +461,10 @@ pub fn routing_policy_findings(
                 RoutingDiagnosticReason::DuplicateRuleId,
             ));
         }
-        if rule.because.trim().is_empty() || rule.because.len() > 256 {
+        if rule.because.trim().is_empty()
+            || rule.because.len() > 256
+            || registry_platform_yaml::DisplayText::new(rule.because.as_str()).is_err()
+        {
             findings.push(RoutingDiagnostic::new(
                 format!("{base}/because"),
                 RoutingDiagnosticReason::InvalidReason,

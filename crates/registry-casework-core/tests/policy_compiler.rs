@@ -502,6 +502,115 @@ fn presentation_changes_preserve_behavior_binding_and_closure_keeps_them() {
 }
 
 #[test]
+fn provider_description_keeps_path_text_semantics() {
+    let mut value = source_value();
+    let description = "context-providers/\u{202e}provider.json";
+    value["contextProviders"]["notice-context"]["description"] = json!(description);
+    let project = decode(value.clone());
+    assert_eq!(
+        project.context_providers[0].description.as_deref(),
+        Some(description)
+    );
+
+    value["queues"]["reviews"]["label"] = json!("Reviews\u{202e}");
+    let Err(ConfigLoadError::Refused(report)) =
+        CaseworkProject::from_slice(&serde_json::to_vec(&value).unwrap())
+    else {
+        panic!("a genuine display label must still be refused");
+    };
+    assert!(report
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.path == "/queues/reviews/label"));
+}
+
+#[test]
+fn programmatic_project_check_enforces_display_text() {
+    const EXAMPLE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../products/casework/examples/multi-stage-routing-clocks/casework.yaml"
+    ));
+    let mut project = CaseworkProject::read("casework.yaml", EXAMPLE.as_bytes())
+        .unwrap()
+        .value;
+    project.task_templates.push(
+        serde_json::from_value(json!({
+            "id":"summary","version":"1","label":"Prepare summary",
+            "eligibleTeams":["regional-team"],"eligibleProfiles":["staff"],
+            "source":"regional-register","reviewPolicies":["regional-review"],
+            "agent":{"issuer":"https://agent.example","subject":"summary-agent"},
+            "client":"summary-client","resource":"urn:registry:records",
+            "scopes":["records:get"],"purpose":"prepare-summary",
+            "bounds":{"type":"breg","permissions":[{"collection":"records","operations":["get"]}]},
+            "subjects":{},"lifetimeSeconds":900
+        }))
+        .unwrap(),
+    );
+
+    let refused = "Refused\u{202e}".to_owned();
+    project.queues[0].label.clone_from(&refused);
+    project.teams[0].label.clone_from(&refused);
+    project.review_policies[0].outcomes[0]
+        .label
+        .clone_from(&refused);
+    project.review_policies[0].routing[0]
+        .because
+        .clone_from(&refused);
+    project.task_templates[0].label.clone_from(&refused);
+    let stage_clock = project
+        .clocks
+        .iter_mut()
+        .find_map(|clock| match clock {
+            ClockPolicy::Stage { steps, .. } => Some(steps),
+            ClockPolicy::Subject { .. } => None,
+        })
+        .expect("the example has a stage clock");
+    stage_clock[0].because.clone_from(&refused);
+
+    let findings = project.findings();
+    for path in [
+        "/queues/northern-review/label",
+        "/teams/regional-team/label",
+        "/reviewPolicies/regional-review/outcomes/approved/label",
+        "/reviewPolicies/regional-review/routing/0/because",
+        "/taskTemplates/summary/label",
+        "/clocks/review-deadline/steps/0/because",
+    ] {
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.pointer == path)
+                .count(),
+            1,
+            "expected one DisplayText finding at {path}: {findings:#?}"
+        );
+    }
+
+    let multilingual = "می\u{200c}خواهم العربية \u{200f}Latin".to_owned();
+    project.queues[0].label.clone_from(&multilingual);
+    project.teams[0].label.clone_from(&multilingual);
+    project.review_policies[0].outcomes[0]
+        .label
+        .clone_from(&multilingual);
+    project.review_policies[0].routing[0]
+        .because
+        .clone_from(&multilingual);
+    project.task_templates[0].label.clone_from(&multilingual);
+    let stage_clock = project
+        .clocks
+        .iter_mut()
+        .find_map(|clock| match clock {
+            ClockPolicy::Stage { steps, .. } => Some(steps),
+            ClockPolicy::Subject { .. } => None,
+        })
+        .expect("the example has a stage clock");
+    stage_clock[0].because.clone_from(&multilingual);
+    project
+        .check()
+        .expect("multilingual display text remains valid");
+}
+
+#[test]
 fn routing_explanation_and_grant_label_are_presentation_only() {
     let mut value = project_value();
     value["reviewPolicies"]["notice-review"]["routing"] = json!([{"id":"north","because":"Route notices locally","when":{"fields":{"region":{"equals":"north"}}},"queue":"north"}]);

@@ -206,6 +206,7 @@ impl ReviewOutcomePolicy {
         !self.label.trim().is_empty()
             && self.label.len() <= 120
             && self.label.chars().all(|character| !character.is_control())
+            && registry_platform_yaml::DisplayText::new(self.label.as_str()).is_ok()
     }
 }
 
@@ -641,8 +642,8 @@ impl ReviewPolicy {
                 outcomes.push(
                     "casework.review-policy.invalid-outcome-label",
                     format!("{at}/label"),
-                    "expected a label of 1 to 120 bytes that is not only spaces and has no control characters",
-                    "Write a short label for the outcome.",
+                    "expected display text of 1 to 120 bytes that is not only spaces and has no control characters",
+                    "Write a short display label without hidden reordering controls, line separators, byte-order marks, or Unicode noncharacters.",
                 );
             }
             if self.result_schema.is_none() && outcome.result_required {

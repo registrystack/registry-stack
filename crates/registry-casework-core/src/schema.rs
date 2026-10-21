@@ -279,6 +279,20 @@ mod tests {
     }
 
     #[test]
+    fn provider_description_is_a_path_while_labels_are_display_text() {
+        let documents = project_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[PROJECT_SCHEMA_FILE]).unwrap();
+        let provider_description = &document["properties"]["contextProviders"]
+            ["additionalProperties"]["properties"]["description"];
+        assert_eq!(provider_description["type"], "string");
+        assert!(provider_description.get("$ref").is_none());
+        assert_eq!(
+            document["properties"]["queues"]["additionalProperties"]["properties"]["label"]["$ref"],
+            "#/$defs/DisplayText"
+        );
+    }
+
+    #[test]
     fn project_schema_accepts_the_stage_clock_defaults_the_reader_accepts() {
         let documents = project_documents().unwrap();
         let document: Value = serde_json::from_str(&documents[PROJECT_SCHEMA_FILE]).unwrap();

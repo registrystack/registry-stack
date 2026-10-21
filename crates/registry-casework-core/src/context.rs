@@ -88,15 +88,7 @@ pub struct ReviewContextProviderPolicy {
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
-    #[serde(
-        default,
-        deserialize_with = "registry_platform_yaml::optional_display_text",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::DisplayText>")
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[cfg_attr(
         feature = "schema",
