@@ -4,8 +4,9 @@
 //! `documentsctl apply` applies the schema and records the package in the
 //! activation ledger, `serve` refuses a database the ledger does not name
 //! this package and deployment active in, `documentsctl status` reads the
-//! ledger, and `documentsctl verification replay` returns a dead-lettered
-//! content verification job to pending and refuses every other job.
+//! ledger, and `documentsctl verification replay` and `documentsctl
+//! erasure replay` return a dead-lettered content verification or erasure
+//! job to pending and refuse every other job.
 //!
 //! Every test runs in its own schema inside the database named by
 //! `DOCUMENTS_TEST_DATABASE_URL`; without it every test fails on the spot.
@@ -18,9 +19,11 @@ use axum::body::Body;
 use registry_documents::activation::{ActivationChange, ActivationError, ApplyRequest};
 use registry_documents::audit::DocumentsAudit;
 use registry_documents::config::RuntimeConfig;
+use registry_documents::erasure::{ErasureStatus, ErasureStore};
 use registry_documents::runtime::{
-    activation_plan, activation_status, apply_activation, dead_lettered_verifications, prepare,
-    prepare_with_verifier, replay_verification, Prepared, RuntimeError,
+    activation_plan, activation_status, apply_activation, dead_lettered_erasures,
+    dead_lettered_verifications, erasure_report, prepare, prepare_with_verifier, replay_erasure,
+    replay_verification, Prepared, RuntimeError,
 };
 use registry_documents::store::{PostgresStore, StoreError};
 use registry_documents::verification::{
@@ -661,12 +664,50 @@ async fn replay_refuses_an_unknown_version_and_an_unactivated_database() {
         "{error}"
     );
 
+    let error = dead_lettered_erasures(&config(&deployment), 50)
+        .await
+        .expect_err("an unactivated database is refused");
+    assert!(
+        matches!(
+            error,
+            RuntimeError::Activation(ActivationError::NotActivated)
+        ),
+        "{error}"
+    );
+    let error = replay_erasure(&config(&deployment), Uuid::new_v4(), 1)
+        .await
+        .expect_err("an unactivated database is refused");
+    assert!(
+        matches!(
+            error,
+            RuntimeError::Activation(ActivationError::NotActivated)
+        ),
+        "{error}"
+    );
+    let error = erasure_report(&config(&deployment))
+        .await
+        .expect_err("an unactivated database is refused");
+    assert!(
+        matches!(
+            error,
+            RuntimeError::Activation(ActivationError::NotActivated)
+        ),
+        "{error}"
+    );
+
     deployment.migrate().await;
     let error = replay_verification(&config(&deployment), Uuid::new_v4(), 1)
         .await
         .expect_err("an unknown version is refused");
     assert!(
         matches!(error, RuntimeError::Replay(ReplayRefusal::NotFound)),
+        "{error}"
+    );
+    let error = replay_erasure(&config(&deployment), Uuid::new_v4(), 1)
+        .await
+        .expect_err("an unknown version is refused");
+    assert!(
+        matches!(error, RuntimeError::ErasureReplay(ReplayRefusal::NotFound)),
         "{error}"
     );
 }
@@ -832,4 +873,344 @@ async fn the_dead_letter_listing_skips_jobs_under_a_former_binding_before_its_li
     assert_eq!(listed.len(), 1, "{listed:?}");
     assert_eq!(listed[0].version_id, version);
     assert_eq!(listed[0].generation, 1);
+}
+
+/// Content verification is never replayed for a version whose erasure is
+/// pending or done, or whose document has a removal requested: the bytes
+/// are leaving, and no verdict on them is recorded. Each refusal changes
+/// nothing.
+#[tokio::test]
+async fn replay_refuses_a_verification_whose_content_is_being_removed() {
+    let deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    deployment.migrate().await;
+    let verifier = FakeVerifier::new("binding-a", UNAVAILABLE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let version = dead_lettered(&deployment, &prepared, &api).await;
+
+    for (state, reason) in [
+        (
+            "UPDATE documents_documents SET removal_requested_at = now()",
+            "the version's document has a removal requested",
+        ),
+        (
+            "UPDATE documents_documents SET removal_requested_at = NULL;
+             UPDATE documents_versions
+                SET erasure_state = 'pending', erasure_requested_at = now(),
+                    erasure_due_at = now() + interval '1 day'",
+            "the version's erasure is pending",
+        ),
+        (
+            "UPDATE documents_versions
+                SET erasure_state = 'erased', erasure_due_at = erasure_requested_at,
+                    erased_at = now()",
+            "the version is erased",
+        ),
+    ] {
+        deployment.execute(state).await;
+        let error = replay_verification(&config(&deployment), version, 1)
+            .await
+            .expect_err("a replay of content being removed is refused");
+        assert!(
+            matches!(
+                &error,
+                RuntimeError::Replay(ReplayRefusal::RemovalRequested { reason: refused })
+                    if *refused == reason
+            ),
+            "{error}"
+        );
+        assert_eq!(job(&deployment).await, ("dead-lettered".to_owned(), 1));
+    }
+    let journal = deployment.path().join("audit.documentsctl.ndjson");
+    let replayed = std::fs::read_to_string(&journal)
+        .unwrap_or_default()
+        .contains("\"transition\":\"replayed\"");
+    assert!(!replayed, "a refused replay is not audited as a replay");
+}
+
+/// Upload and approve one document, ask for its removal, let its grace
+/// pass, and dead-letter the erasure job the cleanup pass arms for it.
+async fn erasure_dead_lettered(deployment: &Deployment, prepared: &Prepared, api: &Api) -> Uuid {
+    let content = pdf(256, 22);
+    let reserved = api
+        .reserve(
+            APP,
+            "citizen-delivery",
+            CITIZEN.subject,
+            &content,
+            "application/pdf",
+        )
+        .await;
+    let (document, version, path) = reservation(&reserved);
+    let put = api
+        .put(APP, &path, "application/pdf", Body::from(content))
+        .await;
+    assert_eq!(put.status, 200, "{}", String::from_utf8_lossy(&put.body));
+    assert_eq!(prepared.verify_due().await, 1);
+    let erased = api.erase(CITIZEN, &document).await;
+    assert_eq!(
+        erased.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&erased.body)
+    );
+    deployment
+        .execute(
+            "UPDATE documents_versions
+                SET erasure_requested_at = erasure_requested_at - interval '2 days',
+                    erasure_due_at = now() - interval '1 second'",
+        )
+        .await;
+    assert_eq!(prepared.cleanup_pass().await.unwrap().armed_erasures, 1);
+    deployment
+        .execute(&format!(
+            "UPDATE documents_erasure_jobs
+                SET state = 'dead-lettered', attempt = {}, next_attempt_at = NULL,
+                    dead_lettered_at = now()",
+            registry_documents::erasure::MAXIMUM_ATTEMPTS
+        ))
+        .await;
+    version.parse().unwrap()
+}
+
+/// The erasure job's state and generation.
+async fn erasure_job(deployment: &Deployment) -> (String, i64) {
+    (
+        deployment
+            .scalar("SELECT state FROM documents_erasure_jobs")
+            .await,
+        deployment
+            .scalar("SELECT generation FROM documents_erasure_jobs")
+            .await,
+    )
+}
+
+#[tokio::test]
+async fn erasure_replay_returns_a_dead_lettered_erasure_to_pending() {
+    let deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    deployment.migrate().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let version = erasure_dead_lettered(&deployment, &prepared, &api).await;
+
+    // The sweep never re-arms a dead-lettered erasure: only a replay does.
+    prepared.sweep_due().await;
+    assert_eq!(
+        erasure_job(&deployment).await,
+        ("dead-lettered".to_owned(), 1)
+    );
+    let erasure: String = deployment
+        .scalar("SELECT erasure_state FROM documents_versions")
+        .await;
+    assert_eq!(erasure, "pending");
+    assert_eq!(
+        erasure_report(&config(&deployment)).await.unwrap(),
+        ErasureStatus {
+            erasure: registry_documents::config::Erasure::Active,
+            awaiting_grace: 0,
+            due: 1,
+            dead_lettered: 1,
+        }
+    );
+
+    let listed = dead_lettered_erasures(&config(&deployment), 50)
+        .await
+        .expect("the dead letters list");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].version_id, version);
+    assert_eq!(listed[0].generation, 1);
+    assert_eq!(
+        listed[0].attempt,
+        registry_documents::erasure::MAXIMUM_ATTEMPTS
+    );
+
+    // A stale generation is refused and changes nothing.
+    let error = replay_erasure(&config(&deployment), version, 2)
+        .await
+        .expect_err("a stale generation is refused");
+    assert!(
+        matches!(
+            error,
+            RuntimeError::ErasureReplay(ReplayRefusal::StaleGeneration { current: 1 })
+        ),
+        "{error}"
+    );
+    assert_eq!(
+        erasure_job(&deployment).await,
+        ("dead-lettered".to_owned(), 1)
+    );
+
+    let replayed = replay_erasure(&config(&deployment), version, 1)
+        .await
+        .expect("the dead letter replays");
+    assert_eq!(replayed.version_id, version);
+    assert_eq!(replayed.generation, 2);
+    let pending: bool = deployment
+        .scalar(
+            "SELECT state = 'pending' AND generation = 2 AND attempt = 0
+               FROM documents_erasure_jobs",
+        )
+        .await;
+    assert!(pending, "the job is pending again under a new generation");
+    assert!(dead_lettered_erasures(&config(&deployment), 50)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // The replay is audited, begun and finished, in the operator's
+    // companion journal.
+    let journal = std::fs::read_to_string(deployment.path().join("audit.documentsctl.ndjson"))
+        .expect("a documentsctl companion audit journal");
+    let replays = journal
+        .lines()
+        .filter(|line| {
+            line.contains("\"event\":\"documents.erasure\"")
+                && line.contains("\"transition\":\"replayed\"")
+                && line.contains(&version.to_string())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(replays.len(), 2, "{journal}");
+    assert!(
+        replays[0].contains("\"outcome\":\"requested\""),
+        "{journal}"
+    );
+    assert!(
+        replays[1].contains("\"outcome\":\"committed\""),
+        "{journal}"
+    );
+
+    // The job is no longer dead-lettered, so a second replay is refused.
+    let error = replay_erasure(&config(&deployment), version, 2)
+        .await
+        .expect_err("a pending job is not replayed");
+    assert!(
+        matches!(
+            &error,
+            RuntimeError::ErasureReplay(ReplayRefusal::NotDeadLettered { state }) if state == "pending"
+        ),
+        "{error}"
+    );
+
+    // The replayed job erases the bytes like any other.
+    prepared.sweep_due().await;
+    let (erasure, held): (String, i64) = (
+        deployment
+            .scalar("SELECT erasure_state FROM documents_versions")
+            .await,
+        deployment
+            .scalar("SELECT count(*) FROM documents_contents")
+            .await,
+    );
+    assert_eq!((erasure.as_str(), held), ("erased", 0));
+}
+
+/// Replay the erasure of `version` at generation 1 with an audit journal
+/// that accepts only its first `lines` lines.
+async fn erasure_replay_audited(
+    deployment: &Deployment,
+    version: Uuid,
+    lines: usize,
+) -> Result<registry_documents::replay::Replayed, ReplayError> {
+    let config = config(deployment);
+    let secrets = config.secret_resolver().unwrap();
+    let store = PostgresStore::connect_runtime(&config.database, &secrets).unwrap();
+    let audit = DocumentsAudit::new(
+        AuditWriter::from_line_sink(Box::new(LimitedSink { lines })),
+        AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+            b"documents-test-audit-key-not-a-secret".to_vec(),
+        ))
+        .unwrap()
+        .key_hasher(),
+    );
+    let erasure = ErasureStore::new(store.clone(), deployment.schema.clone(), audit);
+    registry_documents::erasure::replay(&store, erasure, version, 1).await
+}
+
+#[tokio::test]
+async fn an_erasure_replay_whose_audit_request_is_refused_changes_nothing() {
+    let deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    deployment.migrate().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let version = erasure_dead_lettered(&deployment, &prepared, &api).await;
+
+    let error = erasure_replay_audited(&deployment, version, 0)
+        .await
+        .expect_err("an unaudited replay is refused");
+    assert!(
+        matches!(error, ReplayError::Failed(ReplayFailure::AuditUnavailable)),
+        "{error}"
+    );
+    assert_eq!(
+        erasure_job(&deployment).await,
+        ("dead-lettered".to_owned(), 1)
+    );
+}
+
+#[tokio::test]
+async fn an_erasure_replay_whose_audit_response_is_refused_stands_and_says_so() {
+    let deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    deployment.migrate().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let version = erasure_dead_lettered(&deployment, &prepared, &api).await;
+
+    let error = erasure_replay_audited(&deployment, version, 1)
+        .await
+        .expect_err("a replay whose response was not audited is reported");
+    assert!(
+        matches!(
+            &error,
+            ReplayError::Failed(ReplayFailure::Unaudited { version_id, generation: 2 })
+                if *version_id == version
+        ),
+        "{error}"
+    );
+    assert_eq!(erasure_job(&deployment).await, ("pending".to_owned(), 2));
+}
+
+#[tokio::test]
+async fn erasure_replay_fails_closed_on_an_unwritable_audit_journal() {
+    let deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    deployment.migrate().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let version = erasure_dead_lettered(&deployment, &prepared, &api).await;
+    block_operator_journal(&deployment, "blocked");
+    let error = replay_erasure(&config(&deployment), version, 1)
+        .await
+        .expect_err("replay refuses an unwritable audit journal");
+    assert!(matches!(error, RuntimeError::AuditJournal(_)), "{error}");
+    assert_eq!(
+        erasure_job(&deployment).await,
+        ("dead-lettered".to_owned(), 1)
+    );
+}
+
+/// A replayed erasure waits while erasure is paused: the replay returns the
+/// job to pending, and the paused runtime erases nothing until resumed.
+#[tokio::test]
+async fn a_replayed_erasure_waits_while_erasure_is_paused() {
+    let mut deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
+    deployment.migrate().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let version = erasure_dead_lettered(&deployment, &prepared, &api).await;
+    drop(api);
+    drop(prepared);
+    deployment.set_erasure("paused");
+    let (paused, _api) = start(&deployment, &verifier).await;
+    assert_eq!(
+        erasure_report(&config(&deployment)).await.unwrap().erasure,
+        registry_documents::config::Erasure::Paused
+    );
+
+    replay_erasure(&config(&deployment), version, 1)
+        .await
+        .expect("a paused deployment still replays");
+    paused.sweep_due().await;
+    let held: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_contents")
+        .await;
+    assert_eq!(held, 1, "a paused runtime runs no replayed erasure");
+    assert_eq!(erasure_job(&deployment).await, ("pending".to_owned(), 2));
 }

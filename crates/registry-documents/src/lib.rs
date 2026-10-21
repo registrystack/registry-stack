@@ -15,6 +15,7 @@ pub mod content;
 pub mod erasure;
 pub mod http;
 pub mod package;
+pub mod replay;
 pub mod runtime;
 #[cfg(feature = "schema")]
 pub mod schema;
