@@ -2346,3 +2346,90 @@ async fn the_journal_records_no_unchecked_text_from_a_request() {
         "unparsed"
     );
 }
+
+/// An audit sink that keeps its first line and refuses every write after
+/// it, so a request entry is written and its response entry is not.
+struct FirstLineSink {
+    kept: Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl std::io::Write for FirstLineSink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let mut kept = self.kept.lock().unwrap();
+        if kept.contains(&b'\n') {
+            return Err(std::io::Error::other("the audit sink refuses"));
+        }
+        kept.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// SEC-30: an audit response entry that cannot be written after the
+/// operation committed answers `service.unavailable`; the committed state
+/// stands, the request entry is in the journal, and a retry under the
+/// same idempotency key answers the committed result.
+#[tokio::test]
+async fn a_response_audit_failure_after_commit_answers_unavailable_and_the_retry_answers_the_commit(
+) {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let content = pdf(512, 58);
+    let body = reservation_body(
+        "citizen-delivery",
+        CITIZEN.subject,
+        &sha256(&content),
+        512,
+        PDF,
+    );
+    let kept = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let failing = prepare_with_verifier(&deployment.runtime, verifier.clone())
+        .await
+        .expect("the runtime prepares")
+        .with_audit(DocumentsAudit::new(
+            AuditWriter::from_line_sink(Box::new(FirstLineSink { kept: kept.clone() })),
+            AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+                b"documents-test-audit-key-not-a-secret".to_vec(),
+            ))
+            .unwrap()
+            .key_hasher(),
+        ));
+    Api::new(&failing)
+        .reserve_body(APP, "committed-before-the-journal-failed", &body)
+        .await
+        .assert_problem(ProblemCode::ServiceUnavailable);
+    drop(failing);
+
+    let journal = String::from_utf8(kept.lock().unwrap().clone()).unwrap();
+    let entries = journal.lines().collect::<Vec<_>>();
+    assert_eq!(entries.len(), 1, "{journal}");
+    let entry: serde_json::Value = serde_json::from_str(entries[0]).unwrap();
+    assert_eq!(entry["record"]["event"], "documents.upload-reservation");
+    assert!(entry["record"]["outcome"].is_null(), "{entry}");
+    let committed: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_documents")
+        .await;
+    assert_eq!(committed, 1, "the committed reservation stands");
+
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    let retried = api
+        .reserve_body(APP, "committed-before-the-journal-failed", &body)
+        .await;
+    assert_eq!(
+        retried.status,
+        201,
+        "{}",
+        String::from_utf8_lossy(&retried.body)
+    );
+    let document: String = deployment
+        .scalar("SELECT document_id::text FROM documents_documents")
+        .await;
+    assert_eq!(retried.json()["document"]["id"], document.as_str());
+    let still: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_documents")
+        .await;
+    assert_eq!(still, 1, "the retry made nothing new");
+}
