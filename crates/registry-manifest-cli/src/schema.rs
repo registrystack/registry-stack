@@ -298,6 +298,47 @@ mod tests {
     }
 
     #[test]
+    fn endpoint_description_is_a_url_string_and_not_display_text() {
+        let rendered = schema_documents().unwrap();
+        let schema: Value = serde_json::from_str(&rendered[METADATA_SCHEMA_FILE]).unwrap();
+        assert_eq!(
+            schema.pointer("/$defs/DataServiceManifest/properties/endpoint_description"),
+            Some(&json!({"type": "string"}))
+        );
+        let validator = validator(METADATA_SCHEMA_FILE);
+        let endpoint_description = "https://api.example.test/openapi/\u{202e}definition.json";
+        let document = json!({
+            "schema_version": METADATA_SCHEMA_VERSION,
+            "catalog": {
+                "id": "demo",
+                "base_url": "https://metadata.example.test",
+                "title": "Demo",
+                "publisher": {"name": "Publisher"}
+            },
+            "data_services": [{
+                "id": "registry-api",
+                "title": "Registry API",
+                "description": "Registry description",
+                "endpoint_description": endpoint_description,
+                "serves_datasets": ["registry"]
+            }],
+            "datasets": [{"id": "registry", "title": "Registry"}]
+        });
+        let text = serde_json::to_string(&document).unwrap();
+        read_metadata("metadata.yaml", text.as_bytes())
+            .expect("the reader applies URL semantics to endpointDescription");
+        assert!(validator.is_valid(&document));
+
+        for member in ["title", "description"] {
+            let mut refused = document.clone();
+            refused["data_services"][0][member] = json!(format!("unsafe\u{202e}{member}"));
+            let text = serde_json::to_string(&refused).unwrap();
+            assert!(read_metadata("metadata.yaml", text.as_bytes()).is_err());
+            assert!(!validator.is_valid(&refused));
+        }
+    }
+
+    #[test]
     fn descriptor_members_are_judged_alike_by_schema_and_check() {
         let validator = validator(PROFILE_SCHEMA_FILE);
         let descriptor = |version: &str, path: &str, min: u32, artifacts: Value| {

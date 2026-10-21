@@ -35,6 +35,14 @@ fn check(path: &Path, extra: &[&str]) -> (i32, Value) {
     (output.status.code().unwrap(), report)
 }
 
+fn hidden_problem_count(diagnostic: &Value) -> usize {
+    diagnostic["message"]
+        .as_str()
+        .and_then(|message| message.split_whitespace().next())
+        .and_then(|count| count.parse().ok())
+        .expect("the overflow marker starts with its hidden count")
+}
+
 #[test]
 fn project_check_discovers_companions_and_aggregates_stray_yaml_refusals() {
     let temporary = tempfile::tempdir().unwrap();
@@ -202,6 +210,72 @@ fn discovered_runtime_checks_bindings_and_substitutes_only_when_requested() {
 }
 
 #[test]
+fn runtime_semantics_and_workflow_binding_share_one_file_budget() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    project(&root);
+    let (runtime_prefix, _) = RUNTIME.split_once("connections:\n").unwrap();
+    let mut runtime = format!("{runtime_prefix}connections:\n");
+    for index in 0..16 {
+        runtime.push_str(&format!(
+            concat!(
+                "  connection-{:02}:\n",
+                "    type: messaging\n",
+                "    baseUrl: http://example.test/a//b\n",
+                "    authorization:\n",
+                "      tokenEndpoint: http://example.test/token\n",
+                "      clientId: ' '\n",
+                "      clientAssertionAudience: not a URI\n",
+                "      signingKeyRef: secret:env/MISSING\n",
+                "      resource: not a URI\n",
+                "      scopes: [bad scope]\n",
+            ),
+            index
+        ));
+    }
+    let path = root.join("runtime.yaml");
+    fs::write(&path, runtime).unwrap();
+
+    let runtime_only = registry_coordinator::runtime::RuntimeConfig::check_file(&path, false);
+    assert_eq!(
+        runtime_only.diagnostics.len(),
+        registry_platform_yaml::MAXIMUM_DIAGNOSTICS_PER_FILE + 1
+    );
+    let runtime_marker = runtime_only.diagnostics.last().unwrap();
+    assert_eq!(runtime_marker.code, "config.too-many-problems");
+    let runtime_hidden = runtime_marker
+        .message
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse::<usize>()
+        .unwrap();
+
+    let (exit, report) = check(&root, &[]);
+    assert_eq!(exit, 1, "{report}");
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    assert_eq!(
+        diagnostics.len(),
+        registry_platform_yaml::MAXIMUM_DIAGNOSTICS_PER_FILE + 1
+    );
+    let binding = diagnostics
+        .iter()
+        .position(|diagnostic| {
+            diagnostic["code"] == "coordinator.runtime.workflow-binding"
+                && diagnostic["path"] == "/connections/applications"
+        })
+        .expect("the workflow binding remains visible inside the file budget");
+    let marker = diagnostics.last().unwrap();
+    assert!(binding < diagnostics.len() - 1);
+    assert_eq!(marker["code"], "config.too-many-problems");
+    assert_eq!(marker["severity"], "error");
+    assert_eq!(hidden_problem_count(marker), runtime_hidden + 1);
+    assert!(diagnostics[..diagnostics.len() - 1]
+        .windows(2)
+        .all(|pair| pair[0]["source"]["line"].as_u64() <= pair[1]["source"]["line"].as_u64()));
+}
+
+#[test]
 fn relative_project_selection_resolves_discovered_runtime_files() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
@@ -314,6 +388,9 @@ fn missing_external_binding_names_its_runtime_container_and_repair() {
         .as_str()
         .unwrap()
         .contains("same logical name"));
+    assert!(findings
+        .iter()
+        .all(|finding| finding["code"] != "config.too-many-problems"));
     fs::write(root.join("runtime.yaml"), runtime).unwrap();
     assert_eq!(check(&root, &[]).0, 0);
 }

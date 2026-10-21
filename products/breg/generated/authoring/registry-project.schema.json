@@ -3191,7 +3191,7 @@
           "$ref": "#/$defs/ManifestProjectionTextSource"
         },
         "endpointDescription": {
-          "$ref": "#/$defs/DisplayText"
+          "type": "string"
         },
         "endpointUrl": {
           "$ref": "#/$defs/Url"

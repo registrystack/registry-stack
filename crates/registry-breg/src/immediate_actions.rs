@@ -712,11 +712,12 @@ fn compile_handler(
             || refusal.label.trim().is_empty()
             || refusal.label.len() > 256
             || refusal.label.chars().any(char::is_control)
+            || registry_platform_yaml::DisplayText::new(refusal.label.as_str()).is_err()
             || refusals
                 .insert(refusal.code.clone(), refusal.label.clone())
                 .is_some()
         {
-            errors.push(Diagnostic::error("breg.action.handler-refusal-invalid", format!("{path}.refusals"), "refusals require unique bounded codes and non-empty static labels of at most 256 bytes without control characters"));
+            errors.push(Diagnostic::error("breg.action.handler-refusal-invalid", format!("{path}.refusals"), "refusals require unique bounded codes and non-empty display labels of at most 256 bytes without control or unsafe display characters"));
         }
     }
     if refusals.len() > crate::rhai_planner::MAXIMUM_MAP_ENTRIES {

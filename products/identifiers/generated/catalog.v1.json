@@ -48,7 +48,7 @@
       "description": "JSON-LD namespace for Registry Manifest terms.",
       "source": {
         "path": "crates/registry-manifest-core/src/lib.rs",
-        "sha256": "6fbba7d42280fc661cf5f061728db6a34ff272e7eaaeb3f9eb8c2072db18c613"
+        "sha256": "58759dbaca49d8646761158fc71aab4afada27423aebc0c3d9568a1a6f2f05c1"
       }
     },
     {
@@ -3925,7 +3925,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "b67284d36e250dbcf6c01e897f806f1e4d7ac556c4a86a6514b979d264d8ccd3",
+        "sha256": "f747fe4a357c3ac62d378349cea0f9642b0fa6fa69e81bbd812b6f8f015d9b63",
         "mediaType": "application/schema+json"
       }
     },
@@ -4173,7 +4173,7 @@
       "description": "Registry Coordinator runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/runtime.rs",
-        "sha256": "4e05c080eeaccf0a54da1057222550c97c7a2c390d424e16d4a55ead331c6ebe"
+        "sha256": "5095df87476c778de7733f7ecc6779de0aee4e3e8c86b9f565763810aa2dc8ce"
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
@@ -4569,11 +4569,11 @@
       "description": "Registry Manifest metadata manifest and profile descriptor JSON Schema.",
       "source": {
         "path": "crates/registry-manifest-cli/src/schema.rs",
-        "sha256": "4bc86a6c6102725774ac58552b35653c6a92949654e7596675174ab8026a9324"
+        "sha256": "19d037ee50b143b70576b4ce50808883e0ccb831373f72d42beed770a67d8eae"
       },
       "artifact": {
         "path": "products/manifest/schemas/metadata.schema.json",
-        "sha256": "b2d2f89dc056e591a4632324028a9de3a87d124ef932b059064ba527af165830",
+        "sha256": "63a205c50ddd5ab0565fd56e02213f8061613f057d8759ad0af3c8adc4d38d11",
         "mediaType": "application/schema+json"
       }
     },
@@ -4587,7 +4587,7 @@
       "description": "Registry Manifest metadata manifest and profile descriptor JSON Schema.",
       "source": {
         "path": "crates/registry-manifest-cli/src/schema.rs",
-        "sha256": "4bc86a6c6102725774ac58552b35653c6a92949654e7596675174ab8026a9324"
+        "sha256": "19d037ee50b143b70576b4ce50808883e0ccb831373f72d42beed770a67d8eae"
       },
       "artifact": {
         "path": "products/manifest/schemas/profile.schema.json",

@@ -949,7 +949,7 @@ pub fn check_metadata_file(path: &Path) -> MetadataCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_manifest_core::ValidationError;
+    use registry_manifest_core::{compile_manifest, render_base_dcat, ValidationError};
 
     const MINIMAL: &str = "schema_version: registry-manifest/v1\ncatalog:\n  id: demo\n  \
                            base_url: https://metadata.example.test\n  title: Demo\n  \
@@ -982,6 +982,61 @@ mod tests {
             .unwrap_or_else(|diagnostics| panic!("refused: {diagnostics:#?}"));
         assert_eq!(read.manifest.catalog.id, "demo");
         assert!(manifest_digest(&read).is_ok());
+    }
+
+    #[test]
+    fn endpoint_description_keeps_url_semantics_while_display_fields_stay_strict() {
+        let endpoint_description = "https://api.example.test/openapi/\u{202e}definition.json";
+        let text = format!(
+            "{MINIMAL}data_services:\n  - id: registry-api\n    title: Registry API\n    endpoint_description: {endpoint_description}\n    serves_datasets: [registry]\ndatasets:\n  - id: registry\n    title: Registry\n"
+        );
+        let read = read_metadata("metadata.yaml", text.as_bytes())
+            .unwrap_or_else(|diagnostics| panic!("refused: {diagnostics:#?}"));
+        assert_eq!(
+            read.manifest.data_services[0]
+                .endpoint_description
+                .as_deref(),
+            Some(endpoint_description)
+        );
+        let compiled = compile_manifest(&read.manifest).expect("the accepted manifest compiles");
+        let dcat = render_base_dcat(&compiled);
+        assert_eq!(
+            dcat["dcat:service"][0]["dcat:endpointDescription"],
+            endpoint_description
+        );
+
+        let unsafe_url = "urn:SECRET-endpoint-definition";
+        let invalid = format!(
+            "{MINIMAL}data_services:\n  - id: registry-api\n    title: Registry API\n    endpoint_description: {unsafe_url}\n    serves_datasets: [registry]\ndatasets:\n  - id: registry\n    title: Registry\n"
+        );
+        let diagnostics = refused(&invalid);
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "manifest.metadata.invalid-url")
+            .expect("the URL validator refuses a non-HTTP endpoint description");
+        assert_eq!(diagnostic.path, "/data_services/0/endpoint_description");
+        let report = Report::new(diagnostics);
+        assert!(!report.to_json_value().to_string().contains(unsafe_url));
+        assert!(!report.render_human().contains(unsafe_url));
+
+        for (member, value) in [
+            ("title", "Registry API\u{202e}"),
+            ("description", "Registry description\u{202e}"),
+        ] {
+            let display = if member == "title" {
+                format!("    title: {value}\n")
+            } else {
+                format!("    title: Registry API\n    description: {value}\n")
+            };
+            let text = format!(
+                "{MINIMAL}data_services:\n  - id: registry-api\n{display}    serves_datasets: [registry]\ndatasets:\n  - id: registry\n    title: Registry\n"
+            );
+            let diagnostics = refused(&text);
+            assert!(diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "config.invalid-value"
+                    && diagnostic.path == format!("/data_services/0/{member}")
+            }));
+        }
     }
 
     #[test]

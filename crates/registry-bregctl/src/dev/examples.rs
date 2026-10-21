@@ -8,9 +8,9 @@ use clap::{Args, Subcommand};
 use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE};
 use registry_breg_client::*;
 use registry_platform_yaml::{
-    display_text, local_id_collision_diagnostics, ApiVersion, AuthoredId, Diagnostic, Document,
-    EnvelopeRule, Expect, FormatSpec, Identified, LocalId, Reader, RemovedKey, Report, Severity,
-    UniqueIdList,
+    display_text, escape_pointer_segment, local_id_collision_diagnostics, ApiVersion, AuthoredId,
+    Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Identified, LocalId, Reader,
+    RemovedKey, Report, Severity, UniqueIdList,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
@@ -482,6 +482,39 @@ fn catalogue_problems(catalogue: &Catalogue, document: &Document) -> Vec<Diagnos
             document,
             "breg.examples.step-id-collision",
             &step_ids,
+        ));
+        let mut capture_pointers = Vec::new();
+        for (step_index, step) in scenario.steps.iter().enumerate() {
+            let step_pointer = format!("/scenarios/{index}/steps/{step_index}");
+            if matches!(
+                step.operation,
+                Operation::Create | Operation::Start | Operation::Invoke
+            ) && step.capture_results.is_none()
+            {
+                if let Some(alias) = &step.capture {
+                    capture_pointers.push((alias.as_str(), format!("{step_pointer}/capture")));
+                }
+            }
+            if step.operation == Operation::Invoke {
+                for (result, alias) in step.capture_results.iter().flatten() {
+                    capture_pointers.push((
+                        alias.as_str(),
+                        format!(
+                            "{step_pointer}/captureResults/{}",
+                            escape_pointer_segment(result)
+                        ),
+                    ));
+                }
+            }
+        }
+        let capture_ids = capture_pointers
+            .iter()
+            .map(|(id, pointer)| AuthoredId::at_value(id, pointer))
+            .collect::<Vec<_>>();
+        problems.extend(local_id_collision_diagnostics(
+            document,
+            "breg.examples.capture-id-collision",
+            &capture_ids,
         ));
     }
     let mut refuse = |pointer: &str, code: &str, message: &str, action: &str| {
@@ -2012,6 +2045,28 @@ mod tests {
         }
     }
 
+    fn assert_catalogue_accepted(document: &Value) {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("examples")).unwrap();
+        fs::write(
+            temp.path().join(CATALOGUE_FILE),
+            serde_json::to_vec_pretty(document).unwrap(),
+        )
+        .unwrap();
+        catalogue(&temp.path().canonicalize().unwrap())
+            .unwrap_or_else(|error| panic!("the catalogue should be accepted: {error:#}"));
+    }
+
+    fn serialized_value_position(document: &Value, value: &str) -> (usize, usize) {
+        let written = serde_json::to_string_pretty(document).unwrap();
+        let quoted = format!("\"{value}\"");
+        written
+            .lines()
+            .enumerate()
+            .find_map(|(line, written)| written.find(&quoted).map(|column| (line + 1, column + 1)))
+            .unwrap_or_else(|| panic!("missing {value:?} in {written}"))
+    }
+
     fn located(report: &Report) -> Vec<(&str, &str, Option<usize>)> {
         report
             .diagnostics()
@@ -2217,6 +2272,81 @@ mod tests {
         assert_eq!(diagnostic.related[0].path, "/scenarios/0/steps/0/id");
         assert!(diagnostic.source.as_ref().unwrap().line.is_some());
         assert!(diagnostic.related[0].line.is_some());
+    }
+
+    #[test]
+    fn catalogue_capture_aliases_share_one_positioned_scenario_namespace() {
+        let create = json!({
+            "id":"create","operation":"create","recordType":"entry","client":"writer",
+            "accessProfile":"writer","input":"entry","capture":"case-file"
+        });
+        let invoke = json!({
+            "id":"invoke","operation":"invoke","client":"writer","accessProfile":"writer",
+            "input":"action","action":"register-entry",
+            "captureResults":{"entry":"case_file"}
+        });
+        let singular_invoke = json!({
+            "id":"invoke","operation":"invoke","recordType":"entry","client":"writer",
+            "accessProfile":"writer","input":"action","action":"register-entry",
+            "result":"entry","capture":"case_file"
+        });
+        let start = json!({
+            "id":"start","operation":"start","client":"writer","accessProfile":"writer",
+            "input":"proposal","action":"correct-entry","capture":"case_file"
+        });
+        for (second, primary) in [
+            (singular_invoke, "/scenarios/0/steps/1/capture"),
+            (invoke, "/scenarios/0/steps/1/captureResults/entry"),
+            (start, "/scenarios/0/steps/1/capture"),
+        ] {
+            let catalogue = json!({
+                "apiVersion":API_VERSION,"kind":KIND,"scenarios":[{
+                    "id":"capture-aliases","description":"Exercise capture aliases",
+                    "input":"examples/input.json","steps":[create.clone(), second]
+                }]
+            });
+            let primary_position = serialized_value_position(&catalogue, "case_file");
+            let related_position = serialized_value_position(&catalogue, "case-file");
+            let report = catalogue_refusal(&catalogue);
+            let diagnostic = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == "breg.examples.capture-id-collision")
+                .unwrap_or_else(|| panic!("missing capture collision: {}", report.render_human()));
+            assert_eq!(diagnostic.path, primary);
+            assert_eq!(diagnostic.related[0].path, "/scenarios/0/steps/0/capture");
+            let source = diagnostic.source.as_ref().expect("primary source");
+            assert_eq!(
+                (source.line, source.column),
+                (Some(primary_position.0), Some(primary_position.1))
+            );
+            assert_eq!(
+                (diagnostic.related[0].line, diagnostic.related[0].column),
+                (Some(related_position.0), Some(related_position.1))
+            );
+        }
+
+        let mut second_create = create.clone();
+        second_create["capture"] = json!("case_file");
+        assert_catalogue_accepted(&json!({
+            "apiVersion":API_VERSION,"kind":KIND,"scenarios":[
+                {"id":"first","description":"First namespace","input":"examples/input.json",
+                 "steps":[create.clone()]},
+                {"id":"second","description":"Second namespace","input":"examples/input.json",
+                 "steps":[second_create]}
+            ]
+        }));
+
+        let reference = json!({
+            "id":"case_file","operation":"get","recordType":"entry","client":"reader",
+            "accessProfile":"reader","record":"case_file"
+        });
+        assert_catalogue_accepted(&json!({
+            "apiVersion":API_VERSION,"kind":KIND,"scenarios":[{
+                "id":"references","description":"References stay outside the definition namespace",
+                "input":"examples/input.json","steps":[create, reference]
+            }]
+        }));
     }
 
     #[test]

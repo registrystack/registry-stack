@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Root-level authored companions. Owned state and secrets are never traversed.
 use crate::{authoring, definition::Definition, runtime, scenarios};
+use registry_platform_config::RuntimeFileCheck;
 use registry_platform_yaml::{
     ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Reader, Report, Severity,
     Source,
@@ -45,71 +46,83 @@ pub(crate) fn check_runtime(
     definition: Option<&Definition>,
     environment: bool,
 ) -> (Report, u8) {
-    let mut checked = runtime::RuntimeConfig::check_file(path, environment);
-    if let (Some(loaded), Some(definition)) = (&checked.loaded, definition) {
-        if !checked.defers_within("/connections") {
-            if let Err(error) = loaded.config.validate_workflow(&definition.workflow) {
-                let field = error.field.as_deref().unwrap_or("");
-                let pointer = field
-                    .strip_prefix("steps.")
-                    .and_then(|field| field.strip_suffix(".call"))
-                    .and_then(|step| definition.workflow.steps.get(step))
-                    .and_then(|step| match step {
-                        crate::definition::Step::Call { call, .. } => Some(format!(
-                            "/connections/{}/authorization/taskAuthority",
-                            call.connection
-                        )),
-                        _ => None,
-                    })
-                    .unwrap_or_else(|| {
-                        if field.starts_with('/') {
-                            field.to_owned()
-                        } else {
-                            format!("/{}", field.replace('.', "/"))
-                        }
-                    });
-                let mut diagnostic = checked.error_at(
-                    runtime::KIND,
-                    "coordinator.runtime.workflow-binding",
-                    &pointer,
-                    error.message,
-                    error.suggested_action.unwrap_or_else(|| {
-                        "Use the same logical connection name in the project and runtime.".into()
-                    }),
-                );
-                // A missing member has no span. Anchor it to its nearest
-                // existing runtime container while retaining the missing path.
-                if diagnostic
-                    .source
-                    .as_ref()
-                    .is_some_and(|source| source.line.is_none())
-                {
-                    let mut container = pointer.as_str();
-                    while let Some((parent, _)) = container.rsplit_once('/') {
-                        let source = checked
-                            .error_at(
-                                runtime::KIND,
-                                "coordinator.runtime.workflow-binding",
-                                parent,
-                                "",
-                                "",
-                            )
-                            .source;
-                        if source.as_ref().is_some_and(|source| source.line.is_some()) {
-                            diagnostic.source = source;
-                            break;
-                        }
-                        container = parent;
-                    }
-                }
-                checked.diagnostics.push(diagnostic);
-            }
-        }
-    }
+    let checked = runtime::RuntimeConfig::check_file_with(path, environment, |checked, config| {
+        workflow_binding_diagnostics(checked, config, definition)
+    });
     (
         Report::new(checked.diagnostics),
         if checked.unavailable { 3 } else { 1 },
     )
+}
+
+fn workflow_binding_diagnostics(
+    checked: &RuntimeFileCheck<runtime::RuntimeConfig>,
+    config: &runtime::RuntimeConfig,
+    definition: Option<&Definition>,
+) -> Vec<Diagnostic> {
+    let Some(definition) = definition else {
+        return Vec::new();
+    };
+    if checked.defers_within("/connections") {
+        return Vec::new();
+    }
+    let Err(error) = config.validate_workflow(&definition.workflow) else {
+        return Vec::new();
+    };
+    let field = error.field.as_deref().unwrap_or("");
+    let pointer = field
+        .strip_prefix("steps.")
+        .and_then(|field| field.strip_suffix(".call"))
+        .and_then(|step| definition.workflow.steps.get(step))
+        .and_then(|step| match step {
+            crate::definition::Step::Call { call, .. } => Some(format!(
+                "/connections/{}/authorization/taskAuthority",
+                call.connection
+            )),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            if field.starts_with('/') {
+                field.to_owned()
+            } else {
+                format!("/{}", field.replace('.', "/"))
+            }
+        });
+    let mut diagnostic = checked.error_at(
+        runtime::KIND,
+        "coordinator.runtime.workflow-binding",
+        &pointer,
+        error.message,
+        error.suggested_action.unwrap_or_else(|| {
+            "Use the same logical connection name in the project and runtime.".into()
+        }),
+    );
+    // A missing member has no span. Anchor it to its nearest existing runtime
+    // container while retaining the missing path.
+    if diagnostic
+        .source
+        .as_ref()
+        .is_some_and(|source| source.line.is_none())
+    {
+        let mut container = pointer.as_str();
+        while let Some((parent, _)) = container.rsplit_once('/') {
+            let source = checked
+                .error_at(
+                    runtime::KIND,
+                    "coordinator.runtime.workflow-binding",
+                    parent,
+                    "",
+                    "",
+                )
+                .source;
+            if source.as_ref().is_some_and(|source| source.line.is_some()) {
+                diagnostic.source = source;
+                break;
+            }
+            container = parent;
+        }
+    }
+    vec![diagnostic]
 }
 
 /// `project` is the loaded definition with the workflow document its

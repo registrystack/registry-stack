@@ -14,9 +14,10 @@ use registry_breg::compiler::{
     module_digest_with_assets, CompileProfile,
 };
 use registry_breg::contract::{
-    parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml, Classification,
-    ComparisonOperator, ConstraintSource, FieldTypeSource, ModuleAssetSource, Operation,
-    PackageIdentitySource, ReferenceDelete, RegistryModule, UniqueWhenPredicate,
+    parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml, ActionSource,
+    Classification, ComparisonOperator, ConstraintSource, DerivedFieldSource, DerivedSource,
+    DisplaySource, FieldTypeSource, ModuleAssetSource, Operation, PackageIdentitySource,
+    ReferenceDelete, RegistryModule, ReviewAuthoritySource, UniqueWhenPredicate,
     MODULE_API_VERSION, MODULE_KIND,
 };
 use registry_breg::diagnostics::{CompileFailure, DiagnosticSeverity};
@@ -140,6 +141,204 @@ fn manifest_projection_text_is_one_string_or_a_language_mapping() {
             .collect::<Vec<_>>();
         assert_eq!(refused, vec![(code, path.as_str())], "{failure:?}");
     }
+}
+
+#[test]
+fn manifest_endpoint_description_is_an_http_url() {
+    let project = |written: &str| {
+        let mut value: Value =
+            serde_json::from_slice(MULTI_DATASET_PROJECT).expect("fixture is JSON");
+        value["manifestProjection"]["dataServices"][0]["endpointDescription"] = json!(written);
+        parse_project_yaml(&serde_json::to_vec(&value).expect("fixture serializes"))
+    };
+    for accepted in [
+        "https://registry.example.test/openapi.json",
+        "https://registry.example.test/openapi\u{202e}.json",
+    ] {
+        let project = project(accepted).expect("the endpoint description is read as source text");
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("an endpoint description URL follows Manifest URL rules");
+    }
+    let refused = "API description";
+    let project = project(refused).expect("the endpoint description is read as source text");
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("Manifest compilation refuses a non-URL endpoint description");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.path == "project.manifestProjection.data_services[0].endpoint_description"
+        })
+        .unwrap_or_else(|| panic!("endpoint description refusal is located: {failure:?}"));
+    assert_eq!(diagnostic.code, "breg.manifest-projection.invalid");
+    assert!(!diagnostic.message.contains(refused));
+}
+
+#[test]
+fn directly_constructed_display_text_is_validated_across_source_shapes() {
+    let unsafe_text = "reordered\u{202e}".to_owned();
+    let invalid_label = || DisplaySource {
+        label: Some(unsafe_text.clone()),
+        ..DisplaySource::default()
+    };
+    let invalid_description = || DisplaySource {
+        description: Some(unsafe_text.clone()),
+        ..DisplaySource::default()
+    };
+    let mut project = multi_dataset_project();
+    project.project.display = invalid_label();
+    project.datasets[0].display = invalid_description();
+    project.review_authorities.push(ReviewAuthoritySource {
+        id: "review-main".to_owned(),
+        protocol: "id.registrystack.org/protocols/review/v1".to_owned(),
+        display: invalid_label(),
+    });
+    project.entities[0].display = invalid_description();
+    project.entities[0].fields[0].display = invalid_label();
+    project.entities[0].derived.push(DerivedSource {
+        id: "summary".to_owned(),
+        sql: "sql/summary.sql".to_owned(),
+        key: "id".to_owned(),
+        execution: Default::default(),
+        fields: vec![DerivedFieldSource {
+            id: "score".to_owned(),
+            api_name: None,
+            field_type: FieldTypeSource::Int64,
+            classification: Classification::Internal,
+            display: invalid_description(),
+        }],
+    });
+    let mut action: ActionSource = serde_json::from_value(json!({
+        "id": "rename-person",
+        "execution": {"mode": "immediate"},
+        "inputs": [{
+            "id": "name",
+            "type": "string",
+            "maximumLength": 100,
+            "classification": "restricted"
+        }],
+        "plan": {"type": "fixed", "effects": [{
+            "id": "person",
+            "target": {"recordType": "person"},
+            "operation": "create",
+            "set": {"name": {"fromInput": "name"}}
+        }]}
+    }))
+    .expect("a fixed action parses before direct display mutation");
+    action.display = invalid_label();
+    action.inputs[0].display = invalid_description();
+    project.actions.push(action);
+
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("directly constructed unsafe display text is refused");
+    let mut paths = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "breg.display-text.invalid")
+        .map(|diagnostic| diagnostic.path.as_str())
+        .collect::<Vec<_>>();
+    paths.sort_unstable();
+    assert_eq!(
+        paths,
+        [
+            "actions[id=rename-person].display.label",
+            "actions[id=rename-person].inputs[id=name].display.description",
+            "datasets[id=people].display.description",
+            "project.project.display.label",
+            "recordTypes[id=person].derived[id=summary].fields[id=score].display.description",
+            "recordTypes[id=person].display.description",
+            "recordTypes[id=person].fields[id=name].display.label",
+            "reviewAuthorities[id=review-main].display.label",
+        ]
+    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "breg.display-text.invalid")
+        .all(|diagnostic| !diagnostic.message.contains(&unsafe_text)));
+}
+
+#[test]
+fn directly_constructed_multilingual_display_and_manifest_text_is_preserved() {
+    const DISPLAY: &str = "\u{200f}سجل السكان";
+    const ENDPOINT_DESCRIPTION: &str =
+        "https://registry.example.test/service-description\u{202e}.json";
+    let mut project = multi_dataset_project();
+    project.project.display.label = Some(DISPLAY.to_owned());
+    project.datasets[0].display.description = Some(DISPLAY.to_owned());
+    project.entities[0].display.description = Some(DISPLAY.to_owned());
+    project.entities[0].fields[0].display.label = Some(DISPLAY.to_owned());
+    let projection = project
+        .manifest_projection
+        .as_mut()
+        .expect("fixture has a Manifest projection");
+    projection.catalog.publisher.name = DISPLAY.to_owned();
+    projection.datasets[0].owner = Some(DISPLAY.to_owned());
+    projection.data_services[0].endpoint_description = Some(ENDPOINT_DESCRIPTION.to_owned());
+
+    let compiled = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("multilingual directly constructed display text compiles");
+    assert_eq!(compiled.display().label.as_deref(), Some(DISPLAY));
+    assert_eq!(
+        compiled.entities()["person"].display.description.as_deref(),
+        Some(DISPLAY)
+    );
+    assert_eq!(
+        compiled.entities()["person"].fields["name"]
+            .display
+            .label
+            .as_deref(),
+        Some(DISPLAY)
+    );
+    let projection = compiled
+        .manifest_projection()
+        .expect("compiled projection exists");
+    assert_eq!(projection.primary_authority.name, DISPLAY);
+    assert_eq!(
+        projection.datasets["people"].source.owner.as_deref(),
+        Some(DISPLAY)
+    );
+    assert_eq!(
+        projection.data_services["registry-api"]
+            .source
+            .endpoint_description
+            .as_deref(),
+        Some(ENDPOINT_DESCRIPTION)
+    );
+}
+
+#[test]
+fn directly_constructed_manifest_display_text_is_refused_at_each_string_field() {
+    let unsafe_text = "reordered\u{202e}".to_owned();
+    let mut project = multi_dataset_project();
+    let projection = project
+        .manifest_projection
+        .as_mut()
+        .expect("fixture has a Manifest projection");
+    projection.catalog.publisher.name = unsafe_text.clone();
+    projection.datasets[0].owner = Some(unsafe_text.clone());
+
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("directly constructed unsafe Manifest display text is refused");
+    let mut paths = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "breg.display-text.invalid")
+        .map(|diagnostic| diagnostic.path.as_str())
+        .collect::<Vec<_>>();
+    paths.sort_unstable();
+    assert_eq!(
+        paths,
+        [
+            "project.manifestProjection.catalog.publisher.name",
+            "project.manifestProjection.datasets[0].owner",
+        ]
+    );
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "breg.display-text.invalid")
+        .all(|diagnostic| !diagnostic.message.contains(&unsafe_text)));
 }
 
 #[test]
@@ -1668,6 +1867,75 @@ fn module_entity_access_profiles_remain_supported_for_module_composition() {
     assert!(compiled.entities()["case-file"]
         .access_profiles
         .contains_key("extension-reader"));
+}
+
+#[test]
+fn directly_constructed_module_extension_display_text_keeps_authored_paths() {
+    let project = parse_project_json(
+        br#"{"datasets":[{"id":"records"}],
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"extension-display","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "modules":[{"id":"core","version":"1"}],
+          "recordTypes":[{
+            "id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable",
+            "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]
+          }]
+        }"#,
+    )
+    .expect("project parses");
+    let mut module = parse_module_json(
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"core","version":"1",
+          "recordTypes":[{
+            "id":"module-entry","primaryDataset":"records","route":"module-entries","mutationMode":"mutable",
+            "fields":[{"id":"module-code","type":"string","maximumLength":32,"classification":"internal"}]
+          }],
+          "extendRecordTypes":[{
+            "recordType":"entry",
+            "fields":[{"id":"first-note","type":"text","maximumLength":128,"classification":"internal"}]
+          },{
+            "recordType":"entry",
+            "fields":[{"id":"note","type":"text","maximumLength":128,"classification":"internal"}],
+            "derived":[{"id":"summary","sql":"sql/summary.sql","key":"id","fields":[{"id":"score","type":"int64","classification":"internal"}]}]
+          }],
+          "actions":[{
+            "id":"create-module-entry",
+            "execution":{"mode":"immediate"},
+            "inputs":[{"id":"module-code","type":"string","maximumLength":32,"classification":"internal"}],
+            "plan":{"type":"fixed","effects":[{"id":"entry","target":{"recordType":"module-entry"},"operation":"create","set":{"module-code":{"fromInput":"module-code"}}}]}
+          }]
+        }"#,
+    )
+    .expect("module parses");
+    module.entities[0].display.label = Some("reordered\u{202e}".to_owned());
+    module.entities[0].fields[0].display.description = Some("reordered\u{202e}".to_owned());
+    module.extend_entities[1].fields[0].display.label = Some("reordered\u{202e}".to_owned());
+    module.extend_entities[1].derived[0].fields[0]
+        .display
+        .description = Some("reordered\u{202e}".to_owned());
+    module.actions[0].display.label = Some("reordered\u{202e}".to_owned());
+    module.actions[0].inputs[0].display.description = Some("reordered\u{202e}".to_owned());
+
+    let failure = compile_project(&project, &[module], CompileProfile::Authoring)
+        .expect_err("unsafe directly constructed extension display text is refused");
+    let mut paths = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "breg.display-text.invalid")
+        .map(|diagnostic| diagnostic.path.as_str())
+        .collect::<Vec<_>>();
+    paths.sort_unstable();
+    assert_eq!(
+        paths,
+        [
+            "modules[id=core].actions[id=create-module-entry].display.label",
+            "modules[id=core].actions[id=create-module-entry].inputs[id=module-code].display.description",
+            "modules[id=core].extendRecordTypes[1].derived[id=summary].fields[id=score].display.description",
+            "modules[id=core].extendRecordTypes[1].fields[id=note].display.label",
+            "modules[id=core].recordTypes[id=module-entry].display.label",
+            "modules[id=core].recordTypes[id=module-entry].fields[id=module-code].display.description",
+        ]
+    );
 }
 
 #[test]
