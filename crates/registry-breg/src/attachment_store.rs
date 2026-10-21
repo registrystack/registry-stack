@@ -957,6 +957,46 @@ pub mod test_support {
     ) -> Result<(), MutationError> {
         super::verify_backend_binding(client, backend, policy).await
     }
+    /// Load the bytes of one verdict row under `lease_token`, as a leased
+    /// verification job does: `true` when the row still waits for a
+    /// verdict, `false` when it is settled.
+    pub async fn load_leased_content(
+        client: &tokio_postgres::Transaction<'_>,
+        verification_id: uuid::Uuid,
+        lease_token: uuid::Uuid,
+    ) -> Result<bool, MutationError> {
+        let row = client
+            .query_one(
+                "SELECT v.sha256, v.content_type, b.byte_size, b.backend_id
+                   FROM registry_internal.registry_attachment_verification v
+                   JOIN registry_internal.registry_attachment_blobs b ON b.sha256=v.sha256
+                  WHERE v.verification_id=$1",
+                &[&verification_id],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        let byte_size: i64 = row.get(2);
+        let target = super::VerificationTarget {
+            verification_id,
+            sha256: row.get(0),
+            content_type: row.get(1),
+            byte_size: u64::try_from(byte_size).map_err(|_| MutationError::Unavailable)?,
+            backend_id: row.get(3),
+        };
+        super::load_verification_content(client, &target, lease_token)
+            .await
+            .map(|content| matches!(content, super::VerificationContent::Pending(_)))
+    }
+    /// Record one verdict under `lease_token`, as a finishing verification
+    /// job does.
+    pub async fn record_leased_verdict(
+        client: &tokio_postgres::Transaction<'_>,
+        verification_id: uuid::Uuid,
+        lease_token: uuid::Uuid,
+        approved: bool,
+    ) -> Result<bool, MutationError> {
+        super::record_verification_verdict(client, verification_id, lease_token, approved).await
+    }
 }
 
 pub(crate) async fn persisted_verification_policy(
