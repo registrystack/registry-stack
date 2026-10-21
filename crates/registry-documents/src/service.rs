@@ -955,36 +955,41 @@ impl DocumentService {
         S: Stream<Item = Result<Bytes, E>> + Unpin,
     {
         let reference = self.actor_reference(caller)?;
-        let reservation = self.reservation(caller, upload_id).await?;
         let audit = self
             .begin(
                 UPLOAD_CONTENT_EVENT,
                 json!({
                     "event": UPLOAD_CONTENT_EVENT,
                     "actor": reference,
-                    "versionId": reservation.record.version_id.to_string(),
-                    "length": reservation.record.length,
+                    "uploadId": upload_id.to_string(),
                 }),
             )
             .await?;
-        let result = self
-            .accept_content(caller, &reservation, content_type, content_length, body)
-            .await;
+        let result = async {
+            let reservation = self.reservation(caller, upload_id).await?;
+            let outcome = self
+                .accept_content(caller, &reservation, content_type, content_length, body)
+                .await?;
+            Ok((reservation.record, outcome))
+        }
+        .await;
         let success = match &result {
-            Ok(UploadOutcome::Accepted(_)) => json!({
+            Ok((record, UploadOutcome::Accepted(_))) => json!({
                 "event": UPLOAD_CONTENT_EVENT,
                 "outcome": "finalized",
-                "byteCount": reservation.record.length,
+                "versionId": record.version_id.to_string(),
+                "byteCount": record.length,
             }),
-            Ok(UploadOutcome::Repeated(_)) => json!({
+            Ok((record, UploadOutcome::Repeated(_))) => json!({
                 "event": UPLOAD_CONTENT_EVENT,
                 "outcome": "already-finalized",
+                "versionId": record.version_id.to_string(),
                 "byteCount": 0,
             }),
             Err(_) => Value::Null,
         };
         Self::finish(audit, UPLOAD_CONTENT_EVENT, &result, success).await?;
-        result
+        result.map(|(_, outcome)| outcome)
     }
 
     /// The reservation `caller` made under `upload_id`. An upload another
