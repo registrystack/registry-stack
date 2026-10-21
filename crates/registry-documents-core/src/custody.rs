@@ -167,6 +167,7 @@ impl schemars::JsonSchema for AllowedContentTypes {
 /// The policy a document version was reserved under, frozen at reservation:
 /// its id, its authored version, and the digest of its whole authored body.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PolicyBinding {
     pub id: LocalId,
@@ -245,6 +246,7 @@ pub enum Eligibility {
 /// There is no `verifying` value: a verification attempt in flight changes
 /// nothing a client can act on.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum DocumentStatus {
     /// Reserved, or the reservation lapsed: no content is stored.
