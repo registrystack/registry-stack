@@ -41,6 +41,32 @@ pub const PROJECT_SCHEMA_FILE: &str = "project.schema.json";
 pub const DOCUMENTS_PROJECT_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/documents/project/project.v1alpha1.schema.json";
 
+/// `$id` of the data schema of a `document-version.ready` event.
+pub const DOCUMENT_VERSION_READY_EVENT_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/documents/events/document-version-ready.v1alpha1.schema.json";
+
+/// File name of the data schema of a `document-version.ready` event.
+pub const DOCUMENT_VERSION_READY_EVENT_SCHEMA_FILE: &str = "document-version-ready.schema.json";
+
+/// `$id` of the data schema of a `document-version.rejected` event.
+pub const DOCUMENT_VERSION_REJECTED_EVENT_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/documents/events/document-version-rejected.v1alpha1.schema.json";
+
+/// File name of the data schema of a `document-version.rejected` event.
+pub const DOCUMENT_VERSION_REJECTED_EVENT_SCHEMA_FILE: &str =
+    "document-version-rejected.schema.json";
+
+/// `$id` of the data schema of a `document-grant.changed` event.
+pub const DOCUMENT_GRANT_CHANGED_EVENT_SCHEMA_ID: &str =
+    "https://id.registrystack.org/schemas/documents/events/document-grant-changed.v1alpha1.schema.json";
+
+/// File name of the data schema of a `document-grant.changed` event.
+pub const DOCUMENT_GRANT_CHANGED_EVENT_SCHEMA_FILE: &str = "document-grant-changed.schema.json";
+
+/// URN prefix of the `source` of every event a Document Store emits; the
+/// project id follows it.
+pub const DOCUMENTS_EVENT_SOURCE_PREFIX: &str = "urn:registrystack:documents:";
+
 /// Base of every Document Store problem type URI.
 pub const DOCUMENTS_PROBLEM_TYPE_BASE: &str =
     "https://id.registrystack.org/problems/registry-documents/";
@@ -112,6 +138,38 @@ mod tests {
         assert_eq!(
             DOCUMENTS_PROBLEM_TYPE_BASE,
             "https://id.registrystack.org/problems/registry-documents/"
+        );
+    }
+
+    #[test]
+    fn event_names_are_pinned() {
+        assert_eq!(
+            DOCUMENT_VERSION_READY_EVENT_SCHEMA_ID,
+            "https://id.registrystack.org/schemas/documents/events/document-version-ready.v1alpha1.schema.json"
+        );
+        assert_eq!(
+            DOCUMENT_VERSION_READY_EVENT_SCHEMA_FILE,
+            "document-version-ready.schema.json"
+        );
+        assert_eq!(
+            DOCUMENT_VERSION_REJECTED_EVENT_SCHEMA_ID,
+            "https://id.registrystack.org/schemas/documents/events/document-version-rejected.v1alpha1.schema.json"
+        );
+        assert_eq!(
+            DOCUMENT_VERSION_REJECTED_EVENT_SCHEMA_FILE,
+            "document-version-rejected.schema.json"
+        );
+        assert_eq!(
+            DOCUMENT_GRANT_CHANGED_EVENT_SCHEMA_ID,
+            "https://id.registrystack.org/schemas/documents/events/document-grant-changed.v1alpha1.schema.json"
+        );
+        assert_eq!(
+            DOCUMENT_GRANT_CHANGED_EVENT_SCHEMA_FILE,
+            "document-grant-changed.schema.json"
+        );
+        assert_eq!(
+            DOCUMENTS_EVENT_SOURCE_PREFIX,
+            "urn:registrystack:documents:"
         );
     }
 

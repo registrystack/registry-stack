@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 
+use registry_platform_hooks::{HookDeclaration, HookHandlerSource, HookPhase as SharedHookPhase};
 use registry_platform_yaml::{
     ApiVersion, BoundedU32, BoundedU64, Decoded, Diagnostic, DisplayText, Document, EnvelopeRule,
     Expect, ExternalId, FormatSpec, Identified, Invalid, LocalId, ProjectIdentity, Reader, Report,
@@ -152,7 +153,28 @@ impl DocumentsProject {
                 ));
             }
         }
+        for (index, hook) in self.hooks.iter().enumerate() {
+            let allowed = hook.trigger.fields();
+            for (position, field) in hook.projection.iter().enumerate() {
+                if !allowed.contains(&field.as_str()) {
+                    findings.push(document.diagnostic_at_value(
+                        Severity::Error,
+                        "documents.project.unsupported-hook-projection",
+                        &format!("/hooks/{index}/projection/{position}"),
+                        "this field is not in the trigger's closed projection",
+                        "List only fields the trigger projects: actorKind, documentId, policyId, policyVersion, versionDigest, and versionId, and for document-grant.changed also change and grantId.",
+                    ));
+                }
+            }
+        }
         findings
+    }
+
+    /// The shared declarations of the project's observer hooks, in
+    /// declaration order.
+    #[must_use]
+    pub fn hook_declarations(&self) -> Vec<HookDeclaration> {
+        self.hooks.iter().map(HookPolicy::declaration).collect()
     }
 
     /// The finding for one profile reference, if it names no declared
@@ -414,6 +436,120 @@ pub enum HookTrigger {
     DocumentVersionRejected,
     #[serde(rename = "document-grant.changed")]
     DocumentGrantChanged,
+}
+
+/// The closed fields a version observer may project: which version of which
+/// document, under which policy, and the kind of actor that reserved it.
+/// Content, labels, media types, names, subjects, and anything about the
+/// person a document describes are not representable.
+pub const DOCUMENT_VERSION_EVENT_FIELDS: &[&str] = &[
+    "actorKind",
+    "documentId",
+    "policyId",
+    "policyVersion",
+    "versionDigest",
+    "versionId",
+];
+
+/// The closed fields a grant observer may project: the version fields, the
+/// grant, and whether it was issued or revoked. The actor kind is the kind of
+/// the caller that issued or revoked the grant; the recipient is not
+/// representable.
+pub const DOCUMENT_GRANT_EVENT_FIELDS: &[&str] = &[
+    "actorKind",
+    "change",
+    "documentId",
+    "grantId",
+    "policyId",
+    "policyVersion",
+    "versionDigest",
+    "versionId",
+];
+
+impl HookTrigger {
+    /// Every trigger, in declaration order.
+    pub const ALL: [Self; 3] = [
+        Self::DocumentVersionReady,
+        Self::DocumentVersionRejected,
+        Self::DocumentGrantChanged,
+    ];
+
+    /// The trigger as it is spelled in `documents.yaml`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DocumentVersionReady => "document-version.ready",
+            Self::DocumentVersionRejected => "document-version.rejected",
+            Self::DocumentGrantChanged => "document-grant.changed",
+        }
+    }
+
+    /// The closed fields an observer of this trigger may project, sorted.
+    #[must_use]
+    pub const fn fields(self) -> &'static [&'static str] {
+        match self {
+            Self::DocumentVersionReady | Self::DocumentVersionRejected => {
+                DOCUMENT_VERSION_EVENT_FIELDS
+            }
+            Self::DocumentGrantChanged => DOCUMENT_GRANT_EVENT_FIELDS,
+        }
+    }
+
+    /// `$id` of the data schema every event of this trigger carries as its
+    /// `dataschema`, so a consumer can name the event exactly.
+    #[must_use]
+    pub const fn data_schema_id(self) -> &'static str {
+        match self {
+            Self::DocumentVersionReady => crate::DOCUMENT_VERSION_READY_EVENT_SCHEMA_ID,
+            Self::DocumentVersionRejected => crate::DOCUMENT_VERSION_REJECTED_EVENT_SCHEMA_ID,
+            Self::DocumentGrantChanged => crate::DOCUMENT_GRANT_CHANGED_EVENT_SCHEMA_ID,
+        }
+    }
+
+    /// File name of the published data schema of this trigger.
+    #[must_use]
+    pub const fn data_schema_file(self) -> &'static str {
+        match self {
+            Self::DocumentVersionReady => crate::DOCUMENT_VERSION_READY_EVENT_SCHEMA_FILE,
+            Self::DocumentVersionRejected => crate::DOCUMENT_VERSION_REJECTED_EVENT_SCHEMA_FILE,
+            Self::DocumentGrantChanged => crate::DOCUMENT_GRANT_CHANGED_EVENT_SCHEMA_FILE,
+        }
+    }
+
+    /// The trigger a shared declaration spells, if it is one of these.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|trigger| trigger.as_str() == name)
+    }
+}
+
+impl HookPolicy {
+    /// The shared declaration the hook runtime reads. A Document Store hook
+    /// has no condition and no proposal principal, so the declaration carries
+    /// neither.
+    #[must_use]
+    pub fn declaration(&self) -> HookDeclaration {
+        let HookHandler::Url { destination_id } = &self.handler;
+        HookDeclaration {
+            id: self.id.as_str().to_owned(),
+            phase: match self.phase {
+                HookPhase::After => SharedHookPhase::After,
+            },
+            trigger: self.trigger.as_str().to_owned(),
+            when: None,
+            principal: None,
+            projection: self
+                .projection
+                .iter()
+                .map(|field| field.as_str().to_owned())
+                .collect(),
+            handler: HookHandlerSource::Url {
+                destination_id: destination_id.as_str().to_owned(),
+            },
+        }
+    }
 }
 
 /// Where an observer hook delivers, chosen by its `type` member: a URL
@@ -797,5 +933,127 @@ mod tests {
         assert!(refusal_codes(&text)
             .iter()
             .any(|code| code == "config.duplicate-id"));
+    }
+
+    #[test]
+    fn a_hook_projection_names_only_its_trigger_s_closed_fields() {
+        let text = STARTER.replacen(
+            "projection: [documentId, versionId",
+            "projection: [documentId, label, versionId",
+            1,
+        );
+        assert!(refusals(&text).contains(&(
+            "documents.project.unsupported-hook-projection".to_owned(),
+            "/hooks/0/projection/1".to_owned()
+        )));
+    }
+
+    #[test]
+    fn a_grant_field_is_refused_on_a_version_trigger() {
+        let text = STARTER.replacen(
+            "projection: [documentId, versionId",
+            "projection: [grantId, versionId",
+            1,
+        );
+        assert!(refusals(&text).contains(&(
+            "documents.project.unsupported-hook-projection".to_owned(),
+            "/hooks/0/projection/0".to_owned()
+        )));
+    }
+
+    #[test]
+    fn a_hook_condition_or_principal_is_refused() {
+        for member in ["    when: {field: policyId}\n", "    principal: clerk\n"] {
+            let text = STARTER.replacen(
+                "    trigger: document-version.ready\n",
+                &format!("    trigger: document-version.ready\n{member}"),
+                1,
+            );
+            assert!(
+                refusal_codes(&text)
+                    .iter()
+                    .any(|code| code == "config.unknown-key"),
+                "{member} is refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_local_hook_handler_kind_is_refused() {
+        for handler in [
+            "      type: rhai\n      script: hooks/notify.rhai\n",
+            "      type: wasm\n      module: hooks/notify.wasm\n",
+        ] {
+            let text = STARTER.replacen(
+                "      type: url\n      destinationId: custodian-events\n",
+                handler,
+                1,
+            );
+            assert!(!refusal_codes(&text).is_empty(), "{handler} is refused");
+        }
+    }
+
+    #[test]
+    fn a_before_phase_hook_is_refused() {
+        let text = STARTER.replacen("phase: after", "phase: before", 1);
+        assert!(!refusal_codes(&text).is_empty());
+    }
+
+    #[test]
+    fn each_trigger_names_its_closed_projection_fields() {
+        let version = [
+            "actorKind",
+            "documentId",
+            "policyId",
+            "policyVersion",
+            "versionDigest",
+            "versionId",
+        ];
+        assert_eq!(HookTrigger::DocumentVersionReady.fields(), version);
+        assert_eq!(HookTrigger::DocumentVersionRejected.fields(), version);
+        assert_eq!(
+            HookTrigger::DocumentGrantChanged.fields(),
+            [
+                "actorKind",
+                "change",
+                "documentId",
+                "grantId",
+                "policyId",
+                "policyVersion",
+                "versionDigest",
+                "versionId",
+            ]
+        );
+        for trigger in HookTrigger::ALL {
+            let spelled: HookTrigger = serde_json::from_value(serde_json::json!(trigger.as_str()))
+                .expect("the trigger reads as it is spelled");
+            assert_eq!(spelled, trigger);
+        }
+    }
+
+    #[test]
+    fn a_hook_reads_as_a_url_only_shared_declaration() {
+        let project = DocumentsProject::decode("documents.yaml", STARTER.as_bytes())
+            .expect("the starter project reads")
+            .value;
+        let declarations = project.hook_declarations();
+        assert_eq!(declarations.len(), 3);
+        registry_platform_hooks::validate_hooks(&declarations)
+            .expect("the shared hook rules accept the starter hooks");
+        registry_platform_hooks::HookCapabilities::URL_ONLY
+            .check_declarations(&declarations)
+            .expect("the starter hooks stay inside the url-only capabilities");
+        let ready = &declarations[0];
+        assert_eq!(ready.id, "document-version-ready");
+        assert_eq!(ready.phase, registry_platform_hooks::HookPhase::After);
+        assert_eq!(ready.trigger, "document-version.ready");
+        assert_eq!(ready.when, None);
+        assert_eq!(ready.principal, None);
+        assert_eq!(
+            ready.handler,
+            registry_platform_hooks::HookHandlerSource::Url {
+                destination_id: "custodian-events".to_owned()
+            }
+        );
     }
 }

@@ -459,6 +459,14 @@
       "description": "Registry Document Store runtime configuration JSON Schema."
     },
     {
+      "glob": "products/documents/generated/events/*.schema.json",
+      "sourcePath": "crates/registry-documents/src/schema.rs",
+      "owner": "documents",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Document Store event data JSON Schemas, one per event family."
+    },
+    {
       "glob": "products/discovery/schemas/*.schema.json",
       "owner": "discovery",
       "status": "active",

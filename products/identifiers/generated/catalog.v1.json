@@ -4709,6 +4709,60 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/documents/events/document-grant-changed.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Registry Stack Document Store document-grant.changed event data",
+      "description": "Registry Document Store event data JSON Schemas, one per event family.",
+      "source": {
+        "path": "crates/registry-documents/src/schema.rs",
+        "sha256": "dc89ecb2ce2742b5167a2956ac0a5cf6f2fb22418d998169c5f42dbe872f2d13"
+      },
+      "artifact": {
+        "path": "products/documents/generated/events/document-grant-changed.schema.json",
+        "sha256": "f2db2d463b14022bf76d39edfc4650c8a014ee73fcf03035d5de08afe7e2f7fa",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/documents/events/document-version-ready.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Registry Stack Document Store document-version.ready event data",
+      "description": "Registry Document Store event data JSON Schemas, one per event family.",
+      "source": {
+        "path": "crates/registry-documents/src/schema.rs",
+        "sha256": "dc89ecb2ce2742b5167a2956ac0a5cf6f2fb22418d998169c5f42dbe872f2d13"
+      },
+      "artifact": {
+        "path": "products/documents/generated/events/document-version-ready.schema.json",
+        "sha256": "e080237ece0978b9156e48b96be94304e82a302fc1c8647f3a692df2b4a2a878",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/documents/events/document-version-rejected.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Registry Stack Document Store document-version.rejected event data",
+      "description": "Registry Document Store event data JSON Schemas, one per event family.",
+      "source": {
+        "path": "crates/registry-documents/src/schema.rs",
+        "sha256": "dc89ecb2ce2742b5167a2956ac0a5cf6f2fb22418d998169c5f42dbe872f2d13"
+      },
+      "artifact": {
+        "path": "products/documents/generated/events/document-version-rejected.schema.json",
+        "sha256": "8528879a38fbbd825343de405fc363dc9ce694675e9e9675c2fd3c527deef975",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/documents/project/project.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",
@@ -4718,7 +4772,7 @@
       "description": "Registry Document Store project JSON Schema.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "a6cffa50f4a56171a7d4c2ee42d1f4e654cfe29edff45e3b9248e46250b16b70"
+        "sha256": "dc89ecb2ce2742b5167a2956ac0a5cf6f2fb22418d998169c5f42dbe872f2d13"
       },
       "artifact": {
         "path": "products/documents/generated/project/project.schema.json",
@@ -4736,11 +4790,11 @@
       "description": "Registry Document Store runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "a6cffa50f4a56171a7d4c2ee42d1f4e654cfe29edff45e3b9248e46250b16b70"
+        "sha256": "dc89ecb2ce2742b5167a2956ac0a5cf6f2fb22418d998169c5f42dbe872f2d13"
       },
       "artifact": {
         "path": "products/documents/generated/runtime/runtime.schema.json",
-        "sha256": "799f0d2f00537d627b2ec5cee89e86b44bc90a2d2531e87271e854bbb4ffcad5",
+        "sha256": "92dbff214f4360f20a7f76ac8de3c691bb819eeaf4690c5c8daed17882286994",
         "mediaType": "application/schema+json"
       }
     },

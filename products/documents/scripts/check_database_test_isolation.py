@@ -14,6 +14,7 @@ from pathlib import Path
 DATABASE_SUITES = {
     "registry-documents": {
         "postgres_documents",
+        "postgres_hooks",
         "postgres_journey",
         "postgres_operator",
         "postgres_s3",

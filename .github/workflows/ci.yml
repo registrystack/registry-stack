@@ -1211,6 +1211,10 @@ jobs:
           DOCUMENTS_TEST_DATABASE_URL: postgresql://documents:documents_test@localhost:${{ job.services.postgres.ports['5432'] }}/documents
           REGISTRY_RENDER_BIN: ${{ github.workspace }}/target/debug/registry-render
         run: cargo test --locked -p registry-documents --features postgres-test --test postgres_journey
+      - name: Verify document events are captured on commit and delivered to observers
+        env:
+          DOCUMENTS_TEST_DATABASE_URL: postgresql://documents:documents_test@localhost:${{ job.services.postgres.ports['5432'] }}/documents
+        run: cargo test --locked -p registry-documents --features postgres-test --test postgres_hooks
 
   coordinator-postgres:
     name: Coordinator PostgreSQL runtime

@@ -5670,7 +5670,9 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-dispatch",
+ "registry-platform-hooks",
  "registry-platform-httpsec",
+ "registry-platform-httputil",
  "registry-platform-objectstore",
  "registry-platform-oidc",
  "registry-platform-yaml",
@@ -5691,6 +5693,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "wiremock",
  "zeroize",
 ]
 
@@ -5722,6 +5725,7 @@ dependencies = [
  "hex",
  "registry-platform-canonical-json",
  "registry-platform-config",
+ "registry-platform-hooks",
  "registry-platform-yaml",
  "schemars",
  "serde",

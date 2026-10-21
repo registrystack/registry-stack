@@ -41,6 +41,7 @@ use crate::erasure::{
     cleanup_once, erasure_status, CleanupPass, ErasureStatus, ErasureStore, ErasureTransport,
     ORPHAN_MARGIN,
 };
+use crate::hooks::{ActivatedHooks, HookActivationError, HookDeliveryService, HookRuntimeIdentity};
 use crate::http::{router, DocumentRoutes};
 use crate::package::{load_package, PackageLoadError};
 use crate::service::{DocumentService, ServiceSettings};
@@ -145,6 +146,7 @@ pub struct Prepared {
     dispatcher: Dispatcher<VerificationStore>,
     transport: Arc<VerificationTransport>,
     cleanup: Cleanup,
+    hook_delivery: HookDeliveryService,
 }
 
 /// What the erasure worker and the cleanup pass run over.
@@ -301,6 +303,29 @@ async fn prepare_with(
             stage: "schema lookup",
             source,
         })?;
+    // Resolve and validate every hook destination, its signing material
+    // included, before the listener binds, and prove every retained
+    // delivery can still use the exact destination binding captured for
+    // it. A deployment may keep extra bindings while old deliveries drain.
+    let hooks = ActivatedHooks::activate(
+        &package.project.hook_declarations(),
+        &config.destinations.hooks,
+        &secrets,
+        HookRuntimeIdentity {
+            project_id: package.project.project.id.as_str().to_owned(),
+            package_digest: package.digest.clone(),
+            database_id: database_id.clone(),
+        },
+        schema.clone(),
+        Duration::from_secs(
+            u64::from(config.retention.hook_payload_retention_days.get()) * 24 * 60 * 60,
+        ),
+    )?;
+    let hook_delivery = hooks.delivery_service(store.clone(), audit.clone());
+    hook_delivery
+        .verify_retained_bindings()
+        .await
+        .map_err(|_| RuntimeError::HookDelivery)?;
     let jobs = job_table(&schema).map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
     let erasure_dispatcher = crate::erasure::dispatcher(ErasureStore::new(
         store.clone(),
@@ -308,12 +333,15 @@ async fn prepare_with(
         audit.clone(),
     ))
     .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
-    let dispatcher = dispatcher(VerificationStore::new(
-        store.clone(),
-        schema,
-        audit.clone(),
-        Graces::of(&package.project),
-    ))
+    let dispatcher = dispatcher(
+        VerificationStore::new(
+            store.clone(),
+            schema,
+            audit.clone(),
+            Graces::of(&package.project),
+        )
+        .with_hooks(hooks.clone()),
+    )
     .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
     let deadline = TransferDeadline::new(&config.transfers);
     let cleanup = Cleanup {
@@ -353,6 +381,7 @@ async fn prepare_with(
             deadline,
             idempotency_days: config.retention.receipt_retention_days.get(),
         },
+        hooks,
     ));
     let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr())
         .await
@@ -366,6 +395,7 @@ async fn prepare_with(
         dispatcher,
         transport,
         cleanup,
+        hook_delivery,
     })
 }
 
@@ -701,6 +731,18 @@ impl Prepared {
         pass
     }
 
+    /// Run one hook delivery pass now: claim the next due delivery, if
+    /// any, attempt it, and record its outcome.
+    #[cfg(feature = "postgres-test")]
+    pub async fn deliver_hooks_once(
+        &self,
+    ) -> Result<
+        registry_platform_hooks::delivery::DeliveryOutcome,
+        registry_platform_hooks::delivery::DeliveryError,
+    > {
+        self.hook_delivery.deliver_once().await
+    }
+
     fn worker(&self) -> DispatchWorker<VerificationStore, VerificationTransport> {
         DispatchWorker::new(
             self.dispatcher.clone(),
@@ -724,6 +766,7 @@ impl Prepared {
         }
         let (stop, stopped) = watch::channel(false);
         let worker = tokio::spawn(self.worker().run(stopped.clone()));
+        let hook_worker = tokio::spawn(self.hook_delivery.worker().run(stopped.clone()));
         let erasure_worker = match self.cleanup.worker_if_active() {
             Some(erasure) => Some(tokio::spawn(erasure.run(stopped.clone()))),
             None => {
@@ -739,7 +782,9 @@ impl Prepared {
             .await
             .map_err(RuntimeError::Listen);
         if stop.send(true).is_err() {
-            tracing::warn!("the content verification worker had already stopped");
+            tracing::warn!(
+                "the content verification and hook delivery workers had already stopped"
+            );
         }
         if let Err(error) = worker.await {
             tracing::error!(error = %error, "the content verification worker failed");
@@ -753,6 +798,9 @@ impl Prepared {
         if let Err(error) = cleanup.await {
             tracing::error!(error = %error, "the cleanup pass failed");
         }
+        if let Err(error) = hook_worker.await {
+            tracing::error!(error = %error, "the hook delivery worker failed");
+        }
         served
     }
 }
@@ -763,6 +811,13 @@ pub enum RuntimeError {
     /// an activation step was refused.
     #[error(transparent)]
     Activation(#[from] ActivationError),
+    /// A project hook or its deployment destination binding was refused.
+    #[error(transparent)]
+    HookActivation(#[from] HookActivationError),
+    /// A retained hook delivery can no longer use the destination binding
+    /// it was captured with, or the delivery tables could not be read.
+    #[error("a retained hook delivery no longer matches its destination binding in destinations.hooks, or the hook delivery tables are unavailable")]
+    HookDelivery,
     /// An operator replay of a content verification job was refused.
     #[error("the content verification replay was refused: {0}")]
     Replay(ReplayRefusal),

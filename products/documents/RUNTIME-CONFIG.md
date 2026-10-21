@@ -61,7 +61,7 @@ arrives.
 | `transfers.minimumDeadlineSeconds` | 1 to 3600, default 60. The deadline of the smallest upload or download. |
 | `transfers.mebibyteAllowanceSeconds` | 1 to 600, default 8. The time added to a transfer's deadline for every started mebibyte of the document. |
 | `cleanup.erasure` | `active` or `paused`. `paused` stops every erasure and the sweep of orphaned objects; a removal request still stops release at once, and lapsed uploads are still expired. |
-| `destinations.hooks` | Hook destinations by id: `url`, `hmacSha256KeyRef`, `attemptTimeoutMilliseconds` (100 to 60000), and `maximumAttempts` (1 to 32). A plaintext URL is refused outside development. |
+| `destinations.hooks` | The shared URL hook destination block, keyed by the destination id `documents.yaml` names: `url`, `hmacSha256KeyRef`, `attemptTimeoutMilliseconds` (100 to 10000, 5000 when omitted), and `maximumAttempts` (1 to 20, 8 when omitted). At most 128 destinations. Startup refuses a project hook whose destination is not bound here. A plaintext URL is refused outside development. |
 | `retention.receiptRetentionDays` | 1 to 365, default 7. How long an `Idempotency-Key` on a reservation or a grant is held; a retry after it answers `idempotency.expired`. |
 | `retention.hookPayloadRetentionDays` | 1 to 30, default 7. |
 
