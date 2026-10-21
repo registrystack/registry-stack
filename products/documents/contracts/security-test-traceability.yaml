@@ -258,10 +258,20 @@ entries:
       - {path: crates/registry-documents-core/src/project.rs, name: a_grant_field_is_refused_on_a_version_trigger}
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_verdict_captures_one_delivery_per_matching_observer_with_the_closed_projection}
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: grant_issue_and_revoke_each_capture_one_event_and_repeats_capture_none}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_hook_hears_nothing_about_a_document_under_a_policy_it_does_not_name}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: compile_refuses_a_hook_scoped_to_no_policy_or_to_one_twice}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: the_compiled_fingerprint_covers_the_policy_scope_but_not_its_order}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_hook_without_policies_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: an_empty_hook_policy_list_is_refused_at_its_member}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_repeated_hook_policy_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_hook_policy_the_project_does_not_declare_is_refused}
   - id: DOCUMENTS-SEC-49
     tests:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_capture_that_cannot_commit_rolls_its_transition_back}
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rolled_back_transition_captures_nothing}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rolled_back_removal_captures_nothing}
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: grant_issue_and_revoke_each_capture_one_event_and_repeats_capture_none}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_removal_captures_one_revoked_event_per_grant_it_revokes_and_a_repeat_none}
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rejection_captures_the_rejected_event_once}
   - id: DOCUMENTS-SEC-50
     tests:
@@ -285,6 +295,7 @@ entries:
   - id: DOCUMENTS-SEC-53
     tests:
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: startup_refuses_a_project_hook_whose_destination_is_not_bound}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_destination_changed_under_a_pending_delivery_refuses_startup_until_it_drains}
       - {path: crates/registry-documents/src/hooks_tests.rs, name: activation_refuses_a_hook_whose_destination_is_not_bound}
       - {path: crates/registry-documents/src/hooks_tests.rs, name: activation_refuses_a_signing_secret_it_cannot_resolve}
       - {path: crates/registry-documents/src/hooks_tests.rs, name: hook_destination_binding_digests_are_pinned}

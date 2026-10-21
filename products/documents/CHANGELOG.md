@@ -108,6 +108,9 @@ The Document Store is held out of releases.
 - Document events for after-commit URL observers: `document-version.ready`,
   `document-version.rejected`, and `document-grant.changed`, each captured
   in the transaction that commits it and projecting only its closed fields.
+  Each hook names the policies whose documents it hears about. Grant events
+  carry `actorKind` and `expiresAt`; version events carry no `actorKind`.
+  The envelope subject carries a revision every recorded change raises.
   Destinations come from `destinations.hooks`; delivery is signed, retried,
   and dead-lettered by the shared hook worker; every observer proposal is
   refused. A removal from custody captures one revoked
