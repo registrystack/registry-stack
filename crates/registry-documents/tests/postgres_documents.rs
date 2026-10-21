@@ -904,6 +904,81 @@ async fn the_database_refuses_a_releasable_version_under_a_stale_or_mismatched_v
 }
 
 #[tokio::test]
+async fn the_database_refuses_a_releasable_version_with_a_null_verdict_column() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, version) = upload(&api, &pdf(300, 36)).await;
+    prepared.verify_due().await;
+    assert_eq!(status(&api.read(APP, &document).await), "ready");
+
+    // Each write runs in its own rolled-back transaction, so every variant is
+    // tried against the same releasable row.
+    let mut accepted = Vec::new();
+    for column in [
+        "verified_binding_digest",
+        "verified_digest",
+        "verified_media_type",
+    ] {
+        let outcome = deployment
+            .admin
+            .batch_execute(&format!(
+                "BEGIN; UPDATE {}.documents_versions SET {column} = NULL \
+                 WHERE version_id = '{version}'; ROLLBACK",
+                deployment.schema
+            ))
+            .await;
+        match outcome {
+            Ok(()) => accepted.push(column),
+            Err(error) => {
+                deployment
+                    .admin
+                    .batch_execute("ROLLBACK")
+                    .await
+                    .expect("rolls back the refused write");
+                let constraint = error
+                    .as_db_error()
+                    .and_then(|error| error.constraint())
+                    .map(str::to_owned);
+                assert_eq!(
+                    constraint.as_deref(),
+                    Some("documents_versions_release_shape"),
+                    "{column}: {error}"
+                );
+            }
+        }
+    }
+    assert!(accepted.is_empty(), "accepted NULL in {accepted:?}");
+    assert_eq!(api.download(APP, &document, &version).await.status, 200);
+}
+
+#[tokio::test]
+async fn the_database_refuses_a_finalized_version_without_a_computed_digest() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    let (_, version) = upload(&api, &pdf(300, 37)).await;
+
+    let error = deployment
+        .admin
+        .batch_execute(&format!(
+            "UPDATE {}.documents_versions SET computed_digest = NULL WHERE version_id = '{version}'",
+            deployment.schema
+        ))
+        .await
+        .expect_err("a finalized version without a computed digest");
+    let constraint = error
+        .as_db_error()
+        .and_then(|error| error.constraint())
+        .map(str::to_owned);
+    assert_eq!(
+        constraint.as_deref(),
+        Some("documents_versions_finalized_shape"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
 async fn identical_content_uploaded_twice_gives_two_documents() {
     let deployment = deployment().await;
     let verifier = FakeVerifier::new("binding-a", APPROVE);
