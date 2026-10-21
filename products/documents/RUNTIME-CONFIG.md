@@ -51,7 +51,7 @@ arrives.
 | `listener.networkExposure` | The shared network exposure declaration for the listener. |
 | `secretProviders` | The declared secret providers, such as `file.root`. A reference to an undeclared provider is refused. |
 | `database.runtimeUrlRef` | Secret reference to the PostgreSQL URL the runtime connects with. |
-| `database.migrationUrlRef` | Secret reference to the PostgreSQL URL migrations will run with. |
+| `database.migrationUrlRef` | Secret reference to the PostgreSQL URL `documentsctl apply` connects with to apply the schema, record the package in the activation ledger, and grant the runtime role. The runtime never uses it. |
 | `database.trustedRootCertificateRef` | Optional secret reference to the CA that signs the database certificate. |
 | `database.testOnlyPlaintext` | Accepted only by builds with the `postgres-test` feature; an operator build refuses it. |
 | `authentication.oidc` | The shared OIDC issuer block (`issuer`, `audience`, `jwksSource`), `allowedClients`, and `scopeClaim` (default `scope`). `allowedClients` must list clients; `unrestricted` is refused. |
@@ -75,9 +75,14 @@ before it opens a connection or binds a socket. It then, in order:
 
 1. reads the package at `package.root`, verifies it, and refuses a digest
    other than `package.expectedDigest` when one is pinned;
-2. connects with the runtime credential and refuses a database that does not
-   carry exactly this release's schema (serving never applies the schema;
-   there is no operator command for it yet);
+2. connects with the runtime credential, reads the activation ledger, and
+   refuses a database with no active package, one recorded for another
+   `identity.databaseId`, and one whose active package is not the verified
+   package; it then refuses a database that does not carry exactly this
+   release's schema, or a runtime role that lost its grants or gained
+   authority over the schema. Serving never applies the schema:
+   `documentsctl apply --runtime-config FILE` does, over the migration
+   credential;
 3. opens the audit journal;
 4. activates content storage and refuses a storage binding other than the
    one pinned at the first upload;
@@ -85,6 +90,11 @@ before it opens a connection or binds a socket. It then, in order:
    finalized version verified or queued under another verifier binding;
 6. binds the listener, serves `GET /health` and the document routes, and
    runs the content verification worker until shutdown.
+
+`documentsctl plan`, `apply`, `status`, and `verification list` and `replay`
+read this same document. They write their audit records to a companion
+journal under the `documentsctl` process name, beside the runtime's file
+journal, so they never contend for the running service's journal.
 
 Every document route verifies a bearer access token against
 `authentication.oidc` before it reads a request body. A token the verifier

@@ -27,7 +27,7 @@ decisions:
     decision: >-
       Startup connects with the runtime credential and refuses a database
       that does not carry exactly this release's schema. Applying the schema
-      is a separate step over the migration credential.
+      is a separate step, documentsctl apply, over the migration credential.
     reasoning: >-
       The runtime credential should not hold the rights to change the schema,
       and a schema change should be an operator's deliberate step rather than
@@ -35,6 +35,7 @@ decisions:
     evidence:
       - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_runtime_whose_database_refuses_the_credential_does_not_start}
       - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_runtime_over_a_database_without_the_schema_does_not_start}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: apply_requires_the_migration_credential}
   - id: DOCUMENTS-DEC-03
     subject: One document version is at most 16 MiB by default, and 64 MiB on S3
     decision: >-
@@ -265,3 +266,39 @@ decisions:
     evidence:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_grant_releases_only_to_a_caller_of_the_actor_kind_it_names}
       - {path: crates/registry-documents-core/src/wire.rs, name: a_grant_request_names_one_version_and_one_subject_of_one_kind}
+  - id: DOCUMENTS-DEC-17
+    subject: Activation follows the Messaging ledger, and serve reads the ledger first
+    decision: >-
+      documentsctl plan, apply, and status run over the shared activation
+      ledger the way messagingctl does: one ledger row per applied package,
+      an apply of the already active package records nothing, a changed
+      package records a successor naming its predecessor, the runtime role is
+      split from the migration role when the credentials differ, and the
+      operator reference is kept as a keyed hash. At startup the ledger is
+      read before the schema is checked, so a database nobody activated is
+      refused as not activated rather than as a schema mismatch.
+    reasoning: >-
+      One activation model across products is one model for operators to
+      learn and one implementation to review. Reading the ledger first gives
+      an operator who has not yet applied the remedy they need, apply,
+      instead of a schema finding that suggests the database is damaged.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: apply_is_idempotent_for_one_package_and_records_a_changed_one}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_fresh_database_is_refused_by_serve_until_the_package_is_applied}
+      - {path: crates/registry-documentsctl/tests/postgres_cli.rs, name: init_package_plan_apply_and_status_activate_a_starter_deployment}
+  - id: DOCUMENTS-DEC-18
+    subject: Dead-letter replay is an operator command over the runtime credential
+    decision: >-
+      documentsctl verification list shows dead-lettered verification jobs
+      and documentsctl verification replay returns one to pending under its
+      next generation. Both use the runtime credential against an activated
+      database and write the replay to the documentsctl companion audit
+      journal. No HTTP route lists or replays a job.
+    reasoning: >-
+      A replay re-queues work the dispatcher already owns, so it needs no
+      authority beyond the runtime's. Keeping it off HTTP leaves no caller
+      but the operator, and naming the current generation makes a replay
+      issued from a stale listing fail rather than race.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_returns_a_dead_lettered_verification_to_pending}
+      - {path: crates/registry-documentsctl/tests/postgres_cli.rs, name: the_dead_letter_verbs_refuse_a_database_that_is_not_activated}

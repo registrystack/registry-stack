@@ -10,7 +10,13 @@ import sys
 from pathlib import Path
 
 DATABASE_SUITES = {
-    "registry-documents": {"postgres_documents", "postgres_s3", "postgres_startup"},
+    "registry-documents": {
+        "postgres_documents",
+        "postgres_operator",
+        "postgres_s3",
+        "postgres_startup",
+    },
+    "registry-documentsctl": {"postgres_cli"},
 }
 
 
