@@ -347,7 +347,9 @@ impl DocumentService {
             .query_one(
                 &format!(
                     "UPDATE documents_grants AS grant_record
-                        SET revoked_at = COALESCE(grant_record.revoked_at, now())
+                        SET revoked_at = COALESCE(grant_record.revoked_at, now()),
+                            revision = grant_record.revision
+                                + CASE WHEN grant_record.revoked_at IS NULL THEN 1 ELSE 0 END
                       WHERE grant_record.grant_id = $1
                   RETURNING {GRANT_COLUMNS}"
                 ),

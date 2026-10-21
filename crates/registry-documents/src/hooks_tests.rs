@@ -8,6 +8,7 @@ use registry_platform_config::SecretProvider;
 const DOCUMENT: &str = "0d6f2a5e-7c1b-4b8e-9f3a-2c4d5e6f7a81";
 const VERSION: &str = "1e7a3b6f-8d2c-4c9f-8a4b-3d5e6f7a8b92";
 const GRANT: &str = "2f8b4c7a-9e3d-4dab-9b5c-4e6f7a8b9ca3";
+const EXPIRES_AT: &str = "2026-10-29T08:30:00.000Z";
 const DIGEST: &str = "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 
 /// Lowercase kebab-case, the spelling of every value a machine matches.
@@ -48,7 +49,7 @@ fn version_event(trigger: HookTrigger) -> DocumentEvent {
         version_digest: DIGEST.to_owned(),
         policy_id: "civil-record".to_owned(),
         policy_version: "2026-10".to_owned(),
-        actor_kind: ActorKind::Service,
+        revision: 3,
         grant: None,
     }
 }
@@ -56,8 +57,16 @@ fn version_event(trigger: HookTrigger) -> DocumentEvent {
 fn grant_event(change: GrantChange) -> DocumentEvent {
     DocumentEvent {
         trigger: HookTrigger::DocumentGrantChanged,
-        actor_kind: ActorKind::Human,
-        grant: Some((GRANT.parse().unwrap(), change)),
+        revision: match change {
+            GrantChange::Issued => 1,
+            GrantChange::Revoked => 2,
+        },
+        grant: Some(GrantFacts {
+            grant_id: GRANT.parse().unwrap(),
+            change,
+            actor_kind: ActorKind::Human,
+            expires_at: EXPIRES_AT.parse().unwrap(),
+        }),
         ..version_event(HookTrigger::DocumentVersionReady)
     }
 }
@@ -153,8 +162,10 @@ fn compile_refuses_an_unknown_trigger_and_a_field_outside_its_trigger() {
     assert!(CompiledHooks::compile(&[unknown]).is_err());
 
     for field in [
-        "grantId",
+        "actorKind",
         "change",
+        "expiresAt",
+        "grantId",
         "label",
         "mediaType",
         "subject",
@@ -178,7 +189,6 @@ fn each_family_projects_exactly_its_closed_fields() {
         assert_eq!(
             projected(&version_event(trigger), &full_projection(trigger)).unwrap(),
             json!({
-                "actorKind": "service",
                 "documentId": DOCUMENT,
                 "policyId": "civil-record",
                 "policyVersion": "2026-10",
@@ -201,6 +211,7 @@ fn each_family_projects_exactly_its_closed_fields() {
                 "actorKind": "human",
                 "change": spelling,
                 "documentId": DOCUMENT,
+                "expiresAt": EXPIRES_AT,
                 "grantId": GRANT,
                 "policyId": "civil-record",
                 "policyVersion": "2026-10",
@@ -236,7 +247,6 @@ fn no_forbidden_field_can_be_projected() {
         "recipient",
         "grantee",
         "grantedBy",
-        "expiresAt",
     ];
     for field in forbidden {
         assert!(!DOCUMENT_GRANT_EVENT_FIELDS.contains(&field), "{field}");
@@ -251,8 +261,9 @@ fn no_forbidden_field_can_be_projected() {
             );
         }
     }
-    // A version event refuses the grant fields it has no value for.
-    for field in ["grantId", "change"] {
+    // A version event refuses the grant fields it has no value for, the
+    // kind of the caller that made the grant included.
+    for field in ["actorKind", "change", "expiresAt", "grantId"] {
         assert_eq!(
             projected(
                 &version_event(HookTrigger::DocumentVersionReady),
@@ -316,7 +327,7 @@ fn event_subjects_name_the_record_and_its_revision() {
         version.record_reference,
         format!("/documents/{DOCUMENT}/versions/{VERSION}")
     );
-    assert_eq!(version.record_revision, 1);
+    assert_eq!(version.record_revision, 3, "the revision the change left");
     let issued = grant_event(GrantChange::Issued).subject().unwrap();
     assert_eq!(issued.record_reference, format!("/document-grants/{GRANT}"));
     assert_eq!(issued.record_revision, 1);

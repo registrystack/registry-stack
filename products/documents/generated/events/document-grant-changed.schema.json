@@ -25,6 +25,11 @@
       "format": "uuid",
       "type": "string"
     },
+    "expiresAt": {
+      "description": "The expiry frozen into the grant at issue. Reaching it emits no event: the grant stops releasing the version at this instant.",
+      "format": "date-time",
+      "type": "string"
+    },
     "grantId": {
       "description": "The document grant that changed.",
       "format": "uuid",

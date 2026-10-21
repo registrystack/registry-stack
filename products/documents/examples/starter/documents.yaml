@@ -117,7 +117,7 @@ hooks:
   - id: document-version-ready
     phase: after
     trigger: document-version.ready
-    projection: [documentId, versionId, versionDigest, policyId, policyVersion, actorKind]
+    projection: [documentId, versionId, versionDigest, policyId, policyVersion]
     handler:
       type: url
       destinationId: owning-system-events
@@ -131,7 +131,7 @@ hooks:
   - id: document-grant-changed
     phase: after
     trigger: document-grant.changed
-    projection: [grantId, change, documentId, versionId, actorKind]
+    projection: [grantId, change, documentId, versionId, actorKind, expiresAt]
     handler:
       type: url
       destinationId: owning-system-events
