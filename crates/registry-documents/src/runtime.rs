@@ -20,6 +20,7 @@ use tracing_subscriber::filter::LevelFilter;
 
 use crate::config::{startup_report, RuntimeConfig, RuntimeConfigError};
 use crate::http::router;
+use crate::package::{load_package, PackageLoadError};
 use crate::store::{PostgresStore, StoreError};
 
 #[must_use]
@@ -102,11 +103,13 @@ pub struct Prepared {
     listener: tokio::net::TcpListener,
 }
 
-/// Load and check the runtime document at `path`, confirm the database
-/// answers over the runtime credential, and bind the listener.
+/// Load and check the runtime document at `path` and the package it names,
+/// confirm the database answers over the runtime credential and carries
+/// exactly this release's schema, and bind the listener.
 pub async fn prepare(path: impl AsRef<Path>) -> Result<Prepared, RuntimeError> {
     let config = load_config(path.as_ref())?;
     let secrets = config.secret_resolver()?;
+    let _package = load_package(&config)?;
     let store = PostgresStore::connect_runtime(&config.database, &secrets).map_err(|source| {
         RuntimeError::Database {
             stage: "runtime database configuration",
@@ -118,6 +121,13 @@ pub async fn prepare(path: impl AsRef<Path>) -> Result<Prepared, RuntimeError> {
         .await
         .map_err(|source| RuntimeError::Database {
             stage: "runtime database connection",
+            source,
+        })?;
+    store
+        .ready()
+        .await
+        .map_err(|source| RuntimeError::Database {
+            stage: "runtime database schema check",
             source,
         })?;
     let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr())
@@ -167,6 +177,9 @@ pub enum RuntimeError {
         #[source]
         source: StoreError,
     },
+    /// The deployed package was refused.
+    #[error("the Document Store package was refused ({}): {}", .0.code(), .0)]
+    Package(#[from] PackageLoadError),
     #[error("the Document Store listener could not bind or serve: {0}")]
     Listen(#[source] std::io::Error),
     #[error("the Document Store shutdown signal handler could not be installed: {0}")]

@@ -5647,16 +5647,24 @@ dependencies = [
 name = "registry-documents"
 version = "0.43.0"
 dependencies = [
+ "async-trait",
  "axum",
+ "bytes",
+ "chrono",
  "clap",
  "deadpool-postgres",
+ "futures",
+ "hex",
  "jsonschema",
  "registry-documents-client",
  "registry-documents-core",
  "registry-platform-audit",
  "registry-platform-buildinfo",
+ "registry-platform-canonical-json",
  "registry-platform-config",
+ "registry-platform-dispatch",
  "registry-platform-httpsec",
+ "registry-platform-objectstore",
  "registry-platform-yaml",
  "reqwest 0.12.28",
  "rustls",
@@ -5664,6 +5672,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_norway",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -5673,6 +5682,8 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
