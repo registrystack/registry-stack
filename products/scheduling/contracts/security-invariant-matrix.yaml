@@ -431,7 +431,8 @@ invariants:
       change it describes.
     enforcementPoint: >-
       A closed policy compiler admitting only after-phase URL handlers for
-      three appointment lifecycle triggers; product-owned projections that
+      three appointment lifecycle triggers, with the url-only hook capability
+      set re-checked when the runtime compiles the declarations; product-owned projections that
       cannot name actor, credential, capacity, duplicate-key, or cancellation
       reason fields; outbox capture in the appointment transaction; an
       attempt audit entry accepted before egress; and a delivery seam that
