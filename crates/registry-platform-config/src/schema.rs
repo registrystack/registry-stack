@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 use crate::blocks::{
     AttachmentVerifierConfig, AuditKeyConfig, DatabaseConfig, JwksSource, ListenerConfig,
     ObjectStorageConfig, OidcClientsConfig, OidcIssuerConfig, PackageConfig, PrivateListenerConfig,
-    SecretProvidersConfig, TaskGrantStatusConfig,
+    SecretProvidersConfig, TaskGrantStatusConfig, UrlHookDestinationConfig,
 };
 
 /// File name the shared-blocks generator writes.
@@ -28,6 +28,7 @@ struct SharedBlocks {
     task_grant_status: TaskGrantStatusConfig,
     object_storage: ObjectStorageConfig,
     attachment_verifier: AttachmentVerifierConfig,
+    url_hook_destination: UrlHookDestinationConfig,
 }
 
 /// The pretty-printed shared-blocks document, newline terminated.

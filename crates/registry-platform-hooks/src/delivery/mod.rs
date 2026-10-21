@@ -49,6 +49,7 @@ mod retention;
 mod seams;
 mod service;
 mod store;
+mod url_binding;
 
 pub use audit::{hook_audit_entry, InvalidDeliveryAudit, MAX_AUDIT_COMPILED_DELIVERY_ID_BYTES};
 pub use connection::{NoLocalHandler, PooledConnection};
@@ -58,6 +59,7 @@ pub use destination::{
 };
 pub use identity::verify_active_package;
 pub use insert::{insert_delivery, DeliveryCapture};
+pub use registry_platform_config::UrlHookDestinationConfig;
 pub use registry_platform_dispatch::postgres::RetentionError;
 pub use retention::prune_terminal_deliveries;
 pub use seams::{
@@ -70,4 +72,8 @@ pub use seams::{
 pub use service::{
     DeliveryConfig, DeliveryFailureReason, DeliveryOutcome, DeliveryService, DeliveryStatus,
     DeliveryStatusKind, DeliveryWorker, RetainedBindingError, MAX_DELIVERY_STATUS_RESULTS,
+};
+pub use url_binding::{
+    activate_url_hook_destination, activate_url_hook_destinations, ActivatedUrlHookDestinations,
+    UrlHookActivationError,
 };

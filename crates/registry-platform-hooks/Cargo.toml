@@ -64,4 +64,5 @@ url = { workspace = true, optional = true }
 uuid.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 wat = "1.259.0"
