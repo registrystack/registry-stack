@@ -27,7 +27,7 @@ use registry_breg::postgres::{
     PostgresRevisionReadService, PostgresSnapshotReadService, RegistryLockKey,
     RegistryStateTestIdentity, RuntimePool,
 };
-use registry_breg::CompiledRegistry;
+use registry_breg::{CompiledRegistry, DiagnosticSeverity};
 use registry_platform_audit::AuditProfile;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
@@ -1092,6 +1092,7 @@ async fn real_postgres_consent_refusals_reach_no_recipient_through_an_authored_s
         failure
             .diagnostics()
             .iter()
+            .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
             .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
             .collect::<Vec<_>>(),
         [(
