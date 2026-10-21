@@ -15,8 +15,8 @@ use chrono::{DateTime, Utc};
 use registry_platform_hooks::{validate_hooks, HookDeclaration, HookHandlerSource, HookPhase};
 use registry_platform_yaml::{
     duplicate_display_text_diagnostics, local_id_collision_diagnostics, ApiVersion,
-    AuthoredDisplayText, AuthoredId, Decoded, Diagnostic, EnvelopeRule, Expect, FormatSpec,
-    Identified, ProjectIdentity, Reader, RemovedKey, Report, RetiredApiVersion,
+    AuthoredDisplayText, AuthoredId, Decoded, Diagnostic, DisplayText, EnvelopeRule, Expect,
+    FormatSpec, Identified, ProjectIdentity, Reader, RemovedKey, Report, RetiredApiVersion,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1853,7 +1853,10 @@ fn check_identifier(id: &str, path: &str, findings: &mut Vec<SchedulingDiagnosti
 }
 
 fn check_label(label: &str, path: &str, findings: &mut Vec<SchedulingDiagnostic>) {
-    if label.trim().is_empty() || label.len() > MAXIMUM_LABEL_BYTES {
+    if label.trim().is_empty()
+        || label.len() > MAXIMUM_LABEL_BYTES
+        || DisplayText::new(label).is_err()
+    {
         findings.push(SchedulingDiagnostic::new(
             path,
             PolicyCheckReason::InvalidLabel,
@@ -2229,6 +2232,29 @@ holdPolicy:
             Vec::<String>::new()
         );
         assert_eq!(refusals(MINIMAL_EXACT_TIME_PROJECT), Vec::<String>::new());
+    }
+
+    #[test]
+    fn programmatic_labels_obey_the_display_text_contract() {
+        let mut policy = minimal_exact_time_policy();
+        policy.services[0].label = "Registry\u{202e} update".to_owned();
+        policy.offerings[0].label = "Counter\u{2066} slot".to_owned();
+        assert_eq!(
+            rendered(&policy.check())
+                .into_iter()
+                .filter(|finding| finding.ends_with("invalid-label"))
+                .collect::<Vec<_>>(),
+            [
+                "/services/0/label: scheduling.project.invalid-label",
+                "/offerings/0/label: scheduling.project.invalid-label",
+            ]
+        );
+
+        policy.services[0].label = "نام\u{200c}خانوادگی".to_owned();
+        policy.offerings[0].label = "العربية\u{200f} English".to_owned();
+        assert!(rendered(&policy.check())
+            .into_iter()
+            .all(|finding| !finding.ends_with("invalid-label")));
     }
 
     #[test]

@@ -482,11 +482,17 @@ pub fn derive_binding_id(
 /// trimming, and control-character rules.
 #[must_use]
 pub fn is_valid_public_text(value: &str) -> bool {
+    is_valid_public_scalar(value) && DisplayText::new(value).is_ok()
+}
+
+/// The historical scalar rules shared by display text, global identifiers,
+/// and endpoint URLs. Global identifiers and URLs keep their own semantics;
+/// the additional DisplayText rule applies only to human-visible text.
+fn is_valid_public_scalar(value: &str) -> bool {
     !value.is_empty()
         && value.chars().count() <= MAX_STRING_CHARACTERS
         && !value.chars().any(char::is_control)
         && value.trim() == value
-        && DisplayText::new(value).is_ok()
 }
 
 fn validate_text(field: &'static str, value: &str) -> Result<(), ProfileError> {
@@ -499,7 +505,7 @@ fn validate_text(field: &'static str, value: &str) -> Result<(), ProfileError> {
 /// Whether a globally scoped identifier satisfies the shared public profile.
 #[must_use]
 pub fn is_valid_identifier(value: &str) -> bool {
-    is_valid_public_text(value)
+    is_valid_public_scalar(value)
         && !value.chars().any(char::is_whitespace)
         && Url::parse(value).is_ok_and(|parsed| !parsed.scheme().is_empty())
 }
@@ -524,7 +530,7 @@ fn validate_endpoint(value: &str) -> Result<(), ProfileError> {
 /// accepts only the three explicit loopback host identities.
 #[must_use]
 pub fn is_valid_endpoint_url(value: &str, allow_loopback_http: bool) -> bool {
-    if !is_valid_public_text(value)
+    if !is_valid_public_scalar(value)
         || value
             .chars()
             .any(|character| character.is_whitespace() || character.is_control())
@@ -701,6 +707,41 @@ mod tests {
         assert!(is_valid_public_text("نام\u{200c}خانوادگی"));
         assert!(is_valid_public_text("العربية\u{200f} English"));
         assert!(is_valid_public_text("soft\u{00ad}hyphen"));
+    }
+
+    #[test]
+    fn display_text_rules_do_not_change_identifier_or_endpoint_grammar() {
+        for character in ['\u{202e}', '\u{fdd0}'] {
+            let service_id = format!("urn:example:service:review{character}value");
+            let endpoint = format!("https://evidence.example.org/review{character}value");
+            assert!(is_valid_identifier(&service_id));
+            assert!(is_valid_endpoint_url(&endpoint, false));
+
+            let service = ServiceDescription::new(
+                service_id,
+                ServiceKind::Evidence,
+                "Example Evidence".into(),
+                "Public signed evidence assertions".into(),
+                endpoint,
+                ServiceRoles::default(),
+                vec!["urn:example:jurisdiction".into()],
+                vec!["https://registrystack.org/evidence/profile/v1".into()],
+                vec!["urn:example:evidence-type".into()],
+                vec![],
+                vec![],
+            )
+            .expect("the historical IRI and URL grammars remain accepted");
+            let document = DiscoveryDescription::new(vec![service]).expect("valid description");
+            let rendered = render_description(&document).expect("render");
+            assert_eq!(parse_description(&rendered).expect("parse"), document);
+        }
+
+        let mut invalid_display = evidence();
+        invalid_display.services[0].title = "Review\u{202e} title".to_owned();
+        assert!(matches!(
+            invalid_display.validate(),
+            Err(ProfileError::PublicField("title"))
+        ));
     }
 
     #[test]
