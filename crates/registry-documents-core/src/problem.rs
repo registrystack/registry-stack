@@ -6,8 +6,14 @@
 //! this product can ever return, and a problem code outside this list is a
 //! defect, not a compatibility event. A code joins the list in the same change
 //! that first returns it, so the list holds only what the runtime answers
-//! today: the request-edge rejections, the upload and release refusals, and
-//! an unavailable service.
+//! today: the request-edge rejections, the authentication and access
+//! refusals, the upload, grant, and release refusals, the idempotency
+//! refusals, and an unavailable service.
+//!
+//! `resource.not-found` is the one answer for a document, upload, or grant
+//! the caller may not see, whether or not it exists, so a refusal never
+//! discloses existence. `request.not-found` stays the answer for a route
+//! that does not exist.
 //!
 //! The `request.*` family carries the request-edge rejections (a route that
 //! does not exist, a method the route refuses, a body too large or not JSON)
@@ -17,17 +23,23 @@
 
 use crate::naming::DOCUMENTS_PROBLEM_TYPE_BASE;
 
+pub const AUTHENTICATION_REFUSED_PROBLEM: &str = "authentication.refused";
+pub const CUSTODY_NOT_PERMITTED_PROBLEM: &str = "custody.not-permitted";
 pub const CUSTODY_QUOTA_EXCEEDED_PROBLEM: &str = "custody.quota-exceeded";
 pub const DOCUMENT_POLICY_UNKNOWN_PROBLEM: &str = "document-policy.unknown";
 pub const DOCUMENT_VERSION_NOT_RELEASABLE_PROBLEM: &str = "document-version.not-releasable";
 pub const DOCUMENT_CONTENT_TYPE_NOT_ALLOWED_PROBLEM: &str = "document.content-type-not-allowed";
 pub const DOCUMENT_TOO_LARGE_PROBLEM: &str = "document.too-large";
+pub const IDEMPOTENCY_EXPIRED_PROBLEM: &str = "idempotency.expired";
+pub const IDEMPOTENCY_KEY_REUSED_PROBLEM: &str = "idempotency.key-reused";
+pub const PROFILE_NOT_AUTHORIZED_PROBLEM: &str = "profile.not-authorized";
 pub const REQUEST_BODY_TOO_LARGE_PROBLEM: &str = "request.body-too-large";
 pub const REQUEST_INVALID_PROBLEM: &str = "request.invalid";
 pub const REQUEST_METHOD_NOT_ALLOWED_PROBLEM: &str = "request.method-not-allowed";
 pub const REQUEST_NOT_FOUND_PROBLEM: &str = "request.not-found";
 pub const REQUEST_UNPROCESSABLE_PROBLEM: &str = "request.unprocessable";
 pub const REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM: &str = "request.unsupported-media-type";
+pub const RESOURCE_NOT_FOUND_PROBLEM: &str = "resource.not-found";
 pub const SERVICE_UNAVAILABLE_PROBLEM: &str = "service.unavailable";
 pub const UPLOAD_CONTENT_TYPE_MISMATCH_PROBLEM: &str = "upload.content-type-mismatch";
 pub const UPLOAD_DIGEST_MISMATCH_PROBLEM: &str = "upload.digest-mismatch";
@@ -38,17 +50,23 @@ pub const UPLOAD_LENGTH_MISMATCH_PROBLEM: &str = "upload.length-mismatch";
 /// Every problem code the Document Store can return, in code-string order.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ProblemCode {
+    AuthenticationRefused,
+    CustodyNotPermitted,
     CustodyQuotaExceeded,
     DocumentPolicyUnknown,
     DocumentVersionNotReleasable,
     DocumentContentTypeNotAllowed,
     DocumentTooLarge,
+    IdempotencyExpired,
+    IdempotencyKeyReused,
+    ProfileNotAuthorized,
     RequestBodyTooLarge,
     RequestInvalid,
     RequestMethodNotAllowed,
     RequestNotFound,
     RequestUnprocessable,
     RequestUnsupportedMediaType,
+    ResourceNotFound,
     ServiceUnavailable,
     UploadContentTypeMismatch,
     UploadDigestMismatch,
@@ -60,17 +78,23 @@ pub enum ProblemCode {
 impl ProblemCode {
     /// The complete closed vocabulary, in code-string order.
     pub const ALL: &'static [Self] = &[
+        Self::AuthenticationRefused,
+        Self::CustodyNotPermitted,
         Self::CustodyQuotaExceeded,
         Self::DocumentPolicyUnknown,
         Self::DocumentVersionNotReleasable,
         Self::DocumentContentTypeNotAllowed,
         Self::DocumentTooLarge,
+        Self::IdempotencyExpired,
+        Self::IdempotencyKeyReused,
+        Self::ProfileNotAuthorized,
         Self::RequestBodyTooLarge,
         Self::RequestInvalid,
         Self::RequestMethodNotAllowed,
         Self::RequestNotFound,
         Self::RequestUnprocessable,
         Self::RequestUnsupportedMediaType,
+        Self::ResourceNotFound,
         Self::ServiceUnavailable,
         Self::UploadContentTypeMismatch,
         Self::UploadDigestMismatch,
@@ -82,17 +106,23 @@ impl ProblemCode {
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
+            Self::AuthenticationRefused => AUTHENTICATION_REFUSED_PROBLEM,
+            Self::CustodyNotPermitted => CUSTODY_NOT_PERMITTED_PROBLEM,
             Self::CustodyQuotaExceeded => CUSTODY_QUOTA_EXCEEDED_PROBLEM,
             Self::DocumentPolicyUnknown => DOCUMENT_POLICY_UNKNOWN_PROBLEM,
             Self::DocumentVersionNotReleasable => DOCUMENT_VERSION_NOT_RELEASABLE_PROBLEM,
             Self::DocumentContentTypeNotAllowed => DOCUMENT_CONTENT_TYPE_NOT_ALLOWED_PROBLEM,
             Self::DocumentTooLarge => DOCUMENT_TOO_LARGE_PROBLEM,
+            Self::IdempotencyExpired => IDEMPOTENCY_EXPIRED_PROBLEM,
+            Self::IdempotencyKeyReused => IDEMPOTENCY_KEY_REUSED_PROBLEM,
+            Self::ProfileNotAuthorized => PROFILE_NOT_AUTHORIZED_PROBLEM,
             Self::RequestBodyTooLarge => REQUEST_BODY_TOO_LARGE_PROBLEM,
             Self::RequestInvalid => REQUEST_INVALID_PROBLEM,
             Self::RequestMethodNotAllowed => REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
             Self::RequestNotFound => REQUEST_NOT_FOUND_PROBLEM,
             Self::RequestUnprocessable => REQUEST_UNPROCESSABLE_PROBLEM,
             Self::RequestUnsupportedMediaType => REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM,
+            Self::ResourceNotFound => RESOURCE_NOT_FOUND_PROBLEM,
             Self::ServiceUnavailable => SERVICE_UNAVAILABLE_PROBLEM,
             Self::UploadContentTypeMismatch => UPLOAD_CONTENT_TYPE_MISMATCH_PROBLEM,
             Self::UploadDigestMismatch => UPLOAD_DIGEST_MISMATCH_PROBLEM,
@@ -114,17 +144,23 @@ impl ProblemCode {
     #[must_use]
     pub const fn http_status(self) -> u16 {
         match self {
+            Self::AuthenticationRefused => 401,
+            Self::CustodyNotPermitted => 403,
             Self::CustodyQuotaExceeded => 422,
             Self::DocumentPolicyUnknown => 422,
             Self::DocumentVersionNotReleasable => 409,
             Self::DocumentContentTypeNotAllowed => 422,
             Self::DocumentTooLarge => 422,
+            Self::IdempotencyExpired => 410,
+            Self::IdempotencyKeyReused => 409,
+            Self::ProfileNotAuthorized => 403,
             Self::RequestBodyTooLarge => 413,
             Self::RequestInvalid => 400,
             Self::RequestMethodNotAllowed => 405,
             Self::RequestNotFound => 404,
             Self::RequestUnprocessable => 422,
             Self::RequestUnsupportedMediaType => 415,
+            Self::ResourceNotFound => 404,
             Self::ServiceUnavailable => 503,
             Self::UploadContentTypeMismatch => 422,
             Self::UploadDigestMismatch => 422,
@@ -138,17 +174,23 @@ impl ProblemCode {
     #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
+            Self::AuthenticationRefused => "Authentication refused",
+            Self::CustodyNotPermitted => "Custody not permitted",
             Self::CustodyQuotaExceeded => "Custody quota exceeded",
             Self::DocumentPolicyUnknown => "Document policy unknown",
             Self::DocumentVersionNotReleasable => "Document version not releasable",
             Self::DocumentContentTypeNotAllowed => "Content type not allowed",
             Self::DocumentTooLarge => "Document too large",
+            Self::IdempotencyExpired => "Idempotency window expired",
+            Self::IdempotencyKeyReused => "Idempotency key reused",
+            Self::ProfileNotAuthorized => "Profile not authorized",
             Self::RequestBodyTooLarge => "Payload too large",
             Self::RequestInvalid => "Request invalid",
             Self::RequestMethodNotAllowed => "Method not allowed",
             Self::RequestNotFound => "Not found",
             Self::RequestUnprocessable => "Request unprocessable",
             Self::RequestUnsupportedMediaType => "Unsupported media type",
+            Self::ResourceNotFound => "Not found",
             Self::ServiceUnavailable => "Document Store unavailable",
             Self::UploadContentTypeMismatch => "Content type mismatch",
             Self::UploadDigestMismatch => "Digest mismatch",
@@ -162,17 +204,29 @@ impl ProblemCode {
     #[must_use]
     pub const fn detail(self) -> &'static str {
         match self {
+            Self::AuthenticationRefused => {
+                "The bearer credential is missing, invalid, or expired. Sign in again."
+            }
+            Self::CustodyNotPermitted => "The caller's access profile may not place a document in this custody, or the request names an issuing institution other than the profile's.",
             Self::CustodyQuotaExceeded => "The upload would exceed the bytes this custodian may hold under the policy.",
             Self::DocumentPolicyUnknown => "The request names a document policy this deployment does not hold.",
             Self::DocumentVersionNotReleasable => "The document version is not ready for release. Read its status and try again once it is ready.",
             Self::DocumentContentTypeNotAllowed => "The declared media type is not one the document policy allows.",
             Self::DocumentTooLarge => "The declared length exceeds the document policy maximum.",
+            Self::IdempotencyExpired => {
+                "The stored response for this idempotency key has expired. Reconcile the original submission before choosing a new key."
+            }
+            Self::IdempotencyKeyReused => {
+                "This idempotency key was used for a different request."
+            }
+            Self::ProfileNotAuthorized => "The caller's access profile does not permit this operation.",
             Self::RequestBodyTooLarge => "The request body exceeds the accepted size.",
             Self::RequestInvalid => "The request could not be read as a Document Store request.",
             Self::RequestMethodNotAllowed => "The route exists but not for this method.",
             Self::RequestNotFound => "The requested route does not exist.",
             Self::RequestUnprocessable => "The request body could not be processed.",
             Self::RequestUnsupportedMediaType => "The request body is not JSON.",
+            Self::ResourceNotFound => "The requested resource does not exist or is not available to the caller.",
             Self::ServiceUnavailable => {
                 "The Document Store is unavailable. Try again after the service recovers."
             }
@@ -197,7 +251,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 17);
+        assert_eq!(ProblemCode::ALL.len(), 23);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }
@@ -279,6 +333,22 @@ mod tests {
             (ProblemCode::UploadExpired, 410),
             (ProblemCode::UploadFinalized, 409),
             (ProblemCode::UploadLengthMismatch, 422),
+        ] {
+            assert_eq!(code.http_status(), status, "{}", code.code());
+        }
+    }
+
+    /// The access refusals pin the statuses the sibling products answer
+    /// with, and the idempotency family pins Messaging's.
+    #[test]
+    fn the_access_and_idempotency_refusals_pin_their_statuses() {
+        for (code, status) in [
+            (ProblemCode::AuthenticationRefused, 401),
+            (ProblemCode::CustodyNotPermitted, 403),
+            (ProblemCode::IdempotencyExpired, 410),
+            (ProblemCode::IdempotencyKeyReused, 409),
+            (ProblemCode::ProfileNotAuthorized, 403),
+            (ProblemCode::ResourceNotFound, 404),
         ] {
             assert_eq!(code.http_status(), status, "{}", code.code());
         }
