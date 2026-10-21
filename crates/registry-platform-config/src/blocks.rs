@@ -1069,6 +1069,105 @@ fn default_task_grant_status_path() -> String {
     DEFAULT_TASK_GRANT_STATUS_PATH.to_owned()
 }
 
+/// The longest one object-store or verifier attempt may run, body included,
+/// the upper bound of each block's `attemptTimeoutMilliseconds`.
+pub const MAX_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 60_000;
+
+/// The shortest attempt an object-store or verifier block accepts.
+pub const MIN_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 100;
+
+/// The attempt timeout an object-store or verifier block applies when
+/// `attemptTimeoutMilliseconds` is omitted.
+pub const DEFAULT_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 10_000;
+
+/// A bounded attempt timeout in milliseconds.
+pub type AttemptTimeoutMilliseconds = registry_platform_yaml::BoundedU64<
+    MIN_ATTEMPT_TIMEOUT_MILLISECONDS,
+    MAX_ATTEMPT_TIMEOUT_MILLISECONDS,
+>;
+
+/// One S3-compatible bucket a runtime keeps content bytes in, and the
+/// runtime's credentials for it. The decode checks only the shape; the
+/// object-store transport refuses a non-loopback `http` URL, a URL carrying a
+/// path, query, or fragment, and a malformed bucket or region name before it
+/// sends anything.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObjectStorageConfig {
+    /// The service's base URL, with no path. It is `https`; `http` is
+    /// accepted only for a loopback host, for local development.
+    pub url: Url,
+    /// The bucket name: lowercase letters, digits, `-` and `.`.
+    #[cfg_attr(feature = "schema", schemars(length(min = 3, max = 63)))]
+    pub bucket: String,
+    /// The signing region: lowercase letters, digits and `-`.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 64)))]
+    pub region: String,
+    /// Address the bucket as a path under `url` rather than as a host name.
+    /// Omitted, `true`.
+    #[serde(default = "default_path_style")]
+    pub path_style: bool,
+    pub access_key_id_ref: SecretReference,
+    pub secret_access_key_ref: SecretReference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub session_token_ref: Option<SecretReference>,
+    /// PEM CA bundle for the service. Omitted, the platform's trusted roots
+    /// verify it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub ca_bundle_ref: Option<SecretReference>,
+    /// The longest one request may run, body included. Omitted, 10000.
+    #[serde(default = "default_attempt_timeout")]
+    pub attempt_timeout_milliseconds: AttemptTimeoutMilliseconds,
+}
+
+impl fmt::Debug for ObjectStorageConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObjectStorageConfig(<configured>)")
+    }
+}
+
+/// One external HTTP verifier a runtime submits content bytes to for an
+/// `approved` or `rejected` verdict, and the runtime's bearer credential for
+/// it. The block carries no default: a runtime that makes verification
+/// optional states its own disabled form beside it.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttachmentVerifierConfig {
+    /// The URL the content is posted to. It is `https`; `http` is accepted
+    /// only for a loopback host, for local development.
+    pub url: Url,
+    pub authorization_ref: SecretReference,
+    /// Non-secret identity of the external scanner and its rules generation.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = 128), regex(pattern = r"^[\x21-\x7E]+$"))
+    )]
+    pub policy_id: String,
+    /// The longest one verification attempt may run, body included.
+    /// Omitted, 10000.
+    #[serde(default = "default_attempt_timeout")]
+    pub attempt_timeout_milliseconds: AttemptTimeoutMilliseconds,
+}
+
+impl fmt::Debug for AttachmentVerifierConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("AttachmentVerifierConfig(<configured>)")
+    }
+}
+
+fn default_path_style() -> bool {
+    true
+}
+
+fn default_attempt_timeout() -> AttemptTimeoutMilliseconds {
+    AttemptTimeoutMilliseconds::new(DEFAULT_ATTEMPT_TIMEOUT_MILLISECONDS)
+        .expect("the default attempt timeout is in bounds")
+}
+
 #[cfg(test)]
 #[path = "blocks_tests.rs"]
 mod tests;

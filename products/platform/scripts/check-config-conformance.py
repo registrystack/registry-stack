@@ -77,13 +77,16 @@ class Exemption:
 @dataclass(frozen=True)
 class RustBlock:
     """A runtime struct field that must hold a shared block type, or a `Vec` of
-    it when `repeated` is set."""
+    it when `repeated` is set. With `variant` set, `struct` names a tagged
+    union and `field` one of its newtype variants: the variant's members are
+    the shared block's, read beside the union's tag."""
 
     path: str
     struct: str
     field: str
     block: str
     repeated: bool = False
+    variant: bool = False
 
 
 @dataclass(frozen=True)
@@ -331,6 +334,20 @@ ROWS: tuple[Row, ...] = (
                 "RawAuditConfig",
                 "key",
                 "AuditKeyConfig",
+            ),
+            RustBlock(
+                "crates/registry-breg/src/attachment_storage.rs",
+                "RawAttachmentStorageConfig",
+                "S3",
+                "ObjectStorageConfig",
+                variant=True,
+            ),
+            RustBlock(
+                "crates/registry-breg/src/attachment_verification.rs",
+                "RawAttachmentVerificationConfig",
+                "Http",
+                "AttachmentVerifierConfig",
+                variant=True,
             ),
         ),
     ),
@@ -806,6 +823,32 @@ def struct_fields(code: str, struct: str) -> dict[str, str] | None:
     return fields
 
 
+def enum_variants(code: str, enum: str) -> dict[str, str] | None:
+    """The newtype variants of `enum`, each mapped to the type it holds."""
+    declaration = re.search(rf"\benum\s+{enum}\b[^{{;]*\{{", code)
+    if declaration is None:
+        return None
+    body = code[declaration.end() : matching_brace(code, declaration.end() - 1)]
+    body = re.sub(r"#\[[^\]]*\]", " ", body)
+    body = re.sub(r"//[^\n]*", " ", body)
+    variants: dict[str, str] = {}
+    depth = 0
+    current = ""
+    for character in body + ",":
+        if character in "<([{":
+            depth += 1
+        elif character in ">)]}":
+            depth -= 1
+        if character == "," and depth == 0:
+            variant = re.fullmatch(r"\s*(\w+)\s*\((.+)\)\s*", current, re.DOTALL)
+            if variant is not None:
+                variants[variant.group(1)] = re.sub(r"\s+", "", variant.group(2))
+            current = ""
+        else:
+            current += character
+    return variants
+
+
 def imports_from_platform(code: str, block: str) -> bool:
     for use in re.finditer(rf"\buse\s+{PLATFORM_CRATE}\s*::\s*([^;]*);", code):
         if re.search(rf"(?<![\w:]){block}\b(?!\s*as\b)", use.group(1)):
@@ -826,9 +869,14 @@ def check_rust_blocks(root: Path, row: Row, canonical: dict[str, object]) -> lis
             problems.append(f"{row.product}: runtime source {entry.path} is missing")
             continue
         code = production_code([path]).get(path, "")
-        fields = struct_fields(code, entry.struct)
+        kind, separator = ("enum", "::") if entry.variant else ("struct", ".")
+        fields = (
+            enum_variants(code, entry.struct)
+            if entry.variant
+            else struct_fields(code, entry.struct)
+        )
         if fields is None:
-            problems.append(f"{row.product}: {entry.path} has no struct {entry.struct}")
+            problems.append(f"{row.product}: {entry.path} has no {kind} {entry.struct}")
             continue
         written = fields.get(entry.field)
         expected = f"Vec<{entry.block}>" if entry.repeated else entry.block
@@ -839,8 +887,8 @@ def check_rust_blocks(root: Path, row: Row, canonical: dict[str, object]) -> lis
             continue
         if written != entry.block:
             problems.append(
-                f"{row.product}: {entry.path} {entry.struct}.{entry.field} is not "
-                f"typed {expected}"
+                f"{row.product}: {entry.path} {entry.struct}{separator}{entry.field} "
+                f"is not typed {expected}"
             )
             continue
         if re.search(rf"\b(?:struct|enum|type|union)\s+{entry.block}\b", code):

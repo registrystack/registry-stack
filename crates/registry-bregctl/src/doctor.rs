@@ -309,7 +309,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         StartupError::AttachmentStorage => (
             "startup.attachment-storage.refused",
             "attachmentStorage",
-            "the attachment binding was refused: check attachmentStorage and attachmentVerification credentials and endpoints, disabled S3 versioning, and the registry's pinned backend and verification policy",
+            "the attachment binding was refused: check attachmentStorage and attachmentVerification credentials and urls, disabled S3 versioning, and the registry's pinned backend and verification policy",
         ),
         StartupError::FieldEncryption => (
             "startup.field-encryption.refused",

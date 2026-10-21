@@ -104,9 +104,11 @@ series](../../configure/breg-statistics/).
 Attachments of Proposal Actions are stored in PostgreSQL unless `runtime.yaml` selects
 `attachmentStorage` of `type: s3`. `breg` checks an S3 binding at startup:
 
-- `endpoint` is a root HTTPS URL with no path, query, fragment, or user information; plain HTTP
-  is accepted only for a numeric loopback address.
-- `pathStyle: false` (virtual-host addressing) needs a DNS host name in `endpoint`.
+- `url` is a root HTTPS URL with no path, query, fragment, or user information; plain HTTP
+  is accepted only for a numeric loopback address. A runtime file that still names it `endpoint`
+  is refused: rename `endpoint` to `url` under `attachmentStorage` and `attachmentVerification`,
+  keeping the value.
+- `pathStyle: false` (virtual-host addressing) needs a DNS host name in `url`.
 - `bucket` uses lowercase letters, digits, hyphens, and dots, starts and ends with a letter or
   digit, and is not an IP address. `region` uses lowercase letters, digits, and hyphens.
 - Every credential is a secret reference resolved through the runtime's secret providers.
@@ -121,13 +123,14 @@ independent database its own `identity.databaseId`. Deletion is a retried cleanu
 
 :::caution
 The first stored attachment pins the storage binding (database, or S3 bucket URL, region, and
-registry) and the verification binding (disabled, or endpoint and `policyId`) in the database.
+registry) and the verification binding (disabled, or `url` and `policyId`) in the database.
 `breg` then refuses to start with a different binding, even after every attachment is erased.
 Configure both before the first upload; rotating a secret or changing a timeout keeps the binding.
 :::
 
-{/* Evidence: crates/registry-breg/src/attachment_storage.rs, RawAttachmentStorageConfig,
-    AttachmentStorageConfig, ensure_unversioned(), validate_unversioned_xml(), and binding_digest();
+{/* Evidence: crates/registry-breg/src/attachment_storage.rs, RawAttachmentStorageConfig and
+    AttachmentStorageConfig; crates/registry-platform-objectstore/src/s3.rs, ensure_unversioned(),
+    validate_unversioned_xml(), and binding_digest();
     crates/registry-breg/src/runtime_config.rs, activate_attachment_storage();
     crates/registry-breg/src/attachment_store.rs, pin_backend() and verify_backend_binding();
     crates/registry-breg/src/startup.rs, AttachmentStorage. */}
@@ -135,12 +138,12 @@ Configure both before the first upload; rotating a secret or changing a timeout 
 ## External attachment verification
 
 `attachmentVerification` of `type: http` holds every uploaded file in quarantine until an external
-verifier approves it; the default, `type: disabled`, needs no verdict. `endpoint` is an HTTPS URL,
+verifier approves it; the default, `type: disabled`, needs no verdict. `url` is an HTTPS URL,
 or plain HTTP to a numeric loopback address, and may carry a fixed query but no user information or
 fragment. `policyId` names the verifier's rules generation and is not secret. A background worker
 sends:
 
-- `POST` to `endpoint` with the file's raw bytes as the body;
+- `POST` to `url` with the file's raw bytes as the body;
 - `Authorization: Bearer <token>`, the token read from `authorizationRef`;
 - the file's `Content-Type`, `Accept: application/json`, and its lowercase hexadecimal SHA-256
   digest in `X-Content-SHA256`.
@@ -164,8 +167,9 @@ re-uploading rejected bytes is rejected again. Registry erasure does not reach t
 its logging and retention separately.
 
 {/* Evidence: crates/registry-breg/src/attachment_verification.rs,
-    RawAttachmentVerificationConfig, AttachmentVerificationConfig, HttpAttachmentVerifier,
-    VerdictResponse, and MAXIMUM_VERDICT_BYTES;
+    RawAttachmentVerificationConfig and AttachmentVerificationConfig;
+    crates/registry-platform-objectstore/src/verifier.rs, HttpVerifier, VerdictResponse, and
+    MAXIMUM_VERDICT_BYTES;
     crates/registry-breg/src/attachment_verification_worker.rs, AttachmentVerificationRetryPending;
     crates/registry-breg/src/startup.rs, AttachmentVerificationRetryPending;
     crates/registry-breg/src/attachment_store.rs, verification_status(), permits_content(), and

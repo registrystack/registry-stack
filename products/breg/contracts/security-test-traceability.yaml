@@ -54,7 +54,7 @@ traceability:
   - {id: BREG-SEC-51, state: enforced, negativeId: BREG-NEG-51, negativeTest: {path: crates/registry-breg/src/proposal_workflow.rs, name: proposal_digest_binds_attachment_hash_type_size_and_slot}}
   - {id: BREG-SEC-52, state: enforced, negativeId: BREG-NEG-52, negativeTest: {path: crates/registry-breg/tests/postgres_native_retention.rs, name: shared_attachment_bytes_survive_until_the_last_native_proposal_erasure}}
   - {id: BREG-SEC-53, state: enforced, negativeId: BREG-NEG-53, negativeTest: {path: crates/registry-breg/tests/postgres_native_retention.rs, name: external_tombstones_survive_late_writes_failed_rechecks_and_backend_change}}
-  - {id: BREG-SEC-54, state: enforced, negativeId: BREG-NEG-54, negativeTest: {path: crates/registry-breg/src/attachment_storage.rs, name: downloads_refuse_missing_corrupt_oversized_and_redirect_responses}}
+  - {id: BREG-SEC-54, state: enforced, negativeId: BREG-NEG-54, negativeTest: {path: crates/registry-platform-objectstore/src/s3_tests.rs, name: downloads_refuse_missing_corrupt_oversized_versioned_and_redirect_responses}}
   - {id: BREG-SEC-55, state: enforced, negativeId: BREG-NEG-55, negativeTest: {path: crates/registry-breg/src/attachment_verification.rs, name: malformed_oversized_and_failed_verdicts_remain_unavailable}}
   - {id: BREG-SEC-56, state: enforced, negativeId: BREG-NEG-56, negativeTest: {path: crates/registry-breg/tests/postgres_proposal.rs, name: attachment_binding_integrity_and_detail_erasure_preserve_record_history}}
   - {id: BREG-SEC-57, state: enforced, negativeId: BREG-NEG-57, negativeTest: {path: crates/registry-breg/tests/postgres_proposal_s3.rs, name: s3_integrity_binding_quarantine_and_authority_refusals_precede_transport}}

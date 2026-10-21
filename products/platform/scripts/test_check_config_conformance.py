@@ -475,6 +475,62 @@ pub struct SampleRuntime {
             ),
         )
 
+    TAGGED_UNION = """
+#[derive(Deserialize)]
+#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum RawSource {
+    Database {},
+    /// The sealed package.
+    Sealed(PackageConfig),
+}
+"""
+
+    def variant_row(self) -> object:
+        return self.block_row(
+            gate.RustBlock(
+                "crates/sample/src/lib.rs",
+                "RawSource",
+                "Sealed",
+                "PackageConfig",
+                variant=True,
+            )
+        )
+
+    def test_a_tagged_variant_holding_the_shared_type_passes(self) -> None:
+        self.with_runtime_struct(self.TAGGED_UNION, imports="PackageConfig")
+        self.assertEqual([], self.problems(self.variant_row()))
+
+    def test_a_tagged_variant_of_another_type_is_refused(self) -> None:
+        self.with_runtime_struct(
+            self.TAGGED_UNION.replace("Sealed(PackageConfig)", "Sealed(LocalStorage)"),
+            imports="PackageConfig",
+        )
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs RawSource::Sealed is not typed "
+            "PackageConfig",
+            self.variant_row(),
+        )
+
+    def test_a_tagged_variant_with_inline_members_is_refused(self) -> None:
+        self.with_runtime_struct(
+            self.TAGGED_UNION.replace(
+                "Sealed(PackageConfig)", "Sealed { url: String, bucket: String }"
+            ),
+            imports="PackageConfig",
+        )
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs RawSource::Sealed is not typed "
+            "PackageConfig",
+            self.variant_row(),
+        )
+
+    def test_a_missing_tagged_union_is_refused(self) -> None:
+        self.with_runtime_struct(self.RUNTIME_STRUCT, imports="PackageConfig")
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs has no enum RawSource",
+            self.variant_row(),
+        )
+
     HAND_LISTENER = {
         "type": "object",
         "required": ["bind"],

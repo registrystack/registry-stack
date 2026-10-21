@@ -1,45 +1,30 @@
 // SPDX-License-Identifier: Apache-2.0
 //! A bounded external verdict transport. Durable quarantine, retries and release
 //! authority remain in the Registry worker and PostgreSQL transaction boundary.
+//!
+//! The transport is `registry-platform-objectstore`; this module binds it to
+//! the Registry's binding domain `breg-attachment-verification-http-v1` and
+//! the attachment size bound, and keeps verification off by default.
 
-use std::{fmt, net::IpAddr, sync::Arc, time::Duration};
+use std::{fmt, sync::Arc};
 
-use registry_platform_config::{ProtectedSecret, SecretReference, SecretResolver};
-use registry_platform_httputil::{read_bounded, validate_response_headers, OutboundClientBuilder};
-use reqwest::{header::HeaderValue, StatusCode, Url};
+use registry_platform_config::{AttachmentVerifierConfig, SecretResolver};
+use registry_platform_objectstore::{HttpVerifierSettings, VerifierNamespace};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
-use thiserror::Error;
-use zeroize::Zeroizing;
 
-const MAXIMUM_VERDICT_BYTES: u64 = 1024;
+pub use registry_platform_objectstore::{
+    HttpVerifier as HttpAttachmentVerifier, Verdict as AttachmentVerificationVerdict,
+    VerifierError as AttachmentVerificationError,
+};
 
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub enum AttachmentVerificationError {
-    #[error("attachment verification configuration is invalid")]
-    InvalidConfiguration,
-    #[error("attachment verification secret resolution failed")]
-    Secret,
-    #[error("attachment verification is unavailable")]
-    Unavailable,
-    #[error("attachment verification input failed integrity validation")]
-    Integrity,
-}
+/// The Registry's verifier binding. Changing it changes the policy digest
+/// recorded beside every quarantined attachment.
+const NAMESPACE: VerifierNamespace = VerifierNamespace {
+    binding_domain: "breg-attachment-verification-http-v1",
+    max_content_bytes: crate::contract::MAX_ATTACHMENT_BYTES as u64,
+};
 
 type Result<T> = std::result::Result<T, AttachmentVerificationError>;
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum AttachmentVerificationVerdict {
-    Approved,
-    Rejected,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct VerdictResponse {
-    verdict: AttachmentVerificationVerdict,
-}
 
 /// No verifier preserves the ordinary attachment availability behavior. A
 /// configured verifier keeps uploads quarantined until its worker releases them.
@@ -54,7 +39,7 @@ impl AttachmentVerification {
     pub fn binding_digest(&self) -> String {
         match self {
             Self::Disabled => "disabled".to_string(),
-            Self::Http(verifier) => verifier.binding_digest.clone(),
+            Self::Http(verifier) => verifier.binding_digest().to_string(),
         }
     }
 }
@@ -79,24 +64,7 @@ impl fmt::Debug for AttachmentVerification {
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub(crate) enum RawAttachmentVerificationConfig {
     Disabled {},
-    Http {
-        #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 2048)))]
-        endpoint: String,
-        authorization_ref: SecretReference,
-        /// Non-secret identity of the external scanner and rules generation.
-        #[cfg_attr(
-            feature = "schema",
-            schemars(length(min = 1, max = 128), regex(pattern = r"^[\x21-\x7E]+$"))
-        )]
-        policy_id: String,
-        #[serde(default = "default_timeout_milliseconds")]
-        #[serde(deserialize_with = "crate::contract::bounded_u64::<_, 100, 60_000>")]
-        #[cfg_attr(
-            feature = "schema",
-            schemars(with = "registry_platform_yaml::BoundedU64<100, 60_000>")
-        )]
-        attempt_timeout_milliseconds: u64,
-    },
+    Http(AttachmentVerifierConfig),
 }
 registry_platform_yaml::tagged_union!(RawAttachmentVerificationConfig);
 
@@ -120,94 +88,25 @@ impl Default for RawAttachmentVerificationConfig {
     }
 }
 
-fn default_timeout_milliseconds() -> u64 {
-    10_000
-}
-
 #[derive(Clone, Default)]
-pub(crate) struct AttachmentVerificationConfig(Option<HttpVerifierConfig>);
-
-#[derive(Clone)]
-struct HttpVerifierConfig {
-    endpoint: Url,
-    authorization_ref: SecretReference,
-    policy_id: String,
-    timeout: Duration,
-}
+pub(crate) struct AttachmentVerificationConfig(Option<HttpVerifierSettings>);
 
 impl AttachmentVerificationConfig {
     pub(crate) fn from_raw(raw: RawAttachmentVerificationConfig) -> Result<Self> {
-        let RawAttachmentVerificationConfig::Http {
-            endpoint,
-            authorization_ref,
-            policy_id,
-            attempt_timeout_milliseconds,
-        } = raw
-        else {
-            return Ok(Self::default());
-        };
-        let url =
-            Url::parse(&endpoint).map_err(|_| AttachmentVerificationError::InvalidConfiguration)?;
-        let loopback = url
-            .host_str()
-            .and_then(|host| host.trim_matches(['[', ']']).parse::<IpAddr>().ok())
-            .is_some_and(|ip| ip.is_loopback());
-        if endpoint.len() > 2048
-            || endpoint.trim() != endpoint
-            || endpoint.chars().any(char::is_control)
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.fragment().is_some()
-            || !(url.scheme() == "https" || (url.scheme() == "http" && loopback))
-            || policy_id.is_empty()
-            || policy_id.len() > 128
-            || !policy_id.bytes().all(|b| b.is_ascii_graphic())
-        {
-            return Err(AttachmentVerificationError::InvalidConfiguration);
+        match raw {
+            RawAttachmentVerificationConfig::Disabled {} => Ok(Self::default()),
+            RawAttachmentVerificationConfig::Http(config) => {
+                HttpVerifierSettings::from_config(&config).map(|settings| Self(Some(settings)))
+            }
         }
-        Ok(Self(Some(HttpVerifierConfig {
-            endpoint: url,
-            authorization_ref,
-            policy_id,
-            timeout: Duration::from_millis(attempt_timeout_milliseconds),
-        })))
     }
 
     pub(crate) fn activate(&self, resolver: &SecretResolver) -> Result<AttachmentVerification> {
-        let Some(config) = &self.0 else {
+        let Some(settings) = &self.0 else {
             return Ok(AttachmentVerification::Disabled);
         };
-        let authorization = resolver
-            .resolve_reference(&config.authorization_ref)
-            .map_err(|_| AttachmentVerificationError::Secret)?;
-        if authorization.is_empty()
-            || authorization.len() > 4096
-            || !authorization
-                .expose_secret()
-                .iter()
-                .all(u8::is_ascii_graphic)
-        {
-            return Err(AttachmentVerificationError::Secret);
-        }
-        let identity = serde_json::to_vec(&(
-            "breg-attachment-verification-http-v1",
-            config.endpoint.as_str(),
-            &config.policy_id,
-        ))
-        .map_err(|_| AttachmentVerificationError::InvalidConfiguration)?;
-        Ok(AttachmentVerification::Http(Arc::new(
-            HttpAttachmentVerifier {
-                client: OutboundClientBuilder::new()
-                    .timeout(config.timeout)
-                    .connect_timeout(config.timeout.min(Duration::from_secs(5)))
-                    .try_build()
-                    .map_err(|_| AttachmentVerificationError::InvalidConfiguration)?,
-                endpoint: config.endpoint.clone(),
-                authorization,
-                binding_digest: hex::encode(Sha256::digest(identity)),
-            },
-        )))
+        let verifier = settings.activate(NAMESPACE, resolver)?;
+        Ok(AttachmentVerification::Http(Arc::new(verifier)))
     }
 }
 
@@ -221,76 +120,19 @@ impl fmt::Debug for AttachmentVerificationConfig {
     }
 }
 
-pub struct HttpAttachmentVerifier {
-    client: reqwest::Client,
-    endpoint: Url,
-    authorization: ProtectedSecret,
-    binding_digest: String,
-}
-
-impl fmt::Debug for HttpAttachmentVerifier {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("HttpAttachmentVerifier(<redacted>)")
-    }
-}
-
-impl HttpAttachmentVerifier {
-    /// The worker must bind this verdict to the exact retained digest and policy
-    /// generation. Transport errors leave quarantine intact and are retryable.
-    pub async fn verify(
-        &self,
-        sha256: &str,
-        content_type: &str,
-        bytes: Vec<u8>,
-    ) -> Result<AttachmentVerificationVerdict> {
-        if bytes.len() as u64 > crate::contract::MAX_ATTACHMENT_BYTES as u64
-            || sha256.len() != 64
-            || hex::encode(Sha256::digest(&bytes)) != sha256
-            || content_type.is_empty()
-            || content_type.len() > 255
-            || !content_type.is_ascii()
-        {
-            return Err(AttachmentVerificationError::Integrity);
-        }
-        let content_type = HeaderValue::from_str(content_type)
-            .map_err(|_| AttachmentVerificationError::Integrity)?;
-        let mut bearer = Zeroizing::new(b"Bearer ".to_vec());
-        bearer.extend_from_slice(self.authorization.expose_secret());
-        let mut authorization =
-            HeaderValue::from_bytes(&bearer).map_err(|_| AttachmentVerificationError::Secret)?;
-        authorization.set_sensitive(true);
-        let response = self
-            .client
-            .post(self.endpoint.clone())
-            .header(reqwest::header::AUTHORIZATION, authorization)
-            .header(reqwest::header::CONTENT_TYPE, content_type)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .header("x-content-sha256", sha256)
-            .body(bytes)
-            .send()
-            .await
-            .map_err(|_| AttachmentVerificationError::Unavailable)?;
-        validate_response_headers(response.headers())
-            .map_err(|_| AttachmentVerificationError::Unavailable)?;
-        if response.status() != StatusCode::OK {
-            return Err(AttachmentVerificationError::Unavailable);
-        }
-        let bytes = read_bounded(response, MAXIMUM_VERDICT_BYTES)
-            .await
-            .map_err(|_| AttachmentVerificationError::Unavailable)?;
-        let result: VerdictResponse =
-            serde_json::from_slice(&bytes).map_err(|_| AttachmentVerificationError::Unavailable)?;
-        Ok(result.verdict)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::{body::to_bytes, extract::Request, routing::any, Router};
     use registry_platform_config::SecretProvider;
+    use reqwest::StatusCode;
     use serde_json::json;
+    use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    /// The verdict body bound the transport enforces.
+    const MAXIMUM_VERDICT_BYTES: u64 = 1024;
 
     const CONTENT: &[u8] = b"synthetic attachment for verification";
     const TOKEN: &str = "verification-token-canary";
@@ -382,7 +224,7 @@ mod tests {
     }
 
     fn raw(endpoint: &str) -> serde_json::Value {
-        json!({"type":"http", "endpoint":endpoint, "authorizationRef":"secret:file/token", "policyId":"scanner-rules-2026-09"})
+        json!({"type":"http", "url":endpoint, "authorizationRef":"secret:file/token", "policyId":"scanner-rules-2026-09"})
     }
     fn activate(input: serde_json::Value, files: &SecretFile) -> AttachmentVerification {
         AttachmentVerificationConfig::from_raw(serde_json::from_value(input).unwrap())
@@ -402,10 +244,7 @@ mod tests {
         for endpoint in [
             "http://public.example/verify",
             "http://10.0.0.1/verify",
-            "https://user:secret@example/verify",
             "https://example/verify#fragment",
-            "file:///verify",
-            " https://example/verify",
         ] {
             assert_eq!(
                 AttachmentVerificationConfig::from_raw(
@@ -415,6 +254,20 @@ mod tests {
                 AttachmentVerificationError::InvalidConfiguration
             );
         }
+        // Userinfo, another scheme, or surrounding space is refused at decode.
+        for endpoint in [
+            "https://user:secret@example/verify",
+            "file:///verify",
+            " https://example/verify",
+        ] {
+            assert!(
+                serde_json::from_value::<RawAttachmentVerificationConfig>(raw(endpoint)).is_err()
+            );
+        }
+        let mut renamed = raw("https://example/verify");
+        renamed["endpoint"] = renamed["url"].take();
+        renamed.as_object_mut().unwrap().remove("url");
+        assert!(serde_json::from_value::<RawAttachmentVerificationConfig>(renamed).is_err());
         let mut input = raw("https://verification-canary.example/verify");
         input["authorizationRef"] = json!("inline-token-canary");
         let error = serde_json::from_value::<RawAttachmentVerificationConfig>(input)
@@ -439,7 +292,7 @@ mod tests {
             assert!(serde_json::from_value::<RawAttachmentVerificationConfig>(input).is_err());
         }
         assert!(serde_json::from_value::<RawAttachmentVerificationConfig>(
-            json!({"type":"disabled", "endpoint":"https://ignored.example"})
+            json!({"type":"disabled", "url":"https://ignored.example"})
         )
         .is_err());
         let mut missing = raw("https://example/verify");
@@ -625,7 +478,7 @@ mod tests {
         policy["policyId"] = json!("scanner-rules-next");
         assert_ne!(original, activate(policy, &files).binding_digest());
         let mut endpoint = input;
-        endpoint["endpoint"] = json!("https://other.example/verify");
+        endpoint["url"] = json!("https://other.example/verify");
         assert_ne!(original, activate(endpoint, &files).binding_digest());
     }
 
@@ -646,8 +499,6 @@ mod tests {
         let mut input = raw("https://example/verify");
         input.as_object_mut().unwrap().remove("policyId");
         assert!(!validator.is_valid(&input));
-        assert!(
-            !validator.is_valid(&json!({"type":"disabled", "endpoint":"https://ignored.example"}))
-        );
+        assert!(!validator.is_valid(&json!({"type":"disabled", "url":"https://ignored.example"})));
     }
 }

@@ -519,7 +519,7 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
     }
     let s3_config = fixture.root.join("runtime-attachment-s3.yaml");
     let base_config = fs::read_to_string(&database_config).unwrap();
-    fs::write(&s3_config,format!("{base_config}\nattachmentStorage:\n  type: s3\n  endpoint: {endpoint}\n  bucket: startup-attachments\n  region: us-east-1\n  accessKeyIdRef: secret:file/attachment-access\n  secretAccessKeyRef: secret:file/attachment-secret\n")).unwrap();
+    fs::write(&s3_config,format!("{base_config}\nattachmentStorage:\n  type: s3\n  url: {endpoint}\n  bucket: startup-attachments\n  region: us-east-1\n  accessKeyIdRef: secret:file/attachment-access\n  secretAccessKeyRef: secret:file/attachment-secret\n")).unwrap();
     let activated = registry_breg::runtime_config::load_runtime_config(&s3_config)
         .unwrap()
         .activate_attachment_storage(verified.registry().registry_id())
@@ -563,7 +563,7 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
         .root
         .join("runtime-attachment-changed-verifier.yaml");
     let original_s3 = fs::read_to_string(&s3_config).unwrap();
-    fs::write(&changed_verifier_config,format!("{original_s3}\nattachmentVerification:\n  type: http\n  endpoint: {endpoint}/verify\n  policyId: changed-verifier-policy\n  authorizationRef: secret:file/attachment-secret\n")).unwrap();
+    fs::write(&changed_verifier_config,format!("{original_s3}\nattachmentVerification:\n  type: http\n  url: {endpoint}/verify\n  policyId: changed-verifier-policy\n  authorizationRef: secret:file/attachment-secret\n")).unwrap();
     assert_eq!(
         prepare_with_connection_config_for_test(
             &changed_verifier_config,

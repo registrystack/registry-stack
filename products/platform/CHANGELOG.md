@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `registry-platform-objectstore` is a new crate holding the S3-compatible
+  object storage adapter and the HTTP content verifier transport the Base
+  Registry Engine used for attachments. A product supplies its own key prefix
+  and binding domain; protocol, headers, timeouts, and refusals are unchanged.
+- `registry-platform-config` adds the shared blocks `ObjectStorageConfig` and
+  `AttachmentVerifierConfig` (CFG-SCHEMA-5).
+- BREAKING: the destination key of both blocks is `url`, not `endpoint`
+  (CFG-VAL-7). Rename `endpoint:` to `url:` under `attachmentStorage` and
+  `attachmentVerification` in a BReg runtime configuration; the old key is
+  refused with a pointer to the new one.
+
 ## 0.43.0 - 2026-10-21
 
 - BREAKING: the shared `DisplayText` reader rejects bidi embedding, override,

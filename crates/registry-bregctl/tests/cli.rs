@@ -2652,14 +2652,14 @@ fn check_substitutes_the_environment_only_when_asked_and_never_repeats_a_value()
 fn runtime_config_with_deferred_locations(scratch: &TestProject, tail: &str) -> PathBuf {
     const BLOCKS: &str = r"attachmentStorage:
   type: s3
-  endpoint: ${BREG_CHECK_TEST_STORAGE}
+  url: ${BREG_CHECK_TEST_STORAGE}
   bucket: test-bucket
   region: us-east-1
   accessKeyIdRef: secret:file/access
   secretAccessKeyRef: secret:file/key
 attachmentVerification:
   type: http
-  endpoint: ${BREG_CHECK_TEST_VERIFIER}
+  url: ${BREG_CHECK_TEST_VERIFIER}
   policyId: scanner-rules-v1
   authorizationRef: secret:file/verifier-token
 fieldEncryption:
