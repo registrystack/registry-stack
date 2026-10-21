@@ -285,6 +285,7 @@ decisions:
     evidence:
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: apply_is_idempotent_for_one_package_and_records_a_changed_one}
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_fresh_database_is_refused_by_serve_until_the_package_is_applied}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: serve_refuses_an_activated_database_with_a_newer_schema_version}
       - {path: crates/registry-documentsctl/tests/postgres_cli.rs, name: init_package_plan_apply_and_status_activate_a_starter_deployment}
   - id: DOCUMENTS-DEC-18
     subject: Dead-letter replay is an operator command over the runtime credential

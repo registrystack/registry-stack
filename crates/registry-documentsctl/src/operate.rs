@@ -18,7 +18,7 @@ use registry_documents::runtime::{
     activation_plan, activation_status, apply_activation, dead_lettered_verifications,
     replay_verification, RuntimeError,
 };
-use registry_documents::verification::ReplayRefusal;
+use registry_documents::verification::{ReplayFailure, ReplayRefusal};
 use registry_platform_config::PackageErrorKind;
 use registry_platform_yaml::{Diagnostic, Report};
 use serde_json::{json, Value};
@@ -279,13 +279,29 @@ fn failure(path: &Path, error: RuntimeError) -> Outcome {
         }
         RuntimeError::Replay(refusal) => {
             let code = match refusal {
-                ReplayRefusal::NotFound => "verification.not-found",
-                ReplayRefusal::NotDeadLettered { .. } => "verification.not-dead-lettered",
-                ReplayRefusal::StaleGeneration { .. } => "verification.stale-generation",
-                ReplayRefusal::Changed => "verification.changed",
+                ReplayRefusal::NotFound => "documents.verification.not-found",
+                ReplayRefusal::NotDeadLettered { .. } => "documents.verification.not-dead-lettered",
+                ReplayRefusal::StaleGeneration { .. } => "documents.verification.stale-generation",
+                ReplayRefusal::Changed => "documents.verification.changed",
             };
             refused(DOMAIN_REFUSAL_EXIT, code, "verification")
         }
+        RuntimeError::ReplayFailed(failure) => match failure {
+            ReplayFailure::AuditUnavailable => {
+                refused(OPERATIONAL_FAILURE_EXIT, "audit.unavailable", "audit")
+            }
+            ReplayFailure::Unaudited { .. } => {
+                refused(OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed", "audit")
+            }
+            ReplayFailure::OutcomeUnknown { .. } => refused(
+                OPERATIONAL_FAILURE_EXIT,
+                "documents.verification.outcome-unknown",
+                "verification",
+            ),
+            ReplayFailure::DatabaseUnavailable => {
+                refused(OPERATIONAL_FAILURE_EXIT, "database.unavailable", "database")
+            }
+        },
         RuntimeError::Activation(ActivationError::Store(_)) | RuntimeError::Database { .. } => {
             refused(OPERATIONAL_FAILURE_EXIT, "database.unavailable", "database")
         }
