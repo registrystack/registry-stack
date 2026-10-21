@@ -12,14 +12,20 @@ publish = false
 workspace = true
 
 [dependencies]
+hex.workspace = true
 registry-documents-core.workspace = true
 registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
+registry-platform-yaml.workspace = true
 reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 url.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
-serde_json.workspace = true
+bytes.workspace = true
+http-body.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
