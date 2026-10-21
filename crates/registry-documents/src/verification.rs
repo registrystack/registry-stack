@@ -420,15 +420,45 @@ pub struct VerificationStore {
     store: PostgresStore,
     schema: String,
     audit: DocumentsAudit,
+    graces: Graces,
+}
+
+/// Each declared policy's `cleanupGraceHours`, as the two parallel arrays
+/// the rejection statement joins against a document's policy.
+#[derive(Clone, Debug, Default)]
+pub struct Graces {
+    policies: Vec<String>,
+    hours: Vec<i32>,
+}
+
+impl Graces {
+    /// Read every declared policy's erasure grace from `project`.
+    #[must_use]
+    pub fn of(project: &registry_documents_core::DocumentsProject) -> Self {
+        let mut graces = Self::default();
+        for (id, policy) in &project.document_policies {
+            let hours = policy.mandatory_restrictions.cleanup_grace_hours.get();
+            graces.policies.push(id.to_string());
+            // The declared bound, MAXIMUM_PERIOD_HOURS, always fits.
+            graces.hours.push(i32::try_from(hours).unwrap_or(i32::MAX));
+        }
+        graces
+    }
 }
 
 impl VerificationStore {
     #[must_use]
-    pub fn new(store: PostgresStore, schema: String, audit: DocumentsAudit) -> Self {
+    pub fn new(
+        store: PostgresStore,
+        schema: String,
+        audit: DocumentsAudit,
+        graces: Graces,
+    ) -> Self {
         Self {
             store,
             schema,
             audit,
+            graces,
         }
     }
 
@@ -561,17 +591,47 @@ impl DispatchStore for VerificationStore {
                     AND media_type = $4",
                 binding,
             )),
-            VerificationDetail::Rejected { binding } => Some((
-                "UPDATE documents_versions
-                    SET verification_state = 'rejected', eligibility = 'suspended',
-                        verified_binding_digest = $2, verified_digest = $3,
-                        verified_media_type = media_type, verified_at = transaction_timestamp()
-                  WHERE version_id = $1 AND upload_state = 'finalized'
-                    AND erasure_state = 'none'
-                    AND verification_binding_digest = $2 AND computed_digest = $3
-                    AND media_type = $4",
-                binding,
-            )),
+            VerificationDetail::Rejected { binding } => {
+                // A rejection arms the erasure of the rejected bytes after
+                // the policy's grace, through the same sweep a removal
+                // uses. A policy the deployment no longer declares falls
+                // back to the version's upload window, which was cut from
+                // the same grace when the version was reserved.
+                let changed = transaction
+                    .execute(
+                        "UPDATE documents_versions AS version
+                            SET verification_state = 'rejected', eligibility = 'suspended',
+                                verified_binding_digest = $2, verified_digest = $3,
+                                verified_media_type = media_type,
+                                verified_at = transaction_timestamp(),
+                                erasure_state = 'pending',
+                                erasure_requested_at = transaction_timestamp(),
+                                erasure_due_at = transaction_timestamp() + COALESCE(
+                                    (SELECT make_interval(hours => grace.hours)
+                                       FROM documents_documents AS document
+                                       JOIN unnest($5::text[], $6::int[]) AS grace(policy, hours)
+                                         ON grace.policy = document.policy_id
+                                      WHERE document.document_id = version.document_id),
+                                    version.upload_expires_at - version.reserved_at)
+                          WHERE version_id = $1 AND upload_state = 'finalized'
+                            AND erasure_state = 'none'
+                            AND verification_binding_digest = $2 AND computed_digest = $3
+                            AND media_type = $4",
+                        &[
+                            &version_id,
+                            binding,
+                            digest,
+                            &job.job.media_type,
+                            &self.graces.policies,
+                            &self.graces.hours,
+                        ],
+                    )
+                    .await?;
+                if changed == 0 {
+                    return unrecorded_verdict(transaction, version_id, binding).await;
+                }
+                None
+            }
             VerificationDetail::Superseded | VerificationDetail::Failed => None,
         };
         if let Some((sql, binding)) = statement {

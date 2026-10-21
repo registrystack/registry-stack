@@ -309,7 +309,8 @@ decisions:
       Two clocks are kept apart. A grant's expiry or revocation only stops that
       grant releasing; it never starts erasure. Bytes are erased only after the
       custodian asks for the document's removal and the policy's
-      cleanupGraceHours have passed. Nothing expires by inactivity: there is no
+      cleanupGraceHours have passed, or after a rejection and the same grace
+      (DOCUMENTS-DEC-21). Nothing expires by inactivity: there is no
       sliding expiry, and a citizen-held document stays until its custodian
       removes it.
     reasoning: >-
@@ -336,17 +337,27 @@ decisions:
     evidence:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes}
   - id: DOCUMENTS-DEC-21
-    subject: Rejected and dead-lettered versions are kept, not erased
+    subject: A rejected version's bytes are erased after the grace; a dead-lettered verification's are kept
     decision: >-
-      A version whose verification was rejected or dead-lettered stays in
-      custody, unreleasable, until its custodian asks for removal. The sweep
-      never erases a version on its own judgement.
+      A rejection arms the erasure of the rejected version's bytes in the
+      transaction that records it, due after the document policy's
+      cleanupGraceHours, and the same sweep, erasure job, and evidence a
+      removal uses erase them. The version record stays: it reads rejected
+      until the bytes are erased, and erased after. A policy the deployment no
+      longer declares falls back to the version's upload window, which was
+      cut from the same grace at reservation. A version whose verification
+      dead-lettered is kept, pending and suspended, until an operator replays
+      the job or its custodian asks for removal.
     reasoning: >-
-      A rejection may be wrong and a dead-letter is an outage, not a verdict;
-      keeping the bytes lets an operator re-verify or replay. Erasure follows
-      the custodian's decision only (DOCUMENTS-DEC-19).
+      A rejection is a verdict: the bytes can never be released again, since
+      no later verdict moves a rejected version, so keeping them only keeps
+      content the Store refused. The grace leaves an operator the same window
+      to restore from a wrong verdict that a removal leaves. A dead-letter is
+      an outage, not a verdict: the content was never judged, and erasing it
+      would destroy a document a replay would release.
     evidence:
-      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_rejected_version_is_never_released}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_rejected_version_is_erased_after_its_grace}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_unavailable_verifier_never_releases_and_a_dead_letter_neither_approves_nor_rejects}
   - id: DOCUMENTS-DEC-22
     subject: Lapsed uploads are expired; orphaned objects are swept after the longest transfer
     decision: >-
