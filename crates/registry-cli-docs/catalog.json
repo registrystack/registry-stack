@@ -8551,6 +8551,51 @@
       "constraints": [],
       "subcommands": [
         {
+          "name": "init",
+          "invocation": "documentsctl init",
+          "about": "Write the starter project into a new directory",
+          "long_about": null,
+          "usage": "documentsctl init [OPTIONS] <DIRECTORY>",
+          "arguments": [
+            {
+              "display": "<DIRECTORY>",
+              "description": "The directory to create. It must not exist",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
           "name": "check",
           "invocation": "documentsctl check",
           "about": "Check a project, a runtime configuration, or both, offline",
@@ -8636,6 +8681,381 @@
             }
           ],
           "subcommands": []
+        },
+        {
+          "name": "package",
+          "invocation": "documentsctl package",
+          "about": "Build the deployable package from a checked project",
+          "long_about": null,
+          "usage": "documentsctl package [OPTIONS] --output <DIRECTORY> <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "The project directory holding documents.yaml",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--output <DIRECTORY>",
+              "description": "New directory to create for the package",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--revision <REVISION>",
+              "description": "Optional source revision recorded in the package envelope",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--dry-run",
+              "description": "Validate and report the digest without writing the package",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "plan",
+          "invocation": "documentsctl plan",
+          "about": "Report what apply would change in the database, writing nothing",
+          "long_about": null,
+          "usage": "documentsctl plan [OPTIONS] --runtime-config <FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "apply",
+          "invocation": "documentsctl apply",
+          "about": "Apply the schema and record the configured package as active",
+          "long_about": null,
+          "usage": "documentsctl apply [OPTIONS] --runtime-config <FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--operator-reference <TEXT>",
+              "description": "Change or ticket reference; stored only as an activation-scoped keyed hash",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--backup <REF>",
+              "description": "Backup or snapshot reference recorded with this activation. Repeatable",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "status",
+          "invocation": "documentsctl status",
+          "about": "Report the active package and the activation history",
+          "long_about": null,
+          "usage": "documentsctl status [OPTIONS] --runtime-config <FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "verification",
+          "invocation": "documentsctl verification",
+          "about": "Inspect and replay dead-lettered content verification jobs",
+          "long_about": null,
+          "usage": "documentsctl verification [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "list",
+              "invocation": "documentsctl verification list",
+              "about": "List the oldest dead-lettered content verification jobs",
+              "long_about": null,
+              "usage": "documentsctl verification list [OPTIONS] --runtime-config <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--limit <COUNT>",
+                  "description": "The most dead letters to report, oldest first",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "50"
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "replay",
+              "invocation": "documentsctl verification replay",
+              "about": "Return one dead-lettered content verification job to pending",
+              "long_about": null,
+              "usage": "documentsctl verification replay [OPTIONS] --runtime-config <FILE> --version-id <UUID> --expected-generation <GENERATION>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--version-id <UUID>",
+                  "description": "The document version whose verification job is replayed",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--expected-generation <GENERATION>",
+                  "description": "The generation `verification list` reported for the job",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
         }
       ]
     },
