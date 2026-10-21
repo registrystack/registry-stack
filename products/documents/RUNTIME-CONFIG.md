@@ -96,9 +96,12 @@ verifier that cannot be reached answers `service.unavailable`.
 Every upload, download, and content verification attempt holds the whole
 document version in memory while it runs. One transfer budget, shared by all
 three, bounds those bytes at the larger of 256 MiB and
-`storage.maximumDocumentBytes`. A transfer that finds no room in the budget
-is refused at once with `service.unavailable` and `Retry-After`; it never
-waits for room. A transfer still holds its share until it completes or
+`storage.maximumDocumentBytes`. An upload or download that finds no room in
+the budget is refused at once with `service.unavailable` and `Retry-After`;
+it never waits for room. A background verification attempt waits for room
+only within its attempt timeout, then ends as a transient failure and is
+retried on its backoff, so it never holds its job lease past the attempt
+deadline. A transfer still holds its share until it completes or
 reaches its deadline (`transfers.minimumDeadlineSeconds` plus
 `transfers.mebibyteAllowanceSeconds` for every started mebibyte), when it is
 cut off and lets go. Transient copies made while hashing, storing, and

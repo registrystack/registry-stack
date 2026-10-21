@@ -4722,7 +4722,7 @@
       },
       "artifact": {
         "path": "products/documents/generated/project/project.schema.json",
-        "sha256": "48334c576645a001df6a44539832fe2a63f09344d0a60f3cd772786e90f6be94",
+        "sha256": "889798368d269db31696ff9b75ed89a41f9829a700b8ccb0b2fa1d58f4c499a4",
         "mediaType": "application/schema+json"
       }
     },

@@ -64,6 +64,9 @@ entries:
       - {path: crates/registry-documents/src/http.rs, name: a_credential_refusal_carries_the_bearer_challenge}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_authority_and_unknown_ids_answer_without_disclosing_a_document}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_uploaded_document_is_released_only_after_it_is_verified}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_json_body_is_not_read_before_the_caller_is_authenticated}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_authenticated_json_body_over_the_limit_is_refused_as_too_large}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_owning_system_that_is_not_the_custodian_is_refused_the_content_as_unauthorized}
   - id: DOCUMENTS-SEC-11
     tests:
       - {path: crates/registry-documents/src/config.rs, name: shared_runtime_loader_refuses_environment_expressions_in_secret_references}
@@ -122,12 +125,17 @@ entries:
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_grant_releases_one_exact_version_to_its_named_recipient_until_expiry_or_revocation}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_uploaded_document_is_released_only_after_it_is_verified}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_grant_releases_only_to_a_caller_of_the_actor_kind_it_names}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_a_grant_on_another_document_s_version_or_of_an_unknown_kind}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_recipient_s_grant_list_pages_only_grants_it_may_redeem}
+      - {path: crates/registry-documents-core/src/wire.rs, name: a_grant_request_names_one_version_and_one_subject_of_one_kind}
   - id: DOCUMENTS-SEC-25
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_idempotent_grant_retry_after_revocation_releases_nothing}
   - id: DOCUMENTS-SEC-26
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_authority_and_unknown_ids_answer_without_disclosing_a_document}
+      - {path: crates/registry-documents-core/src/access.rs, name: the_owner_matches_the_reserver_s_kind_as_well_as_its_subject}
   - id: DOCUMENTS-SEC-27
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_version_approved_under_another_binding_is_released_to_nobody}
@@ -135,6 +143,7 @@ entries:
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_exhausted_transfer_budget_refuses_uploads_and_downloads}
       - {path: crates/registry-documents/src/transfer.rs, name: a_transfer_beyond_the_remaining_budget_is_refused_until_room_returns}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_verification_attempt_waits_for_transfer_budget_only_within_its_attempt_timeout}
   - id: DOCUMENTS-SEC-29
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_stalled_upload_is_cut_off_at_its_deadline}
@@ -143,6 +152,15 @@ entries:
   - id: DOCUMENTS-SEC-30
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_request_audit_failure_refuses_the_upload_and_the_download}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_response_audit_failure_after_commit_answers_unavailable_and_the_retry_answers_the_commit}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_upload_to_an_unknown_or_another_caller_s_reservation_is_journalled}
   - id: DOCUMENTS-SEC-31
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_label_is_bounded_and_returned_untouched}
+  - id: DOCUMENTS-SEC-32
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: under_institutional_custody_the_named_person_has_no_standing_without_a_grant}
+      - {path: crates/registry-documents-core/src/access.rs, name: under_institutional_custody_the_reserving_system_stays_the_custodian}
+  - id: DOCUMENTS-SEC-33
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_journal_records_no_unchecked_text_from_a_request}
