@@ -120,18 +120,18 @@ hooks:
     projection: [documentId, versionId, versionDigest, policyId, policyVersion, actorKind]
     handler:
       type: url
-      destinationId: custodian-events
+      destinationId: owning-system-events
   - id: document-version-rejected
     phase: after
     trigger: document-version.rejected
     projection: [documentId, versionId, policyId, policyVersion]
     handler:
       type: url
-      destinationId: custodian-events
+      destinationId: owning-system-events
   - id: document-grant-changed
     phase: after
     trigger: document-grant.changed
     projection: [grantId, change, documentId, versionId, actorKind]
     handler:
       type: url
-      destinationId: custodian-events
+      destinationId: owning-system-events

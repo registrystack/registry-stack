@@ -38,7 +38,7 @@ const READY_MIRROR: &str = "
     projection: [documentId]
     handler:
       type: url
-      destinationId: custodian-events
+      destinationId: owning-system-events
 ";
 
 fn two_ready_observers() -> String {
@@ -709,7 +709,7 @@ async fn an_unreachable_destination_never_blocks_a_transition() {
 #[tokio::test]
 async fn startup_refuses_a_project_hook_whose_destination_is_not_bound() {
     let project = STARTER_PROJECT.replace(
-        "destinationId: custodian-events",
+        "destinationId: owning-system-events",
         "destinationId: unbound-events",
     );
     let deployment = deployment(&project).await;

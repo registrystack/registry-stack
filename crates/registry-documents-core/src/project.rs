@@ -601,7 +601,7 @@ mod tests {
         assert_eq!(
             project.hooks[0].handler,
             HookHandler::Url {
-                destination_id: LocalId::new("custodian-events").unwrap()
+                destination_id: LocalId::new("owning-system-events").unwrap()
             }
         );
     }
@@ -985,7 +985,7 @@ mod tests {
             "      type: wasm\n      module: hooks/notify.wasm\n",
         ] {
             let text = STARTER.replacen(
-                "      type: url\n      destinationId: custodian-events\n",
+                "      type: url\n      destinationId: owning-system-events\n",
                 handler,
                 1,
             );
@@ -1052,7 +1052,7 @@ mod tests {
         assert_eq!(
             ready.handler,
             registry_platform_hooks::HookHandlerSource::Url {
-                destination_id: "custodian-events".to_owned()
+                destination_id: "owning-system-events".to_owned()
             }
         );
     }
