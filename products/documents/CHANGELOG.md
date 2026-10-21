@@ -81,6 +81,9 @@ The Document Store is held out of releases.
   only, suspends release, revokes the document's active grants, cancels
   pending verification, and schedules erasure after the policy's
   `cleanupGraceHours`. Grant expiry and revocation erase nothing.
+- A rejected version's bytes are erased `cleanupGraceHours` after the
+  verdict; the version reads `rejected`, then `erased`. A dead-lettered
+  verification keeps its bytes for a replay.
 - A cleanup sweep expires lapsed uploads, erases due versions through a
   dispatch job (PostgreSQL row deletion, or S3 delete confirmed by a 404),
   and, on S3, deletes objects abandoned uploads left behind. A version is

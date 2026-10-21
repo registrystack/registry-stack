@@ -45,7 +45,7 @@ use crate::store::{PostgresStore, StoreError};
 use crate::transfer::{TransferBudget, TransferDeadline};
 use crate::verification::{
     activate_verifier, dead_letters, dispatcher, job_table, replay, sweep_bindings, DeadLetter,
-    ReplayError, ReplayFailure, ReplayRefusal, Replayed, VerdictSource, VerificationStore,
+    Graces, ReplayError, ReplayFailure, ReplayRefusal, Replayed, VerdictSource, VerificationStore,
     VerificationTransport,
 };
 
@@ -305,8 +305,13 @@ async fn prepare_with(
         audit.clone(),
     ))
     .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
-    let dispatcher = dispatcher(VerificationStore::new(store.clone(), schema, audit.clone()))
-        .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
+    let dispatcher = dispatcher(VerificationStore::new(
+        store.clone(),
+        schema,
+        audit.clone(),
+        Graces::of(&package.project),
+    ))
+    .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
     let deadline = TransferDeadline::new(&config.transfers);
     let cleanup = Cleanup {
         store: store.clone(),
@@ -487,7 +492,8 @@ pub async fn replay_verification(
             source,
         })?;
     let audit = open_audit(config, &secrets, Some(OPERATOR_PROCESS)).await?;
-    let verification = VerificationStore::new(store.clone(), schema, audit);
+    let graces = Graces::of(&load_package(config)?.project);
+    let verification = VerificationStore::new(store.clone(), schema, audit, graces);
     replay(&store, verification, version_id, expected_generation)
         .await
         .map_err(|error| match error {

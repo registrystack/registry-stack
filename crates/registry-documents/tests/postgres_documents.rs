@@ -20,7 +20,7 @@ use registry_documents::runtime::{prepare_with_verifier, Prepared, RuntimeError}
 use registry_documents::store::PostgresStore;
 use registry_documents::transfer::TransferBudget;
 use registry_documents::verification::{
-    dispatcher, VerdictSource, VerificationStore, VerificationTransport, MAXIMUM_ATTEMPTS,
+    dispatcher, Graces, VerdictSource, VerificationStore, VerificationTransport, MAXIMUM_ATTEMPTS,
 };
 use registry_documents_core::ProblemCode;
 use registry_platform_audit::{AuditProfile, AuditWriter};
@@ -615,6 +615,52 @@ async fn a_rejected_version_is_never_released() {
     assert_eq!(status(&api.read(APP, &document).await), "rejected");
 }
 
+/// A rejection arms the erasure of the rejected bytes after the policy's
+/// `cleanupGraceHours`, through the same sweep a removal uses. The version
+/// reads as rejected until its bytes are erased, and its record stays.
+#[tokio::test]
+async fn a_rejected_version_is_erased_after_its_grace() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", REJECT);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, _) = upload(&api, &pdf(256, 95)).await;
+    prepared.verify_due().await;
+    assert_eq!(status(&api.read(APP, &document).await), "rejected");
+    let armed: bool = deployment
+        .scalar(
+            "SELECT erasure_state = 'pending'
+                    AND erasure_requested_at = verified_at
+                    AND erasure_due_at = verified_at + interval '24 hours'
+               FROM documents_versions",
+        )
+        .await;
+    assert!(armed, "the rejection arms erasure after the policy's grace");
+    prepared.sweep_due().await;
+    let held: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_contents")
+        .await;
+    assert_eq!(held, 1, "the grace has not ended");
+    deployment
+        .execute(
+            "UPDATE documents_versions
+                SET erasure_requested_at = erasure_requested_at - interval '2 days',
+                    erasure_due_at = now() - interval '1 second'",
+        )
+        .await;
+    prepared.sweep_due().await;
+    let (held, verification): (i64, String) = (
+        deployment
+            .scalar("SELECT count(*) FROM documents_contents")
+            .await,
+        deployment
+            .scalar("SELECT verification_state FROM documents_versions")
+            .await,
+    );
+    assert_eq!(held, 0);
+    assert_eq!(verification, "rejected");
+    assert_eq!(status(&api.read(APP, &document).await), "erased");
+}
+
 #[tokio::test]
 async fn an_unavailable_verifier_never_releases_and_a_dead_letter_neither_approves_nor_rejects() {
     let deployment = deployment().await;
@@ -666,6 +712,18 @@ async fn an_unavailable_verifier_never_releases_and_a_dead_letter_neither_approv
     api.download(CITIZEN, &document, &version)
         .await
         .assert_problem(ProblemCode::DocumentVersionNotReleasable);
+    // A dead-lettered verification waits for a replay, so its bytes are
+    // kept.
+    prepared.sweep_due().await;
+    let (erasure, held): (String, i64) = (
+        deployment
+            .scalar("SELECT erasure_state FROM documents_versions")
+            .await,
+        deployment
+            .scalar("SELECT count(*) FROM documents_contents")
+            .await,
+    );
+    assert_eq!((erasure.as_str(), held), ("none", 1));
 }
 
 #[tokio::test]
@@ -925,6 +983,7 @@ async fn a_verification_audit_failure_refuses_the_claim_and_records_no_verdict()
         store.clone(),
         deployment.schema.clone(),
         audit,
+        Graces::default(),
     ))
     .unwrap();
     let transport = VerificationTransport::new(

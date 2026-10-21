@@ -203,6 +203,7 @@ entries:
   - id: DOCUMENTS-SEC-39
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_expiry_and_revocation_erase_nothing_held_in_custody}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_rejected_version_is_erased_after_its_grace}
   - id: DOCUMENTS-SEC-40
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_paused_deployment_erases_nothing}

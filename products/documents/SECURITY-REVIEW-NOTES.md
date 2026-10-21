@@ -426,6 +426,12 @@ DOCUMENTS-DEC-26:
 - Grant expiry and revocation erase nothing. The grace is frozen at the
   request from the policy's `cleanupGraceHours`; changing the policy later
   moves no due time.
+- A rejection arms the erasure of the rejected bytes in the transaction that
+  records the verdict, due after the policy's `cleanupGraceHours` (the
+  version's upload window when the policy is no longer declared), and the
+  same sweep erases them. The version reads `rejected`, then `erased`. A
+  dead-lettered verification is not a verdict and keeps its bytes for a
+  replay (DOCUMENTS-DEC-21).
 - The sweep arms one erasure job per due version on
   `registry-platform-dispatch` and records `erased` only in the transaction
   that deletes the content row (PostgreSQL) or after every committed S3
@@ -493,5 +499,10 @@ the merge.
 - Replaying a dead-lettered erasure job is owed by WP7; until then a
   version whose erasure dead-lettered stays pending and unservable.
 - The Rust client has no method for the erasure route yet.
+- A custodian's removal of a rejected document finds erasure already armed,
+  so it answers as a repeat with the rejection's due time and revokes no
+  grant. A grant on a rejected version releases nothing, since the version
+  can never become releasable again, but it stays listed as active until it
+  expires or is revoked.
 - A paused deployment keeps due bytes for as long as it stays paused, and
   orphan S3 objects accumulate meanwhile.
