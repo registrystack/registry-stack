@@ -77,8 +77,8 @@ transfers:
   minimumDeadlineSeconds: 60
   mebibyteAllowanceSeconds: 8
 cleanup:
-  # paused stops erasure work; expired and revoked document grants stop
-  # releasing bytes regardless.
+  # paused stops every erasure; a removal request still stops release at
+  # once. Pause it while restoring a backup.
   erasure: active
 destinations:
   hooks:

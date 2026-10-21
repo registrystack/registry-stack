@@ -7,7 +7,7 @@
 //! content verifier, suspends every version verified under another
 //! verifier binding, loads the token issuer's signing keys, binds the
 //! listener, and serves the HTTP surface beside the content verification
-//! worker.
+//! worker, the erasure worker, and the cleanup pass.
 //!
 //! Every step that can refuse a deployment runs before the listener binds,
 //! so a mis-provisioned deployment never answers a request.
@@ -33,8 +33,11 @@ use tracing_subscriber::filter::LevelFilter;
 use crate::activation::{self, ActivationError, ApplyRequest};
 use crate::audit::DocumentsAudit;
 use crate::auth::DocumentsAuthenticator;
-use crate::config::{describe_secret_failure, startup_report, RuntimeConfig, RuntimeConfigError};
+use crate::config::{
+    describe_secret_failure, startup_report, Erasure, RuntimeConfig, RuntimeConfigError,
+};
 use crate::content::{pinned_storage, ContentStorage, StorageError};
+use crate::erasure::{cleanup_once, CleanupPass, ErasureStore, ErasureTransport, ORPHAN_MARGIN};
 use crate::http::{router, DocumentRoutes};
 use crate::package::{load_package, PackageLoadError};
 use crate::service::{DocumentService, ServiceSettings};
@@ -53,6 +56,9 @@ const WORKER_CONCURRENCY: NonZeroUsize = match NonZeroUsize::new(4) {
 
 /// How long the verification worker waits after it finds no due job.
 const WORKER_IDLE_POLL: Duration = Duration::from_secs(5);
+
+/// The time between two cleanup passes.
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
 
 #[must_use]
 pub fn command() -> Command {
@@ -134,6 +140,71 @@ pub struct Prepared {
     routes: DocumentRoutes,
     dispatcher: Dispatcher<VerificationStore>,
     transport: Arc<VerificationTransport>,
+    cleanup: Cleanup,
+}
+
+/// What the erasure worker and the cleanup pass run over.
+struct Cleanup {
+    store: PostgresStore,
+    storage: Arc<ContentStorage>,
+    audit: DocumentsAudit,
+    erasure: Erasure,
+    orphan_age: Duration,
+    dispatcher: Dispatcher<ErasureStore>,
+    transport: Arc<ErasureTransport>,
+}
+
+impl Cleanup {
+    async fn pass(&self) -> Result<CleanupPass, crate::erasure::CleanupError> {
+        cleanup_once(
+            &self.store,
+            &self.storage,
+            &self.audit,
+            self.erasure,
+            self.orphan_age,
+        )
+        .await
+    }
+
+    fn worker(&self) -> DispatchWorker<ErasureStore, ErasureTransport> {
+        DispatchWorker::new(
+            self.dispatcher.clone(),
+            Arc::clone(&self.transport),
+            WorkerConfig {
+                concurrency: WORKER_CONCURRENCY,
+                idle_poll: WORKER_IDLE_POLL,
+            },
+        )
+    }
+
+    /// Run a cleanup pass every [`CLEANUP_INTERVAL`] until `stopped` is
+    /// set. A failed pass is logged and the next one runs on schedule.
+    async fn run(self: Arc<Self>, mut stopped: watch::Receiver<bool>) {
+        loop {
+            match self.pass().await {
+                Ok(pass) if pass != CleanupPass::default() => {
+                    tracing::info!(
+                        expired_uploads = pass.expired_uploads,
+                        armed_erasures = pass.armed_erasures,
+                        erased_orphans = pass.erased_orphans,
+                        "a cleanup pass finished"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::error!(error = %error, "a cleanup pass failed; the next pass retries");
+                }
+            }
+            tokio::select! {
+                () = tokio::time::sleep(CLEANUP_INTERVAL) => {}
+                changed = stopped.changed() => {
+                    if changed.is_err() || *stopped.borrow() {
+                        return;
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for Prepared {
@@ -219,8 +290,24 @@ async fn prepare_with(
             source,
         })?;
     let jobs = job_table(&schema).map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
+    let erasure_dispatcher = crate::erasure::dispatcher(ErasureStore::new(
+        store.clone(),
+        schema.clone(),
+        audit.clone(),
+    ))
+    .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
     let dispatcher = dispatcher(VerificationStore::new(store.clone(), schema, audit.clone()))
         .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
+    let deadline = TransferDeadline::new(&config.transfers);
+    let cleanup = Cleanup {
+        store: store.clone(),
+        storage: Arc::clone(&storage),
+        audit: audit.clone(),
+        erasure: config.cleanup.erasure,
+        orphan_age: deadline.for_length(ceiling) + ORPHAN_MARGIN,
+        dispatcher: erasure_dispatcher,
+        transport: Arc::new(ErasureTransport::new(store.clone(), Arc::clone(&storage))),
+    };
     let budget = TransferBudget::new(ceiling);
     let transport = Arc::new(VerificationTransport::new(
         store.clone(),
@@ -246,7 +333,7 @@ async fn prepare_with(
             verifier_binding: verifier.binding_digest().to_owned(),
             ceiling,
             budget,
-            deadline: TransferDeadline::new(&config.transfers),
+            deadline,
             idempotency_days: config.retention.receipt_retention_days.get(),
         },
     ));
@@ -261,6 +348,7 @@ async fn prepare_with(
         },
         dispatcher,
         transport,
+        cleanup,
     })
 }
 
@@ -512,6 +600,19 @@ impl Prepared {
         self.worker().drain(&shutdown).await
     }
 
+    /// Run one cleanup pass and then every due erasure attempt, as the
+    /// serving runtime would, and return the pass. Erasure attempts run only
+    /// while erasure is active.
+    #[cfg(feature = "postgres-test")]
+    pub async fn sweep_due(&self) -> CleanupPass {
+        let pass = self.cleanup.pass().await.expect("the cleanup pass runs");
+        if self.cleanup.erasure == Erasure::Active {
+            let (_sender, shutdown) = watch::channel(false);
+            self.cleanup.worker().drain(&shutdown).await;
+        }
+        pass
+    }
+
     fn worker(&self) -> DispatchWorker<VerificationStore, VerificationTransport> {
         DispatchWorker::new(
             self.dispatcher.clone(),
@@ -524,7 +625,8 @@ impl Prepared {
     }
 
     /// Serve until `shutdown` resolves, then finish the requests in flight
-    /// and stop the verification worker.
+    /// and stop the verification worker, the erasure worker, and the
+    /// cleanup pass.
     pub async fn serve_until(
         self,
         shutdown: impl std::future::Future<Output = ()> + Send + 'static,
@@ -533,7 +635,17 @@ impl Prepared {
             tracing::info!(address = %address, "the Document Store is serving");
         }
         let (stop, stopped) = watch::channel(false);
-        let worker = tokio::spawn(self.worker().run(stopped));
+        let worker = tokio::spawn(self.worker().run(stopped.clone()));
+        let erasure_worker = match self.cleanup.erasure {
+            Erasure::Active => Some(tokio::spawn(self.cleanup.worker().run(stopped.clone()))),
+            Erasure::Paused => {
+                tracing::warn!(
+                    "cleanup.erasure is paused: no erasure runs and no orphaned object is erased until it is active again"
+                );
+                None
+            }
+        };
+        let cleanup = tokio::spawn(Arc::new(self.cleanup).run(stopped));
         let served = axum::serve(self.listener, router(self.routes))
             .with_graceful_shutdown(shutdown)
             .await
@@ -543,6 +655,15 @@ impl Prepared {
         }
         if let Err(error) = worker.await {
             tracing::error!(error = %error, "the content verification worker failed");
+        }
+        if let Some(Err(error)) = match erasure_worker {
+            Some(handle) => Some(handle.await),
+            None => None,
+        } {
+            tracing::error!(error = %error, "the erasure worker failed");
+        }
+        if let Err(error) = cleanup.await {
+            tracing::error!(error = %error, "the cleanup pass failed");
         }
         served
     }

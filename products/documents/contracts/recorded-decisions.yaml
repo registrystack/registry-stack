@@ -86,8 +86,9 @@ decisions:
       delete it.
     reasoning: >-
       A delete in the failure path can itself fail and would hide the orphan.
-      The staged row keeps every such object findable for the cleanup sweep
-      WP5 adds.
+      The staged row keeps every such object findable for the orphan sweep,
+      which erases it once it is older than the longest transfer deadline
+      (DOCUMENTS-DEC-22).
     evidence:
       - {path: crates/registry-documents/tests/postgres_s3.rs, name: a_failed_object_write_keeps_the_staged_row_and_finalizes_nothing}
   - id: DOCUMENTS-DEC-07
@@ -302,3 +303,123 @@ decisions:
     evidence:
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_returns_a_dead_lettered_verification_to_pending}
       - {path: crates/registry-documentsctl/tests/postgres_cli.rs, name: the_dead_letter_verbs_refuse_a_database_that_is_not_activated}
+  - id: DOCUMENTS-DEC-19
+    subject: Grant expiry and revocation erase nothing held in custody
+    decision: >-
+      Two clocks are kept apart. A grant's expiry or revocation only stops that
+      grant releasing; it never starts erasure. Bytes are erased only after the
+      custodian asks for the document's removal and the policy's
+      cleanupGraceHours have passed. Nothing expires by inactivity: there is no
+      sliding expiry, and a citizen-held document stays until its custodian
+      removes it.
+    reasoning: >-
+      Erasing on grant expiry would destroy a document its custodian still
+      holds the moment its last share lapsed. Custody belongs to the custodian,
+      so only the custodian ends it.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_expiry_and_revocation_erase_nothing_held_in_custody}
+  - id: DOCUMENTS-DEC-20
+    subject: A removal request stops release at once and freezes its grace
+    decision: >-
+      The removal request moves the version to erasure pending, suspends it,
+      revokes every active grant on the document, and cancels its pending
+      verification, all in one transaction. The due time is the request time
+      plus the policy's cleanupGraceHours at that moment; a later policy change
+      does not move it. A repeated request changes nothing and answers the
+      document as it stands. Only the custodian may ask; a caller that cannot
+      see the document is answered resource.not-found.
+    reasoning: >-
+      The grace exists to give the operator a window to restore from a
+      mistake, not to keep serving: a document its custodian asked to remove
+      must not be released in the meantime. Freezing the due time keeps one
+      request's outcome independent of later package changes.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes}
+  - id: DOCUMENTS-DEC-21
+    subject: Rejected and dead-lettered versions are kept, not erased
+    decision: >-
+      A version whose verification was rejected or dead-lettered stays in
+      custody, unreleasable, until its custodian asks for removal. The sweep
+      never erases a version on its own judgement.
+    reasoning: >-
+      A rejection may be wrong and a dead-letter is an outage, not a verdict;
+      keeping the bytes lets an operator re-verify or replay. Erasure follows
+      the custodian's decision only (DOCUMENTS-DEC-19).
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_rejected_version_is_never_released}
+  - id: DOCUMENTS-DEC-22
+    subject: Lapsed uploads are expired; orphaned objects are swept after the longest transfer
+    decision: >-
+      Each cleanup pass marks every reserved upload past its deadline expired,
+      in audited batches, whether erasure is active or paused; an expired
+      upload stops counting against the custodian's quota and cannot be
+      finalized. A lapsed upload never stored bytes the Store serves, so
+      nothing is erased for it. An S3 object an upload attempt left
+      uncommitted is erased, and its staged row deleted, once it is older than
+      the deployment's longest transfer deadline plus ten minutes, and only
+      while erasure is active.
+    reasoning: >-
+      Expiring a reservation changes state only, so pausing erasure has no
+      reason to stop it. Sweeping an uncommitted object any sooner could race a
+      write still in flight and leave an object no row names.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_unfinished_upload_past_its_deadline_is_expired_by_the_sweep}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: the_orphan_sweep_erases_only_old_uncommitted_objects}
+  - id: DOCUMENTS-DEC-23
+    subject: An erasure is recorded only once the bytes are confirmed gone
+    decision: >-
+      Each version due for erasure gets one dispatch job. For PostgreSQL bytea
+      the content row is deleted in the transaction that records the version
+      erased. For S3 every committed object is deleted and a read of it must
+      answer 404 before its staged row is deleted and the version recorded
+      erased; an unconfirmed delete leaves the version pending and the job
+      retries. Erased means this Store can no longer serve the bytes:
+      PostgreSQL returns the space only after vacuum, and backups and a
+      provider's own copies keep them until they age out.
+    reasoning: >-
+      Recording an erasure the store did not confirm would let the Store claim
+      a removal it cannot prove. Recording in the same transaction as the
+      deletion of the rows that named the bytes keeps an interrupted attempt
+      resumable without a second erasure being recorded.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_unconfirmed_s3_delete_keeps_the_version_pending}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_interrupted_erasure_batch_resumes_without_double_erasure}
+  - id: DOCUMENTS-DEC-24
+    subject: A dead-lettered erasure waits for a replay
+    decision: >-
+      An erasure job that uses every attempt, about seven days of retries, is
+      dead-lettered and not re-armed by later passes. Its version stays erasure
+      pending and unservable until an operator replays the job.
+    reasoning: >-
+      Re-arming would hide a store that keeps refusing deletes behind an
+      endless retry. A dead-letter is visible, and the version releases nothing
+      while it waits.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_interrupted_erasure_batch_resumes_without_double_erasure}
+  - id: DOCUMENTS-DEC-25
+    subject: Erasure deletes bytes and keeps every record
+    decision: >-
+      Erasure deletes the content row or the object and its staged row, and
+      keeps the document, version, grants, idempotency keys, and dispatch jobs
+      as tombstones. Every foreign key is ON DELETE RESTRICT, so no delete
+      cascades through a record the audit trail names. Idempotency keys are not
+      pruned by erasure.
+    reasoning: >-
+      The audit journal names documents, versions, and grants by identifier; a
+      cascade would leave entries naming rows that no longer exist and let one
+      delete silently remove history.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: no_delete_cascades_through_custody_records}
+  - id: DOCUMENTS-DEC-26
+    subject: A document under an undeclared policy cannot be removed over HTTP
+    decision: >-
+      A document whose policy the deployed package no longer declares is seen
+      by nobody, so its custodian's removal request answers resource.not-found.
+      Declaring the policy again makes it removable.
+    reasoning: >-
+      Granting removal on a policy the package no longer declares would need a
+      second, policy-free standing rule; the grace a removal freezes comes from
+      that policy. Keeping the bytes is the safe default until the operator
+      restores the declaration.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_document_under_an_undeclared_policy_cannot_be_removed}

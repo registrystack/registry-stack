@@ -330,6 +330,20 @@ mod tests {
     }
 
     #[test]
+    fn the_erasure_job_table_migration_is_exactly_the_dispatch_core_shape() {
+        let table =
+            JobTable::new("public", crate::erasure::JOB_TABLE, "version_id", "part").unwrap();
+        let declared = normalized(&table.create_statements().join("\n").replace("public.", ""));
+        let start = DOCUMENTS_MIGRATION
+            .find("CREATE TABLE IF NOT EXISTS documents_erasure_jobs")
+            .expect("the erasure job table");
+        let end = DOCUMENTS_MIGRATION
+            .find("ALTER TABLE documents_erasure_jobs")
+            .expect("the erasure job table's own constraints");
+        assert_eq!(normalized(&DOCUMENTS_MIGRATION[start..end]), declared);
+    }
+
+    #[test]
     fn the_baseline_is_version_100_and_later_versions_increase() {
         assert_eq!(MIGRATIONS[0].0, 100);
         assert!(versions_start_at_baseline_and_increase(&MIGRATIONS));

@@ -225,6 +225,7 @@ impl DocumentService {
         let grant_id = match replay(&transaction, &key, &digest).await? {
             Replay::Repeat(grant_id) => grant_id,
             Replay::Fresh => {
+                Self::refuse_erasing(&transaction, version_id).await?;
                 let grant_id = Uuid::new_v4();
                 transaction
                     .execute(

@@ -43,6 +43,7 @@ pub struct Deployment {
     storage: String,
     verifier: String,
     project: String,
+    erasure: &'static str,
     extra: String,
 }
 
@@ -97,6 +98,7 @@ impl Deployment {
             storage: storage.to_owned(),
             verifier: verifier.to_owned(),
             project: project.to_owned(),
+            erasure: "active",
             extra: String::new(),
         };
         deployment.secret("runtime-database-url", runtime_url.unwrap_or(&scoped_url));
@@ -142,6 +144,12 @@ impl Deployment {
         self.write_runtime();
     }
 
+    /// Set `cleanup.erasure` to `mode`, `active` or `paused`.
+    pub fn set_erasure(&mut self, mode: &'static str) {
+        self.erasure = mode;
+        self.write_runtime();
+    }
+
     /// Append `block`, top-level runtime keys, to the runtime document.
     pub fn configure(&mut self, block: &str) {
         self.extra = block.to_owned();
@@ -182,13 +190,14 @@ audit:
   path: {audit}
   hashKeyRef: secret:file/documents-audit-key
 {storage}{verifier}cleanup:
-  erasure: active
+  erasure: {erasure}
 {extra}",
             package = self.directory.path().join("package").display(),
             secrets = self.secrets.display(),
             audit = self.audit_path().display(),
             storage = self.storage,
             verifier = self.verifier,
+            erasure = self.erasure,
             extra = self.extra,
         );
         std::fs::write(&self.runtime, document).unwrap();
@@ -702,6 +711,20 @@ impl Api {
             &format!("/documents/{document}/grants"),
             Some(key),
             &body,
+        )
+        .await
+    }
+
+    /// Ask for the erasure of `document` as `principal`.
+    pub async fn erase(&self, principal: Principal, document: &str) -> Answer {
+        self.call(
+            request(
+                principal,
+                axum::http::Method::POST,
+                &format!("/documents/{document}/erasure"),
+            )
+            .body(axum::body::Body::empty())
+            .unwrap(),
         )
         .await
     }
