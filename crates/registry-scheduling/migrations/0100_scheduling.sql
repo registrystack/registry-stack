@@ -144,21 +144,110 @@ CREATE INDEX IF NOT EXISTS scheduling_history_claim_idx
     ON scheduling_history(claim_id, occurred_at, event_id);
 
 CREATE TABLE IF NOT EXISTS scheduling_outbox (
-    outbox_id uuid PRIMARY KEY,
-    purpose text NOT NULL CHECK (purpose IN ('confirmation','change','cancellation','reminder')),
-    claim_id uuid NOT NULL REFERENCES scheduling_claims(claim_id),
-    appointment_revision bigint NOT NULL,
-    due_at timestamptz NOT NULL,
-    delivery_state text NOT NULL CHECK (delivery_state IN ('pending','delivered','failed','local','suppressed')),
-    attempts integer NOT NULL DEFAULT 0,
-    next_attempt_at timestamptz NOT NULL,
-    payload jsonb NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    delivered_at timestamptz
-);
+                 outbox_id uuid NOT NULL,
+                 purpose text NOT NULL
+                     CHECK (purpose <> '' AND octet_length(purpose) <= 256),
+                 generation bigint NOT NULL CHECK (generation > 0),
+                 state text NOT NULL
+                     CONSTRAINT scheduling_outbox_state_values CHECK (
+                         state IN ('pending', 'leased', 'delivered', 'dead-lettered',
+                                   'expired', 'unknown', 'cancelled')
+                     ),
+                 attempt smallint NOT NULL CHECK (attempt >= 0),
+                 next_attempt_at timestamptz,
+                 attempt_started_at timestamptz,
+                 lease_expires_at timestamptz,
+                 lease_token uuid,
+                 delivered_at timestamptz,
+                 dead_lettered_at timestamptz,
+                 expired_at timestamptz,
+                 updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 PRIMARY KEY (outbox_id, purpose),
+                 CONSTRAINT scheduling_outbox_shape CHECK (
+                     (state = 'pending'
+                         AND next_attempt_at IS NOT NULL
+                         AND attempt_started_at IS NULL
+                         AND lease_expires_at IS NULL
+                         AND lease_token IS NULL
+                         AND delivered_at IS NULL
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NULL)
+                     OR (state = 'leased'
+                         AND attempt > 0
+                         AND next_attempt_at IS NULL
+                         AND attempt_started_at IS NOT NULL
+                         AND lease_expires_at > attempt_started_at
+                         AND lease_token IS NOT NULL
+                         AND delivered_at IS NULL
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NULL)
+                     OR (state = 'delivered'
+                         AND attempt > 0
+                         AND next_attempt_at IS NULL
+                         AND attempt_started_at IS NULL
+                         AND lease_expires_at IS NULL
+                         AND lease_token IS NULL
+                         AND delivered_at IS NOT NULL
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NULL)
+                     OR (state = 'dead-lettered'
+                         AND attempt > 0
+                         AND next_attempt_at IS NULL
+                         AND attempt_started_at IS NULL
+                         AND lease_expires_at IS NULL
+                         AND lease_token IS NULL
+                         AND delivered_at IS NULL
+                         AND dead_lettered_at IS NOT NULL)
+                     OR (state = 'expired'
+                         AND next_attempt_at IS NULL
+                         AND attempt_started_at IS NULL
+                         AND lease_expires_at IS NULL
+                         AND lease_token IS NULL
+                         AND delivered_at IS NULL
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NOT NULL)
+                     OR (state = 'unknown'
+                         AND attempt > 0
+                         AND next_attempt_at IS NULL
+                         AND attempt_started_at IS NULL
+                         AND lease_expires_at IS NULL
+                         AND lease_token IS NULL
+                         AND delivered_at IS NULL
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NULL)
+                     OR (state = 'cancelled'
+                         AND next_attempt_at IS NULL
+                         AND attempt_started_at IS NULL
+                         AND lease_expires_at IS NULL
+                         AND lease_token IS NULL
+                         AND delivered_at IS NULL
+                         AND dead_lettered_at IS NULL
+                         AND expired_at IS NULL)
+                 )
+             );
 CREATE INDEX IF NOT EXISTS scheduling_outbox_due_idx
-    ON scheduling_outbox(due_at, next_attempt_at)
-    WHERE delivery_state = 'pending';
+                 ON scheduling_outbox (next_attempt_at, outbox_id, purpose)
+                 WHERE state = 'pending';
+CREATE INDEX IF NOT EXISTS scheduling_outbox_lease_idx
+                 ON scheduling_outbox (lease_expires_at, outbox_id, purpose)
+                 WHERE state = 'leased';
+ALTER TABLE scheduling_outbox
+    ADD COLUMN claim_id uuid NOT NULL REFERENCES scheduling_claims(claim_id),
+    ADD COLUMN appointment_revision bigint NOT NULL,
+    ADD COLUMN due_at timestamptz NOT NULL,
+    ADD COLUMN payload jsonb NOT NULL,
+    ADD COLUMN created_at timestamptz NOT NULL DEFAULT now(),
+    ADD COLUMN last_failure_class text
+        CHECK (last_failure_class IS NULL OR octet_length(last_failure_class) BETWEEN 1 AND 64),
+    ADD CONSTRAINT scheduling_outbox_purpose_values
+        CHECK (purpose IN ('confirmation','change','cancellation','reminder')),
+    ADD CONSTRAINT scheduling_outbox_one_purpose UNIQUE (outbox_id),
+    -- An intent the dispatcher carries no further names why, so an operator can
+    -- tell a deployment without a destination from a refused delivery.
+    ADD CONSTRAINT scheduling_outbox_set_aside_class
+        CHECK (state NOT IN ('dead-lettered','expired') OR last_failure_class IS NOT NULL),
+    ADD CONSTRAINT scheduling_outbox_delivered_class
+        CHECK (state <> 'delivered' OR last_failure_class IS NULL);
 CREATE INDEX IF NOT EXISTS scheduling_outbox_claim_idx
     ON scheduling_outbox(claim_id, purpose);
 

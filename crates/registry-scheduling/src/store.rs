@@ -126,9 +126,6 @@ const MIGRATION_LOCK_KEY: i64 = 0x7363_6865_6475_6c65;
 /// namespace spells the ASCII bytes of "SCHD".
 const HOLD_CEILING_LOCK_NAMESPACE: i32 = 0x5343_4844;
 
-/// The send deadline must fit inside the remaining dispatch lease.
-pub(crate) const REMINDER_SEND_TIMEOUT: Duration = Duration::from_secs(5);
-
 /// The deployment's clock: the instant the HTTP edge stamps on each request,
 /// the store's authorization re-checks and hold expiry inside a capacity
 /// transaction, and the runtime workers' passes all read it. Production
@@ -234,6 +231,11 @@ pub enum StoreError {
     /// cause is value-free: a refused bound or the server's SQLSTATE.
     #[error("the Scheduling dispatch retention pass could not complete: {0}")]
     DispatchRetention(#[source] registry_platform_hooks::delivery::RetentionError),
+    /// A delivery-intent dispatch pass could not complete: the claim, the
+    /// liveness read, or the outcome write was refused. The cause is
+    /// value-free; the dispatch core reports it as an operational event.
+    #[error("the Scheduling delivery intent dispatch pass could not complete")]
+    IntentDispatch,
     /// The environment records would retire or reduce supply that live
     /// appointments or holds still occupy. The swap is refused whole, so the
     /// operator either keeps the supply or closes what stands on it first.
@@ -741,14 +743,14 @@ pub struct OutboxRow {
     pub claim_id: Uuid,
     pub appointment_revision: i64,
     pub due_at: DateTime<Utc>,
-    pub attempts: i32,
     pub payload: Value,
 }
 
-/// One delivery intent no sweep will carry any further, as an operator reads
+/// One delivery intent the dispatcher will carry no further, as an operator reads
 /// it. The delivery state is what separates the two ways that happens: `local`
 /// is a deployment that declares no destination, and `failed` is a destination
-/// that refused every attempt the ceiling allowed.
+/// that refused the intent outright or failed every attempt the policy
+/// allowed.
 #[derive(Clone, Debug)]
 pub struct UndeliveredIntent {
     pub outbox_id: Uuid,
@@ -1769,7 +1771,6 @@ impl PostgresStore {
                 json!({}),
             )
             .await?;
-        transaction.suppress_pending_reminders(hold_id).await?;
         transaction
             .insert_attempt(
                 Uuid::new_v4(),
@@ -1891,10 +1892,8 @@ impl PostgresStore {
                 }))
             .await?;
         // A stale unsent reminder describes an appointment that no longer
-        // exists in this form; it is suppressed, never sent (INT-02).
-        transaction
-            .suppress_pending_reminders(appointment_id)
-            .await?;
+        // exists in this form; its dispatch sets it aside, never sends it
+        // (INT-02).
         let moved = ClaimRow {
             displayed_start: admission.start,
             displayed_end: admission.end,
@@ -2020,9 +2019,6 @@ impl PostgresStore {
             )
             .await?;
         transaction
-            .suppress_pending_reminders(appointment_id)
-            .await?;
-        transaction
             .insert_outbox(
                 "cancellation",
                 appointment_id,
@@ -2132,101 +2128,45 @@ impl PostgresStore {
         Ok(rows.len() as u64)
     }
 
-    /// Claim due outbox intents for dispatch, marking the attempt and
-    /// holding each intent for the lease a dispatch pass needs. An intent
-    /// is due when its own time has come and the back-off a failed attempt
-    /// wrote has passed: without the second half a failing intent would be
-    /// re-claimed on every tick and burn its attempts ceiling in seconds.
-    ///
-    /// The claim is a durable reservation. `next_attempt_at` moves to the
-    /// end of the lease, so a second dispatcher, or the same one after a
-    /// crash, cannot claim the intent again until the lease passes; the
-    /// outcome writes that follow are fenced by the attempt number this
-    /// claim stamped, so only the attempt that owns the intent can settle
-    /// it. The lease must therefore cover a whole claimed batch's worst
-    /// case, and a dispatcher that dies delays its intents by exactly one
-    /// lease.
-    pub async fn claim_due_intents(
+    /// A pooled connection for the delivery-intent dispatcher.
+    pub(crate) async fn intent_dispatch_client(
         &self,
-        now: DateTime<Utc>,
-        limit: i64,
-        lease: TimeDelta,
-    ) -> Result<Vec<OutboxRow>, StoreError> {
-        let leased_until = now
-            .checked_add_signed(lease)
-            .ok_or(StoreError::Configuration)?;
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        let rows = transaction
-            .query(
-                "UPDATE scheduling_outbox SET attempts = attempts + 1, next_attempt_at = $3 \
-                 WHERE outbox_id IN (\
-                     SELECT outbox_id FROM scheduling_outbox \
-                     WHERE delivery_state='pending' AND due_at <= $1 \
-                     AND next_attempt_at <= $1 \
-                     ORDER BY due_at LIMIT $2 FOR UPDATE SKIP LOCKED) \
-                     RETURNING outbox_id, purpose, claim_id, appointment_revision, due_at, attempts, payload",
-                &[&now, &limit, &leased_until],
-            )
-            .await?;
-        transaction.commit().await?;
-        Ok(rows
-            .iter()
-            .map(|row| OutboxRow {
-                outbox_id: row.get(0),
-                purpose: row.get(1),
-                claim_id: row.get(2),
-                appointment_revision: row.get(3),
-                due_at: row.get(4),
-                attempts: row.get(5),
-                payload: row.get(6),
-            })
-            .collect())
+    ) -> Result<deadpool_postgres::Client, StoreError> {
+        self.client().await
     }
 
-    /// Whether the attempt that claimed an intent still owns a dispatch it
-    /// should carry out: the row must still be pending at that attempt, the
-    /// remaining lease must cover one more send deadline, and a reminder
-    /// must still describe its appointment's current revision. A
-    /// cancellation or reschedule suppresses the row, a superseding attempt
-    /// means this one no longer speaks for the intent, and a lease that
-    /// expired means another pass is entitled to reclaim the intent; any of
-    /// the three skips the send.
-    pub async fn intent_still_dispatchable(
-        &self,
-        outbox_id: Uuid,
-        attempts: i32,
-    ) -> Result<bool, StoreError> {
+    /// Whether a claimed intent still describes a decision the caller
+    /// stands by, read immediately before its send. A confirmation, change
+    /// or cancellation always does. A reminder does only while its
+    /// appointment is active at the revision the reminder was minted for:
+    /// a cancellation or reschedule supersedes it, and it is set aside
+    /// rather than sent (INT-02).
+    pub async fn intent_is_current(&self, outbox_id: Uuid) -> Result<bool, StoreError> {
         let client = self.client().await?;
         let row = client
             .query_opt(
-                "SELECT o.next_attempt_at FROM scheduling_outbox AS o \
+                "SELECT 1 FROM scheduling_outbox AS o \
                  JOIN scheduling_claims AS c ON c.claim_id = o.claim_id \
-                 WHERE o.outbox_id=$1 AND o.attempts=$2 AND o.attempts > 0 \
-                   AND o.delivery_state='pending' \
+                 WHERE o.outbox_id=$1 \
                    AND (o.purpose <> 'reminder' \
                         OR (c.state='active' AND c.revision = o.appointment_revision))",
-                &[&outbox_id, &attempts],
+                &[&outbox_id],
             )
             .await?;
-        let send_deadline = self
-            .observed_now()
-            .checked_add_signed(
-                TimeDelta::from_std(REMINDER_SEND_TIMEOUT)
-                    .map_err(|_| StoreError::Configuration)?,
-            )
-            .ok_or(StoreError::Configuration)?;
-        Ok(row.is_some_and(|row| row.get::<_, DateTime<Utc>>(0) > send_deadline))
+        Ok(row.is_some())
     }
 
     /// The intents nothing will deliver without an operator, oldest first.
     ///
-    /// A deployment that declares no reminders destination holds every intent
-    /// locally, and a destination that refused every attempt leaves the intent
-    /// failed. Both are recorded and then waited on by nobody, so without a
-    /// read path an operator cannot tell either has happened. Delivered
-    /// intents are not listed, and neither are pending ones: the sweep is
-    /// still carrying those.
+    /// A deployment that declares no reminders destination sets every intent
+    /// aside locally, and a destination that refused an intent, or failed
+    /// every attempt the policy allowed, leaves it failed. Both are recorded
+    /// and then waited on by nobody, so without a read path an operator
+    /// cannot tell either has happened. Delivered intents are not listed,
+    /// and neither are pending or leased ones: the dispatcher is still
+    /// carrying those. A reminder set aside because its appointment was
+    /// cancelled or moved is not listed either: nobody is meant to deliver
+    /// it.
     pub async fn undelivered_intents(
         &self,
         limit: i64,
@@ -2235,8 +2175,11 @@ impl PostgresStore {
         let rows = client
             .query(
                 "SELECT outbox_id, purpose, claim_id, appointment_revision, due_at, \
-                 delivery_state, attempts, payload FROM scheduling_outbox \
-                 WHERE delivery_state IN ('local','failed') \
+                 CASE WHEN last_failure_class = 'destination_unconfigured' \
+                      THEN 'local' ELSE 'failed' END, \
+                 attempt::integer, payload FROM scheduling_outbox \
+                 WHERE state IN ('dead-lettered','expired') \
+                   AND last_failure_class IS DISTINCT FROM 'superseded' \
                  ORDER BY due_at, outbox_id LIMIT $1",
                 &[&limit],
             )
@@ -2254,72 +2197,6 @@ impl PostgresStore {
                 payload: row.get(7),
             })
             .collect())
-    }
-
-    /// Mark one intent delivered, for the attempt that delivered it.
-    ///
-    /// `false` means the write changed nothing: the intent was suppressed
-    /// or a superseding attempt took it over while this one was in flight.
-    /// The caller reports that outcome explicitly, because a send whose
-    /// acknowledgement is lost is a delivery the accounting must still talk
-    /// about, not a silence.
-    pub async fn mark_intent_delivered(
-        &self,
-        outbox_id: Uuid,
-        attempts: i32,
-    ) -> Result<bool, StoreError> {
-        let client = self.client().await?;
-        let delivered = client
-            .execute(
-                "UPDATE scheduling_outbox SET delivery_state='delivered', delivered_at=now(), \
-                 next_attempt_at=now() \
-                 WHERE outbox_id=$1 AND attempts=$2 AND delivery_state='pending'",
-                &[&outbox_id, &attempts],
-            )
-            .await?;
-        Ok(delivered == 1)
-    }
-
-    /// Schedule one intent's retry, or fail it once its attempts reach the
-    /// ceiling, for the attempt that owns it.
-    pub async fn retry_intent(
-        &self,
-        outbox_id: Uuid,
-        next_attempt_at: DateTime<Utc>,
-        attempts_ceiling: i32,
-        attempts: i32,
-    ) -> Result<bool, StoreError> {
-        let client = self.client().await?;
-        let written = client
-            .execute(
-                "UPDATE scheduling_outbox \
-                 SET delivery_state = CASE WHEN attempts >= $3 THEN 'failed' ELSE 'pending' END, \
-                     next_attempt_at = CASE WHEN attempts >= $3 THEN now() ELSE $2 END \
-                 WHERE outbox_id=$1 AND attempts=$4 AND delivery_state='pending'",
-                &[&outbox_id, &next_attempt_at, &attempts_ceiling, &attempts],
-            )
-            .await?;
-        Ok(written == 1)
-    }
-
-    /// Hold one intent locally, for the attempt that claimed it: the
-    /// deployment has no destination configured, so the intent stays
-    /// recorded instead of pretending a delivery happened. Nothing is
-    /// delivered, so no delivery instant is stamped either.
-    pub async fn hold_intent_local(
-        &self,
-        outbox_id: Uuid,
-        attempts: i32,
-    ) -> Result<bool, StoreError> {
-        let client = self.client().await?;
-        let held = client
-            .execute(
-                "UPDATE scheduling_outbox SET delivery_state='local', next_attempt_at=now() \
-                 WHERE outbox_id=$1 AND attempts=$2 AND delivery_state='pending'",
-                &[&outbox_id, &attempts],
-            )
-            .await?;
-        Ok(held == 1)
     }
 
     /// Erase cursors whose fifteen minutes have passed.
@@ -2422,7 +2299,7 @@ impl PostgresStore {
     /// Prune at most 256 delivered outbox intents of any purpose
     /// (confirmation, change, cancellation, reminder) and 256 terminal hook
     /// deliveries per tick, using the configured receipt metadata horizon.
-    /// Active, local, failed and suppressed intents remain retained;
+    /// Pending, leased and set-aside intents remain retained;
     /// hooks also preserve replay until payload expiry has completed.
     pub async fn erase_terminal_dispatch(
         &self,
@@ -2442,7 +2319,7 @@ impl PostgresStore {
             .execute(
                 "DELETE FROM scheduling_outbox WHERE outbox_id IN (
                 SELECT outbox_id FROM scheduling_outbox
-                WHERE delivery_state='delivered' AND delivered_at <= $1
+                WHERE state='delivered' AND delivered_at <= $1
                 ORDER BY delivered_at, outbox_id LIMIT 256 FOR UPDATE SKIP LOCKED
              )",
                 &[&cutoff],
@@ -3213,9 +3090,9 @@ async fn mint_reminders(
         }
         transaction
             .execute(
-                "INSERT INTO scheduling_outbox(outbox_id, purpose, claim_id, \
-                 appointment_revision, due_at, delivery_state, next_attempt_at, payload) \
-                 VALUES($1,'reminder',$2,$3,$4,'pending',$4,$5)",
+                "INSERT INTO scheduling_outbox(outbox_id, purpose, generation, state, \
+                 attempt, next_attempt_at, claim_id, appointment_revision, due_at, payload) \
+                 VALUES($1,'reminder',1,'pending',0,$4,$2,$3,$4,$5)",
                 &[
                     &Uuid::new_v4(),
                     &claim.claim_id,
@@ -3622,7 +3499,6 @@ trait CapacityStatements {
         due_at: DateTime<Utc>,
         payload: Value,
     ) -> Result<(), StoreError>;
-    async fn suppress_pending_reminders(&self, claim_id: Uuid) -> Result<(), StoreError>;
     /// Write the receipt this commitment answers a replay with. The key is
     /// claimed here, at the end of the transaction, so a writer who finds it
     /// already taken is refused rather than failed.
@@ -3825,9 +3701,9 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
         payload: Value,
     ) -> Result<(), StoreError> {
         self.execute(
-            "INSERT INTO scheduling_outbox(outbox_id, purpose, claim_id, appointment_revision, \
-             due_at, delivery_state, next_attempt_at, payload) \
-             VALUES($1,$2,$3,$4,$5,'pending',$5,$6)",
+            "INSERT INTO scheduling_outbox(outbox_id, purpose, generation, state, attempt, \
+             next_attempt_at, claim_id, appointment_revision, due_at, payload) \
+             VALUES($1,$2,1,'pending',0,$5,$3,$4,$5,$6)",
             &[
                 &Uuid::new_v4(),
                 &purpose,
@@ -3836,19 +3712,6 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
                 &due_at,
                 &payload,
             ],
-        )
-        .await?;
-        Ok(())
-    }
-
-    async fn suppress_pending_reminders(&self, claim_id: Uuid) -> Result<(), StoreError> {
-        // Suppression marks rather than deletes: the row keeps accounting
-        // for the intent, and a dispatch already in flight reports its
-        // outcome as lost to suppression instead of vanishing.
-        self.execute(
-            "UPDATE scheduling_outbox SET delivery_state='suppressed' \
-             WHERE claim_id=$1 AND purpose='reminder' AND delivery_state='pending'",
-            &[&claim_id],
         )
         .await?;
         Ok(())
