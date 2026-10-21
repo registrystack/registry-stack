@@ -82,9 +82,9 @@ cleanup:
   erasure: active
 destinations:
   hooks:
-    custodian-events:
+    owning-system-events:
       url: https://civil-registry.example.test/document-events
-      hmacSha256KeyRef: secret:file/custodian-events-hmac
+      hmacSha256KeyRef: secret:file/owning-system-events-hmac
       attemptTimeoutMilliseconds: 5000
       maximumAttempts: 8
 retention:

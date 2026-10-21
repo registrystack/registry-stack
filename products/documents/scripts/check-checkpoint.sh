@@ -62,7 +62,7 @@ elif change == "environment-in-credential":
 elif change == "unrestricted-clients":
     runtime["authentication"]["oidc"]["allowedClients"] = "unrestricted"
 elif change == "plaintext-hook":
-    hook = runtime["destinations"]["hooks"]["custodian-events"]
+    hook = runtime["destinations"]["hooks"]["owning-system-events"]
     hook["url"] = hook["url"].replace("https://", "http://", 1)
 elif change == "verification-disabled":
     runtime["contentVerification"] = {"type": "disabled"}
@@ -122,7 +122,7 @@ expect_refusal environment-in-credential --runtime-config /database/runtimeUrlRe
   config.substitution-not-allowed
 expect_refusal unrestricted-clients --runtime-config /authentication/oidc/allowedClients \
   documents.runtime.allowed-clients-required
-expect_refusal plaintext-hook --runtime-config /destinations/hooks/custodian-events/url \
+expect_refusal plaintext-hook --runtime-config /destinations/hooks/owning-system-events/url \
   documents.runtime.insecure-url
 expect_refusal verification-disabled --runtime-config /contentVerification/type \
   documents.runtime.content-verification-disabled

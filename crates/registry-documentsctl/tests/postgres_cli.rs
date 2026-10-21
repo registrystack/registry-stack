@@ -113,7 +113,7 @@ cleanup:
   erasure: active
 destinations:
   hooks:
-    custodian-events:
+    owning-system-events:
       url: http://127.0.0.1:9/document-events
       hmacSha256KeyRef: secret:file/hook-key
 ",
