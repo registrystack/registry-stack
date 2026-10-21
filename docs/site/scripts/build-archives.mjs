@@ -28,6 +28,7 @@ import { generateCaseworkConfiguration } from './generate-casework-configuration
 import { generateRenderConfiguration } from './generate-render-configuration.mjs';
 import { generateMessagingConfiguration } from './generate-messaging-configuration.mjs';
 import { generateCoordinatorConfiguration } from './generate-coordinator-configuration.mjs';
+import { generateDocumentsConfiguration } from './generate-documents-configuration.mjs';
 
 const execFileAsync = promisify(execFile);
 const archiveExecutionEnvironmentKeys = Object.freeze([
@@ -66,6 +67,7 @@ const configurationGenerators = new Map([
   ['docs/site/src/data/generated/render-configuration.json', generateRenderConfiguration],
   ['docs/site/src/data/generated/messaging-configuration.json', generateMessagingConfiguration],
   ['docs/site/src/data/generated/coordinator-configuration.json', generateCoordinatorConfiguration],
+  ['docs/site/src/data/generated/documents-configuration.json', generateDocumentsConfiguration],
   ['docs/site/src/data/generated/configuration-formats.json', generateConfigurationFormats],
 ]);
 // New archives generate these artifacts from their pinned source. Legacy refs

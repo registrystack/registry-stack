@@ -1,0 +1,66 @@
+---
+title: Document Store configuration reference
+description: Generated key-path reference for the Registry Document Store project and runtime files.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: reference
+locale: en
+standards_referenced:
+  - json-schema
+wide: true
+---
+
+import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
+
+import ConfigurationReference from '../../../components/ConfigurationReference.astro';
+import reference from '../../../data/generated/documents-configuration.json';
+
+The Registry Document Store reads two files: the `documents.yaml` project that declares access
+profiles, document policies, and hooks, and the `runtime.yaml` an operator deploys.
+
+## Contract status
+
+| File | Kind | Status | Source |
+| ---- | ---- | ------ | ------ |
+| `documents.yaml` | `DocumentsProject` | Pre-1.0, may change | [`project.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/documents/generated/project/project.schema.json) |
+| `runtime.yaml` | `DocumentsRuntimeConfig` | Pre-1.0, may change | [`runtime.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/documents/generated/runtime/runtime.schema.json) |
+
+Every mapping is closed: an unknown key is refused with its path. JSON Schema is not the
+acceptance path: a document these schemas accept still has to pass `documentsctl check`, which
+resolves the access profiles each policy names and checks each profile's role against the
+policy that uses it.
+
+{/* Evidence: docs/site/scripts/generate-documents-configuration.mjs, CONTRACTS;
+    crates/registry-documents-core/src/project.rs, DocumentsProject;
+    crates/registry-documents/src/config.rs, DOCUMENTS_RUNTIME_KIND;
+    products/documents/RUNTIME-CONFIG.md. */}
+
+## Key paths
+
+A key path writes a property as `name`, an array item as `name[]`, and a map entry whose name you
+choose as `name.*`, as in `documentPolicies.*.mandatoryRestrictions.cleanupGraceHours` or
+`destinations.hooks.*.url`.
+
+{/* Evidence: docs/site/scripts/configuration-reference.mjs, collectFields();
+    docs/site/src/components/ConfigurationReference.astro. */}
+
+{/* Generated from src/data/generated/documents-configuration.json, built from
+    products/documents/generated/{project,runtime}/*.schema.json.
+    Run npm run generate from docs/site. */}
+<ConfigurationReference contracts={reference.contracts} prefix="documents" />
+
+## Check commands
+
+Both files have a command that checks them offline, with no service, database, or secret. Each
+prints the diagnostics, JSON output, and exit codes that
+[Check a file before you deploy it](../configuration-files/#check-a-file-before-you-deploy-it)
+describes.
+
+<ConfigurationFormatChecks product="documents" />
+
+## Next
+
+[Document Store API operations](../apis/documents/)

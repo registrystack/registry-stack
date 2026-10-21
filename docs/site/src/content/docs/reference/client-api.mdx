@@ -137,6 +137,16 @@ the routes it reaches.
 
 </DocsetProduct>
 
+<DocsetProduct product="registry-documents">
+
+The unified packages carry no Registry Document Store namespace. Its client is the
+`registry-documents-client` Rust crate, with no Node.js or Python binding. The
+[Document Store API operations](../apis/documents/) reference describes the routes it reaches.
+
+{/* Evidence: products/documents/AGENTS.md, client binding rule. */}
+
+</DocsetProduct>
+
 Import only the namespaces an application uses. Nothing crosses a namespace, and a Discovery
 selection is inert metadata that grants no access.
 
@@ -1416,5 +1426,12 @@ Deployment-defined data stays dynamic at the SDK boundary.
 
 - [Registry Coordinator API](../apis/registry-coordinator/) for the Coordinator HTTP, run state, and
   problem contracts.
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-documents">
+
+- [Document Store API operations](../apis/documents/) for the Document Store HTTP and problem
+  contracts.
 
 </DocsetProduct>
