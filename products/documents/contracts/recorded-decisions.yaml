@@ -327,13 +327,19 @@ decisions:
       verification, all in one transaction. The due time is the request time
       plus the policy's cleanupGraceHours at that moment; a later policy change
       does not move it. A repeated request changes nothing and answers the
-      document as it stands. Only the custodian may ask; a caller that cannot
-      see the document is answered resource.not-found.
+      document as it stands, so the route takes no Idempotency-Key. Only the
+      custodian may ask, by the one predicate the route and the document's
+      offered actions share; a caller that cannot see the document is
+      answered resource.not-found.
     reasoning: >-
       The grace exists to give the operator a window to restore from a
       mistake, not to keep serving: a document its custodian asked to remove
       must not be released in the meantime. Freezing the due time keeps one
-      request's outcome independent of later package changes.
+      request's outcome independent of later package changes. The request is
+      repeat-safe by construction: it moves only a version not yet erasing,
+      so a retry after a lost answer finds the first outcome without a stored
+      receipt, and a key would add a refusal (another body under a held key)
+      for a request that has no body.
     evidence:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes}
   - id: DOCUMENTS-DEC-21

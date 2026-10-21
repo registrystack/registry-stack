@@ -33,7 +33,7 @@ contract.
 | `GET /documents/{documentId}/grants` | List every grant on a document |
 | `GET /document-grants` | List the active grants naming the caller |
 | `DELETE /document-grants/{grantId}` | Revoke a grant |
-| `POST /documents/{documentId}/erasure` | Remove a document from custody; only its custodian may, and a repeat answers the same view |
+| `POST /documents/{documentId}/erasure` | Remove a document from custody; only its custodian may. Takes no `Idempotency-Key`: a repeat moves nothing and answers the same view |
 | `GET /document-policies` | List the policies the caller may reserve under, with their bounds |
 
 A document the caller may not see answers `resource.not-found`, the same as
