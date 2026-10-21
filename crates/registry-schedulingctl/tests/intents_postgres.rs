@@ -3,8 +3,8 @@
 //! `intents` against a real PostgreSQL, on a disposable schema.
 //!
 //! The test proves the read path end to end: a pending intent the dispatcher
-//! is still carrying, a delivered one and a superseded reminder are never
-//! listed, a `local` intent (set aside because no destination is declared)
+//! is still carrying, a delivered one, a superseded reminder and a reminder
+//! cancelled before any attempt are never listed, a `local` intent (set aside because no destination is declared)
 //! and a `failed` one (every attempt refused) both are, oldest due first, and
 //! a `--limit` narrower than the qualifying rows keeps only the earliest of
 //! them. Every field the command reports is pinned
@@ -234,6 +234,7 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
     let failed_id = Uuid::new_v4();
     let delivered_id = Uuid::new_v4();
     let local_second_id = Uuid::new_v4();
+    let cancelled_id = Uuid::new_v4();
 
     let local_first_payload =
         json!({"appointmentId": claim_a, "revision": 1, "offering": "registry-update-30"});
@@ -307,6 +308,20 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
         &json!({"appointmentId": claim_b, "revision": 1, "offering": "registry-update-30"}),
     )
     .await;
+    // Cancelled by its appointment's cancellation before any attempt:
+    // never sent and never listed.
+    seed_outbox(
+        &seed,
+        cancelled_id,
+        "reminder",
+        claim_b,
+        1,
+        base_time + Duration::seconds(220),
+        "cancelled",
+        0,
+        &json!({"appointmentId": claim_b, "revision": 1, "offering": "registry-update-30"}),
+    )
+    .await;
     // A second, later local intent: listed last.
     seed_outbox(
         &seed,
@@ -354,14 +369,16 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
     assert_eq!(intents[2]["deliveryState"], "local");
     assert_eq!(intents[2]["payload"], local_second_payload);
 
-    // A pending intent the dispatcher still carries, a delivered one and a
-    // superseded reminder are never listed, regardless of the limit.
+    // A pending intent the dispatcher still carries, a delivered one, a
+    // superseded reminder and a cancelled one are never listed, regardless
+    // of the limit.
     let outbox_ids: Vec<&str> = intents
         .iter()
         .map(|intent| intent["outboxId"].as_str().unwrap())
         .collect();
     assert!(!outbox_ids.contains(&pending_id.to_string().as_str()));
     assert!(!outbox_ids.contains(&delivered_id.to_string().as_str()));
+    assert!(!outbox_ids.contains(&cancelled_id.to_string().as_str()));
 
     // A limit narrower than the qualifying rows keeps only the earliest due.
     let limited = undelivered(&config_path, 2);
