@@ -510,6 +510,20 @@ impl RuntimeConfig {
 
     /// Check syntax, references and offline values without reading secret material.
     pub fn check_file(path: &Path, substitute: bool) -> RuntimeFileCheck<Self> {
+        Self::check_file_with(path, substitute, |_, _| Vec::new())
+    }
+
+    /// Check one runtime file and include product diagnostics that depend on
+    /// an already decoded companion before applying the file's single report
+    /// budget. The callback is never invoked after a decode refusal.
+    pub(crate) fn check_file_with(
+        path: &Path,
+        substitute: bool,
+        additional: impl FnOnce(
+            &RuntimeFileCheck<Self>,
+            &Self,
+        ) -> Vec<registry_platform_yaml::Diagnostic>,
+    ) -> RuntimeFileCheck<Self> {
         let mut checked = Self::loader().check_offline::<Self>(path, substitute, stand_in);
         let mut diagnostics = checked.loaded.as_ref().map_or_else(Vec::new, |loaded| {
             runtime_id_collision_diagnostics(&checked, &loaded.config)
@@ -531,6 +545,7 @@ impl RuntimeConfig {
                     );
                 }
             }
+            diagnostics.extend(additional(&checked, &loaded.config));
         }
         checked.diagnostics = checked.report_with(KIND, diagnostics).into_diagnostics();
         checked
