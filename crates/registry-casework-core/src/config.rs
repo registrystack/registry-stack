@@ -960,7 +960,7 @@ impl CaseworkProject {
                     })
                     .collect::<Vec<_>>(),
             };
-            for stage in &policy.stages {
+            if let Some(stage) = policy.stages.first() {
                 for finding in routing_policy_findings(
                     &stage.queue,
                     &projection,
@@ -970,11 +970,7 @@ impl CaseworkProject {
                 ) {
                     findings.push(
                         finding.reason.code(),
-                        format!(
-                            "{}/routing{}",
-                            keyed("reviewPolicies", &policy.id),
-                            finding.path
-                        ),
+                        format!("{}{}", keyed("reviewPolicies", &policy.id), finding.path),
                         finding.reason.message(),
                         finding.reason.suggested_action(),
                     );
@@ -994,12 +990,22 @@ impl CaseworkProject {
         );
         for team in &self.teams {
             let at = keyed("teams", &team.id);
-            if !valid_directory_identifier(&team.id) || !bounded_config_text(&team.label, 160) {
+            if !valid_directory_identifier(&team.id) {
                 findings.push(
                     "casework.team.identity",
                     &at,
-                    "the team id or label is invalid",
-                    "Write a bounded id and label.",
+                    "the team id is invalid",
+                    "Write a bounded id.",
+                );
+            }
+            if !bounded_config_text(&team.label, 160)
+                || registry_platform_yaml::DisplayText::new(team.label.as_str()).is_err()
+            {
+                findings.push(
+                    "casework.team.identity",
+                    format!("{at}/label"),
+                    "the team label is empty, over 160 bytes, or contains a character that cannot be shown safely",
+                    "Write a short display label without hidden reordering controls, line separators, byte-order marks, or Unicode noncharacters.",
                 );
             }
             if team.serves.is_empty() || team.serves.iter().any(|queue| !queues.contains(queue)) {
@@ -1088,12 +1094,15 @@ impl CaseworkProject {
                     IDENTIFIER_ACTION,
                 );
             }
-            if queue.label.trim().is_empty() || queue.label.len() > 160 {
+            if queue.label.trim().is_empty()
+                || queue.label.len() > 160
+                || registry_platform_yaml::DisplayText::new(queue.label.as_str()).is_err()
+            {
                 findings.push(
                     "casework.queue.invalid-label",
                     format!("{}/label", keyed("queues", &queue.id)),
-                    "expected a label of 1 to 160 bytes that is not only spaces",
-                    "Write a short label for the queue.",
+                    "expected display text of 1 to 160 bytes that is not only spaces",
+                    "Write a short display label without hidden reordering controls, line separators, byte-order marks, or Unicode noncharacters.",
                 );
             }
         }

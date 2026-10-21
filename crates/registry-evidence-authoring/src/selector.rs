@@ -154,6 +154,17 @@ impl Field {
         }
     }
 
+    fn description(&self) -> Option<&str> {
+        match self {
+            Self::String { description, .. }
+            | Self::Date { description, .. }
+            | Self::Uuid { description, .. }
+            | Self::Integer { description, .. }
+            | Self::Boolean { description, .. }
+            | Self::ControlledCode { description, .. } => description.as_deref(),
+        }
+    }
+
     pub fn codelist(&self) -> Option<(&str, &str)> {
         match self {
             Self::ControlledCode {
@@ -200,6 +211,12 @@ impl Field {
 }
 pub fn validate(profile: &SelectorProfile, at: &FieldPath) -> Vec<Finding> {
     let mut findings = Vec::new();
+    project::validate_presentation(
+        profile.label.as_deref(),
+        profile.description.as_deref(),
+        at,
+        &mut findings,
+    );
     if profile.fields.is_empty() || profile.fields.len() > 16 {
         findings.push(Finding::new(
             at.clone().key("fields"),
@@ -208,9 +225,16 @@ pub fn validate(profile: &SelectorProfile, at: &FieldPath) -> Vec<Finding> {
         ));
     }
     for (id, field) in &profile.fields {
+        let field_at = at.clone().key("fields").map_key(id.to_string());
+        project::validate_presentation(
+            field.label(),
+            field.description(),
+            &field_at,
+            &mut findings,
+        );
         if !field.valid(profile.maximum_aggregate_bytes.get()) {
             findings.push(Finding::new(
-                at.clone().key("fields").map_key(id.to_string()),
+                field_at,
                 "selector-field-bounds",
                 "declare bounded selector constraints within the profile aggregate and reviewed codelist contract",
             ));
