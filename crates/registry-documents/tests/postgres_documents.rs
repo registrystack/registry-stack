@@ -2433,3 +2433,70 @@ async fn a_response_audit_failure_after_commit_answers_unavailable_and_the_retry
         .await;
     assert_eq!(still, 1, "the retry made nothing new");
 }
+
+/// SEC-28: verification waits for transfer budget only within its attempt
+/// timeout. While every byte of the budget is held, an attempt ends as a
+/// transient failure once its attempt deadline passes, without asking the
+/// verifier, so a job never holds its lease past that deadline.
+#[tokio::test]
+async fn a_verification_attempt_waits_for_transfer_budget_only_within_its_attempt_timeout() {
+    use registry_documents::verification::{job_part, verification_policy, VerificationJob};
+    use registry_platform_dispatch::postgres::{DispatchTransport as _, JobKey, LeasedJob};
+    use registry_platform_dispatch::SendOutcome;
+
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let config = RuntimeConfig::load(&deployment.runtime).unwrap();
+    let secrets = Arc::new(config.secret_resolver().unwrap());
+    let store = PostgresStore::connect_runtime(&config.database, &secrets).unwrap();
+    let storage = Arc::new(
+        ContentStorage::activate(&config.storage, "registry-documents-test", secrets)
+            .await
+            .unwrap(),
+    );
+    let budget = TransferBudget::new(1_048_576);
+    let held = budget
+        .try_reserve(budget.total_bytes())
+        .expect("the whole budget is free");
+    assert_eq!(budget.available_bytes(), 0);
+    let transport = VerificationTransport::new(store, storage, verifier.clone(), budget);
+
+    let version_id = Uuid::new_v4();
+    let binding = verifier.binding_digest().to_owned();
+    let attempt_timeout = std::time::Duration::from_millis(300);
+    let job = LeasedJob {
+        key: JobKey::new(version_id, job_part(version_id, &binding)).unwrap(),
+        generation: 1,
+        attempt: 1,
+        attempt_started_at: std::time::SystemTime::now(),
+        lease_token: Uuid::new_v4(),
+        policy: registry_platform_dispatch::JobPolicy {
+            attempt_timeout,
+            ..verification_policy()
+        },
+        job: VerificationJob {
+            version_id,
+            media_type: PDF.to_owned(),
+            computed_digest: sha256(b"held"),
+            length: 4096,
+            object_id: None,
+            binding,
+        },
+    };
+
+    let started = std::time::Instant::now();
+    let sent = tokio::time::timeout(std::time::Duration::from_secs(10), transport.send(&job))
+        .await
+        .expect("the attempt ends within its own timeout, not when the budget frees")
+        .expect("the attempt answers an outcome");
+    let waited = started.elapsed();
+    assert!(
+        matches!(sent.outcome, SendOutcome::Transient { .. }),
+        "{:?}",
+        sent.outcome
+    );
+    assert!(waited >= attempt_timeout, "{waited:?}");
+    assert!(waited < std::time::Duration::from_secs(5), "{waited:?}");
+    assert_eq!(verifier.calls.load(Ordering::SeqCst), 0);
+    drop(held);
+}
