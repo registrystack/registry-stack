@@ -173,6 +173,14 @@ mod tests {
     }
 
     #[test]
+    fn the_namespace_admits_exactly_the_largest_attachment_a_slot_may_declare() {
+        assert_eq!(
+            NAMESPACE.max_object_bytes,
+            u64::from(crate::contract::MAX_ATTACHMENT_BYTES)
+        );
+    }
+
+    #[test]
     fn strict_storage_configuration_and_debug_are_value_free() {
         for url in [
             "http://storage.example",
