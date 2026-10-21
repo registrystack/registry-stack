@@ -617,14 +617,26 @@ async fn expire_uploads(
             )
             .await
             .map_err(|_| CleanupError::Audit)?;
-        transaction
-            .execute(
-                "UPDATE documents_versions SET upload_state = 'expired'
-                  WHERE version_id = ANY($1) AND upload_state = 'reserved'",
-                &[&ids],
-            )
-            .await?;
-        transaction.commit().await?;
+        let committed = async {
+            transaction
+                .execute(
+                    "UPDATE documents_versions SET upload_state = 'expired'
+                      WHERE version_id = ANY($1) AND upload_state = 'reserved'",
+                    &[&ids],
+                )
+                .await?;
+            transaction.commit().await
+        }
+        .await;
+        if let Err(error) = committed {
+            request
+                .finish(
+                    json!({"event": UPLOAD_EXPIRY_EVENT, "outcome": "failed", "versionIds": names}),
+                )
+                .await
+                .map_err(|_| CleanupError::Audit)?;
+            return Err(error.into());
+        }
         request
             .finish(
                 json!({"event": UPLOAD_EXPIRY_EVENT, "outcome": "expired", "versionIds": names}),
@@ -731,13 +743,27 @@ async fn erase_orphans(
             failed.push(object_id);
             continue;
         }
-        transaction
-            .execute(
-                "DELETE FROM documents_staged_objects WHERE object_id = $1 AND NOT committed",
-                &[&object_id],
-            )
-            .await?;
-        transaction.commit().await?;
+        // The object is gone; a staged row whose deletion does not commit
+        // is found again by the next pass, whose delete finds nothing.
+        let committed = async {
+            transaction
+                .execute(
+                    "DELETE FROM documents_staged_objects WHERE object_id = $1 AND NOT committed",
+                    &[&object_id],
+                )
+                .await?;
+            transaction.commit().await
+        }
+        .await;
+        if let Err(error) = committed {
+            let mut unrecorded = record;
+            unrecorded["outcome"] = json!("failed");
+            request
+                .finish(unrecorded)
+                .await
+                .map_err(|_| CleanupError::Audit)?;
+            return Err(error.into());
+        }
         let mut done = record;
         done["outcome"] = json!("erased");
         request

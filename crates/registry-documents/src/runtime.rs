@@ -616,12 +616,18 @@ impl Prepared {
         self.worker().drain(&shutdown).await
     }
 
+    /// Run one cleanup pass alone and return what it answered.
+    #[cfg(feature = "postgres-test")]
+    pub async fn cleanup_pass(&self) -> Result<CleanupPass, crate::erasure::CleanupError> {
+        self.cleanup.pass().await
+    }
+
     /// Run one cleanup pass and then every due erasure attempt, as the
     /// serving runtime would, and return the pass. Erasure attempts run only
     /// while erasure is active.
     #[cfg(feature = "postgres-test")]
     pub async fn sweep_due(&self) -> CleanupPass {
-        let pass = self.cleanup.pass().await.expect("the cleanup pass runs");
+        let pass = self.cleanup_pass().await.expect("the cleanup pass runs");
         if let Some(worker) = self.cleanup.worker_if_active() {
             let (_sender, shutdown) = watch::channel(false);
             worker.drain(&shutdown).await;

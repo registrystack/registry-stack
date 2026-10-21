@@ -3059,6 +3059,48 @@ async fn an_unfinished_upload_past_its_deadline_is_expired_by_the_sweep() {
     assert_eq!(batches[0]["record"]["versionIds"], json!([lapsed]));
 }
 
+/// Fault injection: an upload expiry batch whose commit fails finishes its
+/// audit entry as failed before the pass reports the error, so no entry is
+/// left unfinished, and the reservation stays for the next pass.
+#[tokio::test]
+async fn a_failed_upload_expiry_commit_is_audited_as_failed() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (_, lapsed, _) = reservation(
+        &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &pdf(200, 68), PDF)
+            .await,
+    );
+    deployment
+        .execute(&format!(
+            "UPDATE documents_versions
+                SET reserved_at = reserved_at - interval '2 days',
+                    upload_expires_at = now() - interval '1 second'
+              WHERE version_id = '{lapsed}';
+             CREATE FUNCTION refuse_expiry() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'the expiry commit failed'; END $$;
+             CREATE CONSTRAINT TRIGGER refuse_expiry AFTER UPDATE ON documents_versions
+                DEFERRABLE INITIALLY DEFERRED
+                FOR EACH ROW WHEN (NEW.upload_state = 'expired')
+                EXECUTE FUNCTION refuse_expiry();"
+        ))
+        .await;
+    assert!(prepared.cleanup_pass().await.is_err());
+    let upload: String = deployment
+        .scalar(&format!(
+            "SELECT upload_state FROM documents_versions WHERE version_id = '{lapsed}'"
+        ))
+        .await;
+    assert_eq!(upload, "reserved");
+    let outcomes = deployment
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| entry["record"]["event"] == "documents.upload-expiry")
+        .map(|entry| entry["record"]["outcome"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(outcomes, [json!(null), json!("failed")]);
+}
+
 /// Fault injection: a sweep interrupted mid-batch, with one version's
 /// recording transaction failing, erases the others, and the next pass
 /// finishes the interrupted one. No version is erased twice and none is
