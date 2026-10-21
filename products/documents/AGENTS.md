@@ -11,12 +11,11 @@ names. It owns its custody records, document grants, stored bytes, content
 verification state, and audit journal. Why a document exists, who it concerns,
 and whether a recipient is entitled to it stay with the owning system.
 
-The product is held out of releases. The document routes (reserve, upload,
-read, download) are compiled only into test builds, behind a synthetic actor;
-the served runtime answers only `GET /health` until authentication lands. Do
-not serve a document route without the authorization,
-verification, and audit rules that govern it and the invariant rows in
-`contracts/` that prove them.
+The product is held out of releases. Every document route is served behind
+OAuth access-token verification through `registry-platform-oidc`, and the
+PostgreSQL suites prove each one with real signed tokens. Do not add or
+widen a document route without the authorization, verification, and audit
+rules that govern it and the invariant rows in `contracts/` that prove them.
 
 - No Document Store crate reaches a BReg, Casework, Coordinator, Evidence,
   Messaging, or Scheduling crate, and no product crate or the

@@ -9,10 +9,34 @@ document grant names one recipient, one version, and an expiry.
 The product is pre-1.0 and held out of releases. The configuration formats,
 schemas, problem vocabulary, tooling, CI gates, and release hold-out exist.
 Custody, PostgreSQL and S3 storage, upload with digest and length checks,
-content verification on dispatch, and release of a verified version are
-implemented and proven through a router that only test builds compile; the
-served runtime answers only its health route until authentication lands.
-Document grants, retention, and hooks arrive in later changes.
+content verification on dispatch, document grants, and release of a verified
+version are implemented and served behind OAuth access-token verification.
+Retention, erasure, and hooks arrive in later changes.
+
+## Routes
+
+Every route but `GET /health` takes a bearer access token the configured
+issuer signed. The token's client, scopes, and actor kind select one access
+profile in `documents.yaml`; the profile and the document policy decide what
+the caller may do. `generated/registry-documents.openapi.json` is the full
+contract.
+
+| Route | Does |
+|---|---|
+| `POST /documents` | Reserve a document under a policy; needs an `Idempotency-Key` |
+| `PUT /uploads/{uploadId}/content` | Send the reserved bytes once; the same bytes again answer the same view |
+| `GET /documents` | List the documents the caller holds in custody or reserved |
+| `GET /documents/{documentId}` | Read metadata and the actions the caller may take |
+| `GET /documents/{documentId}/versions/{versionId}/content` | Download a releasable version, as its custodian or a grant holder |
+| `POST /documents/{documentId}/grants` | Grant one named recipient one exact version until a fixed expiry; needs an `Idempotency-Key` |
+| `GET /documents/{documentId}/grants` | List every grant on a document |
+| `GET /document-grants` | List the active grants naming the caller |
+| `DELETE /document-grants/{grantId}` | Revoke a grant |
+| `GET /document-policies` | List the policies the caller may reserve under, with their bounds |
+
+A document the caller may not see answers `resource.not-found`, the same as
+one that does not exist. Lists page by `cursor` and `limit` (at most 100) in a
+stable order.
 
 ## Crates
 

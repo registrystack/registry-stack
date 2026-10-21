@@ -17,7 +17,9 @@ rule governs.
 
 ### Enforcement and defaults
 
-The runtime serves `GET /health` and nothing else. Every other path answers
+The runtime serves `GET /health` without a credential and the document
+routes behind access-token verification (see "Access profiles, document
+grants, and release" below), and nothing else. Every other path answers
 404 `request.not-found` and another method on health answers 405
 `request.method-not-allowed`, both as `application/problem+json` with the
 caller's trace echoed (`crates/registry-documents/src/http.rs`). Health needs
@@ -99,12 +101,14 @@ DOCUMENTS-SEC-14 to DOCUMENTS-SEC-20:
   runs under a transaction advisory lock per custodian and policy, so
   concurrent reservations cannot overrun it.
 - Upload (`PUT /uploads/{id}/content`) has no body-limit layer of its own
-  and a five-minute transfer deadline. It requires `Content-Type` to equal
+  and a transfer deadline of `transfers.minimumDeadlineSeconds` plus
+  `transfers.mebibyteAllowanceSeconds` per started mebibyte. It requires `Content-Type` to equal
   the reserved type, never inspects the bytes for a type, refuses a declared
   length above the deployment ceiling or other than the reserved one before
   reading, and stops reading at the reserved length plus one byte, so the
   reservation's policy bound is what limits the body. The body is hashed while read
-  and buffered under a fixed 256 MiB budget of concurrent uploads; past it the
+  and buffered under one transfer budget, the larger of 256 MiB and the
+  deployment ceiling, shared with downloads and verification; past it the
   upload answers 503. Nothing is written until digest and length match, and
   no database transaction is open while bytes arrive. Finalization locks the
   version row, so concurrent uploads finalize once.
@@ -155,12 +159,6 @@ against a loopback fake object store and verifier. The rows in
 
 ### Residual risk
 
-- Authentication is owed by WP4. The `documents` binary serves no
-  unauthenticated document route: the router that carries them is compiled
-  only into test builds, where a synthetic caller stands in for the verified
-  token, and a unit test proves the served router answers 404 on each
-  document path. Read access in the test router is the custodian subject or
-  the reserving caller; WP4 replaces it with access profiles and grants.
 - Upload expiry, erasure of expired reservations, and the sweep of S3
   objects a failed or losing attempt left behind are owed by WP5. Until then
   such objects and rows stay in place.
@@ -174,3 +172,105 @@ against a loopback fake object store and verifier. The rows in
   instance.
 - There is no operator command to apply the schema yet; serving refuses a
   database without it.
+
+## Access profiles, document grants, and release (2026-10-22)
+
+### Threat
+
+A caller without a verified token, or under the wrong access profile,
+reserves, reads, or downloads a document; a caller places a document in
+custody it may not hold or under an institution it does not act for; a
+retried request reserves twice or answers a stale success; a grant releases
+another version, to another reader, or after it expired or was revoked; an
+unauthorized caller learns a document exists; concurrent or stalled transfers
+exhaust memory; a caller-chosen label is trusted.
+
+### Enforcement and defaults
+
+`crates/registry-documents/src/auth.rs`, `http.rs`, `service.rs`,
+`service/grants.rs`, and `transfer.rs` enforce, with the invariant rows
+DOCUMENTS-SEC-10, DOCUMENTS-SEC-19, and DOCUMENTS-SEC-21 to DOCUMENTS-SEC-31:
+
+- Every document route verifies the bearer token through
+  `registry-platform-oidc` (issuer, audience, `at+jwt`, allowed clients,
+  signature from the configured key set) and resolves exactly one access
+  profile from its client, scopes, and actor kind before it reads the body
+  or the store. A refused token answers 401 with a `Bearer` challenge; a key
+  set the runtime cannot reach answers 503, never 401.
+- Custody: a reservation needs the caller's profile among the policy's
+  `custodyProfiles`. A service may name any custodian; a human caller only
+  itself, matched by issuer, subject, and kind. The issuing institution is
+  the profile's `institution`; a body that names another is refused with
+  `custody.not-permitted`.
+- Idempotency: `POST /documents` and grant issue require an
+  `Idempotency-Key`, scoped to issuer, subject, operation, and key, with the
+  request body's digest. Another body answers 409 `idempotency.key-reused`;
+  a key older than `retention.receiptRetentionDays` answers 410
+  `idempotency.expired`; neither reserves anything. A replay re-runs
+  authorization first, so a caller who lost authority gets the refusal, not
+  the cached success. A finalized upload answers a repeat of the same bytes
+  with the same view and other bytes with 409 `upload.finalized`.
+- Pushed grants, no live predicate: a grant names one exact version, one
+  recipient issuer and subject, and an expiry frozen at issue from the
+  policy default within its maximum. Grants are issued and revoked by the
+  custodian or the owning system under a granting profile. Nothing extends
+  a grant, names an organization, or invites a reader; release consults the
+  stored grant row only, never current claims beyond the recipient's
+  identity and recipient-role profile.
+- Release: download answers only the custodian, or the holder of an
+  unrevoked, unexpired grant on that exact version, and only while the
+  version is releasable under the current verifier binding (409 otherwise).
+  The reserving system that is not the custodian sees metadata but gets no
+  bytes.
+- Uniform 404: read, download, and every grant route answer
+  `resource.not-found` for a document the caller has no standing on, the
+  same as an unknown identifier; 403 goes only to a caller who already sees
+  the document. Download refusals are audited with the code answered.
+- Download budget: downloads, uploads, and verification share one transfer
+  budget, the larger of 256 MiB and the deployment ceiling. A transfer that
+  finds no room answers 503 with `Retry-After` and is never queued. Every
+  transfer has a deadline of a floor plus a per-MiB allowance; a stalled
+  upload is cut off with 503, and a stalled download ends in a body error
+  and lets go of its bytes. The database client is released before content
+  is read from object storage, and the digest check still runs before the
+  first byte is sent. Transient copies can reach about twice the budget;
+  `RUNTIME-CONFIG.md` states the memory to provision.
+- Untrusted label: a label is one to 256 bytes without control characters,
+  stored and returned exactly as written. The Store never interprets it,
+  and a client must render it as untrusted text.
+- An audit entry that cannot be written refuses the upload and the download
+  with 503 before anything is finalized or sent.
+- `GET /document-policies` lists only the policies the caller's profile may
+  reserve under, with their size, media type, and grant expiry bounds.
+
+### Tests
+
+`crates/registry-documents/tests/postgres_documents.rs` and
+`crates/registry-documents/tests/postgres_startup.rs` mint ES256 access
+tokens from a test key whose public half the runtime reads as a static key
+set, and call the served router; the startup suite does so over a socket.
+The unit tests in `auth.rs` and `transfer.rs` cover token refusal shapes and
+the budget and deadline. `contracts/security-test-traceability.yaml` names
+each test.
+
+### Residual risk
+
+- Restore caveat: grants and revocations live in PostgreSQL. Restoring a
+  backup older than a revocation brings the revoked grant back as active
+  unless the audit journal written since the backup is restored too and
+  the revocations it records are re-applied. Treat a database restore as a
+  security event and re-revoke from the journal.
+- A download already admitted when its grant is revoked finishes within its
+  transfer deadline (DOCUMENTS-DEC-11); the deadline bounds the window.
+- Lists filter after fetching a page, so a page can be shorter than its
+  limit while a next cursor remains (DOCUMENTS-DEC-13).
+- The recipient resolver and display names are out of scope: a grant names
+  a recipient only by issuer and subject, and the granting system must know
+  them. A recipient's grant follows the subject, so an issuer that reuses a
+  subject for another person would release to that person.
+- The label is caller text. A client that renders it as markup, or trusts it
+  to describe the bytes, can mislead its user; the Store makes no claim
+  about it.
+- A document whose policy the deployed package no longer declares is shown
+  to nobody, custodian included, and each such access logs a warning; it
+  stays in custody until erasure (WP5).

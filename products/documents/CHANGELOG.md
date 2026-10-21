@@ -32,11 +32,32 @@ The Document Store is held out of releases.
 - Download checks stored content against its digest before the first byte
   and refuses a mismatch.
 - Audit entries for reservation, upload, verification, and download.
-- The served runtime still answers only `GET /health`: the document routes
-  are compiled only into test builds until authentication lands.
 - Verification under mixed verifier bindings: a worker under another binding
   retries a job rather than ending it, a restart cancels the jobs it
   supersedes, a verdict that records nothing is retried, and the database
   refuses a releasable version whose verdict binding is not its current one.
   S3 storage is activated once at startup, and an empty reservation is
   refused as `request.unprocessable`.
+- Every document route is served behind bearer access-token verification
+  through `registry-platform-oidc` and access-profile resolution. Access
+  profiles gain an optional `institution`, recorded as the issuing
+  institution of every document reserved under the profile.
+- Custody placement follows the policy's `custodyProfiles`: a service may
+  name any custodian, a human only itself (`custody.not-permitted`).
+- `POST /documents` and grant issue take a required `Idempotency-Key`,
+  answering `idempotency.key-reused` for another body and
+  `idempotency.expired` after `retention.receiptRetentionDays`. A repeated
+  upload of the same content answers the finalized view.
+- Document grants: issue, list, received list, and revoke, each naming one
+  exact version, one recipient, and an expiry fixed at issue. Download
+  releases only to the custodian or an active grant holder, and every other
+  caller gets a uniform `resource.not-found`.
+- `GET /document-policies` lists the policies a caller may reserve under,
+  with their bounds. Lists page by cursor in a stable order, at most 100
+  items a page. Documents carry an optional, untrusted `label`.
+- One transfer budget for uploads, downloads, and verification, and a
+  per-transfer deadline set by the new `transfers` runtime block
+  (`minimumDeadlineSeconds`, `mebibyteAllowanceSeconds`).
+- New problem codes `custody.not-permitted`, `idempotency.key-reused`,
+  `idempotency.expired`, and `resource.not-found`.
+- The OpenAPI document describes every route with its bearer security.

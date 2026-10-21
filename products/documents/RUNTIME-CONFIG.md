@@ -36,8 +36,9 @@ provider.
 ## Keys
 
 The runtime reads and checks every key below. It acts on `identity`,
-`package`, `listener`, `secretProviders`, `database`, `audit`, `storage`, and
-`contentVerification`; the other blocks are checked so
+`package`, `listener`, `secretProviders`, `database`, `authentication`,
+`audit`, `storage`, `contentVerification`, `transfers`, and
+`retention.receiptRetentionDays`; the other blocks are checked so
 a deployment written now keeps its meaning when the behaviour behind them
 arrives.
 
@@ -57,9 +58,11 @@ arrives.
 | `audit` | `destination` (`file`, the default, or `stdout`), `path` for a file journal, and `hashKeyRef`. |
 | `storage` | `type: database`, or `type: s3` with the shared object storage keys (`url`, `bucket`, `region`, `pathStyle`, `accessKeyIdRef`, `secretAccessKeyRef`, `caBundleRef`, `attemptTimeoutMilliseconds`). `maximumDocumentBytes` is the deployment ceiling on one document version: 16 MiB when omitted, at most 16 MiB for `database` and 64 MiB for `s3`. Startup refuses a package whose policy asks for more. The storage binding is pinned at the first upload, and a later start under another backend, bucket, or scope is refused. |
 | `contentVerification` | `type: http` with `url`, `authorizationRef`, `policyId`, and `attemptTimeoutMilliseconds` (100 to 60000). `type: disabled` is accepted only beside `tlsTermination: development-loopback`. |
+| `transfers.minimumDeadlineSeconds` | 1 to 3600, default 60. The deadline of the smallest upload or download. |
+| `transfers.mebibyteAllowanceSeconds` | 1 to 600, default 8. The time added to a transfer's deadline for every started mebibyte of the document. |
 | `cleanup.erasure` | `active` or `paused`. Expired and revoked document grants stop releasing bytes regardless. |
 | `destinations.hooks` | Hook destinations by id: `url`, `hmacSha256KeyRef`, `attemptTimeoutMilliseconds` (100 to 60000), and `maximumAttempts` (1 to 32). A plaintext URL is refused outside development. |
-| `retention.receiptRetentionDays` | 1 to 365, default 7. |
+| `retention.receiptRetentionDays` | 1 to 365, default 7. How long an `Idempotency-Key` on a reservation or a grant is held; a retry after it answers `idempotency.expired`. |
 | `retention.hookPayloadRetentionDays` | 1 to 30, default 7. |
 
 Seven days is a placeholder, not a jurisdictional recommendation: a
@@ -80,8 +83,24 @@ before it opens a connection or binds a socket. It then, in order:
    one pinned at the first upload;
 5. activates the content verifier, then suspends and re-queues every
    finalized version verified or queued under another verifier binding;
-6. binds the listener, serves `GET /health`, and runs the content
-   verification worker until shutdown.
+6. binds the listener, serves `GET /health` and the document routes, and
+   runs the content verification worker until shutdown.
 
-The served runtime answers only `GET /health` until authentication lands;
-the document routes are compiled only into test builds.
+Every document route verifies a bearer access token against
+`authentication.oidc` before it reads a request body. A token the verifier
+refuses answers `authentication.refused` with a `Bearer` challenge; a
+verifier that cannot be reached answers `service.unavailable`.
+
+## Transfer memory
+
+Every upload, download, and content verification attempt holds the whole
+document version in memory while it runs. One transfer budget, shared by all
+three, bounds those bytes at the larger of 256 MiB and
+`storage.maximumDocumentBytes`. A transfer that finds no room in the budget
+is refused at once with `service.unavailable` and `Retry-After`; it never
+waits for room. A transfer still holds its share until it completes or
+reaches its deadline (`transfers.minimumDeadlineSeconds` plus
+`transfers.mebibyteAllowanceSeconds` for every started mebibyte), when it is
+cut off and lets go. Transient copies made while hashing, storing, and
+sending can reach about twice the budget, so size the host for about 512 MiB
+of document memory on top of the process's own needs.

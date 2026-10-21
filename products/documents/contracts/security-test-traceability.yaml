@@ -19,8 +19,7 @@ entries:
       - {path: crates/registry-documents/src/http.rs, name: another_method_on_health_is_refused}
       - {path: crates/registry-documents/src/http.rs, name: health_answers_without_a_credential}
       - {path: crates/registry-documents/src/http.rs, name: the_trace_is_echoed_on_a_refusal}
-      - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_prepared_runtime_answers_health_and_refuses_every_other_route}
-      - {path: crates/registry-documents/src/http.rs, name: the_served_router_carries_no_document_route}
+      - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_prepared_runtime_serves_documents_only_to_a_verified_caller}
   - id: DOCUMENTS-SEC-03
     tests:
       - {path: crates/registry-documents/src/config.rs, name: plaintext_database_is_refused_outside_test_builds}
@@ -55,6 +54,16 @@ entries:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_rejected_version_is_never_released}
       - {path: crates/registry-documents/tests/postgres_s3.rs, name: s3_content_is_staged_verified_over_http_and_released}
       - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_s3_object_that_no_longer_matches_is_never_released}
+  - id: DOCUMENTS-SEC-10
+    tests:
+      - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_prepared_runtime_serves_documents_only_to_a_verified_caller}
+      - {path: crates/registry-documents/src/auth.rs, name: a_malformed_or_foreign_credential_is_refused}
+      - {path: crates/registry-documents/src/auth.rs, name: a_token_outside_every_profile_is_a_profile_refusal}
+      - {path: crates/registry-documents/src/auth.rs, name: an_exchanged_token_is_refused_where_no_assertion_authority_is_declared}
+      - {path: crates/registry-documents/src/auth.rs, name: a_key_set_outage_is_not_a_credential_refusal}
+      - {path: crates/registry-documents/src/http.rs, name: a_credential_refusal_carries_the_bearer_challenge}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_authority_and_unknown_ids_answer_without_disclosing_a_document}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_uploaded_document_is_released_only_after_it_is_verified}
   - id: DOCUMENTS-SEC-11
     tests:
       - {path: crates/registry-documents/src/config.rs, name: shared_runtime_loader_refuses_environment_expressions_in_secret_references}
@@ -94,6 +103,46 @@ entries:
   - id: DOCUMENTS-SEC-19
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: concurrent_uploads_of_one_reservation_finalize_once}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_retry_after_finalize_with_the_same_content_is_answered_and_other_content_is_refused}
   - id: DOCUMENTS-SEC-20
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_custodian_quota_holds_against_concurrent_reservations}
+  - id: DOCUMENTS-SEC-21
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: custody_is_placed_only_by_a_custody_profile_and_a_human_only_into_its_own}
+  - id: DOCUMENTS-SEC-22
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_issuing_institution_comes_from_the_profile_and_a_differing_body_is_refused}
+  - id: DOCUMENTS-SEC-23
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_idempotency_key_replays_its_reservation_and_refuses_another_body}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_idempotent_grant_retry_after_revocation_releases_nothing}
+      - {path: crates/registry-documents/src/http.rs, name: the_idempotency_key_is_present_bounded_and_graphical}
+  - id: DOCUMENTS-SEC-24
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_grant_releases_one_exact_version_to_its_named_recipient_until_expiry_or_revocation}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_uploaded_document_is_released_only_after_it_is_verified}
+  - id: DOCUMENTS-SEC-25
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_idempotent_grant_retry_after_revocation_releases_nothing}
+  - id: DOCUMENTS-SEC-26
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_authority_and_unknown_ids_answer_without_disclosing_a_document}
+  - id: DOCUMENTS-SEC-27
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_version_approved_under_another_binding_is_released_to_nobody}
+  - id: DOCUMENTS-SEC-28
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_exhausted_transfer_budget_refuses_uploads_and_downloads}
+      - {path: crates/registry-documents/src/transfer.rs, name: a_transfer_beyond_the_remaining_budget_is_refused_until_room_returns}
+  - id: DOCUMENTS-SEC-29
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_stalled_upload_is_cut_off_at_its_deadline}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_download_not_read_before_its_deadline_ends_in_an_error}
+      - {path: crates/registry-documents/src/transfer.rs, name: a_stalled_release_lets_go_of_its_bytes_at_the_deadline}
+  - id: DOCUMENTS-SEC-30
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_request_audit_failure_refuses_the_upload_and_the_download}
+  - id: DOCUMENTS-SEC-31
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_label_is_bounded_and_returned_untouched}
