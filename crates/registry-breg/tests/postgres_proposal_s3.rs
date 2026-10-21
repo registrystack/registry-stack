@@ -217,8 +217,12 @@ struct Objects {
     deletes: AtomicUsize,
     // 1 unavailable, 2 corrupt body, 3 short body, 4 interrupted upload.
     mode: AtomicUsize,
-    // External verifier: approve, reject, or exceed its transport deadline.
+    // External verifier: approve, reject, exceed its transport deadline, or
+    // (3) signal `verifier_entered` and approve once `verifier_release` is
+    // notified.
     verifier_mode: AtomicUsize,
+    verifier_entered: tokio::sync::Notify,
+    verifier_release: tokio::sync::Notify,
     verifier_bytes: tokio::sync::Mutex<Vec<Vec<u8>>>,
     verifier_content_types: tokio::sync::Mutex<Vec<String>>,
 }
@@ -248,6 +252,10 @@ async fn object_request(
         let mode = state.verifier_mode.load(Ordering::SeqCst);
         if mode == 2 {
             tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        if mode == 3 {
+            state.verifier_entered.notify_one();
+            state.verifier_release.notified().await;
         }
         return axum::Json(json!({"verdict": if mode == 1 {"rejected"} else {"approved"}}))
             .into_response();
@@ -306,6 +314,10 @@ struct S3Fixture {
 }
 impl S3Fixture {
     async fn new() -> Self {
+        Self::with_verifier_timeout(100).await
+    }
+
+    async fn with_verifier_timeout(verifier_timeout_milliseconds: u32) -> Self {
         let state = Arc::new(Objects::default());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -333,7 +345,7 @@ impl S3Fixture {
             }
         }
         let raw = format!(
-            "{}\nattachmentStorage:\n  type: s3\n  url: {endpoint}\n  bucket: synthetic-proposal\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 2000\nattachmentVerification:\n  type: http\n  url: {endpoint}/verify\n  policyId: synthetic-policy\n  authorizationRef: secret:file/verifier\n  attemptTimeoutMilliseconds: 100\n",
+            "{}\nattachmentStorage:\n  type: s3\n  url: {endpoint}\n  bucket: synthetic-proposal\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 2000\nattachmentVerification:\n  type: http\n  url: {endpoint}/verify\n  policyId: synthetic-policy\n  authorizationRef: secret:file/verifier\n  attemptTimeoutMilliseconds: {verifier_timeout_milliseconds}\n",
             valid_runtime(secrets.path(), secrets.path())
         );
         let config = parse_runtime_config(&raw).unwrap();
@@ -1397,11 +1409,145 @@ async fn verification_jobs(fixture: &client_http::ClientFixture) -> Vec<(String,
         .collect()
 }
 
+/// The attachment verification entries in append order, each with the index
+/// of the attempt it answers and its verification reference: attempts are
+/// numbered in the order their reference first appears.
+fn verification_attempts(entries: &[Value]) -> Vec<(usize, String, String)> {
+    let mut references: Vec<String> = Vec::new();
+    entries
+        .iter()
+        .filter(|entry| entry["record"]["kind"] == "attachmentVerification")
+        .map(|entry| {
+            let reference = entry["record"]["verificationReference"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let index = references
+                .iter()
+                .position(|known| *known == reference)
+                .unwrap_or_else(|| {
+                    references.push(reference.clone());
+                    references.len() - 1
+                });
+            (
+                index,
+                format!(
+                    "{}:{}",
+                    entry["record"]["phase"].as_str().unwrap(),
+                    entry["record"]["outcome"].as_str().unwrap()
+                ),
+                reference,
+            )
+        })
+        .collect()
+}
+
+/// `verification_attempts` without the references.
+fn attempt_outcomes(entries: &[Value]) -> Vec<(usize, String)> {
+    verification_attempts(entries)
+        .into_iter()
+        .map(|(index, outcome, _)| (index, outcome))
+        .collect()
+}
+
+fn outcomes(expected: &[(usize, &str)]) -> Vec<(usize, String)> {
+    expected
+        .iter()
+        .map(|(index, outcome)| (*index, (*outcome).to_owned()))
+        .collect()
+}
+
+/// The audit key every verification test worker hashes references with.
+fn verification_audit_profile() -> registry_platform_audit::AuditProfile {
+    registry_platform_audit::AuditProfile::production_from_secret_bytes(vec![0x63; 32].into())
+        .unwrap()
+}
+
+/// A registry whose mutations store attachments in `s3` under its verifier,
+/// with a capturing audit for the workers `verification_worker` builds.
+async fn verification_fixture(
+    s3: &S3Fixture,
+) -> (
+    client_http::ClientFixture,
+    registry_breg::attachment_verification::AttachmentVerification,
+    registry_breg::audit::RegistryAudit,
+    registry_breg::audit::test_support::AuditCapture,
+) {
+    let storage = s3.storage.clone();
+    let verification = s3.config.activate_attachment_verification().unwrap();
+    let configured_verification = verification.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        registry(false),
+        claims("synthetic-author", "zone-a"),
+        move |mutations| {
+            mutations
+                .with_attachment_storage(storage)
+                .with_attachment_verification(configured_verification)
+        },
+    )
+    .await;
+    let (audit, capture) =
+        registry_breg::audit::test_support::capturing(verification_audit_profile());
+    (fixture, verification, audit, capture)
+}
+
+fn verification_worker(
+    fixture: &client_http::ClientFixture,
+    s3: &S3Fixture,
+    verification: &registry_breg::attachment_verification::AttachmentVerification,
+    audit: &registry_breg::audit::RegistryAudit,
+) -> registry_breg::attachment_verification_worker::AttachmentVerificationWorker {
+    registry_breg::attachment_verification_worker::AttachmentVerificationWorker::new(
+        fixture.pool.clone(),
+        fixture.identity.clone(),
+        registry_breg::postgres::RegistryLockKey::derive(fixture.registry.registry_id()).unwrap(),
+        Duration::from_secs(2),
+        audit.clone(),
+        s3.storage.clone(),
+        verification.clone(),
+    )
+}
+
+/// Upload `bytes` to a fresh Proposal's `support` slot and return the
+/// Proposal and the verification id of its verdict row.
+async fn upload_for_verification(
+    fixture: &client_http::ClientFixture,
+    name: &str,
+    bytes: &[u8],
+) -> (registry_breg_client::BRegProposal, uuid::Uuid) {
+    let draft = start(fixture, "After", name).await;
+    let draft = fixture
+        .http
+        .client
+        .upload_proposal_attachment(
+            &draft,
+            "support",
+            "text/plain",
+            bytes,
+            &key(&format!("{name}-upload")),
+        )
+        .await
+        .unwrap()
+        .value;
+    let verification_id = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT verdict.verification_id
+               FROM registry_internal.registry_attachment_verification AS verdict
+              WHERE verdict.sha256 = encode(sha256($1::bytea), 'hex')",
+            &[&bytes],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    (draft, verification_id)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn verification_runs_on_the_shared_dispatch_job_table() {
     use registry_breg::attachment_verification_worker::AttachmentVerificationWorker;
     use registry_breg::postgres::RegistryLockKey;
-    use registry_platform_audit::AuditProfile;
     let s3 = S3Fixture::new().await;
     let storage = s3.storage.clone();
     let verification = s3.config.activate_attachment_verification().unwrap();
@@ -1416,9 +1562,8 @@ async fn verification_runs_on_the_shared_dispatch_job_table() {
         },
     )
     .await;
-    let (audit, capture) = registry_breg::audit::test_support::capturing(
-        AuditProfile::production_from_secret_bytes(vec![0x63; 32].into()).unwrap(),
-    );
+    let (audit, capture) =
+        registry_breg::audit::test_support::capturing(verification_audit_profile());
     let worker = || {
         AttachmentVerificationWorker::new(
             fixture.pool.clone(),
@@ -1547,19 +1692,22 @@ async fn verification_runs_on_the_shared_dispatch_job_table() {
     // A worker that stopped mid-attempt leaves a lapsed lease. The verdict
     // row it was verifying is retired while it holds the lease, which leaves
     // the leased job in place.
-    fixture
+    let lapsed_token = uuid::Uuid::new_v4();
+    let lapsed_id: uuid::Uuid = fixture
         .database
         .admin
-        .execute(
+        .query_one(
             "UPDATE registry_internal.registry_attachment_verification_jobs
                 SET state = 'leased', attempt = 1, next_attempt_at = NULL,
                     attempt_started_at = transaction_timestamp() - interval '2 minutes',
                     lease_expires_at = transaction_timestamp() - interval '1 minute',
-                    lease_token = gen_random_uuid()",
-            &[],
+                    lease_token = $1
+              RETURNING verification_id",
+            &[&lapsed_token],
         )
         .await
-        .unwrap();
+        .unwrap()
+        .get(0);
     let _draft = client
         .upload_proposal_attachment(
             &draft,
@@ -1625,28 +1773,300 @@ async fn verification_runs_on_the_shared_dispatch_job_table() {
 
     let audit = capture.entries();
     postgres_harness::assert_audit_identity_goldens(&audit);
-    let outcomes = audit
-        .iter()
-        .filter(|entry| entry["record"]["kind"] == "attachmentVerification")
-        .map(|entry| {
-            format!(
-                "{}:{}",
-                entry["record"]["phase"].as_str().unwrap(),
-                entry["record"]["outcome"].as_str().unwrap()
-            )
-        })
-        .collect::<Vec<_>>();
-    for expected in [
-        "attempt:started",
-        "terminal:retry-pending",
-        "terminal:approved",
-        "terminal:unfinished",
-        "terminal:discarded",
-    ] {
-        assert!(
-            outcomes.iter().any(|outcome| outcome == expected),
-            "{expected} in {outcomes:?}"
-        );
-    }
+    let attempts = verification_attempts(&audit);
+    assert_eq!(
+        attempt_outcomes(&audit),
+        outcomes(&[
+            // The verifier that did not answer.
+            (0, "attempt:started"),
+            (0, "terminal:retry-pending"),
+            // Its retry, approved.
+            (1, "attempt:started"),
+            (1, "terminal:approved"),
+            // The current upload, claimed in the pass that recovers the
+            // lapsed lease, whose worker answers that lease as unfinished
+            // before its own verdict.
+            (2, "attempt:started"),
+            (3, "terminal:unfinished"),
+            (2, "terminal:approved"),
+            // The retired row's retry, discarded without a verifier request.
+            (4, "attempt:started"),
+            (4, "terminal:discarded"),
+        ])
+    );
+    // The recovered entry answers the lapsed lease itself: its reference is
+    // keyed by that lease's verification id and token.
+    let lapsed_reference = verification_audit_profile()
+        .key_hasher()
+        .audit_reference_hash(
+            "breg-attachment-verification-v2",
+            &fixture.identity.activation_id,
+            &format!("{lapsed_id}:{lapsed_token}"),
+        )
+        .unwrap();
+    assert_eq!(attempts[5].2, lapsed_reference);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_verdict_for_an_upload_retired_mid_verify_is_discarded() {
+    // The verifier holds its answer until the test releases it, so the
+    // timeout must outlast the retirement below.
+    let s3 = S3Fixture::with_verifier_timeout(20_000).await;
+    let (fixture, verification, audit, capture) = verification_fixture(&s3).await;
+    let (draft, retired_id) =
+        upload_for_verification(&fixture, "mid-verify", b"mid-verify-first").await;
+
+    s3.state.verifier_mode.store(3, Ordering::SeqCst);
+    let worker = verification_worker(&fixture, &s3, &verification, &audit);
+    let pass = tokio::spawn(async move { worker.run_once().await });
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        s3.state.verifier_entered.notified(),
+    )
+    .await
+    .expect("the worker reaches the verifier");
+
+    // While the verifier runs under a live lease, a replacement upload
+    // retires the verdict row it was asked about.
+    let lease_live: bool = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT state = 'leased' AND lease_expires_at > transaction_timestamp()
+               FROM registry_internal.registry_attachment_verification_jobs
+              WHERE verification_id = $1",
+            &[&retired_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(lease_live);
+    fixture
+        .http
+        .client
+        .upload_proposal_attachment(
+            &draft,
+            "support",
+            "text/plain",
+            b"mid-verify-second",
+            &key("mid-verify-replace"),
+        )
+        .await
+        .unwrap();
+    let retired: i64 = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_attachment_verification
+              WHERE verification_id = $1",
+            &[&retired_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(retired, 0);
+
+    s3.state.verifier_release.notify_one();
+    assert!(pass.await.unwrap().unwrap());
+
+    // The approval reached no verdict row, the finished job went with its
+    // retired row, and the replacement still waits for its own verdict.
+    let verdicts = fixture
+        .database
+        .admin
+        .query(
+            "SELECT verdict FROM registry_internal.registry_attachment_verification",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(verdicts.len(), 1);
+    assert_eq!(verdicts[0].get::<_, String>(0), "pending");
+    assert_eq!(
+        verification_jobs(&fixture).await,
+        vec![("pending".into(), 0, false)]
+    );
+    assert_eq!(s3.state.verifier_bytes.lock().await.len(), 1);
+    assert_eq!(
+        attempt_outcomes(&capture.entries()),
+        outcomes(&[(0, "attempt:started"), (0, "terminal:discarded")])
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stale_lease_token_neither_loads_content_nor_records_a_verdict() {
+    use registry_breg::attachment_store::test_support::{
+        load_leased_content, record_leased_verdict,
+    };
+    use registry_breg::mutation::MutationError;
+    let s3 = S3Fixture::new().await;
+    let (fixture, _verification, _audit, _capture) = verification_fixture(&s3).await;
+    let (_draft, verification_id) =
+        upload_for_verification(&fixture, "stale-lease", b"stale-lease-bytes").await;
+    let (mut client, connection) = fixture.database.connect_admin().await;
+
+    let lease = |token: uuid::Uuid, live: bool| {
+        let expires = if live {
+            "transaction_timestamp() + interval '1 minute'"
+        } else {
+            "transaction_timestamp() - interval '1 minute'"
+        };
+        format!(
+            "UPDATE registry_internal.registry_attachment_verification_jobs
+                SET state = 'leased', attempt = 1, next_attempt_at = NULL,
+                    attempt_started_at = transaction_timestamp() - interval '2 minutes',
+                    lease_expires_at = {expires}, lease_token = '{token}'
+              WHERE verification_id = '{verification_id}'"
+        )
+    };
+    let first = uuid::Uuid::new_v4();
+    let second = uuid::Uuid::new_v4();
+
+    // The live lease loads the content.
+    client.batch_execute(&lease(first, true)).await.unwrap();
+    let transaction = client.transaction().await.unwrap();
+    assert!(load_leased_content(&transaction, verification_id, first)
+        .await
+        .unwrap());
+    transaction.rollback().await.unwrap();
+
+    // After the lease lapses, its token is refused by both.
+    client.batch_execute(&lease(first, false)).await.unwrap();
+    let transaction = client.transaction().await.unwrap();
+    assert_eq!(
+        load_leased_content(&transaction, verification_id, first).await,
+        Err(MutationError::PreconditionFailed)
+    );
+    assert_eq!(
+        record_leased_verdict(&transaction, verification_id, first, true).await,
+        Err(MutationError::PreconditionFailed)
+    );
+    transaction.rollback().await.unwrap();
+
+    // After the job is leased again under a new token, the old one is
+    // refused by both while the new one records the verdict.
+    client.batch_execute(&lease(second, true)).await.unwrap();
+    let transaction = client.transaction().await.unwrap();
+    assert_eq!(
+        load_leased_content(&transaction, verification_id, first).await,
+        Err(MutationError::PreconditionFailed)
+    );
+    assert_eq!(
+        record_leased_verdict(&transaction, verification_id, first, true).await,
+        Err(MutationError::PreconditionFailed)
+    );
+    assert_eq!(
+        record_leased_verdict(&transaction, verification_id, second, false).await,
+        Ok(true)
+    );
+    transaction.commit().await.unwrap();
+    let verdict: String = client
+        .query_one(
+            "SELECT verdict FROM registry_internal.registry_attachment_verification
+              WHERE verification_id = $1",
+            &[&verification_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(verdict, "rejected");
+    drop(client);
+    connection.await.unwrap();
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_whose_verdict_is_already_decided_ends_without_a_verifier_request() {
+    let s3 = S3Fixture::new().await;
+    let (fixture, verification, audit, capture) = verification_fixture(&s3).await;
+    let (_draft, verification_id) =
+        upload_for_verification(&fixture, "decided", b"decided-bytes").await;
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_attachment_verification
+                SET verdict = 'approved' WHERE verification_id = $1",
+            &[&verification_id],
+        )
+        .await
+        .unwrap();
+
+    let worker = verification_worker(&fixture, &s3, &verification, &audit);
+    assert!(worker.run_once().await.unwrap());
+    assert_eq!(s3.state.verifier_bytes.lock().await.len(), 0);
+    assert_eq!(
+        verification_jobs(&fixture).await,
+        vec![("delivered".into(), 1, false)]
+    );
+    assert_eq!(
+        attempt_outcomes(&capture.entries()),
+        outcomes(&[(0, "attempt:started"), (0, "terminal:discarded")])
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pending_verdict_without_a_running_job_holds_back_worker_success() {
+    let s3 = S3Fixture::new().await;
+    let (fixture, verification, audit, _capture) = verification_fixture(&s3).await;
+    let worker = || verification_worker(&fixture, &s3, &verification, &audit);
+    let decide = |verification_id: uuid::Uuid| {
+        let admin = &fixture.database.admin;
+        async move {
+            admin
+                .execute(
+                    "UPDATE registry_internal.registry_attachment_verification
+                        SET verdict = 'approved' WHERE verification_id = $1",
+                    &[&verification_id],
+                )
+                .await
+                .unwrap();
+        }
+    };
+
+    // A pending verdict whose job is gone waits for nothing a pass would
+    // claim, and the pass that finds it is no success.
+    let (_draft, lost) = upload_for_verification(&fixture, "lost-job", b"lost-job-bytes").await;
+    fixture
+        .database
+        .admin
+        .execute(
+            "DELETE FROM registry_internal.registry_attachment_verification_jobs
+              WHERE verification_id = $1",
+            &[&lost],
+        )
+        .await
+        .unwrap();
+    let pass = worker();
+    assert!(!pass.run_once().await.unwrap());
+    assert!(pass.last_success().age().is_none());
+    decide(lost).await;
+
+    // So is a pending verdict whose job dead-lettered.
+    let (_draft, dead) = upload_for_verification(&fixture, "dead-job", b"dead-job-bytes").await;
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_attachment_verification_jobs
+                SET state = 'dead-lettered', attempt = 32767, next_attempt_at = NULL,
+                    dead_lettered_at = transaction_timestamp()
+              WHERE verification_id = $1",
+            &[&dead],
+        )
+        .await
+        .unwrap();
+    let pass = worker();
+    assert!(!pass.run_once().await.unwrap());
+    assert!(pass.last_success().age().is_none());
+
+    // Once no verifiable verdict is stranded, an idle pass is a success.
+    decide(dead).await;
+    let pass = worker();
+    assert!(!pass.run_once().await.unwrap());
+    assert!(pass.last_success().age().is_some());
     fixture.finish().await;
 }
