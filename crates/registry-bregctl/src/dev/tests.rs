@@ -3982,8 +3982,8 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
         assert!(activated.lookup("undeclared").is_none());
         let value: Value =
             serde_norway::from_slice(&fs::read(root.join(filename)).unwrap()).unwrap();
-        assert_eq!(value["eventDestinations"].as_object().unwrap().len(), 2);
-        for binding in value["eventDestinations"].as_object().unwrap().values() {
+        assert_eq!(value["destinations"]["hooks"].as_object().unwrap().len(), 2);
+        for binding in value["destinations"]["hooks"].as_object().unwrap().values() {
             assert_eq!(binding["origin"], "http://127.0.0.1:18996");
             assert_eq!(binding["networkProfile"], "loopback-development-http");
             assert_eq!(binding["classificationCeiling"], "internal");
@@ -4026,7 +4026,7 @@ fn explicit_local_event_destinations_bind_exact_compiled_inventory() {
     fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
     let secrets = secret_root(&project, &mut clients);
     let key = file_secret(&secrets, "event-key", b"synthetic-local-event-key-for-test");
-    clients.event_destinations.insert(
+    clients.destinations.hooks.insert(
         "openfn".into(),
         config::LocalEventDestination {
             origin: "http://127.0.0.1:18888".into(),
@@ -4041,7 +4041,7 @@ fn explicit_local_event_destinations_bind_exact_compiled_inventory() {
     let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
         .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
     let bindings =
-        config::external_event_destinations(&compiled, &clients.event_destinations).unwrap();
+        config::external_event_destinations(&compiled, &clients.destinations.hooks).unwrap();
     assert_eq!(bindings["openfn"]["origin"], "http://127.0.0.1:18888");
     assert_eq!(bindings["openfn"]["path"], "/inbox/registry");
     assert_eq!(
@@ -4050,7 +4050,7 @@ fn explicit_local_event_destinations_bind_exact_compiled_inventory() {
     );
     let runtime: Value =
         serde_norway::from_slice(&fs::read(root.join("runtime-test.yaml")).unwrap()).unwrap();
-    assert_eq!(runtime["eventDestinations"], bindings);
+    assert_eq!(runtime["destinations"]["hooks"], bindings);
     assert!(config::external_event_destinations(&compiled, &BTreeMap::new()).is_err());
 }
 
@@ -4062,7 +4062,7 @@ fn local_event_destinations_refuse_an_origin_without_a_usable_port() {
     fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
     let secrets = secret_root(&project, &mut clients);
     let key = file_secret(&secrets, "event-key", b"synthetic-local-event-key-for-test");
-    clients.event_destinations.insert(
+    clients.destinations.hooks.insert(
         "openfn".into(),
         config::LocalEventDestination {
             origin: "http://127.0.0.1:18888".into(),
@@ -4079,7 +4079,7 @@ fn local_event_destinations_refuse_an_origin_without_a_usable_port() {
     // what must refuse it. The origin otherwise reaches the runtime and fails
     // there, naming the destination policy rather than this declaration.
     for origin in ["http://127.0.0.1:0", "http://127.0.0.1"] {
-        clients.event_destinations.get_mut("openfn").unwrap().origin = origin.into();
+        clients.destinations.hooks.get_mut("openfn").unwrap().origin = origin.into();
         let refusal = config::clients(
             "dev-clients.yaml",
             &serde_norway::to_string(&clients).unwrap().into_bytes(),
@@ -4101,7 +4101,7 @@ fn local_event_destinations_refuse_userinfo_and_noncanonical_paths() {
     fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
     let secrets = secret_root(&project, &mut clients);
     let key = file_secret(&secrets, "event-key", b"synthetic-local-event-key-for-test");
-    clients.event_destinations.insert(
+    clients.destinations.hooks.insert(
         "openfn".into(),
         config::LocalEventDestination {
             origin: "http://127.0.0.1:18888".into(),
@@ -4123,7 +4123,7 @@ fn local_event_destinations_refuse_userinfo_and_noncanonical_paths() {
         "http://operator@127.0.0.1:18888",
         "http://operator:placeholder@127.0.0.1:18888",
     ] {
-        clients.event_destinations.get_mut("openfn").unwrap().origin = origin.into();
+        clients.destinations.hooks.get_mut("openfn").unwrap().origin = origin.into();
         let refusal = config::clients(
             "dev-clients.yaml",
             &serde_norway::to_string(&clients).unwrap().into_bytes(),
@@ -4135,7 +4135,7 @@ fn local_event_destinations_refuse_userinfo_and_noncanonical_paths() {
             "{origin}: {refusal}"
         );
     }
-    clients.event_destinations.get_mut("openfn").unwrap().origin = "http://127.0.0.1:18888".into();
+    clients.destinations.hooks.get_mut("openfn").unwrap().origin = "http://127.0.0.1:18888".into();
     for path in [
         "/inbox/../registry",
         "/inbox/./registry",
@@ -4143,7 +4143,7 @@ fn local_event_destinations_refuse_userinfo_and_noncanonical_paths() {
         "/inbox//registry",
         "/inbox/na\u{ef}ve",
     ] {
-        clients.event_destinations.get_mut("openfn").unwrap().path = path.into();
+        clients.destinations.hooks.get_mut("openfn").unwrap().path = path.into();
         let refusal = config::clients(
             "dev-clients.yaml",
             &serde_norway::to_string(&clients).unwrap().into_bytes(),
@@ -4155,7 +4155,7 @@ fn local_event_destinations_refuse_userinfo_and_noncanonical_paths() {
             "{path}: {refusal}"
         );
     }
-    clients.event_destinations.get_mut("openfn").unwrap().path = "/inbox/registry".into();
+    clients.destinations.hooks.get_mut("openfn").unwrap().path = "/inbox/registry".into();
     config::clients(
         "dev-clients.yaml",
         &serde_norway::to_string(&clients).unwrap().into_bytes(),
@@ -4178,7 +4178,7 @@ fn local_event_destinations_refuse_hmac_key_bytes_the_runtime_cannot_load() {
     let mut material = b"synthetic-local-event-key-for-tes".to_vec();
     material[8] = 0;
     let key = file_secret(&secrets, "event-key", &material);
-    clients.event_destinations.insert(
+    clients.destinations.hooks.insert(
         "openfn".into(),
         config::LocalEventDestination {
             origin: "http://127.0.0.1:18888".into(),
@@ -4193,7 +4193,7 @@ fn local_event_destinations_refuse_hmac_key_bytes_the_runtime_cannot_load() {
     .unwrap_err()
     .to_string();
     assert!(
-        refusal.contains("eventDestinations.openfn.hmacSha256KeyRef could not be resolved")
+        refusal.contains("destinations.hooks.openfn.hmacSha256KeyRef could not be resolved")
             && refusal.contains("without NUL bytes"),
         "{refusal}"
     );
@@ -5057,6 +5057,31 @@ fn a_clients_file_without_the_header_is_refused_naming_the_current_one() {
 }
 
 #[test]
+fn hook_destinations_outside_the_destinations_block_are_refused_naming_the_new_path() {
+    let document = format!(
+        "{CLIENTS_HEADER}clients: []
+eventDestinations:
+  receiver:
+    origin: http://127.0.0.1:18888
+    path: /inbox
+    hmacSha256KeyRef: secret:file/receiver-key
+"
+    );
+    let report = clients_refusal(document.as_bytes());
+    let rendered = report.render_human();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "config.removed-key")
+        .unwrap_or_else(|| panic!("the old location is refused: {rendered}"));
+    assert_eq!(diagnostic.path, "/eventDestinations", "{rendered}");
+    assert!(
+        diagnostic.suggested_action.contains("destinations.hooks"),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn every_removed_clients_member_is_refused_at_its_position_naming_its_replacement() {
     let document = format!(
         "{CLIENTS_HEADER}version: 1
@@ -5068,11 +5093,12 @@ clients:
     clientIdFile: /private/published-client-id
     assertionKeyFile: /private/published-assertion-key
     assertionKeyInputFile: /private/imported-assertion-key
-eventDestinations:
-  receiver:
-    origin: http://127.0.0.1:18888
-    path: /inbox
-    hmacKeyFile: /private/hmac-key
+destinations:
+  hooks:
+    receiver:
+      origin: http://127.0.0.1:18888
+      path: /inbox
+      hmacKeyFile: /private/hmac-key
 evidenceProviders:
   qualification:
     baseUrl: http://127.0.0.1:18093
@@ -5136,7 +5162,7 @@ issuer:
         ("/clients/0/assertionKeyFile", "bregctl dev export-client"),
         ("/clients/0/assertionKeyInputFile", "assertionKeyRef"),
         (
-            "/eventDestinations/receiver/hmacKeyFile",
+            "/destinations/hooks/receiver/hmacKeyFile",
             "hmacSha256KeyRef",
         ),
         ("/evidenceProviders/qualification/tokenFile", "tokenRef"),

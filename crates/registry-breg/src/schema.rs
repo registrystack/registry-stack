@@ -1176,7 +1176,8 @@ mod tests {
             assert_eq!(value.pointer(pointer), Some(&expected), "{pointer}");
         }
         for pointer in [
-            "/properties/eventDestinations/default",
+            "/properties/destinations/default",
+            "/$defs/RawDestinationsConfig/properties/hooks/default",
             "/$defs/RawAuthorityClaimsConfig/properties/purpose/default",
             "/$defs/RawRegistryDatabase/properties/password/default",
             "/$defs/RawRegistryDatabase/properties/plaintext/default",
@@ -1424,7 +1425,7 @@ mod tests {
             &schema,
             "event destination identifier grammar",
             |instance| {
-                instance["eventDestinations"] =
+                instance["destinations"]["hooks"] =
                     serde_json::json!({"AssetOps": valid_event_destination()});
             },
         );
@@ -1434,7 +1435,7 @@ mod tests {
             |instance| {
                 let mut destination = valid_event_destination();
                 destination["hmacSha256KeyRef"] = Value::String("secret:file/".into());
-                instance["eventDestinations"] = serde_json::json!({"asset_ops": destination});
+                instance["destinations"]["hooks"] = serde_json::json!({"asset_ops": destination});
             },
         );
         assert_schema_rejects_parser_refused_runtime(
@@ -1443,7 +1444,7 @@ mod tests {
             |instance| {
                 let mut destination = valid_event_destination();
                 destination["deliveryCeilings"]["attemptTimeoutMilliseconds"] = Value::from(99_u64);
-                instance["eventDestinations"] = serde_json::json!({"asset_ops": destination});
+                instance["destinations"]["hooks"] = serde_json::json!({"asset_ops": destination});
             },
         );
         assert_schema_rejects_parser_refused_runtime(
@@ -1452,7 +1453,7 @@ mod tests {
             |instance| {
                 let mut destination = valid_event_destination();
                 destination["deliveryCeilings"]["maximumAttempts"] = Value::from(6_u64);
-                instance["eventDestinations"] = serde_json::json!({"asset_ops": destination});
+                instance["destinations"]["hooks"] = serde_json::json!({"asset_ops": destination});
             },
         );
         assert_schema_rejects_parser_refused_runtime(
@@ -1461,7 +1462,7 @@ mod tests {
             |instance| {
                 let mut destination = valid_event_destination();
                 destination["tls"] = serde_json::json!({});
-                instance["eventDestinations"] = serde_json::json!({"asset_ops": destination});
+                instance["destinations"]["hooks"] = serde_json::json!({"asset_ops": destination});
             },
         );
     }

@@ -227,6 +227,10 @@ const REMOVED_KEYS: &[RemovedKey] = &[
     },
     REMOVED_OIDC_JWKS_SOURCE_KIND,
     RemovedKey {
+        path: "eventDestinations",
+        replacement: "move each eventDestinations entry under destinations.hooks; the entries stay as they are",
+    },
+    RemovedKey {
         path: "taskGrantStatus.*.caseworkResource",
         replacement: "rename caseworkResource to statusResource in each taskGrantStatus entry; the value stays as it is",
     },
@@ -338,7 +342,7 @@ pub enum RuntimeConfigError {
     #[error("runtime configuration contains an invalid event destination binding")]
     InvalidEventDestination,
     #[error(
-        "runtime configuration eventDestinations contains identifiers that differ only by `-` versus `_`"
+        "runtime configuration destinations.hooks contains identifiers that differ only by `-` versus `_`"
     )]
     EventDestinationIdCollision,
     #[error(
@@ -424,8 +428,8 @@ impl RuntimeConfigError {
             Self::InvalidOidcLeeway => "/authentication/oidc/leewayMilliseconds",
             Self::InvalidAudit => "/audit",
             Self::InvalidCursor => "/cursor",
-            Self::InvalidEventDestination => "/eventDestinations",
-            Self::EventDestinationIdCollision => "/eventDestinations",
+            Self::InvalidEventDestination => "/destinations/hooks",
+            Self::EventDestinationIdCollision => "/destinations/hooks",
             Self::EvidenceProviderIdCollision => "/evidenceProviders",
             Self::ReviewAuthorityIdCollision => "/reviewAuthorities",
             Self::InvalidAttachmentStorage => "/attachmentStorage",
@@ -732,9 +736,10 @@ fn runtime_definition_id_diagnostics(
     let mut diagnostics = Vec::new();
     for (namespace, code, ids) in [
         (
-            "eventDestinations",
+            "destinations/hooks",
             "breg.runtime.event-destination-id-collision",
-            raw.event_destinations
+            raw.destinations
+                .hooks
                 .keys()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
@@ -818,10 +823,10 @@ fn runtime_stand_in(pointer: &str) -> &'static str {
         }
         ["audit", "path"]
         | ["fieldEncryption", "provider", "unixSocketPath"]
-        | ["eventDestinations", _, "path"] => "/deferred",
+        | ["destinations", "hooks", _, "path"] => "/deferred",
         ["taskGrantStatus", _, "statusPath"] => "/{grantId}",
         ["attachmentStorage" | "attachmentVerification", "url"]
-        | ["eventDestinations", _, "origin"]
+        | ["destinations", "hooks", _, "origin"]
         | ["evidenceProviders", _, "baseUrl"]
         | ["taskGrantStatus", _, "baseUrl"
         | "sourceIssuer"
@@ -902,7 +907,7 @@ impl RuntimeConfig {
         .map_err(|_| RuntimeConfigError::InvalidTaskGrantStatus)?;
         let audit = AuditConfig::from_raw(raw.audit)?;
         let cursor = CursorConfig::from_raw(raw.cursor)?;
-        let event_destinations = EventDestinationConfigs::from_raw(raw.event_destinations)
+        let event_destinations = EventDestinationConfigs::from_raw(raw.destinations.hooks)
             .map_err(|_| RuntimeConfigError::InvalidEventDestination)?;
         let retention = RetentionConfig::from_raw(raw.retention);
         let review_authorities = raw
@@ -1334,7 +1339,8 @@ impl RuntimeConfig {
 fn validate_runtime_definition_ids(raw: &RawRuntimeConfig) -> Result<()> {
     for (ids, error) in [
         (
-            raw.event_destinations
+            raw.destinations
+                .hooks
                 .keys()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
@@ -2833,14 +2839,10 @@ struct RawRuntimeConfig {
     task_grant_status: Vec<TaskGrantStatusConfig>,
     audit: RawAuditConfig,
     cursor: RawCursorConfig,
-    #[serde(default, deserialize_with = "local_id_map")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(
-            schema_with = "local_id_map_schema::<crate::event_destination::RawEventDestinationConfig>"
-        )
-    )]
-    event_destinations: RawEventDestinationConfigs,
+    /// Outbound destination bindings. Absent by default, which binds no
+    /// destination.
+    #[serde(default)]
+    destinations: RawDestinationsConfig,
     #[serde(default, deserialize_with = "local_id_map")]
     #[cfg_attr(
         feature = "schema",
@@ -3277,6 +3279,22 @@ struct RawCursorConfig {
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Outbound destination bindings, grouped by what sends to them.
+struct RawDestinationsConfig {
+    /// URL hook destinations, keyed by the identifier a reviewed hook names.
+    #[serde(default, deserialize_with = "local_id_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            schema_with = "local_id_map_schema::<crate::event_destination::RawEventDestinationConfig>"
+        )
+    )]
+    hooks: RawEventDestinationConfigs,
+}
+
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawRetentionConfig {
@@ -3522,7 +3540,8 @@ pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> 
         );
     }
     for pointer in [
-        "/properties/eventDestinations",
+        "/properties/destinations",
+        "/$defs/RawDestinationsConfig/properties/hooks",
         "/$defs/RawAuthorityClaimsConfig/properties/purpose",
         "/$defs/RawEventDestinationConfig/properties/tls",
         "/$defs/RawOidcVerifierConfig/properties/deniedKids",
@@ -3730,7 +3749,7 @@ fn install_schema_constraints(schema: &mut Value) {
         true,
     );
     if let Some(member) = schema
-        .pointer_mut("/properties/eventDestinations")
+        .pointer_mut("/$defs/RawDestinationsConfig/properties/hooks")
         .and_then(Value::as_object_mut)
     {
         member.insert("maxProperties".to_owned(), Value::from(128_u64));
@@ -4027,7 +4046,7 @@ mod schema_tests {
     fn schema_types_the_keys_of_a_map_as_the_identifier_the_reader_reads() {
         let schema = super::runtime_config_schema().unwrap();
         for (map, identifier) in [
-            ("/properties/eventDestinations", "LocalId"),
+            ("/$defs/RawDestinationsConfig/properties/hooks", "LocalId"),
             (
                 "/$defs/RawAuthorityClaimsConfig/properties/trustedActors",
                 "ExternalId",

@@ -31,22 +31,23 @@ first delivery on a local registry.
 
 ## Bind each destination
 
-Add an `eventDestinations` block to the runtime file, with one entry per destination the package
+Add a `destinations.hooks` block to the runtime file, with one entry per destination the package
 names:
 
 ```yaml title="runtime.yaml"
-eventDestinations:
-  contact-events:
-    origin: https://receiver.example.org
-    path: /events
-    networkProfile: production-https
-    dnsFamily: dual-stack-strict
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/contact-events-key
-    classificationCeiling: internal
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: 1000
-      maximumAttempts: 3
+destinations:
+  hooks:
+    contact-events:
+      origin: https://receiver.example.org
+      path: /events
+      networkProfile: production-https
+      dnsFamily: dual-stack-strict
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/contact-events-key
+      classificationCeiling: internal
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 1000
+        maximumAttempts: 3
 ```
 
 `bregctl check <project> --runtime-config runtime.yaml` checks the binding's shape offline. The

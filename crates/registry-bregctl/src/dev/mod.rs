@@ -1240,7 +1240,7 @@ fn start(args: StartArgs) -> Result<Value> {
             probe(port, PortRole::Purpose)?;
         }
         if !compiled.event_deliveries().deliveries.is_empty()
-            && clients.event_destinations.is_empty()
+            && clients.destinations.hooks.is_empty()
         {
             state.webhook_port = Some(receiver_port(&state)?);
         }

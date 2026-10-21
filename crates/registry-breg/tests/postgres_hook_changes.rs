@@ -32,7 +32,9 @@ use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
 use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
-use registry_breg::hook_handler::HookHandlerRegistry;
+use registry_breg::hooks::{
+    HookDeliveryError, HookDeliveryService, HookRetainedBindingError, HookWorkOutcome,
+};
 use registry_breg::model::CompiledRegistry;
 use registry_breg::mutation::{MutationBody, MutationPlan, MutationRequest, MutationTransaction};
 use registry_breg::postgres::{
@@ -41,9 +43,6 @@ use registry_breg::postgres::{
     RegistryStateTestIdentity, RowBoundaryContext, RuntimePool,
 };
 use registry_breg::runtime_config::parse_runtime_config;
-use registry_breg::webhook::{
-    WebhookDeliveryError, WebhookDeliveryService, WebhookRetainedBindingError, WebhookWorkOutcome,
-};
 use registry_platform_audit::AuditProfile;
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
 use serde_json::{json, Map, Value};
@@ -200,6 +199,21 @@ fn hook_project_json(
         case_hook_results = case_hook_results,
         extra_writes = extra_writes,
     )
+}
+
+/// The local hook programs `compiled` holds, with a hook WASM runtime on the
+/// default budgets: assembling the delivery path directly bypasses the server
+/// startup path, so this embedder starts the hook runtime itself.
+fn hook_handlers(
+    compiled: &CompiledRegistry,
+    package_revision: &str,
+) -> Arc<registry_platform_hooks::executor::LocalHookHandlers> {
+    let handlers = registry_breg::hooks::local_hook_handlers(compiled, package_revision);
+    #[cfg(feature = "wasm")]
+    let handlers = handlers.with_wasm_runtime(
+        registry_breg::hooks::default_hook_wasm_runtime().expect("the hook wasm runtime starts"),
+    );
+    Arc::new(handlers)
 }
 
 fn compile_proposal_registry(
@@ -507,7 +521,7 @@ struct Setup {
     pool: RuntimePool,
     identity: ExpectedRegistryIdentity,
     coordinator: MutationTransaction,
-    service: WebhookDeliveryService,
+    service: HookDeliveryService,
     // Kept alive for the deployment's lifetime, not read: the activated
     // bindings were resolved out of this directory.
     #[allow(dead_code)]
@@ -609,10 +623,10 @@ async fn setup_in(
         Some(field_encryption) => coordinator.with_field_encryption(field_encryption),
         None => coordinator,
     };
-    let service = WebhookDeliveryService::new_with_field_encryption(
+    let service = HookDeliveryService::new_with_field_encryption(
         pool.clone(),
         Arc::clone(&destinations),
-        Arc::new(HookHandlerRegistry::new(&compiled, &identity.activation_id)),
+        hook_handlers(&compiled, &identity.activation_id),
         Arc::new(compiled.clone()),
         identity.clone(),
         "hook-proposal-instance",
@@ -664,19 +678,16 @@ async fn test_field_encryption_service(
 }
 
 impl Setup {
-    fn service_for_identity(&self, identity: ExpectedRegistryIdentity) -> WebhookDeliveryService {
+    fn service_for_identity(&self, identity: ExpectedRegistryIdentity) -> HookDeliveryService {
         let destinations = Arc::new(self.fixture.activate(&self.compiled));
         let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
             .expect("test owns a keyed audit profile");
         let lock_key = RegistryLockKey::derive("hook-proposal-registry")
             .expect("test lock identity is bounded");
-        WebhookDeliveryService::new(
+        HookDeliveryService::new(
             self.pool.clone(),
             destinations,
-            Arc::new(HookHandlerRegistry::new(
-                &self.compiled,
-                &identity.activation_id,
-            )),
+            hook_handlers(&self.compiled, &identity.activation_id),
             Arc::new(self.compiled.clone()),
             identity,
             "hook-proposal-instance",
@@ -1108,7 +1119,7 @@ async fn real_postgres_hook_change_seals_an_encrypted_action_field() {
 
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered)
+        Ok(HookWorkOutcome::Delivered)
     );
     let delivery = delivery_row(&setup, event.event_id, &delivery_id).await;
     assert_eq!(delivery.disposition.as_deref(), Some("applied"));
@@ -1189,7 +1200,7 @@ async fn real_postgres_hook_loop_terminates_at_the_causation_ceiling_and_dead_le
             .await
             .expect("one loop iteration completes");
         outcomes.push(outcome);
-        if outcome == WebhookWorkOutcome::DeadLettered {
+        if outcome == HookWorkOutcome::DeadLettered {
             break;
         }
     }
@@ -1199,21 +1210,21 @@ async fn real_postgres_hook_loop_terminates_at_the_causation_ceiling_and_dead_le
     assert_eq!(
         outcomes,
         [
-            WebhookWorkOutcome::Delivered,
-            WebhookWorkOutcome::Delivered,
-            WebhookWorkOutcome::Delivered,
-            WebhookWorkOutcome::Delivered,
-            WebhookWorkOutcome::Delivered,
-            WebhookWorkOutcome::Delivered,
-            WebhookWorkOutcome::Delivered,
-            WebhookWorkOutcome::Delivered,
-            WebhookWorkOutcome::DeadLettered,
+            HookWorkOutcome::Delivered,
+            HookWorkOutcome::Delivered,
+            HookWorkOutcome::Delivered,
+            HookWorkOutcome::Delivered,
+            HookWorkOutcome::Delivered,
+            HookWorkOutcome::Delivered,
+            HookWorkOutcome::Delivered,
+            HookWorkOutcome::Delivered,
+            HookWorkOutcome::DeadLettered,
         ],
         "the loop delivers exactly eight applies and dead-letters the ninth"
     );
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Idle),
+        Ok(HookWorkOutcome::Idle),
         "the dead letter is terminal: no further work is due"
     );
     assert_eq!(record_count(&setup, "followup").await, 8);
@@ -1311,7 +1322,7 @@ async fn real_postgres_redelivered_hook_answer_applies_once() {
 
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered)
+        Ok(HookWorkOutcome::Delivered)
     );
     let first = delivery_row(&setup, event.event_id, &delivery_id).await;
     assert_eq!(first.state, "delivered");
@@ -1355,13 +1366,13 @@ async fn real_postgres_redelivered_hook_answer_applies_once() {
     rewind_to_crashed_lease(&setup, &event, &delivery_id, &payload).await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Idle),
+        Ok(HookWorkOutcome::Idle),
         "the expired lease is reaped to a scheduled retry, not claimed at once"
     );
     wait_until_delivery_is_due(&setup, &event, &delivery_id).await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered),
+        Ok(HookWorkOutcome::Delivered),
         "the redelivered answer settles through the same application identity"
     );
     let second = delivery_row(&setup, event.event_id, &delivery_id).await;
@@ -1435,7 +1446,7 @@ async fn real_postgres_a_retained_local_delivery_survives_restart_verification()
     assert_eq!(changed, 1);
     assert_eq!(
         setup.service.verify_retained_bindings().await,
-        Err(WebhookRetainedBindingError::Mismatch {
+        Err(HookRetainedBindingError::Mismatch {
             retained_deliveries: 1,
         }),
         "a retained local delivery whose digest no handler answers to still blocks startup"
@@ -1478,7 +1489,7 @@ async fn real_postgres_a_changed_answer_cannot_reapply_one_delivery() {
         .await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered)
+        Ok(HookWorkOutcome::Delivered)
     );
     let first = delivery_row(&setup, event.event_id, &delivery_id).await;
     assert_eq!(first.state, "delivered");
@@ -1493,7 +1504,7 @@ async fn real_postgres_a_changed_answer_cannot_reapply_one_delivery() {
     rewind_to_crashed_lease(&setup, &event, &delivery_id, &payload).await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Idle),
+        Ok(HookWorkOutcome::Idle),
         "the expired lease is reaped to a scheduled retry"
     );
     wait_until_delivery_is_due(&setup, &event, &delivery_id).await;
@@ -1504,7 +1515,7 @@ async fn real_postgres_a_changed_answer_cannot_reapply_one_delivery() {
         .await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::DeadLettered),
+        Ok(HookWorkOutcome::DeadLettered),
         "a changed answer after the commit dead-letters as a stable conflict"
     );
     let drifted = delivery_row(&setup, event.event_id, &delivery_id).await;
@@ -1548,7 +1559,7 @@ async fn real_postgres_a_changed_answer_cannot_reapply_one_delivery() {
     );
     assert_eq!(
         setup.service.discard(event.event_id, &delivery_id, 1).await,
-        Err(WebhookDeliveryError::Unavailable),
+        Err(HookDeliveryError::Unavailable),
         "discard refuses rather than hiding a committed proposal receipt"
     );
 
@@ -1571,13 +1582,13 @@ async fn real_postgres_a_changed_answer_cannot_reapply_one_delivery() {
         .await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered)
+        Ok(HookWorkOutcome::Delivered)
     );
     assert_eq!(record_count(&setup, "followup").await, 2);
     rewind_to_crashed_lease(&setup, &none_event, &none_delivery_id, &none_payload).await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Idle),
+        Ok(HookWorkOutcome::Idle),
         "the expired lease is reaped to a scheduled retry"
     );
     wait_until_delivery_is_due(&setup, &none_event, &none_delivery_id).await;
@@ -1586,7 +1597,7 @@ async fn real_postgres_a_changed_answer_cannot_reapply_one_delivery() {
         .await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::DeadLettered),
+        Ok(HookWorkOutcome::DeadLettered),
         "a changed none answer cannot hide an already committed proposal"
     );
     let none = delivery_row(&setup, none_event.event_id, &none_delivery_id).await;
@@ -1639,7 +1650,7 @@ async fn real_postgres_same_answer_replays_after_a_compatible_package_upgrade() 
         .await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered)
+        Ok(HookWorkOutcome::Delivered)
     );
     assert_eq!(record_count(&setup, "followup").await, 1);
     rewind_to_crashed_lease(&setup, &event, &delivery_id, &payload).await;
@@ -1666,7 +1677,7 @@ async fn real_postgres_same_answer_replays_after_a_compatible_package_upgrade() 
 
     assert_eq!(
         successor_service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Idle),
+        Ok(HookWorkOutcome::Idle),
         "the successor reaps the predecessor delivery to a scheduled retry"
     );
     wait_until_delivery_is_due(&setup, &event, &delivery_id).await;
@@ -1677,7 +1688,7 @@ async fn real_postgres_same_answer_replays_after_a_compatible_package_upgrade() 
         .await;
     assert_eq!(
         successor_service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered),
+        Ok(HookWorkOutcome::Delivered),
         "the exact committed answer replays before successor-package validation"
     );
     let replayed = delivery_row(&setup, event.event_id, &delivery_id).await;
@@ -1798,12 +1809,12 @@ async fn real_postgres_receipt_recovery_waits_for_an_in_flight_application() {
     assert!(unlocked);
     assert_eq!(
         first.await.expect("the first worker joins"),
-        Err(WebhookDeliveryError::Unavailable),
+        Err(HookDeliveryError::Unavailable),
         "the stale first lease cannot finalize"
     );
     assert_eq!(
         second.await.expect("the recovery worker joins"),
-        Ok(WebhookWorkOutcome::DeadLettered),
+        Ok(HookWorkOutcome::DeadLettered),
         "the retry observes the committed receipt and records the answer conflict"
     );
     let row = delivery_row(&setup, event.event_id, &delivery_id).await;
@@ -1863,7 +1874,7 @@ async fn real_postgres_terminal_retry_fences_a_late_proposal_application() {
     expire_lease(&setup, &event, &delivery_id).await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Idle),
+        Ok(HookWorkOutcome::Idle),
         "the expired first lease is reaped to its final retry"
     );
     wait_until_delivery_is_due(&setup, &event, &delivery_id).await;
@@ -1872,14 +1883,14 @@ async fn real_postgres_terminal_retry_fences_a_late_proposal_application() {
         .await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered),
+        Ok(HookWorkOutcome::Delivered),
         "the final retry settles the delivery with no proposal"
     );
 
     let _ = release_tx.send(());
     assert_eq!(
         first.await.expect("the first worker joins"),
-        Err(WebhookDeliveryError::Unavailable),
+        Err(HookDeliveryError::Unavailable),
         "the stale lease cannot apply after the final retry settles"
     );
     let row = delivery_row(&setup, event.event_id, &delivery_id).await;
@@ -1929,12 +1940,12 @@ async fn real_postgres_exhausted_failed_retry_recovers_a_committed_proposal() {
         .await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered)
+        Ok(HookWorkOutcome::Delivered)
     );
     rewind_to_crashed_lease(&setup, &event, &delivery_id, &payload).await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Idle),
+        Ok(HookWorkOutcome::Idle),
         "the expired first lease is reaped to its final retry"
     );
     wait_until_delivery_is_due(&setup, &event, &delivery_id).await;
@@ -1942,7 +1953,7 @@ async fn real_postgres_exhausted_failed_retry_recovers_a_committed_proposal() {
     receiver.enqueue(ResponsePlan::NonSuccess).await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::DeadLettered),
+        Ok(HookWorkOutcome::DeadLettered),
         "the exhausted failed retry recovers the committed proposal receipt"
     );
     let row = delivery_row(&setup, event.event_id, &delivery_id).await;
@@ -1993,7 +2004,7 @@ async fn real_postgres_final_expired_lease_recovers_a_committed_proposal() {
         .await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered)
+        Ok(HookWorkOutcome::Delivered)
     );
     rewind_to_crashed_lease(&setup, &event, &delivery_id, &payload).await;
     let changed = setup
@@ -2011,7 +2022,7 @@ async fn real_postgres_final_expired_lease_recovers_a_committed_proposal() {
 
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Idle),
+        Ok(HookWorkOutcome::Idle),
         "the reaper terminalizes the expired final lease before claiming new work"
     );
     let row = delivery_row(&setup, event.event_id, &delivery_id).await;
@@ -2044,7 +2055,7 @@ async fn real_postgres_a_hidden_effect_proposal_finalizes_as_applied() {
 
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered),
+        Ok(HookWorkOutcome::Delivered),
         "a proposal whose granted result set hides every applied effect still completes"
     );
     let row = delivery_row(&setup, event.event_id, &delivery_id).await;
@@ -2079,7 +2090,7 @@ async fn real_postgres_uncertain_hook_apply_fails_closed_and_recovers() {
     revoke_followup_insert(&setup).await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Err(WebhookDeliveryError::Unavailable),
+        Err(HookDeliveryError::Unavailable),
         "an uncertain apply fails closed instead of recording a disposition"
     );
     let uncertain = delivery_row(&setup, event.event_id, &delivery_id).await;
@@ -2103,13 +2114,13 @@ async fn real_postgres_uncertain_hook_apply_fails_closed_and_recovers() {
     expire_lease(&setup, &event, &delivery_id).await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Idle),
+        Ok(HookWorkOutcome::Idle),
         "the expired lease is reaped to a scheduled retry"
     );
     wait_until_delivery_is_due(&setup, &event, &delivery_id).await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered)
+        Ok(HookWorkOutcome::Delivered)
     );
     let recovered = delivery_row(&setup, event.event_id, &delivery_id).await;
     assert_eq!(recovered.state, "delivered");
@@ -2161,10 +2172,10 @@ async fn real_postgres_hook_delivery_rows_record_every_proposal_disposition() {
             .await
             .expect("one disposition journey iteration completes");
         outcome_names.push(match outcome {
-            WebhookWorkOutcome::Delivered => "delivered",
-            WebhookWorkOutcome::DeadLettered => "dead-lettered",
-            WebhookWorkOutcome::RetryScheduled => "retry_scheduled",
-            WebhookWorkOutcome::Idle => "idle",
+            HookWorkOutcome::Delivered => "delivered",
+            HookWorkOutcome::DeadLettered => "dead-lettered",
+            HookWorkOutcome::RetryScheduled => "retry_scheduled",
+            HookWorkOutcome::Idle => "idle",
         });
     }
     outcome_names.sort_unstable();
@@ -2175,7 +2186,7 @@ async fn real_postgres_hook_delivery_rows_record_every_proposal_disposition() {
     );
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Idle)
+        Ok(HookWorkOutcome::Idle)
     );
 
     let none_row = delivery_row(
@@ -2299,7 +2310,7 @@ async fn real_postgres_the_same_proposal_applies_identically_across_handler_kind
             .await;
         assert_eq!(
             setup.service.deliver_once().await,
-            Ok(WebhookWorkOutcome::Delivered)
+            Ok(HookWorkOutcome::Delivered)
         );
         let row = delivery_row(&setup, event.event_id, &delivery_id).await;
         legs.push((
@@ -2332,7 +2343,7 @@ async fn real_postgres_the_same_proposal_applies_identically_across_handler_kind
         drop(mutation_client);
         assert_eq!(
             setup.service.deliver_once().await,
-            Ok(WebhookWorkOutcome::Delivered)
+            Ok(HookWorkOutcome::Delivered)
         );
         let row = delivery_row(&setup, event.event_id, &delivery_id).await;
         legs.push((
@@ -2363,9 +2374,8 @@ async fn real_postgres_the_same_proposal_applies_identically_across_handler_kind
                 bytes: outcome_guest(HOOK_PROPOSAL_STR),
             }],
         );
-        // Assembling the delivery path directly bypasses the server startup
-        // path, so this embedder installs the process WASM runtime itself.
-        registry_breg::wasm_runtime::install_default().expect("the wasm runtime installs");
+        // No process action handler runtime is installed: the hook program
+        // runs on the hook-owned runtime `hook_handlers` attaches.
         let setup = setup(wasm_registry, &receiver, false).await;
         let mut mutation_client = setup
             .pool
@@ -2377,7 +2387,7 @@ async fn real_postgres_the_same_proposal_applies_identically_across_handler_kind
         drop(mutation_client);
         assert_eq!(
             setup.service.deliver_once().await,
-            Ok(WebhookWorkOutcome::Delivered)
+            Ok(HookWorkOutcome::Delivered)
         );
         let row = delivery_row(&setup, event.event_id, &delivery_id).await;
         legs.push((
@@ -2439,7 +2449,7 @@ async fn real_postgres_a_hook_without_a_principal_compiles_and_delivers() {
 
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered),
+        Ok(HookWorkOutcome::Delivered),
         "a non-proposing, principal-less hook delivers normally"
     );
     let row = delivery_row(&setup, event.event_id, &delivery_id).await;
@@ -2469,7 +2479,7 @@ async fn real_postgres_a_proposal_without_a_declared_principal_is_dead_lettered_
 
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::DeadLettered),
+        Ok(HookWorkOutcome::DeadLettered),
         "a principal-less proposal is dead-lettered on its first attempt"
     );
     let row = delivery_row(&setup, event.event_id, &delivery_id).await;
@@ -2492,7 +2502,7 @@ async fn real_postgres_a_proposal_without_a_declared_principal_is_dead_lettered_
     assert_eq!(record_count(&setup, "case").await, 1);
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Idle),
+        Ok(HookWorkOutcome::Idle),
         "the dead letter is terminal"
     );
 
@@ -2515,7 +2525,7 @@ async fn real_postgres_a_proposal_failing_outcome_validation_is_refused_not_appl
 
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered),
+        Ok(HookWorkOutcome::Delivered),
         "a refused proposal still completes its delivery"
     );
     let row = delivery_row(&setup, event.event_id, &delivery_id).await;
@@ -2592,7 +2602,7 @@ async fn real_postgres_resulting_revision_follows_byte_order_under_a_locale_coll
 
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered)
+        Ok(HookWorkOutcome::Delivered)
     );
     let first = delivery_row(&setup, event.event_id, &delivery_id).await;
     assert_eq!(
@@ -2631,12 +2641,12 @@ async fn real_postgres_resulting_revision_follows_byte_order_under_a_locale_coll
     rewind_to_crashed_lease(&setup, &event, &delivery_id, &payload).await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Idle)
+        Ok(HookWorkOutcome::Idle)
     );
     wait_until_delivery_is_due(&setup, &event, &delivery_id).await;
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered)
+        Ok(HookWorkOutcome::Delivered)
     );
     let second = delivery_row(&setup, event.event_id, &delivery_id).await;
     assert_eq!(second.attempt, 2);
@@ -2686,7 +2696,7 @@ async fn real_postgres_a_proposal_failing_a_commit_guard_settles_as_refused() {
 
     assert_eq!(
         setup.service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered),
+        Ok(HookWorkOutcome::Delivered),
         "a guard-refused proposal still completes its delivery"
     );
     let row = delivery_row(&setup, event.event_id, &delivery_id).await;
@@ -2831,20 +2841,21 @@ impl DestinationFixture {
         compiled: &registry_breg::CompiledRegistry,
     ) -> ActivatedEventDestinationRegistry {
         parse_runtime_config(&self.runtime_config(&format!(
-            r#"eventDestinations:
-  {DESTINATION_ID}:
-    origin: https://localhost:{}/
-    path: {DELIVERY_PATH}
-    networkProfile: pinned-loopback-https-test
-    dnsFamily: ipv4-only
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/{KEY_REF_CANARY}
-    classificationCeiling: restricted
-    tls:
-      caBundleRef: secret:file/{CA_REF_CANARY}
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: 2000
-      maximumAttempts: 2
+            r#"destinations:
+  hooks:
+    {DESTINATION_ID}:
+      origin: https://localhost:{}/
+      path: {DELIVERY_PATH}
+      networkProfile: pinned-loopback-https-test
+      dnsFamily: ipv4-only
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/{KEY_REF_CANARY}
+      classificationCeiling: restricted
+      tls:
+        caBundleRef: secret:file/{CA_REF_CANARY}
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 2000
+        maximumAttempts: 2
 "#,
             self.receiver_port,
         )))

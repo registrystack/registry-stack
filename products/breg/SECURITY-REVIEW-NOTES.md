@@ -1789,7 +1789,8 @@ It changes which packages such a build activates, a deployment default.
 - Package loading rederives the package through the same compiler, so the
   build refuses to load a package a wasm-enabled build produced.
 - Default builds carry the `wasm` feature and are unchanged. The runtime's
-  late refusal of a WASM hook in `hook_handler.rs` stays as a second line.
+  late refusal of a WASM hook, now in the shared executor in
+  `registry-platform-hooks`, stays as a second line.
 
 ### Tests
 
@@ -4226,3 +4227,54 @@ without source reads. Its HTTP proof also refuses another producer and retains
 reviewer and supervisor concealment. Remote cancellation is asynchronous, so
 in-flight work and dependency outages are settled through retained exact
 recovery; the change does not claim a cross-service atomic transaction.
+
+## Hook adapter and executor in the platform crate
+
+The hook delivery adapter and the local handler executor move from
+`webhook.rs` and `hook_handler.rs` into `registry-platform-hooks`; BReg keeps
+`apply_proposal`, the proposal completion barrier, its triggers and
+projections, and its identity preflight in `crates/registry-breg/src/hooks.rs`.
+
+**What changes for authority.** Nothing. The signing URL destination, the
+pooled connection, the audit mapping, and the retry schedule are the same
+code with the product prefix as a parameter. A local program still runs only
+when its delivery id, package revision, handler kind, and handler digest
+match the compiled package, and its message is still applied through
+`apply_proposal` under BReg's own authorization and audit.
+
+**Hook Rhai engine.** Hook programs now run on the bare
+`registry-platform-script` engine, without the action planner helpers. Rhai
+resolves functions when a call runs, so a hook program calling `join`
+compiles and fails at execution as a source failure, which dead-letters the
+delivery; it does not reach a different helper. Action handlers keep the
+planner engine. `a_hook_program_calling_a_planner_helper_fails_on_the_bare_engine`
+in `crates/registry-breg/src/tests/hooks_tests.rs` pins this.
+
+**WASM hook runtime.** Hook modules run on a hook-owned WASM runtime with its
+own fuel, epoch ticker, and prepared-module cache, so a hook module and an
+action module no longer share cache slots or eviction.
+
+**Capability set.** BReg declares `HookCapabilities::ALL`; every declaration
+accepted before is accepted, and a refusal outside the set is
+`hook.capability.unsupported` at the declaration's path.
+
+**Identity preflight.** BReg's preflight still reads
+`registry_internal.registry_state` under a shared transaction advisory lock
+and compares package id, database id, active package digest, activation id,
+and schema fingerprint. It does not use the platform's activation-record
+preflight: BReg's activation takes the same advisory lock exclusively, so a
+delivery transaction and an activation are serialized rather than compared
+against a snapshot, and the readiness and schema fingerprint checks have no
+counterpart in the activation record. Moving BReg onto the shared preflight
+is left to a separate change.
+
+**Audit.** Hook delivery entries move to `breg-hook-audit/v1` with
+`"event": "breg.hook-delivery"` and reference domains `breg-hook-event-v1` and
+`breg-hook-delivery-v1`; the redaction and the field set are unchanged.
+`contracts/audit-identity.md` and the audit identity goldens record the
+change.
+
+**Configuration.** `eventDestinations` moves to `destinations.hooks` and the
+old key is refused with `config.removed-key`. The destination binding digest
+keeps its internal `eventDestinations` member name, so retained deliveries
+captured before the upgrade verify against the same digest.

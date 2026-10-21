@@ -80,10 +80,21 @@ pub(crate) fn compile_hooks(
         else {
             unreachable!()
         };
-        for hook in &source.hooks {
+        for (index, hook) in source.hooks.iter().enumerate() {
             let path = format!(
                 "actions[id={}].execution.proposal.hooks[id={}]",
                 action.id, hook.id
+            );
+            crate::compiler::check_hook_capabilities(
+                registry_platform_hooks::HookUse {
+                    index,
+                    id: &hook.id,
+                    handler: Some(hook.handler.kind()),
+                    when: false,
+                    principal: false,
+                },
+                &path,
+                &mut errors,
             );
             let (destination_id, handler) = match &hook.handler {
                 HookHandlerSource::Url { destination_id } => {
