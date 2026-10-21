@@ -12,9 +12,9 @@
 use std::collections::BTreeMap;
 
 use registry_platform_yaml::{
-    ApiVersion, BoundedU32, BoundedU64, Decoded, Diagnostic, DisplayText, Document, EnvelopeRule, Expect, ExternalId,
-    FormatSpec, Identified, Invalid, LocalId, ProjectIdentity, Reader, Report, Severity,
-    UniqueIdList, UniqueList,
+    ApiVersion, BoundedU32, BoundedU64, Decoded, Diagnostic, DisplayText, Document, EnvelopeRule,
+    Expect, ExternalId, FormatSpec, Identified, Invalid, LocalId, ProjectIdentity, Reader, Report,
+    Severity, UniqueIdList, UniqueList,
 };
 use serde::{Deserialize, Serialize};
 
@@ -111,8 +111,16 @@ impl DocumentsProject {
             let base = format!("/documentPolicies/{id}");
             let lists = [
                 ("custodyProfiles", &policy.custody_profiles, CUSTODY_ROLES),
-                ("grantingProfiles", &policy.granting_profiles, GRANTING_ROLES),
-                ("recipientProfiles", &policy.recipient_profiles, RECIPIENT_ROLES),
+                (
+                    "grantingProfiles",
+                    &policy.granting_profiles,
+                    GRANTING_ROLES,
+                ),
+                (
+                    "recipientProfiles",
+                    &policy.recipient_profiles,
+                    RECIPIENT_ROLES,
+                ),
             ];
             for (member, list, roles) in lists {
                 for (index, profile) in list.iter().enumerate() {
@@ -259,6 +267,27 @@ impl schemars::JsonSchema for ListedIds {
 pub enum ActorKind {
     Service,
     Human,
+}
+
+impl ActorKind {
+    /// The spelling the project and the store use.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Service => "service",
+            Self::Human => "human",
+        }
+    }
+
+    /// The kind `text` spells, if any.
+    #[must_use]
+    pub fn from_str_exact(text: &str) -> Option<Self> {
+        match text {
+            "service" => Some(Self::Service),
+            "human" => Some(Self::Human),
+            _ => None,
+        }
+    }
 }
 
 /// What a caller resolved to an access profile is to a document.
@@ -605,7 +634,10 @@ mod tests {
             assert_ne!(text, STARTER, "{path}");
             assert_eq!(
                 refusals(&text),
-                [("documents.project.unknown-profile".to_owned(), path.to_owned())]
+                [(
+                    "documents.project.unknown-profile".to_owned(),
+                    path.to_owned()
+                )]
             );
         }
     }
