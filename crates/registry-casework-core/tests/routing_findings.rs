@@ -49,6 +49,39 @@ fn routing_findings_name_each_authored_rule_member_once() {
     );
 }
 
+fn assert_unknown_field_and_predicate_error(predicate: &str, predicate_code: &str) {
+    let text = EXAMPLE.replace(
+        "fields: {region: {equals: north}}",
+        &format!("fields: {{zone: {{{predicate}}}}}"),
+    );
+    let report = CaseworkProject::read("casework.yaml", text.as_bytes()).unwrap_err();
+    let findings = report.diagnostics();
+    assert_eq!(findings.len(), 2, "{findings:#?}");
+    for code in ["casework.routing.unknown-field", predicate_code] {
+        assert!(findings.iter().any(|finding| finding.code == code));
+    }
+    for finding in findings {
+        assert_eq!(
+            finding.path,
+            "/reviewPolicies/regional-review/routing/0/when/fields/zone"
+        );
+        assert_eq!(finding.source.as_ref().unwrap().line, Some(30));
+    }
+}
+
+#[test]
+fn routing_findings_keep_unknown_fields_with_empty_predicates() {
+    assert_unknown_field_and_predicate_error("oneOf: []", "casework.routing.predicate-value-count");
+}
+
+#[test]
+fn routing_findings_keep_unknown_fields_with_repeated_predicate_values() {
+    assert_unknown_field_and_predicate_error(
+        "oneOf: [north, north]",
+        "casework.routing.duplicate-predicate-value",
+    );
+}
+
 #[test]
 fn routing_findings_do_not_repeat_stage_queue_findings() {
     let text = EXAMPLE
