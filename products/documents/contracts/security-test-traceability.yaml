@@ -82,6 +82,7 @@ entries:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: content_that_differs_from_the_reserved_digest_or_length_never_finalizes}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_a_finalized_version_without_a_computed_digest}
       - {path: crates/registry-documents/src/content.rs, name: content_is_checked_by_digest_and_length}
+      - {path: crates/registry-documents/tests/postgres_journey.rs, name: a_rendered_document_reaches_a_named_recipient_and_outlives_its_share}
   - id: DOCUMENTS-SEC-15
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_body_over_the_reserved_length_is_cut_off_and_keeps_nothing}
@@ -129,6 +130,7 @@ entries:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_a_grant_on_another_document_s_version_or_of_an_unknown_kind}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_recipient_s_grant_list_pages_only_grants_it_may_redeem}
       - {path: crates/registry-documents-core/src/wire.rs, name: a_grant_request_names_one_version_and_one_subject_of_one_kind}
+      - {path: crates/registry-documents/tests/postgres_journey.rs, name: a_rendered_document_reaches_a_named_recipient_and_outlives_its_share}
   - id: DOCUMENTS-SEC-25
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_idempotent_grant_retry_after_revocation_releases_nothing}
@@ -212,6 +214,7 @@ entries:
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_expiry_and_revocation_erase_nothing_held_in_custody}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_rejected_version_is_erased_after_its_grace}
+      - {path: crates/registry-documents/tests/postgres_journey.rs, name: a_rendered_document_reaches_a_named_recipient_and_outlives_its_share}
   - id: DOCUMENTS-SEC-40
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_paused_deployment_erases_nothing}
