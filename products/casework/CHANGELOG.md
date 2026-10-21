@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Report routing errors at the authored rule or stage, without duplicate
+  findings for the derived field projection or stage queue. The projection's
+  field-count limit points at the policy's `routing` list.
+
 ## 0.42.0 - 2026-10-20
 
 - Return the admitted producer ID as bounded Review acceptance metadata on
