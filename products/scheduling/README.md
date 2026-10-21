@@ -217,9 +217,12 @@ failure retries after thirty seconds, doubling to about thirty-two minutes,
 a refusal the retry classes do not cover sets the intent aside for the
 operator, and the eighth failed attempt sets it aside. A worker that stops
 mid-attempt leaves its lease to lapse, and the attempt counts as a failure.
-Just before each send the runtime reads whether the intent still describes
-the appointment: a reminder whose appointment was cancelled or moved to a
-newer revision is set aside as superseded and never sent. The destination
+A cancellation or reschedule cancels the appointment's reminders no attempt
+has started on, in the same transaction. Just before each send the runtime
+reads, under the attempt's lease, whether the intent still describes the
+appointment: a reminder whose appointment was cancelled or moved to a newer
+revision is set aside as superseded and never sent, and a lapsed lease
+starts no send. The destination
 deduplicates on the envelope `id`, the same on every attempt.
 
 Every event carries the same envelope:
@@ -277,8 +280,9 @@ task grants, resource and channel identifiers, duplicate keys, and cancellation
 reasons cannot be projected. Retained payloads expire after
 `retention.hookPayloadRetentionDays`. Operator replay is not exposed in this slice.
 Terminal delivery metadata uses `retention.receiptRetentionDays`: every
-delivered outbox intent (confirmation, change, cancellation, reminder) and
-every completed hook delivery ages out in bounded retention batches.
+delivered outbox intent (confirmation, change, cancellation, reminder), every
+reminder cancelled or set aside as superseded, and every completed hook
+delivery ages out in bounded retention batches.
 Dead-letter metadata ages from the original `dead_lettered_at` timestamp and
 requires completed payload expiry and erased payload bytes before removal.
 Later payload expiry does not restart the metadata window, so an old dead letter

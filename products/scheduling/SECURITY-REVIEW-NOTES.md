@@ -1332,31 +1332,28 @@ retention erase. Observer hooks already ride the core through
 |---|---|---|
 | Claim and lease | Up to 100 pending rows due by `due_at` and `next_attempt_at`, `ORDER BY due_at`, `FOR UPDATE SKIP LOCKED`; the claim adds one attempt and pushes `next_attempt_at` 600 seconds out as the lease | One row per claim, `pending` and due on the database clock, `ORDER BY next_attempt_at, outbox_id, purpose`; the lease lasts the attempt timeout plus 5 seconds and a finish is fenced by `lease_token`, `generation`, and `attempt` |
 | Attempt timeout | 5 seconds | `attempt_timeout` 5 seconds, bound 5 to 5 seconds |
-| Retry schedule | 30 seconds doubling, capped at 3600 seconds; `Retry-After` ignored | `RetrySchedule::Frozen` of 30, 60, 120, 240, 480, 960, and 1920 seconds; pause hints ignored |
+| Retry schedule | 30 seconds doubling, capped at 3600 seconds, a cap the eighth attempt never reached; `Retry-After` ignored | `RetrySchedule::Frozen` of 30, 60, 120, 240, 480, 960, and 1920 seconds; pause hints ignored |
 | Maximum attempts and expiry | 8; no expiry | `maximum_attempts` 8; `expires_at` none |
-| Terminal states | `delivered`, `local`, `failed`, `suppressed` | `delivered`; `dead-lettered` with `destination_unconfigured`, `destination_refused`, `delivery_failed`, `event_unrenderable`, `superseded`, or a quarantine class |
+| Terminal states | `delivered`, `local`, `failed`, `suppressed` | `delivered`; `cancelled` for a reminder superseded before any attempt; `dead-lettered` with `destination_unconfigured`, `destination_refused`, `delivery_failed`, `event_unrenderable`, `superseded`, or a quarantine class; `expired` for a quarantined row never attempted |
 | Uncertain outcome | A send error is retried; a crash leaves the row to be reclaimed after the 600-second lease | `UncertainOutcome::Retry`: a lapsed lease counts as a failed attempt and waits the next back-off; a lapsed eighth attempt is dead-lettered |
 | Receiver dedup | The envelope `id` is the `outbox_id` | Unchanged; `generation` stays 1 and `UNIQUE (outbox_id)` keeps one intent per identifier |
 | Audit lifecycle | No audit event for intent delivery | Unchanged; dispatch operational events go to tracing only |
 
 Behaviour that differs from the hand-rolled loop:
 
-- A cancellation or reschedule no longer marks the obsolete reminder
-  `suppressed` in its own transaction. The transport reads
-  `PostgresStore::intent_is_current` immediately before each send and sets a
-  reminder that no longer describes an active appointment at its current
-  revision aside as `superseded`, without a send. The obsolete reminder
-  stays `pending` until it falls due, then ends `dead-lettered` after one
-  attempt. The dispatch core has no cancel a caller can run inside its own
-  transaction, so the earlier, immediate suppression cannot be kept without
-  changing the core.
+- A cancellation or reschedule moves the obsolete reminder from `pending`
+  at attempt 0 to `cancelled` in its own transaction, through
+  `registry_platform_dispatch::postgres::cancel_unattempted`, so no
+  dispatcher claims it. A reminder already attempted or leased is left
+  alone: `cancelled` keeps the core's meaning of never sent in that
+  generation. For those, the transport reads the reminder's liveness under
+  its lease with `Dispatcher::read_leased` immediately before the send and
+  sets a reminder that no longer describes an active appointment at its
+  current revision aside as `dead-lettered` with `superseded`, without a
+  send. A lease that lapsed before that read starts no send.
 - The lease lasts 10 seconds instead of 600 seconds per batch, and a lapsed
   lease waits the next back-off instead of being reclaimed as soon as it
   passes.
-- The longest back-off is 1920 seconds instead of 3600 seconds, because the
-  schedule is frozen at seven delays.
-- An intent whose event cannot be rendered is set aside as
-  `event_unrenderable` instead of being retried.
 - Due time is judged on the database clock rather than the runtime's.
 - A finish under a lease another worker has replaced returns an error the
   worker logs instead of updating zero rows silently.
@@ -1374,18 +1371,35 @@ refuses a stale owner's finish,
 `a_lapsed_final_attempt_is_set_aside_for_an_operator` dead-letters a lapsed
 eighth attempt, `the_intents_nobody_will_deliver_are_readable_by_an_operator`
 covers the unconfigured and exhausted branches,
-`a_cancelled_appointments_reminder_is_set_aside_without_a_send` and
+`a_cancelled_appointments_reminder_is_cancelled_without_a_send` and
 `a_reschedule_supersedes_the_obsolete_reminder_and_mints_its_replacement`
-prove a superseded reminder is never sent, and
+prove the transaction cancels an unattempted reminder and it is never sent,
+`a_reminder_claimed_before_its_cancellation_is_set_aside_at_its_send` covers
+the order claimed, cancelled, then sent,
+`a_lapsed_dispatch_lease_starts_no_send` proves a lapsed lease sends nothing,
+`an_unrenderable_intent_is_held_on_its_first_attempt_without_a_send` and
+`an_unreadable_intent_is_quarantined_without_stalling_the_rows_behind_it`
+cover the unrenderable and quarantine branches,
+`due_intents_are_claimed_by_instant_then_identifier` pins the claim order, and
 `a_dispatch_pass_delivers_retries_and_holds_by_what_the_destination_answers`
 pins the refused, retried, and delivered outcomes. In
 `crates/registry-scheduling/src/runtime/intents.rs`, unit tests hold the
 migration to the dispatch core's DDL, the policy to its bounds and delays,
 and every set-aside reason to its class.
+`cancel_unattempted_withdraws_only_a_pending_job_never_attempted` in
+`crates/registry-platform-dispatch/tests/postgres_dispatch.rs` proves the
+cancel touches only a pending job at attempt 0.
 `crates/registry-schedulingctl/tests/intents_postgres.rs` holds the operator
-listing to the same states.
+listing to the same states, and
+`outbox_retention_uses_receipt_cutoff_for_every_purpose_and_preserves_actionable_work_and_tombstones`
+ages out delivered, cancelled, and superseded rows on the receipt cutoff
+while every other set-aside row stays.
 
 Residual: Delivery stays at-least-once. A send whose response is lost is
 retried under the same envelope `id`, so a destination that ignores it may
-see an event twice. A superseded reminder waits until it falls due before it
-is set aside. One worker serves each runtime process.
+see an event twice. A reminder a dispatcher already holds when its
+appointment is cancelled or moved waits for that send to be set aside. A
+cancel or reschedule that commits between the liveness check and the send
+still sends the stale reminder, and the receiver gets no ordering promise
+across processes: that is inherent to at-least-once delivery. One worker
+serves each runtime process.
