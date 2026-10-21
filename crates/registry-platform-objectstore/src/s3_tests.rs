@@ -68,16 +68,20 @@ fn store_from(input: serde_json::Value, scope: &str, files: &SecretFiles) -> S3O
         bucket_url: settings.bucket_url,
         region: settings.region,
         scope,
-        access_key_id: resolver
-            .resolve_reference(&settings.access_key_id_ref)
-            .unwrap(),
-        secret_access_key: resolver
-            .resolve_reference(&settings.secret_access_key_ref)
-            .unwrap(),
+        access_key_id: Arc::new(
+            resolver
+                .resolve_reference(&settings.access_key_id_ref)
+                .unwrap(),
+        ),
+        secret_access_key: Arc::new(
+            resolver
+                .resolve_reference(&settings.secret_access_key_ref)
+                .unwrap(),
+        ),
         session_token: settings
             .session_token_ref
             .as_ref()
-            .map(|reference| resolver.resolve_reference(reference).unwrap()),
+            .map(|reference| Arc::new(resolver.resolve_reference(reference).unwrap())),
     }
 }
 
@@ -633,6 +637,46 @@ async fn activation_probes_versioning_and_binds_the_scope() {
         ObjectStoreError::VersionedBucket
     );
     server.abort();
+}
+
+#[tokio::test]
+async fn a_scoped_store_binds_its_own_scope_without_resolving_or_sending() {
+    let (url, server) = mock("<VersioningConfiguration/>", StatusCode::OK, &[]).await;
+    let files = SecretFiles::new();
+    let settings = settings(raw(&url)).unwrap();
+    let deployment = settings
+        .activate(NAMESPACE, "database-one", &files.resolver())
+        .await
+        .unwrap();
+    let activated = settings
+        .activate(NAMESPACE, "database-one/object-one", &files.resolver())
+        .await
+        .unwrap();
+    server.abort();
+    drop(files);
+
+    // The bucket and the secret files are gone: deriving a scope sends
+    // nothing and resolves nothing.
+    let scoped = deployment.scoped("database-one/object-one").unwrap();
+    assert_eq!(scoped.binding_digest(), activated.binding_digest());
+    assert_ne!(scoped.binding_digest(), deployment.binding_digest());
+    assert_eq!(
+        scoped.object_url(EMPTY_SHA256).unwrap(),
+        activated.object_url(EMPTY_SHA256).unwrap()
+    );
+    assert_ne!(
+        scoped.binding_digest(),
+        deployment
+            .scoped("database-one/object-two")
+            .unwrap()
+            .binding_digest()
+    );
+    for refused in ["", &"s".repeat(MAXIMUM_SCOPE_INPUT_BYTES + 1)] {
+        assert_eq!(
+            deployment.scoped(refused).unwrap_err(),
+            ObjectStoreError::InvalidConfiguration
+        );
+    }
 }
 
 #[tokio::test]

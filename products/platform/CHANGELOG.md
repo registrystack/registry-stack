@@ -6,6 +6,9 @@
   object storage adapter and the HTTP content verifier transport the Base
   Registry Engine used for attachments. A product supplies its own key prefix
   and binding domain; protocol, headers, timeouts, and refusals are unchanged.
+- `S3ObjectStore::scoped` derives the store of another scope from an activated
+  store without resolving secrets, building a client, or probing the bucket
+  again.
 - `registry-platform-config` adds the shared blocks `ObjectStorageConfig` and
   `AttachmentVerifierConfig` (CFG-SCHEMA-5).
 - BREAKING: the destination key of both blocks is `url`, not `endpoint`

@@ -17,6 +17,10 @@ bindings by accident.
 - `S3ObjectStore::put`, `get`, and `delete`. A write reads the object back and
   checks its SHA-256; a read checks length and SHA-256 before returning bytes;
   a delete is confirmed by a `404` on a following read.
+- `S3ObjectStore::scoped`: the store of another scope in the same bucket,
+  sharing the activated store's credentials and HTTP client. It resolves and
+  sends nothing, so a product that keeps one object per scope activates once
+  at startup and derives each object's store from it.
 - `ObjectNamespace`: the product's key prefix, binding domain, and object size
   bound. Objects live at
   `{bucket path}/{key prefix}/{sha256(scope)}/{content sha256}`.
