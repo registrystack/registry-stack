@@ -1111,7 +1111,7 @@ async fn completion_delivery_stops_at_its_window_and_never_sends_to_an_unconfigu
         .await
         .expect("close the first completion window");
     assert!(
-        claim_review_completion_for_test(fixture.store.clone(), "registry-completion")
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
             .await
             .expect("claim past the completion window")
             .is_none()
@@ -1143,13 +1143,14 @@ async fn completion_delivery_stops_at_its_window_and_never_sends_to_an_unconfigu
         .await
         .expect("close the second completion window soon");
     let closing_lease =
-        claim_review_completion_for_test(fixture.store.clone(), "registry-completion")
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
             .await
             .expect("lease the closing completion delivery")
             .expect("the closing completion delivery");
     finish_review_completion_for_test(
         fixture.store.clone(),
         "registry-completion",
+        3,
         &closing_lease,
         false,
     )
@@ -1183,7 +1184,7 @@ async fn completion_delivery_stops_at_its_window_and_never_sends_to_an_unconfigu
         .await
         .expect("make the unconfigured completion delivery due");
     assert!(
-        claim_review_completion_for_test(fixture.store.clone(), "another-destination")
+        claim_review_completion_for_test(fixture.store.clone(), "another-destination", 3)
             .await
             .expect("claim beside an unconfigured destination")
             .is_none()
@@ -1202,6 +1203,179 @@ async fn completion_delivery_stops_at_its_window_and_never_sends_to_an_unconfigu
     assert_eq!(
         set_aside.get::<_, Option<String>>(2).as_deref(),
         Some("destination_unconfigured")
+    );
+}
+
+async fn completion_outbox_row(
+    fixture: &Fixture,
+    request_id: Uuid,
+) -> (String, i16, Option<Uuid>, Option<String>, bool) {
+    let row = fixture
+        .database
+        .query_one(
+            "SELECT state,attempt,lease_token,last_failure_class,dead_lettered_at IS NOT NULL
+             FROM casework_review_completion_outbox WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("completion delivery row");
+    (row.get(0), row.get(1), row.get(2), row.get(3), row.get(4))
+}
+
+async fn lapse_completion_lease(fixture: &Fixture, request_id: Uuid) {
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox
+             SET attempt_started_at=now() - interval '2 seconds',
+                 lease_expires_at=now() - interval '1 second'
+             WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("lapse the completion lease as an interrupted attempt would");
+}
+
+#[tokio::test]
+async fn an_interrupted_final_completion_attempt_dead_letters_without_another_send() {
+    let fixture = fixture().await;
+    let request_id = settle_review_for_completion(&fixture, "interrupted-final-completion").await;
+    let lease = claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 1)
+        .await
+        .expect("lease the only completion attempt")
+        .expect("the only completion attempt");
+    assert_eq!(lease.attempt(), 1);
+    lapse_completion_lease(&fixture, request_id).await;
+    assert!(
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 1)
+            .await
+            .expect("recover the interrupted final attempt")
+            .is_none(),
+        "an interrupted final attempt is not sent again"
+    );
+    assert_eq!(
+        completion_outbox_row(&fixture, request_id).await,
+        (
+            "dead-lettered".to_owned(),
+            1,
+            None,
+            Some("delivery_failed".to_owned()),
+            true
+        )
+    );
+    assert!(
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 1)
+            .await
+            .expect("claim after the dead letter")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_completion_finish_after_retention_erased_its_row_is_refused() {
+    let fixture = fixture().await;
+    let request_id = settle_review_for_completion(&fixture, "erased-completion").await;
+    let lease = claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+        .await
+        .expect("lease the completion delivery")
+        .expect("the completion delivery");
+    // Review retention erases the row by its window while the send runs.
+    fixture
+        .database
+        .execute(
+            "DELETE FROM casework_review_completion_outbox WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("erase the leased completion delivery");
+    assert!(
+        finish_review_completion_for_test(
+            fixture.store.clone(),
+            "registry-completion",
+            3,
+            &lease,
+            true,
+        )
+        .await
+        .is_err(),
+        "a finish on an erased delivery is refused"
+    );
+    assert_eq!(
+        count_for_request(&fixture, "casework_review_completion_outbox", request_id).await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn a_lapsed_completion_lease_for_an_unconfigured_destination_dead_letters_without_a_send() {
+    let fixture = fixture().await;
+    let request_id = settle_review_for_completion(&fixture, "unconfigured-lapsed-completion").await;
+    let lease = claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+        .await
+        .expect("lease the completion delivery")
+        .expect("the completion delivery");
+    assert_eq!(lease.attempt(), 1);
+    lapse_completion_lease(&fixture, request_id).await;
+    assert!(
+        claim_review_completion_for_test(fixture.store.clone(), "another-destination", 3)
+            .await
+            .expect("recover beside an unconfigured destination")
+            .is_none()
+    );
+    assert_eq!(
+        completion_outbox_row(&fixture, request_id).await,
+        (
+            "dead-lettered".to_owned(),
+            1,
+            None,
+            Some("destination_unconfigured".to_owned()),
+            true
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_completion_past_a_lowered_attempt_limit_is_set_aside_as_exhausted() {
+    let fixture = fixture().await;
+    let request_id = settle_review_for_completion(&fixture, "lowered-limit-completion").await;
+    let lease = claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
+        .await
+        .expect("lease the completion delivery")
+        .expect("the completion delivery");
+    finish_review_completion_for_test(
+        fixture.store.clone(),
+        "registry-completion",
+        3,
+        &lease,
+        false,
+    )
+    .await
+    .expect("fail the first completion attempt");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_completion_outbox SET next_attempt_at=now()
+             WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("make the retry due");
+    // The operator lowers maximumAttempts to the attempts already made.
+    assert!(
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 1)
+            .await
+            .expect("claim under the lowered attempt limit")
+            .is_none()
+    );
+    assert_eq!(
+        completion_outbox_row(&fixture, request_id).await,
+        (
+            "dead-lettered".to_owned(),
+            1,
+            None,
+            Some("attempts_exhausted".to_owned()),
+            true
+        )
     );
 }
 
@@ -1445,14 +1619,14 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
     );
 
     let first_lease =
-        claim_review_completion_for_test(fixture.store.clone(), "registry-completion")
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
             .await
             .expect("lease completion delivery")
             .expect("a due completion delivery");
     assert_eq!(first_lease.attempt(), 1);
     let event_id = first_lease.event().event_id;
     assert!(
-        claim_review_completion_for_test(fixture.store.clone(), "registry-completion")
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
             .await
             .expect("do not lease active delivery twice")
             .is_none()
@@ -1469,7 +1643,7 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         .await
         .expect("expire completion lease after simulated lost acknowledgement");
     assert!(
-        claim_review_completion_for_test(fixture.store.clone(), "registry-completion")
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
             .await
             .expect("recover expired completion lease")
             .is_none(),
@@ -1484,16 +1658,25 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         .await
         .expect("make recovered completion attempt due");
     let recovered_lease =
-        claim_review_completion_for_test(fixture.store.clone(), "registry-completion")
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
             .await
             .expect("lease recovered completion delivery")
             .expect("the recovered completion delivery");
     assert_eq!(recovered_lease.attempt(), 2);
     assert_eq!(recovered_lease.event(), first_lease.event());
+    assert_eq!(
+        recovered_lease.destination_id(),
+        first_lease.destination_id()
+    );
+    assert_eq!(
+        recovered_lease.recipient_binding(),
+        first_lease.recipient_binding()
+    );
     assert!(
         finish_review_completion_for_test(
             fixture.store.clone(),
             "registry-completion",
+            3,
             &first_lease,
             true,
         )
@@ -1514,6 +1697,7 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
     finish_review_completion_for_test(
         fixture.store.clone(),
         "registry-completion",
+        3,
         &recovered_lease,
         false,
     )
@@ -1538,7 +1722,7 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
         .await
         .expect("make final completion attempt due");
     let final_lease =
-        claim_review_completion_for_test(fixture.store.clone(), "registry-completion")
+        claim_review_completion_for_test(fixture.store.clone(), "registry-completion", 3)
             .await
             .expect("lease final completion attempt")
             .expect("the final completion attempt");
@@ -1547,6 +1731,7 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
     finish_review_completion_for_test(
         fixture.store.clone(),
         "registry-completion",
+        3,
         &final_lease,
         false,
     )

@@ -195,6 +195,7 @@ fn test_completion_targets(
     destination_id: &str,
     url: String,
     bearer_token: &str,
+    maximum_attempts: u32,
 ) -> Result<completion::CompletionTargets, crate::ReviewRuntimeError> {
     Ok(Arc::new(BTreeMap::from([(
         destination_id.to_owned(),
@@ -205,7 +206,7 @@ fn test_completion_targets(
                     .map_err(|_| crate::ReviewRuntimeError::Invalid)?,
             ),
             timeout: Duration::from_secs(30),
-            maximum_attempts: 3,
+            maximum_attempts,
             retry: Duration::from_secs(1),
         }),
     )])))
@@ -221,7 +222,7 @@ pub async fn dispatch_review_completions_once_for_test(
     url: String,
     bearer_token: &str,
 ) -> Result<(), crate::ReviewRuntimeError> {
-    let targets = test_completion_targets(destination_id, url, bearer_token)?;
+    let targets = test_completion_targets(destination_id, url, bearer_token, 3)?;
     let dispatcher = completion::completion_dispatcher(store, Arc::clone(&targets)).await?;
     let client = review_completion_client().map_err(|_| crate::ReviewRuntimeError::Invalid)?;
     let transport = completion::CompletionTransport::new(client, targets);
@@ -254,20 +255,32 @@ impl ReviewCompletionLeaseForTest {
     pub fn event(&self) -> &registry_casework_core::ReviewCompletion {
         &self.0.job.event
     }
+
+    #[must_use]
+    pub fn destination_id(&self) -> &str {
+        &self.0.job.destination_id
+    }
+
+    #[must_use]
+    pub fn recipient_binding(&self) -> &str {
+        &self.0.job.recipient_binding
+    }
 }
 
 /// Lease the next due completion delivery as a worker configured with only
-/// `destination_id` would, without sending it.
+/// `destination_id`, allowing `maximum_attempts`, would, without sending it.
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
 pub async fn claim_review_completion_for_test(
     store: PostgresStore,
     destination_id: &str,
+    maximum_attempts: u32,
 ) -> Result<Option<ReviewCompletionLeaseForTest>, crate::ReviewRuntimeError> {
     let targets = test_completion_targets(
         destination_id,
         "http://127.0.0.1/completion".to_owned(),
         "completion-secret",
+        maximum_attempts,
     )?;
     let dispatcher = completion::completion_dispatcher(store, targets).await?;
     let claim = dispatcher
@@ -283,6 +296,7 @@ pub async fn claim_review_completion_for_test(
 pub async fn finish_review_completion_for_test(
     store: PostgresStore,
     destination_id: &str,
+    maximum_attempts: u32,
     lease: &ReviewCompletionLeaseForTest,
     delivered: bool,
 ) -> Result<(), crate::ReviewRuntimeError> {
@@ -290,6 +304,7 @@ pub async fn finish_review_completion_for_test(
         destination_id,
         "http://127.0.0.1/completion".to_owned(),
         "completion-secret",
+        maximum_attempts,
     )?;
     let dispatcher = completion::completion_dispatcher(store, targets).await?;
     let outcome = if delivered {
