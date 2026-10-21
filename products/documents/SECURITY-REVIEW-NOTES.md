@@ -192,17 +192,24 @@ exhaust memory; a caller-chosen label is trusted.
 
 `crates/registry-documents/src/auth.rs`, `http.rs`, `service.rs`,
 `service/grants.rs`, and `transfer.rs` enforce, with the invariant rows
-DOCUMENTS-SEC-10, DOCUMENTS-SEC-19, and DOCUMENTS-SEC-21 to DOCUMENTS-SEC-31:
+DOCUMENTS-SEC-10, DOCUMENTS-SEC-19, and DOCUMENTS-SEC-21 to DOCUMENTS-SEC-33:
 
 - Every document route verifies the bearer token through
   `registry-platform-oidc` (issuer, audience, `at+jwt`, allowed clients,
   signature from the configured key set) and resolves exactly one access
   profile from its client, scopes, and actor kind before it reads the body
-  or the store. A refused token answers 401 with a `Bearer` challenge; a key
-  set the runtime cannot reach answers 503, never 401.
+  or the store; a JSON body is buffered, under the default body limit, only
+  after the caller is verified. A refused token answers 401 with a `Bearer`
+  challenge; a key set the runtime cannot reach answers 503, never 401.
 - Custody: a reservation needs the caller's profile among the policy's
   `custodyProfiles`. A service may name any custodian; a human caller only
-  itself, matched by issuer, subject, and kind. The issuing institution is
+  itself, matched by issuer, subject, and kind. The policy's `custodian`
+  rule decides what naming another subject means (DOCUMENTS-DEC-15): under
+  `represented-principal` that subject becomes the custodian; under
+  `institution` the reserving service stays the custodian and the subject
+  is recorded only as the represented principal, with no standing until
+  granted. Owner standing matches the reserving system's issuer, subject,
+  and kind. The issuing institution is
   the profile's `institution`; a body that names another is refused with
   `custody.not-permitted`.
 - Idempotency: `POST /documents` and grant issue require an
@@ -214,7 +221,8 @@ DOCUMENTS-SEC-10, DOCUMENTS-SEC-19, and DOCUMENTS-SEC-21 to DOCUMENTS-SEC-31:
   the cached success. A finalized upload answers a repeat of the same bytes
   with the same view and other bytes with 409 `upload.finalized`.
 - Pushed grants, no live predicate: a grant names one exact version, one
-  recipient issuer and subject, and an expiry frozen at issue from the
+  recipient issuer, subject, and actor kind (DOCUMENTS-DEC-16), and an
+  expiry frozen at issue from the
   policy default within its maximum. Grants are issued and revoked by the
   custodian or the owning system under a granting profile. Nothing extends
   a grant, names an organization, or invites a reader; release consults the
@@ -222,16 +230,22 @@ DOCUMENTS-SEC-10, DOCUMENTS-SEC-19, and DOCUMENTS-SEC-21 to DOCUMENTS-SEC-31:
   identity and recipient-role profile.
 - Release: download answers only the custodian, or the holder of an
   unrevoked, unexpired grant on that exact version, and only while the
-  version is releasable under the current verifier binding (409 otherwise).
+  version is releasable under the current verifier binding. Otherwise the
+  custodian gets 409, and every other caller, grant holders included, 404.
   The reserving system that is not the custodian sees metadata but gets no
-  bytes.
+  bytes; its download answers 403 `profile.not-authorized`
+  (DOCUMENTS-DEC-10). The database keeps a grant only on a version of its
+  own document and only of a known actor kind.
 - Uniform 404: read, download, and every grant route answer
   `resource.not-found` for a document the caller has no standing on, the
   same as an unknown identifier; 403 goes only to a caller who already sees
   the document. Download refusals are audited with the code answered.
 - Download budget: downloads, uploads, and verification share one transfer
   budget, the larger of 256 MiB and the deployment ceiling. A transfer that
-  finds no room answers 503 with `Retry-After` and is never queued. Every
+  finds no room answers 503 with `Retry-After` and is never queued; a
+  background verification attempt waits for room only within its attempt
+  timeout, then ends as a transient failure, so it never holds its job lease
+  past the attempt deadline. Every
   transfer has a deadline of a floor plus a per-MiB allowance; a stalled
   upload is cut off with 503, and a stalled download ends in a body error
   and lets go of its bytes. The database client is released before content
@@ -241,10 +255,41 @@ DOCUMENTS-SEC-10, DOCUMENTS-SEC-19, and DOCUMENTS-SEC-21 to DOCUMENTS-SEC-31:
 - Untrusted label: a label is one to 256 bytes without control characters,
   stored and returned exactly as written. The Store never interprets it,
   and a client must render it as untrusted text.
-- An audit entry that cannot be written refuses the upload and the download
-  with 503 before anything is finalized or sent.
+- Audit ordering: every audited request writes its request entry before it
+  acts, the upload before it looks up its reservation, so a probe of an
+  unknown or another caller's upload is journalled. A request entry that
+  cannot be written answers 503 and changes nothing. The response entry is
+  written after the operation commits; if it cannot be written the caller
+  gets 503, the committed state stands, the request entry is in the
+  journal, and a retry with the same `Idempotency-Key` answers the
+  committed result.
+- The journal records a caller-supplied identifier (policy id, media type,
+  version id) only once it parses under its bounded grammar, and the marker
+  `unparsed` otherwise.
 - `GET /document-policies` lists only the policies the caller's profile may
   reserve under, with their size, media type, and grant expiry bounds.
+
+### Review calls
+
+The lead reviewer settled these points of the access slice; the rows and
+decisions above carry them:
+
+- A grant stores its recipient's actor kind and release compares it, so a
+  human's grant is never redeemable by a service that shares the subject
+  value (DOCUMENTS-SEC-24).
+- Under institutional custody, custody always stays with the reserving
+  institution; a named person is only the represented principal and has no
+  standing without a grant. Citizen delivery is unchanged
+  (DOCUMENTS-SEC-32).
+- The owning system that sees a document but may not download it gets 403
+  `profile.not-authorized`, not 404 (DOCUMENTS-SEC-10, DOCUMENTS-DEC-10).
+- Requests that find the transfer budget spent are refused at once; the
+  background verifier waits for room only within its attempt timeout
+  (DOCUMENTS-SEC-28).
+- The audit response entry is written after commit: a request entry that
+  cannot be written refuses and changes nothing, and a response entry that
+  cannot be written answers 503 while the committed state stands and a retry
+  under the same key answers it (DOCUMENTS-SEC-30).
 
 ### Tests
 
@@ -265,11 +310,13 @@ each test.
   security event and re-revoke from the journal.
 - A download already admitted when its grant is revoked finishes within its
   transfer deadline (DOCUMENTS-DEC-11); the deadline bounds the window.
-- Lists filter after fetching a page, so a page can be shorter than its
-  limit while a next cursor remains (DOCUMENTS-DEC-13).
+- The documents list filters each fetched row by the policy's standing
+  rules, so its page can be shorter than its limit while a next cursor
+  remains; the received-grants list selects only redeemable grants before
+  its limit (DOCUMENTS-DEC-13).
 - The recipient resolver and display names are out of scope: a grant names
-  a recipient only by issuer and subject, and the granting system must know
-  them. A recipient's grant follows the subject, so an issuer that reuses a
+  a recipient only by issuer, subject, and actor kind, and the granting
+  system must know them. A recipient's grant follows the subject, so an issuer that reuses a
   subject for another person would release to that person.
 - The label is caller text. A client that renders it as markup, or trusts it
   to describe the bytes, can mislead its user; the Store makes no claim

@@ -164,8 +164,10 @@ invariants:
     refusal: >-
       Answer 401 authentication.refused with a Bearer challenge without a
       verified token, 403 profile.not-authorized for a token no profile
-      admits, and 404 resource.not-found for every document the caller may
-      not see.
+      admits, 404 resource.not-found for every document the caller may not
+      see, and 403 profile.not-authorized to a caller who sees the document
+      but whose standing does not reach the action, the owning system's
+      download included.
     negativeTest:
       path: crates/registry-documents/tests/postgres_startup.rs
       name: a_prepared_runtime_serves_documents_only_to_a_verified_caller
@@ -397,8 +399,11 @@ invariants:
     enforcementPoint: >-
       Download releases a version only to its custodian, or to a caller holding
       an unrevoked, unexpired grant whose version, recipient issuer, subject,
-      and kind match exactly, under a profile with the recipient role. The grant
-      expiry is fixed at issue within the policy maximum and never extended.
+      and kind match exactly, under a profile with the recipient role. The
+      grant request names the recipient's actor kind, stored with the grant;
+      the database keeps a grant only on a version of its own document and
+      only of a known kind. The grant expiry is fixed at issue within the
+      policy maximum and never extended.
     refusal: >-
       Answer 404 resource.not-found to every other caller, and record the
       refusal in the audit journal.
@@ -443,8 +448,10 @@ invariants:
       Download requires the releasable row's verdict binding to equal the
       running verifier binding.
     refusal: >-
-      Answer 409 document-version.not-releasable to the custodian and to every
-      grant holder.
+      Answer 409 document-version.not-releasable to the custodian, 403
+      profile.not-authorized to the owning system that is not the custodian,
+      as on every download, and 404 resource.not-found to every other caller,
+      grant holders included.
     negativeTest:
       path: crates/registry-documents/tests/postgres_documents.rs
       name: a_version_approved_under_another_binding_is_released_to_nobody
@@ -455,11 +462,15 @@ invariants:
       in memory than the host can bear.
     enforcementPoint: >-
       One transfer budget, the larger of 256 MiB and the deployment ceiling, is
-      shared by uploads, downloads, and verification; a transfer that finds no
-      room is refused at once rather than queued.
+      shared by uploads, downloads, and verification. An upload or download
+      that finds no room is refused at once rather than queued. A verification
+      attempt waits for room only within its attempt timeout, which bounds the
+      whole attempt, so a job never holds its lease past the attempt deadline.
     refusal: >-
-      Answer 503 service.unavailable with Retry-After, keep nothing, and release
-      nothing.
+      Answer 503 service.unavailable with Retry-After to an upload or download,
+      keep nothing, and release nothing; end a verification attempt that found
+      no room within its timeout as a transient failure, without asking the
+      verifier.
     negativeTest:
       path: crates/registry-documents/tests/postgres_documents.rs
       name: an_exhausted_transfer_budget_refuses_uploads_and_downloads
@@ -481,13 +492,20 @@ invariants:
   - id: DOCUMENTS-SEC-30
     state: enforced
     threat: >-
-      An upload is finalized or bytes are released without an audit record
-      because the audit journal could not be written.
+      An upload is finalized, a reservation or grant is made, or bytes are
+      released without an audit record because the audit journal could not be
+      written, or a probe of an upload goes unrecorded.
     enforcementPoint: >-
-      The upload and the download write their audit record before they finalize
-      or send the first byte.
+      Every audited request writes its request entry before it acts: the
+      upload before it looks up its reservation, the download before it sends
+      the first byte. The response entry is written after the operation
+      commits.
     refusal: >-
-      Answer 503 service.unavailable, finalize nothing, and release no byte.
+      A request entry that cannot be written answers 503 service.unavailable
+      and changes nothing. A response entry that cannot be written after the
+      operation committed answers 503 service.unavailable; the committed state
+      stands, its request entry is in the journal, and a retry with the same
+      Idempotency-Key answers the committed result.
     negativeTest:
       path: crates/registry-documents/tests/postgres_documents.rs
       name: a_request_audit_failure_refuses_the_upload_and_the_download
@@ -506,3 +524,39 @@ invariants:
     negativeTest:
       path: crates/registry-documents/tests/postgres_documents.rs
       name: a_label_is_bounded_and_returned_untouched
+  - id: DOCUMENTS-SEC-32
+    state: enforced
+    threat: >-
+      The person a document names gains standing on a record an institution
+      holds about them, reading or granting it without the institution's
+      grant, or a document meant for a citizen stays with the system that
+      delivered it.
+    enforcementPoint: >-
+      A document policy's custodian rule decides. Under institution, a service
+      that names another subject keeps custody itself and records the named
+      subject only as the represented principal, who holds no standing. Under
+      represented-principal, a service places custody in the subject it names.
+      A human caller only ever places custody in itself.
+    refusal: >-
+      Answer 404 resource.not-found to the named person under institutional
+      custody on read, download, and every grant route until the institution
+      grants them the version.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: under_institutional_custody_the_named_person_has_no_standing_without_a_grant
+  - id: DOCUMENTS-SEC-33
+    state: enforced
+    threat: >-
+      A caller writes arbitrary or oversized text into the audit journal
+      through a request field the journal records before it is checked.
+    enforcementPoint: >-
+      An audit entry records a request identifier only once it parses under its
+      bounded grammar (a policy local id, a media type, a version UUID), and a
+      fixed marker otherwise. Upload ids and document ids are parsed before the
+      entry is written.
+    refusal: >-
+      Record the marker unparsed in place of the value and answer the request's
+      own refusal.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_documents.rs
+      name: the_journal_records_no_unchecked_text_from_a_request

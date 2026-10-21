@@ -1664,6 +1664,9 @@ async fn a_version_approved_under_another_binding_is_released_to_nobody() {
     api.download(CITIZEN, &document, &version)
         .await
         .assert_problem(ProblemCode::DocumentVersionNotReleasable);
+    api.download(APP, &document, &version)
+        .await
+        .assert_problem(ProblemCode::ProfileNotAuthorized);
     api.download(READER, &document, &version)
         .await
         .assert_problem(ProblemCode::ResourceNotFound);
