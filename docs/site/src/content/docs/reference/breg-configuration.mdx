@@ -159,8 +159,8 @@ The verifier answers HTTP 200 with at most 1,024 bytes holding exactly one of:
 ```
 
 Anything else, a timeout, or an unreachable verifier leaves the file pending; the worker logs
-`attachment_verification.retry_pending` and retries after a delay that starts at 30 seconds and
-doubles, with jitter, up to one hour. Each attempt has 60 seconds for the storage read and the
+`attachment_verification.retry_pending` and retries it. The first retry follows 15 to 30 seconds
+later, and each further delay doubles, to at most one hour with jitter included. Each attempt has 60 seconds for the storage read and the
 verifier call together, so `breg` refuses to start when `attemptTimeoutMilliseconds` under
 `attachmentStorage` (when it is `type: s3`) plus the one under `attachmentVerification` exceeds
 55,000; the rest of the minute is kept for recording the outcome. The request follows no redirect
