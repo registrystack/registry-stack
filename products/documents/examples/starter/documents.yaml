@@ -20,6 +20,9 @@ accessProfiles:
     actorKind: service
     # custodian: places documents in custody and issues document grants.
     role: custodian
+    # The institution this profile acts for, recorded as the issuing
+    # institution of every document it reserves.
+    institution: civil-registry
   citizen:
     principalClaim: sub
     requiredScopes: [documents:own]
