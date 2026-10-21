@@ -211,9 +211,16 @@ declares, each due a fixed number of minutes before the appointment, and a
 worker renders every due intent as one
 shared hook envelope in canonical JSON, the same envelope an appointment
 observer receives, and POSTs it to the configured reminder destination with
-`content-type: application/json`, exactly once per claim. A transport
-failure schedules an exponential retry, a refusal the retry classes do not
-cover holds the intent for the operator, and eight failed attempts hold it.
+`content-type: application/json`, once per claim. Delivery runs on the
+shared dispatch core: each attempt is bounded at five seconds, a transport
+failure retries after thirty seconds, doubling to about thirty-two minutes,
+a refusal the retry classes do not cover sets the intent aside for the
+operator, and the eighth failed attempt sets it aside. A worker that stops
+mid-attempt leaves its lease to lapse, and the attempt counts as a failure.
+Just before each send the runtime reads whether the intent still describes
+the appointment: a reminder whose appointment was cancelled or moved to a
+newer revision is set aside as superseded and never sent. The destination
+deduplicates on the envelope `id`, the same on every attempt.
 
 Every event carries the same envelope:
 
@@ -239,7 +246,8 @@ revision, offering, start, and how many minutes before the start it was
 minted for.
 
 With no reminder destination configured, the intents stay readable in place:
-they are written to the outbox and marked local, never pretended delivered.
+each is set aside in the outbox as local when it falls due, never pretended
+delivered.
 Adopting the product does not require wiring a notification bus first.
 
 Appointment observers are governed hooks. A policy may declare `phase: after`

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- BREAKING: confirmation, change, cancellation, and reminder delivery runs on
+  the shared dispatch core. `scheduling_outbox` takes the dispatch job table
+  shape: the attempt count is `attempt`, a lease carries `lease_token`, and an
+  intent that stops without delivery ends `dead-lettered` with a
+  `last_failure_class` instead of `local` or `failed`. A cancellation or
+  reschedule no longer marks the obsolete reminder `suppressed`: the reminder
+  is read just before its send and set aside as `superseded` without one. A
+  lapsed lease counts as a failed attempt and waits the next back-off, and
+  the longest back-off is 1920 seconds instead of an hour.
+  `schedulingctl intents` reports the same `local` and `failed` delivery
+  states as before. Apply this release to a fresh database.
 - `destinations.hooks` entries are the shared `UrlHookDestinationConfig`
   block from `registry-platform-config`, activated by
   `registry-platform-hooks`. The keys, bounds, defaults, refusals, and the

@@ -124,6 +124,12 @@ time as its expiry, quarantine of rows a claim cannot take, and attempt
 timeouts from 100 milliseconds to 30 seconds. See
 `crates/registry-casework/src/runtime/completion.rs`.
 
+Registry Scheduling delivers confirmation, change, cancellation, and reminder
+intents on this core over its `scheduling_outbox` table, with a frozen
+doubling schedule from 30 seconds, eight attempts, `Retry` on an uncertain
+outcome, no expiry, quarantine of rows a claim cannot take, and a fixed
+5-second attempt timeout. See `crates/registry-scheduling/src/runtime/intents.rs`.
+
 The `postgres-test` feature enables the PostgreSQL test consumer in
 `tests/postgres_dispatch.rs`. Its tests require `DISPATCH_TEST_DATABASE_URL`,
 naming a disposable database, and fail when it is absent.
