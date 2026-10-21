@@ -35,7 +35,11 @@ The opt-in `postgres` feature adds the lease machine in `postgres`:
   input, and `create_statements` returns the DDL for a product that does not
   already own an equivalent table. `enqueue` inserts one pending job inside the
   product's own transaction, due at the later of the transaction timestamp and
-  an optional not-before instant.
+  an optional not-before instant. `cancel_unattempted` moves one pending job
+  that was never attempted to `cancelled` inside the product's own
+  transaction and reports whether it did; a job with an attempt behind it, a
+  leased job, and a terminal one are left alone, so `cancelled` still means
+  never sent in that generation.
 - `DispatchStore` is the product's seam: it lends a connection, verifies the
   transaction's identity, decodes the product columns its `DispatchSql` joins
   into each read, keeps product relational writes in the transition

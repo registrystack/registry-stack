@@ -345,6 +345,48 @@ pub async fn enqueue(
     Ok(())
 }
 
+/// Cancel one job that was never attempted, inside the caller's transaction.
+///
+/// The job moves from `pending` at attempt zero to `cancelled`, so a
+/// product withdraws work in the same transaction as the decision that made
+/// it obsolete. Only an unattempted job is cancelled, so `cancelled` keeps
+/// meaning never sent in that generation. A pending job with an attempt
+/// behind it, a leased job, and a job in any other state are left alone and
+/// `false` is returned; a concurrent claim holds the row lock, and the
+/// predicate is re-checked once it is released. This function performs no
+/// transaction management and writes no audit of its own.
+///
+/// # Errors
+///
+/// [`DispatchError::Unavailable`] when the UPDATE fails or writes more than
+/// one row.
+pub async fn cancel_unattempted(
+    transaction: &Transaction<'_>,
+    table: &JobTable,
+    key: &JobKey,
+) -> Result<bool, DispatchError> {
+    let changed = transaction
+        .execute(
+            &format!(
+                "UPDATE {qualified}
+                    SET state = 'cancelled', next_attempt_at = NULL,
+                        updated_at = transaction_timestamp()
+                  WHERE {id} = $1 AND {part} = $2
+                    AND state = 'pending' AND attempt = 0",
+                qualified = table.qualified(),
+                id = table.id_column,
+                part = table.part_column,
+            ),
+            &[&key.id, &key.part],
+        )
+        .await?;
+    match changed {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(DispatchError::Unavailable),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
