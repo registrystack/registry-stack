@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_hooks::HOOK_HANDLER_ABI_V1;
-use registry_platform_yaml::{duplicate_display_text_pairs, lookalike_local_id_pairs};
+use registry_platform_yaml::{duplicate_display_text_pairs, lookalike_local_id_pairs, DisplayText};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -3179,12 +3179,13 @@ fn validate_access_log(
             || exemption.reason != exemption.reason.trim()
             || exemption.reason.len() > MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES
             || exemption.reason.chars().any(char::is_control)
+            || DisplayText::new(exemption.reason.as_str()).is_err()
         {
             errors.push(Diagnostic::error(
                 "breg.access-log.exemption-reason-invalid",
                 format!("{path}.exemptions[{profile_id}].reason"),
                 &format!(
-                    "an access-log exemption reason must be trimmed printable text of at most {MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES} UTF-8 bytes"
+                    "an access-log exemption reason must be trimmed display text of at most {MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES} UTF-8 bytes"
                 ),
             ));
         }

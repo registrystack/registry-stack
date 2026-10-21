@@ -1357,11 +1357,28 @@ pub struct AccessLogExemptionSource {
     #[serde(rename = "sourceRecordType")]
     pub source_entity: Option<String>,
     /// Bounded policy reason retained and audited with each delayed entry.
-    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "access_log_exemption_reason_schema")
+    )]
     pub reason: String,
     /// Days after the read when the entry becomes visible to the subject.
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 3_649)))]
     pub delay_days: u16,
+}
+
+#[cfg(feature = "schema")]
+fn access_log_exemption_reason_schema(
+    generator: &mut schemars::SchemaGenerator,
+) -> schemars::Schema {
+    let display_text = generator.subschema_for::<registry_platform_yaml::DisplayText>();
+    schemars::json_schema!({
+        "allOf": [
+            display_text,
+            {"type": "string", "minLength": 1, "maxLength": 256}
+        ]
+    })
 }
 
 /// The fields of a consent-record entity the engine reads. Other fields are

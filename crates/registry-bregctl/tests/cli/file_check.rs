@@ -147,6 +147,107 @@ fn every_registered_tool_example_checks_without_a_diagnostic() {
 }
 
 #[test]
+fn model_selection_effective_ids_refuse_separator_collisions_at_authored_sources() {
+    let scratch = scratch();
+    for (name, record_types, primary, related) in [
+        (
+            "explicit-second",
+            "  - concept: GroupMembership\n  - concept: Person\n    id: group_membership\n",
+            ("/recordTypes/1/id", 10, 9),
+            ("/recordTypes/0", 8, 5),
+        ),
+        (
+            "implicit-second",
+            "  - concept: Person\n    id: group_membership\n  - concept: GroupMembership\n",
+            ("/recordTypes/1", 10, 5),
+            ("/recordTypes/0/id", 9, 9),
+        ),
+    ] {
+        let file = scratch.path().join(format!("{name}.yaml"));
+        fs::write(
+            &file,
+            format!(
+                "apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\n\
+                 kind: BRegModelSelection\n\
+                 model: publicschema\n\
+                 registry:\n\
+                 \x20 id: example\n\
+                 \x20 title: Example\n\
+                 recordTypes:\n{record_types}"
+            ),
+        )
+        .unwrap();
+
+        let output = check_file(&file, &["--format", "json"]);
+        let report = json_report(&output);
+        assert_eq!(output.status.code(), Some(1), "{report}");
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["code"], "init.selection.entity-id-collision");
+        assert_eq!(diagnostic["path"], primary.0);
+        assert_eq!(diagnostic["source"]["file"], path(&file));
+        assert_eq!(diagnostic["source"]["line"], primary.1);
+        assert_eq!(diagnostic["source"]["column"], primary.2);
+        assert_eq!(diagnostic["related"][0]["path"], related.0);
+        assert_eq!(diagnostic["related"][0]["file"], path(&file));
+        assert_eq!(diagnostic["related"][0]["line"], related.1);
+        assert_eq!(diagnostic["related"][0]["column"], related.2);
+
+        let destination = scratch.path().join(format!("generated-{name}"));
+        let output = bregctl(&[
+            "--format",
+            "json",
+            "init",
+            path(&destination),
+            "--from",
+            "publicschema",
+            "--selection",
+            path(&file),
+        ]);
+        let report = json_report(&output);
+        assert_eq!(output.status.code(), Some(1), "{report}");
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "init.selection.entity-id-collision"
+        );
+        assert!(
+            !destination.exists(),
+            "a refused selection writes no project"
+        );
+    }
+
+    let file = scratch.path().join("field-identifiers.yaml");
+    fs::write(
+        &file,
+        "apiVersion: id.registrystack.org/formats/breg/model-selection/v1alpha1\n\
+         kind: BRegModelSelection\n\
+         model: publicschema\n\
+         registry:\n\
+         \x20 id: example\n\
+         \x20 title: Example\n\
+         recordTypes:\n\
+         \x20 - concept: Person\n\
+         \x20   identifierField: given_name\n\
+         \x20   properties:\n\
+         \x20     - name: given_name\n",
+    )
+    .unwrap();
+    let output = check_file(&file, &["--format", "json"]);
+    let report = json_report(&output);
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "init.selection.field-name-collision");
+    assert_eq!(diagnostic["path"], "/recordTypes/0/properties/0");
+    assert_eq!(diagnostic["source"]["line"], 11);
+    assert_eq!(diagnostic["source"]["column"], 9);
+    assert_eq!(
+        diagnostic["related"][0]["path"],
+        "/recordTypes/0/identifierField"
+    );
+    assert_eq!(diagnostic["related"][0]["line"], 9);
+    assert_eq!(diagnostic["related"][0]["column"], 22);
+}
+
+#[test]
 fn a_warning_passes_unless_warnings_are_denied_in_both_output_forms() {
     let journeys = repository("products/breg/acceptance/asset-site-placement/tests/journeys.yaml");
 

@@ -12,10 +12,17 @@
           "type": "integer"
         },
         "reason": {
-          "description": "Bounded policy reason retained and audited with each delayed entry.",
-          "maxLength": 256,
-          "minLength": 1,
-          "type": "string"
+          "allOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "description": "Bounded policy reason retained and audited with each delayed entry."
         },
         "sourceRecordType": {
           "description": "Record type whose access profile authorizes the read. Omitted for direct reads of the logged record type.",

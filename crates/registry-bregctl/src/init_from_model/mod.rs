@@ -53,13 +53,24 @@ pub(crate) fn check_selection(
     };
     Ok(match resolve::resolve(&selection, &model) {
         Ok(_) => Vec::new(),
-        Err(refusal) => vec![crate::file_check::diagnostic_near(
-            document,
-            &refusal.code,
-            &refusal.path,
-            &refusal.message,
-            "Correct the selection as the message says, then check it again.",
-        )],
+        Err(refusal) => {
+            let mut diagnostic = crate::file_check::diagnostic_near(
+                document,
+                &refusal.code,
+                &refusal.path,
+                &refusal.message,
+                "Correct the selection as the message says, then check it again.",
+            );
+            for related in refusal.related {
+                crate::file_check::add_related_near(
+                    document,
+                    &mut diagnostic,
+                    &related.path,
+                    &related.message,
+                );
+            }
+            vec![diagnostic]
+        }
     })
 }
 

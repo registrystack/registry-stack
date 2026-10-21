@@ -12,10 +12,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use registry_breg::logical_names::{default_api_name, default_sql_name, reserved_logical_name};
-use registry_breg::Diagnostic;
+use registry_breg::{Diagnostic, RelatedDiagnostic};
 use registry_linkml::publicschema::{self, Sensitivity, LANGUAGES};
 use registry_linkml::{ClassDef, EnumDef, Model, Range, SlotDef};
 use registry_manifest_core::MAX_CODELIST_CONCEPTS;
+use registry_platform_yaml::{lookalike_local_id_pairs, DisplayText};
 use serde_json::{json, Value};
 
 use super::selection::{EntitySelection, PropertySelection, Selection, VocabularyMode};
@@ -59,6 +60,32 @@ pub(crate) enum Classification {
     Public,
     Internal,
     Restricted,
+}
+
+struct SourcedId {
+    value: String,
+    path: String,
+}
+
+fn lookalike_id_refusal(code: &str, kind: &str, values: &[SourcedId]) -> Option<Diagnostic> {
+    let (first, second) = lookalike_local_id_pairs(values.iter().map(|value| value.value.as_str()))
+        .into_iter()
+        .next()?;
+    let first = &values[first];
+    let second = &values[second];
+    let mut refusal = diagnostic(
+        code,
+        &second.path,
+        &format!(
+            "{kind} identifiers `{}` and `{}` differ only by `-` versus `_`; rename one of them",
+            first.value, second.value
+        ),
+    );
+    refusal.related.push(RelatedDiagnostic {
+        path: first.path.clone(),
+        message: "the first identifier is defined here".to_owned(),
+    });
+    Some(refusal)
 }
 
 impl Classification {
@@ -357,11 +384,13 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
             &message,
         ));
     }
-    if selection.registry.title.trim().is_empty() {
+    if selection.registry.title.trim().is_empty()
+        || DisplayText::new(selection.registry.title.as_str()).is_err()
+    {
         return Err(diagnostic(
             "init.selection.registry-title",
             "/registry/title",
-            "the registry title must not be empty",
+            "the registry title must be non-empty display text",
         ));
     }
     if selection.entities.is_empty() {
@@ -374,6 +403,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
 
     let mut index = Vec::new();
     let mut ids = BTreeSet::new();
+    let mut sourced_ids = Vec::new();
     let mut routes = BTreeSet::new();
     for (position, entity) in selection.entities.iter().enumerate() {
         let path = entity_pointer(position);
@@ -411,6 +441,13 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
                 ),
             ));
         }
+        sourced_ids.push(SourcedId {
+            value: id.clone(),
+            path: entity
+                .id
+                .as_ref()
+                .map_or_else(|| path.clone(), |_| format!("{path}/id")),
+        });
         let route = entity.route.clone().unwrap_or_else(|| pluralize(&id));
         validate_identifier(&route, &format!("{path}/route"), "a route")?;
         if !routes.insert(route.clone()) {
@@ -427,6 +464,13 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
             route,
             class: class.name.clone(),
         });
+    }
+    if let Some(refusal) = lookalike_id_refusal(
+        "init.selection.entity-id-collision",
+        "record type",
+        &sourced_ids,
+    ) {
+        return Err(refusal);
     }
 
     let mut vocabulary_modes = BTreeMap::new();
@@ -624,8 +668,16 @@ fn resolve_entity(
         .map_err(|error| model_error(path, &error))?;
     let mut fields = Vec::new();
     let mut field_ids = BTreeSet::from([identifier_id.clone()]);
+    let mut sourced_field_ids = vec![SourcedId {
+        value: identifier_id.clone(),
+        path: entity
+            .identifier_field
+            .as_ref()
+            .map_or_else(|| path.to_owned(), |_| format!("{path}/identifierField")),
+    }];
     let mut api_names = BTreeSet::from([default_api_name(&identifier_id)]);
     let mut sql_names = BTreeSet::from([default_sql_name(&identifier_id)]);
+    let mut derived_name_collision = None;
     let mut properties = BTreeSet::new();
     for (position, property) in entity.properties.iter().enumerate() {
         let property_path = format!("{path}/properties/{position}");
@@ -683,12 +735,18 @@ fn resolve_entity(
                 &format!("two fields of this entity would share the identifier `{id}`"),
             ));
         }
+        sourced_field_ids.push(SourcedId {
+            value: id.clone(),
+            path: property_path.clone(),
+        });
         // The compiler derives an API name and a SQL name from every field
         // identifier and holds each to be unique within the entity, so two
         // identifiers that differ only in their separators collide there.
         let api_name = default_api_name(&id);
-        if !api_names.insert(api_name.clone()) || !sql_names.insert(default_sql_name(&id)) {
-            return Err(diagnostic(
+        let api_name_is_unique = api_names.insert(api_name.clone());
+        let sql_name_is_unique = sql_names.insert(default_sql_name(&id));
+        if (!api_name_is_unique || !sql_name_is_unique) && derived_name_collision.is_none() {
+            derived_name_collision = Some(diagnostic(
                 "init.selection.field-name-collision",
                 &property_path,
                 &format!(
@@ -710,6 +768,16 @@ fn resolve_entity(
             required: false,
             kind,
         });
+    }
+    if let Some(refusal) = lookalike_id_refusal(
+        "init.selection.field-name-collision",
+        "field",
+        &sourced_field_ids,
+    ) {
+        return Err(refusal);
+    }
+    if let Some(refusal) = derived_name_collision {
+        return Err(refusal);
     }
 
     let mut title = labels(class);
@@ -2224,6 +2292,37 @@ mod tests {
     }
 
     #[test]
+    fn a_directly_constructed_registry_title_still_obeys_display_text() {
+        let mut selection = selection("recordTypes:\n  - concept: Person\n");
+        selection.registry.title = "safe\u{202e}text".to_owned();
+        let error = resolve(&selection, model()).expect_err("hidden text direction is refused");
+        assert_eq!(error.code, "init.selection.registry-title");
+        assert_eq!(error.path, "/registry/title");
+    }
+
+    #[test]
+    fn effective_entity_identifiers_refuse_separator_collisions_at_both_sources() {
+        for (body, path, related_path) in [
+            (
+                "recordTypes:\n  - concept: GroupMembership\n  - concept: Person\n    id: group_membership\n",
+                "/recordTypes/1/id",
+                "/recordTypes/0",
+            ),
+            (
+                "recordTypes:\n  - concept: Person\n    id: group_membership\n  - concept: GroupMembership\n",
+                "/recordTypes/1",
+                "/recordTypes/0/id",
+            ),
+        ] {
+            let error = refused(body);
+            assert_eq!(error.code, "init.selection.entity-id-collision");
+            assert_eq!(error.path, path);
+            assert_eq!(error.related.len(), 1);
+            assert_eq!(error.related[0].path, related_path);
+        }
+    }
+
+    #[test]
     fn an_identifier_field_the_compiler_keeps_for_itself_is_refused() {
         for name in ["id", "revision", "created_at", "record-id", "deleted-at"] {
             let error = refused(&format!(
@@ -2244,7 +2343,8 @@ mod tests {
         );
         assert_eq!(error.code, "init.selection.field-name-collision");
         assert_eq!(error.path, "/recordTypes/0/properties/0");
-        assert!(error.message.contains("givenName"), "{}", error.message);
+        assert_eq!(error.related.len(), 1);
+        assert_eq!(error.related[0].path, "/recordTypes/0/identifierField");
         assert!(resolve(
             &selection(
                 "recordTypes:\n  - concept: Person\n    identifierField: person-number\n    properties:\n      - name: given_name\n",
