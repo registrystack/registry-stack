@@ -483,6 +483,7 @@ pub enum RawSource {
     /// The sealed package.
     Sealed(PackageConfig),
 }
+registry_platform_yaml::tagged_union!(RawSource);
 """
 
     def variant_row(self) -> object:
@@ -530,6 +531,46 @@ pub enum RawSource {
             "sample: crates/sample/src/lib.rs has no enum RawSource",
             self.variant_row(),
         )
+
+    def test_a_variant_of_a_union_that_is_not_internally_tagged_is_refused(self) -> None:
+        self.with_runtime_struct(
+            self.TAGGED_UNION.replace(
+                "registry_platform_yaml::tagged_union!(RawSource);\n", ""
+            ),
+            imports="PackageConfig",
+        )
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs enum RawSource is not an internally "
+            "tagged union; read it through tagged_union! or #[serde(tag = ...)]",
+            self.variant_row(),
+        )
+
+    def test_a_variant_of_a_serde_internally_tagged_union_passes(self) -> None:
+        self.with_runtime_struct(
+            self.TAGGED_UNION.replace(
+                "registry_platform_yaml::tagged_union!(RawSource);\n", ""
+            ).replace('remote = "Self"', 'tag = "type"'),
+            imports="PackageConfig",
+        )
+        self.assertEqual([], self.problems(self.variant_row()))
+
+    def test_a_variant_of_an_adjacently_tagged_or_untagged_union_is_refused(
+        self,
+    ) -> None:
+        for attribute in ('tag = "type", content = "spec"', "untagged"):
+            with self.subTest(attribute=attribute):
+                self.with_runtime_struct(
+                    self.TAGGED_UNION.replace(
+                        "registry_platform_yaml::tagged_union!(RawSource);\n", ""
+                    ).replace('remote = "Self"', attribute),
+                    imports="PackageConfig",
+                )
+                self.assert_one_problem(
+                    "sample: crates/sample/src/lib.rs enum RawSource is not an "
+                    "internally tagged union; read it through tagged_union! or "
+                    "#[serde(tag = ...)]",
+                    self.variant_row(),
+                )
 
     HAND_LISTENER = {
         "type": "object",
