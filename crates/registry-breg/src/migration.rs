@@ -24,7 +24,7 @@ use crate::migration_plan::{
     ValidatedReviewedMigrationPlan,
 };
 use crate::package::{
-    CompiledRegistryChangeClass, CompiledRegistryMigrationBaseline, MigrationPlan, PackageFileRole,
+    CompiledRegistryChangeClass, CompiledRegistryMigrationBaseline, PackageFileRole,
     VerifiedPackage,
 };
 use crate::postgres::{
@@ -166,19 +166,29 @@ pub type Result<T> = std::result::Result<T, MigrationError>;
 
 /// Whether a package applied as a successor has nothing to apply: its plan has
 /// no schema statement and no reviewed migration, and it is not an access or
-/// disclosure change alone. This reads only the package, so a caller can refuse
-/// it before opening the database.
+/// disclosure change or a changed compiled presentation alone. This reads only
+/// the package, so a caller can refuse it before opening the database.
 pub fn successor_plan_is_empty(package: &VerifiedPackage) -> bool {
     let plan = &package.manifest().migration_plan;
     plan.statements.is_empty()
         && package.reviewed_migration_plan().is_none()
-        && !verified_metadata_only_plan(plan)
+        && !verified_metadata_only_plan(package)
 }
 
-fn verified_metadata_only_plan(plan: &MigrationPlan) -> bool {
-    !plan.changes.is_empty()
-        && plan.statements.is_empty()
+fn verified_metadata_only_plan(package: &VerifiedPackage) -> bool {
+    let plan = &package.manifest().migration_plan;
+    plan.statements.is_empty()
         && plan.reviewed_descriptors.is_empty()
+        && (!plan.changes.is_empty()
+            || plan.prior_baseline.as_ref().is_some_and(|prior| {
+                // In-memory baselines carry the compiler revision; loaded
+                // predecessors carry the packaged governed-model digest.
+                prior.registry_revision != package.registry().revision()
+                    && package.manifest().files.iter().any(|file| {
+                        file.role == PackageFileRole::GovernedModel
+                            && prior.registry_revision != file.sha256
+                    })
+            }))
         && plan
             .changes
             .iter()
@@ -344,9 +354,7 @@ pub(crate) fn package_ledger_entry(
         } else {
             ActivationPlanKind::Initial
         },
-        migration_kind: if current.is_some()
-            && verified_metadata_only_plan(&package.manifest().migration_plan)
-        {
+        migration_kind: if current.is_some() && verified_metadata_only_plan(package) {
             MigrationKind::MetadataOnly
         } else {
             MigrationKind::CompiledAdditive

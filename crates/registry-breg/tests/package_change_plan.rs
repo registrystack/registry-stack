@@ -1541,7 +1541,7 @@ fn loaded_predecessor_baseline_states_the_digest_of_its_packaged_ddl_script() {
 #[cfg(feature = "tooling")]
 #[test]
 fn unchanged_rebuild_is_empty_over_a_same_compiler_predecessor_and_not_over_an_earlier_one() {
-    let (root, _initial, predecessor) = published_predecessor();
+    let (root, initial, predecessor) = published_predecessor();
 
     let same_compiler = verified_unchanged_successor(
         root.path(),
@@ -1555,6 +1555,17 @@ fn unchanged_rebuild_is_empty_over_a_same_compiler_predecessor_and_not_over_an_e
         .is_empty());
     assert!(registry_breg::migration::successor_plan_is_empty(
         &same_compiler
+    ));
+    let from_compiled = verified_unchanged_successor(
+        root.path(),
+        "from-compiled",
+        registry_breg::package::CompiledRegistryMigrationBaseline::from_compiled(
+            predecessor.package_digest(),
+            initial.registry(),
+        ),
+    );
+    assert!(registry_breg::migration::successor_plan_is_empty(
+        &from_compiled
     ));
 
     // A predecessor built before the digest existed states none, so the plan
@@ -1584,6 +1595,48 @@ fn unchanged_rebuild_is_empty_over_a_same_compiler_predecessor_and_not_over_an_e
         !String::from_utf8_lossy(&canonical(&plan.prior_baseline)).contains("generatedDdlSha256"),
         "the successor signs the baseline it was planned over, without a digest"
     );
+}
+
+#[cfg(feature = "tooling")]
+#[test]
+fn display_only_successor_is_not_an_empty_rebuild() {
+    let (root, initial, predecessor) = published_predecessor();
+    let source = source_for_variant(Variant::ReferenceConstraintIndex);
+    let mut project: serde_json::Value = serde_json::from_slice(&source.project_bytes).unwrap();
+    project["project"]["display"] = json!({"label": "Updated registry label"});
+    let successor = prepare_package(build_request(
+        Some(predecessor.package_digest()),
+        serde_json::to_vec(&project).unwrap(),
+        source.module_bytes,
+        PackageMigrationPlanInput::SuccessorFromBaseline {
+            prior_baseline: Box::new(predecessor.migration_baseline().clone()),
+        },
+    ))
+    .expect("display-only successor prepares without a reviewed migration");
+    let package = root.path().join("display-only");
+    successor.publish_to_directory(&package).unwrap();
+    let successor = registry_breg::package::load_package(
+        &package,
+        &PackageLoadContext {
+            database_initialization_environment: "local",
+        },
+    )
+    .expect("display-only successor verifies");
+    let plan = &successor.manifest().migration_plan;
+    assert!(plan.changes.is_empty());
+    assert!(plan.statements.is_empty());
+    assert!(plan.reviewed_descriptors.is_empty());
+    assert_ne!(
+        initial.registry().revision(),
+        successor.registry().revision()
+    );
+    assert_eq!(
+        successor.registry().display().label.as_deref(),
+        Some("Updated registry label")
+    );
+    assert!(!registry_breg::migration::successor_plan_is_empty(
+        &successor
+    ));
 }
 
 #[cfg(feature = "tooling")]

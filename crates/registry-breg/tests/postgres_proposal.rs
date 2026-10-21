@@ -4309,6 +4309,16 @@ async fn compatible_verified_activation_keeps_the_frozen_submission_applicable()
     );
     let (registry, identity) = proposal_activation::activate_successor(&fixture, &next).await;
     assert_ne!(identity.activation_id, fixture.identity.activation_id);
+    let row = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT migration_kind FROM registry_internal.registry_migrations WHERE activation_id::text = $1",
+            &[&identity.activation_id],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, String>(0), "metadata-only");
     let current = successor_client(&fixture, registry, identity).await;
     let metadata = current
         .client

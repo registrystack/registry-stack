@@ -20,6 +20,8 @@
 - Rebuild governed packages after upgrading. Dataset and access-profile
   presentation metadata now contributes to the compiled revision and artifact
   bytes.
+- Activate display-only successor packages as metadata updates while retaining
+  compatible frozen Proposal submissions. Unchanged rebuilds remain empty plans.
 
 - Extend `bregctl explain access` with each Action target's runtime-enforced
   authority, whether the profile also has a direct Record grant, and the
