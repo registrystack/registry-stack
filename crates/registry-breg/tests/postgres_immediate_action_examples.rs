@@ -440,18 +440,19 @@ impl TestPackage {
                 .iter()
                 .all(|delivery| delivery.destination_id.as_deref() == Some("facility-events")));
             write_private(&secrets.join("event-key"), &[0x65; 32]);
-            "eventDestinations:
-  facility-events:
-    origin: https://consumer.example/
-    path: /events
-    networkProfile: production-https
-    dnsFamily: dual-stack-strict
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/event-key
-    classificationCeiling: internal
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: 5000
-      maximumAttempts: 5
+            "destinations:
+  hooks:
+    facility-events:
+      origin: https://consumer.example/
+      path: /events
+      networkProfile: production-https
+      dnsFamily: dual-stack-strict
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/event-key
+      classificationCeiling: internal
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 5000
+        maximumAttempts: 5
 "
             .to_owned()
         };

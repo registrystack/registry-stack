@@ -57,7 +57,11 @@ pub(crate) const DEV_CLIENTS_FORMAT: FormatSpec<'static> = FormatSpec {
             replacement: "Use `assertionKeyRef`: write a secret reference (secret:file/name or secret:env/NAME) and enable its provider under secretProviders.",
         },
         RemovedKey {
-            pointer: "/eventDestinations/*/hmacKeyFile",
+            pointer: "/eventDestinations",
+            replacement: "Move each `eventDestinations` entry under `destinations.hooks`; the entries stay as they are.",
+        },
+        RemovedKey {
+            pointer: "/destinations/hooks/*/hmacKeyFile",
             replacement: "Use `hmacSha256KeyRef`: write a secret reference (secret:file/name or secret:env/NAME) and enable its provider under secretProviders.",
         },
         RemovedKey {
@@ -191,13 +195,9 @@ pub(super) struct Clients {
     pub seed: Vec<Seed>,
     #[serde(default)]
     pub issuer: IssuerComposition,
-    /// Optional exact local webhook bindings. An empty map keeps the inbox.
-    #[serde(default, deserialize_with = "local_id_keys")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "keyed_schema::<LocalId, LocalEventDestination>")
-    )]
-    pub event_destinations: BTreeMap<String, LocalEventDestination>,
+    /// Optional exact local outbound destination bindings.
+    #[serde(default)]
+    pub destinations: LocalDestinations,
     /// Exact local Evidence provider bindings for governed action packages.
     #[serde(default, deserialize_with = "local_id_keys")]
     #[cfg_attr(
@@ -219,6 +219,19 @@ pub(super) struct Clients {
         schemars(schema_with = "keyed_schema::<LocalId, LocalTaskGrantStatus>")
     )]
     pub task_grant_status: BTreeMap<String, LocalTaskGrantStatus>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct LocalDestinations {
+    /// Exact local hook destination bindings. An empty map keeps the inbox.
+    #[serde(default, deserialize_with = "local_id_keys")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "keyed_schema::<LocalId, LocalEventDestination>")
+    )]
+    pub hooks: BTreeMap<String, LocalEventDestination>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -910,7 +923,7 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
     {
         bail!("local issuer composition exceeds its bounded inventory");
     }
-    if clients.event_destinations.len() > 16 {
+    if clients.destinations.hooks.len() > 16 {
         bail!("at most 16 local event destinations may be bound");
     }
     if clients.evidence_providers.len() > 8 {
@@ -1085,7 +1098,7 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
             }
         }
     }
-    for (id, destination) in &clients.event_destinations {
+    for (id, destination) in &clients.destinations.hooks {
         let origin = reqwest::Url::parse(&destination.origin)
             .context("local event destination origin must be an exact loopback HTTP URL")?;
         if !identifier(id)
@@ -1254,11 +1267,11 @@ fn validate(clients: Clients, secrets: Secrets) -> Result<Clients> {
             PASSWORD_BYTES,
         )?;
     }
-    for (id, destination) in &clients.event_destinations {
+    for (id, destination) in &clients.destinations.hooks {
         let key = secret(
             &clients,
             secrets,
-            &format!("eventDestinations.{id}.hmacSha256KeyRef"),
+            &format!("destinations.hooks.{id}.hmacSha256KeyRef"),
             &destination.hmac_sha256_key_ref,
             HMAC_KEY_BYTES,
         )?;
@@ -1431,10 +1444,10 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
             &password,
         )?;
     }
-    for (id, destination) in &clients.event_destinations {
+    for (id, destination) in &clients.destinations.hooks {
         let key = resolve_secret(
             clients,
-            &format!("eventDestinations.{id}.hmacSha256KeyRef"),
+            &format!("destinations.hooks.{id}.hmacSha256KeyRef"),
             &destination.hmac_sha256_key_ref,
             HMAC_KEY_BYTES,
         )?;
@@ -2062,11 +2075,11 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
             )?;
         }
     }
-    let destinations = if state.webhook_port.is_some() || !clients.event_destinations.is_empty() {
+    let destinations = if state.webhook_port.is_some() || !clients.destinations.hooks.is_empty() {
         if let Some(port) = state.webhook_port {
             event_destinations(&compiled, port)
         } else {
-            external_event_destinations(&compiled, &clients.event_destinations)?
+            external_event_destinations(&compiled, &clients.destinations.hooks)?
         }
     } else {
         json!({})
@@ -2114,7 +2127,7 @@ pub(super) fn runtime(root: &Path, state: &State, clients: &Clients, test: bool)
         "database":{"runtimeUrlRef":format!("secret:file/{runtime_url}"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maximumConnections":4},"roles":{"migration":MIGRATION_ROLE,"runtime":runtime_role}},
         "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"})},
         "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":&assertion_issuers,"maximumTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"type":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":authority_claims},
-        "audit":{"hashKeyRef":"secret:file/audit-key","destination":"file","path":final_root.join("audit").join(format!("{prefix}audit.jsonl"))},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations,
+        "audit":{"hashKeyRef":"secret:file/audit-key","destination":"file","path":final_root.join("audit").join(format!("{prefix}audit.jsonl"))},"cursor":{"secretRef":"secret:file/cursor-key"},"destinations":{"hooks":destinations},
         "evidenceProviders":clients.evidence_providers.iter().map(|(id, provider)| (id.clone(), json!({
             "baseUrl":provider.base_url,
             "trustBindingId":provider.trust_binding_id,

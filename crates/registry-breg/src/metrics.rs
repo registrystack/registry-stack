@@ -446,7 +446,7 @@ async fn read_queues(pool: &RuntimePool) -> Result<QueueSample, ()> {
                       WHERE p.state='submitted' AND p.submission_version=q.submission_version
                         AND p.blocked_reason='package-changed'
                         AND q.state IN ('queued','applying','blocked','cancelled'))",
-                schema = crate::webhook::DELIVERY_SCHEMA,
+                schema = crate::hooks::DELIVERY_SCHEMA,
                 submission_claimable = crate::review_store::REVIEW_SUBMISSION_CLAIMABLE,
             ),
             &[],

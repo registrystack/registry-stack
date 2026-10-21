@@ -27,6 +27,7 @@ use crate::attachment_verification_worker::AttachmentVerificationWorker;
 use crate::audit::RegistryAudit;
 use crate::auth::{AuthenticationConfigError, RegistryAuthenticator};
 use crate::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
+use crate::hooks::{HookDeliveryService, HookRetainedBindingError, HookWorker};
 use crate::metrics::{self, LastSuccess, Metrics, ProgressWorker};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use crate::model::CompiledRegistry;
@@ -40,7 +41,6 @@ use crate::postgres::{
     PostgresSnapshotReadService, RegistryLockKey, RoleMode, RuntimePool, SqlIdentifier,
 };
 use crate::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
-use crate::webhook::{WebhookDeliveryService, WebhookRetainedBindingError, WebhookWorker};
 
 /// Bounded startup refusal. Package paths, request identifiers, stored review
 /// values, and physical catalog details are intentionally unavailable through
@@ -238,7 +238,7 @@ impl WebhookStateTransitionCode {
 /// The closed set of background tasks `serve` runs beside the HTTP listener.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackgroundTask {
-    WebhookWorker,
+    HookWorker,
     AttachmentVerificationWorker,
     ReviewWorker,
     SubjectAccessLogRetention,
@@ -250,7 +250,7 @@ impl BackgroundTask {
     /// Every supervised task, used by exhaustive operational-log contract
     /// tests.
     pub const ALL: [Self; 6] = [
-        Self::WebhookWorker,
+        Self::HookWorker,
         Self::AttachmentVerificationWorker,
         Self::ReviewWorker,
         Self::SubjectAccessLogRetention,
@@ -274,8 +274,8 @@ impl BackgroundTaskStop {
 
 const fn background_task_stop_code(task: BackgroundTask, stop: BackgroundTaskStop) -> &'static str {
     match (task, stop) {
-        (BackgroundTask::WebhookWorker, BackgroundTaskStop::Panicked) => "webhook.worker.panicked",
-        (BackgroundTask::WebhookWorker, BackgroundTaskStop::Returned) => "webhook.worker.returned",
+        (BackgroundTask::HookWorker, BackgroundTaskStop::Panicked) => "webhook.worker.panicked",
+        (BackgroundTask::HookWorker, BackgroundTaskStop::Returned) => "webhook.worker.returned",
         (BackgroundTask::AttachmentVerificationWorker, BackgroundTaskStop::Panicked) => {
             "attachment_verification.worker.panicked"
         }
@@ -720,7 +720,7 @@ pub struct PreparedServer {
     bind: SocketAddr,
     app: Router,
     shutdown_grace: Duration,
-    webhook_worker: Option<WebhookWorker>,
+    webhook_worker: Option<HookWorker>,
     attachment_verification_worker: Option<AttachmentVerificationWorker>,
     review_worker: Option<crate::review_store::ReviewWorker>,
     access_log_retention: Option<(RuntimePool, Arc<LastSuccess>)>,
@@ -834,7 +834,7 @@ impl PreparedServer {
         bind: SocketAddr,
         app: Router,
         shutdown_grace: Duration,
-        webhook_worker: WebhookWorker,
+        webhook_worker: HookWorker,
     ) -> Self {
         Self {
             bind,
@@ -1512,16 +1512,22 @@ async fn finish_prepared_server(
         Some(field_encryption) => snapshots.with_field_encryption(field_encryption),
         None => snapshots,
     });
-    let hook_handlers = Arc::new(crate::hook_handler::HookHandlerRegistry::new(
-        &registry,
-        &expected.activation_id,
-    ));
+    let hook_handlers = crate::hooks::local_hook_handlers(&registry, &expected.activation_id);
+    // Local WASM hook programs run on their own hook runtime under the
+    // operator budgets and backend, apart from the action handler runtime
+    // and its module cache.
+    #[cfg(feature = "wasm")]
+    let hook_handlers = hook_handlers.with_wasm_runtime(
+        crate::hooks::hook_wasm_runtime(config.wasm_execution())
+            .map_err(|_| StartupError::RuntimeConfig(RuntimeConfigError::InvalidWasmExecution))?,
+    );
+    let hook_handlers = Arc::new(hook_handlers);
     // Every write path spends idempotency keys under the one verified issuer
     // and holds responses for the configured receipt horizon.
     let idempotency = config
         .idempotency_policy()
         .map_err(StartupError::RuntimeConfig)?;
-    let webhook_delivery = WebhookDeliveryService::new_with_runtime_bindings(
+    let webhook_delivery = HookDeliveryService::new_with_runtime_bindings(
         pool.clone(),
         Arc::clone(&event_destinations),
         hook_handlers,
@@ -1540,17 +1546,17 @@ async fn finish_prepared_server(
         .verify_retained_bindings()
         .await
         .map_err(|error| match error {
-            WebhookRetainedBindingError::Mismatch {
+            HookRetainedBindingError::Mismatch {
                 retained_deliveries,
             } => StartupError::RetainedWebhookBindings {
                 retained_deliveries,
             },
-            WebhookRetainedBindingError::Unavailable => StartupError::EventDestinations,
+            HookRetainedBindingError::Unavailable => StartupError::EventDestinations,
         })?;
     // The worker also owns payload expiry, so it runs even when the active
     // package declares no events. Compatible retained work is checked above.
     let webhook_progress = webhook_delivery.last_success();
-    let webhook_worker = Some(WebhookWorker::new(webhook_delivery));
+    let webhook_worker = Some(HookWorker::new(webhook_delivery));
     let evidence = config
         .activate_evidence(&registry)
         .map_err(StartupError::RuntimeConfig)?;
@@ -1968,7 +1974,7 @@ pub async fn serve_until_shutdown(
     });
     let mut worker = webhook_worker.map(|worker| {
         SupervisedTask::spawn(
-            BackgroundTask::WebhookWorker,
+            BackgroundTask::HookWorker,
             worker.run(worker_shutdown_rx.clone()),
             worker_shutdown_rx.clone(),
             task_stopped_tx.clone(),
@@ -2508,7 +2514,7 @@ async fn verify_pending_delivery_source(
     package_id: &str,
     instance_id: &str,
 ) -> Result<()> {
-    let expected_source = crate::webhook::delivery_source(package_id, instance_id);
+    let expected_source = crate::hooks::delivery_source(package_id, instance_id);
     let client = pool
         .get()
         .await

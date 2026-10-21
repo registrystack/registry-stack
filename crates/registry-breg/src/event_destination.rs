@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Activation of deployment bindings for governed webhook destinations.
+//! Activation of deployment bindings for governed hook destinations.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -10,9 +10,8 @@ use std::{
 
 use ipnet::IpNet;
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_config::{
-    ProtectedSecret, SecretError, SecretReference, SecretResolver, MAX_SECRET_BYTES,
-};
+use registry_platform_config::{ProtectedSecret, SecretError, SecretReference, SecretResolver};
+use registry_platform_hooks::delivery::{UrlDestination, UrlDestinationError, UrlDestinationParts};
 use registry_platform_httputil::destination::{
     DestinationDnsFamily, DestinationProfile, DestinationTlsMaterial, EventDestinationPolicy,
     EventDestinationRequestTemplate, MAX_DESTINATION_PRIVATE_CIDRS,
@@ -34,7 +33,6 @@ use crate::{
 };
 
 const DESTINATION_BINDING_SCHEMA_VERSION: &str = "breg.event-destinations/v1";
-const MIN_HMAC_SHA256_KEY_BYTES: usize = 32;
 const MAX_EVENT_REQUEST_BYTES: usize = MAX_DESTINATION_TARGET_BYTES
     + MAX_DESTINATION_REQUEST_HEADER_BYTES
     + MAX_DESTINATION_REQUEST_BODY_BYTES;
@@ -73,7 +71,7 @@ pub type Result<T> = std::result::Result<T, EventDestinationActivationError>;
 /// binding.
 pub struct ActivatedEventDestinationRegistry {
     binding_digest: String,
-    bindings: BTreeMap<String, Arc<ActivatedEventDestination>>,
+    bindings: BTreeMap<String, Arc<UrlDestination>>,
     payload_retention: Duration,
 }
 
@@ -186,17 +184,14 @@ impl ActivatedEventDestinationRegistry {
 
     /// Look up a binding only by its compiler-issued logical destination id.
     #[must_use]
-    pub fn lookup(&self, compiled_logical_id: &str) -> Option<&ActivatedEventDestination> {
+    pub fn lookup(&self, compiled_logical_id: &str) -> Option<&UrlDestination> {
         self.bindings.get(compiled_logical_id).map(Arc::as_ref)
     }
 
     /// Owned handle to a binding, for callers that carry it across an await
     /// point. Same lookup discipline as [`Self::lookup`].
     #[must_use]
-    pub fn lookup_shared(
-        &self,
-        compiled_logical_id: &str,
-    ) -> Option<Arc<ActivatedEventDestination>> {
+    pub fn lookup_shared(&self, compiled_logical_id: &str) -> Option<Arc<UrlDestination>> {
         self.bindings.get(compiled_logical_id).cloned()
     }
 
@@ -209,7 +204,7 @@ impl ActivatedEventDestinationRegistry {
                 .bindings
                 .iter()
                 .map(|(logical_id, destination)| {
-                    (logical_id.clone(), destination.binding_digest.clone())
+                    (logical_id.clone(), destination.binding_digest().to_owned())
                 })
                 .collect(),
         }
@@ -223,78 +218,6 @@ impl fmt::Debug for ActivatedEventDestinationRegistry {
             .field("binding_digest", &self.binding_digest)
             .field("binding_count", &self.bindings.len())
             .field("payload_retention", &self.payload_retention)
-            .finish()
-    }
-}
-
-/// One activated logical event destination.
-pub struct ActivatedEventDestination {
-    binding_digest: String,
-    request_target: String,
-    policy: Arc<EventDestinationPolicy>,
-    request_template: EventDestinationRequestTemplate,
-    hmac_sha256_key: ProtectedSecret,
-    attempt_timeout: Duration,
-    maximum_attempts: u8,
-}
-
-impl ActivatedEventDestination {
-    /// Digest of this exact logical destination's non-secret deployment binding.
-    #[must_use]
-    pub fn binding_digest(&self) -> &str {
-        &self.binding_digest
-    }
-
-    /// Share the only outbound authority for this logical destination.
-    #[must_use]
-    pub fn policy(&self) -> Arc<EventDestinationPolicy> {
-        Arc::clone(&self.policy)
-    }
-
-    /// Borrow the closed event request template for rendering a later delivery.
-    #[must_use]
-    pub fn request_template(&self) -> &EventDestinationRequestTemplate {
-        &self.request_template
-    }
-
-    /// Borrow the exact validated request target used by the closed template.
-    ///
-    /// Base Registry Engine binds these same bytes into its product-owned
-    /// signature, so signing and transport cannot disagree about the path.
-    #[must_use]
-    pub fn request_target(&self) -> &str {
-        &self.request_target
-    }
-
-    /// Borrow signing bytes only for the duration of the supplied operation.
-    pub fn with_hmac_sha256_key<T>(&self, use_key: impl FnOnce(&[u8]) -> T) -> T {
-        use_key(self.hmac_sha256_key.expose_secret())
-    }
-
-    /// Deployed per-attempt timeout, already proved no wider than every user.
-    #[must_use]
-    pub fn attempt_timeout(&self) -> Duration {
-        self.attempt_timeout
-    }
-
-    /// Deployed maximum attempt count, already proved no wider than every user.
-    #[must_use]
-    pub fn maximum_attempts(&self) -> u8 {
-        self.maximum_attempts
-    }
-}
-
-impl fmt::Debug for ActivatedEventDestination {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ActivatedEventDestination")
-            .field("binding_digest", &self.binding_digest)
-            .field("request_target", &"[REDACTED]")
-            .field("policy", &self.policy)
-            .field("request_template", &self.request_template)
-            .field("hmac_sha256_key", &"[REDACTED]")
-            .field("attempt_timeout", &self.attempt_timeout)
-            .field("maximum_attempts", &self.maximum_attempts)
             .finish()
     }
 }
@@ -405,11 +328,8 @@ impl EventDestinationConfig {
         logical_id: &str,
         maximum_payload_bytes: u32,
         secrets: &SecretResolver,
-    ) -> Result<ActivatedEventDestination> {
+    ) -> Result<UrlDestination> {
         let hmac_sha256_key = secrets.resolve_reference(&self.hmac_sha256_key_ref)?;
-        if !(MIN_HMAC_SHA256_KEY_BYTES..=MAX_SECRET_BYTES).contains(&hmac_sha256_key.len()) {
-            return Err(EventDestinationActivationError::InvalidSigningMaterial);
-        }
 
         let mut policy = EventDestinationPolicy::new_with_dns_family(
             logical_id,
@@ -443,23 +363,22 @@ impl EventDestinationConfig {
 
         let maximum_payload_bytes = usize::try_from(maximum_payload_bytes)
             .map_err(|_| EventDestinationActivationError::InvalidBinding)?;
-        let request_template = EventDestinationRequestTemplate::event_delivery(
-            &self.path,
-            maximum_payload_bytes,
-            MAX_EVENT_REQUEST_BYTES,
-        )
-        .map_err(|_| EventDestinationActivationError::InvalidBinding)?;
-
-        Ok(ActivatedEventDestination {
+        UrlDestination::new(UrlDestinationParts {
             binding_digest: self.binding_digest(logical_id)?,
             request_target: self.path.clone(),
-            policy: Arc::new(policy),
-            request_template,
+            policy,
+            maximum_payload_bytes,
             hmac_sha256_key,
             attempt_timeout: Duration::from_millis(u64::from(
                 self.delivery_ceilings.attempt_timeout_milliseconds,
             )),
             maximum_attempts: self.delivery_ceilings.maximum_attempts,
+        })
+        .map_err(|error| match error {
+            UrlDestinationError::InvalidBinding => EventDestinationActivationError::InvalidBinding,
+            UrlDestinationError::InvalidSigningMaterial => {
+                EventDestinationActivationError::InvalidSigningMaterial
+            }
         })
     }
 

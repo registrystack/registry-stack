@@ -1032,7 +1032,7 @@ bindings:
                     EventDestinationActivationError::InventoryMismatch,
                 ),
                 "test.event-destinations.inventory-mismatch",
-                "eventDestinations",
+                "destinations.hooks",
             ),
         ];
         for error in [
@@ -1045,7 +1045,7 @@ bindings:
             cases.push((
                 SchemaTestRuntimeSetupError::EventDestinations(error),
                 "test.event-destinations.activation-failed",
-                "eventDestinations",
+                "destinations.hooks",
             ));
         }
         for (error, code, path) in cases {

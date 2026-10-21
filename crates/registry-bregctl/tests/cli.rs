@@ -2668,18 +2668,19 @@ fieldEncryption:
     unixSocketPath: ${BREG_CHECK_TEST_TRANSIT_SOCKET}
     mount: transit
     keyName: breg-field-dek
-eventDestinations:
-  case-operations:
-    origin: ${BREG_CHECK_TEST_EVENTS_ORIGIN}
-    path: ${BREG_CHECK_TEST_EVENTS_PATH}
-    networkProfile: production-https
-    dnsFamily: dual-stack-strict
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/event-hmac-key
-    classificationCeiling: restricted
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: 4000
-      maximumAttempts: 4
+destinations:
+  hooks:
+    case-operations:
+      origin: ${BREG_CHECK_TEST_EVENTS_ORIGIN}
+      path: ${BREG_CHECK_TEST_EVENTS_PATH}
+      networkProfile: production-https
+      dnsFamily: dual-stack-strict
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/event-hmac-key
+      classificationCeiling: restricted
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 4000
+        maximumAttempts: 4
 evidenceProviders:
   civil:
     baseUrl: ${BREG_CHECK_TEST_EVIDENCE_URL}
