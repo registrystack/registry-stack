@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::access::DocumentAction;
 use crate::custody::{ContentType, DocumentStatus, PolicyBinding};
 use crate::problem::{type_uri, ProblemCode};
+use crate::project::ActorKind;
 
 /// The most bytes a document label may hold.
 pub const MAXIMUM_LABEL_BYTES: usize = 256;
@@ -187,12 +188,15 @@ pub struct IssueGrantRequest {
     pub expiry_hours: Option<u32>,
 }
 
-/// The recipient a grant names: a subject at the configured token issuer.
+/// The recipient a grant names: a subject at the configured token issuer,
+/// and the actor kind a caller must resolve to for the grant to release
+/// anything to it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GranteeRef {
     pub subject: ExternalId,
+    pub kind: ActorKind,
 }
 
 /// Where a grant stands.
@@ -358,17 +362,20 @@ mod tests {
     }
 
     #[test]
-    fn a_grant_request_names_one_version_and_one_subject() {
+    fn a_grant_request_names_one_version_and_one_subject_of_one_kind() {
         let request: IssueGrantRequest = serde_json::from_value(json!({
             "versionId": "v",
-            "grantee": {"subject": "reader-1"},
+            "grantee": {"subject": "reader-1", "kind": "human"},
         }))
         .unwrap();
         assert_eq!(request.expiry_hours, None);
+        assert_eq!(request.grantee.kind, ActorKind::Human);
         for refused in [
-            json!({"versionId": "v", "grantee": {"subject": "r", "issuer": "x"}}),
+            json!({"versionId": "v", "grantee": {"subject": "r"}}),
+            json!({"versionId": "v", "grantee": {"subject": "r", "kind": "organization"}}),
+            json!({"versionId": "v", "grantee": {"subject": "r", "kind": "human", "issuer": "x"}}),
             json!({"versionId": "v", "grantee": {"organization": "x"}}),
-            json!({"versionId": "v", "grantee": {"subject": "r"}, "renewable": true}),
+            json!({"versionId": "v", "grantee": {"subject": "r", "kind": "human"}, "renewable": true}),
         ] {
             assert!(serde_json::from_value::<IssueGrantRequest>(refused).is_err());
         }
