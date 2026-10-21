@@ -1,0 +1,83 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/documents/runtime/runtime.v1alpha1.schema.json
+# A complete Document Store runtime configuration: the document
+# `documents --runtime-config <file> serve` reads and
+# `documentsctl check --runtime-config <file>` checks.
+# Every configured path must be absolute. Secret members (ending in Ref) take
+# only a literal secret reference.
+apiVersion: id.registrystack.org/formats/documents/runtime/v1alpha1
+kind: DocumentsRuntimeConfig
+identity:
+  # The one database this deployment owns.
+  databaseId: registry-documents-production
+package:
+  # The directory holding the deployment's documents.yaml.
+  root: /srv/registry-documents/package
+  # expectedDigest: sha256:<64 lowercase hex digits>
+listener:
+  bind: 127.0.0.1:8116
+  tlsTermination: operator-controlled-upstream
+  networkExposure: private-address
+secretProviders:
+  file:
+    root: /run/secrets/registry-documents
+  # environment: {}
+database:
+  runtimeUrlRef: secret:file/runtime-database-url
+  migrationUrlRef: secret:file/migration-database-url
+  # trustedRootCertificateRef: secret:file/postgres-ca.pem
+authentication:
+  oidc:
+    issuer: https://identity.example.test/realms/registry
+    audience: urn:example:documents
+    scopeClaim: scope
+    # Required; `unrestricted` is a startup refusal.
+    allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]
+    # jwksSource:
+    #   type: static
+    #   documentRef: secret:file/jwks.json
+audit:
+  destination: file
+  path: /var/lib/registry-documents/audit.ndjson
+  hashKeyRef: secret:file/documents-audit-key
+storage:
+  # Document version bytes held in PostgreSQL. maximumDocumentBytes is the
+  # deployment ceiling; a policy's mandatory restriction may only be lower.
+  type: database
+  maximumDocumentBytes: 16777216
+  # S3-compatible object storage, the same keys Base Registry Engine reads
+  # under attachmentStorage. The binding is pinned at the first upload.
+  # type: s3
+  # url: https://objects.example.test
+  # bucket: registry-documents
+  # region: eu-west-1
+  # pathStyle: true
+  # accessKeyIdRef: secret:file/s3-access-key-id
+  # secretAccessKeyRef: secret:file/s3-secret-access-key
+  # caBundleRef: secret:file/s3-ca.pem
+  # attemptTimeoutMilliseconds: 10000
+  # maximumDocumentBytes: 104857600
+contentVerification:
+  # Required: no document version becomes releasable until this verifier
+  # accepts it. The keys match Base Registry Engine attachmentVerification.
+  # An omitted member is refused; `type: disabled` is accepted only beside
+  # `tlsTermination: development-loopback`.
+  type: http
+  url: https://scanner.example.test/v1/verify
+  authorizationRef: secret:file/content-verifier-authorization
+  policyId: documents-default
+  attemptTimeoutMilliseconds: 10000
+cleanup:
+  # paused stops erasure work; expired and revoked document grants stop
+  # releasing bytes regardless.
+  erasure: active
+destinations:
+  hooks:
+    custodian-events:
+      url: https://civil-registry.example.test/document-events
+      hmacSha256KeyRef: secret:file/custodian-events-hmac
+      attemptTimeoutMilliseconds: 5000
+      maximumAttempts: 8
+retention:
+  # Seven days is a placeholder, not a jurisdictional recommendation.
+  receiptRetentionDays: 7
+  hookPayloadRetentionDays: 7

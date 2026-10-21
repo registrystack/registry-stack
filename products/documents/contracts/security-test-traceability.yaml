@@ -1,0 +1,56 @@
+contract: registry.documents.security-test-traceability/v1
+scope: bootstrap
+executionStatus: not-recorded
+note: >-
+  Every entry names the tests that carry its invariant. A pending invariant
+  has no entry until the work package that enforces it adds its tests. Tests
+  under crates/registry-documents/tests run only with the postgres-test
+  feature and a disposable database. This file records the obligation, not a
+  passing run.
+entries:
+  - id: DOCUMENTS-SEC-01
+    tests:
+      - {path: crates/registry-documents/src/runtime.rs, name: a_refused_document_reports_every_finding_before_anything_binds}
+      - {path: crates/registry-documents/src/config.rs, name: an_unknown_member_is_refused_by_the_shared_reader}
+      - {path: crates/registry-documentsctl/src/lib.rs, name: a_refused_project_is_reported_at_its_member_and_exits_one}
+  - id: DOCUMENTS-SEC-02
+    tests:
+      - {path: crates/registry-documents/src/http.rs, name: every_other_route_is_not_found}
+      - {path: crates/registry-documents/src/http.rs, name: another_method_on_health_is_refused}
+      - {path: crates/registry-documents/src/http.rs, name: health_answers_without_a_credential}
+      - {path: crates/registry-documents/src/http.rs, name: the_trace_is_echoed_on_a_refusal}
+      - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_prepared_runtime_answers_health_and_refuses_every_other_route}
+  - id: DOCUMENTS-SEC-03
+    tests:
+      - {path: crates/registry-documents/src/config.rs, name: plaintext_database_is_refused_outside_test_builds}
+  - id: DOCUMENTS-SEC-04
+    tests:
+      - {path: crates/registry-documents/src/config.rs, name: disabled_content_verification_requires_development_loopback}
+  - id: DOCUMENTS-SEC-05
+    tests:
+      - {path: crates/registry-documents/src/config.rs, name: unrestricted_clients_are_refused}
+  - id: DOCUMENTS-SEC-06
+    tests:
+      - {path: crates/registry-documentsctl/src/lib.rs, name: a_refused_runtime_configuration_names_the_finding_without_the_value}
+      - {path: crates/registry-documents/src/config.rs, name: a_reference_to_a_disabled_provider_is_refused}
+      - {path: crates/registry-documentsctl/src/report.rs, name: a_validator_reason_is_the_message_unless_it_repeats_the_value}
+  - id: DOCUMENTS-SEC-07
+    tests:
+      - {path: crates/registry-documents-client/tests/http_boundary.rs, name: a_problem_whose_trace_disagrees_is_a_protocol_failure}
+      - {path: crates/registry-documents-client/tests/http_boundary.rs, name: a_problem_whose_status_disagrees_with_its_code_is_a_protocol_failure}
+      - {path: crates/registry-documents-client/tests/http_boundary.rs, name: a_failure_that_is_not_a_problem_is_a_protocol_failure}
+      - {path: crates/registry-documents-client/tests/http_boundary.rs, name: a_healthy_answer_without_a_trace_is_a_protocol_failure}
+      - {path: crates/registry-documents-client/tests/http_boundary.rs, name: a_healthy_answer_with_a_body_is_a_protocol_failure}
+      - {path: crates/registry-documents-client/src/client.rs, name: debug_withholds_url_and_certificate_material}
+      - {path: crates/registry-documents-core/src/wire.rs, name: a_problem_that_differs_from_the_vocabulary_is_not_recognized}
+  - id: DOCUMENTS-SEC-08
+    tests:
+      - {path: crates/registry-documents/src/config.rs, name: a_plaintext_hook_destination_is_refused_outside_development}
+      - {path: crates/registry-documentsctl/src/lib.rs, name: a_refused_runtime_configuration_names_the_finding_without_the_value}
+  - id: DOCUMENTS-SEC-11
+    tests:
+      - {path: crates/registry-documents/src/config.rs, name: shared_runtime_loader_refuses_environment_expressions_in_secret_references}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_substitution_expression_is_refused_in_the_authored_file}
+  - id: DOCUMENTS-SEC-12
+    tests:
+      - {path: crates/registry-documents-core/src/project.rs, name: an_empty_scope_or_client_list_is_refused_at_its_member}

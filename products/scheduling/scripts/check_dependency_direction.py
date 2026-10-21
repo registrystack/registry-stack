@@ -11,7 +11,12 @@ from pathlib import Path
 
 # The runtime products whose protocol surfaces must never reach a scheduling
 # crate, directly or through any shared dependency.
-PRODUCT_PREFIXES = ("registry-breg", "registry-casework", "registry-evidence")
+PRODUCT_PREFIXES = (
+    "registry-breg",
+    "registry-casework",
+    "registry-documents",
+    "registry-evidence",
+)
 
 # The Coordinator composes products through their public clients. It may use
 # the Scheduling client and core, never the runtime or adopter tooling, and no

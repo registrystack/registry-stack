@@ -1,0 +1,62 @@
+apiVersion: registry.registrystack.org/product-contract/v1
+product: documents
+scope: bootstrap
+purpose: >-
+  Behaviour a reader could reasonably mistake for an oversight, recorded as a
+  deliberate choice with the reasoning that settled it. A later change may
+  overturn any of these, but it overturns the entry in the same commit rather
+  than rediscovering the question.
+decisions:
+  - id: DOCUMENTS-DEC-01
+    subject: The runtime serves only its health route
+    decision: >-
+      The bootstrap runtime reads and checks the whole target configuration,
+      confirms its database answers, and serves GET /health. Every other route
+      answers request.not-found.
+    reasoning: >-
+      The product is wired end to end, with CI, release hold-out, schemas,
+      problem catalog, and tooling, before any document behaviour exists. A
+      route without the authorization and verification rules that govern it
+      would be worse than no route.
+    evidence:
+      - {path: crates/registry-documents/src/http.rs, name: every_other_route_is_not_found}
+      - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_prepared_runtime_answers_health_and_refuses_every_other_route}
+  - id: DOCUMENTS-DEC-02
+    subject: The runtime has no migrations and checks its database with one query
+    decision: >-
+      The runtime owns no tables yet. Startup connects with the runtime
+      credential and runs one trivial query before it binds; a database that
+      refuses the connection stops the runtime.
+    reasoning: >-
+      Schema arrives with the document model in WP3. Checking the connection
+      now keeps the startup order the later runtime needs: configuration,
+      database, then the listener.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_runtime_whose_database_refuses_the_credential_does_not_start}
+  - id: DOCUMENTS-DEC-03
+    subject: Storage and content verification settings are product-local for now
+    decision: >-
+      The storage and contentVerification members are typed inside the
+      Document Store runtime configuration rather than read through shared
+      platform blocks.
+    reasoning: >-
+      The shared object storage and verifier configuration is being extracted
+      separately. The members keep the target names and shapes so the swap to
+      the shared blocks changes no document an operator writes.
+    evidence:
+      - {path: crates/registry-documents/src/config.rs, name: the_starter_runtime_document_is_accepted}
+      - {path: crates/registry-documents/src/config.rs, name: a_storage_ceiling_above_the_product_bound_is_out_of_range}
+  - id: DOCUMENTS-DEC-04
+    subject: The project file is parsed and bounded but not cross-checked
+    decision: >-
+      documentsctl check reads documents.yaml against its schema and bounds,
+      and refuses unknown members and repeated hook ids, but does not yet
+      check references between policies, profiles, and hooks.
+    reasoning: >-
+      The meaning of those references is defined by the document model and
+      access rules, which arrive in WP3 and WP4. Checking them earlier would
+      freeze rules that are not designed yet.
+    evidence:
+      - {path: crates/registry-documents-core/src/project.rs, name: an_unknown_member_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_repeated_hook_id_is_refused}
+      - {path: crates/registry-documentsctl/src/lib.rs, name: the_starter_project_and_runtime_check_clean}
