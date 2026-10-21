@@ -246,6 +246,10 @@ DOCUMENTS_TEST_DATABASE_URL=<disposable database> cargo test --locked \
   --test postgres_s3
 DOCUMENTS_TEST_DATABASE_URL=<disposable database> cargo test --locked \
   -p registry-documentsctl --features postgres-test --test postgres_cli
+cargo build --locked -p registry-render
+DOCUMENTS_TEST_DATABASE_URL=<disposable database> \
+  REGISTRY_RENDER_BIN="$PWD/target/debug/registry-render" cargo test --locked \
+  -p registry-documents --features postgres-test --test postgres_journey
 ```
 
 The checkpoint runs the dependency-direction and database-isolation gates,
@@ -254,3 +258,11 @@ offline `documentsctl` refusal cases. The PostgreSQL suites need a disposable
 database and fail, rather than skip, without `DOCUMENTS_TEST_DATABASE_URL`.
 Each test runs in its own schema. `postgres_s3` runs the S3 storage branch
 against a loopback fake object store and HTTP verifier it starts itself.
+`postgres_journey` is the golden journey over a real socket: a letter
+rendered by the `registry-render` binary is reserved under the digest Registry
+Render reported, uploaded into a citizen's custody, shared by the citizen with
+one named recipient, downloaded byte for byte, and kept after the share
+expires and the sweep runs. It fails, rather than skips, without
+`REGISTRY_RENDER_BIN`. The database-isolation gate also refuses a suite that
+reads its database variable without failing when it is absent, or that
+ignores a test.
