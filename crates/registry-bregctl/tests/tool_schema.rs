@@ -106,6 +106,23 @@ fn example_scenario_schema_uses_bounded_display_text() {
     }
 }
 
+#[test]
+fn model_selection_registry_title_uses_display_text() {
+    let documents = documents().expect("the tool schemas generate");
+    let schema = compile(&documents["model-selection.v1alpha1.schema.json"]);
+    let valid = example("crates/registry-linkml/publicschema/starters/household.yaml");
+    for accepted in ["Registry שלום\u{200f}", "ทะเบียนประชาชน"] {
+        let mut changed = valid.clone();
+        changed["registry"]["title"] = Value::from(accepted);
+        assert!(schema.is_valid(&changed), "{accepted:?}");
+    }
+    for refused in ["unsafe\u{202e}text", "unsafe\u{2028}text"] {
+        let mut changed = valid.clone();
+        changed["registry"]["title"] = Value::from(refused);
+        assert!(!schema.is_valid(&changed), "{refused:?}");
+    }
+}
+
 /// Every committed file under `root` named `name`, outside hidden
 /// directories.
 fn committed(root: &str, name: &str) -> Vec<String> {

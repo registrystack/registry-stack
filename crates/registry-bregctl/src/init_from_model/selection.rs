@@ -92,6 +92,11 @@ pub(crate) struct RegistrySelection {
     // local identifier grammar.
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    #[serde(deserialize_with = "registry_platform_yaml::display_text")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::DisplayText")
+    )]
     pub title: String,
 }
 
@@ -232,6 +237,21 @@ recordTypes:
         assert_eq!(selection.entities[0].id, None);
         assert_eq!(selection.entities[0].properties[0].name, "label");
         assert!(selection.vocabularies.is_empty());
+    }
+
+    #[test]
+    fn the_registry_title_is_display_text_at_the_reader_boundary() {
+        let document = MINIMAL.replace("title: Example", "title: safe\u{202e}text");
+        let report = Selection::parse("selection.yaml", document.as_bytes())
+            .expect_err("hidden text direction is refused");
+        let diagnostic = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "config.invalid-value")
+            .expect("the DisplayText refusal is retained");
+        assert_eq!(diagnostic.path, "/registry/title");
+        let source = diagnostic.source.as_ref().expect("positioned");
+        assert_eq!((source.line, source.column), (Some(7), Some(10)));
     }
 
     #[test]

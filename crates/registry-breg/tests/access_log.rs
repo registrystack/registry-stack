@@ -353,6 +353,65 @@ fn exemptions_name_read_profiles_and_bounded_policy_text() {
     too_long["recordTypes"][0]["accessLog"]["exemptions"]["investigator"]["reason"] =
         json!("x".repeat(257));
     assert_refused(&too_long, "breg.access-log.exemption-reason-invalid");
+
+    let mut hidden_direction = source();
+    hidden_direction["recordTypes"][0]["accessLog"]["exemptions"]["investigator"]["reason"] =
+        json!("active\u{202e}investigation");
+    let report = parse_project_json(&serde_json::to_vec(&hidden_direction).unwrap())
+        .expect_err("the source reader refuses hidden text direction");
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "config.invalid-value")
+        .expect("the DisplayText refusal is retained");
+    assert_eq!(
+        diagnostic.path,
+        "project.recordTypes[0].accessLog.exemptions.investigator.reason"
+    );
+
+    let mut directly_constructed =
+        parse_project_json(&serde_json::to_vec(&source()).unwrap()).expect("source parses");
+    directly_constructed.entities[0]
+        .access_log
+        .as_mut()
+        .unwrap()
+        .exemptions
+        .get_mut("investigator")
+        .unwrap()
+        .reason = "active\u{202e}investigation".to_owned();
+    let failure = compile_project(&directly_constructed, &[], CompileProfile::Authoring)
+        .expect_err("directly constructed hidden text direction is refused");
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.access-log.exemption-reason-invalid"));
+}
+
+#[cfg(feature = "schema")]
+#[test]
+fn exemption_reason_schema_composes_display_text_and_existing_length_bounds() {
+    let documents = registry_breg::schema::documents().expect("authoring schemas generate");
+    let schema: Value =
+        serde_json::from_str(&documents[registry_breg::schema::REGISTRY_PROJECT_SCHEMA_FILE])
+            .expect("the project schema is JSON");
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .expect("the project schema compiles");
+    let reason = |text: &str| {
+        let mut value = source();
+        value["recordTypes"][0]["accessLog"]["exemptions"]["investigator"]["reason"] = json!(text);
+        value
+    };
+
+    assert!(validator.is_valid(&reason("تحقيق نشط\u{200f}")));
+    for refused in [
+        reason("active\u{202e}investigation"),
+        reason(""),
+        reason(&"x".repeat(257)),
+    ] {
+        assert!(!validator.is_valid(&refused));
+    }
 }
 
 #[test]
