@@ -8447,6 +8447,199 @@
       ]
     },
     {
+      "name": "documents",
+      "invocation": "documents",
+      "about": "Run the Registry Stack Document Store",
+      "long_about": null,
+      "usage": "documents --runtime-config <ABSOLUTE_FILE> <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "--runtime-config <ABSOLUTE_FILE>",
+          "description": "Runtime configuration file",
+          "always_required": true,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "serve",
+          "invocation": "documents serve",
+          "about": "Run the Document Store HTTP service",
+          "long_about": null,
+          "usage": "documents --runtime-config <ABSOLUTE_FILE> serve",
+          "arguments": [],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "name": "documentsctl",
+      "invocation": "documentsctl",
+      "about": "Registry Stack Document Store adopter and local operator tooling",
+      "long_about": null,
+      "usage": "documentsctl [OPTIONS] <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "--format <FORMAT>",
+          "description": "Emit the selected command's report in this format",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [
+            "human"
+          ],
+          "possible_values": [
+            "human",
+            "json"
+          ],
+          "environment": null
+        },
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "check",
+          "invocation": "documentsctl check",
+          "about": "Check a project, a runtime configuration, or both, offline",
+          "long_about": null,
+          "usage": "documentsctl check [OPTIONS] <--project <DIRECTORY>|--runtime-config <FILE>>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--project <DIRECTORY>",
+              "description": "The project directory holding documents.yaml",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--environment",
+              "description": "Substitute `${VAR}` references in the runtime configuration from the environment instead of checking them as stand-ins",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--deny-warnings",
+              "description": "Refuse the check when it finds a warning",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "required-one-or-more",
+              "when": null,
+              "arguments": [
+                "--project <DIRECTORY>",
+                "--runtime-config <FILE>"
+              ]
+            },
+            {
+              "kind": "requires-all",
+              "when": "--environment",
+              "arguments": [
+                "--runtime-config <FILE>"
+              ]
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "name": "evidence",
       "invocation": "evidence",
       "about": "Registry Evidence Version 1",

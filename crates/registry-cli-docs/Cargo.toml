@@ -29,5 +29,7 @@ registry-scheduling.workspace = true
 registry-schedulingctl.workspace = true
 registry-messaging.workspace = true
 registry-messagingctl.workspace = true
+registry-documents.workspace = true
+registry-documentsctl.workspace = true
 serde.workspace = true
 serde_json.workspace = true
