@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Every file of the starter, by its path relative to the new directory.
 pub(crate) const FILES: [(&str, &str); 2] = [
@@ -19,6 +19,18 @@ pub(crate) const FILES: [(&str, &str); 2] = [
         include_str!("../../../products/documents/examples/starter/runtime.example.yaml"),
     ),
 ];
+
+/// The package directory the next steps suggest for a starter written to
+/// `directory`: a sibling named after it, so packaging never writes into
+/// the project it reads.
+pub(crate) fn package_beside(directory: &Path) -> PathBuf {
+    let mut name = directory
+        .file_name()
+        .map(std::ffi::OsStr::to_os_string)
+        .unwrap_or_else(|| "documents".into());
+    name.push("-package");
+    directory.with_file_name(name)
+}
 
 #[derive(Debug)]
 pub(crate) enum InitError {

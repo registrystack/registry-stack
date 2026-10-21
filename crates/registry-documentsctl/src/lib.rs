@@ -564,17 +564,25 @@ fn command_path(command: &Command) -> &'static str {
 
 fn init(directory: &Path) -> Outcome {
     match starter::write(directory) {
-        Ok(created) => Outcome::new(
-            json!({
-                "directory": directory,
-                "created": created,
-                "next": [
-                    "Run documentsctl check --project DIRECTORY --runtime-config DIRECTORY/runtime.example.yaml.",
-                    "Run documentsctl package DIRECTORY --output PACKAGE, point runtime.yaml at PACKAGE and pin its digest, run documentsctl plan, then documentsctl apply, then documents serve.",
-                ],
-            }),
-            View::Init,
-        ),
+        Ok(created) => {
+            // The steps name the directory as the caller gave it, so they
+            // can be pasted from where init ran.
+            let package = starter::package_beside(directory);
+            let (project, output) = (shell_word(directory), shell_word(&package));
+            let runtime = shell_word(&directory.join("runtime.example.yaml"));
+            Outcome::new(
+                json!({
+                    "directory": directory,
+                    "created": created,
+                    "package": package,
+                    "next": [
+                        format!("Run documentsctl check --project {project} --runtime-config {runtime}."),
+                        format!("Run documentsctl package {project} --output {output}, point runtime.yaml at {output} and pin its digest, run documentsctl plan, then documentsctl apply, then documents serve."),
+                    ],
+                }),
+                View::Init,
+            )
+        }
         Err(starter::InitError::Exists) => Outcome::refused(
             DOMAIN_REFUSAL_EXIT,
             "init.exists",
@@ -587,6 +595,21 @@ fn init(directory: &Path) -> Outcome {
             "/",
             format!("the starter could not be written: {}", error.kind()),
         ),
+    }
+}
+
+/// `path` as one shell word: bare when every character is safe unquoted,
+/// otherwise single-quoted, so a step can be pasted as written.
+fn shell_word(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    let safe = !text.is_empty()
+        && text
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "/._-+:@%,=".contains(character));
+    if safe {
+        text.into_owned()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
     }
 }
 
@@ -1138,6 +1161,45 @@ mod tests {
         assert_eq!(report["status"], "domain-refusal");
         assert_eq!(report["diagnostics"][0]["code"], "init.exists");
         assert_eq!(report["diagnostics"][0]["artifact"], "filesystem");
+    }
+
+    #[test]
+    fn init_names_the_directory_it_wrote_and_its_package_in_each_next_step() {
+        let parent = scratch();
+        let directory = parent.path().join("project");
+        let target = directory.to_str().unwrap();
+        let package = parent.path().join("project-package");
+        let package = package.to_str().unwrap();
+        let (code, report) = json_report(&["init", target]);
+        assert_eq!(code, ExitCode::SUCCESS, "{report:#}");
+        assert_eq!(report["package"], package);
+        assert_eq!(
+            report["next"],
+            json!([
+                format!(
+                    "Run documentsctl check --project {target} --runtime-config {target}/runtime.example.yaml."
+                ),
+                format!(
+                    "Run documentsctl package {target} --output {package}, point runtime.yaml at {package} and pin its digest, run documentsctl plan, then documentsctl apply, then documents serve."
+                ),
+            ])
+        );
+
+        let other = parent.path().join("with space");
+        let (code, stdout, _) = run(&[OsStr::new("init"), other.as_os_str()]);
+        assert_eq!(code, ExitCode::SUCCESS);
+        let quoted = format!("'{}'", other.display());
+        assert!(
+            stdout.contains(&format!(
+                "next: Run documentsctl check --project {quoted} --runtime-config '{}/runtime.example.yaml'.\n",
+                other.display()
+            )),
+            "{stdout}"
+        );
+        assert!(
+            !stdout.contains("DIRECTORY") && !stdout.contains("PACKAGE"),
+            "{stdout}"
+        );
     }
 
     #[test]
