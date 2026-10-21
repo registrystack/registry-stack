@@ -75,6 +75,8 @@ jobs:
       scheduling_contracts: ${{ steps.filter.outputs.scheduling_contracts }}
       messaging_contracts: ${{ steps.filter.outputs.messaging_contracts }}
       messaging_postgres: ${{ steps.filter.outputs.messaging_postgres }}
+      documents_contracts: ${{ steps.filter.outputs.documents_contracts }}
+      documents_postgres: ${{ steps.filter.outputs.documents_postgres }}
       coordinator: ${{ steps.filter.outputs.coordinator }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
@@ -1128,6 +1130,75 @@ jobs:
           MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
         run: products/messaging/scripts/test-dev.sh
 
+  documents-contracts:
+    name: Document Store product contracts
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.documents_contracts == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.11.16"
+
+      - name: Document Store contract consistency
+        run: uv run --no-project --with PyYAML==6.0.2 products/documents/scripts/check-contracts.sh
+
+  documents-postgres:
+    name: Document Store PostgreSQL runtime
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.documents_postgres == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_DB: documents
+          POSTGRES_USER: documents
+          POSTGRES_PASSWORD: documents_test
+        options: >-
+          --health-cmd "pg_isready -U documents -d documents"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Rust cache
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.11.16"
+
+      - name: Build the Document Store operator tool
+        run: cargo build --locked -p registry-documentsctl
+      - name: Verify Document Store product contracts and offline configuration checks
+        env:
+          DOCUMENTSCTL_BIN: ${{ github.workspace }}/target/debug/documentsctl
+        run: uv run --no-project --with PyYAML==6.0.2 products/documents/scripts/check-checkpoint.sh
+      - name: Verify database readiness and the served runtime
+        env:
+          DOCUMENTS_TEST_DATABASE_URL: postgresql://documents:documents_test@localhost:${{ job.services.postgres.ports['5432'] }}/documents
+        run: cargo test --locked -p registry-documents --features postgres-test --test postgres_startup
+
   coordinator-postgres:
     name: Coordinator PostgreSQL runtime
     needs: [changes, rust-policy]
@@ -1674,6 +1745,7 @@ jobs:
           -p registry-bregctl -p registry-caseworkctl -p registry-schedulingctl
           -p registry-coordinator
           -p registry-messagingctl -p registry-discoveryctl -p registry-render
+          -p registry-documentsctl
           -p registry-evidence -p registry-evidencectl -p registry-manifest-cli
           -p registry-breg-mcp -p registry-breg-review -p registry-evidence-oid4vci
 
@@ -1700,6 +1772,8 @@ jobs:
       - messaging-postgres
       - messaging-contracts
       - messaging-smtp
+      - documents-contracts
+      - documents-postgres
       - coordinator-postgres
       - config-conformance
     runs-on: ubuntu-slim
@@ -2972,6 +3046,8 @@ jobs:
       - messaging-postgres
       - messaging-contracts
       - messaging-smtp
+      - documents-contracts
+      - documents-postgres
       - coordinator-postgres
       - config-conformance
       - release-tool

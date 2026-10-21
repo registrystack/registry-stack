@@ -162,6 +162,34 @@ class MonorepoSourceModelTest(unittest.TestCase):
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn(name, result.stderr)
 
+    def test_requires_every_document_store_source_path(self) -> None:
+        for path, name in (
+            ("crates/registry-documents-core", "registry-documents core crate"),
+            ("crates/registry-documents", "registry-documents runtime crate"),
+            ("crates/registry-documentsctl", "registry-documentsctl crate"),
+            ("crates/registry-documents-client", "registry-documents client crate"),
+            (
+                "products/documents/generated/runtime/runtime.schema.json",
+                "registry-documents runtime schema",
+            ),
+            (
+                "products/documents/generated/registry-documents.openapi.json",
+                "registry-documents HTTP contract",
+            ),
+        ):
+            with self.subTest(path=path):
+                with MonorepoFixture() as stack_root:
+                    target = stack_root / path
+                    if target.is_dir():
+                        shutil.rmtree(target)
+                    else:
+                        target.unlink()
+
+                    result = run_validator(stack_root)
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(name, result.stderr)
+
     def test_requires_every_scheduling_client_crate(self) -> None:
         for crate, name in (
             ("registry-scheduling-client", "registry-scheduling client crate"),
@@ -345,6 +373,10 @@ class MonorepoFixture:
             "crates/registry-stack-client-node",
             "crates/registry-stack-client-py",
             "crates/registry-coordinator",
+            "crates/registry-documents-core",
+            "crates/registry-documents",
+            "crates/registry-documentsctl",
+            "crates/registry-documents-client",
         ):
             (stack_root / crate_dir).mkdir(parents=True)
             (stack_root / crate_dir / ".keep").write_text("", encoding="utf-8")
@@ -353,6 +385,13 @@ class MonorepoFixture:
         coordinator.mkdir(parents=True)
         (coordinator / "DEPLOYMENT.md").write_text("Coordinator deployment runbook\n", encoding="utf-8")
         for source in ("crates/registry-coordinator/src/main.rs", "crates/registry-coordinator/src/ctl.rs", "products/coordinator/generated/runtime/runtime.schema.json", "products/coordinator/generated/openapi/coordinator.openapi.json"):
+            target = stack_root / source
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("test source\n", encoding="utf-8")
+        for source in (
+            "products/documents/generated/runtime/runtime.schema.json",
+            "products/documents/generated/registry-documents.openapi.json",
+        ):
             target = stack_root / source
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("test source\n", encoding="utf-8")
