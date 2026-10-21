@@ -2283,3 +2283,66 @@ async fn an_upload_to_an_unknown_or_another_caller_s_reservation_is_journalled()
         assert_eq!(refusal["record"]["code"], "resource.not-found");
     }
 }
+
+#[tokio::test]
+async fn the_journal_records_no_unchecked_text_from_a_request() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let oversized = "X".repeat(64 * 1024);
+    let content = pdf(256, 16);
+    api.reserve_body(
+        APP,
+        "oversized-policy",
+        &reservation_body(&oversized, CITIZEN.subject, &sha256(&content), 256, PDF),
+    )
+    .await
+    .assert_problem(ProblemCode::DocumentPolicyUnknown);
+    api.reserve_body(
+        APP,
+        "oversized-media-type",
+        &reservation_body(
+            "citizen-delivery",
+            CITIZEN.subject,
+            &sha256(&content),
+            256,
+            &oversized,
+        ),
+    )
+    .await
+    .assert_problem(ProblemCode::DocumentContentTypeNotAllowed);
+    let (document, _) = ready(&prepared, &api, &content).await;
+    api.send_json(
+        APP,
+        axum::http::Method::POST,
+        &format!("/documents/{document}/grants"),
+        Some("oversized-version"),
+        &json!({"versionId": oversized, "grantee": {"subject": READER.subject, "kind": "human"}}),
+    )
+    .await
+    .assert_problem(ProblemCode::ResourceNotFound);
+
+    let journal = std::fs::read_to_string(deployment.audit_path()).unwrap();
+    assert!(
+        !journal.contains("XXXX"),
+        "the journal recorded an unchecked request value"
+    );
+    let entries = deployment.audit_entries();
+    let begun = |event: &str, field: &str| {
+        entries
+            .iter()
+            .filter(|entry| entry["record"]["event"] == event)
+            .filter_map(|entry| entry["record"][field].as_str().map(str::to_owned))
+            .collect::<Vec<_>>()
+    };
+    let policies = begun("documents.upload-reservation", "policyId");
+    assert_eq!(policies[0], "unparsed");
+    assert_eq!(policies[1], "citizen-delivery");
+    let media_types = begun("documents.upload-reservation", "mediaType");
+    assert_eq!(media_types[0], PDF);
+    assert_eq!(media_types[1], "unparsed");
+    assert_eq!(
+        begun("documents.grant-issue", "versionId").last().unwrap(),
+        "unparsed"
+    );
+}

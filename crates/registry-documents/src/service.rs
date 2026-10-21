@@ -23,9 +23,9 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use futures::Stream;
 use registry_documents_core::{
     admit_reservation, allowed_actions, check_custodian_quota, place_custody, standing, ActorKind,
-    Caller, CustodianRef, Custody, CustodyAsk, DocumentPage, DocumentPolicy, DocumentPolicyList,
-    DocumentPolicyView, DocumentStatus, DocumentVersionView, DocumentView, DocumentsProject,
-    Eligibility, PolicyBinding, ProblemCode, ReservationAsk, ReservationView,
+    Caller, ContentType, CustodianRef, Custody, CustodyAsk, DocumentPage, DocumentPolicy,
+    DocumentPolicyList, DocumentPolicyView, DocumentStatus, DocumentVersionView, DocumentView,
+    DocumentsProject, Eligibility, PolicyBinding, ProblemCode, ReservationAsk, ReservationView,
     ReserveDocumentRequest, Reserver, Standing, UploadState, VerificationState, MAXIMUM_PAGE_SIZE,
 };
 use registry_platform_canonical_json::canonicalize_json;
@@ -193,6 +193,16 @@ impl std::fmt::Debug for DocumentService {
             .debug_struct("DocumentService")
             .finish_non_exhaustive()
     }
+}
+
+/// The journal's marker for a request value that does not parse.
+const UNPARSED: &str = "unparsed";
+
+/// What the journal records for an identifier a caller sent: the value
+/// once it parses under its bounded grammar, and [`UNPARSED`] when it does
+/// not, so no unchecked text reaches the journal.
+fn checked<T: std::fmt::Display>(parsed: Option<T>) -> String {
+    parsed.map_or_else(|| UNPARSED.to_owned(), |value| value.to_string())
 }
 
 /// Log a failure the caller is answered `service.unavailable` for.
@@ -743,9 +753,9 @@ impl DocumentService {
                     "event": UPLOAD_RESERVATION_EVENT,
                     "actor": reference,
                     "profile": caller.profile_id,
-                    "policyId": request.policy_id,
+                    "policyId": checked(LocalId::new(request.policy_id.as_str()).ok()),
                     "length": request.length,
-                    "mediaType": request.media_type,
+                    "mediaType": checked(ContentType::new(request.media_type.as_str()).ok()),
                 }),
             )
             .await?;
