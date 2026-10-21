@@ -162,16 +162,12 @@ against a loopback fake object store and verifier. The rows in
 - Upload expiry, erasure of expired reservations, and the sweep of S3
   objects a failed or losing attempt left behind are owed by WP5. Until then
   such objects and rows stay in place.
-- Replaying a dead-lettered verification job is owed by WP7; until then an
-  operator cannot release a version whose job dead-lettered.
 - During a verifier rollout, an older instance may still finalize a version
   under its binding after a newer instance swept. That version can be
   approved and released under the older binding by a worker that holds it,
   and stays so until the next restart sweeps it; a worker under the newer
   binding only retries its job. Finish a verifier change by restarting every
   instance.
-- There is no operator command to apply the schema yet; serving refuses a
-  database without it.
 
 ## Access profiles, document grants, and release (2026-10-22)
 
@@ -321,3 +317,63 @@ each test.
 - A document whose policy the deployed package no longer declares is shown
   to nobody, custodian included, and each such access logs a warning; it
   stays in custody until erasure (WP5).
+
+## Activation and dead-letter replay (2026-10-22)
+
+### Threat
+
+The serving process changes the schema or records a package as active
+nobody reviewed; the runtime serves a database no operator activated, one
+belonging to another deployment, or one whose active package is not the
+configured one; a dead-lettered verification is re-queued by a caller other
+than the operator, or by a replay issued from a stale listing.
+
+### Enforcement and defaults
+
+- `documentsctl apply` is the only path that changes the schema. It connects
+  with `database.migrationUrlRef`, verifies the package at `package.root`
+  against `package.expectedDigest` when pinned, applies the embedded schema,
+  records the package digest in the shared activation ledger
+  (`documents_activations`, created at the end of `0100_documents.sql`), and
+  grants the runtime role what serving needs. When the two credentials name
+  different roles, the runtime role is split from the migration role.
+  Applying the active package again records nothing; a changed package
+  records a successor naming its predecessor (DOCUMENTS-DEC-17).
+- The operator reference is stored only as an activation-scoped keyed hash;
+  backup references are bounded in count and text and recorded as written.
+  An invalid reference is refused before anything is written.
+- `documentsctl plan` and `status` write nothing.
+- `serve` reads the ledger before the schema and refuses a database with no
+  active package, one recorded for another `identity.databaseId`, or one
+  whose active package is not the verified one. It then refuses a schema
+  other than this release's, a runtime role that lost its grants, and a
+  runtime role that gained authority over the schema after a split apply.
+- `documentsctl verification list` and `replay` run over the runtime
+  credential against an activated database. Replay names the job's current
+  generation, bumps it, and returns the job to pending; the version stays
+  pending and suspended until a verifier approves it. No HTTP route lists or
+  replays a job (DOCUMENTS-DEC-18).
+- Apply and replay write their audit records to the `documentsctl`
+  companion journal. An apply whose ledger row committed but whose audit
+  record was not accepted reports `audit.unconfirmed` with the
+  activation id, and `status` confirms it.
+
+### Tests
+
+`crates/registry-documents/tests/postgres_operator.rs` runs plan, apply,
+status, serve, and replay against a disposable database, including a limited
+role that cannot apply the schema. `crates/registry-documentsctl/tests/postgres_cli.rs`
+runs the built `documentsctl` binary from `init` to `status`. Both run only
+under the `postgres-test` feature. `contracts/security-test-traceability.yaml`
+names each test under DOCUMENTS-SEC-34 to DOCUMENTS-SEC-36.
+
+### Residual risk
+
+- The migration credential holds authority over the schema. Keep it off the
+  serving host; when the two credentials name the same role, apply records a
+  single-role activation and the runtime keeps that authority.
+- Anyone holding the runtime credential can replay a dead-lettered job. A
+  replay only re-queues verification and releases nothing, so the risk is
+  repeated verifier load, not disclosure.
+- The companion journal lives on the host the operator command runs on;
+  collect it with the runtime's journal.

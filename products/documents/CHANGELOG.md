@@ -68,3 +68,12 @@ The Document Store is held out of releases.
 - New problem codes `custody.not-permitted`, `idempotency.key-reused`,
   `idempotency.expired`, and `resource.not-found`.
 - The OpenAPI document describes every route with its bearer security.
+- `documentsctl init`, `package`, `plan`, `apply`, and `status`. `apply`
+  applies the schema over the migration credential, records the verified
+  package digest in an activation ledger, and grants the runtime role;
+  `serve` refuses a database with no active package, one recorded for
+  another `identity.databaseId`, or one whose active package is not the
+  configured one.
+- `documentsctl verification list` and `verification replay` show
+  dead-lettered verification jobs and return one to pending under its next
+  generation, audited in the `documentsctl` companion journal.

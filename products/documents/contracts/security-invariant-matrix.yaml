@@ -556,3 +556,61 @@ invariants:
     negativeTest:
       path: crates/registry-documents/tests/postgres_documents.rs
       name: the_journal_records_no_unchecked_text_from_a_request
+  - id: DOCUMENTS-SEC-34
+    state: enforced
+    threat: >-
+      The runtime credential changes the schema or the activation ledger, so a
+      compromised serving process could rewrite the tables it serves from or
+      record a package nobody reviewed as active.
+    enforcementPoint: >-
+      documentsctl apply connects with database.migrationUrlRef, applies the
+      embedded schema, records the verified package digest in the activation
+      ledger, and grants the runtime role exactly what serving needs. Serving
+      connects only with database.runtimeUrlRef and never applies the schema.
+    refusal: >-
+      An apply over a credential without authority over the schema fails and
+      records nothing; a runtime credential that later gains that authority is
+      refused at startup with documentsctl.activation.role-mode-weakened.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_operator.rs
+      name: apply_requires_the_migration_credential
+  - id: DOCUMENTS-SEC-35
+    state: enforced
+    threat: >-
+      The runtime serves a database no operator activated, one activated for
+      another deployment, or one whose active package is not the configured
+      one, so documents are governed by policies nobody applied there.
+    enforcementPoint: >-
+      Startup reads the activation ledger before anything else in the
+      database and requires its databaseId to equal identity.databaseId and
+      its active package digest to equal the digest of the verified package
+      at package.root.
+    refusal: >-
+      Refuse to start before binding, naming documentsctl plan and apply as
+      the remedy; another deployment's database is refused at
+      identity.databaseId.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_operator.rs
+      name: a_fresh_database_is_refused_by_serve_until_the_package_is_applied
+  - id: DOCUMENTS-SEC-36
+    state: enforced
+    threat: >-
+      A caller over HTTP, or a stale operator command, returns a dead-lettered
+      verification to the queue, so a version is re-verified outside the
+      operator's deliberate step or a replay races a newer one.
+    enforcementPoint: >-
+      Replay exists only as documentsctl verification replay, over the
+      runtime credential against an activated database; no HTTP route
+      reaches it. The replay names the job's current generation, bumps it,
+      returns the job to pending without approving or releasing the version,
+      and records the replay in the operator's companion audit journal.
+    refusal: >-
+      Refuse an unactivated database with
+      documentsctl.activation.not-activated, an unknown version with
+      verification.not-found, a job that is not dead-lettered
+      with verification.not-dead-lettered, and a generation
+      other than the current one with
+      verification.stale-generation; each changes nothing.
+    negativeTest:
+      path: crates/registry-documents/tests/postgres_operator.rs
+      name: replay_refuses_an_unknown_version_and_an_unactivated_database
