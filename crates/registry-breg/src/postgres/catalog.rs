@@ -131,7 +131,8 @@ const SUBJECT_ACCESS_LOG_EXPIRY: &str = "registry_internal.expire_subject_access
 const MANAGED_INTERNAL_INDEXES: &[&str] = &[
     "registry_internal.registry_action_evidence_uses_expiry",
     "registry_internal.registry_attachment_live_references",
-    "registry_internal.registry_attachment_verification_pending",
+    "registry_internal.registry_attachment_verification_jobs_due_idx",
+    "registry_internal.registry_attachment_verification_jobs_lease_idx",
     "registry_internal.registry_field_encryption_lifecycle_progress_idx",
     "registry_internal.registry_idempotency_caller_key",
     "registry_internal.registry_import_authorities_one_open",
@@ -513,6 +514,15 @@ impl ExpectedManagedCatalog {
                 });
             }
         }
+        // The verification job table carries no row-level security: it
+        // holds only dispatch state keyed by a verdict row's identifier.
+        let (table, privileges) = crate::attachment_store::VERIFICATION_JOB_TABLE;
+        catalog.table(
+            &format!("registry_internal.{table}"),
+            privileges.iter().copied(),
+            std::iter::empty::<&str>(),
+            Some((false, false)),
+        );
         for (table, privileges) in crate::attachment_store::ATTACHMENT_TABLES {
             catalog.table(
                 &format!("registry_internal.{table}"),
