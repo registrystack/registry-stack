@@ -370,18 +370,19 @@ audit:
   path: $audit_path
 cursor:
   secretRef: secret:file/cursor-key
-eventDestinations:
-  record-events:
-    origin: http://$receiver_address
-    path: /events
-    networkProfile: loopback-development-http
-    dnsFamily: dual-stack-strict
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/record-events-key
-    classificationCeiling: internal
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: 2000
-      maximumAttempts: 5
+destinations:
+  hooks:
+    record-events:
+      origin: http://$receiver_address
+      path: /events
+      networkProfile: loopback-development-http
+      dnsFamily: dual-stack-strict
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/record-events-key
+      classificationCeiling: internal
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 2000
+        maximumAttempts: 5
 EOF
 }
 

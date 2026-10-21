@@ -432,18 +432,19 @@ async fn production_schema_test_setup_failures_identify_configuration_without_se
         } else {
             let mut source = fs::read_to_string(&config_path).expect("runtime config reads");
             source.push_str(
-                r#"eventDestinations:
-  destination-canary:
-    origin: https://receiver-canary.example
-    path: /payload-canary
-    networkProfile: production-https
-    dnsFamily: dual-stack-strict
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/key-canary
-    classificationCeiling: restricted
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: 1000
-      maximumAttempts: 1
+                r#"destinations:
+  hooks:
+    destination-canary:
+      origin: https://receiver-canary.example
+      path: /payload-canary
+      networkProfile: production-https
+      dnsFamily: dual-stack-strict
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/key-canary
+      classificationCeiling: restricted
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 1000
+        maximumAttempts: 1
 "#,
             );
             fs::write(&config_path, source).expect("extra destination config writes");

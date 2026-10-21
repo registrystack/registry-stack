@@ -3522,18 +3522,19 @@ audit:
 cursor:
   secretRef: secret:file/cursor-key
   maximumAgeSeconds: 300
-eventDestinations:
-  neutral-events:
-    origin: https://events.example/
-    path: {path}
-    networkProfile: production-https
-    dnsFamily: dual-stack-strict
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/webhook-key
-    classificationCeiling: internal
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: 4000
-      maximumAttempts: 4
+destinations:
+  hooks:
+    neutral-events:
+      origin: https://events.example/
+      path: {path}
+      networkProfile: production-https
+      dnsFamily: dual-stack-strict
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/webhook-key
+      classificationCeiling: internal
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 4000
+        maximumAttempts: 4
 operationalTimeouts:
   httpRequestMilliseconds: 10000
   shutdownGraceMilliseconds: 30000

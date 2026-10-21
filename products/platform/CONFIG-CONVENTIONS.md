@@ -422,6 +422,7 @@ here is added to the list in the same change that first uses it. See CFG-QTY.
 | How long an idempotency receipt stays replayable, from 1 through 365 days | `receiptRetentionDays` | `attemptReceiptRetentionDays`, `submissionReceiptRetentionDays` |
 | Cache entry lifetime | `cacheTtlSeconds` | |
 | Largest accepted body or file | `maximum<Thing>Bytes` | `max<Thing>Bytes`, `maxSize` outside `pool` |
+| Outbound hook destination bindings, one entry per destination id | `destinations.hooks` | `eventDestinations` |
 
 Adding a shared concept adds a row here in the same change.
 *Enforced by:* the schema convention lint (one unit per key stem across all

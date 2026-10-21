@@ -2100,7 +2100,7 @@ struct WebhookDrainSuccessReport {
     ok: bool,
     command: &'static str,
     #[serde(flatten)]
-    outcome: registry_breg::webhook::WebhookDrainReport,
+    outcome: registry_breg::hooks::HookDrainReport,
 }
 
 #[derive(Serialize)]
@@ -5690,12 +5690,12 @@ fn schema_test_runtime_setup_failure(
             EventDestinationActivationError::InventoryMismatch,
         ) => (
             "test.event-destinations.inventory-mismatch",
-            "eventDestinations",
+            "destinations.hooks",
             "configure exactly the logical destination bindings required by the candidate event deliveries before retrying",
         ),
         SchemaTestRuntimeSetupError::EventDestinations(_) => (
             "test.event-destinations.activation-failed",
-            "eventDestinations",
+            "destinations.hooks",
             "check the destination bindings, delivery ceilings, and referenced secret, signing, and TLS material before retrying",
         ),
         SchemaTestRuntimeSetupError::Evidence => (
@@ -6079,7 +6079,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
         ),
         ApplyLifecycleError::EventDestinations => (
             "apply.event-destinations.refused",
-            "eventDestinations",
+            "destinations.hooks",
             "the event destination bindings were refused",
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
@@ -12255,9 +12255,9 @@ fn write_webhook_drain_success(
     } else {
         let outcome = &report.outcome;
         let stopped = match outcome.stop_reason {
-            registry_breg::webhook::WebhookDrainStopReason::Idle => "no local attempt due",
-            registry_breg::webhook::WebhookDrainStopReason::AttemptBudget => "attempt budget",
-            registry_breg::webhook::WebhookDrainStopReason::TimeBudget => {
+            registry_breg::hooks::HookDrainStopReason::Idle => "no local attempt due",
+            registry_breg::hooks::HookDrainStopReason::AttemptBudget => "attempt budget",
+            registry_breg::hooks::HookDrainStopReason::TimeBudget => {
                 "time budget; an unfinished lease may remain"
             }
         };
@@ -14411,7 +14411,7 @@ mod tests {
                  \u{20}\u{20}audit                pass\n\
                  \u{20}\u{20}cursor               pass\n\
                  \u{20}\u{20}authentication.oidc  pass\n\
-                 \u{20}\u{20}eventDestinations    pass\n\
+                 \u{20}\u{20}destinations.hooks   pass\n\
                  \u{20}\u{20}reviewBindings       pass\n\
                  \u{20}\u{20}authentication       pass\n\
                  \u{20}\u{20}fieldEncryption      pass\n\
@@ -14419,7 +14419,7 @@ mod tests {
             ),
             (
                 OutputFormat::Json,
-                "{\n  \"apiVersion\": \"id.registrystack.org/formats/breg/ctl-report/v1alpha1\",\n  \"kind\": \"BRegCtlReport\",\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"reviewBindings\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ],\n  \"roleMode\": \"split\",\n  \"advisories\": []\n}\n",
+                "{\n  \"apiVersion\": \"id.registrystack.org/formats/breg/ctl-report/v1alpha1\",\n  \"kind\": \"BRegCtlReport\",\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"destinations.hooks\",\n    \"reviewBindings\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ],\n  \"roleMode\": \"split\",\n  \"advisories\": []\n}\n",
             ),
         ] {
             let mut stdout = Vec::new();

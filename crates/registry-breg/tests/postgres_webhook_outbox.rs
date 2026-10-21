@@ -1372,18 +1372,19 @@ audit:
 cursor:
   secretRef: secret:file/cursor-key
   maximumAgeSeconds: 300
-eventDestinations:
-  {DESTINATION_ID}:
-    origin: https://{ORIGIN_CANARY}/
-    path: {PATH_CANARY}
-    networkProfile: production-https
-    dnsFamily: dual-stack-strict
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/{SECRET_REF_CANARY}
-    classificationCeiling: restricted
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: 4000
-      maximumAttempts: 4
+destinations:
+  hooks:
+    {DESTINATION_ID}:
+      origin: https://{ORIGIN_CANARY}/
+      path: {PATH_CANARY}
+      networkProfile: production-https
+      dnsFamily: dual-stack-strict
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/{SECRET_REF_CANARY}
+      classificationCeiling: restricted
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 4000
+        maximumAttempts: 4
 operationalTimeouts:
   httpRequestMilliseconds: 10000
   shutdownGraceMilliseconds: 30000

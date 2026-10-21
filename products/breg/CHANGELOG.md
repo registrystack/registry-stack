@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- BREAKING: hook destinations move from `eventDestinations` to
+  `destinations.hooks` in `runtime.yaml` and in the `bregctl dev` clients file
+  `dev-clients.yaml` (CFG-NAME-5). Migration: add a `destinations:` block,
+  put a `hooks:` key under it, and move each `eventDestinations` entry under
+  `hooks:` unchanged. A file that still writes `eventDestinations` is refused
+  with `config.removed-key` naming `destinations.hooks`, and `breg` refuses to
+  start on it. The destination binding digest a retained delivery was captured
+  under is unchanged, so retained deliveries stay deliverable. `bregctl
+  doctor` reports the check as `destinations.hooks`; its diagnostic codes are
+  unchanged.
+- BREAKING: hook delivery audit entries use the schema `breg-hook-audit/v1`
+  in place of `breg-webhook-audit/v3`, carry `"event": "breg.hook-delivery"`,
+  and derive their keyed event and delivery references under the
+  `breg-hook-event-v1` and `breg-hook-delivery-v1` domains. Migration: select
+  hook delivery entries by the new schema or event name, and branch on the
+  schema when joining references across the upgrade; a reference written
+  before the upgrade does not match one written after it for the same
+  delivery.
+- BREAKING: local Rhai and WASM hook handlers run on the shared
+  `registry-platform-hooks` executor, which uses the bare
+  `registry-platform-script` engine. Hook programs lose the `join` helper the
+  action planner engine carries. Migration: build the string in the program
+  itself; a program that calls `join` still compiles and fails when it runs.
+  Action handlers keep `join`. The WASM hook entry point no longer shares the
+  action handler module cache.
+- BREAKING: the Rust module `registry_breg::webhook` is `registry_breg::hooks`,
+  its `Webhook*` types are `Hook*`, and `registry_breg::hook_handler` is
+  removed in favour of the executor in `registry-platform-hooks`. Migration:
+  rename the imports. Hook declarations are checked against the full hook
+  capability set at compile time and refused outside it with
+  `hook.capability.unsupported`; every declaration BReg accepted before is
+  still accepted.
 - BREAKING: `attachmentStorage` and `attachmentVerification` in `runtime.yaml`
   name their destination `url`, not `endpoint` (CFG-VAL-7). Migration: rename
   `endpoint:` to `url:` in both blocks and keep the value. A file that still

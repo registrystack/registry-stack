@@ -125,7 +125,7 @@ pub async fn install_mutation_schema(
         ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
-    registry_platform_hooks::delivery_schema::install(migration, crate::webhook::DELIVERY_SCHEMA)
+    registry_platform_hooks::delivery_schema::install(migration, crate::hooks::DELIVERY_SCHEMA)
         .await
         .map_err(|_| MutationError::Unavailable)?;
 
@@ -746,7 +746,7 @@ impl MutationTransaction {
         audit: RegistryAudit,
         event_destinations: Option<Arc<ActivatedEventDestinationRegistry>>,
     ) -> Self {
-        let event_source = crate::webhook::delivery_source(&expected.package_id, instance_id);
+        let event_source = crate::hooks::delivery_source(&expected.package_id, instance_id);
         Self {
             lock_key,
             lock_timeout,

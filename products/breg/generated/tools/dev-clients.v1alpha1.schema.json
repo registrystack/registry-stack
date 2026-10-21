@@ -310,6 +310,23 @@
       ],
       "type": "object"
     },
+    "LocalDestinations": {
+      "additionalProperties": false,
+      "properties": {
+        "hooks": {
+          "additionalProperties": {
+            "$ref": "#/$defs/LocalEventDestination"
+          },
+          "default": {},
+          "description": "Exact local hook destination bindings. An empty map keeps the inbox.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "LocalEventDestination": {
       "additionalProperties": false,
       "properties": {
@@ -606,16 +623,12 @@
       },
       "type": "array"
     },
-    "eventDestinations": {
-      "additionalProperties": {
-        "$ref": "#/$defs/LocalEventDestination"
+    "destinations": {
+      "$ref": "#/$defs/LocalDestinations",
+      "default": {
+        "hooks": {}
       },
-      "default": {},
-      "description": "Optional exact local webhook bindings. An empty map keeps the inbox.",
-      "propertyNames": {
-        "$ref": "#/$defs/LocalId"
-      },
-      "type": "object"
+      "description": "Optional exact local outbound destination bindings."
     },
     "evidenceProviders": {
       "additionalProperties": {
