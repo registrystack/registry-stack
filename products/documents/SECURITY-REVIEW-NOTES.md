@@ -448,7 +448,10 @@ DOCUMENTS-DEC-26:
   releasable version under removal, and every nullable comparison in a
   CHECK is guarded with `IS NOT NULL`.
 - Removal requests, erasure outcomes, upload expiry, and orphan erasure are
-  audited with `begin` before the change and `finish` after it.
+  audited with `begin` before the change and `finish` after it. An upload
+  expiry batch or an orphan's staged-row deletion that does not commit
+  finishes its entry as `failed` before the pass reports the error, and the
+  next pass retries it.
 
 ### Tests
 

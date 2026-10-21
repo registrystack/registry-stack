@@ -679,6 +679,50 @@ async fn an_orphan_whose_delete_fails_does_not_hold_back_the_others() {
     assert!(stored.keys().all(|key| !key.contains(&scope_of(&other))));
 }
 
+/// Fault injection: an orphan whose staged row's deletion does not commit
+/// finishes its audit entry as failed before the pass reports the error, and
+/// the next pass finds the row again and removes it.
+#[tokio::test]
+async fn a_failed_orphan_commit_is_audited_as_failed_and_retried() {
+    let fixture = Fixture::new().await;
+    let (prepared, api) = fixture.start().await;
+    let (first, second) = two_old_orphans(&fixture, &api, 91).await;
+    fixture
+        .deployment
+        .execute(
+            "CREATE FUNCTION refuse_unstage() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'the orphan commit failed'; END $$;
+             CREATE CONSTRAINT TRIGGER refuse_unstage AFTER DELETE ON documents_staged_objects
+                DEFERRABLE INITIALLY DEFERRED
+                FOR EACH ROW EXECUTE FUNCTION refuse_unstage();",
+        )
+        .await;
+    assert!(prepared.cleanup_pass().await.is_err());
+    let outcomes = fixture
+        .deployment
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| entry["record"]["event"] == "documents.orphan-erasure")
+        .map(|entry| entry["record"]["outcome"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(outcomes, [json!(null), json!("failed")]);
+    fixture
+        .deployment
+        .execute("DROP TRIGGER refuse_unstage ON documents_staged_objects")
+        .await;
+    let pass = prepared.sweep_due().await;
+    assert_eq!(pass.erased_orphans, 2);
+    let left: i64 = fixture
+        .deployment
+        .scalar(&format!(
+            "SELECT count(*) FROM documents_staged_objects
+              WHERE object_id IN ('{first}', '{second}')"
+        ))
+        .await;
+    assert_eq!(left, 0);
+    assert!(fixture.state.bytes.lock().await.is_empty());
+}
+
 /// A commit that arrives after the orphan sweep erased its object finds no
 /// staged row and is refused, so the version stays unfinalized and no
 /// object is left that no row names. The commit is held back by a lock on
