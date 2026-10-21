@@ -69,6 +69,13 @@ contentVerification:
   authorizationRef: secret:file/content-verifier-authorization
   policyId: documents-default
   attemptTimeoutMilliseconds: 10000
+transfers:
+  # One upload or download may run for this floor plus an allowance per
+  # started mebibyte; a 16 MiB document gets 60 + 16 * 8 = 188 seconds.
+  # A transfer still running at its deadline is cut off with
+  # service.unavailable and its bytes leave the transfer budget.
+  minimumDeadlineSeconds: 60
+  mebibyteAllowanceSeconds: 8
 cleanup:
   # paused stops erasure work; expired and revoked document grants stop
   # releasing bytes regardless.

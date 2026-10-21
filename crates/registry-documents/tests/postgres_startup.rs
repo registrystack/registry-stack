@@ -64,7 +64,11 @@ async fn a_prepared_runtime_serves_documents_only_to_a_verified_caller() {
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED, "{path}");
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "{path}"
+        );
         assert_eq!(response.headers()["www-authenticate"], "Bearer");
         assert_eq!(
             problem(response).await,
@@ -77,7 +81,11 @@ async fn a_prepared_runtime_serves_documents_only_to_a_verified_caller() {
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED, "{path}");
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "{path}"
+        );
     }
     let response = http
         .get(base.join("no-such-route").unwrap())

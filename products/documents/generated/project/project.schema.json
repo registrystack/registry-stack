@@ -8,6 +8,10 @@
           "$ref": "#/$defs/ActorKind",
           "description": "The actor kind the token must claim."
         },
+        "institution": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The institution this profile acts for. The Document Store records it\nas the issuing institution of every document version a caller under\nthis profile reserves; a profile that names none records none."
+        },
         "principalClaim": {
           "$ref": "#/$defs/ExternalId",
           "description": "`sub`, or the name of another string claim identifying the principal."

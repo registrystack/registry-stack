@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
+use futures::StreamExt as _;
 use registry_documents::audit::DocumentsAudit;
 use registry_documents::config::RuntimeConfig;
 use registry_documents::content::ContentStorage;
@@ -25,7 +26,6 @@ use registry_documents_core::ProblemCode;
 use registry_platform_audit::{AuditProfile, AuditWriter};
 use registry_platform_dispatch::DispatchError;
 use registry_platform_objectstore::{Verdict, VerifierError};
-use futures::StreamExt as _;
 use serde_json::json;
 use support::{
     pdf, reservation, reservation_body, sha256, Api, Deployment, FakeVerifier, APP, APPROVE,
@@ -114,7 +114,10 @@ async fn an_uploaded_document_is_released_only_after_it_is_verified() {
     // custody went to the citizen.
     let placed = api.read(APP, &document).await;
     assert_eq!(placed.status, 200);
-    assert_eq!(placed.json()["actions"], serde_json::json!(["share", "revoke-share", "list-shares"]));
+    assert_eq!(
+        placed.json()["actions"],
+        serde_json::json!(["share", "revoke-share", "list-shares"])
+    );
     api.download(APP, &document, &version)
         .await
         .assert_problem(ProblemCode::ResourceNotFound);
@@ -167,7 +170,10 @@ async fn an_uploaded_document_is_released_only_after_it_is_verified() {
         .count();
     assert_eq!(released, 1);
     let journal = std::fs::read_to_string(deployment.audit_path()).unwrap();
-    assert!(!journal.contains(CITIZEN.subject), "the journal names no caller");
+    assert!(
+        !journal.contains(CITIZEN.subject),
+        "the journal names no caller"
+    );
 }
 
 #[tokio::test]
@@ -323,12 +329,26 @@ async fn a_document_above_the_policy_size_is_refused_before_any_byte_moves() {
     let verifier = FakeVerifier::new("binding-a", APPROVE);
     let (_prepared, api) = start(&deployment, &verifier).await;
     let digest = sha256(b"unused");
-    api.reserve_declared(APP, "citizen-delivery", CITIZEN.subject, &digest, 16_777_217, PDF)
-        .await
-        .assert_problem(ProblemCode::DocumentTooLarge);
-    api.reserve_declared(APP, "named-share", CITIZEN.subject, &digest, 10_485_761, PDF)
-        .await
-        .assert_problem(ProblemCode::DocumentTooLarge);
+    api.reserve_declared(
+        APP,
+        "citizen-delivery",
+        CITIZEN.subject,
+        &digest,
+        16_777_217,
+        PDF,
+    )
+    .await
+    .assert_problem(ProblemCode::DocumentTooLarge);
+    api.reserve_declared(
+        APP,
+        "named-share",
+        CITIZEN.subject,
+        &digest,
+        10_485_761,
+        PDF,
+    )
+    .await
+    .assert_problem(ProblemCode::DocumentTooLarge);
     api.reserve_declared(APP, "no-such-policy", CITIZEN.subject, &digest, 10, PDF)
         .await
         .assert_problem(ProblemCode::DocumentPolicyUnknown);
@@ -435,7 +455,12 @@ async fn concurrent_uploads_of_one_reservation_finalize_once() {
     let mut views = Vec::new();
     for attempt in attempts {
         let answer = attempt.await.unwrap();
-        assert_eq!(answer.status, 200, "{}", String::from_utf8_lossy(&answer.body));
+        assert_eq!(
+            answer.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&answer.body)
+        );
         views.push(answer.json());
     }
     assert_eq!(views.len(), 8);
@@ -501,8 +526,15 @@ async fn the_custodian_quota_holds_against_concurrent_reservations() {
             let api = api.clone();
             let digest = digest.clone();
             tokio::spawn(async move {
-                api.reserve_declared(APP, "citizen-delivery", CITIZEN.subject, &digest, 10_000_000, PDF)
-                    .await
+                api.reserve_declared(
+                    APP,
+                    "citizen-delivery",
+                    CITIZEN.subject,
+                    &digest,
+                    10_000_000,
+                    PDF,
+                )
+                .await
             })
         })
         .collect::<Vec<_>>();
@@ -540,9 +572,16 @@ async fn the_custodian_quota_holds_against_concurrent_reservations() {
         )
         .await;
     assert_eq!(
-        api.reserve_declared(APP, "citizen-delivery", CITIZEN.subject, &digest, 10_000_000, PDF)
-            .await
-            .status,
+        api.reserve_declared(
+            APP,
+            "citizen-delivery",
+            CITIZEN.subject,
+            &digest,
+            10_000_000,
+            PDF
+        )
+        .await
+        .status,
         201
     );
 }
@@ -683,7 +722,10 @@ async fn a_verifier_binding_change_at_restart_suspends_and_verifies_again() {
         ))
         .await;
     assert_eq!(binding, "binding-b");
-    assert_eq!(api.download(CITIZEN, &ready, &ready_version).await.status, 200);
+    assert_eq!(
+        api.download(CITIZEN, &ready, &ready_version).await.status,
+        200
+    );
 }
 
 /// SEC-18: while two instances run under different verifier bindings, a
@@ -1077,7 +1119,12 @@ async fn ready(prepared: &Prepared, api: &Api, content: &[u8]) -> (String, Strin
 }
 
 fn grant_id(answer: &support::Answer) -> String {
-    assert_eq!(answer.status, 201, "{}", String::from_utf8_lossy(&answer.body));
+    assert_eq!(
+        answer.status,
+        201,
+        "{}",
+        String::from_utf8_lossy(&answer.body)
+    );
     answer.json()["id"].as_str().unwrap().to_owned()
 }
 
@@ -1107,7 +1154,9 @@ async fn custody_is_placed_only_by_a_custody_profile_and_a_human_only_into_its_o
         .await
         .assert_problem(ProblemCode::CustodyNotPermitted);
 
-    let reserved: i64 = deployment.scalar("SELECT count(*) FROM documents_documents").await;
+    let reserved: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_documents")
+        .await;
     assert_eq!(reserved, 1);
 }
 
@@ -1139,7 +1188,9 @@ async fn the_issuing_institution_comes_from_the_profile_and_a_differing_body_is_
     api.reserve_body(CITIZEN, "citizen-institution", &own)
         .await
         .assert_problem(ProblemCode::CustodyNotPermitted);
-    let reserved: i64 = deployment.scalar("SELECT count(*) FROM documents_documents").await;
+    let reserved: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_documents")
+        .await;
     assert_eq!(reserved, 0);
 
     let same = api
@@ -1181,7 +1232,9 @@ async fn an_idempotency_key_replays_its_reservation_and_refuses_another_body() {
         .await
         .assert_problem(ProblemCode::IdempotencyKeyReused);
     let (documents, reserved): (i64, i64) = (
-        deployment.scalar("SELECT count(*) FROM documents_documents").await,
+        deployment
+            .scalar("SELECT count(*) FROM documents_documents")
+            .await,
         deployment
             .scalar("SELECT coalesce(sum(length), 0)::bigint FROM documents_versions")
             .await,
@@ -1200,7 +1253,9 @@ async fn an_idempotency_key_replays_its_reservation_and_refuses_another_body() {
     api.reserve_body(APP, "reserve-1", &body)
         .await
         .assert_problem(ProblemCode::IdempotencyExpired);
-    let documents: i64 = deployment.scalar("SELECT count(*) FROM documents_documents").await;
+    let documents: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_documents")
+        .await;
     assert_eq!(documents, 2);
 }
 
@@ -1224,7 +1279,9 @@ async fn a_grant_releases_one_exact_version_to_its_named_recipient_until_expiry_
         .await
         .assert_problem(ProblemCode::ResourceNotFound);
 
-    let issued = api.grant(APP, &document, &version, READER.subject, None).await;
+    let issued = api
+        .grant(APP, &document, &version, READER.subject, None)
+        .await;
     let grant = grant_id(&issued);
     let view = issued.json();
     assert_eq!(view["state"], "active");
@@ -1255,7 +1312,10 @@ async fn a_grant_releases_one_exact_version_to_its_named_recipient_until_expiry_
         .assert_problem(ProblemCode::ResourceNotFound);
     // A named subject under a profile the policy does not list as a
     // recipient is not released to either.
-    grant_id(&api.grant(APP, &document, &version, STAFF.subject, None).await);
+    grant_id(
+        &api.grant(APP, &document, &version, STAFF.subject, None)
+            .await,
+    );
     api.download(STAFF, &document, &version)
         .await
         .assert_problem(ProblemCode::ResourceNotFound);
@@ -1274,10 +1334,18 @@ async fn a_grant_releases_one_exact_version_to_its_named_recipient_until_expiry_
         .assert_problem(ProblemCode::ResourceNotFound);
 
     // Nor does a revoked one, and revoking twice is the same answer.
-    let renewed = grant_id(&api.grant(APP, &document, &version, READER.subject, None).await);
+    let renewed = grant_id(
+        &api.grant(APP, &document, &version, READER.subject, None)
+            .await,
+    );
     assert_eq!(api.download(READER, &document, &version).await.status, 200);
     let revoked = api.revoke(APP, &renewed).await;
-    assert_eq!(revoked.status, 200, "{}", String::from_utf8_lossy(&revoked.body));
+    assert_eq!(
+        revoked.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&revoked.body)
+    );
     assert_eq!(revoked.json()["state"], "revoked");
     assert_eq!(api.revoke(APP, &renewed).await.json(), revoked.json());
     api.download(READER, &document, &version)
@@ -1317,7 +1385,10 @@ async fn a_version_approved_under_another_binding_is_released_to_nobody() {
     let verifier = FakeVerifier::new("binding-a", APPROVE);
     let (prepared, api) = start(&deployment, &verifier).await;
     let (document, version) = ready(&prepared, &api, &pdf(900, 46)).await;
-    grant_id(&api.grant(APP, &document, &version, READER.subject, None).await);
+    grant_id(
+        &api.grant(APP, &document, &version, READER.subject, None)
+            .await,
+    );
     assert_eq!(api.download(READER, &document, &version).await.status, 200);
 
     deployment
@@ -1374,7 +1445,10 @@ async fn grant_authority_and_unknown_ids_answer_without_disclosing_a_document() 
         .await;
     assert_eq!(grants, 0);
 
-    let grant = grant_id(&api.grant(APP, &document, &version, READER.subject, Some(2)).await);
+    let grant = grant_id(
+        &api.grant(APP, &document, &version, READER.subject, Some(2))
+            .await,
+    );
     // A caller that does not see the document learns nothing of its grants;
     // the grantee and the custodian see it but manage no grant here.
     api.revoke(STRANGER, &grant)
@@ -1446,9 +1520,16 @@ async fn an_idempotent_grant_retry_after_revocation_releases_nothing() {
 
     // A retry under the key by a caller without the authority is that
     // caller's own refusal, never the cached success.
-    api.grant_with_key(CITIZEN, "share-1", &document, &version, READER.subject, None)
-        .await
-        .assert_problem(ProblemCode::ProfileNotAuthorized);
+    api.grant_with_key(
+        CITIZEN,
+        "share-1",
+        &document,
+        &version,
+        READER.subject,
+        None,
+    )
+    .await
+    .assert_problem(ProblemCode::ProfileNotAuthorized);
     let mut other = json!({"versionId": version, "grantee": {"subject": STAFF.subject}});
     other["expiryHours"] = json!(2);
     api.send_json(
@@ -1471,7 +1552,10 @@ async fn a_transfer_admitted_before_a_revocation_completes() {
     let (prepared, api) = start(&deployment, &verifier).await;
     let content = pdf(200_000, 49);
     let (document, version) = ready(&prepared, &api, &content).await;
-    let grant = grant_id(&api.grant(APP, &document, &version, READER.subject, None).await);
+    let grant = grant_id(
+        &api.grant(APP, &document, &version, READER.subject, None)
+            .await,
+    );
 
     let response = api
         .respond(
@@ -1506,16 +1590,24 @@ async fn grant_and_document_lists_page_in_a_stable_order() {
     let mut issued = Vec::new();
     for _ in 0..3 {
         issued.push(grant_id(
-            &api.grant(APP, &document, &version, READER.subject, None).await,
+            &api.grant(APP, &document, &version, READER.subject, None)
+                .await,
         ));
     }
     api.revoke(APP, &issued[0]).await;
 
     let path = format!("/documents/{document}/grants");
     let first = api.get(APP, &format!("{path}?limit=2")).await;
-    assert_eq!(first.status, 200, "{}", String::from_utf8_lossy(&first.body));
+    assert_eq!(
+        first.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&first.body)
+    );
     let cursor = first.json()["nextCursor"].as_str().unwrap().to_owned();
-    let second = api.get(APP, &format!("{path}?limit=2&cursor={cursor}")).await;
+    let second = api
+        .get(APP, &format!("{path}?limit=2&cursor={cursor}"))
+        .await;
     assert_eq!(second.status, 200);
     assert!(second.json()["nextCursor"].is_null());
     let mut listed = first.json()["items"].as_array().unwrap().clone();
@@ -1544,7 +1636,12 @@ async fn grant_and_document_lists_page_in_a_stable_order() {
         json!([])
     );
 
-    for refused in ["?limit=0", "?limit=101", "?cursor=not-a-cursor", "?unknown=1"] {
+    for refused in [
+        "?limit=0",
+        "?limit=101",
+        "?cursor=not-a-cursor",
+        "?unknown=1",
+    ] {
         api.get(APP, &format!("{path}{refused}"))
             .await
             .assert_problem(ProblemCode::RequestInvalid);
@@ -1557,7 +1654,10 @@ async fn grant_and_document_lists_page_in_a_stable_order() {
         assert_eq!(page.status, 200);
         assert_eq!(page.json()["items"][0]["id"], document.as_str());
     }
-    assert_eq!(api.get(STRANGER, "/documents").await.json()["items"], json!([]));
+    assert_eq!(
+        api.get(STRANGER, "/documents").await.json()["items"],
+        json!([])
+    );
 }
 
 /// The placeable policies are read with the bounds a caller needs before
@@ -1576,7 +1676,10 @@ async fn the_policies_a_caller_may_place_are_read_with_their_bounds() {
         .iter()
         .map(|policy| policy["id"].as_str().unwrap().to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(ids, ["citizen-delivery", "institutional-custody", "named-share"]);
+    assert_eq!(
+        ids,
+        ["citizen-delivery", "institutional-custody", "named-share"]
+    );
     let delivery = &app.json()["items"][0];
     assert_eq!(delivery["maximumDocumentBytes"], 16_777_216);
     assert_eq!(delivery["allowedContentTypes"], json!([PDF]));
@@ -1666,7 +1769,8 @@ async fn an_exhausted_transfer_budget_refuses_uploads_and_downloads() {
 #[tokio::test]
 async fn a_stalled_upload_is_cut_off_at_its_deadline() {
     let mut deployment = deployment().await;
-    deployment.configure("transfers:\n  minimumDeadlineSeconds: 1\n  mebibyteAllowanceSeconds: 1\n");
+    deployment
+        .configure("transfers:\n  minimumDeadlineSeconds: 1\n  mebibyteAllowanceSeconds: 1\n");
     let verifier = FakeVerifier::new("binding-a", APPROVE);
     let (_prepared, api) = start(&deployment, &verifier).await;
     let content = pdf(1000, 54);
@@ -1693,7 +1797,8 @@ async fn a_stalled_upload_is_cut_off_at_its_deadline() {
 #[tokio::test]
 async fn a_download_not_read_before_its_deadline_ends_in_an_error() {
     let mut deployment = deployment().await;
-    deployment.configure("transfers:\n  minimumDeadlineSeconds: 1\n  mebibyteAllowanceSeconds: 1\n");
+    deployment
+        .configure("transfers:\n  minimumDeadlineSeconds: 1\n  mebibyteAllowanceSeconds: 1\n");
     let verifier = FakeVerifier::new("binding-a", APPROVE);
     let (prepared, api) = start(&deployment, &verifier).await;
     let (document, version) = ready(&prepared, &api, &pdf(800, 55)).await;

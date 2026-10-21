@@ -489,12 +489,17 @@ impl Api {
         key: Option<&str>,
         body: &serde_json::Value,
     ) -> Answer {
-        let mut builder = request(principal, method, path).header("content-type", "application/json");
+        let mut builder =
+            request(principal, method, path).header("content-type", "application/json");
         if let Some(key) = key {
             builder = builder.header("idempotency-key", key);
         }
-        self.call(builder.body(axum::body::Body::from(body.to_string())).unwrap())
-            .await
+        self.call(
+            builder
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
     }
 
     pub async fn get(&self, principal: Principal, path: &str) -> Answer {
@@ -547,8 +552,14 @@ impl Api {
         key: &str,
         body: &serde_json::Value,
     ) -> Answer {
-        self.send_json(principal, axum::http::Method::POST, "/documents", Some(key), body)
-            .await
+        self.send_json(
+            principal,
+            axum::http::Method::POST,
+            "/documents",
+            Some(key),
+            body,
+        )
+        .await
     }
 
     /// Send `body` as the content of the upload at `path`.

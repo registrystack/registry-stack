@@ -11,8 +11,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use jsonwebtoken::Algorithm;
 use registry_documents_core::{DOCUMENTS_RUNTIME_API_VERSION, DOCUMENTS_RUNTIME_KIND};
 use registry_platform_audit::{AuditDestination, AuditDestinationKind};
+use registry_platform_config::JwksSource;
 pub use registry_platform_config::{
     AttachmentVerifierConfig, AuditKeyConfig, DatabaseConfig, ObjectStorageConfig,
     OidcClientsConfig, OidcIssuerConfig, PackageConfig, PrivateListenerConfig as ListenerConfig,
@@ -22,8 +24,6 @@ use registry_platform_config::{
     ConfigBlockError, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference,
     SecretResolver, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
 };
-use jsonwebtoken::Algorithm;
-use registry_platform_config::JwksSource;
 use registry_platform_objectstore::{s3::S3Settings, verifier::HttpVerifierSettings};
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy,
@@ -551,7 +551,12 @@ impl RuntimeConfig {
     /// Whether this deployment declared any token-exchange authority.
     #[must_use]
     pub fn binds_assertion_issuers(&self) -> bool {
-        !self.authentication.oidc.clients.assertion_issuers.is_empty()
+        !self
+            .authentication
+            .oidc
+            .clients
+            .assertion_issuers
+            .is_empty()
     }
 
     /// Every rule this document breaks, in document order.
