@@ -1271,7 +1271,7 @@ the active row of `scheduling_activations` through
 requires it to name the database id and package digest the worker was started
 with. The policy is part of the package and changes only through an
 activation, so a superseded policy is still caught, and a database id swap is
-now caught too. Any mismatch, missing activation, or read failure is
+now caught too (see the tests below). Any mismatch, missing activation, or read failure is
 `DeliveryError::Unavailable`, which sends nothing and audits nothing; the
 reason is not carried.
 
@@ -1288,11 +1288,21 @@ again and refuses.
 
 **Capability set.** The runtime re-checks the compiled declarations against
 `HookCapabilities::URL_ONLY` (url handlers, no `when`, no `principal`); the
-policy shape already refuses those members, so this is defense in depth. The
-refusal is tested once in the platform crate.
+policy shape already refuses those members, so this is defense in depth. A
+refusal is `HookActivationError::UnsupportedCapability`, whose message leads
+with the shared `hook.capability.unsupported` code.
 
 **Tests.** `crates/registry-scheduling/tests/postgres_commitments.rs`:
 `hook_delivery_stops_once_the_activation_record_names_another_package` (a
 later activation for another package leaves the pending delivery unclaimed,
-unsent, and unaudited). `crates/registry-platform-hooks/src/capability.rs`:
+unsent, and unaudited),
+`hook_delivery_is_refused_when_the_activation_record_names_another_database`
+(the database id swap), and
+`hook_delivery_is_refused_without_an_activation_record` (no activation row);
+each of the last two also proves the delivery has no lease.
+`crates/registry-scheduling/src/hooks.rs`:
+`compile_refuses_a_when_condition_as_an_unsupported_capability`,
+`compile_refuses_a_principal_as_an_unsupported_capability`, and
+`compile_refuses_a_local_rhai_handler_as_an_unsupported_capability`.
+`crates/registry-platform-hooks/src/capability.rs`:
 `the_url_only_set_refuses_each_other_part_with_the_one_shared_diagnostic`.

@@ -2020,6 +2020,89 @@ async fn hook_delivery_audit_failure_prevents_egress() {
     assert_eq!(state.get::<_, i16>(1), 0);
 }
 
+/// Run one delivery pass that the activation identity check must refuse, and
+/// prove the captured delivery was not claimed, not sent, and not audited.
+async fn assert_delivery_refused_before_claim(fx: &Fixture, destination: &MockServer, why: &str) {
+    let delivery = fx
+        .hooks
+        .delivery_service(fx.store.clone(), fx.audit.clone());
+    assert!(delivery.deliver_once().await.is_err(), "{why}");
+    assert!(
+        destination
+            .received_requests()
+            .await
+            .expect("read hook requests")
+            .is_empty(),
+        "{why}: nothing is sent"
+    );
+    assert!(
+        hook_delivery_entries(fx).is_empty(),
+        "{why}: no attempt is audited"
+    );
+    let state = fx
+        .admin
+        .query_one(
+            "SELECT state, attempt, lease_token FROM registry_webhook_delivery_state",
+            &[],
+        )
+        .await
+        .expect("read the untouched claim state");
+    assert_eq!(state.get::<_, String>(0), "pending", "{why}");
+    assert_eq!(state.get::<_, i16>(1), 0, "{why}");
+    assert_eq!(state.get::<_, Option<Uuid>>(2), None, "{why}: not claimed");
+}
+
+#[tokio::test]
+async fn hook_delivery_is_refused_when_the_activation_record_names_another_database() {
+    let destination = MockServer::start().await;
+    let fx = hook_fixture_at(&format!("{}/scheduling-hooks", destination.uri())).await;
+    let _ = booked(&fx, 300, 440, "hook-swapped-database").await;
+    // A later activation names the same package for a different database,
+    // as when a backup of another deployment is restored over this one.
+    registry_platform_activation::append_activation(
+        &fx.admin,
+        &activation_layout(),
+        &registry_platform_activation::NewActivation {
+            activation_id: Uuid::new_v4(),
+            package_digest: PACKAGE_DIGEST,
+            database_id: "another-scheduling-database",
+            operator_reference_hash: None,
+            backup_references: &[],
+            role_mode: RoleMode::Single,
+            runtime_role: Some("scheduling_test"),
+        },
+    )
+    .await
+    .expect("record an activation naming another database");
+
+    assert_delivery_refused_before_claim(
+        &fx,
+        &destination,
+        "a worker whose database id the activation record does not name",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn hook_delivery_is_refused_without_an_activation_record() {
+    let destination = MockServer::start().await;
+    let policy = read_policy(&observer_policy()).expect("the scheduling hook policy");
+    let fx = fixture_publishing_with_hook_url(
+        policy,
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+        &format!("{}/scheduling-hooks", destination.uri()),
+    )
+    .await;
+    let _ = booked(&fx, 300, 440, "hook-no-activation").await;
+
+    assert_delivery_refused_before_claim(
+        &fx,
+        &destination,
+        "a worker with no activation record to check",
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn hook_delivery_stops_once_the_activation_record_names_another_package() {
     let destination = MockServer::start().await;
