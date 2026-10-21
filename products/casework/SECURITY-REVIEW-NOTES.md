@@ -1045,7 +1045,7 @@ the serve loop. Casework keeps the table name, the payload rows, the send
 | Aspect | Hand-rolled loop | Dispatch core |
 |---|---|---|
 | Claim and lease | One row per claim: `pending`, or leased with a lapsed lease; due and `retained_until > now()`; `ORDER BY next_attempt_at, event_id`; `FOR UPDATE SKIP LOCKED`; a fixed 60-second lease fenced by the attempt count and `lease_until` | The same selection and lock rule; the lease lasts the attempt timeout plus 5 seconds and a finish is fenced by `lease_token`, `generation`, and `attempt` |
-| Attempt timeout | Per destination, 100 milliseconds to 30 seconds | `AttemptTimeoutBound` of 100 milliseconds to 30 seconds; the policy is read from the live runtime configuration at claim |
+| Attempt timeout | Per destination, 100 milliseconds to 30 seconds | `AttemptTimeoutBound` of 100 milliseconds to 30 seconds; the policy is read from the process's loaded configuration at claim |
 | Retry schedule | A constant `retryDelaySeconds` | A frozen schedule of `maximumAttempts - 1` copies of `retryDelaySeconds` |
 | Maximum attempts and expiry | `maximumAttempts` from 1 to 100; no attempt once `retained_until` passes | `maximum_attempts` from the same setting; `expires_at` is `retained_until` |
 | Terminal states | `delivered`, `exhausted` | `delivered`; `dead-lettered` when attempts run out; `expired` when the window closes first |
@@ -1062,10 +1062,16 @@ Behaviour that differs from the hand-rolled loop:
   a fixed 60 seconds.
 - A due row whose result window has closed is stamped `expired` at claim
   instead of being skipped until retention erases it.
-- A row whose destination the runtime no longer configures, or whose joined
-  terminal event cannot be read, is quarantined without a send:
-  `dead-lettered` when it has had an attempt, else `expired`, with
-  `last_failure_class` `destination_unconfigured` or `delivery_unreadable`.
+- A row the claim cannot take is quarantined without a send:
+  `dead-lettered` when it has had an attempt, else `expired`. Its
+  `last_failure_class` names why: `destination_unconfigured` when the
+  runtime no longer configures its destination, `attempts_exhausted` when
+  its attempts already reach a lowered `maximumAttempts`,
+  `delivery_unreadable` when its joined terminal event cannot be read,
+  `policy_refused` when the destination configuration does not fit a
+  dispatch policy, and `recovery_failed` or `expiry_failed` when the
+  core's lapsed-lease recovery or expiry fails on it. Each quarantine is
+  logged with its `event_id` and `destination_id`.
 - A finish under a lease another worker has replaced, or on a row retention
   erased while it was leased, returns an error the worker logs instead of
   updating zero rows silently.
@@ -1082,14 +1088,37 @@ the destination required while work remains, and
 `completion_delivery_stops_at_its_window_and_never_sends_to_an_unconfigured_destination`
 expires a closed-window row at claim, expires a retry that would land past
 the window, and quarantines a row for an unconfigured destination without
-leasing it, so no send can start. In `crates/registry-casework/src/runtime/completion.rs`,
+leasing it, so no send can start.
+`an_interrupted_final_completion_attempt_dead_letters_without_another_send`
+dead-letters a lapsed final attempt with `delivery_failed` and leases it no
+more, `a_completion_finish_after_retention_erased_its_row_is_refused` refuses
+a finish on a row erased mid-lease,
+`a_lapsed_completion_lease_for_an_unconfigured_destination_dead_letters_without_a_send`
+dead-letters a lapsed attempt whose destination is gone with
+`destination_unconfigured`, and
+`a_completion_past_a_lowered_attempt_limit_is_set_aside_as_exhausted`
+dead-letters a row whose attempts reach a lowered limit with
+`attempts_exhausted`. In `crates/registry-casework/src/runtime/completion.rs`,
 `the_completion_outbox_migration_is_exactly_the_dispatch_core_shape` holds the
-migration to the dispatch core's DDL, and the policy tests prove every
+migration to the dispatch core's DDL, the policy tests prove every
 configurable destination maps to a valid frozen policy and that a destination
-outside the dispatch bounds has none.
+outside the dispatch bounds has none, and
+`a_set_aside_delivery_records_the_class_of_its_reason` maps every quarantine
+reason to its failure class.
 
 Residual: Delivery stays at-least-once. A send whose response is lost is
 retried under the same `idempotency-key`, so a producer that ignores the key
-may see the same wake-up twice. One worker serves each runtime process with a
-one-second idle poll, so a settled review's wake-up can wait up to that poll
-after its retry time. Dispatch operational events are not audited.
+may see the same wake-up twice. Once an attempt overruns the 5-second
+allowance past its timeout, for example on a slow pool connection at finish,
+another replica may recover the lease and send again; that duplicate waits at
+least the retry delay and carries the same idempotency key. An attempt
+interrupted by a crash or restart counts as a failed attempt, so an
+interrupted final attempt is not retried and ends `dead-lettered`; with
+`maximumAttempts: 1`, any interrupted attempt does. The producer then learns
+the result from the result feed, `GET /v1/review-results`, which BReg polls.
+One worker serves each runtime process with a one-second idle poll, so a
+settled review's wake-up can wait up to that poll after its retry time. A
+worker iteration that fails, such as a finish refused under a replaced lease,
+is logged without the row's `event_id` and `destination_id`, because the
+dispatch core reports it without its row. Dispatch operational events are not
+audited.

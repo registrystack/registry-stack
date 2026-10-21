@@ -8,7 +8,8 @@
   stops without delivery ends `dead-lettered` when its attempts run out or
   `expired` when its result window closes, instead of `exhausted`. A lapsed
   lease counts as a failed attempt and waits `retryDelaySeconds`. A row whose
-  destination is no longer configured stops without a send. Apply this
+  destination is no longer configured stops without a send. A database
+  created by an earlier release must be recreated, not upgraded: apply this
   release to a fresh database.
 
 ## 0.43.0 - 2026-10-21
