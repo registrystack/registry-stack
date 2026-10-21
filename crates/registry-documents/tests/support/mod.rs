@@ -42,6 +42,7 @@ pub struct Deployment {
     scoped_url: String,
     storage: String,
     verifier: String,
+    project: String,
 }
 
 impl Deployment {
@@ -54,6 +55,20 @@ impl Deployment {
     /// As [`Deployment::new`], with the runtime credential replaced by
     /// `runtime_url` when one is given.
     pub async fn with_url(storage: &str, verifier: &str, runtime_url: Option<&str>) -> Self {
+        Self::build(storage, verifier, runtime_url, STARTER_PROJECT).await
+    }
+
+    /// As [`Deployment::new`], with `project` as the packaged project.
+    pub async fn with_project(storage: &str, verifier: &str, project: &str) -> Self {
+        Self::build(storage, verifier, None, project).await
+    }
+
+    async fn build(
+        storage: &str,
+        verifier: &str,
+        runtime_url: Option<&str>,
+        project: &str,
+    ) -> Self {
         let base = database_url();
         let schema = format!("documents_{}", Uuid::new_v4().simple());
         let separator = if base.contains('?') { '&' } else { '?' };
@@ -80,6 +95,7 @@ impl Deployment {
             scoped_url: scoped_url.clone(),
             storage: storage.to_owned(),
             verifier: verifier.to_owned(),
+            project: project.to_owned(),
         };
         deployment.secret("runtime-database-url", runtime_url.unwrap_or(&scoped_url));
         deployment.secret("migration-database-url", &scoped_url);
@@ -104,8 +120,7 @@ impl Deployment {
     }
 
     fn write_package(&self) {
-        let files =
-            BTreeMap::from([(PROJECT_FILE.to_owned(), STARTER_PROJECT.as_bytes().to_vec())]);
+        let files = BTreeMap::from([(PROJECT_FILE.to_owned(), self.project.as_bytes().to_vec())]);
         write_package(
             &self.directory.path().join("package"),
             &files,
@@ -191,5 +206,284 @@ audit:
 
     pub fn path(&self) -> &Path {
         self.directory.path()
+    }
+}
+
+/// The issuer every synthetic actor carries.
+pub const TEST_ISSUER: &str = "https://identity.example.test/realms/registry";
+
+/// The header a test names its caller in. A request without it has no
+/// actor.
+pub const TEST_SUBJECT_HEADER: &str = "x-test-subject";
+
+/// A synthetic actor source: the caller is the subject the test header
+/// names, acting under the custodian application's profile.
+#[derive(Debug, Default)]
+pub struct TestActors;
+
+impl registry_documents::actor::ActorSource for TestActors {
+    fn actor(&self, headers: &axum::http::HeaderMap) -> Option<registry_documents::actor::Actor> {
+        let subject = headers.get(TEST_SUBJECT_HEADER)?.to_str().ok()?;
+        Some(registry_documents::actor::Actor {
+            issuer: TEST_ISSUER.to_owned(),
+            subject: subject.to_owned(),
+            kind: registry_documents::actor::ActorKind::Service,
+            client_id: "civil-registry-app".to_owned(),
+            access_profile_id: "custodian-app".to_owned(),
+            issuing_institution: "civil-registry".to_owned(),
+        })
+    }
+}
+
+/// What a [`FakeVerifier`] answers.
+pub const APPROVE: u8 = 0;
+pub const REJECT: u8 = 1;
+pub const UNAVAILABLE: u8 = 2;
+
+/// A content verifier under test control: it approves, rejects, or does
+/// not answer, under the binding it was made with.
+#[derive(Debug)]
+pub struct FakeVerifier {
+    binding: String,
+    mode: std::sync::atomic::AtomicU8,
+    pub calls: std::sync::atomic::AtomicUsize,
+}
+
+impl FakeVerifier {
+    pub fn new(binding: &str, mode: u8) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            binding: binding.to_owned(),
+            mode: std::sync::atomic::AtomicU8::new(mode),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    pub fn answer(&self, mode: u8) {
+        self.mode.store(mode, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl registry_documents::verification::VerdictSource for FakeVerifier {
+    fn binding_digest(&self) -> &str {
+        &self.binding
+    }
+
+    async fn verdict(
+        &self,
+        _sha256: &str,
+        _media_type: &str,
+        _bytes: Vec<u8>,
+    ) -> Result<registry_platform_objectstore::Verdict, registry_platform_objectstore::VerifierError>
+    {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        match self.mode.load(std::sync::atomic::Ordering::SeqCst) {
+            APPROVE => Ok(registry_platform_objectstore::Verdict::Approved),
+            REJECT => Ok(registry_platform_objectstore::Verdict::Rejected),
+            _ => Err(registry_platform_objectstore::VerifierError::Unavailable),
+        }
+    }
+}
+
+/// One answered request: its status, headers, and body.
+#[derive(Debug)]
+pub struct Answer {
+    pub status: u16,
+    pub headers: axum::http::HeaderMap,
+    pub body: Vec<u8>,
+}
+
+impl Answer {
+    pub fn json(&self) -> serde_json::Value {
+        serde_json::from_slice(&self.body).expect("a JSON body")
+    }
+
+    /// Assert this is exactly the problem `code` names.
+    pub fn assert_problem(&self, code: registry_documents_core::ProblemCode) {
+        assert_eq!(
+            self.status,
+            code.http_status(),
+            "{code:?}: {}",
+            String::from_utf8_lossy(&self.body)
+        );
+        assert_eq!(self.headers["content-type"], "application/problem+json");
+        assert_eq!(self.json()["code"], code.code());
+    }
+}
+
+/// The document router of a prepared runtime, acting through
+/// [`TestActors`].
+#[derive(Clone)]
+pub struct Api {
+    router: axum::Router,
+}
+
+impl Api {
+    pub fn new(prepared: &registry_documents::runtime::Prepared) -> Self {
+        Self {
+            router: registry_documents::http::document_router(
+                prepared.service(),
+                std::sync::Arc::new(TestActors),
+            ),
+        }
+    }
+
+    pub async fn call(&self, request: axum::http::Request<axum::body::Body>) -> Answer {
+        use tower::ServiceExt as _;
+        let response = self.router.clone().oneshot(request).await.unwrap();
+        let status = response.status().as_u16();
+        let headers = response.headers().clone();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec();
+        Answer {
+            status,
+            headers,
+            body,
+        }
+    }
+
+    /// Reserve a document for `custodian` as `subject`.
+    pub async fn reserve(
+        &self,
+        subject: &str,
+        policy: &str,
+        custodian: &str,
+        content: &[u8],
+        media_type: &str,
+    ) -> Answer {
+        self.reserve_declared(
+            subject,
+            policy,
+            custodian,
+            &sha256(content),
+            content.len() as u64,
+            media_type,
+        )
+        .await
+    }
+
+    pub async fn reserve_declared(
+        &self,
+        subject: &str,
+        policy: &str,
+        custodian: &str,
+        digest: &str,
+        length: u64,
+        media_type: &str,
+    ) -> Answer {
+        let body = serde_json::json!({
+            "policyId": policy,
+            "custodian": {"subject": custodian},
+            "expectedDigest": digest,
+            "length": length,
+            "mediaType": media_type,
+        });
+        self.call(
+            axum::http::Request::post("/documents")
+                .header(TEST_SUBJECT_HEADER, subject)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+    }
+
+    /// Send `body` as the content of the upload at `path`.
+    pub async fn put(
+        &self,
+        subject: &str,
+        path: &str,
+        media_type: &str,
+        body: axum::body::Body,
+    ) -> Answer {
+        self.call(
+            axum::http::Request::put(path)
+                .header(TEST_SUBJECT_HEADER, subject)
+                .header("content-type", media_type)
+                .body(body)
+                .unwrap(),
+        )
+        .await
+    }
+
+    pub async fn read(&self, subject: &str, document: &str) -> Answer {
+        self.call(
+            axum::http::Request::get(format!("/documents/{document}"))
+                .header(TEST_SUBJECT_HEADER, subject)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+    }
+
+    pub async fn download(&self, subject: &str, document: &str, version: &str) -> Answer {
+        self.call(
+            axum::http::Request::get(format!("/documents/{document}/versions/{version}/content"))
+                .header(TEST_SUBJECT_HEADER, subject)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+    }
+}
+
+/// The `sha256:<hex>` digest of `bytes`.
+pub fn sha256(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    format!("sha256:{}", hex::encode(sha2::Sha256::digest(bytes)))
+}
+
+/// A small synthetic PDF body of `length` bytes.
+pub fn pdf(length: usize, seed: u8) -> Vec<u8> {
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    bytes.extend(
+        (0..length.saturating_sub(bytes.len()))
+            .map(|index| seed.wrapping_add(u8::try_from(index % 251).unwrap())),
+    );
+    bytes.truncate(length);
+    bytes
+}
+
+/// The reservation `answer` carries: the document id, version id, and
+/// upload path.
+pub fn reservation(answer: &Answer) -> (String, String, String) {
+    assert_eq!(
+        answer.status,
+        201,
+        "{}",
+        String::from_utf8_lossy(&answer.body)
+    );
+    let view = answer.json();
+    (
+        view["document"]["id"].as_str().unwrap().to_owned(),
+        view["document"]["version"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        view["uploadPath"].as_str().unwrap().to_owned(),
+    )
+}
+
+impl Deployment {
+    /// One value from the isolated schema.
+    pub async fn scalar<T>(&self, sql: &str) -> T
+    where
+        T: for<'a> tokio_postgres::types::FromSql<'a>,
+    {
+        self.admin
+            .batch_execute(&format!("SET search_path TO {}", self.schema))
+            .await
+            .unwrap();
+        self.admin.query_one(sql, &[]).await.unwrap().get(0)
+    }
+
+    /// Run `sql` in the isolated schema.
+    pub async fn execute(&self, sql: &str) {
+        self.admin
+            .batch_execute(&format!("SET search_path TO {}; {sql}", self.schema))
+            .await
+            .unwrap();
     }
 }

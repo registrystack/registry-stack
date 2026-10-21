@@ -5,6 +5,10 @@
 //! The runtime answers `/health` and refuses every other request with a
 //! problem from the closed vocabulary. Every response carries the request's
 //! trace and `Cache-Control: no-store`.
+//!
+//! The document routes are assembled by `document_router`, which exists
+//! only in test builds: the production listener serves no document route
+//! until it verifies the caller's token.
 
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::StatusCode;
@@ -24,12 +28,28 @@ tokio::task_local! {
 /// Every problem the HTTP surface can answer with.
 pub const HTTP_PROBLEMS: &[ProblemCode] = ProblemCode::ALL;
 
+/// The route that reserves a document.
+pub const DOCUMENTS_PATH: &str = "/documents";
+/// The route that reads one document.
+pub const DOCUMENT_PATH: &str = "/documents/{documentId}";
+/// The route that releases the content of one document version.
+pub const DOCUMENT_CONTENT_PATH: &str = "/documents/{documentId}/versions/{versionId}/content";
+/// The route an upload's content is sent to.
+pub const UPLOAD_CONTENT_PATH: &str = "/uploads/{uploadId}/content";
+
+/// The production surface: `/health` only.
 pub fn router() -> Router {
-    Router::new()
-        .route(HEALTH_PATH, get(health))
+    finish(Router::new().route(HEALTH_PATH, get(health)), Router::new())
+}
+
+/// Apply the shared fallbacks and boundary layers. `limited` routes take
+/// the default request body limit; `unlimited` routes bound their own body.
+fn finish(limited: Router, unlimited: Router) -> Router {
+    limited
+        .layer(request_body_limit_default())
+        .merge(unlimited)
         .fallback(route_not_found)
         .method_not_allowed_fallback(method_not_allowed)
-        .layer(request_body_limit_default())
         .layer(middleware::from_fn(http_boundary))
         .layer(security_headers(CspBuilder::restrictive()).without_hsts())
 }
@@ -94,7 +114,7 @@ fn current_trace() -> TraceContext {
 
 /// Render one problem: the pinned code, title, status, and detail from the
 /// closed vocabulary, under the answering request's trace.
-fn problem_response(problem: ProblemCode) -> Response {
+pub(crate) fn problem_response(problem: ProblemCode) -> Response {
     let trace = current_trace();
     let status = problem.http_status();
     let body = ProblemBody {
@@ -121,6 +141,173 @@ fn problem_response(problem: ProblemCode) -> Response {
         );
     }
     response
+}
+
+#[cfg(any(test, feature = "postgres-test"))]
+pub use documents::document_router;
+
+/// The document routes, served only by test builds through a synthetic
+/// actor source.
+#[cfg(any(test, feature = "postgres-test"))]
+mod documents {
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::extract::{Path, State};
+    use axum::http::header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, LOCATION};
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::response::{IntoResponse, Response};
+    use axum::routing::{get, post, put};
+    use axum::{Json, Router};
+    use registry_documents_core::{ProblemCode, ReserveDocumentRequest, HEALTH_PATH};
+    use uuid::Uuid;
+
+    use super::{
+        finish, health, problem_response, DOCUMENTS_PATH, DOCUMENT_CONTENT_PATH, DOCUMENT_PATH,
+        UPLOAD_CONTENT_PATH,
+    };
+    use crate::actor::{Actor, ActorSource};
+    use crate::service::DocumentService;
+
+    #[derive(Clone)]
+    struct DocumentState {
+        service: Arc<DocumentService>,
+        actors: Arc<dyn ActorSource>,
+    }
+
+    impl DocumentState {
+        /// The caller, or `request.not-found` so an unauthenticated caller
+        /// learns nothing about which documents exist.
+        fn actor(&self, headers: &HeaderMap) -> Result<Actor, ProblemCode> {
+            self.actors
+                .actor(headers)
+                .ok_or(ProblemCode::RequestNotFound)
+        }
+    }
+
+    fn identifier(text: &str) -> Result<Uuid, ProblemCode> {
+        Uuid::parse_str(text).map_err(|_| ProblemCode::RequestNotFound)
+    }
+
+    fn answer(result: Result<Response, ProblemCode>) -> Response {
+        result.unwrap_or_else(problem_response)
+    }
+
+    /// The health route and the document routes, acting for the callers
+    /// `actors` names.
+    pub fn document_router(service: Arc<DocumentService>, actors: Arc<dyn ActorSource>) -> Router {
+        let state = DocumentState { service, actors };
+        let limited = Router::new()
+            .route(HEALTH_PATH, get(health))
+            .route(DOCUMENTS_PATH, post(reserve))
+            .route(DOCUMENT_PATH, get(read))
+            .route(DOCUMENT_CONTENT_PATH, get(download))
+            .with_state(state.clone());
+        let unlimited = Router::new()
+            .route(UPLOAD_CONTENT_PATH, put(upload))
+            .with_state(state);
+        finish(limited, unlimited)
+    }
+
+    async fn reserve(
+        State(state): State<DocumentState>,
+        headers: HeaderMap,
+        Json(request): Json<ReserveDocumentRequest>,
+    ) -> Response {
+        answer(
+            async {
+                let actor = state.actor(&headers)?;
+                let view = state.service.reserve(&actor, &request).await?;
+                let location = format!("{DOCUMENTS_PATH}/{}", view.document.id);
+                Ok((StatusCode::CREATED, [(LOCATION, location)], Json(view)).into_response())
+            }
+            .await,
+        )
+    }
+
+    async fn read(
+        State(state): State<DocumentState>,
+        headers: HeaderMap,
+        Path(document_id): Path<String>,
+    ) -> Response {
+        answer(
+            async {
+                let actor = state.actor(&headers)?;
+                let view = state
+                    .service
+                    .read(&actor, identifier(&document_id)?)
+                    .await?;
+                Ok(Json(view).into_response())
+            }
+            .await,
+        )
+    }
+
+    async fn upload(
+        State(state): State<DocumentState>,
+        headers: HeaderMap,
+        Path(upload_id): Path<String>,
+        body: Body,
+    ) -> Response {
+        answer(
+            async {
+                let actor = state.actor(&headers)?;
+                let upload_id = identifier(&upload_id)?;
+                let content_type = headers
+                    .get(CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok());
+                let content_length = headers
+                    .get(CONTENT_LENGTH)
+                    .map(|value| {
+                        value
+                            .to_str()
+                            .ok()
+                            .and_then(|text| text.parse::<u64>().ok())
+                            .ok_or(ProblemCode::RequestInvalid)
+                    })
+                    .transpose()?;
+                let view = state
+                    .service
+                    .put_content(
+                        &actor,
+                        upload_id,
+                        content_type,
+                        content_length,
+                        body.into_data_stream(),
+                    )
+                    .await?;
+                Ok(Json(view).into_response())
+            }
+            .await,
+        )
+    }
+
+    async fn download(
+        State(state): State<DocumentState>,
+        headers: HeaderMap,
+        Path((document_id, version_id)): Path<(String, String)>,
+    ) -> Response {
+        answer(
+            async {
+                let actor = state.actor(&headers)?;
+                let content = state
+                    .service
+                    .download(&actor, identifier(&document_id)?, identifier(&version_id)?)
+                    .await?;
+                Ok((
+                    StatusCode::OK,
+                    [
+                        (CONTENT_TYPE, content.media_type),
+                        (CONTENT_LENGTH, content.bytes.len().to_string()),
+                        (CONTENT_DISPOSITION, "attachment".to_owned()),
+                    ],
+                    content.bytes,
+                )
+                    .into_response())
+            }
+            .await,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -173,6 +360,23 @@ mod tests {
         for path in ["/", "/documents", "/ready", "/metrics", "/health/extra"] {
             expect_problem(
                 call("GET", path, Body::empty()).await,
+                ProblemCode::RequestNotFound,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn the_served_router_carries_no_document_route() {
+        let id = "00000000-0000-4000-8000-000000000000";
+        for (method, uri) in [
+            ("POST", DOCUMENTS_PATH.to_owned()),
+            ("GET", format!("/documents/{id}")),
+            ("GET", format!("/documents/{id}/versions/{id}/content")),
+            ("PUT", format!("/uploads/{id}/content")),
+        ] {
+            expect_problem(
+                call(method, &uri, Body::from("%PDF")).await,
                 ProblemCode::RequestNotFound,
             )
             .await;

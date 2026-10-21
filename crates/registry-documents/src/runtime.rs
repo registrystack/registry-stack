@@ -2,7 +2,10 @@
 
 //! Service assembly: `documents serve` loads and checks the runtime
 //! configuration, confirms the database answers over the runtime
-//! credential, binds the listener, and serves the HTTP surface.
+//! credential, opens the audit journal, activates content storage and the
+//! content verifier, suspends every version verified under another
+//! verifier binding, binds the listener, and serves the HTTP surface beside
+//! the content verification worker.
 //!
 //! Every step that can refuse a deployment runs before the listener binds,
 //! so a mis-provisioned deployment never answers a request.
@@ -11,17 +14,39 @@
 //! is answering, and exits 0.
 
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 
 use clap::{Arg, Command};
+use registry_platform_audit::{AuditDestination, AuditProfile, AuditWriter};
+use registry_platform_dispatch::postgres::{DispatchWorker, Dispatcher, WorkerConfig};
 use registry_platform_yaml::Report;
 use thiserror::Error;
+use tokio::sync::watch;
 use tracing_subscriber::filter::LevelFilter;
 
-use crate::config::{startup_report, RuntimeConfig, RuntimeConfigError};
+use crate::audit::DocumentsAudit;
+use crate::config::{describe_secret_failure, startup_report, RuntimeConfig, RuntimeConfigError};
+use crate::content::{pinned_storage, ContentStorage, StorageError};
 use crate::http::router;
 use crate::package::{load_package, PackageLoadError};
+use crate::service::DocumentService;
 use crate::store::{PostgresStore, StoreError};
+use crate::verification::{
+    activate_verifier, dispatcher, job_table, sweep_bindings, VerdictSource, VerificationStore,
+    VerificationTransport,
+};
+
+/// The most verification attempts one process runs at once.
+const WORKER_CONCURRENCY: NonZeroUsize = match NonZeroUsize::new(4) {
+    Some(value) => value,
+    None => panic!("the worker concurrency is not zero"),
+};
+
+/// How long the verification worker waits after it finds no due job.
+const WORKER_IDLE_POLL: Duration = Duration::from_secs(5);
 
 #[must_use]
 pub fn command() -> Command {
@@ -98,18 +123,47 @@ fn load_config(path: &Path) -> Result<RuntimeConfig, RuntimeError> {
 }
 
 /// A runtime that passed every startup check and holds its bound listener.
-#[derive(Debug)]
 pub struct Prepared {
     listener: tokio::net::TcpListener,
+    service: Arc<DocumentService>,
+    dispatcher: Dispatcher<VerificationStore>,
+    transport: Arc<VerificationTransport>,
+}
+
+impl std::fmt::Debug for Prepared {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Prepared")
+            .field("listener", &self.listener)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Load and check the runtime document at `path` and the package it names,
 /// confirm the database answers over the runtime credential and carries
-/// exactly this release's schema, and bind the listener.
+/// exactly this release's schema, open the audit journal, activate content
+/// storage and the verifier, and bind the listener.
 pub async fn prepare(path: impl AsRef<Path>) -> Result<Prepared, RuntimeError> {
-    let config = load_config(path.as_ref())?;
-    let secrets = config.secret_resolver()?;
-    let _package = load_package(&config)?;
+    prepare_with(path.as_ref(), None).await
+}
+
+/// As [`prepare`], with the content verifier replaced by `verifier`, so a
+/// suite can drive approval, rejection, and an unavailable verifier.
+#[cfg(feature = "postgres-test")]
+pub async fn prepare_with_verifier(
+    path: impl AsRef<Path>,
+    verifier: Arc<dyn VerdictSource>,
+) -> Result<Prepared, RuntimeError> {
+    prepare_with(path.as_ref(), Some(verifier)).await
+}
+
+async fn prepare_with(
+    path: &Path,
+    verifier: Option<Arc<dyn VerdictSource>>,
+) -> Result<Prepared, RuntimeError> {
+    let config = load_config(path)?;
+    let secrets = Arc::new(config.secret_resolver()?);
+    let package = load_package(&config)?;
     let store = PostgresStore::connect_runtime(&config.database, &secrets).map_err(|source| {
         RuntimeError::Database {
             stage: "runtime database configuration",
@@ -130,10 +184,126 @@ pub async fn prepare(path: impl AsRef<Path>) -> Result<Prepared, RuntimeError> {
             stage: "runtime database schema check",
             source,
         })?;
+    let audit = open_audit(&config, &secrets).await?;
+    let database_id = config
+        .identity
+        .as_ref()
+        .map(|identity| identity.database_id.as_str().to_owned())
+        .ok_or(RuntimeError::Arguments)?;
+    let ceiling = config.storage.maximum_document_bytes();
+    let storage = Arc::new(
+        ContentStorage::activate(&config.storage, &database_id, Arc::clone(&secrets))
+            .await
+            .map_err(RuntimeError::Storage)?,
+    );
+    check_storage_pin(&store, &storage).await?;
+    let verifier = match verifier {
+        Some(verifier) => verifier,
+        None => activate_verifier(&config.content_verification, ceiling, &secrets)
+            .map_err(|error| RuntimeError::Verifier(error.to_string()))?,
+    };
+    let suspended = sweep_bindings(&store, verifier.binding_digest())
+        .await
+        .map_err(|source| RuntimeError::Database {
+            stage: "verifier binding sweep",
+            source,
+        })?;
+    if suspended > 0 {
+        tracing::warn!(
+            suspended,
+            "versions verified under another verifier binding were suspended for verification again"
+        );
+    }
+    let schema = store
+        .current_schema()
+        .await
+        .map_err(|source| RuntimeError::Database {
+            stage: "schema lookup",
+            source,
+        })?;
+    let jobs = job_table(&schema).map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
+    let dispatcher = dispatcher(VerificationStore::new(store.clone(), schema, audit.clone()))
+        .map_err(|error| RuntimeError::Dispatch(error.to_string()))?;
+    let transport = Arc::new(VerificationTransport::new(
+        store.clone(),
+        Arc::clone(&storage),
+        Arc::clone(&verifier),
+    ));
+    let service = Arc::new(DocumentService::new(
+        store,
+        Arc::new(package.project),
+        storage,
+        verifier.binding_digest().to_owned(),
+        jobs,
+        audit,
+        ceiling,
+    ));
     let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr())
         .await
         .map_err(RuntimeError::Listen)?;
-    Ok(Prepared { listener })
+    Ok(Prepared {
+        listener,
+        service,
+        dispatcher,
+        transport,
+    })
+}
+
+/// Open the audit journal the runtime document names, keyed by its audit
+/// secret.
+async fn open_audit(
+    config: &RuntimeConfig,
+    secrets: &registry_platform_config::SecretResolver,
+) -> Result<DocumentsAudit, RuntimeError> {
+    let reference = config.audit.key.hash_key_ref.as_str();
+    let secret = secrets.resolve(reference).map_err(|error| {
+        RuntimeError::AuditSecret(describe_secret_failure(
+            "audit.hashKeyRef",
+            reference,
+            &error,
+        ))
+    })?;
+    let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+        secret.expose_secret().to_vec(),
+    ))
+    .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
+    let destination = AuditDestination::from_settings(
+        config.audit.destination,
+        config.audit.path.clone(),
+        None,
+        None,
+    )
+    .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
+    let writer = AuditWriter::open(destination)
+        .await
+        .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
+    Ok(DocumentsAudit::new(writer, profile.key_hasher()))
+}
+
+/// Refuse a start whose storage is not the one the deployment pinned at
+/// its first write. A deployment that never wrote has no pin yet.
+async fn check_storage_pin(
+    store: &PostgresStore,
+    storage: &ContentStorage,
+) -> Result<(), RuntimeError> {
+    let client = store
+        .client()
+        .await
+        .map_err(|source| RuntimeError::Database {
+            stage: "storage pin read",
+            source,
+        })?;
+    let pinned = pinned_storage(&**client)
+        .await
+        .map_err(|error| RuntimeError::Storage(StorageError::Query(error)))?;
+    match pinned {
+        Some((backend, binding))
+            if backend != storage.backend() || binding != storage.binding() =>
+        {
+            Err(RuntimeError::StorageBindingChanged)
+        }
+        _ => Ok(()),
+    }
 }
 
 impl Prepared {
@@ -142,7 +312,33 @@ impl Prepared {
         self.listener.local_addr().map_err(RuntimeError::Listen)
     }
 
-    /// Serve until `shutdown` resolves, then finish the requests in flight.
+    /// The document operations this runtime serves.
+    #[must_use]
+    pub fn service(&self) -> Arc<DocumentService> {
+        Arc::clone(&self.service)
+    }
+
+    /// Run every due content verification attempt now and return how many
+    /// jobs moved.
+    #[cfg(feature = "postgres-test")]
+    pub async fn verify_due(&self) -> usize {
+        let (_sender, shutdown) = watch::channel(false);
+        self.worker().drain(&shutdown).await
+    }
+
+    fn worker(&self) -> DispatchWorker<VerificationStore, VerificationTransport> {
+        DispatchWorker::new(
+            self.dispatcher.clone(),
+            Arc::clone(&self.transport),
+            WorkerConfig {
+                concurrency: WORKER_CONCURRENCY,
+                idle_poll: WORKER_IDLE_POLL,
+            },
+        )
+    }
+
+    /// Serve until `shutdown` resolves, then finish the requests in flight
+    /// and stop the verification worker.
     pub async fn serve_until(
         self,
         shutdown: impl std::future::Future<Output = ()> + Send + 'static,
@@ -150,10 +346,19 @@ impl Prepared {
         if let Ok(address) = self.listener.local_addr() {
             tracing::info!(address = %address, "the Document Store is serving");
         }
-        axum::serve(self.listener, router())
+        let (stop, stopped) = watch::channel(false);
+        let worker = tokio::spawn(self.worker().run(stopped));
+        let served = axum::serve(self.listener, router())
             .with_graceful_shutdown(shutdown)
             .await
-            .map_err(RuntimeError::Listen)
+            .map_err(RuntimeError::Listen);
+        if stop.send(true).is_err() {
+            tracing::warn!("the content verification worker had already stopped");
+        }
+        if let Err(error) = worker.await {
+            tracing::error!(error = %error, "the content verification worker failed");
+        }
+        served
     }
 }
 
@@ -184,6 +389,23 @@ pub enum RuntimeError {
     Listen(#[source] std::io::Error),
     #[error("the Document Store shutdown signal handler could not be installed: {0}")]
     Signal(#[source] std::io::Error),
+    #[error("the Document Store audit key could not be read: {0}")]
+    AuditSecret(String),
+    #[error("the Document Store audit journal could not be opened: {0}")]
+    AuditJournal(String),
+    #[error("the Document Store content storage could not be activated: {0}")]
+    Storage(#[source] StorageError),
+    /// The configured storage is not the one the deployment pinned at its
+    /// first write. Content is never read from or written to another
+    /// backend, bucket, or scope.
+    #[error(
+        "the Document Store content storage is not the storage this deployment pinned at its first write"
+    )]
+    StorageBindingChanged,
+    #[error("the Document Store content verifier could not be activated: {0}")]
+    Verifier(String),
+    #[error("the Document Store verification worker could not be configured: {0}")]
+    Dispatch(String),
 }
 
 #[cfg(test)]
