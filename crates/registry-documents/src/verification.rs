@@ -593,7 +593,10 @@ impl DispatchStore for VerificationStore {
                     "UPDATE documents_versions
                         SET verification_state = 'approved', eligibility = 'releasable',
                             verified_binding_digest = $2, verified_digest = $3,
-                            verified_media_type = media_type, verified_at = transaction_timestamp()
+                            verified_media_type = media_type, verified_at = transaction_timestamp(),
+                            revision = revision + CASE
+                                WHEN verification_state = 'approved' AND eligibility = 'releasable'
+                                THEN 0 ELSE 1 END
                       WHERE version_id = $1 AND upload_state = 'finalized'
                         AND verification_state <> 'rejected' AND erasure_state = 'none'
                         AND verification_binding_digest = $2 AND computed_digest = $3
@@ -614,6 +617,7 @@ impl DispatchStore for VerificationStore {
                             verified_binding_digest = $2, verified_digest = $3,
                             verified_media_type = media_type,
                             verified_at = transaction_timestamp(),
+                            revision = version.revision + 1,
                             erasure_state = 'pending',
                             erasure_requested_at = transaction_timestamp(),
                             erasure_due_at = transaction_timestamp() + COALESCE(
@@ -992,7 +996,8 @@ pub async fn sweep_bindings(store: &PostgresStore, binding: &str) -> Result<u64,
     let rows = transaction
         .query(
             "UPDATE documents_versions
-                SET eligibility = 'suspended', verification_binding_digest = $1
+                SET eligibility = 'suspended', verification_binding_digest = $1,
+                    revision = revision + 1
               WHERE upload_state = 'finalized' AND verification_state <> 'rejected'
                 AND erasure_state = 'none' AND verification_binding_digest <> $1
               RETURNING version_id",

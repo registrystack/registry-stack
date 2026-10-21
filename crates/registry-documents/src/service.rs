@@ -1271,7 +1271,8 @@ impl DocumentService {
                 "UPDATE documents_versions
                     SET upload_state = 'finalized', computed_digest = $2,
                         finalized_at = transaction_timestamp(), storage_backend = $3,
-                        object_id = $4, verification_binding_digest = $5
+                        object_id = $4, verification_binding_digest = $5,
+                        revision = revision + 1
                   WHERE version_id = $1",
                 &[
                     &version_id,
