@@ -59,6 +59,11 @@ pub enum StartupError {
     DatabaseConnection(DatabaseConnectionCause),
     #[error("the Registry database is not ready for this package")]
     DatabaseUnready,
+    /// Schema-test preparation refused a role or catalog prerequisite. The
+    /// text is the kernel's fixed, value-free invariant, which names the cause
+    /// without any role name, catalog value, or connection detail.
+    #[error("the schema-test database setup was refused: {0}")]
+    SchemaTestSetupRefused(&'static str),
     /// Managed database object names only. No catalog values, role names, or
     /// connection details are included.
     #[error("the Registry database catalog differs from the runtime package")]
@@ -627,6 +632,7 @@ impl StartupError {
             Self::PackageEnvelopeRefused(_) => "the Registry package was refused",
             Self::DatabaseConnection(cause) => cause.message(),
             Self::DatabaseUnready => "the Registry database is not ready for this package",
+            Self::SchemaTestSetupRefused(_) => "the schema-test database setup was refused",
             Self::DatabaseCatalogDrift { .. } => {
                 "the Registry database catalog differs from the runtime package; run `bregctl doctor` to name the objects"
             }
@@ -1080,6 +1086,10 @@ fn schema_preparation_error(error: crate::postgres::PostgresKernelError) -> Star
             entity_id,
             field_id,
         },
+        crate::postgres::PostgresKernelError::RoleInvariant(invariant)
+        | crate::postgres::PostgresKernelError::CatalogInvariant(invariant) => {
+            StartupError::SchemaTestSetupRefused(invariant)
+        }
         _ => StartupError::DatabaseUnready,
     }
 }
@@ -2713,4 +2723,36 @@ async fn verify_configured_runtime_role(
         return Err(StartupError::DatabaseUnready);
     }
     Ok(())
+}
+
+#[cfg(all(test, feature = "runtime", feature = "tooling"))]
+mod schema_preparation_error_tests {
+    use super::*;
+    use crate::postgres::PostgresKernelError;
+
+    #[test]
+    fn role_and_catalog_invariants_keep_their_cause() {
+        assert_eq!(
+            schema_preparation_error(PostgresKernelError::RoleInvariant(
+                "schema-test runtime connection uses unexpected authority"
+            )),
+            StartupError::SchemaTestSetupRefused(
+                "schema-test runtime connection uses unexpected authority"
+            )
+        );
+        assert_eq!(
+            schema_preparation_error(PostgresKernelError::CatalogInvariant(
+                "administrator-installed btree_gist is required"
+            )),
+            StartupError::SchemaTestSetupRefused("administrator-installed btree_gist is required")
+        );
+    }
+
+    #[test]
+    fn connection_failures_stay_database_unready() {
+        assert_eq!(
+            schema_preparation_error(PostgresKernelError::Connection),
+            StartupError::DatabaseUnready
+        );
+    }
 }

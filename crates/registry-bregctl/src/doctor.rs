@@ -225,6 +225,9 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "database",
             "the database is not ready for the runtime package",
         ),
+        StartupError::SchemaTestSetupRefused(_) => {
+            unreachable!("only schema-test preparation raises it")
+        }
         StartupError::DatabaseCatalogDrift { .. } => unreachable!("handled above"),
         StartupError::DatabaseUninitialized => (
             "startup.database.uninitialized",

@@ -743,6 +743,7 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::PackageEnvelopeRefused(_) => "the Registry package was refused",
         StartupError::DatabaseConnection(cause) => cause.message(),
         StartupError::DatabaseUnready => "the Registry database is not ready for this package",
+        StartupError::SchemaTestSetupRefused(_) => "the schema-test database setup was refused",
         StartupError::DatabaseCatalogDrift { .. } => "the Registry database catalog differs from the runtime package; run `bregctl doctor` to name the objects",
         StartupError::DatabaseUninitialized => {
             "the Registry database records no activated package; run `bregctl apply --package DIR --initial` to activate the first package"

@@ -1764,6 +1764,7 @@ enum SuggestedAction {
     CorrectFixtureJourneys,
     SupplySchemaTestCredentials,
     PrepareSchemaTestDatabase,
+    CorrectDatabaseSetup,
     RecreateDisposableDatabase,
     ChooseSchemaTestOutput,
     VerifyMigrationAuthority,
@@ -5851,6 +5852,23 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             DiagnosticArtifact::SchemaTestDatabase,
             SuggestedAction::RecreateDisposableDatabase,
         ),
+        TestLifecycleError::DatabaseSetupRefused(invariant) => {
+            return FailureReport {
+                ok: false,
+                command: "test",
+                diagnostics: vec![tool_diagnostic(
+                    diagnostic(
+                        "test.database.setup-refused",
+                        "database",
+                        &format!(
+                            "the schema-test database setup was refused: {invariant}; correct that prerequisite (see Provision PostgreSQL for the roles, grants, and extensions), then recreate the disposable database before retrying"
+                        ),
+                    ),
+                    DiagnosticArtifact::SchemaTestDatabase,
+                    SuggestedAction::CorrectDatabaseSetup,
+                )],
+            };
+        }
         TestLifecycleError::Execution => (
             "test.execution.refused",
             "execution",
