@@ -54,6 +54,12 @@
   `config.invalid-value` at the member and the shared URL sentence.
 - A removed-key path segment may name a variant, `name[tag=value]`, so a key
   renamed in one variant of a tagged union is named as renamed only there.
+- `registry-platform-dispatch` adds `postgres::cancel_unattempted`, which
+  cancels one job inside the caller's transaction only while it is pending
+  at attempt 0, so a product withdraws work in the transaction that made it
+  obsolete. It returns `false` and leaves the job alone in any other state,
+  and fails with `DispatchError::Unavailable` when the update fails or
+  changes more than one row.
 
 ## 0.43.0 - 2026-10-21
 
