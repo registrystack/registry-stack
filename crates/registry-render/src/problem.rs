@@ -6,7 +6,7 @@ use std::fmt;
 use registry_platform_yaml::{Diagnostic, Report};
 
 /// Base URI for RFC 9457 problem types, shared by HTTP responses and CLI
-/// `--json` failure documents.
+/// `--format json` failure documents.
 pub const PROBLEM_TYPE_BASE: &str = "https://render.registrystack.org/problems";
 
 /// The closed set of Render failure kinds.
@@ -57,7 +57,7 @@ pub enum ProblemKind {
 }
 
 impl ProblemKind {
-    /// Stable process exit code for CLI use (`--json` scripts rely on it).
+    /// Stable process exit code for CLI use (`--format json` scripts rely on it).
     /// One code per kind: scripts must be able to branch exactly.
     pub fn exit_code(&self) -> i32 {
         match self {

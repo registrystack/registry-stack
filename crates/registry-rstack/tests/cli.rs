@@ -121,6 +121,23 @@ fn action_help_accepts_json_after_the_product_without_an_installation() {
 }
 
 #[test]
+fn evidence_junit_help_remains_offline_for_supported_commands() {
+    for arguments in [
+        &["--format", "junit", "evidence", "test", "--help"][..],
+        &["evidence", "fixtures", "run", "--help", "--format=junit"][..],
+    ] {
+        let output = run(arguments);
+        assert!(output.status.success(), "{arguments:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{arguments:?}: {output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            stdout.contains("rstack evidence"),
+            "{arguments:?}: {stdout}"
+        );
+    }
+}
+
+#[test]
 fn offline_help_refuses_unknown_surplus_actions_and_options() {
     for arguments in [
         &["evidence", "unknown", "--help"][..],

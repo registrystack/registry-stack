@@ -45,6 +45,14 @@ enum ReportFormat {
     Json,
 }
 
+#[derive(Clone, Copy)]
+enum RequestedReportFormat {
+    Human,
+    Json,
+    Junit,
+    Invalid,
+}
+
 #[derive(Parser)]
 #[command(
     name = "rstack",
@@ -53,7 +61,8 @@ enum ReportFormat {
     about = "Registry Stack command and component manager"
 )]
 struct Cli {
-    /// Report encoding. Defaults to human even when stdout is piped.
+    /// Report encoding. Defaults to human even when stdout is piped. Evidence
+    /// test and fixtures run also accept junit.
     #[arg(long, global = true, value_enum, action = ArgAction::Append, default_value = "human")]
     format: Vec<ReportFormat>,
 
@@ -153,10 +162,30 @@ pub fn command() -> clap::Command {
 
 pub fn run() -> i32 {
     let arguments: Vec<OsString> = std::env::args_os().collect();
-    let (duplicate_format, json_requested, format_supplied) = report_arguments(&arguments);
+    let (duplicate_format, json_requested, format_supplied, requested_format) =
+        report_arguments(&arguments);
     if duplicate_format {
         return emit_failure(2, "--format may be supplied only once", json_requested);
     }
+    let evidence_junit = match requested_format {
+        Some(RequestedReportFormat::Junit) if evidence_supports_junit(&arguments) => true,
+        Some(RequestedReportFormat::Junit) => {
+            return emit_failure(
+                2,
+                "--format junit is supported only by evidence test and evidence fixtures run",
+                json_requested,
+            );
+        }
+        Some(RequestedReportFormat::Invalid) => {
+            return emit_failure(2, "--format must be human or json", json_requested);
+        }
+        _ => false,
+    };
+    let arguments = if evidence_junit {
+        remove_report_format(arguments)
+    } else {
+        arguments
+    };
     let cli = match Cli::try_parse_from(arguments) {
         Ok(cli) => cli,
         Err(error) => {
@@ -168,7 +197,7 @@ pub fn run() -> i32 {
             return code;
         }
     };
-    if let Err(error) = execute(cli, format_supplied) {
+    if let Err(error) = execute(cli, format_supplied, evidence_junit) {
         if error.reported {
             return error.code;
         }
@@ -177,9 +206,10 @@ pub fn run() -> i32 {
     0
 }
 
-fn report_arguments(arguments: &[OsString]) -> (bool, bool, bool) {
+fn report_arguments(arguments: &[OsString]) -> (bool, bool, bool, Option<RequestedReportFormat>) {
     let mut occurrences = 0;
     let mut json = false;
+    let mut requested = None;
     let mut values = arguments.iter().skip(1);
     while let Some(argument) = values.next() {
         if argument == "--" {
@@ -187,16 +217,93 @@ fn report_arguments(arguments: &[OsString]) -> (bool, bool, bool) {
         }
         if argument == "--format" {
             occurrences += 1;
-            json |= values.next().is_some_and(|value| value == "json");
+            if let Some(value) = values.next() {
+                requested = Some(requested_report_format(value));
+                json |= matches!(requested, Some(RequestedReportFormat::Json));
+            }
         } else if let Some(value) = argument
             .to_str()
             .and_then(|text| text.strip_prefix("--format="))
         {
             occurrences += 1;
-            json |= value == "json";
+            requested = Some(requested_report_format(&OsString::from(value)));
+            json |= matches!(requested, Some(RequestedReportFormat::Json));
         }
     }
-    (occurrences > 1, json, occurrences > 0)
+    (occurrences > 1, json, occurrences > 0, requested)
+}
+
+fn requested_report_format(value: &OsString) -> RequestedReportFormat {
+    match value.to_str() {
+        Some("human") => RequestedReportFormat::Human,
+        Some("json") => RequestedReportFormat::Json,
+        Some("junit") => RequestedReportFormat::Junit,
+        _ => RequestedReportFormat::Invalid,
+    }
+}
+
+fn evidence_supports_junit(arguments: &[OsString]) -> bool {
+    let command = command_tokens(arguments);
+    matches!(
+        command.as_slice(),
+        ["evidence", "test", ..] | ["evidence", "fixtures", "run", ..]
+    )
+}
+
+fn command_tokens(arguments: &[OsString]) -> Vec<&str> {
+    let mut command = Vec::new();
+    let mut index = 1;
+    while index < arguments.len() {
+        let Some(argument) = arguments[index].to_str() else {
+            return Vec::new();
+        };
+        if argument == "--" {
+            break;
+        }
+        if matches!(
+            argument,
+            "--format" | "--install-root" | "--bin-dir" | "--asset-dir"
+        ) {
+            index += 2;
+            continue;
+        }
+        if argument.starts_with("--format=")
+            || argument.starts_with("--install-root=")
+            || argument.starts_with("--bin-dir=")
+            || argument.starts_with("--asset-dir=")
+        {
+            index += 1;
+            continue;
+        }
+        if !argument.starts_with('-') {
+            command.push(argument);
+        }
+        index += 1;
+    }
+    command
+}
+
+fn remove_report_format(mut arguments: Vec<OsString>) -> Vec<OsString> {
+    let mut index = 1;
+    while index < arguments.len() {
+        if arguments[index] == "--" {
+            break;
+        }
+        if arguments[index] == "--format" {
+            let end = usize::min(index + 2, arguments.len());
+            arguments.drain(index..end);
+            break;
+        }
+        if arguments[index]
+            .to_str()
+            .is_some_and(|argument| argument.starts_with("--format="))
+        {
+            arguments.remove(index);
+            break;
+        }
+        index += 1;
+    }
+    arguments
 }
 
 fn emit_failure(code: i32, message: &str, json: bool) -> i32 {
@@ -269,7 +376,7 @@ impl From<&str> for CliFailure {
     }
 }
 
-fn execute(cli: Cli, format_supplied: bool) -> Result<(), CliFailure> {
+fn execute(cli: Cli, format_supplied: bool, evidence_junit: bool) -> Result<(), CliFailure> {
     if cli.format.len() > 1 {
         return Err("--format may be supplied only once".into());
     }
@@ -469,7 +576,13 @@ fn execute(cli: Cli, format_supplied: bool) -> Result<(), CliFailure> {
             if let Some((help_format, path)) = product_help_request(arguments, format)? {
                 product_help(product, help_format, &path)?;
             } else {
-                dispatch_product(&cli, product, &arguments[1..], format_supplied)?;
+                dispatch_product(
+                    &cli,
+                    product,
+                    &arguments[1..],
+                    format_supplied,
+                    evidence_junit,
+                )?;
             }
         }
     }
@@ -907,6 +1020,7 @@ fn dispatch_product(
     product: &str,
     arguments: &[OsString],
     format_supplied: bool,
+    evidence_junit: bool,
 ) -> Result<(), CliFailure> {
     let Some((lease, selection, manifest)) = selected_state(cli)? else {
         return Err(CliFailure::domain(format!(
@@ -929,28 +1043,27 @@ fn dispatch_product(
         .join(&component.entrypoint);
     let mut command = ProcessCommand::new(&executable);
     set_selected_generation_environment(&mut command, lease.path(), &selection, &manifest)?;
-    let product_has_format = arguments
+    let delimiter = arguments
         .iter()
-        .take_while(|argument| *argument != "--")
-        .any(|argument| {
-            argument == "--format"
-                || argument
-                    .to_str()
-                    .is_some_and(|value| value.starts_with("--format="))
-        });
-    if format_supplied && !product_has_format {
-        let format = cli
-            .format
-            .first()
-            .expect("explicit report format is parsed");
+        .position(|argument| argument == "--")
+        .unwrap_or(arguments.len());
+    let product_has_format = arguments.iter().take(delimiter).any(|argument| {
+        argument == "--format"
+            || argument
+                .to_str()
+                .is_some_and(|value| value.starts_with("--format="))
+    });
+    let format = cli.format.first().copied().unwrap_or(ReportFormat::Human);
+    if evidence_junit {
+        debug_assert_eq!(product, "evidence");
+        command.args(&arguments[..delimiter]);
+        command.args(["--format", "junit"]);
+        command.args(&arguments[delimiter..]);
+    } else if format_supplied && !product_has_format {
         let format = match format {
             ReportFormat::Human => "human",
             ReportFormat::Json => "json",
         };
-        let delimiter = arguments
-            .iter()
-            .position(|argument| argument == "--")
-            .unwrap_or(arguments.len());
         command.args(&arguments[..delimiter]);
         command.args(["--format", format]);
         command.args(&arguments[delimiter..]);

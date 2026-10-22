@@ -104,6 +104,93 @@ fn fixture(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
     (manifest_path, checksums, launcher)
 }
 
+fn install_products(directory: &Path, products: &[&str]) -> (PathBuf, PathBuf) {
+    let assets = directory.join("assets");
+    fs::create_dir(&assets).unwrap();
+    let (manifest, checksums, launcher) = fixture(&assets);
+    let root = directory.join("lib");
+    let bin = directory.join("bin");
+    let installed = Command::new(env!("CARGO_BIN_EXE_rstack"))
+        .args(["bootstrap", "--release-manifest"])
+        .arg(manifest)
+        .arg("--checksum-file")
+        .arg(checksums)
+        .arg("--launcher-asset")
+        .arg(launcher)
+        .arg("--asset-dir")
+        .arg(&assets)
+        .arg("--install-root")
+        .arg(&root)
+        .arg("--bin-dir")
+        .arg(&bin)
+        .args(products)
+        .output()
+        .unwrap();
+    assert!(installed.status.success(), "{installed:?}");
+    (root, bin)
+}
+
+fn installed_command(bin: &Path, root: &Path) -> Command {
+    let mut command = Command::new(bin.join("rstack"));
+    command
+        .arg("--install-root")
+        .arg(root)
+        .arg("--bin-dir")
+        .arg(bin);
+    command
+}
+
+#[test]
+fn evidence_junit_format_reaches_only_the_supported_commands() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (root, bin) = install_products(scratch.path(), &["evidence"]);
+
+    for arguments in [
+        &["--format", "junit", "evidence", "test", "project"][..],
+        &["evidence", "test", "project", "--format", "junit"][..],
+        &["evidence", "fixtures", "run", "project", "--format=junit"][..],
+    ] {
+        let output = installed_command(&bin, &root)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(7), "{arguments:?}: {output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains("arg:--format\narg:junit\n"), "{stdout}");
+        assert!(!stdout.contains("arg:human\n"), "{stdout}");
+    }
+
+    let unsupported = installed_command(&bin, &root)
+        .args(["evidence", "check", "project", "--format", "junit"])
+        .output()
+        .unwrap();
+    assert_eq!(unsupported.status.code(), Some(2), "{unsupported:?}");
+    assert!(unsupported.stdout.is_empty(), "{unsupported:?}");
+
+    let management = installed_command(&bin, &root)
+        .args(["components", "list", "--format", "junit"])
+        .output()
+        .unwrap();
+    assert_eq!(management.status.code(), Some(2), "{management:?}");
+    assert!(management.stdout.is_empty(), "{management:?}");
+
+    let other_product = installed_command(&bin, &root)
+        .args(["render", "validate", "--format", "junit"])
+        .output()
+        .unwrap();
+    assert_eq!(other_product.status.code(), Some(2), "{other_product:?}");
+    assert!(other_product.stdout.is_empty(), "{other_product:?}");
+
+    let duplicate = installed_command(&bin, &root)
+        .args([
+            "--format", "human", "evidence", "test", "project", "--format", "junit",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(duplicate.status.code(), Some(2), "{duplicate:?}");
+    assert!(duplicate.stdout.is_empty(), "{duplicate:?}");
+}
+
 #[test]
 fn old_invocation_keeps_its_generation_while_new_one_activates() {
     let scratch = tempfile::tempdir().unwrap();

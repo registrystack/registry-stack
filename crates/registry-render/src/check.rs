@@ -7,7 +7,7 @@
 //! with no package, secret material, or listener.
 //! The rendered file closure is governed where a render exists to capture
 //! it: the golden suite pins each acceptance bundle's closure and proves
-//! every file it reads is manifest-governed, and `compile --json` reports
+//! every file it reads is manifest-governed, and `compile --format json` reports
 //! `deps` for authors reviewing their own bundles.
 
 use std::collections::BTreeSet;

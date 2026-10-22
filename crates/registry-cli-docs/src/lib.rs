@@ -23,7 +23,7 @@ pub fn catalog() -> Catalog {
         command_reference(registry_messaging::runtime::command(), None, None),
         command_reference(registry_messagingctl::command(), None, None),
         command_reference(registry_manifest_cli::command(), None, None),
-        command_reference(registry_rstack::command(), None, None),
+        rstack_reference(),
         command_reference(registry_breg::command(), None, None),
         command_reference(registry_breg_mcp::command(), None, None),
         command_reference(registry_breg_review::command(), None, None),
@@ -40,6 +40,26 @@ pub fn catalog() -> Catalog {
         source_version: env!("CARGO_PKG_VERSION"),
         binaries,
     }
+}
+
+/// Build the launcher reference with its product-owned offline help command.
+/// The shared walker omits commands named `help` because Clap normally adds
+/// one synthetically, while `rstack` disables that command and defines its own.
+fn rstack_reference() -> CommandReference {
+    let command = registry_rstack::command();
+    let (help_index, help) = command
+        .get_subcommands()
+        .filter(|subcommand| !subcommand.is_hide_set())
+        .enumerate()
+        .find(|(_, subcommand)| subcommand.get_name() == "help")
+        .expect("rstack command tree publishes offline help");
+    let help = help.clone();
+    let mut reference = command_reference(command, None, None);
+    reference.subcommands.insert(
+        help_index,
+        command_reference(help, Some(&reference.invocation), None),
+    );
+    reference
 }
 
 /// The committed catalog snapshot the docs site renders, beside this crate's
@@ -855,16 +875,21 @@ mod tests {
                         option.display
                     );
                     assert!(
-                        option.description == "Runtime configuration file"
-                            || option.description
-                                == format!(
-                                    "Runtime configuration file. {}",
-                                    registry_cli_reference::SYMBOLIC_LINK_REFUSAL
-                                ),
+                        option.description.starts_with("Runtime configuration file"),
                         "{}: {}",
                         command.invocation,
                         option.description
                     );
+                    if command.invocation == "bregctl" || command.invocation.starts_with("bregctl ")
+                    {
+                        assert_eq!(
+                            option.description.matches(SYMBOLIC_LINK_REFUSAL).count(),
+                            1,
+                            "{}: {}",
+                            command.invocation,
+                            option.description
+                        );
+                    }
                 }
             }
             assert!(!command
