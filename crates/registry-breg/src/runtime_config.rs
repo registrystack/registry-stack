@@ -4048,6 +4048,28 @@ fn oidc_leeway(milliseconds: u64) -> Result<Duration> {
     Ok(Duration::from_millis(milliseconds))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::RuntimeConfigError;
+    use crate::attachment_verification_worker::ATTEMPT_BUDGET;
+
+    #[test]
+    fn the_attempt_budget_action_states_the_worker_budget() {
+        let budget = ATTEMPT_BUDGET.as_millis();
+        assert_eq!(budget, 55_000);
+        let action = RuntimeConfigError::AttachmentAttemptBudgetExceeded.suggested_action();
+        assert!(
+            action.ends_with(&format!("add up to at most {budget}.")),
+            "{action}"
+        );
+        let message = RuntimeConfigError::AttachmentAttemptBudgetExceeded.to_string();
+        assert!(
+            message.contains(&format!("the {budget} millisecond budget")),
+            "{message}"
+        );
+    }
+}
+
 #[cfg(all(test, feature = "schema"))]
 mod schema_tests {
     use serde_json::json;
