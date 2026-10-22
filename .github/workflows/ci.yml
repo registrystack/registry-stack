@@ -1781,6 +1781,24 @@ jobs:
       - name: Test rstack release component inventory
         run: python3 -m unittest release/scripts/test_rstack_components.py
 
+      - name: Test release unit ownership
+        run: python3 -m unittest release/scripts/test_release_units.py
+
+      - name: Test scoped candidate contracts
+        run: uv run --no-project --with jsonschema==4.25.1 python3 -m unittest release/scripts/test_release_candidate_v3.py
+
+      - name: Test distribution component selection
+        run: python3 -m unittest release/scripts/test_release_distribution.py
+
+      - name: Test unit release pipeline
+        run: python3 -m unittest release/scripts/test_unit_release_pipeline.py
+
+      - name: Test Discovery installer
+        run: python3 -m unittest release/scripts/test_discovery_install.py
+
+      - name: Test installed Discovery and SDK smoke
+        run: python3 -m unittest release/scripts/test_smoke_discovery_distribution.py
+
       - name: Test public release verifier
         run: python3 -m unittest release/scripts/test_verify_public_release.py
 

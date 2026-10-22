@@ -43,6 +43,7 @@ const cacheRoot = resolve(root, '.repo-docs-cache');
 // Repo id -> the spec path within the repo. Only repos listed here publish an
 // aggregated API reference; others are skipped.
 const SPEC_SOURCES = {
+  'registry-discovery': 'crates/registry-discovery/openapi.json',
   'registry-casework': 'products/casework/generated/registry-casework.openapi.json',
   'registry-scheduling': 'products/scheduling/generated/registry-scheduling.openapi.json',
   'registry-messaging': 'products/messaging/generated/registry-messaging.openapi.json',
@@ -183,6 +184,12 @@ async function main() {
 
   let written = 0;
   for (const [repoId, specPath] of Object.entries(SPEC_SOURCES)) {
+    // Discovery first enters the docset line with independent product releases,
+    // so archives without a Discovery selection publish no Discovery spec.
+    if (repoId === 'registry-discovery' && !docset.products[repoId]) {
+      console.log(`Skipped ${repoId} OpenAPI spec absent from docset ${docset.id}.`);
+      continue;
+    }
     // Casework, Scheduling, Messaging, and the Coordinator first enter the
     // docset line after the archives that predate them, so a docset without
     // the product pins no spec for it.

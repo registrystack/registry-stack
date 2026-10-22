@@ -53,7 +53,11 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   request binding and the distinction between verified, raw, unsigned, and
   holder-bound results across language conversions. Portable verifier means
   independent of the service runtime, not unrestricted target support.
-- Discovery selections remain inert public metadata. Structural validation or
+- Discovery HTTP response decoding uses client-owned tolerant wire models.
+  Ignore additive response fields and valid unknown problem types; validate
+  known fields, reject duplicates and unsupported service kinds, and preserve
+  bounded, value-free failures. Shared persisted and server models remain strict.
+  Discovery selections remain inert public metadata. Structural validation or
   persistence cannot create trust; local acceptance must precede credentials
   and native provider access. Renewal cannot accept changed semantics silently.
 - BReg writes require complete caller-filtered metadata bindings tied to the

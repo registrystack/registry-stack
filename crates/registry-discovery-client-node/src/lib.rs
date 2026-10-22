@@ -77,6 +77,11 @@ fn error(source: DiscoveryClientError) -> Error {
             "problem": problem_name(problem),
             "message": "Discovery refused the request"
         }),
+        DiscoveryClientError::UnrecognizedProblem { status } => json!({
+            "kind": "problem",
+            "status": status,
+            "message": "Discovery refused or failed the request with an unrecognized problem type"
+        }),
         DiscoveryClientError::Protocol => json!({
             "kind": "protocol",
             "message": "the Discovery response did not satisfy its closed wire contract"

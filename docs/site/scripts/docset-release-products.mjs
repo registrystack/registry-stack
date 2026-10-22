@@ -39,7 +39,12 @@ export function releaseArtifactFor(productId, docsetId, releaseArtifacts) {
 /** The release version when the manifest ships the product, else the unreleased label. */
 export function releaseProductVersion(productId, docsetId, manifest, releaseArtifacts) {
   const artifact = releaseArtifactFor(productId, docsetId, releaseArtifacts);
-  return Object.hasOwn(manifest?.artifacts ?? {}, artifact) ? docsetId : UNRELEASED_PRODUCT_VERSION;
+  if (!Object.hasOwn(manifest?.artifacts ?? {}, artifact)) return UNRELEASED_PRODUCT_VERSION;
+  const version = manifest.artifacts[artifact];
+  if (typeof version !== 'string' || !releaseTagPattern.test(`v${version}`)) {
+    throw new Error(`release manifest artifact ${artifact} must be an unprefixed stable semantic version`);
+  }
+  return `v${version}`;
 }
 
 /**

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "registry-stack.sdk-compatibility.v1",
+  "sdkPackage": {
+    "name": "registry-stack-client",
+    "version": "0.44.0"
+  },
+  "namespaces": {
+    "discovery": {
+      "testedServerBaseline": "0.44.0",
+      "compatibleServerPatchLine": "0.44.x",
+      "responseCompatibility": {
+        "additiveObjectMembers": "ignored-after-duplicate-key-rejection",
+        "unknownProblemCodes": "http-status-only",
+        "proof": "registry-discovery-client::client::tests::real_client_ignores_additive_response_members_at_every_response_level"
+      }
+    }
+  }
+}

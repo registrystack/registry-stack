@@ -5,6 +5,16 @@
 # standards_referenced and last_reviewed so future current-page reviews cannot
 # rewrite historical metadata.
 repos:
+  # Discovery has its own release identity. Stack candidates select its
+  # generated OpenAPI at discovery/vX.Y.Z while the maintained hand-authored
+  # Discovery adopter pages remain alongside its generated API operations.
+  registry-discovery:
+    remote: https://github.com/registrystack/registry-stack
+    ref: HEAD
+    version: main source (unreleased)
+    local: ../..
+    openapi: crates/registry-discovery/openapi.json
+
   # Scheduling is unreleased MVP work. Only its product-owned OpenAPI artifact
   # is pulled; the API reference page beside it is hand-authored, and no other
   # Scheduling doc lane exists yet.

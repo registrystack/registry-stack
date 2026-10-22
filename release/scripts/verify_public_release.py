@@ -15,7 +15,8 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
+from urllib.parse import quote
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -25,9 +26,13 @@ if str(SCRIPT_DIR) not in sys.path:
 import release_candidate
 import client_registry
 import macos_fips_packaging
+import release_units  # noqa: E402
 
 
 TAG_PATTERN = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+UNIT_TAG_PATTERN = re.compile(
+    r"^(?P<unit>[a-z][a-z0-9-]*)/v(?P<version>(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$"
+)
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^sha256:([0-9a-f]{64})$")
 CHECKSUM_LINE = re.compile(r"^([0-9a-f]{64})  ([^\r\n]+)$")
@@ -36,6 +41,58 @@ SIGNER_ISSUER = "https://token.actions.githubusercontent.com"
 
 class PublicReleaseError(RuntimeError):
     """The public release does not satisfy its minimum contract."""
+
+
+class ReleaseIdentity(NamedTuple):
+    """Closed public names derived from one canonical release tag."""
+
+    unit: str | None
+    version: str
+    asset_tag: str
+    manifest_name: str
+    artifact_prefix: str
+
+
+def release_identity(tag: str) -> ReleaseIdentity:
+    if TAG_PATTERN.fullmatch(tag) is not None:
+        version = tag.removeprefix("v")
+        prefix = f"registry-stack-{tag}"
+        return ReleaseIdentity(
+            None,
+            version,
+            tag,
+            f"{prefix}-release-manifest.json",
+            prefix,
+        )
+
+    match = UNIT_TAG_PATTERN.fullmatch(tag)
+    if match is None:
+        raise PublicReleaseError(
+            "tag must be a canonical release tag: v<major>.<minor>.<patch> or "
+            "<unit>/v<major>.<minor>.<patch>"
+        )
+    unit = match.group("unit")
+    version = match.group("version")
+    try:
+        release_units.load_registry().require_pilot(unit)
+        expected_tag = release_units.release_tag(unit, version)
+        manifest_name = release_units.public_manifest_name(unit, version)
+    except release_units.UnitRegistryError as exc:
+        raise PublicReleaseError(
+            f"release pilot does not support public verification for {unit!r}: {exc}"
+        ) from exc
+    if tag != expected_tag:
+        raise PublicReleaseError(f"release tag must be {expected_tag}")
+    suffix = "-release-manifest.json"
+    if not manifest_name.endswith(suffix):
+        raise PublicReleaseError("release unit manifest name has an unsupported form")
+    return ReleaseIdentity(
+        unit,
+        version,
+        release_units.asset_tag(version),
+        manifest_name,
+        manifest_name.removesuffix(suffix),
+    )
 
 
 def version_uses_client_registries(version: str) -> bool:
@@ -142,7 +199,8 @@ def validate_release_metadata(
     *,
     tag: str,
 ) -> dict[str, dict[str, Any]]:
-    if not isinstance(release, dict) or not isinstance(latest, dict):
+    identity = release_identity(tag)
+    if not isinstance(release, dict):
         raise PublicReleaseError("GitHub release metadata is malformed")
     if (
         release.get("tag_name") != tag
@@ -152,9 +210,13 @@ def validate_release_metadata(
         or not release["published_at"]
     ):
         raise PublicReleaseError(f"GitHub Release {tag} is not a published Beta")
-    if latest.get("tag_name") != tag:
+    if identity.unit is None and (
+        not isinstance(latest, dict) or latest.get("tag_name") != tag
+    ):
         raise PublicReleaseError(
-            f"GitHub latest release is {latest.get('tag_name')!r}, not {tag}"
+            "GitHub latest release is "
+            f"{latest.get('tag_name') if isinstance(latest, dict) else None!r}, "
+            f"not {tag}"
         )
     assets = release.get("assets")
     if not isinstance(assets, list) or not assets:
@@ -212,6 +274,7 @@ def verify_downloaded_assets(
     *,
     tag: str,
 ) -> tuple[dict[str, str], str, str | None]:
+    identity = release_identity(tag)
     downloaded = {
         path.name: path
         for path in directory.iterdir()
@@ -234,10 +297,12 @@ def verify_downloaded_assets(
         actual_digests[name] = actual
 
     checksum_name = "SHA256SUMS"
-    bundle_name = f"registry-stack-{tag}-SHA256SUMS.sigstore.json"
-    provenance_name = f"registry-stack-{tag}-SHA256SUMS.intoto.jsonl"
+    bundle_name = f"{identity.artifact_prefix}-SHA256SUMS.sigstore.json"
+    provenance_name = f"{identity.artifact_prefix}-SHA256SUMS.intoto.jsonl"
     required_names = [checksum_name, bundle_name]
-    if version_requires_release_provenance(tag.removeprefix("v")):
+    if identity.unit is not None or version_requires_release_provenance(
+        identity.version
+    ):
         required_names.append(provenance_name)
     for required in required_names:
         if required not in downloaded:
@@ -273,6 +338,7 @@ def validate_release_manifest(
     checksums: dict[str, str],
     assets: dict[str, dict[str, Any]],
 ) -> list[dict[str, str]]:
+    identity = release_identity(tag)
     if not isinstance(document, dict):
         raise PublicReleaseError("public candidate manifest must be an object")
     validity = document.get("validity")
@@ -281,11 +347,15 @@ def validate_release_manifest(
         raise PublicReleaseError("public candidate manifest has no creation timestamp")
     try:
         validation_time = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        release_candidate.validate_candidate_manifest(
-            document,
-            expected_source_sha=source_sha,
-            expected_version=tag.removeprefix("v"),
-            now=validation_time,
+        validation_options: dict[str, Any] = {
+            "expected_source_sha": source_sha,
+            "expected_version": identity.version,
+            "now": validation_time,
+        }
+        if identity.unit is not None:
+            validation_options["expected_unit"] = identity.unit
+        validated_manifest = release_candidate.validate_candidate_manifest(
+            document, **validation_options
         )
     except (ValueError, release_candidate.CandidateError) as exc:
         raise PublicReleaseError(f"public candidate manifest is invalid: {exc}") from exc
@@ -297,9 +367,10 @@ def validate_release_manifest(
         raise PublicReleaseError("public candidate manifest has no release workflow binding")
     if (
         release.get("tag") != tag
-        or release.get("version") != tag.removeprefix("v")
+        or release.get("version") != identity.version
         or release.get("source_sha") != source_sha
         or document.get("repository") != repository
+        or (identity.unit is not None and release.get("unit") != identity.unit)
     ):
         raise PublicReleaseError("public candidate manifest does not match tag identity")
     if (
@@ -313,7 +384,7 @@ def validate_release_manifest(
     ):
         raise PublicReleaseError("public candidate manifest has an invalid workflow identity")
 
-    manifest_name = f"registry-stack-{tag}-release-manifest.json"
+    manifest_name = identity.manifest_name
     payloads = document.get("payloads")
     payload_records = {
         payload.get("name"): payload
@@ -343,25 +414,45 @@ def validate_release_manifest(
         raise PublicReleaseError("public candidate manifest has no final image inventory")
     verified: list[dict[str, str]] = []
     final_refs: set[str] = set()
-    for image in images:
+
+    def append_image(image: object, *, asset_tag: str, label: str) -> None:
         if not isinstance(image, dict):
-            raise PublicReleaseError("public candidate image entry is malformed")
+            raise PublicReleaseError(f"{label} image entry is malformed")
         digest = image.get("digest")
         final_ref = image.get("final_ref")
         if (
             not isinstance(digest, str)
             or DIGEST.fullmatch(digest) is None
             or not isinstance(final_ref, str)
-            or not final_ref.endswith(f":{tag}")
+            or not final_ref.endswith(f":{asset_tag}")
             or final_ref in final_refs
         ):
-            raise PublicReleaseError("public candidate image identity is invalid")
+            raise PublicReleaseError(f"{label} image identity is invalid")
         final_refs.add(final_ref)
         verified.append({"digest": digest, "final_ref": final_ref})
+
+    for image in images:
+        append_image(
+            image,
+            asset_tag=identity.asset_tag,
+            label="public candidate",
+        )
+    for component in validated_manifest.get("components", []):
+        component_asset_tag = release_units.asset_tag(component["version"])
+        for image in component["images"]:
+            append_image(
+                image,
+                asset_tag=component_asset_tag,
+                label=f"public component {component['unit']}",
+            )
     return verified
 
 
 def smoke_asset_name(tag: str) -> str:
+    identity = release_identity(tag)
+    if identity.unit == "discovery":
+        return f"discovery-{identity.asset_tag}-linux-amd64"
+
     machine = platform.machine().lower()
     if os.sys.platform == "darwin" and machine in {"arm64", "aarch64"}:
         platform_name = "macos-arm64"
@@ -374,7 +465,7 @@ def smoke_asset_name(tag: str) -> str:
             f"no maintained public binary smoke for {os.sys.platform}/{machine}"
         )
     name = f"evidence-{tag}-{platform_name}"
-    version = tuple(int(part) for part in tag.removeprefix("v").split("."))
+    version = tuple(int(part) for part in identity.version.split("."))
     if (
         platform_name == "macos-arm64"
         and version >= release_candidate.MACOS_FIPS_BUNDLE_MINIMUM_VERSION
@@ -431,27 +522,31 @@ def verify_client_registries(directory: Path, version: str) -> int:
     return package_count
 
 
-def verify(
+def _verify(
     *,
     repo: Path,
     repository: str,
     tag: str,
-) -> dict[str, Any]:
-    if TAG_PATTERN.fullmatch(tag) is None:
-        raise PublicReleaseError("tag must be canonical v<major>.<minor>.<patch> text")
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    identity = release_identity(tag)
     for tool in ("gh", "git", "cosign", "docker"):
         if shutil.which(tool) is None:
             raise PublicReleaseError(f"public verification requires {tool} on PATH")
 
     source_sha = resolve_annotated_tag(repo, tag)
+    encoded_tag = quote(tag, safe="")
     release = json.loads(
-        run_text(["gh", "api", f"repos/{repository}/releases/tags/{tag}"])
+        run_text(
+            ["gh", "api", f"repos/{repository}/releases/tags/{encoded_tag}"]
+        )
     )
-    latest = json.loads(
-        run_text(["gh", "api", f"repos/{repository}/releases/latest"])
+    latest = (
+        json.loads(run_text(["gh", "api", f"repos/{repository}/releases/latest"]))
+        if identity.unit is None
+        else None
     )
     assets = validate_release_metadata(release, latest, tag=tag)
-    manifest_name = f"registry-stack-{tag}-release-manifest.json"
+    manifest_name = identity.manifest_name
     if manifest_name not in assets:
         raise PublicReleaseError(f"GitHub Release is missing {manifest_name}")
 
@@ -475,7 +570,7 @@ def verify(
             assets,
             tag=tag,
         )
-        identity = (
+        signer_identity = (
             f"https://github.com/{repository}/.github/workflows/"
             "release.yml@refs/heads/main"
         )
@@ -487,7 +582,7 @@ def verify(
                 "--bundle",
                 str(directory / bundle_name),
                 "--certificate-identity",
-                identity,
+                signer_identity,
                 "--certificate-oidc-issuer",
                 SIGNER_ISSUER,
             ]
@@ -512,7 +607,8 @@ def verify(
             )
         manifest_path = directory / manifest_name
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_bytes = manifest_path.read_bytes()
+            manifest = json.loads(manifest_bytes)
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise PublicReleaseError(f"cannot read {manifest_name}: {exc}") from exc
         images = validate_release_manifest(
@@ -524,9 +620,14 @@ def verify(
             assets=assets,
         )
         manifest_sha256 = sha256_file(manifest_path)
-        marker = f"registry-stack-release-candidate-v2 manifest_sha256:{manifest_sha256}"
+        marker = (
+            f"{release_candidate.TAG_BINDING_HEADER} "
+            f"manifest_sha256:{manifest_sha256}"
+        )
         if marker not in str(release.get("body", "")):
-            raise PublicReleaseError("GitHub Release body lacks the exact manifest binding")
+            raise PublicReleaseError(
+                "GitHub Release body lacks the exact manifest binding"
+            )
         for image in images:
             manifest = json.loads(
                 run_text(
@@ -553,19 +654,21 @@ def verify(
         if smoke_name not in checksums or not smoke_path.is_file():
             raise PublicReleaseError(f"GitHub Release is missing smoke asset {smoke_name}")
         observed_version = smoke_downloaded_binary(smoke_path)
-        expected_version = f"evidence {tag.removeprefix('v')}"
+        smoke_binary = identity.unit or "evidence"
+        expected_version = f"{smoke_binary} {identity.version}"
         if observed_version != expected_version:
             raise PublicReleaseError(
                 f"{smoke_name} reports {observed_version!r}, not {expected_version!r}"
             )
-        version = tag.removeprefix("v")
-        if version_uses_client_registries(version):
+        version = identity.version
+        if identity.unit is None and version_uses_client_registries(version):
             client_registry_package_count = verify_client_registries(
                 directory,
                 version,
             )
 
-    return {
+    summary = {
+        "release_unit": identity.unit or "stack",
         "tag": tag,
         "source_sha": source_sha,
         "release_url": release.get("html_url"),
@@ -577,3 +680,33 @@ def verify(
         "client_registry_package_count": client_registry_package_count,
         "status": "verified",
     }
+    closure = {
+        "manifest_bytes": manifest_bytes,
+        "manifest_sha256": manifest_sha256,
+        "checksums": checksums,
+    }
+    return summary, closure
+
+
+def verify(
+    *,
+    repo: Path,
+    repository: str,
+    tag: str,
+) -> dict[str, Any]:
+    """Verify a public release and return its JSON-serializable summary."""
+
+    summary, _ = _verify(repo=repo, repository=repository, tag=tag)
+    return summary
+
+
+def verify_component_closure(
+    *,
+    repo: Path,
+    repository: str,
+    tag: str,
+) -> dict[str, Any]:
+    """Return manifest bytes only after verifying their full public closure."""
+
+    _, closure = _verify(repo=repo, repository=repository, tag=tag)
+    return closure

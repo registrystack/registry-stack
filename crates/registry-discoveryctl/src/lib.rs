@@ -18,6 +18,11 @@ mod report;
 pub mod schema;
 mod selected_binary;
 
+/// Build identity for the independently versioned Discovery product.
+pub mod build_info {
+    include!(concat!(env!("OUT_DIR"), "/product_build_info.rs"));
+}
+
 pub use build::{package_project, package_project_at, BuildError, PackagedDiscovery};
 pub use index::{inspect_index_file, IndexReport};
 pub use project::{
@@ -37,7 +42,7 @@ pub const CTL_REPORT_KIND: &str = "DiscoveryCtlReport";
 #[command(
     name = "discoveryctl",
     about = "Check and package one immutable Registry Discovery index",
-    version = registry_platform_buildinfo::DISPLAY_VERSION
+    version = build_info::DISPLAY_VERSION
 )]
 struct Arguments {
     #[command(subcommand)]

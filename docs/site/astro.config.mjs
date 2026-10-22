@@ -124,6 +124,7 @@ const {
 } = resolveDocsetBuildContext(docsetsManifest);
 const hasBregOpenApi = docsetPublishesBregOpenApi(selectedDocset, docsetsManifest.current);
 const hasEvidenceOid4vciOpenApi = docsetPublishesEvidenceOid4vciOpenApi(selectedDocset, docsetsManifest.current);
+const hasDiscovery = Boolean(selectedDocset.products?.['registry-discovery']);
 const productSidebar = loadProductSidebar();
 
 // Lift a generated per-product group to the top level of the sidebar.
@@ -278,6 +279,17 @@ const coordinatorOpenApiSchema = {
   schema: './openapi/registry-coordinator.render.openapi.json',
   sidebar: {
     group: coordinatorOpenApiSidebarGroup,
+    label: 'API operations',
+    collapsed: true,
+    operations: { labels: /** @type {'path'} */ ('path'), badges: true },
+  },
+};
+const discoveryOpenApiSidebarGroup = createOpenAPISidebarGroup();
+const discoveryOpenApiSchema = {
+  base: 'reference/apis/discovery',
+  schema: './openapi/registry-discovery.render.openapi.json',
+  sidebar: {
+    group: discoveryOpenApiSidebarGroup,
     label: 'API operations',
     collapsed: true,
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
@@ -530,6 +542,7 @@ export default defineConfig({
           ...[schedulingOpenApiSchema].filter(() => hasScheduling),
           ...[messagingOpenApiSchema].filter(() => hasMessaging),
           ...[coordinatorOpenApiSchema].filter(() => hasCoordinator),
+          ...[discoveryOpenApiSchema].filter(() => hasDiscovery),
           ...[bregOpenApiSchema].filter(() => hasBregOpenApi),
         ]),
       ],
@@ -817,6 +830,7 @@ export default defineConfig({
             { label: 'Publish and consume an index', slug: 'tutorials/publish-and-consume-discovery-index' },
             { label: 'How Discovery works', slug: 'explanation/discovery-as-an-index' },
             { label: 'Package and run an index', slug: 'configure/discovery' },
+            ...(hasDiscovery ? [discoveryOpenApiSidebarGroup] : []),
           ],
         },
         {

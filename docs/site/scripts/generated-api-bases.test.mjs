@@ -50,6 +50,8 @@ test('a generated base and its descendants are recognised', () => {
   assert.equal(isGeneratedApiPath('/reference/apis/messaging/operations/gethealth/'), true);
   assert.equal(isGeneratedApiDir('reference/apis/coordinator'), true);
   assert.equal(isGeneratedApiPath('/reference/apis/coordinator/operations/live/'), true);
+  assert.equal(isGeneratedApiDir('reference/apis/discovery'), true);
+  assert.equal(isGeneratedApiPath('/reference/apis/discovery/operations/v1services/'), true);
 });
 
 test('the hand-authored narrative pages keep their Markdown twin', () => {

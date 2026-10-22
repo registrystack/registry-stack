@@ -5,34 +5,56 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 
 group=all
+exclude_unit=""
 include_casework_override=0
 nightly_tag=""
 while [[ "$#" -gt 1 ]]; do
   case "$1" in
-    --group) group="${2:-}"; shift 2 ;;
-    --include-casework) include_casework_override=1; shift ;;
-    --nightly-tag) nightly_tag="${2:-}"; shift 2 ;;
+    --exclude-unit)
+      exclude_unit="${2:-}"
+      shift 2
+      ;;
+    --group)
+      group="${2:-}"
+      shift 2
+      ;;
+    --include-casework)
+      include_casework_override=1
+      shift
+      ;;
+    --nightly-tag)
+      nightly_tag="${2:-}"
+      shift 2
+      ;;
     *) break ;;
   esac
 done
 if [[ "$#" -eq 1 ]]; then
   version="$1"
 else
-  printf 'usage: %s [--include-casework] [--nightly-tag TAG] [--group core|breg|casework|scheduling|messaging] <release-version>\n' "$0" >&2
+  printf 'usage: %s [--include-casework] [--exclude-unit discovery] [--nightly-tag TAG] [--group core|breg|casework|scheduling|messaging|discovery] <release-version>\n' "$0" >&2
   exit 2
 fi
 if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ||
-      ("${group}" != all && "${group}" != core && "${group}" != breg &&
-       "${group}" != casework && "${group}" != scheduling &&
-       "${group}" != messaging) ]]; then
-  printf 'usage: %s [--include-casework] [--nightly-tag TAG] [--group core|breg|casework|scheduling|messaging] <release-version>\n' "$0" >&2
+  ("${group}" != all && "${group}" != core && "${group}" != breg &&
+  "${group}" != casework && "${group}" != scheduling &&
+  "${group}" != messaging && "${group}" != discovery) ]]; then
+  printf 'usage: %s [--include-casework] [--exclude-unit discovery] [--nightly-tag TAG] [--group core|breg|casework|scheduling|messaging|discovery] <release-version>\n' "$0" >&2
+  exit 2
+fi
+if [[ "${group}" == discovery && -n "${nightly_tag}" ]]; then
+  printf 'independent Discovery candidates do not use Stack nightly tags\n' >&2
+  exit 2
+fi
+if [[ -n "${exclude_unit}" && ("${exclude_unit}" != discovery || "${group}" == discovery) ]]; then
+  printf 'only Discovery may be carried forward in a Stack distribution\n' >&2
   exit 2
 fi
 tag="v${version}"
 nightly_source_sha=""
 if [[ -n "${nightly_tag}" ]]; then
   if [[ ! "${nightly_tag}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-nightly\.([0-9]{8})\.([0-9a-f]{40})$ ||
-        "${BASH_REMATCH[1]:-}" != "${version}" ]]; then
+    "${BASH_REMATCH[1]:-}" != "${version}" ]]; then
     printf 'nightly tag must match v%s-nightly.<YYYYMMDD>.<40-character lowercase source SHA>\n' "${version}" >&2
     exit 2
   fi
@@ -43,7 +65,7 @@ if [[ -n "${nightly_tag}" ]]; then
     exit 2
   fi
   if [[ -n "${RELEASE_SOURCE_SHA:-}" &&
-        "${RELEASE_SOURCE_SHA}" != "${nightly_source_sha}" ]]; then
+    "${RELEASE_SOURCE_SHA}" != "${nightly_source_sha}" ]]; then
     printf 'nightly tag source SHA does not match RELEASE_SOURCE_SHA\n' >&2
     exit 2
   fi
@@ -82,8 +104,8 @@ if [[ "${breg_services_in_release}" == true ]]; then
   include_breg_services=1
 fi
 include_casework=0
-if ((version_major > 0 || version_minor >= 30)) ||
-   [[ "${include_casework_override}" -eq 1 ]]; then
+if ((version_major > 0 || version_minor >= 30)) \
+  || [[ "${include_casework_override}" -eq 1 ]]; then
   include_casework=1
 fi
 include_scheduling=0
@@ -134,6 +156,16 @@ coordinator_in_release="$(python3 "${script_dir}/release_roster.py" \
   coordinator-in-release "${version}")"
 if [[ "${coordinator_in_release}" == true ]]; then
   include_coordinator=1
+fi
+
+if [[ "${group}" == discovery ]]; then
+  include_discovery=1
+  include_discoveryctl=1
+fi
+
+if [[ "${exclude_unit}" == discovery ]]; then
+  include_discovery=0
+  include_discoveryctl=0
 fi
 
 # Compile and link every product binary through Zig against the glibc stubs of
@@ -206,9 +238,9 @@ prepare_zig_toolchain() {
 check_source_commit_absent() {
   local commit="${RELEASE_SOURCE_COMMIT:-}"
   if [[ -n "${nightly_tag}" &&
-        "${REGISTRY_NIGHTLY_TAG:-}" == "${nightly_tag}" &&
-        -z "${REGISTRY_RELEASE_TAG:-}" &&
-        "${nightly_source_sha}" == "${commit}" ]]; then
+    "${REGISTRY_NIGHTLY_TAG:-}" == "${nightly_tag}" &&
+    -z "${REGISTRY_RELEASE_TAG:-}" &&
+    "${nightly_source_sha}" == "${commit}" ]]; then
     printf 'nightly tag %s intentionally embeds source commit %s; source commit absence check skipped\n' \
       "${nightly_tag}" "${commit}"
     return 0
@@ -282,6 +314,9 @@ build_payload() {
       cp target/release/coordinatorctl dist/image-bin/coordinatorctl
     fi
 
+  fi
+
+  if [[ "${group}" == all || "${group}" == core || "${group}" == discovery ]]; then
     if [[ "${include_discovery}" -eq 1 ]]; then
       cargo build --release --locked \
         -p registry-discovery \
@@ -384,21 +419,25 @@ build_payload() {
 # owned by root on either GitHub-hosted runners or an operator workstation.
 if [[ "${RELEASE_BUILDER_READY:-0}" -eq 1 ]]; then
   identity_matches=0
-  if [[ -n "${nightly_tag}" &&
-        "${REGISTRY_NIGHTLY_TAG:-}" == "${tag}" &&
-        -z "${REGISTRY_RELEASE_TAG:-}" ]]; then
+  if [[ "${group}" == discovery &&
+    "${REGISTRY_PRODUCT_RELEASE_TAG:-}" == "discovery/${tag}" &&
+    -z "${REGISTRY_RELEASE_TAG:-}" && -z "${REGISTRY_NIGHTLY_TAG:-}" ]]; then
+    identity_matches=1
+  elif [[ -n "${nightly_tag}" &&
+    "${REGISTRY_NIGHTLY_TAG:-}" == "${tag}" &&
+    -z "${REGISTRY_RELEASE_TAG:-}" ]]; then
     identity_matches=1
   elif [[ -z "${nightly_tag}" &&
-          "${REGISTRY_RELEASE_TAG:-}" == "${tag}" &&
-          -z "${REGISTRY_NIGHTLY_TAG:-}" ]]; then
+    "${REGISTRY_RELEASE_TAG:-}" == "${tag}" &&
+    -z "${REGISTRY_NIGHTLY_TAG:-}" ]]; then
     identity_matches=1
   fi
   if [[ "${repo_root}" != "/workspace" ||
-        "${CARGO_HOME:-}" != "/workspace/.cargo-home" ||
-        "${CARGO_TARGET_DIR:-}" != "/workspace/target" ||
-        "${GIT_CEILING_DIRECTORIES:-}" != "/workspace" ||
-        "${RELEASE_TAG:-}" != "${tag}" ||
-        "${identity_matches}" -ne 1 ]]; then
+    "${CARGO_HOME:-}" != "/workspace/.cargo-home" ||
+    "${CARGO_TARGET_DIR:-}" != "/workspace/target" ||
+    "${GIT_CEILING_DIRECTORIES:-}" != "/workspace" ||
+    "${RELEASE_TAG:-}" != "${tag}" ||
+    "${identity_matches}" -ne 1 ]]; then
     printf 'RELEASE_BUILDER_READY is internal to the canonical builder container\n' >&2
     exit 2
   fi
@@ -459,12 +498,17 @@ if [[ -n "${nightly_tag}" && "${release_source_commit}" != "${nightly_source_sha
   exit 2
 fi
 casework_args=()
+if [[ -n "${exclude_unit}" ]]; then
+  casework_args+=(--exclude-unit "${exclude_unit}")
+fi
 if [[ "${include_casework_override}" -eq 1 ]]; then
   casework_args+=(--include-casework)
 fi
 nightly_args=()
 identity_env_args=()
-if [[ -n "${nightly_tag}" ]]; then
+if [[ "${group}" == discovery ]]; then
+  identity_env_args+=(--env REGISTRY_PRODUCT_RELEASE_TAG="discovery/${tag}")
+elif [[ -n "${nightly_tag}" ]]; then
   nightly_args+=(--nightly-tag "${nightly_tag}")
   identity_env_args+=(--env REGISTRY_NIGHTLY_TAG="${nightly_tag}")
 else
@@ -509,9 +553,9 @@ docker run --rm \
   --env RELEASE_BUILDER_READY=1 \
   "${release_builder_image}" \
   /workspace/release/scripts/build-release-binaries.sh \
-    "${casework_args[@]}" \
-    "${nightly_args[@]}" \
-    --group "${group}" "${version}"
+  "${casework_args[@]}" \
+  "${nightly_args[@]}" \
+  --group "${group}" "${version}"
 
 if [[ "${group}" == all ]]; then
   printf '%s\n' "${default_builder_image}" >"${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
@@ -537,11 +581,11 @@ fi
 # that predates an asset neither checksums nor chmods a file it never built.
 bin_assets=()
 image_bin_binaries=()
-if [[ ("${group}" == all || "${group}" == core) && "${include_discovery}" -eq 1 ]]; then
+if [[ ("${group}" == all || "${group}" == core || "${group}" == discovery) && "${include_discovery}" -eq 1 ]]; then
   bin_assets+=("discovery-${tag}-linux-amd64")
   image_bin_binaries+=(discovery)
 fi
-if [[ ("${group}" == all || "${group}" == core) && "${include_discoveryctl}" -eq 1 ]]; then
+if [[ ("${group}" == all || "${group}" == core || "${group}" == discovery) && "${include_discoveryctl}" -eq 1 ]]; then
   bin_assets+=("discoveryctl-${tag}-linux-amd64")
 fi
 if [[ ("${group}" == all || "${group}" == breg) && "${include_breg}" -eq 1 ]]; then

@@ -190,3 +190,11 @@ test('the real manifest yields one group per product with every doc present exac
   const actual = groups.flatMap((g) => leaves(g.items)).map((l) => l.slug).sort();
   assert.deepEqual(actual, expected);
 });
+
+test('the hand-authored Discovery journey has no generated product-navigation duplicate', async () => {
+  const manifest = YAML.parse(await readFile(manifestPath, 'utf8'));
+  assert.equal(
+    buildProductSidebar(manifest).some((group) => group.label === 'Discovery'),
+    false,
+  );
+});

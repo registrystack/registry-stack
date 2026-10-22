@@ -152,6 +152,74 @@ pub fn display_build_version(
     display_version(package_version, None).map_err(|error| BuildIdentityError(error.to_string()))
 }
 
+/// Render the build identity for an independently versioned product package.
+///
+/// `platform_version` is the version of this build-info crate. Legacy Stack
+/// release and nightly markers remain anchored to that version. A scoped
+/// product release is instead anchored to `product_version`, so changing an
+/// internal platform crate cannot relabel the product.
+// This source is also compiled directly into the legacy build script, where
+// only the legacy renderer is called.
+#[allow(dead_code)]
+pub fn display_product_build_version(
+    product: &str,
+    product_version: &str,
+    platform_version: &str,
+    product_release_tag: Option<&str>,
+    release_tag: Option<&str>,
+    nightly_tag: Option<&str>,
+) -> Result<String, BuildIdentityError> {
+    let product_release_tag = marker(product_release_tag);
+    let release_tag = marker(release_tag);
+    let nightly_tag = marker(nightly_tag);
+    let marker_count = [
+        product_release_tag.is_some(),
+        release_tag.is_some(),
+        nightly_tag.is_some(),
+    ]
+    .into_iter()
+    .filter(|present| *present)
+    .count();
+    if marker_count > 1 {
+        return Err(BuildIdentityError(
+            "REGISTRY_PRODUCT_RELEASE_TAG, REGISTRY_RELEASE_TAG, and REGISTRY_NIGHTLY_TAG are mutually exclusive"
+                .to_owned(),
+        ));
+    }
+
+    if let Some(tag) = product_release_tag {
+        let expected = format!("{product}/v{product_version}");
+        return if tag == expected {
+            Ok(product_version.to_owned())
+        } else {
+            Err(BuildIdentityError(format!(
+                "product release tag {tag} does not match this package, which builds {expected}"
+            )))
+        };
+    }
+
+    if let Some(tag) = release_tag {
+        display_version(platform_version, Some(tag))
+            .map_err(|error| BuildIdentityError(error.to_string()))?;
+        return if product_version == platform_version {
+            Ok(product_version.to_owned())
+        } else {
+            Ok(format!("{product_version}{DEVELOPMENT_SUFFIX}"))
+        };
+    }
+
+    if let Some(tag) = nightly_tag {
+        validate_nightly_tag(platform_version, tag)?;
+        let prefix = format!("v{platform_version}");
+        let suffix = tag
+            .strip_prefix(&prefix)
+            .expect("the validated nightly tag starts with the platform version");
+        return Ok(format!("{product_version}{suffix}"));
+    }
+
+    Ok(format!("{product_version}{DEVELOPMENT_SUFFIX}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +333,135 @@ mod tests {
                 "marker {malformed:?} is not the release tag and must not claim a release"
             );
         }
+    }
+
+    #[test]
+    fn an_exact_product_release_tag_reports_the_product_version() {
+        assert_eq!(
+            display_product_build_version(
+                "discovery",
+                "1.7.2",
+                "0.44.0",
+                Some("discovery/v1.7.2"),
+                None,
+                None,
+            )
+            .unwrap(),
+            "1.7.2"
+        );
+    }
+
+    #[test]
+    fn an_unmarked_product_build_reports_its_own_development_version() {
+        assert_eq!(
+            display_product_build_version("discovery", "1.7.2", "0.44.0", None, None, None,)
+                .unwrap(),
+            "1.7.2-dev"
+        );
+    }
+
+    #[test]
+    fn a_product_release_tag_for_another_product_or_version_stops_the_build() {
+        for tag in ["evidence/v1.7.2", "discovery/v1.7.1", "v1.7.2"] {
+            let error = display_product_build_version(
+                "discovery",
+                "1.7.2",
+                "0.44.0",
+                Some(tag),
+                None,
+                None,
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains(tag) && error.to_string().contains("discovery/v1.7.2"),
+                "the failure must name the supplied and expected tags: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn product_release_and_stack_build_markers_are_mutually_exclusive() {
+        for (release_tag, nightly_tag) in [
+            (Some("v0.44.0"), None),
+            (
+                None,
+                Some("v0.44.0-nightly.20261002.0123456789abcdef0123456789abcdef01234567"),
+            ),
+        ] {
+            let error = display_product_build_version(
+                "discovery",
+                "1.7.2",
+                "0.44.0",
+                Some("discovery/v1.7.2"),
+                release_tag,
+                nightly_tag,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("mutually exclusive"));
+        }
+    }
+
+    #[test]
+    fn a_common_nightly_keeps_its_suffix_but_reports_the_divergent_product_version() {
+        let tag = format!("v0.44.0-nightly.20261002.{SHA}");
+        assert_eq!(
+            display_product_build_version("discovery", "1.7.2", "0.44.0", None, None, Some(&tag),)
+                .unwrap(),
+            format!("1.7.2-nightly.20261002.{SHA}")
+        );
+    }
+
+    #[test]
+    fn a_common_nightly_still_validates_the_workspace_version() {
+        let tag = format!("v0.43.0-nightly.20261002.{SHA}");
+        let error =
+            display_product_build_version("discovery", "1.7.2", "0.44.0", None, None, Some(&tag))
+                .unwrap_err();
+        assert!(error.to_string().contains("package version 0.44.0"));
+    }
+
+    #[test]
+    fn a_legacy_stack_release_marks_a_divergent_unselected_product_as_development() {
+        assert_eq!(
+            display_product_build_version(
+                "discovery",
+                "0.44.0",
+                "0.44.0",
+                None,
+                Some("v0.44.0"),
+                None,
+            )
+            .unwrap(),
+            "0.44.0"
+        );
+
+        assert_eq!(
+            display_product_build_version(
+                "discovery",
+                "1.7.2",
+                "0.44.0",
+                None,
+                Some("v0.44.0"),
+                None,
+            )
+            .unwrap(),
+            "1.7.2-dev"
+        );
+    }
+
+    #[test]
+    fn a_legacy_stack_release_still_validates_the_workspace_version() {
+        let error = display_product_build_version(
+            "discovery",
+            "1.7.2",
+            "0.44.0",
+            None,
+            Some("v0.43.0"),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("v0.43.0"));
+        assert!(error.to_string().contains("v0.44.0"));
     }
 }

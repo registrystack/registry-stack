@@ -24,14 +24,20 @@ what is in scope, and how reports are acknowledged.
 | Earlier minors of the current stable major | None; upgrade to the latest minor |
 | Earlier major | Until the successor stable major is released, as described under [Major-line end of life](#major-line-end-of-life) |
 
+For the independent Discovery pilot, support covers the Discovery version selected by the
+current recommended Stack distribution and explicitly tested later patches on that same
+major/minor line. Release and distribution notes name tested combinations; an arbitrary mix
+of product versions is not a supported distribution. Discovery fixes can ship before the next
+Stack release, under their own `discovery/vX.Y.Z` tag.
+
 Registry Stack uses a roll-forward security model.
 Security fixes land on the current release line and ship in its latest minor or patch release.
 Registry Stack does not promise backports to an earlier minor.
 
 The rest of the lifecycle policy is designed to make rolling forward cheap:
 
-- Within a major line, a minor release removes a covered surface only after deprecating it in an
-  earlier minor, per the [compatibility promise](../../reference/api-stability/). Registry Evidence
+- For products still on the Stack release train, a minor release removes a covered surface only
+  after deprecating it in an earlier minor, per the [compatibility promise](../../reference/api-stability/). Registry Evidence
   and Registry Manifest have no migrated state, so moving to the fixed release needs no migration
   step for them. Base
   Registry Engine, Casework, Scheduling, and Messaging each own migrated PostgreSQL state;
@@ -77,7 +83,8 @@ within 5 business days.
 
 ## Scope notes
 
-- This policy is stack-wide. This page supersedes the narrower statement in
+- This policy applies to the recommended distribution and its tested Discovery patch variants.
+  Independently released Discovery uses its own version line. This page supersedes the narrower statement in
   `products/manifest/SECURITY.md` that security fixes target the current `main` branch.
 - Pre-1.0 releases (`v0.x`) are technical releases for evaluation and pilots. They receive
   fixes only in the latest `v0.x` release, under the same roll-forward model.

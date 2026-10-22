@@ -117,6 +117,8 @@ const messagingOpenApiSidebarGroup = openApiGroup('reference/apis/messaging', 'A
 const messagingOpenApiSchema = openApiSchema('reference/apis/messaging', messagingOpenApiSidebarGroup);
 const coordinatorOpenApiSidebarGroup = openApiGroup('reference/apis/coordinator', 'API operations');
 const coordinatorOpenApiSchema = openApiSchema('reference/apis/coordinator', coordinatorOpenApiSidebarGroup);
+const discoveryOpenApiSidebarGroup = openApiGroup('reference/apis/discovery', 'API operations');
+const discoveryOpenApiSchema = openApiSchema('reference/apis/discovery', discoveryOpenApiSidebarGroup);
 const bregOpenApiSidebarGroup = openApiGroup('reference/apis/breg', 'API operations (facility template)');
 const bregOpenApiSchema = openApiSchema('reference/apis/breg', bregOpenApiSidebarGroup);
 // The product groups in the order the sidebar factory takes them; BReg's
@@ -128,6 +130,7 @@ const productOpenApiSidebarGroups = [
   schedulingOpenApiSidebarGroup,
   messagingOpenApiSidebarGroup,
   coordinatorOpenApiSidebarGroup,
+  discoveryOpenApiSidebarGroup,
 ];
 const openApiSidebarGroups = [...productOpenApiSidebarGroups, bregOpenApiSidebarGroup];
 const apiSchemaFactory = new Function(
@@ -137,12 +140,14 @@ const apiSchemaFactory = new Function(
   'hasScheduling',
   'hasMessaging',
   'hasCoordinator',
+  'hasDiscovery',
   'evidenceOpenApiSchema',
   'evidenceOid4vciOpenApiSchema',
   'caseworkOpenApiSchema',
   'schedulingOpenApiSchema',
   'messagingOpenApiSchema',
   'coordinatorOpenApiSchema',
+  'discoveryOpenApiSchema',
   'bregOpenApiSchema',
   `return ${apiConfigSource};`,
 );
@@ -153,9 +158,10 @@ const apiSchemaArguments = [
   schedulingOpenApiSchema,
   messagingOpenApiSchema,
   coordinatorOpenApiSchema,
+  discoveryOpenApiSchema,
   bregOpenApiSchema,
 ];
-const apiSchemas = apiSchemaFactory(true, true, true, true, true, true, ...apiSchemaArguments);
+const apiSchemas = apiSchemaFactory(true, true, true, true, true, true, true, ...apiSchemaArguments);
 assert.ok(apiSchemas.includes(bregOpenApiSchema), 'the current docset registers the BReg OpenAPI schema');
 const sidebarFactory = new Function(
   'cliReferenceSidebar',
@@ -169,6 +175,7 @@ const sidebarFactory = new Function(
   'hasMessaging',
   'hasBregServices',
   'hasCoordinator',
+  'hasDiscovery',
   'selectedDocset',
   'hasBregOpenApi',
   'bregOpenApiSidebarGroup',
@@ -179,6 +186,7 @@ const sidebarFactory = new Function(
   'schedulingOpenApiSidebarGroup',
   'messagingOpenApiSidebarGroup',
   'coordinatorOpenApiSidebarGroup',
+  'discoveryOpenApiSidebarGroup',
   `return [${sidebarSource}];`,
 );
 const sidebarArguments = [
@@ -200,9 +208,10 @@ const everyProductDocset = {
     'registry-messaging': {},
     'registry-breg-services': {},
     'registry-coordinator': {},
+    'registry-discovery': {},
   },
 };
-const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true, true, everyProductDocset,
+const sidebar = sidebarFactory(...sidebarArguments, true, true, true, true, true, true, true, everyProductDocset,
   true, bregOpenApiSidebarGroup, true, ...productOpenApiSidebarGroups);
 
 const messagingPageRoutes = [
@@ -348,7 +357,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     current: 'latest',
     released: 'v0.29.0',
     docsets: [
-      { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' }, 'registry-scheduling': { ref: 'HEAD' }, 'registry-render': { ref: 'HEAD' } } },
+      { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' }, 'registry-scheduling': { ref: 'HEAD' }, 'registry-render': { ref: 'HEAD' }, 'registry-discovery': { ref: 'HEAD' } } },
       // The last archive that predates the OID4VCI supporting service's document.
       { id: 'v0.19.0', status: 'archived', availability: 'released', path: '/v/0.19.0/', products: {} },
       { id: 'v0.29.0', status: 'archived', availability: 'released', path: '/v/0.29.0/', products: {} },
@@ -377,6 +386,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     const context = resolveDocsetBuildContext(docsets, { DOCS_DOCSET: id, ...env });
     const hasBregOpenApi = docsetPublishesBregOpenApi(context.selectedDocset, docsets.current);
     const hasEvidenceOid4vciOpenApi = docsetPublishesEvidenceOid4vciOpenApi(context.selectedDocset, docsets.current);
+    const hasDiscovery = Boolean(context.selectedDocset.products['registry-discovery']);
     assert.equal(context.hasCasework, hasCasework, id);
     assert.equal(context.hasScheduling, hasScheduling, id);
     assert.equal(context.hasRender, hasRender, id);
@@ -391,6 +401,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       context.hasMessaging,
       context.hasBregServices,
       context.hasCoordinator,
+      hasDiscovery,
       context.selectedDocset,
       hasBregOpenApi,
       bregOpenApiSidebarGroup,
@@ -421,12 +432,13 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       context.hasScheduling,
       context.hasMessaging,
       context.hasCoordinator,
+      hasDiscovery,
       ...apiSchemaArguments,
     );
     assert.equal(
       docsetSchemas.length,
       1 + Number(hasEvidenceOid4vciOpenApi) + Number(hasCasework) + Number(hasScheduling) +
-        Number(hasMessaging) + Number(hasCoordinator) + Number(hasBregOpenApi),
+        Number(hasMessaging) + Number(hasCoordinator) + Number(hasDiscovery) + Number(hasBregOpenApi),
       id,
     );
     // Each product group seats the group of its own schema and no other,
@@ -441,6 +453,12 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
       id,
     );
     assert.deepEqual(seatedGroups(docsetBreg), hasBregOpenApi ? [bregOpenApiSidebarGroup] : [], id);
+    const docsetDiscovery = docsetSidebar.find((item) => item.label === 'Registry Discovery');
+    assert.deepEqual(
+      seatedGroups(docsetDiscovery),
+      hasDiscovery ? [discoveryOpenApiSidebarGroup] : [],
+      id,
+    );
     for (const [label, present, group] of [
       ['Registry Casework', hasCasework, caseworkOpenApiSidebarGroup],
       ['Registry Scheduling', hasScheduling, schedulingOpenApiSidebarGroup],

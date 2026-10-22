@@ -21,6 +21,9 @@ import advisory_renewal
 import release_candidate
 import release_notes
 import release_roster
+import release_units
+import release_distribution
+import unit_release_pipeline
 import verify_latest_published_release
 import verify_public_release
 import prepare_release_docs
@@ -431,6 +434,15 @@ def local_tag_target(repo: Path, tag: str) -> str | None:
     return None
 
 
+def component_artifact_versions(repo: Path, version: str) -> dict[str, str]:
+    try:
+        selections = release_distribution.load_components(repo, version)
+    except release_distribution.DistributionError as exc:
+        raise ReleasePlanError(str(exc)) from exc
+    return {member: selection["version"] for selection in selections
+            for member in release_units.load_registry().require_pilot(selection["unit"]).members}
+
+
 def validate(manifest_path: Path) -> int:
     manifest = load_yaml(manifest_path)
     errors: list[str] = []
@@ -490,9 +502,15 @@ def validate(manifest_path: Path) -> int:
             catalog_source_ref,
         )
     )
+    try:
+        component_versions = component_artifact_versions(repo_root, version)
+    except ReleasePlanError as exc:
+        errors.append(str(exc))
+        component_versions = {}
     for name, artifact_version in sorted(artifacts.items()):
-        if str(artifact_version) != version:
-            errors.append(f"artifact {name} version {artifact_version} does not match stack version {version}")
+        expected = component_versions.get(name, version)
+        if str(artifact_version) != expected:
+            errors.append(f"artifact {name} version {artifact_version} does not match selected version {expected}")
     crosswalk = external.get("crosswalk") if isinstance(external, dict) else None
     if crosswalk is not None:
         if not isinstance(crosswalk, dict):
@@ -889,15 +907,24 @@ def validate_docsets(
         )
         artifacts = manifest.get("artifacts")
         shipped = set(artifacts) if isinstance(artifacts, dict) else set()
+        try:
+            component_versions = component_artifact_versions(manifest_dir.parent.parent, str(stack.get("version", "")))
+        except ReleasePlanError as exc:
+            errors.append(str(exc))
+            component_versions = {}
         for name, product in sorted(products.items()):
             if name in external:
                 continue
             actual_ref = product.get("ref") if isinstance(product, dict) else None
             actual_version = product.get("version") if isinstance(product, dict) else None
-            if actual_ref != expected_source_ref:
+            artifact = product_artifacts.get(name)
+            component_version = component_versions.get(artifact)
+            product_ref = f"discovery/v{component_version}" if component_version else expected_source_ref
+            product_version = f"v{component_version}" if component_version else expected_version
+            if actual_ref != product_ref:
                 errors.append(
                     f"docset {docset_id} product {name} ref {actual_ref!r} "
-                    f"does not match release manifest ref {expected_source_ref!r}"
+                    f"does not match release manifest ref {product_ref!r}"
                 )
             if held_to_shipped_products:
                 artifact = product_artifacts.get(name)
@@ -916,10 +943,10 @@ def validate_docsets(
                             f"manifest {docset_id} ships no {artifact} artifact"
                         )
                     continue
-            if actual_version != expected_version:
+            if actual_version != product_version:
                 errors.append(
                     f"docset {docset_id} product {name} version {actual_version!r} "
-                    f"does not match release manifest version {expected_version!r}"
+                    f"does not match release manifest version {product_version!r}"
                 )
         for name, expected in sorted(external.items()):
             if not isinstance(expected, dict):
@@ -1604,11 +1631,13 @@ def validate_selected_manifest(repo: Path, record: dict[str, Any]) -> None:
     inventory_errors = artifact_inventory_errors(version, artifacts)
     if inventory_errors:
         raise ReleasePlanError(f"selected manifest {inventory_errors[0]}")
+    component_versions = component_artifact_versions(repo, version)
     for name, artifact_version in sorted(artifacts.items()):
-        if str(artifact_version) != version:
+        expected = component_versions.get(name, version)
+        if str(artifact_version) != expected:
             raise ReleasePlanError(
                 f"selected manifest artifact {name} version {artifact_version!r} "
-                f"does not match {version}"
+                f"does not match {expected}"
             )
     identifier_errors = identifier_catalog_errors(
         version,
@@ -1641,10 +1670,19 @@ def validate_workspace_versions(repo: Path, version: str) -> dict[str, Any]:
     }
     if not path_dependencies:
         raise ReleasePlanError("Cargo.toml has no versioned workspace path dependencies")
+    product_versions = {}
+    for name in ("registry-discovery", "registry-discoveryctl"):
+        path = repo / "crates" / name / "Cargo.toml"
+        if path.is_file():
+            declared = required_toml(path).get("package", {}).get("version")
+            if isinstance(declared, str):
+                strict_semver(declared)
+                product_versions[name] = declared
     for name, entry in sorted(path_dependencies.items()):
-        if entry.get("version") != version:
+        expected = product_versions.get(name, version)
+        if entry.get("version") != expected:
             raise ReleasePlanError(
-                f"Cargo.toml workspace path dependency {name} version must be {version!r}"
+                f"Cargo.toml workspace path dependency {name} version must be {expected!r}"
             )
 
     cargo_lock = required_toml(repo / "Cargo.lock")
@@ -1661,9 +1699,10 @@ def validate_workspace_versions(repo: Path, version: str) -> dict[str, Any]:
     if not workspace_packages:
         raise ReleasePlanError("Cargo.lock has no Registry Stack workspace packages")
     for package in workspace_packages:
-        if package.get("version") != version:
+        expected = product_versions.get(package.get("name"), version)
+        if package.get("version") != expected:
             raise ReleasePlanError(
-                f"Cargo.lock workspace package {package.get('name')} version must be {version!r}"
+                f"Cargo.lock workspace package {package.get('name')} version must be {expected!r}"
             )
     return {
         "cargo": cargo,
@@ -1894,8 +1933,8 @@ def validate_fuzz_lock_versions(
     workspace_packages = workspace_lock.get("package")
     if not isinstance(workspace_packages, list):
         raise ReleasePlanError("Cargo.lock must contain a package list")
-    workspace_names = {
-        package.get("name")
+    workspace_versions = {
+        package.get("name"): package.get("version")
         for package in workspace_packages
         if isinstance(package, dict)
         and isinstance(package.get("name"), str)
@@ -1913,7 +1952,7 @@ def validate_fuzz_lock_versions(
             package
             for package in packages
             if isinstance(package, dict)
-            and package.get("name") in workspace_names
+            and package.get("name") in workspace_versions
             and "source" not in package
         ]
         if not selected:
@@ -1921,7 +1960,7 @@ def validate_fuzz_lock_versions(
         stale = sorted(
             str(package.get("name"))
             for package in selected
-            if package.get("version") != version
+            if package.get("version") != workspace_versions[package["name"]]
         )
         if stale:
             raise ReleasePlanError(
@@ -2127,6 +2166,7 @@ def selected_docsets(
         )
     held_to_shipped_products = release_version_tuple(version) >= applies_from
     shipped = record["data"]["artifacts"]
+    component_versions = component_artifact_versions(repo, version)
     for name, product in sorted(products.items()):
         if not isinstance(product, dict):
             raise ReleasePlanError(f"docset {tag} product {name} must be an object")
@@ -2138,6 +2178,7 @@ def selected_docsets(
                 )
         else:
             expected_version = tag
+            expected_ref = source_ref
             if held_to_shipped_products:
                 artifact = product_artifacts.get(name)
                 if not isinstance(artifact, str) or not artifact:
@@ -2147,7 +2188,10 @@ def selected_docsets(
                     )
                 if artifact not in shipped:
                     expected_version = UNRELEASED_PRODUCT_VERSION
-            if product.get("version") != expected_version or product.get("ref") != source_ref:
+                elif artifact in component_versions:
+                    expected_version = f"v{component_versions[artifact]}"
+                    expected_ref = f"discovery/{expected_version}"
+            if product.get("version") != expected_version or product.get("ref") != expected_ref:
                 raise ReleasePlanError(
                     f"docset {tag} product {name} must use version "
                     f"{expected_version} and selected source_ref"
@@ -2257,6 +2301,34 @@ def validate_openapi_versions(repo: Path, version: str) -> list[Path]:
     return paths
 
 
+def prepare_selected_context(repo: Path, version: str, release_id: str, unit: str) -> dict[str, Any]:
+    if unit == "stack":
+        return prepare_release_context(repo, version, release_id)
+    try:
+        selection = unit_release_pipeline.prepare_unit(repo.resolve(), unit, version, release_id)
+    except ValueError as exc:
+        raise ReleasePlanError(str(exc)) from exc
+    workspace_version = required_toml(repo / "Cargo.toml")["workspace"]["package"]["version"]
+    validate_workspace_versions(repo, workspace_version)
+    return {"repo": repo.resolve(), "unit": unit, "selection": selection,
+            "selected": {"data": {"stack": {}}},
+            "checks": [passed_check("unit-identity", f"{unit} package versions and release notes match {version}")]}
+
+
+def validate_stack_component_selection(repo: Path, version: str) -> None:
+    selected = component_artifact_versions(repo, version)
+    for artifact in ("discovery", "discoveryctl"):
+        package = repo / "crates" / f"registry-{artifact}" / "Cargo.toml"
+        if not package.is_file():
+            continue
+        declared = required_toml(package).get("package", {}).get("version")
+        if isinstance(declared, str) and declared != version and artifact not in selected:
+            raise ReleasePlanError(
+                f"{artifact} version {declared} differs from Stack {version}; "
+                f"commit a distribution selection in release/distributions/v{version}.json"
+            )
+
+
 def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[str, Any]:
     repo = repo.resolve()
     if not repo.is_dir():
@@ -2268,6 +2340,7 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
         )
     selected, previous, advisory = select_release_history(repo, version, release_id)
     validate_selected_manifest(repo, selected)
+    validate_stack_component_selection(repo, version)
     checks = [
         passed_check(
             "release-history",
@@ -2463,8 +2536,11 @@ def prepare_changes(context: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def build_prepare_plan(repo: Path, version: str, release_id: str) -> dict[str, Any]:
-    context = prepare_release_context(repo, version, release_id)
+def build_prepare_plan(repo: Path, version: str, release_id: str, unit: str = "stack") -> dict[str, Any]:
+    context = prepare_selected_context(repo, version, release_id, unit)
+    if unit != "stack":
+        return {"schema_version": RELEASE_PLAN_SCHEMA, "operation": "prepare",
+                "status": "ready", "requested": context["selection"], "checks": context["checks"]}
     previous = manifest_plan_identity(context["repo"], context["previous"])
     previous["advisory_next_release_id"] = context["advisory"]
     return {
@@ -2498,9 +2574,10 @@ def run_prepare_plan(
     version: str,
     release_id: str,
     plan_output: Path | None,
+    unit: str = "stack",
 ) -> int:
     try:
-        plan = build_prepare_plan(repo, version, release_id)
+        plan = build_prepare_plan(repo, version, release_id, unit)
         emit_release_plan(plan, plan_output)
     except (OSError, UnicodeError, ReleasePlanError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -2890,12 +2967,13 @@ def request_release_candidate(
     repository: str,
     *,
     print_request: bool,
+    unit: str = "stack",
     wait_for_ci: bool = False,
     wait_for_candidate: bool = False,
     verbose_wait: bool = False,
 ) -> int:
     try:
-        context = prepare_release_context(repo, version, release_id)
+        context = prepare_selected_context(repo, version, release_id, unit)
         selected_stack = context["selected"]["data"]["stack"]
         remote_default = refresh_protected_main(context["repo"], repository)
         resolved_source = resolve_commit(context["repo"], source_sha, "candidate source")
@@ -2968,6 +3046,8 @@ def request_release_candidate(
             "-F",
             f"client_payload[request_id]={request_id}",
         ]
+        if unit != "stack":
+            command.extend(["-F", f"client_payload[release_unit]={unit}"])
         if print_request:
             print(" ".join(shlex.quote(part) for part in command))
         else:
@@ -3177,6 +3257,7 @@ def verify_candidate_run(
     version: str,
     release_id: str | None,
     source_sha: str | None,
+    unit: str = "stack",
 ) -> tuple[dict[str, Any], str]:
     with tempfile.TemporaryDirectory(prefix="registry-candidate-") as directory:
         temporary = Path(directory)
@@ -3213,7 +3294,8 @@ def verify_candidate_run(
             artifact_root,
             expected_archive_sha256=artifact["archive_sha256"],
         )
-        expected_bundle_name = f"registry-stack-v{version}-candidate.tar.gz"
+        expected_bundle_name = (f"registry-stack-v{version}-candidate.tar.gz" if unit == "stack"
+                                else release_units.candidate_bundle_name(unit, version))
         expected_names = {
             "release-candidate-manifest.json",
             expected_bundle_name,
@@ -3249,6 +3331,8 @@ def verify_candidate_run(
             )
         except release_candidate.CandidateError as exc:
             raise ReleasePlanError(f"candidate verification failed: {exc}") from exc
+        if manifest["release"].get("unit", "stack") != unit:
+            raise ReleasePlanError("candidate release unit differs from request")
         workflow_revision = manifest["workflow"]["revision"]
         signer = f"{repository}/{RELEASE_CANDIDATE_WORKFLOW}"
         for path in (manifest_path, bundle_path):
@@ -3361,7 +3445,7 @@ def validate_recovery_release(
 
 
 def candidate_docs_sha256(manifest: dict[str, Any], version: str) -> str | None:
-    if strict_semver(version) < DOCS_RELEASE_RESUMPTION_VERSION:
+    if manifest.get("release", {}).get("unit", "stack") != "stack" or strict_semver(version) < DOCS_RELEASE_RESUMPTION_VERSION:
         return None
     docs = manifest.get("docs")
     digest = docs.get("sha256") if isinstance(docs, dict) else None
@@ -3399,7 +3483,7 @@ def load_candidate_verification_plan(path: Path) -> dict[str, Any]:
             "candidate verification plan fields do not match its schema"
         )
     if (
-        plan.get("schema_version") != CANDIDATE_VERIFICATION_PLAN_SCHEMA
+        plan.get("schema_version") not in {CANDIDATE_VERIFICATION_PLAN_SCHEMA, "registry-release.candidate-verification.v4"}
         or plan.get("operation") != "verify-candidate"
         or plan.get("status") != "ready"
     ):
@@ -3416,7 +3500,9 @@ def load_candidate_verification_plan(path: Path) -> dict[str, Any]:
         raise ReleasePlanError("candidate verification plan repository is invalid")
     release = plan.get("release")
     candidate = plan.get("candidate")
-    if not isinstance(release, dict) or set(release) != {
+    scoped = plan["schema_version"] == "registry-release.candidate-verification.v4"
+    unit_fields = {"unit"} if scoped else set()
+    if not isinstance(release, dict) or set(release) != unit_fields | {
         "version",
         "release_id",
         "tag",
@@ -3435,6 +3521,9 @@ def load_candidate_verification_plan(path: Path) -> dict[str, Any]:
         raise ReleasePlanError(
             "candidate verification plan candidate identity is malformed"
         )
+    unit = release.get("unit", "stack")
+    if scoped and unit != "discovery":
+        raise ReleasePlanError("unsupported independent release unit")
     version = release.get("version")
     release_id = release.get("release_id")
     tag = release.get("tag")
@@ -3442,9 +3531,9 @@ def load_candidate_verification_plan(path: Path) -> dict[str, Any]:
     if not isinstance(version, str):
         raise ReleasePlanError("candidate verification plan version is invalid")
     parsed_version = strict_semver(version)
-    if parsed_version[0] != 0:
+    if not scoped and parsed_version[0] != 0:
         raise ReleasePlanError("Beta publication accepts only v0.x.y release tags")
-    if parsed_version < RELAY_V2_RELEASE_MINIMUM_VERSION:
+    if not scoped and parsed_version < RELAY_V2_RELEASE_MINIMUM_VERSION:
         raise ReleasePlanError(
             "pre-v0.19 releases are immutable historical evidence; use their "
             "existing Git tags and archived assets"
@@ -3454,8 +3543,7 @@ def load_candidate_verification_plan(path: Path) -> dict[str, Any]:
     validate_release_id(release_id)
     if (
         not isinstance(tag, str)
-        or tag != f"v{version}"
-        or SEMVER_TAG.fullmatch(tag) is None
+        or tag != (f"v{version}" if unit == "stack" else release_units.release_tag(unit, version))
     ):
         raise ReleasePlanError("candidate verification plan tag does not match its version")
     if not isinstance(source_sha, str) or HEX40.fullmatch(source_sha) is None:
@@ -3475,7 +3563,7 @@ def load_candidate_verification_plan(path: Path) -> dict[str, Any]:
     ):
         raise ReleasePlanError("candidate verification plan docs_sha256 is invalid")
     if (
-        parsed_version >= DOCS_RELEASE_RESUMPTION_VERSION
+        not scoped and parsed_version >= DOCS_RELEASE_RESUMPTION_VERSION
         and docs_sha256 is None
     ):
         raise ReleasePlanError(
@@ -3521,6 +3609,7 @@ def verify_candidate_verification_plan(
         version=release["version"],
         release_id=release["release_id"],
         source_sha=release["source_sha"],
+        **({"unit": release["unit"]} if "unit" in release else {}),
     )
     expected_binding = release_candidate.parse_tag_binding(
         release_candidate.render_tag_binding(
@@ -4051,11 +4140,12 @@ def publish_candidate_plan(
                     f"GitHub Release destination {tag} exists before its remote tag"
                 )
             verify_absent_image_destinations(manifest["images"])
-            verify_identifier_publisher_pin(
-                repo,
-                version=release_identity["version"],
-                source_sha=source_sha,
-            )
+            if release_identity.get("unit", "stack") == "stack":
+                verify_identifier_publisher_pin(
+                    repo,
+                    version=release_identity["version"],
+                    source_sha=source_sha,
+                )
         else:
             validate_recovery_release(
                 release,
@@ -4176,9 +4266,12 @@ def verify_release_recovery(
     repository: str,
 ) -> int:
     try:
-        if not tag.startswith("v"):
+        unit = "discovery" if tag.startswith("discovery/") else "stack"
+        asset_marker = tag.removeprefix("discovery/")
+        if not asset_marker.startswith("v"):
             raise ReleasePlanError("tag must be canonical v<major>.<minor>.<patch> text")
-        tag_version = strict_semver(tag.removeprefix("v"))
+        version = asset_marker.removeprefix("v")
+        tag_version = strict_semver(version)
         verify_origin_repository(repo, repository)
         release = release_for_tag(repository, tag)
         if release is not None and release.get("draft") is False:
@@ -4196,9 +4289,9 @@ def verify_release_recovery(
                 file=sys.stderr,
             )
             return 0
-        if tag_version[0] != 0:
+        if unit == "stack" and tag_version[0] != 0:
             raise ReleasePlanError("Beta publication accepts only v0.x.y release tags")
-        if tag_version < RELAY_V2_RELEASE_MINIMUM_VERSION:
+        if unit == "stack" and tag_version < RELAY_V2_RELEASE_MINIMUM_VERSION:
             raise ReleasePlanError(
                 "pre-v0.19 releases are immutable historical evidence; use the "
                 f"corresponding {tag} Git tag and archived assets"
@@ -4208,7 +4301,8 @@ def verify_release_recovery(
             repo,
             repository=repository,
             candidate_run=tag_binding["run_id"],
-            version=tag.removeprefix("v"),
+            version=version,
+            **({"unit": unit} if unit != "stack" else {}),
             release_id=None,
             source_sha=source_sha,
         )
@@ -4273,9 +4367,10 @@ def verify_candidate_for_tag(
     default_branch: str,
     repository: str,
     plan_output: Path | None,
+    unit: str = "stack",
 ) -> int:
     try:
-        context = prepare_release_context(repo, version, release_id)
+        context = prepare_selected_context(repo, version, release_id, unit)
         stack = context["selected"]["data"]["stack"]
         if "source_ref" in stack or "status" in stack:
             raise ReleasePlanError(
@@ -4290,6 +4385,7 @@ def verify_candidate_for_tag(
             version=version,
             release_id=release_id,
             source_sha=None,
+            **({"unit": unit} if unit != "stack" else {}),
         )
         release = manifest["release"]
         workflow = manifest["workflow"]
@@ -4357,6 +4453,9 @@ def verify_candidate_for_tag(
             "tag_command": command,
             "release_command": release_command,
         }
+        if unit != "stack":
+            plan["schema_version"] = "registry-release.candidate-verification.v4"
+            plan["release"]["unit"] = unit
         emit_release_plan(plan, plan_output)
         if plan_output is not None:
             publish_command = (
@@ -4380,6 +4479,8 @@ def verify_candidate_for_tag(
                 file=sys.stderr,
             )
         try:
+            if unit != "stack":
+                return 0
             verify_identifier_publisher_pin(
                 context["repo"],
                 version=version,
@@ -4466,6 +4567,7 @@ def main() -> int:
     notes_parser.add_argument("--repository", default="registrystack/registry-stack")
     notes_parser.add_argument("--output", type=Path, help="create a new draft file; existing paths are refused (default: stdout)")
     prepare_parser = subparsers.add_parser("prepare")
+    prepare_parser.add_argument("--unit", choices=("stack", "discovery"), default="stack")
     prepare_parser.add_argument("--version", required=True)
     prepare_parser.add_argument("--release-id", required=True)
     prepare_parser.add_argument("--repo", type=Path, default=ROOT)
@@ -4508,6 +4610,7 @@ def main() -> int:
         help="write the renewed baselines and live test pins (default: report only)",
     )
     candidate_parser = subparsers.add_parser("request-candidate")
+    candidate_parser.add_argument("--unit", choices=("stack", "discovery"), default="stack")
     candidate_parser.add_argument("--version", required=True)
     candidate_parser.add_argument("--release-id", required=True)
     candidate_parser.add_argument("--source-sha", required=True)
@@ -4538,6 +4641,7 @@ def main() -> int:
     ci_parser.add_argument("--source-sha", required=True)
     ci_parser.add_argument("--repository", default="registrystack/registry-stack")
     verify_candidate_parser = subparsers.add_parser("verify-candidate")
+    verify_candidate_parser.add_argument("--unit", choices=("stack", "discovery"), default="stack")
     verify_candidate_parser.add_argument("--version", required=True)
     verify_candidate_parser.add_argument("--release-id", required=True)
     verify_candidate_parser.add_argument("--candidate-run", type=int, required=True)
@@ -4627,6 +4731,7 @@ def main() -> int:
             args.version,
             args.release_id,
             args.plan_output,
+            unit=args.unit,
         )
     if args.command == "prepare-docs":
         return prepare_release_docs.run(
@@ -4651,6 +4756,7 @@ def main() -> int:
             args.default_branch,
             args.repository,
             print_request=args.print_request,
+            unit=args.unit,
             wait_for_ci=args.wait_for_ci,
             wait_for_candidate=args.wait,
             verbose_wait=args.verbose_wait,
@@ -4666,6 +4772,7 @@ def main() -> int:
             default_branch=args.default_branch,
             repository=args.repository,
             plan_output=args.plan_output,
+            unit=args.unit,
         )
     if args.command == "publish":
         return publish_candidate_plan(

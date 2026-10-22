@@ -30,7 +30,7 @@ class ReleaseDocsSchedulingTest(unittest.TestCase):
     def test_archive_build_is_independent_and_preserves_source_and_lock(self) -> None:
         docs = self.jobs["build-docs"]
         self.assertEqual(docs["needs"], "validate")
-        self.assertNotIn("if", docs)
+        self.assertEqual(docs["if"], "needs.validate.outputs.unit == 'stack'")
         self.assertEqual(docs["permissions"], {"contents": "read"})
         checkout = self.step("build-docs", "Checkout exact candidate source")
         self.assertEqual(
@@ -69,7 +69,8 @@ class ReleaseDocsSchedulingTest(unittest.TestCase):
     def test_assembly_requires_current_attempt_docs_artifact(self) -> None:
         assemble = self.jobs["assemble"]
         self.assertIn("build-docs", assemble["needs"])
-        self.assertNotIn("if", assemble)
+        self.assertIn("needs.build-docs.result == 'success'", assemble["if"])
+        self.assertIn("needs.validate.outputs.unit == 'discovery'", assemble["if"])
         upload = self.step("build-docs", "Upload exact release docs archive")["with"]
         self.assertEqual(
             upload["name"],
@@ -105,6 +106,8 @@ class ReleaseDocsSchedulingTest(unittest.TestCase):
         # client validation, using opaque archive bytes to detect rewriting.
         script = script.split('version=', 1)[0]
         script = script.replace("${{ needs.validate.outputs.tag }}", "v1.2.3")
+        script = script.replace("${{ needs.validate.outputs.asset_tag }}", "v1.2.3")
+        script = script.replace("${{ needs.validate.outputs.exclude_discovery }}", "false")
         archive = "registry-docs-v1.2.3.tar.gz"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

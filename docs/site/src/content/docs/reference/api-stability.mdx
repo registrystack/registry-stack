@@ -13,26 +13,33 @@ standards_referenced: []
 
 Use this page to decide which Registry Stack surfaces you can build on across releases. It names
 the promised products and surfaces, the experimental ones, the rules a change to a covered surface
-follows, and how state moves from one release to the next. The promise takes effect at `v1.0.0`.
+follows, and how state moves from one release to the next. The promise takes effect at each
+release unit's `1.0.0`.
 
 ## Versioning
 
-Every artifact of a release (binaries, container images, client packages, the docs snapshot, and
-the release manifest under `release/manifests/`) carries one stack-wide version, tagged
-`vMAJOR.MINOR.PATCH`.
+Registry Discovery and discoveryctl share one product version and the tag
+`discovery/vMAJOR.MINOR.PATCH`. They can ship independently of the recommended Stack distribution,
+whose tag remains `vMAJOR.MINOR.PATCH`. A distribution records the exact Discovery release,
+source, checksums, and image digest it selects. It does not change that product's version or
+provenance. Other products still ship through the Stack release train during this pilot.
 
-From `v1.0.0`, 1.x follows the deprecation rules on this page, not strict SemVer:
+Independently released products follow SemVer for their covered public surfaces from their own
+`1.0.0`: patches fix behavior, minors add compatible surface, and breaking changes require a
+major version. Deprecation does not permit a breaking minor release. A product reaching 1.0 does
+not graduate the other products or the unified SDK.
 
-- A patch release (`1.x.y`) fixes behavior and never breaks a covered surface.
-- A minor release (`1.x`) may add surface, deprecate surface, and remove a configuration or HTTP
-  surface that was deprecated in at least one earlier minor release.
-- A major release (`2.0`) may also remove deprecated SDK methods.
+Products still on the Stack release train retain the existing 1.x policy: patches do not break
+covered surface; a minor may remove HTTP or configuration surface deprecated in an earlier minor;
+removing deprecated SDK methods requires a major. Before a product's 1.0, breaking changes require
+a minor release, a `BREAKING:` note, and concrete migration steps. Patches remain compatible.
 
-Before `v1.0.0`, a minor release may contain breaking changes. Each one is announced with a
-`BREAKING:` entry and concrete migration steps in the stack release note, plus the owning product
-CHANGELOG where one exists. A patch release is backward compatible with the latest minor line.
+The Node and Python SDKs remain one release unit, with one package version. Compatibility is
+specified per product namespace. A breaking change to any promised SDK namespace requires a
+major version of the whole package, even if other namespaces are unchanged.
 
-{/* Evidence: Cargo.toml, [workspace.package] version (every crate uses version.workspace). */}
+{/* Evidence: release/units.yaml; release/scripts/release_distribution.py;
+    crates/registry-discovery/Cargo.toml; crates/registry-discoveryctl/Cargo.toml. */}
 
 ## Promised products
 
@@ -170,6 +177,8 @@ release note repeats the migration steps.
 A security fix may tighten or remove surface without the full window when keeping the surface
 would leave deployments exploitable. The release notes document the removal, the shortened window,
 and the migration steps without details that put unpatched deployments at more risk.
+For independently released products, a breaking security fix still requires a major version;
+the exception shortens the notice window, not the versioning rule.
 
 Changes made before `v1.0.0`, including the
 [Registry Relay retirement](../../decisions/registry-relay-retirement-2026-10-03/), predate these
@@ -186,7 +195,9 @@ release add members and codes.
     crates/registry-breg-client/tests/http_boundary.rs,
     unknown_problem_codes_fall_back_to_http_status_without_retaining_service_values;
     crates/registry-breg-client-node/__test__/binding.test.js;
-    crates/registry-breg-client-py/tests/python/test_errors.py. */}
+    crates/registry-breg-client-py/tests/python/test_errors.py;
+    crates/registry-discovery-client/src/wire.rs;
+    crates/registry-discovery-client/src/client.rs. */}
 
 For Base Registry Engine metadata, `requiredCapabilities` is the must-understand gate. An engine
 addition that changes how an existing member must be interpreted or executed must add a new
