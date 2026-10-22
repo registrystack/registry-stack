@@ -65,10 +65,15 @@ REVOKE ALL ON SCHEMA public FROM PUBLIC;
 ```
 
 Grant the runtime role nothing more. `apply` grants it what serving needs, and `serve` refuses a
-runtime role that holds authority over the schema.
+runtime role that holds authority over the schema. If the runtime role later loses `USAGE` on the
+schema or read access to the activation ledger, `serve` refuses to start and the operator commands
+answer `documentsctl.activation.ledger-unreadable` at `database.runtimeUrlRef`. Run `apply` again
+with the migration credential to restore its grants.
 
 {/* Evidence: crates/registry-documents/src/activation.rs, apply (grant_runtime_role and
-    stray_authority); products/documents/RUNTIME-CONFIG.md, Startup; observed with documents
+    stray_authority) and check_runtime;
+    crates/registry-documents/src/activation.rs, LedgerUnreadable;
+    crates/registry-documentsctl/src/operate.rs, failure; products/documents/RUNTIME-CONFIG.md, Startup; observed with documents
     0.43.0-dev on 2026-10-22 against PostgreSQL 17. */}
 
 ## Write the runtime file
@@ -244,11 +249,21 @@ something fails behind it, such as the database or the token verifier, or when i
 scope its profile requires. A refused request is explained by its problem response, and every
 audited operation, such as an upload, a download, or a grant, is in the audit journal.
 
-`serve` never applies the schema. It refuses to start on a database with no active package, an
-active package other than the configured one, or a schema from another release, and names every
-finding before it binds the socket. If its verification, event delivery, or erasure
-worker, or its cleanup pass, ends while it serves, it logs the error and exits with status 1, so
-run it under a supervisor that restarts it. Check that it answers:
+`serve` never applies the schema. Before it connects to the database, it refuses a runtime file
+that `documentsctl check --project` refuses against the package's project, such as a hook
+destination `destinations.hooks` does not bind, with the same diagnostic on the same line. It
+refuses to start on a database with no active package, an active package other than the configured
+one, a schema from another release, or a runtime role that has lost its grants, and names every
+finding before it binds the socket. If its verification, event delivery, or erasure worker, or its
+cleanup pass, ends while it serves, it logs the error and exits with status 1, so run it under a
+supervisor that restarts it.
+
+An upload wakes the verification worker of the same `serve` process as soon as the upload
+completes, so its version goes to the verifier at once. The worker also looks for due jobs every
+five seconds while idle, which picks up a job another instance or a `documentsctl` command
+enqueued, and one retried after a backoff.
+
+Check that it answers:
 
 ```sh
 curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8116/health
@@ -267,6 +282,9 @@ commands write their own audit journal beside the service's.
     crates/registry-documents/src/main.rs, initialize_logging;
     crates/registry-documents/src/runtime.rs, operational_log_level;
     crates/registry-documents/src/audit.rs, module documentation;
+    crates/registry-documents/src/runtime.rs, prepare_with, check_against_project,
+    drain_until_stopped, and WORKER_IDLE_POLL;
+    crates/registry-documents/src/service.rs, finalize and verification_wake;
     observed with documentsctl and documents
     0.43.0-dev on 2026-10-22, paths and references replaced. */}
 

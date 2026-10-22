@@ -41,7 +41,7 @@ policy that uses it. The check also refuses:
 - a hook whose `handler.destinationId` the runtime configuration does not bind under
   `destinations.hooks` (`documents.runtime.unbound-hook-destination`, at `/destinations/hooks`),
   when the check is given both `--project` and `--runtime-config`. The runtime refuses to start
-  with the same code.
+  with the same diagnostic at the same position, before it connects to the database.
 
 A profile's `requesterClients`, `requiredScopes`, `actorKind`, and `principalClaim` are what an
 access token must match, beside the runtime's `authentication.oidc` block.
@@ -51,6 +51,7 @@ must carry.
 {/* Evidence: docs/site/scripts/generate-documents-configuration.mjs, CONTRACTS;
     crates/registry-documents-core/src/project.rs, DocumentsProject and reference_findings;
     crates/registry-documents/src/config.rs, DOCUMENTS_RUNTIME_KIND and project_findings;
+    crates/registry-documents/src/runtime.rs, prepare_with and check_against_project;
     products/documents/RUNTIME-CONFIG.md. */}
 
 ## Key paths

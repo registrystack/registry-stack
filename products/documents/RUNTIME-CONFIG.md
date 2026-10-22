@@ -83,26 +83,43 @@ before it opens a connection or binds a socket. It then, in order:
 
 1. reads the package at `package.root`, verifies it, and refuses a digest
    other than `package.expectedDigest` when one is pinned;
-2. connects with the runtime credential, reads the activation ledger, and
-   refuses a database with no active package, one recorded for another
+2. checks this document against the package's project and refuses it with
+   the report `documentsctl check --project` gives for the same files: a hook
+   whose destination `destinations.hooks` does not bind is
+   `documents.runtime.unbound-hook-destination` at `/destinations/hooks`, on
+   its line of this document;
+3. connects with the runtime credential and refuses a runtime role that
+   cannot use the schema or read the activation ledger, and says to restore
+   its grants with `documentsctl apply`; it then reads the activation ledger,
+   and refuses a database with no active package, one recorded for another
    `identity.databaseId`, and one whose active package is not the verified
    package; it then refuses a database that does not carry exactly this
    release's schema, or a runtime role that lost its grants or gained
    authority over the schema. Serving never applies the schema:
    `documentsctl apply --runtime-config FILE` does, over the migration
    credential;
-3. opens the audit journal;
-4. activates content storage and refuses a storage binding other than the
+4. opens the audit journal;
+5. activates content storage and refuses a storage binding other than the
    one pinned at the first upload;
-5. activates the content verifier, then suspends and re-queues every
+6. activates the content verifier, then suspends and re-queues every
    finalized version verified or queued under another verifier binding;
-6. binds the listener, serves `GET /health` and the document routes, and
+7. binds the listener, serves `GET /health` and the document routes, and
    runs the content verification worker until shutdown.
+
+An upload that finalizes a version wakes the verification worker of its own
+process, which claims the job at once. The worker also looks for due jobs
+every five seconds while idle, which picks up a job enqueued by another
+instance or by an operator command, and one due again after a backoff.
 
 `documentsctl plan`, `apply`, `status`, `verification list` and `replay`, and
 `erasure status`, `list`, and `replay` read this same document. They write their audit records to a companion
 journal under the `documentsctl` process name, beside the runtime's file
-journal, so they never contend for the running service's journal.
+journal, so they never contend for the running service's journal. The
+`verification` and `erasure` commands, like `serve`, need an activated
+database: a runtime role that cannot use the schema or read the activation
+ledger is refused as `documentsctl.activation.ledger-unreadable` at
+`database.runtimeUrlRef`. Run `documentsctl apply` with the migration
+credential, which grants the runtime role what it lacks, then retry.
 
 Every document route verifies a bearer access token against
 `authentication.oidc` before it reads a request body. A token the verifier
