@@ -196,6 +196,10 @@ pub fn bootstrap(options: BootstrapOptions) -> Result<InstallReport, String> {
 
     let store = GenerationStore::new(options.install_root, options.bin_dir);
     let mutation = store.lock_mutation()?;
+    if let Some(current) = mutation.current()? {
+        let active = read_active_release(current.path())?;
+        ensure_not_downgrade(&active.selection.release, &manifest.release.tag)?;
+    }
     let name = unique_generation_name(&manifest.release.tag)?;
     let staged = mutation.stage_generation(&name)?;
     let raw_dir = staged.path().join(".assets");
@@ -397,12 +401,16 @@ pub fn update(
         let plan = prepare_update(&active, release, options.asset_dir.clone())?;
         return Ok(UpdateReport {
             schema_version: "registry.rstack.update.v1",
-            current_release: active.selection.release,
+            current_release: active.selection.release.clone(),
             target_release: release.to_owned(),
             generation: None,
             components: plan.components,
             added_components: plan.added_components,
-            download_bytes: plan.download_bytes,
+            download_bytes: if release == active.selection.release {
+                0
+            } else {
+                plan.download_bytes
+            },
             preview: true,
             activated: false,
         });
@@ -665,14 +673,7 @@ fn prepare_update(
     release: &str,
     asset_dir: Option<PathBuf>,
 ) -> Result<UpdatePlan, ManagerError> {
-    let current_version = parse_release_version(&active.selection.release)?;
-    let target_version = parse_release_version(release).map_err(ManagerError::domain)?;
-    if target_version < current_version {
-        return Err(ManagerError::domain(format!(
-            "refusing downgrade from {} to {release}",
-            active.selection.release
-        )));
-    }
+    ensure_not_downgrade(&active.selection.release, release).map_err(ManagerError::domain)?;
     let target = resolve_release(release, asset_dir)?;
     if release == active.selection.release && target.manifest_bytes != active.manifest_bytes {
         return Err(ManagerError::operational(
@@ -718,6 +719,17 @@ fn prepare_update(
         added_components,
         download_bytes: selection.download_bytes,
     })
+}
+
+fn ensure_not_downgrade(current_release: &str, target_release: &str) -> Result<(), String> {
+    let current_version = parse_release_version(current_release)?;
+    let target_version = parse_release_version(target_release)?;
+    if target_version < current_version {
+        return Err(format!(
+            "refusing downgrade from {current_release} to {target_release}"
+        ));
+    }
+    Ok(())
 }
 
 fn resolve_release(

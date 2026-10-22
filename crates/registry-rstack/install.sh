@@ -38,8 +38,8 @@ EOF
 }
 
 release="${RSTACK_RELEASE:-${default_version}}"
-bin_dir="${HOME:?HOME is required}/.local/bin"
-install_root="${HOME:?HOME is required}/.local/lib/registrystack"
+bin_dir=""
+install_root=""
 asset_dir=""
 selected=()
 select_all=0
@@ -133,6 +133,18 @@ fi
 if [[ "${seen_release}" -eq 1 && -n "${RSTACK_RELEASE:-}" && "${RSTACK_RELEASE}" != "${release}" ]]; then
 	printf -- '--release conflicts with RSTACK_RELEASE.\n' >&2
 	exit 2
+fi
+if [[ "${seen_bin_dir}" -eq 0 || "${seen_install_root}" -eq 0 ]]; then
+	if [[ -z "${HOME:-}" ]]; then
+		printf 'HOME is required for default installation paths; pass --bin-dir and --install-root.\n' >&2
+		exit 2
+	fi
+	if [[ "${seen_bin_dir}" -eq 0 ]]; then
+		bin_dir="${HOME}/.local/bin"
+	fi
+	if [[ "${seen_install_root}" -eq 0 ]]; then
+		install_root="${HOME}/.local/lib/registrystack"
+	fi
 fi
 
 case "$(uname -s):$(uname -m)" in
@@ -357,7 +369,7 @@ if [[ -n "${asset_dir}" ]]; then
 fi
 if [[ "${select_all}" -eq 1 ]]; then
 	arguments+=(--all)
-else
+elif [[ "${#selected[@]}" -gt 0 ]]; then
 	arguments+=("${selected[@]}")
 fi
 "${launcher}" "${arguments[@]}"
