@@ -4,6 +4,10 @@
 
 The Document Store is held out of releases.
 
+- `documents_verification_jobs` and `documents_erasure_jobs` refuse a
+  `leased` row without a `lease_expires_at`, through the corrected shared
+  dispatch job shape.
+
 - The product skeleton: `registry-documents-core`, the `registry-documents`
   runtime and `documents` binary, `registry-documentsctl` and the
   `documentsctl` binary, and the `registry-documents-client` Rust client.

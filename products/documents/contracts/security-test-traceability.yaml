@@ -229,6 +229,7 @@ entries:
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_interrupted_erasure_batch_resumes_without_double_erasure}
       - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_s3_erasure_interrupted_after_the_delete_resumes_once}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_job_tables_refuse_a_lease_without_an_expiry}
   - id: DOCUMENTS-SEC-43
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_an_erasure_state_without_its_timestamps}

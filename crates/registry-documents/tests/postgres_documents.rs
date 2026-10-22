@@ -1099,6 +1099,52 @@ async fn the_database_refuses_a_releasable_version_with_a_null_verdict_column() 
 }
 
 #[tokio::test]
+async fn the_job_tables_refuse_a_lease_without_an_expiry() {
+    let deployment = deployment().await;
+    for table in ["documents_verification_jobs", "documents_erasure_jobs"] {
+        // A copy with the job table's checks and without its foreign key,
+        // so one row exercises the shape check alone.
+        deployment
+            .admin
+            .batch_execute(&format!(
+                "CREATE TABLE {schema}.{table}_probe
+                     (LIKE {schema}.{table} INCLUDING DEFAULTS INCLUDING CONSTRAINTS);",
+                schema = deployment.schema,
+            ))
+            .await
+            .expect("copy the job table checks");
+        let leased = |expiry: &str| {
+            format!(
+                "INSERT INTO {schema}.{table}_probe
+                     (version_id, part, generation, state, attempt,
+                      attempt_started_at, lease_expires_at, lease_token)
+                 VALUES (gen_random_uuid(), 'job', 1, 'leased', 1,
+                         transaction_timestamp(), {expiry}, gen_random_uuid())",
+                schema = deployment.schema,
+            )
+        };
+        let error = deployment
+            .admin
+            .batch_execute(&leased("NULL"))
+            .await
+            .expect_err("a leased job without a lease expiry is refused");
+        let database = error.as_db_error().expect("a database refusal");
+        assert_eq!(
+            database.code(),
+            &tokio_postgres::error::SqlState::CHECK_VIOLATION,
+            "{table}"
+        );
+        let shape = format!("{table}_shape");
+        assert_eq!(database.constraint(), Some(shape.as_str()));
+        deployment
+            .admin
+            .batch_execute(&leased("transaction_timestamp() + interval '1 minute'"))
+            .await
+            .expect("the same lease with an expiry is admitted");
+    }
+}
+
+#[tokio::test]
 async fn the_database_refuses_a_finalized_version_without_a_computed_digest() {
     let deployment = deployment().await;
     let verifier = FakeVerifier::new("binding-a", APPROVE);
