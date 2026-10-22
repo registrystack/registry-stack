@@ -48,22 +48,23 @@ function newestVersion(versions, label) {
   return versions.toSorted(compareSemver).at(-1);
 }
 
-function latestStackReleaseVersion() {
-  const versions = readdirSync(resolve(repoRoot, 'release/notes'))
-    .map((name) => /^v([0-9]+\.[0-9]+\.[0-9]+)[.]md$/.exec(name)?.[1])
-    .filter(Boolean);
-  return newestVersion(versions, 'release/notes');
-}
-
 function latestStackManifest() {
-  const version = latestStackReleaseVersion();
   const manifests = readdirSync(resolve(repoRoot, 'release/manifests'))
     .filter((name) => /^registry-stack-.+[.]yaml$/.test(name))
     .map((name) => parse(readRepoFile(`release/manifests/${name}`)))
-    .filter((manifest) => manifest?.stack?.version === version);
+    .filter((manifest) => manifest?.stack?.version);
+  const version = newestVersion(
+    manifests.map((manifest) => manifest.stack.version),
+    'release/manifests',
+  );
+  const latest = manifests.filter((manifest) => manifest.stack.version === version);
 
-  assert.equal(manifests.length, 1, `expected one release manifest for ${version}`);
-  return manifests[0];
+  assert.equal(latest.length, 1, `expected one release manifest for ${version}`);
+  assert.ok(
+    readdirSync(resolve(repoRoot, 'release/notes')).includes(`v${version}.md`),
+    `expected release notes for published manifest ${version}`,
+  );
+  return latest[0];
 }
 
 test('product release notes track newest released changelog headings', () => {
