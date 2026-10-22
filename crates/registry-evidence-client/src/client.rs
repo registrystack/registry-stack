@@ -788,7 +788,7 @@ impl EvidenceClient {
             .await
             .map_err(|_| metadata_protocol_failure())?;
         let mut request = validated
-            .immediate_get_with_timeout(self.config.request_timeout)
+            .immediate_get_with_timeout(self.config.attempt_timeout)
             .map_err(|_| metadata_protocol_failure())?
             .header(ACCEPT, media_type);
         if let Some(etag) = previous.and_then(|(_, etag, _)| etag) {
@@ -1053,11 +1053,11 @@ impl EvidenceClient {
     fn response_bound(&self, format: EvidenceResponseFormat) -> u64 {
         match format {
             EvidenceResponseFormat::SignedJws | EvidenceResponseFormat::SdJwtVc => {
-                self.config.max_response_bytes
+                self.config.maximum_response_bytes
             }
             EvidenceResponseFormat::SdJwtVcBatch => self
                 .config
-                .max_response_bytes
+                .maximum_response_bytes
                 .min(MAX_SD_JWT_VC_BATCH_RESPONSE_BYTES as u64),
         }
     }
@@ -1085,7 +1085,7 @@ impl EvidenceClient {
                 response,
                 EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
                 self.config
-                    .max_response_bytes
+                    .maximum_response_bytes
                     .min(MAX_EVIDENCE_REQUEST_BATCH_RESPONSE_BYTES as u64),
             )
             .await?;
@@ -1716,7 +1716,7 @@ fn response_trace_id(headers: &HeaderMap) -> Option<String> {
 /// Build the outbound client from the pinned deployment options.
 fn build_client(config: &EvidenceClientConfig) -> Result<reqwest::Client, EvidenceClientError> {
     outbound::build_client(OutboundOptions {
-        request_timeout: config.request_timeout,
+        request_timeout: config.attempt_timeout,
         connect_timeout: config.connect_timeout,
         user_agent: config.user_agent.as_deref(),
         trusted_root_certificates: config
@@ -2475,8 +2475,9 @@ mod tests {
         let fixture = signed_evidence();
         let server = MockServer::start().await;
         let client = EvidenceClient::new(
-            config_for(&server.uri(), &fixture)
-                .with_max_response_bytes((MAX_EVIDENCE_REQUEST_BATCH_RESPONSE_BYTES * 2) as u64),
+            config_for(&server.uri(), &fixture).with_maximum_response_bytes(
+                (MAX_EVIDENCE_REQUEST_BATCH_RESPONSE_BYTES * 2) as u64,
+            ),
         )
         .expect("the client is configured");
         let prepared = client
@@ -2741,7 +2742,7 @@ mod tests {
 
     /// The four ways a bounded read can fail are four different things to tell an
     /// adopter. A timeout while the body streams is the likely one, because the
-    /// request timeout runs until the body finishes, and reporting it as an
+    /// attempt timeout runs until the body finishes, and reporting it as an
     /// oversized response would send the adopter to the wrong place.
     #[tokio::test]
     async fn a_failed_body_read_reports_its_own_cause() {
@@ -2771,14 +2772,14 @@ mod tests {
             .mount(&server)
             .await;
         let http = build_client(
-            &config_for(&server.uri(), &fixture).with_request_timeout(Duration::from_millis(100)),
+            &config_for(&server.uri(), &fixture).with_attempt_timeout(Duration::from_millis(100)),
         )
         .expect("the outbound client builds");
         let timeout = http
             .get(server.uri())
             .send()
             .await
-            .expect_err("the request timeout elapses");
+            .expect_err("the attempt timeout elapses");
         assert!(timeout.is_timeout(), "{timeout:?}");
         assert_eq!(
             read_failure_kind(&BoundedReadError::Transport(timeout)),
@@ -2854,7 +2855,7 @@ mod tests {
 
         let server = MockServer::start().await;
         let client = discovery_client_with(&server, &fixture, document.clone(), |config| {
-            config.with_max_response_bytes(1)
+            config.with_maximum_response_bytes(1)
         })
         .await;
         let read = client
@@ -3020,9 +3021,10 @@ mod tests {
     async fn a_refusal_whose_body_cannot_be_read_keeps_its_status_and_identifier() {
         let fixture = signed_evidence();
         let server = MockServer::start().await;
-        let client =
-            EvidenceClient::new(config_for(&server.uri(), &fixture).with_max_response_bytes(32))
-                .expect("the client is configured");
+        let client = EvidenceClient::new(
+            config_for(&server.uri(), &fixture).with_maximum_response_bytes(32),
+        )
+        .expect("the client is configured");
         let prepared = client
             .prepare(spec(SubjectExpectations::AcceptFirstUse))
             .expect("the specification is accepted");
@@ -3057,9 +3059,10 @@ mod tests {
     async fn a_successful_answer_whose_body_cannot_be_read_is_a_transport_failure() {
         let fixture = signed_evidence();
         let server = MockServer::start().await;
-        let client =
-            EvidenceClient::new(config_for(&server.uri(), &fixture).with_max_response_bytes(32))
-                .expect("the client is configured");
+        let client = EvidenceClient::new(
+            config_for(&server.uri(), &fixture).with_maximum_response_bytes(32),
+        )
+        .expect("the client is configured");
         let prepared = client
             .prepare(spec(SubjectExpectations::AcceptFirstUse))
             .expect("the specification is accepted");
@@ -3104,7 +3107,7 @@ mod tests {
     /// The configured total timeout is the relying party's own bound on how long
     /// a decision may wait.
     #[tokio::test]
-    async fn an_elapsed_request_timeout_reports_a_timeout() {
+    async fn an_elapsed_attempt_timeout_reports_a_timeout() {
         let fixture = signed_evidence();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -3117,7 +3120,7 @@ mod tests {
             .mount(&server)
             .await;
         let client = EvidenceClient::new(
-            config_for(&server.uri(), &fixture).with_request_timeout(Duration::from_millis(100)),
+            config_for(&server.uri(), &fixture).with_attempt_timeout(Duration::from_millis(100)),
         )
         .expect("the client is configured");
         let prepared = client

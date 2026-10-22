@@ -26,7 +26,7 @@ mod signin;
 mod templates;
 
 pub use config::{
-    check_runtime, RuntimeCheck, RuntimeConfig, RuntimeConfigError, RUNTIME_API_VERSION,
+    check_runtime, LogLevel, RuntimeCheck, RuntimeConfig, RuntimeConfigError, RUNTIME_API_VERSION,
     RUNTIME_KIND,
 };
 
@@ -588,7 +588,7 @@ fn offline(config: &RuntimeConfig) -> Result<Offline, RuntimeError> {
     // Client resends stacked under each submit would multiply the wait of a
     // person looking at the page.
     let registry = BaseRegistryClient::new(
-        BaseRegistryClientConfig::new(base_url).with_max_mutation_retries(0),
+        BaseRegistryClientConfig::new(base_url).with_maximum_mutation_retries(0),
     )
     .map_err(|error| RuntimeError::Registry(error.to_string()))?;
     let templates =

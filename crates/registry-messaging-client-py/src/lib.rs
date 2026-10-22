@@ -13,7 +13,7 @@ use messaging_client_sdk::{
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
     prelude::*,
-    types::{PyBool, PyDict},
+    types::{PyBool, PyDict, PyFloat, PyInt},
 };
 use serde::{de::DeserializeOwned, Serialize};
 use url::Url;
@@ -204,18 +204,39 @@ fn mutation_retries(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<u8> {
 /// or `float` reaches the client, which refuses zero; a `bool` is not a
 /// duration.
 fn duration(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Duration> {
-    let invalid = || {
-        binding_error(
+    if value.is_exact_instance_of::<PyFloat>() {
+        let seconds = value.extract::<f64>().map_err(|_| {
+            binding_error(
+                py,
+                "configuration",
+                "Messaging client configuration is invalid",
+            )
+        })?;
+        Duration::try_from_secs_f64(seconds).map_err(|_| {
+            binding_error(
+                py,
+                "configuration",
+                "client timeouts must be finite non-negative seconds",
+            )
+        })
+    } else if value.is_exact_instance_of::<PyInt>() {
+        value
+            .extract::<u64>()
+            .map(Duration::from_secs)
+            .map_err(|_| {
+                binding_error(
+                    py,
+                    "configuration",
+                    "Messaging client configuration is invalid",
+                )
+            })
+    } else {
+        Err(binding_error(
             py,
             "configuration",
-            "client timeouts must be finite non-negative seconds",
-        )
-    };
-    if value.is_instance_of::<PyBool>() {
-        return Err(invalid());
+            "Messaging client configuration is invalid",
+        ))
     }
-    let seconds = value.extract::<f64>().map_err(|_| invalid())?;
-    Duration::try_from_secs_f64(seconds).map_err(|_| invalid())
 }
 
 /// The response body bound as a Python integer. Only an `int` in the `u64`
@@ -229,7 +250,7 @@ fn response_bytes(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<u64> {
             "Messaging client configuration is invalid",
         )
     };
-    if value.is_instance_of::<PyBool>() {
+    if !value.is_exact_instance_of::<PyInt>() {
         return Err(invalid());
     }
     value.extract::<u64>().map_err(|_| invalid())
@@ -270,17 +291,17 @@ struct MessagingClient {
 #[pymethods]
 impl MessagingClient {
     #[new]
-    #[pyo3(signature = (base_url, request_timeout_seconds=None, connect_timeout_seconds=None, max_response_bytes=None, user_agent=None, trusted_root_certificates=None, max_mutation_retries=None))]
+    #[pyo3(signature = (base_url, attempt_timeout_seconds=None, connect_timeout_seconds=None, maximum_response_bytes=None, user_agent=None, trusted_root_certificates=None, maximum_mutation_retries=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
         base_url: &str,
-        request_timeout_seconds: Option<&Bound<'_, PyAny>>,
+        attempt_timeout_seconds: Option<&Bound<'_, PyAny>>,
         connect_timeout_seconds: Option<&Bound<'_, PyAny>>,
-        max_response_bytes: Option<&Bound<'_, PyAny>>,
+        maximum_response_bytes: Option<&Bound<'_, PyAny>>,
         user_agent: Option<String>,
         trusted_root_certificates: Option<Vec<u8>>,
-        max_mutation_retries: Option<&Bound<'_, PyAny>>,
+        maximum_mutation_retries: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let base_url = Url::parse(base_url).map_err(|_| {
             binding_error(
@@ -290,14 +311,14 @@ impl MessagingClient {
             )
         })?;
         let mut config = MessagingClientConfig::new(base_url);
-        if let Some(value) = request_timeout_seconds {
-            config = config.with_request_timeout(duration(py, value)?);
+        if let Some(value) = attempt_timeout_seconds {
+            config = config.with_attempt_timeout(duration(py, value)?);
         }
         if let Some(value) = connect_timeout_seconds {
             config = config.with_connect_timeout(duration(py, value)?);
         }
-        if let Some(value) = max_response_bytes {
-            config = config.with_max_response_bytes(response_bytes(py, value)?);
+        if let Some(value) = maximum_response_bytes {
+            config = config.with_maximum_response_bytes(response_bytes(py, value)?);
         }
         if let Some(value) = user_agent {
             config = config.with_user_agent(value);
@@ -305,8 +326,8 @@ impl MessagingClient {
         if let Some(value) = trusted_root_certificates {
             config = config.with_trusted_root_certificates(value);
         }
-        if let Some(value) = max_mutation_retries {
-            config = config.with_max_mutation_retries(mutation_retries(py, value)?);
+        if let Some(value) = maximum_mutation_retries {
+            config = config.with_maximum_mutation_retries(mutation_retries(py, value)?);
         }
         let inner = py
             .detach(|| RustClient::new(config))

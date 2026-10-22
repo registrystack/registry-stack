@@ -624,6 +624,13 @@ jobs:
             -p registry-evidence -p registry-evidencectl \
             -p registry-evidence-oid4vci \
             --target "${{ matrix.target }}"
+          rstack_in_release="$(python3 release/scripts/release_roster.py \
+            rstack-in-release "${{ needs.validate.outputs.version }}")"
+          if [[ "${rstack_in_release}" == true ]]; then
+            cargo build --release --locked \
+              -p registry-rstack --bin rstack \
+              --target "${{ matrix.target }}"
+          fi
           IFS=. read -r release_major release_minor _release_patch \
             <<<"${{ needs.validate.outputs.version }}"
           include_breg=0
@@ -664,6 +671,13 @@ jobs:
               --target "${{ matrix.target }}"
           fi
           mkdir -p platform
+          if [[ "${rstack_in_release}" == true ]]; then
+            asset="rstack-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
+            cp "target/${{ matrix.target }}/release/rstack" "platform/${asset}"
+            chmod 0755 "platform/${asset}"
+            test "$("platform/${asset}" --version)" = \
+              "rstack ${{ needs.validate.outputs.version }}"
+          fi
           for evidence_binary in evidence evidencectl evidence-oid4vci; do
             asset="${evidence_binary}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/${evidence_binary}" \
@@ -2042,6 +2056,24 @@ jobs:
               "${binary} ${{ needs.validate.outputs.version }}"
           done
           rm candidate/bundle-root/SHA256SUMS
+          if [[ "$(python3 release/scripts/release_roster.py \
+              rstack-in-release "${version}")" == true ]]; then
+            rstack_installer="rstack-${{ needs.validate.outputs.tag }}-install.sh"
+            awk -v version="${{ needs.validate.outputs.tag }}" '
+              $0 == "default_version=\"\"" {
+                print "default_version=\"" version "\""
+                rendered = 1
+                next
+              }
+              { print }
+              END { if (!rendered) exit 1 }
+            ' crates/registry-rstack/install.sh \
+              > "candidate/bundle-root/${rstack_installer}"
+            chmod 0755 "candidate/bundle-root/${rstack_installer}"
+            cp "candidate/bundle-root/${rstack_installer}" \
+              candidate/bundle-root/rstack-install.sh
+            chmod 0755 candidate/bundle-root/rstack-install.sh
+          fi
           for name in ${RELEASE_IMAGE_NAMES}; do
             candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
             digest="${candidate_ref##*@}"
@@ -2067,6 +2099,7 @@ jobs:
           set -euo pipefail
           canonical="inputs/candidate-canonical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           tag="${{ needs.validate.outputs.tag }}"
+          version="${{ needs.validate.outputs.version }}"
           bundle="candidate/registry-stack-${tag}-candidate.tar.gz"
           created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           expires_at="$(date -u -d "${created_at} + 7 days" +%Y-%m-%dT%H:%M:%SZ)"
@@ -2097,6 +2130,12 @@ jobs:
                     '{name:$name,kind:$kind,size:$size,sha256:$sha256}'
                 done | jq -s .
           )"
+          components=null
+          if [[ "$(python3 release/scripts/release_roster.py \
+              rstack-in-release "${version}")" == true ]]; then
+            components="$(printf '%s' "${payloads}" \
+              | python3 release/scripts/rstack_components.py --version "${version}")"
+          fi
           images="$(
             for name in ${RELEASE_IMAGE_NAMES}; do
               candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
@@ -2134,6 +2173,7 @@ jobs:
             --arg created_at "${created_at}" \
             --arg expires_at "${expires_at}" \
             --argjson payloads "${payloads}" \
+            --argjson components "${components}" \
             --argjson images "${images}" \
             --arg docs_name "${docs_name}" \
             --arg docs_sha "$(sha256sum "candidate/bundle-root/${docs_name}" | awk '{print $1}')" \
@@ -2179,10 +2219,47 @@ jobs:
                 size: $bundle_size,
                 sha256: $bundle_sha
               }
-            }' > candidate/candidate-manifest.draft.json
+            } + (if $components == null then {} else {components:$components} end)' \
+            > candidate/candidate-manifest.draft.json
           python3 release/scripts/release_candidate.py seal-candidate \
             --draft candidate/candidate-manifest.draft.json \
             --output candidate/release-candidate-manifest.json
+
+      - name: Smoke release-pinned rstack installation from verified local assets
+        if: ${{ needs.validate.outputs.version != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.validate.outputs.version }}"
+          if [[ "$(python3 release/scripts/release_roster.py \
+              rstack-in-release "${version}")" != true ]]; then
+            exit 0
+          fi
+          tag="${{ needs.validate.outputs.tag }}"
+          assets="${GITHUB_WORKSPACE}/candidate/bundle-root"
+          cp candidate/release-candidate-manifest.json \
+            "${assets}/registry-stack-${tag}-release-manifest.json"
+          (
+            cd "${assets}"
+            sha256sum -- * > SHA256SUMS
+          )
+          destination="${RUNNER_TEMP}/rstack-install-smoke"
+          bash "${assets}/rstack-${tag}-install.sh" \
+            --asset-dir "${assets}" \
+            --bin-dir "${destination}/bin" \
+            --install-root "${destination}/lib" \
+            breg evidence
+          test -L "${destination}/bin/rstack"
+          test "$(find "${destination}/bin" -mindepth 1 -maxdepth 1 | wc -l)" -eq 1
+          test "$("${destination}/bin/rstack" --version)" = "rstack ${version}"
+          "${destination}/bin/rstack" components list --format json \
+            | jq -e '.components | any(.name == "breg" and .installed == true)' \
+            >/dev/null
+          "${destination}/bin/rstack" components list --format json \
+            | jq -e '.components | any(.name == "evidence" and .installed == true)' \
+            >/dev/null
+          test "$("${destination}/bin/rstack" breg --version)" = "bregctl ${version}"
+          test "$("${destination}/bin/rstack" evidence --version)" = "evidencectl ${version}"
 
       - name: Upload one candidate manifest and bundle
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

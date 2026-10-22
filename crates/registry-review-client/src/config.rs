@@ -14,9 +14,9 @@ pub const MAXIMUM_REVIEW_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 #[derive(Clone)]
 pub struct ReviewClientConfig {
     pub(crate) base_url: Url,
-    pub(crate) request_timeout: Duration,
+    pub(crate) attempt_timeout: Duration,
     pub(crate) connect_timeout: Duration,
-    pub(crate) max_response_bytes: u64,
+    pub(crate) maximum_response_bytes: u64,
     pub(crate) user_agent: Option<String>,
     pub(crate) trusted_root_certificates: Option<Vec<u8>>,
 }
@@ -26,17 +26,17 @@ impl ReviewClientConfig {
     pub fn new(base_url: Url) -> Self {
         Self {
             base_url,
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            attempt_timeout: DEFAULT_REQUEST_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            max_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
+            maximum_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
             user_agent: None,
             trusted_root_certificates: None,
         }
     }
 
     #[must_use]
-    pub fn with_request_timeout(mut self, value: Duration) -> Self {
-        self.request_timeout = value;
+    pub fn with_attempt_timeout(mut self, value: Duration) -> Self {
+        self.attempt_timeout = value;
         self
     }
 
@@ -47,8 +47,8 @@ impl ReviewClientConfig {
     }
 
     #[must_use]
-    pub fn with_max_response_bytes(mut self, value: u64) -> Self {
-        self.max_response_bytes = value;
+    pub fn with_maximum_response_bytes(mut self, value: u64) -> Self {
+        self.maximum_response_bytes = value;
         self
     }
 
@@ -67,12 +67,14 @@ impl ReviewClientConfig {
     pub(crate) fn validate(&self) -> Result<ServiceBaseUrl, ReviewClientError> {
         let base_url = ServiceBaseUrl::new(self.base_url.clone())
             .map_err(|_| ReviewClientError::configuration("the service base URL is not usable"))?;
-        if self.request_timeout.is_zero() || self.connect_timeout.is_zero() {
+        if self.attempt_timeout.is_zero() || self.connect_timeout.is_zero() {
             return Err(ReviewClientError::configuration(
                 "client timeouts must be greater than zero",
             ));
         }
-        if self.max_response_bytes == 0 || self.max_response_bytes > MAXIMUM_REVIEW_RESPONSE_BYTES {
+        if self.maximum_response_bytes == 0
+            || self.maximum_response_bytes > MAXIMUM_REVIEW_RESPONSE_BYTES
+        {
             return Err(ReviewClientError::configuration(
                 "the response body bound is outside the accepted range",
             ));
@@ -95,9 +97,9 @@ impl fmt::Debug for ReviewClientConfig {
         formatter
             .debug_struct("ReviewClientConfig")
             .field("base_url", &"<validated service URL>")
-            .field("request_timeout", &self.request_timeout)
+            .field("attempt_timeout", &self.attempt_timeout)
             .field("connect_timeout", &self.connect_timeout)
-            .field("max_response_bytes", &self.max_response_bytes)
+            .field("maximum_response_bytes", &self.maximum_response_bytes)
             .field("user_agent_present", &self.user_agent.is_some())
             .field(
                 "trusted_root_certificates_present",

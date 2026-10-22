@@ -573,7 +573,7 @@ async fn complete_evidence_journey_builds_selects_trusts_and_invokes_a_signed_as
     let client = DiscoveryClient::new(
         DiscoveryClientConfig::new(discovery.base_url.clone())
             .with_connect_timeout(Duration::from_secs(1))
-            .with_request_timeout(Duration::from_secs(1)),
+            .with_attempt_timeout(Duration::from_secs(1)),
     )
     .expect("the bounded local Discovery client builds");
     let resolved = client

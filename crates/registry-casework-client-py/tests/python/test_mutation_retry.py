@@ -121,7 +121,7 @@ class MutationRetryTests(unittest.TestCase):
 
     def test_a_ceiling_of_zero_sends_once_and_reports_the_outcome_unknown(self) -> None:
         self.script(UNAVAILABLE, CREATED)
-        client = CaseworkClient(self.base_url, max_mutation_retries=0)
+        client = CaseworkClient(self.base_url, maximum_mutation_retries=0)
 
         with self.assertRaises(CaseworkClientError) as raised:
             client.create_absence("one-call-token", "administrator", 2, KEY, ABSENCE)
@@ -134,7 +134,7 @@ class MutationRetryTests(unittest.TestCase):
 
     def test_a_4xx_refusal_is_never_resent_and_reports_the_outcome_known(self) -> None:
         self.script(PRECONDITION_FAILED, CREATED)
-        client = CaseworkClient(self.base_url, max_mutation_retries=2)
+        client = CaseworkClient(self.base_url, maximum_mutation_retries=2)
 
         with self.assertRaises(CaseworkClientError) as raised:
             client.create_absence("one-call-token", "administrator", 2, KEY, ABSENCE)
@@ -147,11 +147,11 @@ class MutationRetryTests(unittest.TestCase):
     def test_a_ceiling_outside_zero_to_two_is_a_configuration_error(self) -> None:
         for retries in (0, 1, 2):
             with self.subTest(retries=retries):
-                CaseworkClient(self.base_url, max_mutation_retries=retries)
+                CaseworkClient(self.base_url, maximum_mutation_retries=retries)
         for retries in (3, 255, 256, -1, 1.5, "1", True):
             with self.subTest(retries=retries):
                 with self.assertRaises(CaseworkClientError) as raised:
-                    CaseworkClient(self.base_url, max_mutation_retries=retries)
+                    CaseworkClient(self.base_url, maximum_mutation_retries=retries)
                 self.assertEqual(raised.exception.kind, "configuration")
                 self.assertIs(raised.exception.outcome_unknown, False)
 

@@ -509,6 +509,9 @@ class ReleaseCandidateTest(TestCase):
                 "sha256": sha256(bundle_path.read_bytes()),
             },
         }
+        candidate["components"] = self.module.rstack_components.build_component_manifest(
+            "1.2.3", candidate["payloads"]
+        )
         run = {
             "id": 123,
             "run_attempt": 2,
@@ -587,6 +590,7 @@ class ReleaseCandidateTest(TestCase):
         v0_19_0 = copy.deepcopy(current)
         v0_19_0["release"]["version"] = "0.19.0"
         v0_19_0["release"]["tag"] = "v0.19.0"
+        v0_19_0.pop("components")
         with self.assertRaisesRegex(
             self.module.CandidateError,
             "manifest has a non-closed schema: unknown docs",
@@ -621,6 +625,7 @@ class ReleaseCandidateTest(TestCase):
         docs_payload = copy.deepcopy(candidate)
         docs_payload["release"]["version"] = "0.19.0"
         docs_payload["release"]["tag"] = "v0.19.0"
+        docs_payload.pop("components")
         docs_payload.pop("docs")
         docs_payload["payloads"] = [
             item for item in docs_payload["payloads"] if item["kind"] != "docs"
@@ -2039,6 +2044,9 @@ class ReleaseCandidateTest(TestCase):
         )
         self.assertNotIn("docs", schema["required"])
         self.assertIn("docs", schema["properties"])
+        self.assertIn("components", schema["properties"])
+        self.assertIn("components", schema["allOf"][1]["then"]["required"])
+        self.assertIn("components", schema["allOf"][1]["else"]["not"]["required"])
         self.assertIn(
             "docs", payload_schema["items"]["properties"]["kind"]["enum"]
         )

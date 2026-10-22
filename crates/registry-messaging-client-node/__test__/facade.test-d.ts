@@ -11,8 +11,16 @@ import {
   type TemplatePreviewRequest,
 } from '../client'
 
-const client = new MessagingClient({ baseUrl: 'https://messaging.example.test/' })
-const once = new MessagingClient({ baseUrl: 'https://messaging.example.test/', maxMutationRetries: 0 })
+const client = new MessagingClient({
+  baseUrl: 'https://messaging.example.test/',
+  maximumResponseBytes: 1500,
+  trustedRootCertificates: '-----BEGIN CERTIFICATE-----\nplaceholder\n-----END CERTIFICATE-----',
+})
+// @ts-expect-error the public response-bound name is maximumResponseBytes
+new MessagingClient({ baseUrl: 'https://messaging.example.test/', maxResponseBytes: 1500 })
+// @ts-expect-error null is not an omission in JavaScript configuration
+new MessagingClient({ baseUrl: 'https://messaging.example.test/', attemptTimeoutMilliseconds: null })
+const once = new MessagingClient({ baseUrl: 'https://messaging.example.test/', maximumMutationRetries: 0 })
 void once
 const token: string = 'header.payload.signature'
 const messageId = '0f8c2a51-6d3e-4b7a-9c10-2e5f7a8b9c0d'

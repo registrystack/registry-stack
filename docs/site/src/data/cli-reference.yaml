@@ -8,4 +8,4 @@
 # published index until human review.
 status: current
 last_reviewed: 2026-10-18
-unreviewed_binaries: [coordinator, coordinatorctl]
+unreviewed_binaries: [coordinator, coordinatorctl, manifest, rstack]

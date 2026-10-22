@@ -89,7 +89,7 @@ fn help_flags_exit_zero_and_print_usage_to_stdout() {
         );
         let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
         assert!(
-            stdout.contains("usage:"),
+            stdout.contains("Usage:"),
             "{flag} stdout must contain usage text; got: {stdout}"
         );
         assert!(
@@ -173,7 +173,204 @@ fn no_command_keeps_the_existing_usage_error() {
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8(output.stderr)
         .expect("stderr utf8")
-        .contains("usage: registry-manifest validate"));
+        .contains("Usage: registry-manifest"));
+}
+
+#[test]
+fn singleton_options_unknown_options_and_surplus_arguments_fail_before_effects() {
+    let root = temp_dir("strict-cli-options");
+    let manifest = root.join("metadata.yaml");
+    write_minimal_manifest(&manifest, "datasets: []\n");
+
+    let cases: &[&[&str]] = &[
+        &[
+            "validate",
+            manifest.to_str().unwrap(),
+            "--format",
+            "human",
+            "--format",
+            "human",
+        ],
+        &[
+            "render",
+            manifest.to_str().unwrap(),
+            "--artifact-format",
+            "catalog",
+            "--unknown",
+        ],
+        &[
+            "render",
+            manifest.to_str().unwrap(),
+            "--artifact-format",
+            "catalog",
+            "surplus",
+        ],
+        &[
+            "publish",
+            manifest.to_str().unwrap(),
+            "--output",
+            "intended",
+            "--site-root",
+            "site",
+            "--site-root",
+            "site",
+        ],
+    ];
+    for arguments in cases {
+        let output = Command::new(bin())
+            .current_dir(&root)
+            .args(*arguments)
+            .output()
+            .expect("run strict CLI case");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{arguments:?} must be a usage refusal; stdout: {}; stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(!root.join("intended").exists());
+        assert!(!root.join("site").exists());
+        assert!(!root.join("public").exists());
+    }
+}
+
+#[test]
+fn publish_output_is_the_only_default_publication_destination() {
+    let root = temp_dir("publish-output");
+    let manifest = root.join("metadata.yaml");
+    let intended = root.join("intended");
+    write_minimal_manifest(&manifest, "datasets: []\n");
+
+    let output = Command::new(bin())
+        .current_dir(&root)
+        .args([
+            "publish",
+            manifest.to_str().unwrap(),
+            "--output",
+            intended.to_str().unwrap(),
+        ])
+        .output()
+        .expect("publish into the requested output directory");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(intended.join("index.json").is_file());
+    assert!(intended.join(".well-known/api-catalog").is_file());
+    assert!(
+        !root.join("public").exists(),
+        "publish ignored --output and used its historical default"
+    );
+}
+
+#[test]
+fn render_artifact_format_preserves_exact_json_stdout_without_a_report_wrapper() {
+    let root = temp_dir("render-artifact-stdout");
+    let manifest = root.join("metadata.yaml");
+    write_minimal_manifest(&manifest, "datasets: []\n");
+
+    let output = Command::new(bin())
+        .args([
+            "render",
+            manifest.to_str().unwrap(),
+            "--artifact-format",
+            "catalog",
+        ])
+        .output()
+        .expect("render catalog artifact");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let artifact: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("artifact JSON");
+    let expected = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&artifact).expect("pretty artifact JSON")
+    );
+    assert_eq!(output.stdout, expected.as_bytes());
+    assert_eq!(artifact["schema_version"], "registry-manifest-catalog/v1");
+    assert!(
+        artifact.get("kind").is_none(),
+        "artifact was wrapped as a report"
+    );
+}
+
+#[test]
+fn publish_json_reports_separately_from_the_output_artifacts() {
+    let root = temp_dir("publish-json-report");
+    let manifest = root.join("metadata.yaml");
+    let intended = root.join("intended");
+    write_minimal_manifest(&manifest, "datasets: []\n");
+
+    let output = Command::new(bin())
+        .args([
+            "publish",
+            manifest.to_str().unwrap(),
+            "--output",
+            intended.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("publish with JSON report");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("report JSON");
+    assert_eq!(report["command"], "publish");
+    assert_eq!(report["status"], "complete");
+    assert_eq!(report["output"], intended.display().to_string());
+    assert!(report["sourceManifestDigest"]
+        .as_str()
+        .is_some_and(|digest| digest.starts_with("sha256:")));
+    assert!(intended.join("index.json").is_file());
+}
+
+#[test]
+fn retired_manifest_options_name_their_replacements_before_effects() {
+    let root = temp_dir("retired-cli-options");
+    let manifest = root.join("metadata.yaml");
+    write_minimal_manifest(&manifest, "datasets: []\n");
+
+    let retired = [
+        (
+            vec![
+                "publish",
+                manifest.to_str().unwrap(),
+                "--out",
+                "retired-output",
+            ],
+            "--output",
+        ),
+        (
+            vec!["render", manifest.to_str().unwrap(), "--format", "catalog"],
+            "--artifact-format",
+        ),
+        (
+            vec!["validate", manifest.to_str().unwrap(), "--json"],
+            "--format json",
+        ),
+    ];
+    for (arguments, replacement) in retired {
+        let output = Command::new(bin())
+            .current_dir(&root)
+            .args(arguments)
+            .output()
+            .expect("run retired option case");
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+        assert!(
+            stderr.contains(replacement),
+            "retired option must name {replacement}; got {stderr:?}"
+        );
+        assert!(!root.join("retired-output").exists());
+        assert!(!root.join("public").exists());
+    }
 }
 
 #[test]
@@ -184,7 +381,7 @@ fn render_rejects_undeclared_dcat_profile() {
         .args([
             "render",
             manifest.to_str().unwrap(),
-            "--format",
+            "--artifact-format",
             "dcat",
             "--profile",
             "bregdcat-ap",
@@ -212,7 +409,12 @@ fn validate_and_render_multi_dataset_distribution_fixture() {
     );
 
     let render = Command::new(bin())
-        .args(["render", manifest.to_str().unwrap(), "--format", "dcat"])
+        .args([
+            "render",
+            manifest.to_str().unwrap(),
+            "--artifact-format",
+            "dcat",
+        ])
         .output()
         .expect("render multi-dataset fixture");
     assert!(
@@ -363,7 +565,7 @@ fn publish_writes_every_indexed_artifact_without_undeclared_profiles() {
         .args([
             "publish",
             manifest.to_str().unwrap(),
-            "--out",
+            "--output",
             out.to_str().unwrap(),
         ])
         .output()
@@ -421,7 +623,7 @@ fn publish_writes_stable_package_digest_and_artifact_digests() {
             .args([
                 "publish",
                 manifest.to_str().unwrap(),
-                "--out",
+                "--output",
                 out.to_str().unwrap(),
                 "--site-root",
                 site_root.to_str().unwrap(),
@@ -503,7 +705,7 @@ fn publish_bundle_readers_tolerate_additive_artifacts() {
         .args([
             "publish",
             manifest.to_str().unwrap(),
-            "--out",
+            "--output",
             out.to_str().unwrap(),
         ])
         .output()
@@ -558,7 +760,12 @@ fn render_and_publish_cpsv_ap_service_catalogue() {
     let manifest =
         manifest_product_root().join("fixtures/cpsv-ap/health-linked-child-support.metadata.yaml");
     let output = Command::new(bin())
-        .args(["render", manifest.to_str().unwrap(), "--format", "cpsv-ap"])
+        .args([
+            "render",
+            manifest.to_str().unwrap(),
+            "--artifact-format",
+            "cpsv-ap",
+        ])
         .output()
         .expect("run cli");
 
@@ -589,7 +796,7 @@ fn render_and_publish_cpsv_ap_service_catalogue() {
         .args([
             "render",
             manifest.to_str().unwrap(),
-            "--format",
+            "--artifact-format",
             "form-json-schema",
             "--form",
             "child-support-review-form",
@@ -610,7 +817,7 @@ fn render_and_publish_cpsv_ap_service_catalogue() {
         .args([
             "publish",
             manifest.to_str().unwrap(),
-            "--out",
+            "--output",
             out.to_str().unwrap(),
         ])
         .output()
@@ -701,7 +908,7 @@ datasets:
         .args([
             "render",
             manifest.to_str().unwrap(),
-            "--format",
+            "--artifact-format",
             "evidence-offerings",
         ])
         .output()
@@ -719,7 +926,7 @@ datasets:
         .args([
             "render",
             manifest.to_str().unwrap(),
-            "--format",
+            "--artifact-format",
             "policy",
             "--dataset",
             "vital-events",
@@ -740,7 +947,7 @@ datasets:
         .args([
             "publish",
             manifest.to_str().unwrap(),
-            "--out",
+            "--output",
             out.to_str().unwrap(),
         ])
         .output()
@@ -978,7 +1185,7 @@ fn publish_default_writes_only_inside_out() {
         .args([
             "publish",
             manifest.to_str().unwrap(),
-            "--out",
+            "--output",
             out.to_str().unwrap(),
         ])
         .status()
@@ -991,7 +1198,7 @@ fn publish_default_writes_only_inside_out() {
         .collect::<Vec<_>>();
     assert!(
         stray.is_empty(),
-        "publish wrote files outside --out: {stray:?}"
+        "publish wrote files outside --output: {stray:?}"
     );
 
     assert!(out.join(".well-known").join("api-catalog").exists());
@@ -1014,7 +1221,7 @@ fn publish_with_site_root_writes_well_known_under_site_root_only() {
         .args([
             "publish",
             manifest.to_str().unwrap(),
-            "--out",
+            "--output",
             out.to_str().unwrap(),
             "--site-root",
             site_root.to_str().unwrap(),
@@ -1038,7 +1245,7 @@ fn publish_with_site_root_writes_well_known_under_site_root_only() {
         .collect::<Vec<_>>();
     assert!(
         stray.is_empty(),
-        "publish wrote files outside --out ∪ --site-root: {stray:?}"
+        "publish wrote files outside --output ∪ --site-root: {stray:?}"
     );
 }
 
@@ -1060,7 +1267,7 @@ fn publish_rejects_preexisting_symlink_directories_under_out() {
         .args([
             "publish",
             manifest.to_str().unwrap(),
-            "--out",
+            "--output",
             out.to_str().unwrap(),
         ])
         .output()
@@ -1101,7 +1308,7 @@ datasets: []
         .args([
             "publish",
             manifest.to_str().unwrap(),
-            "--out",
+            "--output",
             out.to_str().unwrap(),
         ])
         .output()
@@ -1127,14 +1334,14 @@ fn publish_fails_closed_when_out_cannot_be_created() {
         .args([
             "publish",
             manifest.to_str().unwrap(),
-            "--out",
+            "--output",
             out.to_str().unwrap(),
         ])
         .output()
         .expect("run cli");
     assert!(
         !output.status.success(),
-        "publish must exit non-zero when --out cannot be created"
+        "publish must exit non-zero when --output cannot be created"
     );
 }
 
@@ -1173,7 +1380,7 @@ datasets: []
             .args([
                 "publish",
                 manifest.to_str().unwrap(),
-                "--out",
+                "--output",
                 out.to_str().unwrap(),
             ])
             .output()
@@ -1185,7 +1392,7 @@ datasets: []
         );
         assert!(
             !outside.join(format!("{name}-escape.json")).exists(),
-            "{name} profile id escape wrote outside --out"
+            "{name} profile id escape wrote outside --output"
         );
     }
 }
@@ -1211,7 +1418,12 @@ fn render_reports_required_flag_errors() {
         ),
     ] {
         let output = Command::new(bin())
-            .args(["render", manifest.to_str().unwrap(), "--format", format])
+            .args([
+                "render",
+                manifest.to_str().unwrap(),
+                "--artifact-format",
+                format,
+            ])
             .output()
             .expect("run cli");
         assert!(!output.status.success(), "format {format} must fail closed");
@@ -1230,13 +1442,19 @@ fn render_reports_lookup_errors_and_unsupported_format() {
 
     let cases: &[(&[&str], &str)] = &[
         (
-            &["render", "--format", "policy", "--dataset", "missing"],
+            &[
+                "render",
+                "--artifact-format",
+                "policy",
+                "--dataset",
+                "missing",
+            ],
             "dataset not found: missing",
         ),
         (
             &[
                 "render",
-                "--format",
+                "--artifact-format",
                 "json-schema",
                 "--dataset",
                 "missing",
@@ -1248,7 +1466,7 @@ fn render_reports_lookup_errors_and_unsupported_format() {
         (
             &[
                 "render",
-                "--format",
+                "--artifact-format",
                 "form-json-schema",
                 "--form",
                 "missing",
@@ -1258,7 +1476,7 @@ fn render_reports_lookup_errors_and_unsupported_format() {
         (
             &[
                 "render",
-                "--format",
+                "--artifact-format",
                 "evidence-offering",
                 "--offering",
                 "missing",
@@ -1266,8 +1484,8 @@ fn render_reports_lookup_errors_and_unsupported_format() {
             "evidence offering not found: missing",
         ),
         (
-            &["render", "--format", "unicorn-schema"],
-            "unsupported render format: unicorn-schema",
+            &["render", "--artifact-format", "unicorn-schema"],
+            "command arguments are invalid",
         ),
     ];
 
@@ -1292,7 +1510,7 @@ fn render_dcat_with_unsupported_profile_fails_closed() {
         .args([
             "render",
             manifest.to_str().unwrap(),
-            "--format",
+            "--artifact-format",
             "dcat",
             "--profile",
             "not-a-real-profile",
@@ -1568,7 +1786,7 @@ fn unknown_subcommand_returns_usage() {
         .expect("run cli");
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("usage:"));
+    assert!(stderr.contains("Usage:"));
 }
 
 #[test]
@@ -1929,7 +2147,7 @@ fn publish_fails_closed_when_site_root_is_a_file() {
         .args([
             "publish",
             manifest.to_str().unwrap(),
-            "--out",
+            "--output",
             out.to_str().unwrap(),
             "--site-root",
             site_root.to_str().unwrap(),
@@ -1957,7 +2175,12 @@ fn validate_and_render_multi_vocabulary_field_concepts() {
     );
 
     let output = Command::new(bin())
-        .args(["render", manifest.to_str().unwrap(), "--format", "shacl"])
+        .args([
+            "render",
+            manifest.to_str().unwrap(),
+            "--artifact-format",
+            "shacl",
+        ])
         .output()
         .expect("run cli");
     assert!(

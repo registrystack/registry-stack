@@ -456,6 +456,76 @@ async fn a_relative_token_file_is_read_from_the_current_directory() {
     server.verify().await;
 }
 
+#[cfg(unix)]
+#[test]
+fn token_file_refuses_symlinks_and_fifos_without_blocking() {
+    use std::{
+        os::unix::fs::symlink,
+        process::Stdio,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("token-target");
+    let link = root.path().join("token-link");
+    let fifo = root.path().join("token-fifo");
+    fs::write(&target, TOKEN).unwrap();
+    symlink(&target, &link).unwrap();
+    assert!(Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap()
+        .success());
+
+    for path in [link, fifo] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+            .args([
+                "--format",
+                "json",
+                "status",
+                "--run",
+                "00000000-0000-4000-8000-000000000001",
+                "--url",
+                "http://127.0.0.1:9",
+                "--token-file",
+            ])
+            .arg(&path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                let _ = child.wait();
+                panic!("--token-file blocked while opening {}", path.display());
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(status.code(), Some(1), "{}", path.display());
+        let output = child.wait_with_output().unwrap();
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "coordinator.command.input-invalid",
+            "{}: {report}",
+            path.display()
+        );
+        let rendered = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!rendered.contains(TOKEN), "{}", path.display());
+    }
+}
+
 #[test]
 fn a_service_command_names_the_service_argument_it_still_needs() {
     let root = tempfile::tempdir().unwrap();

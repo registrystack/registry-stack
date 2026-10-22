@@ -135,6 +135,15 @@
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
     },
+    "LogLevel": {
+      "description": "The operational log level. The vocabulary is closed so configuration\ncannot turn on debug output or dependency logging.",
+      "enum": [
+        "error",
+        "warn",
+        "info"
+      ],
+      "type": "string"
+    },
     "PrivateListenerConfig": {
       "additionalProperties": false,
       "description": "The listener of a runtime that declares its TLS termination and network\nexposure.",
@@ -397,6 +406,11 @@
     },
     "listener": {
       "$ref": "#/$defs/PrivateListenerConfig"
+    },
+    "logLevel": {
+      "$ref": "#/$defs/LogLevel",
+      "default": "info",
+      "description": "Operational log level when `BREG_REVIEW_LOG` is not set. Defaults to\n`info`; accepted values are `error`, `warn`, and `info`."
     },
     "publicOrigin": {
       "$ref": "#/$defs/Url",

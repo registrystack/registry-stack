@@ -37,6 +37,33 @@ pub const RUNTIME_API_VERSION: &str = "id.registrystack.org/formats/breg/review-
 /// Kind of the review page runtime configuration document.
 pub const RUNTIME_KIND: &str = "BRegReviewRuntimeConfig";
 
+/// The operational log level. The vocabulary is closed so configuration
+/// cannot turn on debug output or dependency logging.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Error,
+    Warn,
+    #[default]
+    Info,
+}
+
+impl LogLevel {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warn => "warn",
+            Self::Info => "info",
+        }
+    }
+}
+
+const fn default_log_level() -> LogLevel {
+    LogLevel::Info
+}
+
 /// The path the authorization server returns a person to after sign-in,
 /// relative to `publicOrigin`.
 pub const CALLBACK_PATH: &str = "/signin/callback";
@@ -92,6 +119,11 @@ const REMOVED_KEYS: &[RemovedKey] = &[
 pub struct RuntimeConfig {
     pub api_version: String,
     pub kind: String,
+    /// Operational log level when `BREG_REVIEW_LOG` is not set. Defaults to
+    /// `info`; accepted values are `error`, `warn`, and `info`.
+    #[serde(default = "default_log_level")]
+    #[cfg_attr(feature = "schema", schemars(default))]
+    pub log_level: LogLevel,
     pub listener: PrivateListenerConfig,
     /// The browser-facing origin, such as `https://review.example`: an https
     /// URL with no path, query, or fragment; plain http is accepted only on
@@ -961,6 +993,7 @@ audit:
     #[test]
     fn a_production_document_loads_with_its_defaults() {
         let config = load(&document()).expect("valid document");
+        assert_eq!(config.log_level.as_str(), "info");
         assert!(!config.development());
         assert_eq!(
             config.redirect_uri().as_str(),
@@ -977,6 +1010,34 @@ audit:
         );
         assert_eq!(config.rate_limits.global_sign_in.burst.get(), 120);
         assert_eq!(config.registry.target_input.as_str(), "address");
+    }
+
+    #[test]
+    fn log_level_accepts_only_the_closed_vocabulary() {
+        for accepted in ["error", "warn", "info"] {
+            let text = document().replacen(
+                "kind: BRegReviewRuntimeConfig\n",
+                &format!("kind: BRegReviewRuntimeConfig\nlogLevel: {accepted}\n"),
+                1,
+            );
+            assert_eq!(
+                load(&text).expect("level loads").log_level.as_str(),
+                accepted
+            );
+        }
+        for refused_value in ["debug", "trace", "off", "Info", ""] {
+            let yaml_value = if refused_value.is_empty() {
+                "''"
+            } else {
+                refused_value
+            };
+            let text = document().replacen(
+                "kind: BRegReviewRuntimeConfig\n",
+                &format!("kind: BRegReviewRuntimeConfig\nlogLevel: {yaml_value}\n"),
+                1,
+            );
+            refused(&text, "config.unknown-variant", "/logLevel");
+        }
     }
 
     #[test]

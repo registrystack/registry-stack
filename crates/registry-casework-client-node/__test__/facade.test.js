@@ -74,11 +74,20 @@ test('a configuration value the sanitizer refuses is a configuration error', () 
   const { CaseworkClient, CaseworkClientError } = require('../client');
   const baseUrl = 'https://casework.example/';
   for (const [label, config] of [
-    ['an unsafe integer', { baseUrl, requestTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 }],
-    ['a non-finite number', { baseUrl, maxResponseBytes: Infinity }],
+    ['an unsafe integer', { baseUrl, attemptTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 }],
+    ['an overflowing response bound', { baseUrl, maximumResponseBytes: 4294967297 }],
+    ['a negative attempt timeout', { baseUrl, attemptTimeoutMilliseconds: -1 }],
+    ['a fractional connect timeout', { baseUrl, connectTimeoutMilliseconds: 1.5 }],
+    ['a non-finite number', { baseUrl, maximumResponseBytes: Infinity }],
+    ['an unknown member', { baseUrl, maximumResponseByte: 1500 }],
+    ['the retired response-bound spelling', { baseUrl, maxResponseBytes: 1500 }],
+    ['the retired timeout spelling', { baseUrl, requestTimeoutMilliseconds: 1500 }],
+    ['the retired retry spelling', { baseUrl, maxMutationRetries: 0 }],
     ['an undefined member', { baseUrl, userAgent: undefined }],
+    ['a null member', { baseUrl, userAgent: null }],
+    ['a binary trust bundle', { baseUrl, trustedRootCertificates: Buffer.from('not PEM text') }],
     ['a function', { baseUrl, userAgent: () => 'casework-test' }],
-    ['a date', { baseUrl, requestTimeoutMilliseconds: new Date(0) }],
+    ['a date', { baseUrl, attemptTimeoutMilliseconds: new Date(0) }],
     ['a proxy', new Proxy({ baseUrl }, {})],
     ['no configuration', undefined],
   ]) {

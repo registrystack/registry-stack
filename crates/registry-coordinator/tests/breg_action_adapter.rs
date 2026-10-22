@@ -45,7 +45,7 @@ fn client(server: &MockServer, token: Arc<CountingToken>) -> BaseRegistryClient 
     BaseRegistryClient::new(
         BaseRegistryClientConfig::new(format!("{}/tenant/base/", server.uri()).parse().unwrap())
             .with_token_provider(token)
-            .with_max_mutation_retries(0),
+            .with_maximum_mutation_retries(0),
     )
     .unwrap()
 }

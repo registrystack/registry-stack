@@ -75,6 +75,9 @@ SCHEDULING_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = (0, 40, 0)
 
 SCHEDULING_INSTALLER_FIRST_RELEASE: tuple[int, int, int] | None = (0, 42, 0)
 
+# The first release with the unified local command and component manager.
+RSTACK_FIRST_RELEASE: tuple[int, int, int] | None = (0, 44, 0)
+
 COORDINATOR_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = None
 
 COORDINATOR_FIRST_RELEASE: tuple[int, int, int] | None = None
@@ -144,6 +147,13 @@ def scheduling_installer_in_release(version: tuple[int, int, int]) -> bool:
     The constant is read at call time so tests can patch it.
     """
     first_release = SCHEDULING_INSTALLER_FIRST_RELEASE
+    return first_release is not None and tuple(version) >= first_release
+
+
+def rstack_in_release(version: tuple[int, int, int]) -> bool:
+    """Return whether the release ships rstack and its component model."""
+
+    first_release = RSTACK_FIRST_RELEASE
     return first_release is not None and tuple(version) >= first_release
 
 
@@ -245,6 +255,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     scheduling_installer.add_argument("version", type=version_argument, help="release version as X.Y.Z")
     scheduling_installer.set_defaults(in_release=scheduling_installer_in_release)
+    rstack = commands.add_parser(
+        "rstack-in-release",
+        help="print true when the release ships the rstack component manager",
+    )
+    rstack.add_argument("version", type=version_argument, help="release version as X.Y.Z")
+    rstack.set_defaults(in_release=rstack_in_release)
     coordinator_client = commands.add_parser(
         "coordinator-client-in-release",
         help="print true when the unified client packages carry Registry Coordinator, else false",

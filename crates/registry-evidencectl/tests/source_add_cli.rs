@@ -1,7 +1,7 @@
-//! `source add` composes a local Evidence source through the public
-//! `bregctl` binary of the same version found on PATH. When that binary
-//! answers with a different version, the refusal must be as legible in
-//! `--format json` as it already is in the human renderer.
+//! `source add` composes a local Evidence source through the public matching
+//! `bregctl` selected for the invocation. When that binary answers with a
+//! different version, the refusal must be as legible in `--format json` as it
+//! already is in the human renderer.
 
 use std::{
     fs,

@@ -365,7 +365,7 @@ fn ingestion_client(
     token: &str,
 ) -> Result<BaseRegistryClient, DataLifecycleError> {
     let config = BaseRegistryClientConfig::new(base.as_url().clone())
-        .with_request_timeout(DEFAULT_REQUEST_TIMEOUT)
+        .with_attempt_timeout(DEFAULT_REQUEST_TIMEOUT)
         .with_connect_timeout(DEFAULT_CONNECT_TIMEOUT)
         .with_user_agent(DATA_HTTP_USER_AGENT);
     let client = BaseRegistryClient::new(config).map_err(|_| DataLifecycleError::BRegUrl)?;

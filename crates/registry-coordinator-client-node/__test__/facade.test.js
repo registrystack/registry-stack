@@ -568,7 +568,7 @@ test('a refused list, retry, or cancellation keeps its status and code', async (
 test('retrySame and cancel are sent once even when their outcome is unknown', async (context) => {
   const { baseUrl, requests } = await serve(context, scripted([UNAVAILABLE, { status: 200, document: RETRY_SCHEDULED }]));
   const { CoordinatorClient } = require('../client');
-  const client = new CoordinatorClient({ baseUrl, maxMutationRetries: 2 });
+  const client = new CoordinatorClient({ baseUrl, maximumMutationRetries: 2 });
 
   await assert.rejects(client.retrySame('secret', RUN_ID, 'operator reviewed the inspection'), (error) => {
     assert.equal(error.kind, 'problem');
@@ -655,7 +655,7 @@ test('an unknown admission outcome is resent under the same key and body', async
 test('a retry ceiling of zero sends an admission once and reports the outcome unknown', async (context) => {
   const { baseUrl, requests } = await serve(context, scripted([UNAVAILABLE, { status: 200, document: STATUS }]));
   const { CoordinatorClient, CoordinatorClientError } = require('../client');
-  const client = new CoordinatorClient({ baseUrl, maxMutationRetries: 0 });
+  const client = new CoordinatorClient({ baseUrl, maximumMutationRetries: 0 });
 
   await assert.rejects(client.start('one-call-secret', 'key-1', { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: {} }), (error) => {
     assert.ok(error instanceof CoordinatorClientError);
@@ -671,7 +671,7 @@ test('a retry ceiling of zero sends an admission once and reports the outcome un
 test('a 4xx refusal of an admission is never resent and reports the outcome known', async (context) => {
   const { baseUrl, requests } = await serve(context, scripted([CONFLICT, { status: 200, document: STATUS }]));
   const { CoordinatorClient } = require('../client');
-  const client = new CoordinatorClient({ baseUrl, maxMutationRetries: 2 });
+  const client = new CoordinatorClient({ baseUrl, maximumMutationRetries: 2 });
 
   await assert.rejects(client.start('one-call-secret', 'key-1', { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: {} }), (error) => {
     assert.equal(error.kind, 'problem');
@@ -689,7 +689,7 @@ test('a workflow the deployment does not serve is refused once with a known outc
     { status: 200, document: STATUS },
   ]));
   const { CoordinatorClient, CoordinatorClientError } = require('../client');
-  const client = new CoordinatorClient({ baseUrl, maxMutationRetries: 2 });
+  const client = new CoordinatorClient({ baseUrl, maximumMutationRetries: 2 });
 
   await assert.rejects(client.start('one-call-secret', 'key-1', { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: {} }), (error) => {
     assert.ok(error instanceof CoordinatorClientError);
@@ -706,7 +706,7 @@ test('a workflow the deployment does not serve is refused once with a known outc
 test('a run of a workflow outside the caller policy reads as absent on every run action', async (context) => {
   const { baseUrl, requests } = await serve(context, () => problem(404, 'run.not-visible'));
   const { CoordinatorClient, CoordinatorClientError } = require('../client');
-  const client = new CoordinatorClient({ baseUrl, maxMutationRetries: 2 });
+  const client = new CoordinatorClient({ baseUrl, maximumMutationRetries: 2 });
 
   for (const call of [
     () => client.status('secret', RUN_ID),
@@ -754,13 +754,13 @@ test('a refusal that is not the exact problem document is a protocol failure', a
 
 test('a retry ceiling outside zero to two is a configuration error', () => {
   const { CoordinatorClient, CoordinatorClientError } = require('../client');
-  for (const maxMutationRetries of [0, 1, 2, null]) {
-    assert.ok(new CoordinatorClient({ baseUrl: 'https://coordinator.example/', maxMutationRetries }));
+  for (const maximumMutationRetries of [0, 1, 2]) {
+    assert.ok(new CoordinatorClient({ baseUrl: 'https://coordinator.example/', maximumMutationRetries }));
   }
-  for (const maxMutationRetries of [3, 255, 256, -1, 1.5, '1']) {
-    assert.throws(() => new CoordinatorClient({ baseUrl: 'https://coordinator.example/', maxMutationRetries }), (error) => {
-      assert.ok(error instanceof CoordinatorClientError, `${maxMutationRetries}`);
-      assert.equal(error.kind, 'configuration', `${maxMutationRetries}`);
+  for (const maximumMutationRetries of [3, 255, 256, -1, 1.5, '1', true, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => new CoordinatorClient({ baseUrl: 'https://coordinator.example/', maximumMutationRetries }), (error) => {
+      assert.ok(error instanceof CoordinatorClientError, `${maximumMutationRetries}`);
+      assert.equal(error.kind, 'configuration', `${maximumMutationRetries}`);
       assert.equal(error.outcomeUnknown, false);
       return true;
     });
@@ -769,13 +769,51 @@ test('a retry ceiling outside zero to two is a configuration error', () => {
 
 test('a configuration member outside the declared set is a configuration error', () => {
   const { CoordinatorClient, CoordinatorClientError } = require('../client');
-  for (const member of ['maxMutationRetry', 'requestTimeoutMs', 'authorization']) {
+  for (const member of ['maxMutationRetries', 'maximumMutationRetry', 'requestTimeoutMilliseconds', 'attemptTimeoutMs', 'maxResponseBytes', 'authorization']) {
     assert.throws(() => new CoordinatorClient({ baseUrl: 'https://coordinator.example/', [member]: 0 }), (error) => {
       assert.ok(error instanceof CoordinatorClientError, member);
       assert.equal(error.kind, 'configuration', member);
       return true;
     });
   }
+});
+
+test('null is not an omission for non-nullable JavaScript configuration', () => {
+  const { CoordinatorClient, CoordinatorClientError } = require('../client');
+  for (const member of [
+    'attemptTimeoutMilliseconds',
+    'connectTimeoutMilliseconds',
+    'maximumResponseBytes',
+    'userAgent',
+    'trustedRootCertificates',
+    'maximumMutationRetries',
+  ]) {
+    assert.throws(
+      () => new CoordinatorClient({ baseUrl: 'https://coordinator.example/', [member]: null }),
+      (error) => {
+        assert.ok(error instanceof CoordinatorClientError, member);
+        assert.equal(error.kind, 'configuration', member);
+        assert.equal(error.outcomeUnknown, false, member);
+        return true;
+      },
+    );
+  }
+});
+
+test('trusted root certificates accept PEM text, not binary data', () => {
+  const { CoordinatorClient, CoordinatorClientError } = require('../client');
+  assert.throws(
+    () => new CoordinatorClient({
+      baseUrl: 'https://coordinator.example/',
+      trustedRootCertificates: Buffer.from('not PEM text'),
+    }),
+    (error) => {
+      assert.ok(error instanceof CoordinatorClientError);
+      assert.equal(error.kind, 'configuration');
+      assert.equal(error.outcomeUnknown, false);
+      return true;
+    },
+  );
 });
 
 test('workflow discovery is a bounded read under the exact client contract', async (context) => {

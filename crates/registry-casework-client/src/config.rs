@@ -14,12 +14,12 @@ const MAXIMUM_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 #[derive(Clone)]
 pub struct CaseworkClientConfig {
     pub(crate) base_url: Url,
-    pub(crate) request_timeout: Duration,
+    pub(crate) attempt_timeout: Duration,
     pub(crate) connect_timeout: Duration,
-    pub(crate) max_response_bytes: u64,
+    pub(crate) maximum_response_bytes: u64,
     pub(crate) user_agent: Option<String>,
     pub(crate) trusted_root_certificates: Option<Vec<u8>>,
-    pub(crate) max_mutation_retries: u8,
+    pub(crate) maximum_mutation_retries: u8,
 }
 
 impl CaseworkClientConfig {
@@ -27,18 +27,20 @@ impl CaseworkClientConfig {
     pub fn new(base_url: Url) -> Self {
         Self {
             base_url,
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            attempt_timeout: DEFAULT_REQUEST_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            max_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
+            maximum_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
             user_agent: None,
             trusted_root_certificates: None,
-            max_mutation_retries: DEFAULT_MUTATION_RETRIES,
+            maximum_mutation_retries: DEFAULT_MUTATION_RETRIES,
         }
     }
 
+    /// Set the timeout for one HTTP exchange attempt. An authorized same-key
+    /// mutation retry receives a fresh attempt timeout.
     #[must_use]
-    pub fn with_request_timeout(mut self, value: Duration) -> Self {
-        self.request_timeout = value;
+    pub fn with_attempt_timeout(mut self, value: Duration) -> Self {
+        self.attempt_timeout = value;
         self
     }
 
@@ -48,9 +50,10 @@ impl CaseworkClientConfig {
         self
     }
 
+    /// Set the response-body ceiling for every exchange.
     #[must_use]
-    pub fn with_max_response_bytes(mut self, value: u64) -> Self {
-        self.max_response_bytes = value;
+    pub fn with_maximum_response_bytes(mut self, value: u64) -> Self {
+        self.maximum_response_bytes = value;
         self
     }
 
@@ -71,8 +74,8 @@ impl CaseworkClientConfig {
     /// returned. Defaults to 2, accepts at most 2, and 0 disables the
     /// resend.
     #[must_use]
-    pub fn with_max_mutation_retries(mut self, value: u8) -> Self {
-        self.max_mutation_retries = value;
+    pub fn with_maximum_mutation_retries(mut self, value: u8) -> Self {
+        self.maximum_mutation_retries = value;
         self
     }
 
@@ -80,12 +83,13 @@ impl CaseworkClientConfig {
         let base_url = ServiceBaseUrl::new(self.base_url.clone()).map_err(|_| {
             CaseworkClientError::configuration("the service base URL is not usable")
         })?;
-        if self.request_timeout.is_zero() || self.connect_timeout.is_zero() {
+        if self.attempt_timeout.is_zero() || self.connect_timeout.is_zero() {
             return Err(CaseworkClientError::configuration(
                 "client timeouts must be greater than zero",
             ));
         }
-        if self.max_response_bytes == 0 || self.max_response_bytes > MAXIMUM_RESPONSE_BYTES {
+        if self.maximum_response_bytes == 0 || self.maximum_response_bytes > MAXIMUM_RESPONSE_BYTES
+        {
             return Err(CaseworkClientError::configuration(
                 "the response body bound is outside the accepted range",
             ));
@@ -99,7 +103,7 @@ impl CaseworkClientConfig {
                 "the trusted root certificate bundle exceeds the accepted bound",
             ));
         }
-        if self.max_mutation_retries > MAXIMUM_MUTATION_RETRIES {
+        if self.maximum_mutation_retries > MAXIMUM_MUTATION_RETRIES {
             return Err(CaseworkClientError::configuration(
                 "the mutation retry count exceeds the accepted bound",
             ));
@@ -113,15 +117,15 @@ impl fmt::Debug for CaseworkClientConfig {
         formatter
             .debug_struct("CaseworkClientConfig")
             .field("base_url", &"<validated service URL>")
-            .field("request_timeout", &self.request_timeout)
+            .field("attempt_timeout", &self.attempt_timeout)
             .field("connect_timeout", &self.connect_timeout)
-            .field("max_response_bytes", &self.max_response_bytes)
+            .field("maximum_response_bytes", &self.maximum_response_bytes)
             .field("user_agent_present", &self.user_agent.is_some())
             .field(
                 "trusted_root_certificates_present",
                 &self.trusted_root_certificates.is_some(),
             )
-            .field("max_mutation_retries", &self.max_mutation_retries)
+            .field("maximum_mutation_retries", &self.maximum_mutation_retries)
             .finish_non_exhaustive()
     }
 }
@@ -148,20 +152,37 @@ mod tests {
     fn the_mutation_retry_count_is_bounded_before_any_client_exists() {
         let url = Url::parse("https://casework.example.invalid/").expect("fixture URL");
         let excessive_retries = CaseworkClientConfig::new(url.clone())
-            .with_max_mutation_retries(MAXIMUM_MUTATION_RETRIES + 1);
+            .with_maximum_mutation_retries(MAXIMUM_MUTATION_RETRIES + 1);
         assert!(matches!(
             excessive_retries.validate(),
             Err(CaseworkClientError::Configuration { .. })
         ));
         for retries in 0..=MAXIMUM_MUTATION_RETRIES {
             assert!(CaseworkClientConfig::new(url.clone())
-                .with_max_mutation_retries(retries)
+                .with_maximum_mutation_retries(retries)
                 .validate()
                 .is_ok());
         }
         assert_eq!(
-            CaseworkClientConfig::new(url).max_mutation_retries,
+            CaseworkClientConfig::new(url).maximum_mutation_retries,
             DEFAULT_MUTATION_RETRIES
         );
+    }
+
+    #[test]
+    fn the_maximum_response_bytes_are_bounded_before_any_client_exists() {
+        let url = Url::parse("https://casework.example.invalid/").expect("fixture URL");
+        for maximum in [0, MAXIMUM_RESPONSE_BYTES + 1] {
+            assert!(matches!(
+                CaseworkClientConfig::new(url.clone())
+                    .with_maximum_response_bytes(maximum)
+                    .validate(),
+                Err(CaseworkClientError::Configuration { .. })
+            ));
+        }
+        assert!(CaseworkClientConfig::new(url)
+            .with_maximum_response_bytes(MAXIMUM_RESPONSE_BYTES)
+            .validate()
+            .is_ok());
     }
 }

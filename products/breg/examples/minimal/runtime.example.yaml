@@ -8,6 +8,7 @@
 # absolute paths below need not exist where it runs.
 apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
+logLevel: info
 listener:
   bind: 127.0.0.1:8080
 identity:

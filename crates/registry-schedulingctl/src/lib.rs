@@ -16,6 +16,7 @@ pub mod intents;
 mod project;
 pub mod records;
 mod report;
+mod selected_binary;
 mod templates;
 
 use anyhow::Result;
@@ -31,7 +32,7 @@ use serde_json::{json, Value};
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{Command as ProcessCommand, ExitCode};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -50,6 +51,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Run the production Scheduling service with the selected runtime.
+    Serve(ServeArgs),
     /// Create a complete Registry Scheduling authoring project in a new directory.
     Init(InitArgs),
     /// Check a project and, with --runtime-config, a runtime file, offline, and
@@ -71,6 +74,17 @@ enum Command {
     Records(RecordsArgs),
     /// List delivery intents a deployment's sweep has stopped carrying.
     Intents(IntentsArgs),
+}
+
+#[derive(Debug, Args)]
+struct ServeArgs {
+    /// Runtime configuration file passed unchanged to the Scheduling runtime.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Scheduling runtime executable for an unmanaged installation.
+    #[arg(long, hide = true, env = "SCHEDULING_BIN", value_name = "BINARY")]
+    scheduling_bin: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -172,8 +186,12 @@ struct IntentsArgs {
     /// Runtime configuration file.
     #[arg(long = "runtime-config", value_name = "FILE")]
     config: PathBuf,
-    /// Most intents to list.
-    #[arg(long, default_value_t = 50)]
+    /// Most intents to list, from 1 through 200.
+    #[arg(
+        long,
+        default_value_t = 50,
+        value_parser = clap::value_parser!(i64).range(1..=registry_scheduling::store::MAXIMUM_UNDELIVERED_INTENTS_LIMIT)
+    )]
     limit: i64,
 }
 
@@ -204,6 +222,9 @@ where
     T: Into<OsString>,
 {
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
+    let format_requested = args
+        .iter()
+        .any(|arg| arg == OsStr::new("--format") || arg.to_string_lossy().starts_with("--format="));
     let machine_mode = args
         .windows(2)
         .any(|pair| pair[0] == OsStr::new("--format") && pair[1] == OsStr::new("json"))
@@ -261,16 +282,22 @@ where
             return ExitCode::from(USAGE_EXIT);
         }
     }
-    let format = cli.format;
-    let command = command_path(&cli.command);
-    match run(cli) {
+    let Cli { format, command } = cli;
+    let command = match command {
+        Command::Serve(args) => {
+            return serve(args, format, format_requested, stdout, stderr);
+        }
+        command => command,
+    };
+    let command_name = command_path(&command);
+    match run(Cli { format, command }) {
         Ok(mut report) => {
             // The exit code already tells the caller whether this refused;
             // the JSON must agree instead of reporting "ok": true underneath
             // a nonzero exit.
             let refusal = report_is_refusal(&report);
             if format == OutputFormat::Json {
-                report = completed_report(report, command, refusal);
+                report = completed_report(report, command_name, refusal);
             } else if refusal {
                 report["ok"] = json!(false);
             }
@@ -287,8 +314,15 @@ where
         Err(error) => {
             if let Some(configuration) = configuration_report(&error) {
                 let exit = configuration_exit(&error);
-                if write_configuration_report(configuration, format, command, exit, stdout, stderr)
-                    .is_err()
+                if write_configuration_report(
+                    configuration,
+                    format,
+                    command_name,
+                    exit,
+                    stdout,
+                    stderr,
+                )
+                .is_err()
                 {
                     return output_failed(stderr);
                 }
@@ -296,7 +330,7 @@ where
             }
             let (exit, diagnostic) = classify_failure(&error);
             if write_failure(
-                &report::failure(command, exit, vec![diagnostic]),
+                &report::failure(command_name, exit, vec![diagnostic]),
                 format,
                 stdout,
                 stderr,
@@ -313,6 +347,7 @@ where
 /// The subcommand path a parsed invocation selected, as its report names it.
 fn command_path(command: &Command) -> &'static str {
     match command {
+        Command::Serve(_) => "serve",
         Command::Init(_) => "init",
         Command::Check(_) => "check",
         Command::Test(_) => "test",
@@ -330,6 +365,7 @@ fn command_path(command: &Command) -> &'static str {
 
 fn run(cli: Cli) -> Result<Value> {
     match cli.command {
+        Command::Serve(_) => unreachable!("serve replaces the ctl process before report dispatch"),
         Command::Init(args) => project::init(&args.project, &args.template),
         Command::Check(args) => {
             let checked = project::check(&args.project, args.deny_warnings);
@@ -361,6 +397,100 @@ fn run(cli: Cli) -> Result<Value> {
             RecordsCommand::Apply(apply) => records::apply(&apply.config, &apply.records),
         },
         Command::Intents(args) => intents::undelivered(&args.config, args.limit),
+    }
+}
+
+fn serve(
+    args: ServeArgs,
+    format: OutputFormat,
+    format_requested: bool,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) -> ExitCode {
+    if format_requested {
+        let message =
+            "--format does not apply to serve because service output keeps the Scheduling runtime stream"
+                .to_owned();
+        if format == OutputFormat::Json {
+            if write_failure(
+                &usage_failure(message, "Remove --format and retry."),
+                OutputFormat::Json,
+                stdout,
+                stderr,
+            )
+            .is_err()
+            {
+                return output_failed(stderr);
+            }
+        } else {
+            let _ = writeln!(
+                stderr,
+                "error: {message}\n  next: Remove --format and retry."
+            );
+        }
+        return ExitCode::from(USAGE_EXIT);
+    }
+
+    let binary = match selected_binary::resolve_managed(
+        selected_binary::SCHEDULING,
+        args.scheduling_bin.as_deref(),
+    ) {
+        Ok(Some(binary)) => binary,
+        Ok(None) => args
+            .scheduling_bin
+            .unwrap_or_else(|| PathBuf::from("scheduling")),
+        Err(error) => {
+            let _ = writeln!(
+                stderr,
+                "schedulingctl serve could not select scheduling: {error:#}"
+            );
+            return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
+        }
+    };
+    let mut command = ProcessCommand::new(binary);
+    command
+        .arg("--runtime-config")
+        .arg(args.runtime_config)
+        .arg("serve");
+    replace_with_service(command, "scheduling", stderr)
+}
+
+#[cfg(unix)]
+fn replace_with_service(
+    mut command: ProcessCommand,
+    name: &str,
+    stderr: &mut dyn io::Write,
+) -> ExitCode {
+    use std::os::unix::process::CommandExt as _;
+
+    let error = command.exec();
+    let _ = writeln!(
+        stderr,
+        "schedulingctl serve could not start {name}: {error}"
+    );
+    ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+}
+
+#[cfg(not(unix))]
+fn replace_with_service(
+    mut command: ProcessCommand,
+    name: &str,
+    stderr: &mut dyn io::Write,
+) -> ExitCode {
+    match command.status() {
+        Ok(status) => ExitCode::from(
+            status
+                .code()
+                .and_then(|code| u8::try_from(code).ok())
+                .unwrap_or(OPERATIONAL_FAILURE_EXIT),
+        ),
+        Err(error) => {
+            let _ = writeln!(
+                stderr,
+                "schedulingctl serve could not start {name}: {error}"
+            );
+            ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+        }
     }
 }
 
@@ -1414,6 +1544,21 @@ mod tests {
             panic!("expected intents")
         };
         assert_eq!(args.limit, 10);
+
+        for limit in ["0", "-1", "201", "9223372036854775808"] {
+            assert!(
+                Cli::try_parse_from([
+                    "schedulingctl",
+                    "intents",
+                    "--runtime-config",
+                    "/runtime.yaml",
+                    "--limit",
+                    limit,
+                ])
+                .is_err(),
+                "{limit} must be refused before the database is opened"
+            );
+        }
 
         assert!(Cli::try_parse_from(["schedulingctl", "intents"]).is_err());
 

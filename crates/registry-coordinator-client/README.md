@@ -21,7 +21,7 @@ the deployment does not serve is refused with 404 `workflow.not-served`, a known
 outcome the client never resends. When an admission's outcome is
 unknown, after a timeout or broken exchange or on a 5xx answer, the client
 resends the identical request under the same key, at most
-`with_max_mutation_retries` times (2 by default, at most 2, 0 disables it).
+`with_maximum_mutation_retries` times (2 by default, at most 2, 0 disables it).
 It never resends after a 4xx status line. An error that still leaves the
 outcome unknown may have admitted a run: the caller retains the exact key,
 workflow, revision, input, and service identity in durable state before dispatch and

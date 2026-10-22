@@ -4,6 +4,9 @@ Thin napi-rs binding for the bounded Rust `registry-discovery-client` SDK.
 It performs exact service search, Evidence Type resolution, and ambiguity-safe
 selection. A returned selection is inert public metadata. The application must
 apply its own trust policy before calling the selected Evidence endpoint.
+Transport configuration uses `attemptTimeoutMilliseconds`,
+`connectTimeoutMilliseconds`, and `maximumResponseBytes`; custom roots are PEM
+text in `trustedRootCertificates`.
 
 This crate publishes through the unified `@registrystack/client` package.
 Install the exact client version that matches the Discovery deployment, and use

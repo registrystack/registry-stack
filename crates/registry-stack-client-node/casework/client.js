@@ -85,12 +85,50 @@ function sanitize(value, kind) {
   return cloneJson(value, { nodes: 0, bytes: 0, active: new WeakSet() }, 0, kind);
 }
 
+function configurationValue(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config) || isProxy(config)) {
+    throw normalized({}, 'configuration');
+  }
+  const prototype = Object.getPrototypeOf(config);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw normalized({}, 'configuration');
+  }
+  const allowed = new Set([
+    'baseUrl',
+    'attemptTimeoutMilliseconds',
+    'connectTimeoutMilliseconds',
+    'maximumResponseBytes',
+    'userAgent',
+    'trustedRootCertificates',
+    'maximumMutationRetries',
+  ]);
+  const copy = Object.create(null);
+  for (const key of Reflect.ownKeys(config)) {
+    if (typeof key !== 'string' || !allowed.has(key)) throw normalized({}, 'configuration');
+    const descriptor = Object.getOwnPropertyDescriptor(config, key);
+    if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+      throw normalized({}, 'configuration');
+    }
+    const value = descriptor.value;
+    if (key === 'baseUrl' || key === 'userAgent' || key === 'trustedRootCertificates') {
+      if (typeof value !== 'string') throw normalized({}, 'configuration');
+      copy[key] = value;
+    } else {
+      if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff_ffff) {
+        throw normalized({}, 'configuration');
+      }
+      copy[key] = value;
+    }
+  }
+  return copy;
+}
+
 const NativeCaseworkClient = native.CaseworkClient;
 
 class CaseworkClient {
   constructor(config) {
     try {
-      this.native = new NativeCaseworkClient(sanitize(config, 'configuration'));
+      this.native = new NativeCaseworkClient(configurationValue(config));
     } catch (error) {
       throw normalized(error, 'configuration');
     }

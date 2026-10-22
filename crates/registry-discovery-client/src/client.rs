@@ -84,7 +84,7 @@ impl EvidenceServiceQuery {
 
 pub struct DiscoveryClientConfig {
     base_url: url::Url,
-    request_timeout: Duration,
+    attempt_timeout: Duration,
     connect_timeout: Duration,
     maximum_response_bytes: u64,
     trusted_root_certificates: Option<Zeroizing<Vec<u8>>>,
@@ -95,16 +95,17 @@ impl DiscoveryClientConfig {
     pub fn new(base_url: url::Url) -> Self {
         Self {
             base_url,
-            request_timeout: Duration::from_secs(30),
+            attempt_timeout: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(10),
             maximum_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
             trusted_root_certificates: None,
         }
     }
 
+    /// Set the timeout for one Discovery HTTP exchange.
     #[must_use]
-    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
-        self.request_timeout = timeout;
+    pub fn with_attempt_timeout(mut self, timeout: Duration) -> Self {
+        self.attempt_timeout = timeout;
         self
     }
 
@@ -114,6 +115,7 @@ impl DiscoveryClientConfig {
         self
     }
 
+    /// Set the response-body ceiling for every exchange.
     #[must_use]
     pub fn with_maximum_response_bytes(mut self, maximum: u64) -> Self {
         self.maximum_response_bytes = maximum;
@@ -132,7 +134,7 @@ impl std::fmt::Debug for DiscoveryClientConfig {
         formatter
             .debug_struct("DiscoveryClientConfig")
             .field("base_url", &"<configured Discovery URL>")
-            .field("request_timeout", &self.request_timeout)
+            .field("attempt_timeout", &self.attempt_timeout)
             .field("connect_timeout", &self.connect_timeout)
             .field("maximum_response_bytes", &self.maximum_response_bytes)
             .field(
@@ -152,7 +154,7 @@ pub struct DiscoveryClient {
 
 impl DiscoveryClient {
     pub fn new(config: DiscoveryClientConfig) -> Result<Self, DiscoveryClientError> {
-        if config.request_timeout.is_zero()
+        if config.attempt_timeout.is_zero()
             || config.connect_timeout.is_zero()
             || config.maximum_response_bytes == 0
             || config.maximum_response_bytes > 16 * 1024 * 1024
@@ -162,7 +164,7 @@ impl DiscoveryClient {
         let base_url = ServiceBaseUrl::new(config.base_url)
             .map_err(|_| DiscoveryClientError::Configuration)?;
         let http = build_client(OutboundOptions {
-            request_timeout: config.request_timeout,
+            request_timeout: config.attempt_timeout,
             connect_timeout: config.connect_timeout,
             user_agent: Some("registry-discovery-client"),
             trusted_root_certificates: config

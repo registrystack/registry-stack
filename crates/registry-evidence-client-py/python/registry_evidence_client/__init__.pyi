@@ -392,11 +392,11 @@ class EvidenceClient:
         trusted_jwks: Any,
         revoked_key_ids: Sequence[str],
         token: Any = ...,
-        request_timeout_seconds: Optional[float] = ...,
+        attempt_timeout_seconds: Optional[float] = ...,
         connect_timeout_seconds: Optional[float] = ...,
         user_agent: Optional[str] = ...,
         trusted_root_certificates: Optional[bytes] = ...,
-        max_response_bytes: Optional[int] = ...,
+        maximum_response_bytes: Optional[int] = ...,
         max_metadata_bytes: Optional[int] = ...,
         authorization: Optional[Mapping[str, Any]] = ...,
     ) -> None: ...

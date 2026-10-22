@@ -5,7 +5,7 @@
 //! exactly one request; `retry_same` and `cancel` take no idempotency key, so
 //! the client never resends them. `start` resends an admission whose outcome
 //! is unknown under the caller's same key and body, at most
-//! `CoordinatorClientConfig::with_max_mutation_retries` times. The caller
+//! `CoordinatorClientConfig::with_maximum_mutation_retries` times. The caller
 //! chooses the key and, after an error whose outcome is unknown, must retain
 //! the same verified issuer, subject, client, workflow, input and key to recover.
 //! A service-owned run never becomes citizen-owned because its input names a

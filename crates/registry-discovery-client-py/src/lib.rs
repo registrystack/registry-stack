@@ -482,7 +482,7 @@ impl DiscoveryClient {
     #[new]
     #[pyo3(signature = (
         base_url,
-        request_timeout_seconds=None,
+        attempt_timeout_seconds=None,
         connect_timeout_seconds=None,
         maximum_response_bytes=None,
         trusted_root_certificates=None,
@@ -490,7 +490,7 @@ impl DiscoveryClient {
     fn new(
         py: Python<'_>,
         base_url: &Bound<'_, PyAny>,
-        request_timeout_seconds: Option<&Bound<'_, PyAny>>,
+        attempt_timeout_seconds: Option<&Bound<'_, PyAny>>,
         connect_timeout_seconds: Option<&Bound<'_, PyAny>>,
         maximum_response_bytes: Option<&Bound<'_, PyAny>>,
         trusted_root_certificates: Option<&Bound<'_, PyAny>>,
@@ -508,8 +508,8 @@ impl DiscoveryClient {
         }
         let base_url = url::Url::parse(base_url).map_err(|_| configuration_error(py))?;
         let mut config = DiscoveryClientConfig::new(base_url);
-        if let Some(timeout) = request_timeout_seconds {
-            config = config.with_request_timeout(
+        if let Some(timeout) = attempt_timeout_seconds {
+            config = config.with_attempt_timeout(
                 positive_duration(timeout).map_err(|_| configuration_error(py))?,
             );
         }

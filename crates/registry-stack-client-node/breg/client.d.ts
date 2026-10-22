@@ -62,24 +62,24 @@ export interface PrivateKeyJwtConfig {
    * authentication). Defaults to the token endpoint URL. This is not the
    * `resource` of the token request.
    */
-  audience?: string | null
+  audience?: string
   /**
    * The RFC 8707 resource indicator the token is requested for: the resource
    * server's registered identifier, not a URL to fetch.
    */
-  resource?: string | null
+  resource?: string
   /**
    * The scopes requested for the token, sent as one space-delimited `scope`
    * parameter. A requested scope may narrow the client's registered
    * permission set; it can never widen it.
    */
-  scopes?: ReadonlyArray<string> | null
-  assertionLifetimeSeconds?: SafeInteger | null
-  refreshMarginSeconds?: SafeInteger | null
-  requestTimeoutMilliseconds?: SafeInteger | null
-  connectTimeoutMilliseconds?: SafeInteger | null
-  userAgent?: string | null
-  trustedRootCertificates?: string | null
+  scopes?: ReadonlyArray<string>
+  assertionLifetimeSeconds?: SafeInteger
+  refreshMarginSeconds?: SafeInteger
+  attemptTimeoutMilliseconds?: SafeInteger
+  connectTimeoutMilliseconds?: SafeInteger
+  userAgent?: string
+  trustedRootCertificates?: string
 }
 
 /** OAuth credentials are returned to the caller. Keep them out of logs and persistence. */
@@ -98,7 +98,7 @@ export interface ExchangeContext {
   audience: string
   generation: string
   deadlineSeconds: SafeInteger
-  grantId?: string | null
+  grantId?: string
 }
 
 export type ExchangePrivateKeyJwtConfig = PrivateKeyJwtConfig & {
@@ -118,10 +118,10 @@ export interface RemoteExchangeSource {
   bootstrap: ExchangePrivateKeyJwtConfig
   bootstrapResource: string
   bootstrapScope: string
-  requestTimeoutMilliseconds?: SafeInteger | null
-  connectTimeoutMilliseconds?: SafeInteger | null
-  userAgent?: string | null
-  trustedRootCertificates?: string | null
+  attemptTimeoutMilliseconds?: SafeInteger
+  connectTimeoutMilliseconds?: SafeInteger
+  userAgent?: string
+  trustedRootCertificates?: string
 }
 
 export type ExchangeAuthorizationConfig =
@@ -135,12 +135,12 @@ export type BaseRegistryAuthorization =
 
 export interface BaseRegistryClientConfig {
   baseUrl: string
-  authorization?: BaseRegistryAuthorization | null
-  requestTimeoutMilliseconds?: SafeInteger | null
-  connectTimeoutMilliseconds?: SafeInteger | null
-  maxResponseBytes?: SafeInteger | null
-  userAgent?: string | null
-  trustedRootCertificates?: string | null
+  authorization?: BaseRegistryAuthorization
+  attemptTimeoutMilliseconds?: SafeInteger
+  connectTimeoutMilliseconds?: SafeInteger
+  maximumResponseBytes?: SafeInteger
+  userAgent?: string
+  trustedRootCertificates?: string
   /**
    * How many times a keyed mutation (create, patch, attachment upload or
    * delete, lifecycle action, immediate action, batch, tombstone, statistics
@@ -149,7 +149,7 @@ export interface BaseRegistryClientConfig {
    * number from 0 to 2, default 2; 0 sends it once. Any other value is a
    * `configuration` error.
    */
-  maxMutationRetries?: SafeInteger | null
+  maximumMutationRetries?: SafeInteger
 }
 
 export type RecordFormat = 'json' | 'json-ld'

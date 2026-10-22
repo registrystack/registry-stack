@@ -120,7 +120,7 @@ class MutationRetryTests(unittest.TestCase):
 
     def test_a_ceiling_of_zero_sends_once_and_reports_the_outcome_unknown(self) -> None:
         self.script(UNAVAILABLE, PUBLICATION)
-        client = BaseRegistryClient(self.base_url, max_mutation_retries=0)
+        client = BaseRegistryClient(self.base_url, maximum_mutation_retries=0)
 
         with self.assertRaises(BaseRegistryClientError) as raised:
             self.publish(client)
@@ -135,7 +135,7 @@ class MutationRetryTests(unittest.TestCase):
         for refusal in (VERSION_CONFLICT, DOMAIN_VIOLATION):
             with self.subTest(status=refusal[0]):
                 self.script(refusal, PUBLICATION)
-                client = BaseRegistryClient(self.base_url, max_mutation_retries=2)
+                client = BaseRegistryClient(self.base_url, maximum_mutation_retries=2)
 
                 with self.assertRaises(BaseRegistryClientError) as raised:
                     self.publish(client)
@@ -148,11 +148,11 @@ class MutationRetryTests(unittest.TestCase):
     def test_a_ceiling_outside_zero_to_two_is_a_configuration_error(self) -> None:
         for retries in (0, 1, 2):
             with self.subTest(retries=retries):
-                BaseRegistryClient(self.base_url, max_mutation_retries=retries)
+                BaseRegistryClient(self.base_url, maximum_mutation_retries=retries)
         for retries in (3, 255, 256, -1, 1.5, "1", True):
             with self.subTest(retries=retries):
                 with self.assertRaises(BaseRegistryClientError) as raised:
-                    BaseRegistryClient(self.base_url, max_mutation_retries=retries)
+                    BaseRegistryClient(self.base_url, maximum_mutation_retries=retries)
                 self.assertEqual(raised.exception.kind, "configuration")
                 self.assertIs(raised.exception.outcome_unknown, False)
 

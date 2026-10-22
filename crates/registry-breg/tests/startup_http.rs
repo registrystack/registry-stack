@@ -28,7 +28,7 @@ use registry_breg::postgres::{
 };
 use registry_breg::runtime_config::{parse_runtime_config_with_env, RuntimeConfigError};
 use registry_breg::startup::{
-    operational_log_level, with_request_timeout_and_metrics_for_test,
+    operational_log_level, select_operational_log_level, with_request_timeout_and_metrics_for_test,
     with_request_timeout_for_test, BackgroundTask, BackgroundTaskStop, OperationalEvent,
     OperationalLogLevel, StartupError, WebhookStateTransitionCode,
 };
@@ -366,6 +366,16 @@ fn operational_log_level_is_a_closed_vocabulary() {
     assert!(operational_log_level(Some("error")).is_ok());
     assert!(operational_log_level(Some("debug")).is_err());
     assert!(operational_log_level(Some("breg=trace")).is_err());
+    assert_eq!(
+        select_operational_log_level(None, "warn").expect("runtime level"),
+        tracing_subscriber::filter::LevelFilter::WARN
+    );
+    assert_eq!(
+        select_operational_log_level(Some("error"), "warn").expect("environment override"),
+        tracing_subscriber::filter::LevelFilter::ERROR
+    );
+    assert!(select_operational_log_level(Some("debug"), "info").is_err());
+    assert!(select_operational_log_level(None, "debug").is_err());
 }
 
 #[derive(Clone, Default)]

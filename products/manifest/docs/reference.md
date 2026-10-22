@@ -35,7 +35,7 @@ instead, carrying `ok`, `command`, `status`, `filesChecked`, `errors`, `warnings
 Compiles the manifest and writes one renderer's output to stdout.
 
 ```text
-render <metadata.yaml> --format <format> [--profile <id>] [--dataset <id>] [--entity <name>] [--form <id>] [--offering <id>]
+render <metadata.yaml> --artifact-format <format> [--profile <id>] [--dataset <id>] [--entity <name>] [--form <id>] [--offering <id>]
 ```
 
 ### `publish`
@@ -43,11 +43,14 @@ render <metadata.yaml> --format <format> [--profile <id>] [--dataset <id>] [--en
 Compiles the manifest, runs all renderers, writes the full artifact tree to `<dir>`, and writes `index.json`.
 
 ```text
-publish <metadata.yaml> --out <dir> [--site-root <dir>]
+publish <metadata.yaml> [--output <dir>] [--site-root <dir>] [--format human|json]
 ```
 
-`--site-root` is optional. When set, the two `.well-known/*` discovery documents are written
-under `--site-root` instead of `--out`; every other artifact still writes under `--out`. See
+`--output` defaults to `public/metadata`. `--site-root` is optional. When set,
+the two `.well-known/*` discovery documents are written under `--site-root`
+instead of `--output`; every other artifact still writes under `--output`.
+The default human report and the JSON `ManifestCtlReport` describe the completed
+publication separately from its artifact files. See
 [Publish output artifacts](#publish-output-artifacts).
 
 ### `validate-profiles`
@@ -542,7 +545,7 @@ Source:
 [`crates/registry-manifest-cli/src/main.rs`](../../../crates/registry-manifest-cli/src/main.rs)
 (`publish_command`).
 
-All paths are relative to the `--out` directory, except the two `.well-known/*` discovery
+All paths are relative to the `--output` directory, except the two `.well-known/*` discovery
 documents, which are relative to `--site-root` when that flag is set.
 
 | Artifact path | Format | Source renderer | Version marker |
@@ -582,7 +585,7 @@ Digest fields use `sha256:<hex>` values:
 - `artifacts[].sha256`: content digest for each published metadata artifact listed in
   `artifacts`.
 
-The `artifacts` inventory uses paths relative to `--out`, records each artifact's media type,
+The `artifacts` inventory uses paths relative to `--output`, records each artifact's media type,
 and excludes `index.json` because it contains the package digest. Discovery documents under
 `.well-known/` are also excluded because they may be written under a separate `--site-root`
 while still pointing at the same `/metadata/index.json` entry point.

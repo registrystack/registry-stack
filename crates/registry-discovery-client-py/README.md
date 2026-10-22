@@ -4,6 +4,8 @@ Synchronous PyO3 binding for the bounded Rust `registry-discovery-client` SDK.
 It performs exact service search, Evidence Type resolution, and ambiguity-safe
 selection. A returned selection is inert public metadata. Apply local trust
 policy before calling its Evidence endpoint.
+Transport configuration uses `attempt_timeout_seconds`,
+`connect_timeout_seconds`, and `maximum_response_bytes`.
 
 This crate publishes through the unified `registry-stack-client`
 distribution, which imports as `registry_client`. Install the exact client

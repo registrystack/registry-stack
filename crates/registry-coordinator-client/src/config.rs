@@ -14,12 +14,12 @@ use crate::CoordinatorClientError;
 #[derive(Clone)]
 pub struct CoordinatorClientConfig {
     pub(crate) base_url: Url,
-    pub(crate) request_timeout: Duration,
+    pub(crate) attempt_timeout: Duration,
     pub(crate) connect_timeout: Duration,
-    pub(crate) max_response_bytes: u64,
+    pub(crate) maximum_response_bytes: u64,
     pub(crate) user_agent: Option<String>,
     pub(crate) trusted_root_certificates: Option<Vec<u8>>,
-    pub(crate) max_mutation_retries: u8,
+    pub(crate) maximum_mutation_retries: u8,
 }
 
 impl CoordinatorClientConfig {
@@ -27,17 +27,17 @@ impl CoordinatorClientConfig {
     pub fn new(base_url: Url) -> Self {
         Self {
             base_url,
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            attempt_timeout: DEFAULT_REQUEST_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            max_response_bytes: 4 * 1024 * 1024,
+            maximum_response_bytes: 4 * 1024 * 1024,
             user_agent: None,
             trusted_root_certificates: None,
-            max_mutation_retries: DEFAULT_MUTATION_RETRIES,
+            maximum_mutation_retries: DEFAULT_MUTATION_RETRIES,
         }
     }
     #[must_use]
-    pub fn with_request_timeout(mut self, value: Duration) -> Self {
-        self.request_timeout = value;
+    pub fn with_attempt_timeout(mut self, value: Duration) -> Self {
+        self.attempt_timeout = value;
         self
     }
     #[must_use]
@@ -46,8 +46,8 @@ impl CoordinatorClientConfig {
         self
     }
     #[must_use]
-    pub fn with_max_response_bytes(mut self, value: u64) -> Self {
-        self.max_response_bytes = value;
+    pub fn with_maximum_response_bytes(mut self, value: u64) -> Self {
+        self.maximum_response_bytes = value;
         self
     }
     #[must_use]
@@ -64,20 +64,20 @@ impl CoordinatorClientConfig {
     /// identically and under the same idempotency key, before its error is
     /// returned. Defaults to 2, accepts at most 2, and 0 disables the resend.
     #[must_use]
-    pub fn with_max_mutation_retries(mut self, value: u8) -> Self {
-        self.max_mutation_retries = value;
+    pub fn with_maximum_mutation_retries(mut self, value: u8) -> Self {
+        self.maximum_mutation_retries = value;
         self
     }
     pub(crate) fn validate(&self) -> Result<ServiceBaseUrl, CoordinatorClientError> {
         let base = ServiceBaseUrl::new(self.base_url.clone()).map_err(|_| {
             CoordinatorClientError::configuration("the service base URL is not usable")
         })?;
-        if self.request_timeout.is_zero() || self.connect_timeout.is_zero() {
+        if self.attempt_timeout.is_zero() || self.connect_timeout.is_zero() {
             return Err(CoordinatorClientError::configuration(
                 "client timeouts must be greater than zero",
             ));
         }
-        if self.max_response_bytes == 0 || self.max_response_bytes > 16 * 1024 * 1024 {
+        if self.maximum_response_bytes == 0 || self.maximum_response_bytes > 16 * 1024 * 1024 {
             return Err(CoordinatorClientError::configuration(
                 "the response body bound is outside the accepted range",
             ));
@@ -91,7 +91,7 @@ impl CoordinatorClientConfig {
                 "the certificate bundle exceeds the accepted bound",
             ));
         }
-        if self.max_mutation_retries > MAXIMUM_MUTATION_RETRIES {
+        if self.maximum_mutation_retries > MAXIMUM_MUTATION_RETRIES {
             return Err(CoordinatorClientError::configuration(
                 "the mutation retry count exceeds the accepted bound",
             ));
@@ -104,15 +104,15 @@ impl fmt::Debug for CoordinatorClientConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CoordinatorClientConfig")
             .field("base_url", &"<validated service URL>")
-            .field("request_timeout", &self.request_timeout)
+            .field("attempt_timeout", &self.attempt_timeout)
             .field("connect_timeout", &self.connect_timeout)
-            .field("max_response_bytes", &self.max_response_bytes)
+            .field("maximum_response_bytes", &self.maximum_response_bytes)
             .field("user_agent_present", &self.user_agent.is_some())
             .field(
                 "trusted_root_certificates_present",
                 &self.trusted_root_certificates.is_some(),
             )
-            .field("max_mutation_retries", &self.max_mutation_retries)
+            .field("maximum_mutation_retries", &self.maximum_mutation_retries)
             .finish()
     }
 }

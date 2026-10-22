@@ -51,6 +51,7 @@ use registry_messaging_core::{
     PROVIDER_CALLBACK_TOKEN_PATH, READY_PATH, TEMPLATE_PREVIEW_PATH,
 };
 use registry_platform_authcommon::parse_bearer_token;
+use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_httpsec::{
     request_body_limit_default, security_headers, CspBuilder, ProblemBody, TraceContext,
 };
@@ -882,8 +883,7 @@ fn preview_request(
     if !is_json(headers) {
         return Err(ProblemCode::RequestUnsupportedMediaType);
     }
-    let value: serde_json::Value =
-        serde_json::from_slice(body).map_err(|_| ProblemCode::RequestInvalid)?;
+    let value = parse_json_strict(body).map_err(|_| ProblemCode::RequestInvalid)?;
     serde_json::from_value(value).map_err(|_| ProblemCode::RequestUnprocessable)
 }
 
@@ -1598,6 +1598,18 @@ mod tests {
             (
                 PREVIEW,
                 Some("application/json"),
+                br#"{"locale": "fr", "locale": "fr", "data": {"name": "Ada Lovelace", "day": "2026-10-01", "office": "Central Registry Office"}}"#.to_vec(),
+                ProblemCode::RequestInvalid,
+            ),
+            (
+                PREVIEW,
+                Some("application/json"),
+                br#"{"locale": "fr", "data": {"name": "Ada Lovelace", "name": "Ada Lovelace", "day": "2026-10-01", "office": "Central Registry Office"}}"#.to_vec(),
+                ProblemCode::RequestInvalid,
+            ),
+            (
+                PREVIEW,
+                Some("application/json"),
                 br#"{"locale": "en"}"#.to_vec(),
                 ProblemCode::RequestUnprocessable,
             ),
@@ -1645,14 +1657,14 @@ mod tests {
             .await;
         }
         let records = journal(&sink);
-        assert_eq!(records.len(), 9);
+        assert_eq!(records.len(), 11);
         // The undeclared locale is not written; the declared template is.
         assert_eq!(
-            records[7]["template"],
+            records[9]["template"],
             json!({"id": "appointment-reminder", "version": "1"})
         );
-        assert_eq!(records[7]["problem"], "template.locale-unavailable");
-        assert!(records[6].get("template").is_none());
+        assert_eq!(records[9]["problem"], "template.locale-unavailable");
+        assert!(records[8].get("template").is_none());
         for record in &records {
             assert_eq!(record["outcome"], "refused");
         }

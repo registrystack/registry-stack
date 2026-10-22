@@ -9,6 +9,7 @@ mod provider_pair;
 mod report;
 #[cfg(feature = "schema")]
 pub mod schema;
+mod selected_binary;
 mod templates;
 use anyhow::Result;
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
@@ -17,7 +18,7 @@ use std::{
     ffi::OsString,
     io::{self, Write},
     path::PathBuf,
-    process::ExitCode,
+    process::{Command as ProcessCommand, ExitCode},
 };
 #[derive(Debug, Parser)]
 #[command(name="caseworkctl",version=registry_platform_buildinfo::DISPLAY_VERSION,about="Compile and operate bounded review policies")]
@@ -36,6 +37,8 @@ enum OutputFormat {
 }
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Run the production Casework service with the selected runtime.
+    Serve(ServeArgs),
     /// Create a standalone or source-backed ReviewPolicy project.
     Init {
         /// New project directory; existing destinations are never overwritten.
@@ -108,6 +111,17 @@ enum Command {
     #[command(name = "__dev-service-guard", hide = true)]
     DevServiceGuard(dev::ServiceGuardArgs),
 }
+
+#[derive(Debug, Args)]
+struct ServeArgs {
+    /// Runtime configuration file passed unchanged to the Casework runtime.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Casework runtime executable for an unmanaged installation.
+    #[arg(long, hide = true, env = "CASEWORK_BIN", value_name = "BINARY")]
+    casework_bin: Option<PathBuf>,
+}
 #[derive(Debug, Subcommand)]
 enum ProviderCommand {
     /// Create an approval project from a Base Registry Engine (BReg) Action and print missing configuration.
@@ -130,9 +144,9 @@ enum ProviderCommand {
         /// Package directory written with a new project; omit to inspect the package without writing it.
         #[arg(long, value_name = "DIRECTORY", requires = "breg_package")]
         package_output: Option<PathBuf>,
-        /// Matching bregctl executable used for public project and package inspection.
-        #[arg(long, default_value = "bregctl", value_name = "BINARY")]
-        bregctl_bin: PathBuf,
+        /// Matching bregctl executable used for public project and package inspection; otherwise use the rstack-selected helper or bregctl on PATH.
+        #[arg(long, value_name = "BINARY")]
+        bregctl_bin: Option<PathBuf>,
     },
     /// Verify native context and reader authority, then optionally retain its provider export.
     Pair {
@@ -148,9 +162,9 @@ enum ProviderCommand {
         /// Base Registry Engine (BReg) action that declares the required review context.
         #[arg(long)]
         action_id: String,
-        /// Matching bregctl executable used to verify the producer package.
-        #[arg(long, default_value = "bregctl", value_name = "BINARY")]
-        bregctl_bin: PathBuf,
+        /// Matching bregctl executable used to verify the producer package; otherwise use the rstack-selected helper or bregctl on PATH.
+        #[arg(long, value_name = "BINARY")]
+        bregctl_bin: Option<PathBuf>,
         /// Write the verified provider export and description reference after validation.
         #[arg(long)]
         apply: bool,
@@ -193,9 +207,9 @@ struct CheckArgs {
     /// Limit native package comparison to this declared provider.
     #[arg(long, requires = "against_breg_package")]
     provider_id: Option<String>,
-    /// Matching bregctl executable used for native package verification.
-    #[arg(long, default_value = "bregctl", value_name = "BINARY")]
-    bregctl_bin: PathBuf,
+    /// Matching bregctl executable used for native package verification; otherwise use the rstack-selected helper or bregctl on PATH.
+    #[arg(long, value_name = "BINARY")]
+    bregctl_bin: Option<PathBuf>,
     /// Runtime configuration file
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
@@ -246,15 +260,21 @@ pub fn main_entry_from(
             return ExitCode::from(report::USAGE_EXIT);
         }
     };
-    let kind = command_kind(&cli.command);
-    let command = cli.command.report_command();
-    if command == "internal" {
-        return match run(cli.command) {
+    let Cli { format, command } = cli;
+    let command = match command {
+        Command::Serve(args) => return serve(args, format, stdout, stderr),
+        command => command,
+    };
+    let kind = command_kind(&command);
+    let report_command = command.report_command();
+    if report_command == "internal" {
+        return match run(command) {
             Ok(_) => ExitCode::SUCCESS,
             Err(_) => ExitCode::from(1),
         };
     }
-    let result = run(cli.command).and_then(|value| report::CliReport::from_value(command, value));
+    let result =
+        run(command).and_then(|value| report::CliReport::from_value(report_command, value));
     let (value, exit) = match result {
         Ok(value) => {
             let value = serde_json::to_value(value).unwrap_or_default();
@@ -289,18 +309,18 @@ pub fn main_entry_from(
             } else {
                 report::ReportStatus::DomainRefusal
             };
-            let value = report::CliReport::failure(command, status, diagnostics)
+            let value = report::CliReport::failure(report_command, status, diagnostics)
                 .and_then(|value| serde_json::to_value(value).map_err(Into::into))
                 .unwrap_or_default();
             (value, exit)
         }
     };
-    let output = if matches!(cli.format, OutputFormat::Human) && exit != 0 {
+    let output = if matches!(format, OutputFormat::Human) && exit != 0 {
         stderr as &mut dyn Write
     } else {
         stdout as &mut dyn Write
     };
-    let _ = match cli.format {
+    let _ = match format {
         OutputFormat::Json => report::write(&value, output),
         OutputFormat::Human => render_human(&value, output),
     };
@@ -430,6 +450,7 @@ impl Command {
     fn report_command(&self) -> &'static str {
         match self {
             Self::Init { .. } => "init",
+            Self::Serve(_) => "serve",
             Self::Check(_) => "check",
             Self::Explain(_) => "explain",
             Self::Test(_) => "test",
@@ -458,6 +479,7 @@ impl Command {
 
 fn run(command: Command) -> Result<Value> {
     match command {
+        Command::Serve(_) => unreachable!("serve replaces the ctl process before report dispatch"),
         Command::Init { project, template } => project::init(&project, &template),
         Command::Check(args) => {
             let mut result = project::check(&args.project, args.production, args.deny_warnings);
@@ -471,11 +493,12 @@ fn run(command: Command) -> Result<Value> {
             }
             let mut report = result?;
             if let Some(package) = args.against_breg_package {
+                let bregctl = bregctl_binary(args.bregctl_bin.as_deref())?;
                 report["bregPackage"] = provider_pair::compare(
                     &args.project,
                     &package,
                     args.provider_id.as_deref(),
-                    &args.bregctl_bin,
+                    &bregctl,
                 )?;
             }
             Ok(report)
@@ -494,15 +517,18 @@ fn run(command: Command) -> Result<Value> {
                     package_output,
                     bregctl_bin,
                 },
-        } => provider_add::add(
-            &project,
-            &breg_project,
-            &action,
-            &pattern,
-            breg_package.as_deref(),
-            package_output.as_deref(),
-            &bregctl_bin,
-        ),
+        } => {
+            let bregctl = bregctl_binary(bregctl_bin.as_deref())?;
+            provider_add::add(
+                &project,
+                &breg_project,
+                &action,
+                &pattern,
+                breg_package.as_deref(),
+                package_output.as_deref(),
+                &bregctl,
+            )
+        }
         Command::Provider {
             command:
                 ProviderCommand::Pair {
@@ -513,14 +539,17 @@ fn run(command: Command) -> Result<Value> {
                     bregctl_bin,
                     apply,
                 },
-        } => provider_pair::pair(
-            &project,
-            &provider_id,
-            &breg_package,
-            &action_id,
-            &bregctl_bin,
-            apply,
-        ),
+        } => {
+            let bregctl = bregctl_binary(bregctl_bin.as_deref())?;
+            provider_pair::pair(
+                &project,
+                &provider_id,
+                &breg_package,
+                &action_id,
+                &bregctl,
+                apply,
+            )
+        }
         Command::Lifecycle => Ok(
             json!({"ok":true,"command":"lifecycle","lifecycles":[registry_casework_core::review_lifecycle()]}),
         ),
@@ -556,6 +585,96 @@ fn run(command: Command) -> Result<Value> {
         Command::DevServiceGuard(args) => Ok(json!({"ok":dev::run_service_guard(args)?})),
     }
 }
+
+fn serve(
+    args: ServeArgs,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    if matches!(format, OutputFormat::Json) {
+        let diagnostic = registry_platform_yaml::Diagnostic::error(
+            "casework.usage.invalid",
+            "format",
+            "--format does not apply to the serve command because service logs keep the Casework runtime contract.",
+            "Remove --format and retry the serve command.",
+        );
+        let result =
+            report::CliReport::failure("usage", report::ReportStatus::UsageError, vec![diagnostic])
+                .and_then(|report| serde_json::to_value(report).map_err(Into::into))
+                .and_then(|value| report::write(&value, stdout).map_err(Into::into));
+        if result.is_err() {
+            let _ = writeln!(stderr, "caseworkctl: output could not be written");
+            return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
+        }
+        return ExitCode::from(report::USAGE_EXIT);
+    }
+
+    let binary = match selected_binary::resolve_managed(
+        selected_binary::CASEWORK,
+        args.casework_bin.as_deref(),
+    ) {
+        Ok(Some(binary)) => binary,
+        Ok(None) => args
+            .casework_bin
+            .unwrap_or_else(|| PathBuf::from("casework")),
+        Err(error) => {
+            let _ = writeln!(
+                stderr,
+                "caseworkctl serve could not select casework: {error:#}"
+            );
+            return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
+        }
+    };
+    let mut command = ProcessCommand::new(binary);
+    command
+        .arg("--runtime-config")
+        .arg(args.runtime_config)
+        .arg("serve");
+    replace_with_service(command, "casework", stderr)
+}
+
+#[cfg(unix)]
+fn replace_with_service(
+    mut command: ProcessCommand,
+    name: &str,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    use std::os::unix::process::CommandExt as _;
+
+    let error = command.exec();
+    let _ = writeln!(stderr, "caseworkctl serve could not start {name}: {error}");
+    ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+}
+
+#[cfg(not(unix))]
+fn replace_with_service(
+    mut command: ProcessCommand,
+    name: &str,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    match command.status() {
+        Ok(status) => ExitCode::from(
+            status
+                .code()
+                .and_then(|code| u8::try_from(code).ok())
+                .unwrap_or(OPERATIONAL_FAILURE_EXIT),
+        ),
+        Err(error) => {
+            let _ = writeln!(stderr, "caseworkctl serve could not start {name}: {error}");
+            ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+        }
+    }
+}
+
+fn bregctl_binary(explicit: Option<&std::path::Path>) -> Result<PathBuf> {
+    Ok(
+        selected_binary::resolve_managed(selected_binary::BREGCTL, explicit)?
+            .or_else(|| explicit.map(std::path::Path::to_path_buf))
+            .unwrap_or_else(|| PathBuf::from("bregctl")),
+    )
+}
+
 fn render_human(value: &Value, out: &mut (impl Write + ?Sized)) -> io::Result<()> {
     let diagnostics: Vec<registry_platform_yaml::Diagnostic> =
         serde_json::from_value(value["diagnostics"].clone()).map_err(io::Error::other)?;

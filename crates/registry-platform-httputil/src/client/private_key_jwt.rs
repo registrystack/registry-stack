@@ -525,8 +525,9 @@ impl PrivateKeyJwtConfig {
         self
     }
 
+    /// Bound one outbound request to the token endpoint.
     #[must_use]
-    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
+    pub fn with_attempt_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = timeout;
         self
     }
@@ -2980,7 +2981,7 @@ mod tests {
                     endpoint("https://tokens.example.org"),
                     client_key(Some(KEY_ID)),
                 )
-                .with_request_timeout(Duration::ZERO),
+                .with_attempt_timeout(Duration::ZERO),
             ),
             (
                 "the client key cannot sign a client assertion",

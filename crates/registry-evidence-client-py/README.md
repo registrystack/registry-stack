@@ -163,12 +163,16 @@ A response that exceeds its size bound maps to `kind: "transport"` with
 response status itself was a plain 200: the size limit is enforced against the
 transport, before any attempt to interpret the body as a problem response.
 
-Which bound applies depends on the call. `max_response_bytes` bounds the signed
-response body that `send()` and `request_and_verify()` read, and its default
-follows what the verifier will accept as a signed response.
+Which bound applies depends on the call. `maximum_response_bytes` bounds the
+signed response body that `send()` and `request_and_verify()` read, and its
+default follows what the verifier will accept as a signed response.
 `max_metadata_bytes` bounds the documents `discover()` and `fetch_jwks()` read,
 neither of which is signed or verified. Tightening one does not tighten the
-other.
+other. The retired `max_response_bytes` spelling is refused. Passing `None`
+for a typed optional constructor argument has the same effect as omitting it.
+`attempt_timeout_seconds` bounds one outbound attempt, including its body, and
+`connect_timeout_seconds` bounds connection setup. Direct private-key JWT and
+exchange providers use the same timeout names for their own requests.
 
 No string reaching Python carries unbounded remote text; no exception carries
 response bytes, a credential, a header value, a selector value, or a subject

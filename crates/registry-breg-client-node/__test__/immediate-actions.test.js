@@ -111,7 +111,7 @@ test('an immediate action recovers after a lost response from persisted bytes an
   try {
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
     // The process gives up after the lost answer instead of resending it.
-    const client = new BaseRegistryClient({ baseUrl, maxMutationRetries: 0 });
+    const client = new BaseRegistryClient({ baseUrl, maximumMutationRetries: 0 });
     const binding = (await client.registryContract('writer')).selectAction('update-item', 'writer');
     const conditions = await client.actionTargetConditions(binding, { targetId });
     const inputs = { targetId, label: 'new' };

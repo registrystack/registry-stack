@@ -76,6 +76,19 @@ class ReleaseRosterTest(TestCase):
                 self.assertEqual(0, result)
                 self.assertEqual(expected, stdout.getvalue())
 
+    def test_rstack_component_manager_joins_v0_44(self) -> None:
+        self.assertEqual((0, 44, 0), release_roster.RSTACK_FIRST_RELEASE)
+        self.assertFalse(release_roster.rstack_in_release((0, 43, 0)))
+        self.assertTrue(release_roster.rstack_in_release((0, 44, 0)))
+        with mock.patch.object(release_roster, "RSTACK_FIRST_RELEASE", None):
+            self.assertFalse(release_roster.rstack_in_release((1, 0, 0)))
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(
+                release_roster.main(["rstack-in-release", "0.44.0"]), 0
+            )
+        self.assertEqual(output.getvalue(), "true\n")
+
     def test_unified_clients_hold_coordinator_until_its_client_returns(self) -> None:
         self.assertIsNone(release_roster.COORDINATOR_CLIENT_FIRST_RELEASE)
         for version in ((0, 41, 0), (0, 42, 0), (1, 0, 0)):

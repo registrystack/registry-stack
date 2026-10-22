@@ -4848,7 +4848,7 @@ const assert = require('node:assert/strict');
 const { WorkflowClient, workflow, workflowRevision } = require('./js/workflow.js');
 const { CoordinatorClient } = require(process.env.COORDINATOR_SDK_NODE_CLIENT);
 (async () => {
-  const generic = new CoordinatorClient({baseUrl:process.env.COORDINATOR_SDK_ORIGIN,maxMutationRetries:0});
+  const generic = new CoordinatorClient({baseUrl:process.env.COORDINATOR_SDK_ORIGIN,maximumMutationRetries:0});
   const client = new WorkflowClient(generic);
   const token = process.env.COORDINATOR_SDK_TOKEN;
   const contract = (await generic.workflow(token, workflow)).value;
@@ -4887,7 +4887,7 @@ if runtime:
     ctypes.CDLL(glob.glob(runtime + '/libaws_lc_fips*_crypto.dylib')[0], mode=ctypes.RTLD_GLOBAL)
 from registry_coordinator_client import CoordinatorClient
 from workflow import WorkflowClient, WORKFLOW, WORKFLOW_REVISION
-generic = CoordinatorClient(os.environ['COORDINATOR_SDK_ORIGIN'], max_mutation_retries=0)
+generic = CoordinatorClient(os.environ['COORDINATOR_SDK_ORIGIN'], maximum_mutation_retries=0)
 client = WorkflowClient(generic)
 token = os.environ['COORDINATOR_SDK_TOKEN']
 contract = generic.workflow(token, WORKFLOW)['value']

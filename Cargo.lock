@@ -5397,9 +5397,11 @@ dependencies = [
  "registry-evidence",
  "registry-evidence-oid4vci",
  "registry-evidencectl",
+ "registry-manifest-cli",
  "registry-messaging",
  "registry-messagingctl",
  "registry-render",
+ "registry-rstack",
  "registry-scheduling",
  "registry-schedulingctl",
  "serde",
@@ -5451,6 +5453,7 @@ dependencies = [
  "registry-scheduling-core",
  "reqwest 0.12.28",
  "rhai",
+ "rustix 1.1.5",
  "rustls",
  "schemars",
  "serde",
@@ -5938,6 +5941,7 @@ dependencies = [
 name = "registry-manifest-cli"
 version = "0.44.0"
 dependencies = [
+ "clap",
  "jsonschema",
  "registry-manifest-core",
  "registry-platform-buildinfo",
@@ -6514,6 +6518,22 @@ dependencies = [
  "sha2 0.11.1",
  "thiserror 2.0.21",
  "uuid",
+]
+
+[[package]]
+name = "registry-rstack"
+version = "0.44.0"
+dependencies = [
+ "clap",
+ "fs2",
+ "hex",
+ "registry-platform-canonical-json",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "ureq",
 ]
 
 [[package]]

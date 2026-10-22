@@ -1069,6 +1069,12 @@ fn canonical_yaml(bytes: &[u8], name: &str, format: &FormatSpec<'_>) -> Result<V
 }
 
 fn start(args: StartArgs) -> Result<Value> {
+    // Bind an rstack-managed invocation to its selected runtime before this
+    // command creates or changes any retained development state.
+    let managed_breg = crate::selected_binary::resolve_managed(
+        crate::selected_binary::BREG,
+        args.breg_bin.as_deref(),
+    )?;
     let project = project(&args.project)?;
     let requested_issuer = args
         .issuer_project
@@ -1252,7 +1258,10 @@ fn start(args: StartArgs) -> Result<Value> {
             "the retained successor database was explicitly removed; a successor package cannot initialize empty records. Remove the project's .breg/dev directory, then run bregctl dev start to begin a fresh session"
         );
     }
-    let breg = executable("breg", args.breg_bin.as_deref())?;
+    let breg = match managed_breg {
+        Some(path) => path,
+        None => executable("breg", args.breg_bin.as_deref())?,
+    };
     let docker = executable("docker", args.docker_bin.as_deref())?;
     // Identify the prerequisites before the session stops a container or
     // launches the supervisor: a breg from another release has to be named

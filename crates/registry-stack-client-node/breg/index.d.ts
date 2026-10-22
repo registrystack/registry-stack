@@ -58,7 +58,7 @@ export declare class BaseRegistryClient {
   /**
    * Invoke one metadata-selected immediate action. An invocation whose
    * outcome is unknown is resent identically under the same key, at most
-   * `maxMutationRetries` times.
+   * `maximumMutationRetries` times.
    */
   invokeAction(binding: BRegActionBinding, inputs: any, idempotencyKey: string, conditions?: BRegActionTargetConditions | undefined | null): Promise<CompleteOutcome>
   /**
@@ -75,7 +75,7 @@ export declare class BaseRegistryClient {
   /**
    * Explicitly send a recovered invocation under its original key. An
    * invocation whose outcome is unknown is resent identically under that
-   * key, at most `maxMutationRetries` times.
+   * key, at most `maximumMutationRetries` times.
    */
   executeRecoveredAction(binding: BRegActionBinding, recovered: BRegRecoveredAction): Promise<CompleteOutcome>
   /** Execute a recovered proposal start with its exact original request and key. */
@@ -91,7 +91,7 @@ export declare class BaseRegistryClient {
   /**
    * Execute one metadata-selected atomic batch. A batch whose outcome is
    * unknown is resent identically under the same key, at most
-   * `maxMutationRetries` times.
+   * `maximumMutationRetries` times.
    */
   batchRecords(binding: BRegBatchBinding, request: any, idempotencyKey: string): Promise<CompleteOutcome>
   /**

@@ -8,7 +8,7 @@ use clap::Parser;
 use registry_breg_mcp::{
     check,
     cli::{Cli, Command},
-    config::RuntimeConfig,
+    config::{LogLevel, RuntimeConfig},
     runtime,
 };
 use tracing::Level;
@@ -19,9 +19,16 @@ const LOG_VARIABLE: &str = "BREG_MCP_LOG";
 
 /// The operational log level. The vocabulary is closed so a typo cannot
 /// silently turn logging off or turn a dependency's logging on.
-fn operational_log_level(value: Result<String, std::env::VarError>) -> Result<Level, String> {
+fn operational_log_level(
+    value: Result<String, std::env::VarError>,
+    configured: LogLevel,
+) -> Result<Level, String> {
     match value {
-        Err(std::env::VarError::NotPresent) => Ok(Level::INFO),
+        Err(std::env::VarError::NotPresent) => Ok(match configured {
+            LogLevel::Error => Level::ERROR,
+            LogLevel::Warn => Level::WARN,
+            LogLevel::Info => Level::INFO,
+        }),
         Ok(value) => match value.as_str() {
             "error" => Ok(Level::ERROR),
             "warn" => Ok(Level::WARN),
@@ -54,13 +61,17 @@ fn main() -> ExitCode {
         ));
     }
 
-    let level = match operational_log_level(std::env::var(LOG_VARIABLE)) {
-        Ok(level) => level,
-        Err(error) => {
-            eprintln!("breg-mcp: {error}");
-            return ExitCode::from(2);
-        }
+    let environment_level = match std::env::var(LOG_VARIABLE) {
+        Err(std::env::VarError::NotPresent) => None,
+        value => match operational_log_level(value, LogLevel::Info) {
+            Ok(level) => Some(level),
+            Err(error) => {
+                eprintln!("breg-mcp: {error}");
+                return ExitCode::from(2);
+            }
+        },
     };
+
     // A refused runtime file is reported in the shared human shape on
     // standard error (CFG-DIAG-2), naming members and never their values.
     let config = match RuntimeConfig::load(&cli.runtime_config) {
@@ -70,6 +81,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let level = environment_level.unwrap_or_else(|| {
+        operational_log_level(Err(std::env::VarError::NotPresent), config.log_level)
+            .expect("the runtime log level was validated")
+    });
     // JSON lines on standard output, from this crate only.
     tracing_subscriber::registry()
         .with(
@@ -134,16 +149,29 @@ mod tests {
 
     #[test]
     fn the_log_level_vocabulary_is_closed() {
+        use registry_breg_mcp::config::LogLevel;
+
         assert_eq!(
-            operational_log_level(Err(std::env::VarError::NotPresent)),
+            operational_log_level(Err(std::env::VarError::NotPresent), LogLevel::Info),
             Ok(Level::INFO)
+        );
+        assert_eq!(
+            operational_log_level(Err(std::env::VarError::NotPresent), LogLevel::Warn),
+            Ok(Level::WARN)
+        );
+        assert_eq!(
+            operational_log_level(Ok("error".to_owned()), LogLevel::Warn),
+            Ok(Level::ERROR)
         );
         for (value, level) in [
             ("error", Level::ERROR),
             ("warn", Level::WARN),
             ("info", Level::INFO),
         ] {
-            assert_eq!(operational_log_level(Ok(value.to_owned())), Ok(level));
+            assert_eq!(
+                operational_log_level(Ok(value.to_owned()), LogLevel::Info),
+                Ok(level)
+            );
         }
         for refused in [
             "debug",
@@ -154,7 +182,7 @@ mod tests {
             "registry_breg_mcp=info",
         ] {
             assert_eq!(
-                operational_log_level(Ok(refused.to_owned())),
+                operational_log_level(Ok(refused.to_owned()), LogLevel::Info),
                 Err("BREG_MCP_LOG must be one of error, warn, or info".to_owned()),
                 "{refused:?}"
             );

@@ -25,12 +25,12 @@ const MAXIMUM_JAVASCRIPT_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CoordinatorClientConfig {
     base_url: String,
-    request_timeout_milliseconds: Option<f64>,
+    attempt_timeout_milliseconds: Option<f64>,
     connect_timeout_milliseconds: Option<f64>,
-    max_response_bytes: Option<f64>,
+    maximum_response_bytes: Option<f64>,
     user_agent: Option<String>,
     trusted_root_certificates: Option<String>,
-    max_mutation_retries: Option<f64>,
+    maximum_mutation_retries: Option<f64>,
 }
 
 #[napi(object)]
@@ -53,6 +53,7 @@ impl CoordinatorClient {
         ts_args_type = "config: import('./client').CoordinatorClientConfig"
     )]
     pub fn new(config: Value) -> Result<Self> {
+        reject_null_configuration_members(&config)?;
         let config: CoordinatorClientConfig = serde_json::from_value(config).map_err(|_| {
             binding_error(
                 "configuration",
@@ -66,14 +67,14 @@ impl CoordinatorClient {
             )
         })?;
         let mut core = CoreConfig::new(base_url);
-        if let Some(value) = config.request_timeout_milliseconds {
-            core = core.with_request_timeout(Duration::from_millis(whole_number(value)?));
+        if let Some(value) = config.attempt_timeout_milliseconds {
+            core = core.with_attempt_timeout(Duration::from_millis(whole_number(value)?));
         }
         if let Some(value) = config.connect_timeout_milliseconds {
             core = core.with_connect_timeout(Duration::from_millis(whole_number(value)?));
         }
-        if let Some(value) = config.max_response_bytes {
-            core = core.with_max_response_bytes(whole_number(value)?);
+        if let Some(value) = config.maximum_response_bytes {
+            core = core.with_maximum_response_bytes(whole_number(value)?);
         }
         if let Some(value) = config.user_agent {
             core = core.with_user_agent(value);
@@ -81,8 +82,8 @@ impl CoordinatorClient {
         if let Some(value) = config.trusted_root_certificates {
             core = core.with_trusted_root_certificates(value.into_bytes());
         }
-        if let Some(value) = config.max_mutation_retries {
-            core = core.with_max_mutation_retries(mutation_retries(value)?);
+        if let Some(value) = config.maximum_mutation_retries {
+            core = core.with_maximum_mutation_retries(mutation_retries(value)?);
         }
         CoreClient::new(core)
             .map(|inner| Self { inner })
@@ -336,6 +337,21 @@ fn binding_error(kind: &'static str, message: &'static str) -> NapiError {
         json!({ "kind": kind, "message": message, "outcomeUnknown": kind == "protocol" })
             .to_string(),
     )
+}
+
+/// JavaScript `null` is a value, not omission. Optional configuration is
+/// omitted by leaving the member absent.
+fn reject_null_configuration_members(config: &Value) -> Result<()> {
+    if config
+        .as_object()
+        .is_some_and(|members| members.values().any(Value::is_null))
+    {
+        return Err(binding_error(
+            "configuration",
+            "Coordinator client configuration is invalid",
+        ));
+    }
+    Ok(())
 }
 
 /// The retry ceiling as a JavaScript number. Only a whole number in the

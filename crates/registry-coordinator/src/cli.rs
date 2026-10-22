@@ -7,11 +7,14 @@ use crate::{
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use serde_json::{json, Value};
 use std::{
+    fs::File,
     io::Read,
     path::{Path, PathBuf},
     time::Duration,
 };
 use uuid::Uuid;
+
+mod selected_binary;
 pub const CTL_REPORT_API_VERSION: &str =
     "id.registrystack.org/formats/coordinator/ctl-report/v1alpha1";
 pub const CTL_REPORT_KIND: &str = "CoordinatorCtlReport";
@@ -37,7 +40,7 @@ struct Service {
     /// Authenticated Coordinator service origin, HTTPS or explicit loopback HTTP.
     #[arg(long)]
     url: Option<url::Url>,
-    /// File containing a current access token; a relative path is read from the current directory. Token values are never printed.
+    /// Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed.
     #[arg(long, value_name = "FILE")]
     token_file: Option<PathBuf>,
 }
@@ -78,6 +81,12 @@ impl ListState {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Run the production Coordinator service with the selected runtime.
+    Serve {
+        /// Coordinator runtime executable for an unmanaged installation.
+        #[arg(long, hide = true, env = "COORDINATOR_BIN", value_name = "BINARY")]
+        coordinator_bin: Option<PathBuf>,
+    },
     /// Create a reviewed four-file starter and its .gitignore in a new or empty directory.
     Init {
         #[arg(long)]
@@ -309,6 +318,7 @@ enum Command {
 impl Command {
     fn name(&self) -> &'static str {
         match self {
+            Self::Serve { .. } => "serve",
             Self::Init { .. } => "init",
             Self::Check { .. } => "check",
             Self::Explain { .. } => "explain",
@@ -435,13 +445,15 @@ fn test(project: &Path, scenarios: Option<&Path>) -> Result<Value> {
 }
 /// Read the file `argument` names, up to `maximum` bytes.
 fn read(path: &Path, maximum: usize, argument: &str) -> Result<Vec<u8>> {
+    let file = File::open(path).map_err(|_| unreadable_file(argument))?;
+    read_open_file(file, maximum, argument)
+}
+
+fn read_open_file(file: File, maximum: usize, argument: &str) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .and_then(|f| f.take(maximum as u64 + 1).read_to_end(&mut bytes))
-        .map_err(|_| {
-            CoordinatorError::new("input-invalid", format!("cannot read the {argument} file"))
-                .suggest(format!("Name a readable regular file with {argument}."))
-        })?;
+    file.take(maximum as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| unreadable_file(argument))?;
     if bytes.len() > maximum {
         return Err(CoordinatorError::new(
             "input-invalid",
@@ -451,6 +463,50 @@ fn read(path: &Path, maximum: usize, argument: &str) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
+
+fn unreadable_file(argument: &str) -> CoordinatorError {
+    CoordinatorError::new("input-invalid", format!("cannot read the {argument} file"))
+        .suggest(format!("Name a readable regular file with {argument}."))
+}
+
+#[cfg(unix)]
+fn read_token_file(path: &Path, maximum: usize) -> Result<Vec<u8>> {
+    use rustix::fs::{Mode, OFlags};
+
+    let descriptor = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(|_| unreadable_file("--token-file"))?;
+    let file = File::from(descriptor);
+    if !file
+        .metadata()
+        .map_err(|_| unreadable_file("--token-file"))?
+        .is_file()
+    {
+        return Err(unreadable_file("--token-file"));
+    }
+    read_open_file(file, maximum, "--token-file")
+}
+
+#[cfg(not(unix))]
+fn read_token_file(path: &Path, maximum: usize) -> Result<Vec<u8>> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| unreadable_file("--token-file"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(unreadable_file("--token-file"));
+    }
+    let file = File::open(path).map_err(|_| unreadable_file("--token-file"))?;
+    if !file
+        .metadata()
+        .map_err(|_| unreadable_file("--token-file"))?
+        .is_file()
+    {
+        return Err(unreadable_file("--token-file"));
+    }
+    read_open_file(file, maximum, "--token-file")
+}
+
 fn text_file(path: &Path, maximum: usize, argument: &str) -> Result<String> {
     String::from_utf8(read(path, maximum, argument)?)
         .map(|s| s.trim_end_matches(['\r', '\n']).into())
@@ -460,6 +516,14 @@ fn text_file(path: &Path, maximum: usize, argument: &str) -> Result<String> {
                 format!("the {argument} file is not UTF-8 text"),
             )
             .suggest(format!("Write the {argument} file as UTF-8 text."))
+        })
+}
+fn token_text_file(path: &Path, maximum: usize) -> Result<String> {
+    String::from_utf8(read_token_file(path, maximum)?)
+        .map(|s| s.trim_end_matches(['\r', '\n']).into())
+        .map_err(|_| {
+            CoordinatorError::new("input-invalid", "the --token-file file is not UTF-8 text")
+                .suggest("Write the --token-file file as UTF-8 text.")
         })
 }
 fn runtime(cli: &Cli) -> Result<RuntimeConfig> {
@@ -532,7 +596,7 @@ async fn remote(
         )
         .suggest("Add --token-file with the path of a file that holds a current access token.")
     })?;
-    let token = zeroize::Zeroizing::new(text_file(token_path, 16_384, "--token-file")?);
+    let token = zeroize::Zeroizing::new(token_text_file(token_path, 16_384)?);
     registry_platform_authcommon::validate_compact_access_token(&token).map_err(|_| {
         CoordinatorError::new(
             "token-invalid",
@@ -691,6 +755,9 @@ fn refusal_advice(problem: ProblemCode) -> Option<&'static str> {
 }
 async fn execute(cli: &Cli) -> Result<Value> {
     match &cli.command {
+        Command::Serve { .. } => {
+            unreachable!("serve replaces the ctl process before report dispatch")
+        }
         Command::Init { directory, id } => {
             let created = project::init(directory, id.as_deref())?;
             Ok(json!({"status":"initialized","project":directory,"created":created}))
@@ -971,7 +1038,11 @@ fn refused_arguments(error: &clap::Error) -> Vec<String> {
         .collect()
 }
 pub async fn run() -> std::process::ExitCode {
-    let cli = match Cli::try_parse() {
+    let os_arguments = std::env::args_os().collect::<Vec<_>>();
+    let format_requested = os_arguments.iter().any(|argument| {
+        argument == "--format" || argument.to_string_lossy().starts_with("--format=")
+    });
+    let cli = match Cli::try_parse_from(&os_arguments) {
         Ok(cli) => cli,
         Err(error)
             if matches!(
@@ -983,7 +1054,10 @@ pub async fn run() -> std::process::ExitCode {
             return std::process::ExitCode::SUCCESS;
         }
         Err(error) => {
-            let arguments = std::env::args().collect::<Vec<_>>();
+            let arguments = os_arguments
+                .iter()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
             let error = usage(&error, &arguments);
             let json = arguments
                 .windows(2)
@@ -997,6 +1071,9 @@ pub async fn run() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
+    if let Command::Serve { coordinator_bin } = &cli.command {
+        return serve(&cli, coordinator_bin.as_deref(), format_requested);
+    }
     match execute(&cli).await {
         Ok(value) => {
             let tested = matches!(cli.command, Command::Test { .. });
@@ -1034,6 +1111,66 @@ pub async fn run() -> std::process::ExitCode {
                 }
             }
             std::process::ExitCode::from(e.exit_code)
+        }
+    }
+}
+
+fn serve(cli: &Cli, explicit: Option<&Path>, format_requested: bool) -> std::process::ExitCode {
+    if format_requested {
+        let error = CoordinatorError::new(
+            "coordinator.cli.usage",
+            "--format does not apply to serve because service output keeps the Coordinator runtime stream",
+        )
+        .suggest("Remove --format and retry.");
+        match cli.format {
+            Format::Json => write_report(false, "usage", failure_value(&error, 2)),
+            Format::Human => eprint!("{}", error.report().render_human()),
+        }
+        return std::process::ExitCode::from(2);
+    }
+    let Some(runtime_config) = cli.runtime_config.as_ref() else {
+        let error =
+            CoordinatorError::new("coordinator.cli.usage", "serve requires --runtime-config")
+                .suggest("Add --runtime-config with the deployment's runtime file.");
+        eprint!("{}", error.report().render_human());
+        return std::process::ExitCode::from(2);
+    };
+    let binary = match selected_binary::resolve_managed(selected_binary::COORDINATOR, explicit) {
+        Ok(Some(binary)) => binary,
+        Ok(None) => explicit
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("coordinator")),
+        Err(error) => {
+            eprintln!("coordinatorctl serve could not select coordinator: {error}");
+            return std::process::ExitCode::from(3);
+        }
+    };
+    let mut command = std::process::Command::new(binary);
+    command.arg("--runtime-config").arg(runtime_config);
+    replace_with_service(command, "coordinator")
+}
+
+#[cfg(unix)]
+fn replace_with_service(mut command: std::process::Command, name: &str) -> std::process::ExitCode {
+    use std::os::unix::process::CommandExt as _;
+
+    let error = command.exec();
+    eprintln!("coordinatorctl serve could not start {name}: {error}");
+    std::process::ExitCode::from(3)
+}
+
+#[cfg(not(unix))]
+fn replace_with_service(mut command: std::process::Command, name: &str) -> std::process::ExitCode {
+    match command.status() {
+        Ok(status) => std::process::ExitCode::from(
+            status
+                .code()
+                .and_then(|code| u8::try_from(code).ok())
+                .unwrap_or(3),
+        ),
+        Err(error) => {
+            eprintln!("coordinatorctl serve could not start {name}: {error}");
+            std::process::ExitCode::from(3)
         }
     }
 }

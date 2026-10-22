@@ -13,7 +13,7 @@
 use chrono::{DateTime, Duration, SubsecRound, Utc};
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_scheduling::config::RuntimeConfig;
-use registry_scheduling::store::PostgresStore;
+use registry_scheduling::store::{PostgresStore, StoreError};
 use serde_json::{json, Value};
 use std::path::Path;
 use uuid::Uuid;
@@ -346,4 +346,16 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
         .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
         .await
         .expect("the disposable schema is dropped");
+
+    // The store owns the same bound as the CLI. These values are refused
+    // before PostgreSQL is queried, which the already-dropped schema proves.
+    for limit in [0, -1, 201, i64::MAX] {
+        assert!(
+            matches!(
+                store.undelivered_intents(limit).await,
+                Err(StoreError::InvalidUndeliveredIntentsLimit)
+            ),
+            "{limit} must be refused before SQL"
+        );
+    }
 }

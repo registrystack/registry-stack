@@ -36,8 +36,8 @@ const MAXIMUM_PROBLEM_BYTES: u64 = 8 * 1024;
 pub struct ReviewClient {
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
-    max_response_bytes: u64,
-    request_timeout: Duration,
+    maximum_response_bytes: u64,
+    attempt_timeout: Duration,
 }
 
 impl fmt::Debug for ReviewClient {
@@ -45,7 +45,7 @@ impl fmt::Debug for ReviewClient {
         formatter
             .debug_struct("ReviewClient")
             .field("base_url", &"<validated service URL>")
-            .field("max_response_bytes", &self.max_response_bytes)
+            .field("maximum_response_bytes", &self.maximum_response_bytes)
             .finish_non_exhaustive()
     }
 }
@@ -54,7 +54,7 @@ impl ReviewClient {
     pub fn new(config: ReviewClientConfig) -> Result<Self, ReviewClientError> {
         let base_url = config.validate()?;
         let http = build_client(OutboundOptions {
-            request_timeout: config.request_timeout,
+            request_timeout: config.attempt_timeout,
             connect_timeout: config.connect_timeout,
             user_agent: config.user_agent.as_deref(),
             trusted_root_certificates: config.trusted_root_certificates.as_deref(),
@@ -63,15 +63,15 @@ impl ReviewClient {
         Ok(Self {
             http,
             base_url,
-            max_response_bytes: config.max_response_bytes,
-            request_timeout: config.request_timeout,
+            maximum_response_bytes: config.maximum_response_bytes,
+            attempt_timeout: config.attempt_timeout,
         })
     }
 
     /// The configured outbound request timeout, so callers that guard an
     /// exchange with a durable lease can size that lease to outlive it.
-    pub fn request_timeout(&self) -> Duration {
-        self.request_timeout
+    pub fn attempt_timeout(&self) -> Duration {
+        self.attempt_timeout
     }
 
     /// Create a request, or recover its accepted binding by repeating the exact
@@ -440,7 +440,7 @@ impl ReviewClient {
         status: StatusCode,
         trace_id: &str,
     ) -> Result<T, ReviewClientError> {
-        let body = read_bounded(response, self.max_response_bytes)
+        let body = read_bounded(response, self.maximum_response_bytes)
             .await
             .map_err(|error| ReviewClientError::Transport {
                 kind: read_failure_kind(&error),

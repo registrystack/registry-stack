@@ -30,42 +30,58 @@ class ConstructionTests(unittest.TestCase):
 
     def test_negative_timeout_is_a_configuration_error(self) -> None:
         with self.assertRaises(MessagingClientError) as raised:
-            MessagingClient("https://messaging.example.invalid/", request_timeout_seconds=-1.0)
+            MessagingClient("https://messaging.example.invalid/", attempt_timeout_seconds=-1.0)
         self.assertEqual(raised.exception.kind, "configuration")
 
     def test_timeouts_and_response_bound_accept_numbers_in_range(self) -> None:
         for keyword, value in (
-            ("request_timeout_seconds", 2),
-            ("request_timeout_seconds", 1.5),
+            ("attempt_timeout_seconds", 2),
+            ("attempt_timeout_seconds", 1.5),
+            ("attempt_timeout_seconds", 2**64 - 1),
             ("connect_timeout_seconds", 2),
             ("connect_timeout_seconds", 1.5),
-            ("max_response_bytes", 1500),
+            ("connect_timeout_seconds", 2**64 - 1),
+            ("maximum_response_bytes", 1500),
         ):
             with self.subTest(keyword=keyword, value=value):
                 MessagingClient("https://messaging.example.invalid/", **{keyword: value})
 
     def test_bool_or_out_of_range_bound_is_a_configuration_error(self) -> None:
         for keyword, value in (
-            ("request_timeout_seconds", True),
-            ("request_timeout_seconds", False),
-            ("request_timeout_seconds", -1),
-            ("request_timeout_seconds", float("nan")),
-            ("request_timeout_seconds", float("inf")),
-            ("request_timeout_seconds", "2"),
+            ("attempt_timeout_seconds", True),
+            ("attempt_timeout_seconds", False),
+            ("attempt_timeout_seconds", -1),
+            ("attempt_timeout_seconds", 2**64),
+            ("attempt_timeout_seconds", float("nan")),
+            ("attempt_timeout_seconds", float("inf")),
+            ("attempt_timeout_seconds", "2"),
             ("connect_timeout_seconds", True),
             ("connect_timeout_seconds", -1),
-            ("max_response_bytes", True),
-            ("max_response_bytes", False),
-            ("max_response_bytes", -1),
-            ("max_response_bytes", 2**64),
-            ("max_response_bytes", 1.5),
-            ("max_response_bytes", "1500"),
+            ("connect_timeout_seconds", 2**64),
+            ("maximum_response_bytes", True),
+            ("maximum_response_bytes", False),
+            ("maximum_response_bytes", -1),
+            ("maximum_response_bytes", 2**64),
+            ("maximum_response_bytes", 1.5),
+            ("maximum_response_bytes", "1500"),
         ):
             with self.subTest(keyword=keyword, value=value):
                 with self.assertRaises(MessagingClientError) as raised:
                     MessagingClient("https://messaging.example.invalid/", **{keyword: value})
                 self.assertEqual(raised.exception.kind, "configuration")
                 self.assertIs(raised.exception.outcome_unknown, False)
+
+    def test_none_means_omission_for_optional_configuration(self) -> None:
+        client = MessagingClient(
+            "https://messaging.example.invalid/",
+            attempt_timeout_seconds=None,
+            connect_timeout_seconds=None,
+            maximum_response_bytes=None,
+            user_agent=None,
+            trusted_root_certificates=None,
+            maximum_mutation_retries=None,
+        )
+        self.assertIsInstance(client, MessagingClient)
 
     def test_token_error_does_not_repeat_credential(self) -> None:
         malformed = "bad token with spaces canary"

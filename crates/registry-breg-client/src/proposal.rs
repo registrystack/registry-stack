@@ -415,7 +415,7 @@ impl BRegProposal {
         self.input.as_ref()
     }
     pub fn from_slice(bytes: &[u8]) -> Result<Self, BaseRegistryClientError> {
-        if bytes.len() > DEFAULT_MAX_RESPONSE_BYTES as usize {
+        if bytes.len() > DEFAULT_MAXIMUM_RESPONSE_BYTES as usize {
             return Err(refusal());
         }
         let value = crate::strict_json::from_slice(bytes).map_err(|_| refusal())?;
@@ -896,7 +896,7 @@ pub struct BRegPreparedProposal {
 }
 impl BRegPreparedProposal {
     pub fn from_slice(bytes: &[u8]) -> Result<Self, BaseRegistryClientError> {
-        if bytes.len() > DEFAULT_MAX_RESPONSE_BYTES as usize {
+        if bytes.len() > DEFAULT_MAXIMUM_RESPONSE_BYTES as usize {
             return Err(refusal());
         }
         let value = crate::strict_json::from_slice(bytes).map_err(|_| refusal())?;

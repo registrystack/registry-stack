@@ -15,10 +15,44 @@ class ConstructionTests(unittest.TestCase):
         self.assertIsInstance(client, CaseworkClient)
         self.assertNotIn("token", repr(client).lower())
 
+    def test_none_means_omission_for_optional_configuration(self) -> None:
+        client = CaseworkClient(
+            "https://casework.example.invalid/tenant",
+            attempt_timeout_seconds=None,
+            connect_timeout_seconds=None,
+            maximum_response_bytes=None,
+            user_agent=None,
+            trusted_root_certificates=None,
+            maximum_mutation_retries=None,
+        )
+        self.assertIsInstance(client, CaseworkClient)
+
     def test_invalid_configuration_has_a_stable_kind(self) -> None:
         with self.assertRaises(CaseworkClientError) as raised:
             CaseworkClient("not a URL")
         self.assertEqual(raised.exception.kind, "configuration")
+
+    def test_numeric_configuration_is_lossless_and_uses_the_public_name(self) -> None:
+        invalid_configurations = (
+            {"attempt_timeout_seconds": True},
+            {"attempt_timeout_seconds": 2**64},
+            {"connect_timeout_seconds": False},
+            {"maximum_response_bytes": True},
+            {"maximum_response_bytes": 2**64},
+        )
+        for options in invalid_configurations:
+            with self.subTest(options=options), self.assertRaises(CaseworkClientError) as raised:
+                CaseworkClient("https://casework.example.invalid/", **options)
+            self.assertEqual(raised.exception.kind, "configuration")
+
+        with self.assertRaises(TypeError):
+            CaseworkClient(
+                "https://casework.example.invalid/", request_timeout_seconds=1.0
+            )
+        with self.assertRaises(TypeError):
+            CaseworkClient(
+                "https://casework.example.invalid/", max_mutation_retries=0
+            )
 
     def test_token_error_does_not_repeat_credential(self) -> None:
         secret = "bad token with spaces canary"

@@ -102,6 +102,7 @@ SHARDS = {
         "registry-coordinator-client-node",
         "registry-coordinator-client-py",
         "registry-thunderid-tooling",
+        "registry-rstack",
         "registry-cli-docs",
         "registry-cli-reference",
         "registry-language-server",

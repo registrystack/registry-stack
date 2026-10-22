@@ -22,6 +22,7 @@ use subtle::ConstantTimeEq;
 use registry_platform_authcommon::{
     parse_bearer_token, validate_api_key_entropy, MIN_API_KEY_ENTROPY_BYTES,
 };
+use registry_platform_canonical_json::parse_json_preserving_integers;
 use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder, Problem};
 
 use crate::audit::{RenderAudit, RenderAuditEvent};
@@ -730,7 +731,10 @@ fn prepare_render(
     document_type: &str,
     body: &[u8],
 ) -> Result<(WorkerRequest, u32), RenderProblem> {
-    let request: RenderHttpRequest = serde_json::from_slice(body).map_err(|err| {
+    let value = parse_json_preserving_integers(body).map_err(|err| {
+        RenderProblem::new(ProblemKind::InvalidArgument, format!("request body: {err}"))
+    })?;
+    let request: RenderHttpRequest = serde_json::from_value(value).map_err(|err| {
         RenderProblem::new(ProblemKind::InvalidArgument, format!("request body: {err}"))
     })?;
     let Some(issued_at) = request.issued_at.filter(|s| !s.trim().is_empty()) else {
@@ -1108,6 +1112,48 @@ mod tests {
         assert_eq!(accepted[0]["record"]["correlationId"], "effect-5678");
         assert_eq!(accepted[0]["record"]["outcome"], "refused");
         assert_eq!(accepted[0]["record"]["problem"], "issued-at-missing");
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_member_nested_in_data_is_refused_before_rendering() {
+        let lines = AuditLines::new(None);
+        let service = service(&lines, 1);
+        let data = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../products/render/bundles/receipt/fixtures/data.json"),
+        )
+        .expect("receipt fixture");
+        let duplicated = data.replacen(
+            "\"reference\":",
+            "\"reference\":\"shadowed\",\"reference\":",
+            1,
+        );
+        let body = format!(r#"{{"issuedAt":"2026-09-16T10:32:00Z","data":{duplicated}}}"#);
+        let request = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri("/v1/render/receipt")
+            .header(header::AUTHORIZATION, format!("Bearer {TEST_API_KEY}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(body))
+            .expect("request");
+
+        let response = router(service).oneshot(request).await.expect("router");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("problem body");
+        let problem: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON problem body");
+        assert_eq!(
+            problem["type"],
+            "https://render.registrystack.org/problems/invalid-argument"
+        );
+        assert_eq!(problem["title"], "invalid-argument");
+
+        let accepted = lines.accepted();
+        assert_eq!(accepted.len(), 1, "{accepted:?}");
+        assert_eq!(accepted[0]["phase"], "response");
+        assert_eq!(accepted[0]["record"]["outcome"], "refused");
+        assert_eq!(accepted[0]["record"]["problem"], "invalid-argument");
     }
 
     #[tokio::test]

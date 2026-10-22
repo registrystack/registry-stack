@@ -458,7 +458,7 @@ async fn test_client(
     let mut config = BaseRegistryClientConfig::new(
         Url::parse(&format!("http://{address}/tenant/prefix")).expect("base URL"),
     )
-    .with_max_response_bytes(maximum);
+    .with_maximum_response_bytes(maximum);
     if let Some(provider) = provider {
         config = config.with_token_provider(provider);
     }

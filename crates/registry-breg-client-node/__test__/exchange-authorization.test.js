@@ -29,6 +29,26 @@ async function form(request) {
   return new URLSearchParams(Buffer.concat(chunks).toString());
 }
 
+test('exchange configuration rejects null, retired keys, and unsafe integers before I/O', () => {
+  const exchange = {
+    client: clientConfig('https://issuer.example/token', 'urn:records', ['records:get']),
+    context: { issuer: 'https://portal.example', subject: 'person-1', audience: 'https://issuer.example', generation: 'verified-1', deadlineSeconds: Math.floor(Date.now() / 1000) + 120 },
+    firstParty: { key: key(), attributes: { registry_actor_kind: 'human' } },
+  };
+  for (const changed of [
+    { ...exchange, context: { ...exchange.context, grantId: null } },
+    { ...exchange, client: { ...exchange.client, attemptTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 } },
+    { ...exchange, client: { ...exchange.client, requestTimeoutMilliseconds: 100 } },
+    { ...exchange, client: { ...exchange.client, attemptTimeoutSeconds: 0.1 } },
+    { ...exchange, client: { ...exchange.client, request_timeout_milliseconds: 100 } },
+  ]) {
+    assert.throws(
+      () => new BaseRegistryClient({ baseUrl: 'https://registry.example', authorization: { exchange: changed } }),
+      (error) => error instanceof BaseRegistryClientError && error.kind === 'configuration',
+    );
+  }
+});
+
 test('first-party option signs one verified person context and caches its token', async () => {
   const exchanges = [];
   const { server, origin } = await serve(async (request, response) => {

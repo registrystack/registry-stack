@@ -10,7 +10,7 @@
 //! `statistical_dataset.domain_violation`, which the engine returns only with
 //! the attempt rolled back) is resent, byte for byte and under the same key
 //! and credential, at most
-//! `BaseRegistryClientConfig::with_max_mutation_retries` times (2 by default,
+//! `BaseRegistryClientConfig::with_maximum_mutation_retries` times (2 by default,
 //! 0 disables it). Reads and unkeyed exchanges, such as ingestion runs and
 //! action target conditions, are never resent. A 5xx answer may follow a
 //! commit: when `BaseRegistryClientError::is_outcome_unknown` is still true,
@@ -71,9 +71,9 @@ pub use statistics::*;
 pub use uuid::Uuid;
 pub use webhook::*;
 
-pub const DEFAULT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+pub const DEFAULT_ATTEMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 pub const DEFAULT_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-pub const DEFAULT_MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+pub const DEFAULT_MAXIMUM_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Invalid, duplicate-containing, overlarge, or numerically lossy JSON input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -83,7 +83,7 @@ pub struct BRegExactJsonError;
 /// Decode bounded JSON without duplicate members or silently rounded literals.
 /// Mutation builders additionally enforce BReg's supported binary64 integer model.
 pub fn decode_exact_json(bytes: &[u8]) -> Result<serde_json::Value, BRegExactJsonError> {
-    if bytes.len() > DEFAULT_MAX_RESPONSE_BYTES as usize {
+    if bytes.len() > DEFAULT_MAXIMUM_RESPONSE_BYTES as usize {
         return Err(BRegExactJsonError);
     }
     strict_json::from_slice(bytes).map_err(|()| BRegExactJsonError)

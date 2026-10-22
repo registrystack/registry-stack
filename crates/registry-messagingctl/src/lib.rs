@@ -45,7 +45,7 @@
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command as ProcessCommand, ExitCode};
 
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_messaging::activation::{ActivationError, ActivationRefusal, ApplyRequest};
@@ -78,6 +78,7 @@ use uuid::Uuid;
 mod cli_contract_tests;
 mod dev;
 mod report;
+mod selected_binary;
 mod starter;
 
 use report::{DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT, USAGE_EXIT};
@@ -99,6 +100,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Run the production Messaging service with the selected runtime.
+    Serve(ServeArgs),
     /// Write a starter authoring project and runtime example.
     Init(InitArgs),
     /// Build an immutable runtime package from an editable project.
@@ -130,6 +133,17 @@ enum Command {
     /// axllent/mailpit:v1.31.2 at those digests. Each publishes on 127.0.0.1
     /// only, and the session removes both when it stops.
     Dev(dev::DevArgs),
+}
+
+#[derive(Debug, Args)]
+struct ServeArgs {
+    /// Runtime configuration file passed unchanged to the Messaging runtime.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Messaging runtime executable for an unmanaged installation.
+    #[arg(long, hide = true, env = "MESSAGING_BIN", value_name = "BINARY")]
+    messaging_bin: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -630,6 +644,9 @@ where
     T: Into<OsString>,
 {
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
+    let format_requested = args
+        .iter()
+        .any(|arg| arg == OsStr::new("--format") || arg.to_string_lossy().starts_with("--format="));
     let machine_mode = args
         .windows(2)
         .any(|pair| pair[0] == OsStr::new("--format") && pair[1] == OsStr::new("json"))
@@ -661,6 +678,7 @@ where
     };
     let command = command_path(&cli.command);
     let outcome = match cli.command {
+        Command::Serve(args) => return serve(args, cli.format, format_requested, stdout, stderr),
         Command::Dev(args) => return dev::run(args, cli.format, stdout, stderr),
         Command::Init(args) => init(&args.directory),
         Command::Package(args) => package(&args),
@@ -678,6 +696,7 @@ where
 /// The subcommand path a parsed invocation selected, as its report names it.
 fn command_path(command: &Command) -> &'static str {
     match command {
+        Command::Serve(_) => "serve",
         Command::Init(_) => "init",
         Command::Package(_) => "package",
         Command::Check(_) => "check",
@@ -692,6 +711,85 @@ fn command_path(command: &Command) -> &'static str {
         Command::Messages(MessagesCommand::Cancel(_)) => "messages cancel",
         Command::Retention(RetentionCommand::EraseExpired(_)) => "retention erase-expired",
         Command::Dev(args) => dev::command_path(args),
+    }
+}
+
+fn serve(
+    args: ServeArgs,
+    format: OutputFormat,
+    format_requested: bool,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) -> ExitCode {
+    if format_requested {
+        let message =
+            "--format does not apply to serve because service output keeps the Messaging runtime stream"
+                .to_owned();
+        if format == OutputFormat::Json {
+            let outcome = Outcome::refused(USAGE_EXIT, "usage.invalid", "format", message);
+            return finish(&outcome, "usage", OutputFormat::Json, stdout, stderr);
+        }
+        let _ = writeln!(
+            stderr,
+            "error: {message}\n  next: Remove --format and retry."
+        );
+        return ExitCode::from(USAGE_EXIT);
+    }
+
+    let binary = match selected_binary::resolve_managed(
+        selected_binary::MESSAGING,
+        args.messaging_bin.as_deref(),
+    ) {
+        Ok(Some(binary)) => binary,
+        Ok(None) => args
+            .messaging_bin
+            .unwrap_or_else(|| PathBuf::from("messaging")),
+        Err(error) => {
+            let _ = writeln!(
+                stderr,
+                "messagingctl serve could not select messaging: {error}"
+            );
+            return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
+        }
+    };
+    let mut command = ProcessCommand::new(binary);
+    command
+        .arg("--runtime-config")
+        .arg(args.runtime_config)
+        .arg("serve");
+    replace_with_service(command, "messaging", stderr)
+}
+
+#[cfg(unix)]
+fn replace_with_service(
+    mut command: ProcessCommand,
+    name: &str,
+    stderr: &mut dyn io::Write,
+) -> ExitCode {
+    use std::os::unix::process::CommandExt as _;
+
+    let error = command.exec();
+    let _ = writeln!(stderr, "messagingctl serve could not start {name}: {error}");
+    ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+}
+
+#[cfg(not(unix))]
+fn replace_with_service(
+    mut command: ProcessCommand,
+    name: &str,
+    stderr: &mut dyn io::Write,
+) -> ExitCode {
+    match command.status() {
+        Ok(status) => ExitCode::from(
+            status
+                .code()
+                .and_then(|code| u8::try_from(code).ok())
+                .unwrap_or(OPERATIONAL_FAILURE_EXIT),
+        ),
+        Err(error) => {
+            let _ = writeln!(stderr, "messagingctl serve could not start {name}: {error}");
+            ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+        }
     }
 }
 

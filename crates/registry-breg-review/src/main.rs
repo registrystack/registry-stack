@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use registry_breg_review::check::{self, CheckRequest, OutputFormat};
-use registry_breg_review::{command, router, serve, RuntimeConfig};
+use registry_breg_review::{command, router, serve, LogLevel, RuntimeConfig};
 use tracing::Level;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
@@ -13,9 +13,16 @@ const LOG_VARIABLE: &str = "BREG_REVIEW_LOG";
 
 /// The operational log level. The vocabulary is closed so a typo cannot
 /// silently turn logging off or on.
-fn operational_log_level(value: Result<String, std::env::VarError>) -> Result<Level, String> {
+fn operational_log_level(
+    value: Result<String, std::env::VarError>,
+    configured: LogLevel,
+) -> Result<Level, String> {
     match value {
-        Err(std::env::VarError::NotPresent) => Ok(Level::INFO),
+        Err(std::env::VarError::NotPresent) => Ok(match configured {
+            LogLevel::Error => Level::ERROR,
+            LogLevel::Warn => Level::WARN,
+            LogLevel::Info => Level::INFO,
+        }),
         Ok(value) => match value.as_str() {
             "error" => Ok(Level::ERROR),
             "warn" => Ok(Level::WARN),
@@ -54,13 +61,17 @@ async fn main() -> ExitCode {
         ));
     }
 
-    let level = match operational_log_level(std::env::var(LOG_VARIABLE)) {
-        Ok(level) => level,
-        Err(error) => {
-            eprintln!("breg-review: {error}");
-            return ExitCode::from(2);
-        }
+    let environment_level = match std::env::var(LOG_VARIABLE) {
+        Err(std::env::VarError::NotPresent) => None,
+        value => match operational_log_level(value, LogLevel::Info) {
+            Ok(level) => Some(level),
+            Err(error) => {
+                eprintln!("breg-review: {error}");
+                return ExitCode::from(2);
+            }
+        },
     };
+
     // A refused runtime file is reported in the shared human shape on
     // standard error (CFG-DIAG-2), naming members and never their values.
     let config = match RuntimeConfig::load(path) {
@@ -70,6 +81,10 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let level = environment_level.unwrap_or_else(|| {
+        operational_log_level(Err(std::env::VarError::NotPresent), config.log_level)
+            .expect("the runtime log level was validated")
+    });
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
@@ -121,15 +136,25 @@ mod tests {
 
     #[test]
     fn the_log_level_vocabulary_is_closed() {
+        use registry_breg_review::LogLevel;
+
         assert_eq!(
-            operational_log_level(Err(std::env::VarError::NotPresent)),
+            operational_log_level(Err(std::env::VarError::NotPresent), LogLevel::Info),
             Ok(Level::INFO)
         );
         assert_eq!(
-            operational_log_level(Ok("warn".to_owned())),
+            operational_log_level(Err(std::env::VarError::NotPresent), LogLevel::Warn),
             Ok(Level::WARN)
         );
-        assert!(operational_log_level(Ok("debug".to_owned())).is_err());
-        assert!(operational_log_level(Ok("trace".to_owned())).is_err());
+        assert_eq!(
+            operational_log_level(Ok("error".to_owned()), LogLevel::Warn),
+            Ok(Level::ERROR)
+        );
+        assert_eq!(
+            operational_log_level(Ok("warn".to_owned()), LogLevel::Info),
+            Ok(Level::WARN)
+        );
+        assert!(operational_log_level(Ok("debug".to_owned()), LogLevel::Info).is_err());
+        assert!(operational_log_level(Ok("trace".to_owned()), LogLevel::Info).is_err());
     }
 }

@@ -173,7 +173,7 @@ class DiscoveryClient:
     def __init__(
         self,
         base_url: str,
-        request_timeout_seconds: float | None = ...,
+        attempt_timeout_seconds: float | None = ...,
         connect_timeout_seconds: float | None = ...,
         maximum_response_bytes: int | None = ...,
         trusted_root_certificates: bytes | None = ...,

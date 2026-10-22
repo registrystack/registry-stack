@@ -564,7 +564,7 @@ class MutationParityTests(unittest.TestCase):
     def test_immediate_action_recovers_after_a_lost_response(self) -> None:
         # The process gives up after the lost answer instead of resending it.
         self.client = BaseRegistryClient(
-            f"http://127.0.0.1:{self.server.server_port}", max_mutation_retries=0
+            f"http://127.0.0.1:{self.server.server_port}", maximum_mutation_retries=0
         )
         binding = self.contract.select_action(
             "rename-company", "company-writer"

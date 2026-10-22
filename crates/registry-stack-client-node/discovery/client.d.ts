@@ -2,10 +2,10 @@ export type ServiceKind = 'evidence';
 
 export interface DiscoveryClientOptions {
   baseUrl: string;
-  requestTimeoutMilliseconds?: number;
+  attemptTimeoutMilliseconds?: number;
   connectTimeoutMilliseconds?: number;
   maximumResponseBytes?: number;
-  trustedRootCertificates?: Buffer;
+  trustedRootCertificates?: string;
 }
 
 export interface EvidenceTypeResolveRequest {

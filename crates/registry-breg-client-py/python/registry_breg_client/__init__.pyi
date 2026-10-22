@@ -48,7 +48,7 @@ class ExchangeKeyClient(TypedDict):
     audience: NotRequired[str | None]
     assertion_lifetime_seconds: NotRequired[int | None]
     refresh_margin_seconds: NotRequired[int | None]
-    request_timeout_seconds: NotRequired[float | None]
+    attempt_timeout_seconds: NotRequired[float | None]
     connect_timeout_seconds: NotRequired[float | None]
     user_agent: NotRequired[str | None]
     trusted_root_certificates: NotRequired[str | None]
@@ -62,7 +62,7 @@ class RemoteExchangeSource(TypedDict):
     bootstrap: ExchangeKeyClient
     bootstrap_resource: str
     bootstrap_scope: str
-    request_timeout_seconds: NotRequired[float | None]
+    attempt_timeout_seconds: NotRequired[float | None]
     connect_timeout_seconds: NotRequired[float | None]
     user_agent: NotRequired[str | None]
     trusted_root_certificates: NotRequired[str | None]
@@ -302,12 +302,12 @@ class BaseRegistryClient:
         self,
         base_url: str,
         authorization: dict[str, Any] | None = None,
-        request_timeout_seconds: float | None = None,
+        attempt_timeout_seconds: float | None = None,
         connect_timeout_seconds: float | None = None,
         user_agent: str | None = None,
-        max_response_bytes: int | None = None,
+        maximum_response_bytes: int | None = None,
         trusted_root_certificates: bytes | None = None,
-        max_mutation_retries: int | None = None,
+        maximum_mutation_retries: int | None = None,
     ) -> None: ...
     def health(self) -> dict[str, Any]: ...
     def ready(self) -> dict[str, Any]: ...

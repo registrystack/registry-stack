@@ -218,6 +218,48 @@ operationalTimeouts:
     )
 }
 
+#[test]
+fn runtime_log_level_defaults_to_info_and_accepts_the_closed_vocabulary() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+
+    let defaulted =
+        parse_runtime_config_with_env(&base, env_lookup).expect("the default log level loads");
+    assert_eq!(defaulted.log_level().as_str(), "info");
+
+    for accepted in ["error", "warn", "info"] {
+        let configured = base.replacen(
+            &format!("kind: {RUNTIME_CONFIG_KIND}\n"),
+            &format!("kind: {RUNTIME_CONFIG_KIND}\nlogLevel: {accepted}\n"),
+            1,
+        );
+        let loaded = parse_runtime_config_with_env(&configured, env_lookup)
+            .unwrap_or_else(|error| panic!("{accepted:?} loads: {error}"));
+        assert_eq!(loaded.log_level().as_str(), accepted);
+    }
+}
+
+#[test]
+fn runtime_log_level_refuses_values_outside_the_closed_vocabulary() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+
+    for refused in ["debug", "trace", "off", "Info", ""] {
+        let yaml_value = if refused.is_empty() { "''" } else { refused };
+        let configured = base.replacen(
+            &format!("kind: {RUNTIME_CONFIG_KIND}\n"),
+            &format!("kind: {RUNTIME_CONFIG_KIND}\nlogLevel: {yaml_value}\n"),
+            1,
+        );
+        let error = parse_runtime_config_with_env(&configured, env_lookup)
+            .expect_err("an unknown log level is refused");
+        assert_eq!(
+            reader_refusal(&error),
+            ("config.unknown-variant", "/logLevel")
+        );
+    }
+}
+
 fn runtime_with_event_destinations(fixture: &RuntimeFixture, bindings: &str) -> String {
     valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
         "eventDestinations: {}\n",

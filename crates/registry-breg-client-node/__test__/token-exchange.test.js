@@ -22,7 +22,8 @@ test('exchange preserves service cache and sends exact independent grant request
     const clientKey = crypto.generateKeyPairSync('ec', {namedCurve:'prime256v1'}).privateKey.export({format:'jwk'});
     Object.assign(clientKey, {alg:'ES256', kid:'synthetic-test'});
     const config = {tokenEndpoint:`http://127.0.0.1:${server.address().port}/token`, clientId:'test-client',
-      clientKey, resource:'urn:test:resource', scopes:['records:get']};
+      clientKey, resource:'urn:test:resource', scopes:['records:get'], attemptTimeoutMilliseconds:5_000,
+      connectTimeoutMilliseconds:2_000};
     const provider = new PrivateKeyJwt(config);
     assert.equal(await provider.bearerToken(), 'service-token');
     assert.deepEqual(await Promise.all([provider.exchange('first-subject'), provider.exchange('second-subject')]),
@@ -38,7 +39,10 @@ test('exchange preserves service cache and sends exact independent grant request
     }
     assert.notEqual(requests[1].get('client_assertion'), requests[2].get('client_assertion'));
     await assert.rejects(provider.exchange('bad\nsubject'), error => error instanceof BaseRegistryClientError && !error.message.includes('bad'));
-    await assert.rejects(new PrivateKeyJwt({...config, resource:null}).exchange('subject'));
+    assert.throws(() => new PrivateKeyJwt({...config, resource:null}),
+      error => error instanceof BaseRegistryClientError && error.kind === 'configuration');
+    assert.throws(() => new PrivateKeyJwt({...config, requestTimeoutMilliseconds:5_000}),
+      error => error instanceof BaseRegistryClientError && error.kind === 'configuration');
     assert.equal(requests.length, 3);
   } finally { await new Promise(resolve => server.close(resolve)); }
 });

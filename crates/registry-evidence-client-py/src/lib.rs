@@ -6,13 +6,13 @@
 //! current-thread tokio runtime and blocks on it for every network call,
 //! releasing the GIL for the duration so other Python threads keep running.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use pyo3::exceptions::{PyException, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 #[cfg(test)]
 use pyo3::types::PyMapping;
-use pyo3::types::{PyDict, PyList, PyTuple};
+use pyo3::types::{PyDict, PyFloat, PyInt, PyList, PyTuple};
 
 // The wrapped SDK crate is `registry-evidence-client`, but this crate's own
 // `[lib] name` (the Python module name the spec requires) is also
@@ -40,10 +40,11 @@ use evidence_client_sdk::VerifiedEvidenceRequestBatchItem as RealVerifiedEvidenc
 mod convert;
 
 use convert::{
-    batch_spec_from_json, config_from_parts_with_authorization, datetime_from_unix_seconds,
-    evidence_to_json, exchange_from_authorization_json, json_to_python, map_client_error,
-    map_config_error, map_conversion_error, progressive_subjects_from_json, python_to_json,
-    selector_values_from_json, spec_from_json, subject_expectations_to_json, MappedError,
+    batch_spec_from_json, config_from_parts_with_authorization_durations,
+    datetime_from_unix_seconds, evidence_to_json, exchange_from_authorization_json, json_to_python,
+    map_client_error, map_config_error, map_conversion_error, progressive_subjects_from_json,
+    python_to_json, selector_values_from_json, spec_from_json, subject_expectations_to_json,
+    ConversionError, MappedError,
 };
 use registry_platform_crypto::PrivateJwk;
 
@@ -192,6 +193,50 @@ fn to_py_err(py: Python<'_>, mapped: &MappedError) -> PyErr {
 /// is reported as a plain `ValueError` rather than forced into that envelope.
 fn serialization_error(what: &str, error: serde_json::Error) -> PyErr {
     PyValueError::new_err(format!("{what} could not be described: {error}"))
+}
+
+fn configuration_duration(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Duration> {
+    let invalid = || {
+        to_py_err(
+            py,
+            &map_conversion_error(&ConversionError::new(
+                "client timeouts must be finite non-negative seconds",
+            )),
+        )
+    };
+    if value.is_exact_instance_of::<PyFloat>() {
+        return value
+            .extract::<f64>()
+            .ok()
+            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+            .ok_or_else(invalid);
+    }
+    if value.is_exact_instance_of::<PyInt>() {
+        return value
+            .extract::<u64>()
+            .map(Duration::from_secs)
+            .map_err(|_| invalid());
+    }
+    Err(invalid())
+}
+
+fn configuration_u64(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    name: &'static str,
+) -> PyResult<u64> {
+    let invalid = || {
+        to_py_err(
+            py,
+            &map_conversion_error(&ConversionError::new(format!(
+                "{name} must be a non-negative integer"
+            ))),
+        )
+    };
+    if !value.is_exact_instance_of::<PyInt>() {
+        return Err(invalid());
+    }
+    value.extract::<u64>().map_err(|_| invalid())
 }
 
 /// One request, closed and nonce-bearing, before any byte has left the
@@ -833,7 +878,7 @@ impl EvidenceClient {
     ///
     /// `authorization={"exchange": ...}` is an alternative to `token` for
     /// a context-bound staff exchange. Exactly one must be configured.
-    /// `max_response_bytes` bounds the signed response `send` reads.
+    /// `maximum_response_bytes` bounds the signed response `send` reads.
     /// `max_metadata_bytes` bounds the documents `discover` and `fetch_jwks`
     /// read, which are neither signed nor verified, and is a separate decision.
     #[new]
@@ -842,11 +887,11 @@ impl EvidenceClient {
         trusted_jwks,
         revoked_key_ids,
         token=None,
-        request_timeout_seconds=None,
+        attempt_timeout_seconds=None,
         connect_timeout_seconds=None,
         user_agent=None,
         trusted_root_certificates=None,
-        max_response_bytes=None,
+        maximum_response_bytes=None,
         max_metadata_bytes=None,
         authorization=None,
     ))]
@@ -857,12 +902,12 @@ impl EvidenceClient {
         trusted_jwks: &Bound<'_, PyAny>,
         revoked_key_ids: Vec<String>,
         token: Option<&Bound<'_, PyAny>>,
-        request_timeout_seconds: Option<f64>,
-        connect_timeout_seconds: Option<f64>,
+        attempt_timeout_seconds: Option<&Bound<'_, PyAny>>,
+        connect_timeout_seconds: Option<&Bound<'_, PyAny>>,
         user_agent: Option<String>,
         trusted_root_certificates: Option<Vec<u8>>,
-        max_response_bytes: Option<u64>,
-        max_metadata_bytes: Option<u64>,
+        maximum_response_bytes: Option<&Bound<'_, PyAny>>,
+        max_metadata_bytes: Option<&Bound<'_, PyAny>>,
         authorization: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let trusted_jwks_json = python_to_json(trusted_jwks)
@@ -876,18 +921,26 @@ impl EvidenceClient {
             .map(python_to_json)
             .transpose()
             .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
-        let config = config_from_parts_with_authorization(
+        let config = config_from_parts_with_authorization_durations(
             base_url,
             &trusted_jwks_json,
             revoked_key_ids,
             &token_json,
             authorization_json.as_ref(),
-            request_timeout_seconds,
-            connect_timeout_seconds,
+            attempt_timeout_seconds
+                .map(|value| configuration_duration(py, value))
+                .transpose()?,
+            connect_timeout_seconds
+                .map(|value| configuration_duration(py, value))
+                .transpose()?,
             user_agent,
             trusted_root_certificates,
-            max_response_bytes,
-            max_metadata_bytes,
+            maximum_response_bytes
+                .map(|value| configuration_u64(py, value, "maximum_response_bytes"))
+                .transpose()?,
+            max_metadata_bytes
+                .map(|value| configuration_u64(py, value, "max_metadata_bytes"))
+                .transpose()?,
         )
         .map_err(|error| to_py_err(py, &map_config_error(&error)))?;
         let inner = py

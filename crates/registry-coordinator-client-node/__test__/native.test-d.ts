@@ -10,7 +10,7 @@ import type {
 
 const client = new CoordinatorClient({
   baseUrl: 'https://coordinator.example.invalid/',
-  requestTimeoutMilliseconds: 5_000,
+  attemptTimeoutMilliseconds: 5_000,
 })
 
 declare const contract: WorkflowContract
@@ -53,9 +53,9 @@ void [started, status, inspected, reconciled, listed, attention, retried, cancel
 
 // @ts-expect-error Coordinator start requires a caller-selected idempotency key.
 client.start('header.payload.signature', { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: {} })
-const once = new CoordinatorClient({ baseUrl: 'https://coordinator.example.invalid/', maxMutationRetries: 0 })
+const once = new CoordinatorClient({ baseUrl: 'https://coordinator.example.invalid/', maximumMutationRetries: 0 })
 void once
 // @ts-expect-error The retry count is a number, never a string.
-new CoordinatorClient({ baseUrl: 'https://coordinator.example.invalid/', maxMutationRetries: '2' })
+new CoordinatorClient({ baseUrl: 'https://coordinator.example.invalid/', maximumMutationRetries: '2' })
 // @ts-expect-error Operator routes belong to coordinatorctl, not the client.
 client.doctor('header.payload.signature')

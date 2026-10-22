@@ -15,7 +15,12 @@ BaseRegistryClientError = breg_client.BaseRegistryClientError
 class ConstructionTests(unittest.TestCase):
     def test_constructs_with_a_deployment_base(self) -> None:
         self.assertIsInstance(
-            BaseRegistryClient("https://registry.example.invalid/tenant"),
+            BaseRegistryClient(
+                "https://registry.example.invalid/tenant",
+                attempt_timeout_seconds=5,
+                connect_timeout_seconds=2,
+                maximum_mutation_retries=1,
+            ),
             BaseRegistryClient,
         )
 
@@ -23,6 +28,37 @@ class ConstructionTests(unittest.TestCase):
         with self.assertRaises(BaseRegistryClientError) as raised:
             BaseRegistryClient("not a URL")
         self.assertEqual(raised.exception.kind, "configuration")
+
+    def test_none_means_omission_for_optional_configuration(self) -> None:
+        client = BaseRegistryClient(
+            "https://registry.example.invalid/tenant",
+            attempt_timeout_seconds=None,
+            connect_timeout_seconds=None,
+            user_agent=None,
+            maximum_response_bytes=None,
+            trusted_root_certificates=None,
+            maximum_mutation_retries=None,
+        )
+        self.assertIsInstance(client, BaseRegistryClient)
+
+    def test_numeric_configuration_rejects_booleans_and_overflow(self) -> None:
+        for options in (
+            {"attempt_timeout_seconds": True},
+            {"connect_timeout_seconds": False},
+            {"maximum_response_bytes": True},
+            {"maximum_response_bytes": 2**64},
+        ):
+            with self.subTest(options=options), self.assertRaises(BaseRegistryClientError) as raised:
+                BaseRegistryClient("https://registry.example.invalid/tenant", **options)
+            self.assertEqual(raised.exception.kind, "configuration")
+
+    def test_retired_top_level_option_names_are_rejected(self) -> None:
+        for options in (
+            {"request_timeout_seconds": 30},
+            {"max_mutation_retries": 1},
+        ):
+            with self.subTest(options=options), self.assertRaises(TypeError):
+                BaseRegistryClient("https://registry.example.invalid/tenant", **options)
 
     def test_unknown_authorization_shape_is_rejected(self) -> None:
         with self.assertRaises(BaseRegistryClientError) as raised:

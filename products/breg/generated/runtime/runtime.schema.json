@@ -247,6 +247,15 @@
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
     },
+    "LogLevel": {
+      "description": "The operational log level selected by the runtime file when `BREG_LOG`\nis not set. The closed vocabulary prevents configuration from enabling\ndebug output or dependency logging.",
+      "enum": [
+        "error",
+        "warn",
+        "info"
+      ],
+      "type": "string"
+    },
     "OidcAlgorithm": {
       "enum": [
         "EdDSA",
@@ -1514,6 +1523,11 @@
     },
     "listener": {
       "$ref": "#/$defs/RawRegistryListener"
+    },
+    "logLevel": {
+      "$ref": "#/$defs/LogLevel",
+      "default": "info",
+      "description": "Operational log level when `BREG_LOG` is not set. Defaults to `info`;\naccepted values are `error`, `warn`, and `info`."
     },
     "metricsListener": {
       "$ref": "#/$defs/RawMetricsListenerConfig",

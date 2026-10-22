@@ -63,6 +63,11 @@ discoveryctl_in_release="$(python3 "${script_dir}/release_roster.py" \
 if [[ "${discoveryctl_in_release}" == true ]]; then
   include_discoveryctl=1
 fi
+include_rstack=0
+if [[ "$(python3 "${script_dir}/release_roster.py" \
+  rstack-in-release "${version}")" == true ]]; then
+  include_rstack=1
+fi
 include_breg=0
 if ((version_major > 0 || version_minor >= 26)); then
   include_breg=1
@@ -234,6 +239,12 @@ build_payload() {
   prepare_zig_toolchain
 
   if [[ "${group}" == all || "${group}" == core ]]; then
+    if [[ "${include_rstack}" -eq 1 ]]; then
+      cargo build --release --locked -p registry-rstack --bin rstack
+      cp target/release/rstack "dist/bin/rstack-${RELEASE_TAG}-linux-amd64"
+      test "$("dist/bin/rstack-${RELEASE_TAG}-linux-amd64" --version)" = \
+        "rstack ${RELEASE_TAG#v}"
+    fi
     cargo build --release --locked \
       -p registry-manifest-cli
     cp target/release/registry-manifest "dist/bin/registry-manifest-${RELEASE_TAG}-linux-amd64"
@@ -583,6 +594,9 @@ if [[ ("${group}" == all || "${group}" == messaging) && "${include_messaging}" -
   fi
 fi
 if [[ "${group}" == all || "${group}" == core ]]; then
+  if [[ "${include_rstack}" -eq 1 ]]; then
+    bin_assets+=("rstack-${tag}-linux-amd64")
+  fi
   bin_assets+=(
     "evidence-${tag}-linux-amd64"
     "evidencectl-${tag}-linux-amd64"

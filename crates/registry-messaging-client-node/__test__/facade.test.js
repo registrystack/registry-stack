@@ -443,14 +443,13 @@ test('a configuration member outside the declared set is a configuration error',
   const baseUrl = 'https://messaging.example/';
   assert.ok(new MessagingClient({
     baseUrl,
-    requestTimeoutMilliseconds: 1500,
+    attemptTimeoutMilliseconds: 1500,
     connectTimeoutMilliseconds: 1500,
-    maxResponseBytes: 1500,
+    maximumResponseBytes: 1500,
     userAgent: 'messaging-test',
-    trustedRootCertificates: null,
-    maxMutationRetries: 1,
+    maximumMutationRetries: 1,
   }));
-  for (const member of ['maxMutationRetry', 'requestTimeoutMs', 'authorization']) {
+  for (const member of ['maxMutationRetries', 'maximumMutationRetry', 'requestTimeoutMilliseconds', 'attemptTimeoutMs', 'maxResponseBytes', 'authorization']) {
     for (const value of [0, null]) {
       assert.throws(() => new MessagingClient({ baseUrl, [member]: value }), (error) => {
         assert.ok(error instanceof MessagingClientError, member);
@@ -462,17 +461,25 @@ test('a configuration member outside the declared set is a configuration error',
   }
 });
 
-test('every optional configuration member accepts null, as its declaration says', () => {
-  const { MessagingClient } = require('../client');
+test('null is not an omission for non-nullable JavaScript configuration', () => {
+  const { MessagingClient, MessagingClientError } = require('../client');
   for (const member of [
-    'requestTimeoutMilliseconds',
+    'attemptTimeoutMilliseconds',
     'connectTimeoutMilliseconds',
-    'maxResponseBytes',
+    'maximumResponseBytes',
     'userAgent',
     'trustedRootCertificates',
-    'maxMutationRetries',
+    'maximumMutationRetries',
   ]) {
-    assert.ok(new MessagingClient({ baseUrl: 'https://messaging.example/', [member]: null }), member);
+    assert.throws(
+      () => new MessagingClient({ baseUrl: 'https://messaging.example/', [member]: null }),
+      (error) => {
+        assert.ok(error instanceof MessagingClientError, member);
+        assert.equal(error.kind, 'configuration', member);
+        assert.equal(error.outcomeUnknown, false, member);
+        return true;
+      },
+    );
   }
 });
 
@@ -482,14 +489,14 @@ test('a timeout or response bound that is not a whole number in range is a confi
   // A 32-bit conversion would read -1 as 4294967295, 1.5 as 1, 2 ** 32 as 0,
   // and 2 ** 32 + 1024 as 1024, so each value is checked whole.
   const accepted = {
-    requestTimeoutMilliseconds: [1500, 2 ** 32],
+    attemptTimeoutMilliseconds: [1500, 2 ** 32],
     connectTimeoutMilliseconds: [1500, 2 ** 32],
-    maxResponseBytes: [1500],
+    maximumResponseBytes: [1500],
   };
   const refused = {
-    requestTimeoutMilliseconds: [-1, 1.5, '1500'],
-    connectTimeoutMilliseconds: [-1, 1.5, '1500'],
-    maxResponseBytes: [-1, 1.5, 2 ** 32, 2 ** 32 + 1024, '1500'],
+    attemptTimeoutMilliseconds: [true, false, -1, 1.5, '1500'],
+    connectTimeoutMilliseconds: [true, false, -1, 1.5, '1500'],
+    maximumResponseBytes: [true, false, -1, 1.5, 2 ** 32, 2 ** 32 + 1024, '1500'],
   };
   for (const [field, values] of Object.entries(accepted)) {
     for (const value of values) {
@@ -512,11 +519,12 @@ test('a configuration value the sanitizer refuses is a configuration error', () 
   const { MessagingClient, MessagingClientError } = require('../client');
   const baseUrl = 'https://messaging.example/';
   for (const [label, config] of [
-    ['an unsafe integer', { baseUrl, requestTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 }],
-    ['a non-finite number', { baseUrl, maxResponseBytes: Infinity }],
+    ['an unsafe integer', { baseUrl, attemptTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 }],
+    ['a non-finite number', { baseUrl, maximumResponseBytes: Infinity }],
+    ['a binary trust bundle', { baseUrl, trustedRootCertificates: Buffer.from('not PEM text') }],
     ['an undefined member', { baseUrl, userAgent: undefined }],
     ['a function', { baseUrl, userAgent: () => 'messaging-test' }],
-    ['a date', { baseUrl, requestTimeoutMilliseconds: new Date(0) }],
+    ['a date', { baseUrl, attemptTimeoutMilliseconds: new Date(0) }],
     ['a proxy', new Proxy({ baseUrl }, {})],
     ['no configuration', undefined],
   ]) {
@@ -599,7 +607,7 @@ test('a submission answered 503 is resent once under the same key and succeeds',
 test('a retry ceiling of zero sends a submission once and reports the outcome unknown', async (context) => {
   const { baseUrl, requests } = await serve(context, scripted([UNAVAILABLE, RECEIPT]));
   const { MessagingClient, MessagingClientError } = require('../client');
-  const client = new MessagingClient({ baseUrl, maxMutationRetries: 0 });
+  const client = new MessagingClient({ baseUrl, maximumMutationRetries: 0 });
 
   await assert.rejects(client.submit('one-call-secret', 'key-1', SUBMISSION), (error) => {
     assert.ok(error instanceof MessagingClientError);
@@ -623,7 +631,7 @@ test('a 4xx refusal of a submission is never resent and reports the outcome know
     RECEIPT,
   ]));
   const { MessagingClient } = require('../client');
-  const client = new MessagingClient({ baseUrl, maxMutationRetries: 2 });
+  const client = new MessagingClient({ baseUrl, maximumMutationRetries: 2 });
 
   await assert.rejects(client.submit('one-call-secret', 'key-1', SUBMISSION), (error) => {
     assert.equal(error.kind, 'problem');
@@ -636,13 +644,13 @@ test('a 4xx refusal of a submission is never resent and reports the outcome know
 
 test('a retry ceiling outside zero to two is a configuration error', () => {
   const { MessagingClient, MessagingClientError } = require('../client');
-  for (const maxMutationRetries of [0, 1, 2]) {
-    assert.ok(new MessagingClient({ baseUrl: 'https://messaging.example/', maxMutationRetries }));
+  for (const maximumMutationRetries of [0, 1, 2]) {
+    assert.ok(new MessagingClient({ baseUrl: 'https://messaging.example/', maximumMutationRetries }));
   }
-  for (const maxMutationRetries of [3, 255, 256, -1, 1.5, '1']) {
-    assert.throws(() => new MessagingClient({ baseUrl: 'https://messaging.example/', maxMutationRetries }), (error) => {
-      assert.ok(error instanceof MessagingClientError, `${maxMutationRetries}`);
-      assert.equal(error.kind, 'configuration', `${maxMutationRetries}`);
+  for (const maximumMutationRetries of [true, false, 3, 255, 256, -1, 1.5, '1']) {
+    assert.throws(() => new MessagingClient({ baseUrl: 'https://messaging.example/', maximumMutationRetries }), (error) => {
+      assert.ok(error instanceof MessagingClientError, `${maximumMutationRetries}`);
+      assert.equal(error.kind, 'configuration', `${maximumMutationRetries}`);
       assert.equal(error.outcomeUnknown, false);
       return true;
     });
@@ -674,7 +682,7 @@ for (const [code, status, title, detail] of [
   test(`receipt observation maps ${code} without retry or exposing caller values`, async (context) => {
     const { baseUrl, requests } = await serve(context, () => problem(code, status, title, detail));
     const { MessagingClient, MessagingClientError } = require('../client');
-    const client = new MessagingClient({ baseUrl, maxMutationRetries: 2 });
+    const client = new MessagingClient({ baseUrl, maximumMutationRetries: 2 });
     await assert.rejects(client.messageReceipt('token-canary', 'key-canary', SUBMISSION), (error) => {
       assert.ok(error instanceof MessagingClientError);
       assert.equal(error.kind, 'problem');

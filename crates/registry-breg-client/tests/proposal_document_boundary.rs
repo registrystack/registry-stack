@@ -81,7 +81,7 @@ impl Fixture {
         let token = Arc::new(CountingToken::default());
         let client = BaseRegistryClient::new(
             BaseRegistryClientConfig::new(format!("http://{address}/").parse().unwrap())
-                .with_max_mutation_retries(0)
+                .with_maximum_mutation_retries(0)
                 .with_token_provider(token.clone()),
         )
         .unwrap();
@@ -1493,7 +1493,7 @@ async fn proposal_input_snapshot_bound_is_checked_before_protected_io() {
             let mut saved: Value = serde_json::from_slice(attempt.as_bytes()).unwrap();
             saved["body"] = json!(json!({"input":oversized}).to_string());
             let saved = serde_json::to_vec(&saved).unwrap();
-            assert!(saved.len() < registry_breg_client::DEFAULT_MAX_RESPONSE_BYTES as usize);
+            assert!(saved.len() < registry_breg_client::DEFAULT_MAXIMUM_RESPONSE_BYTES as usize);
             assert!(
                 BRegPreparedProposal::from_slice(&saved).is_err(),
                 "{operation}:{state}:oversized restored input"

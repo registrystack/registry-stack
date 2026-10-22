@@ -472,6 +472,21 @@ fn only_fields(
     Ok(())
 }
 
+fn refuse_null_fields(
+    object: &Map<String, Value>,
+    fields: &[&str],
+    kind: &'static str,
+    message: &'static str,
+) -> Result<()> {
+    if fields
+        .iter()
+        .any(|field| matches!(object.get(*field), Some(Value::Null)))
+    {
+        return Err(binding_error(kind, message));
+    }
+    Ok(())
+}
+
 fn required_string(
     object: &Map<String, Value>,
     field: &str,
@@ -595,13 +610,29 @@ fn private_key_jwt(value: &Value) -> Result<PrivateKeyJwt> {
             "scopes",
             "assertionLifetimeSeconds",
             "refreshMarginSeconds",
-            "requestTimeoutMilliseconds",
+            "attemptTimeoutMilliseconds",
             "connectTimeoutMilliseconds",
             "userAgent",
             "trustedRootCertificates",
         ],
         "configuration",
         "authorization.privateKeyJwt contains an unsupported field",
+    )?;
+    refuse_null_fields(
+        object,
+        &[
+            "audience",
+            "resource",
+            "scopes",
+            "assertionLifetimeSeconds",
+            "refreshMarginSeconds",
+            "attemptTimeoutMilliseconds",
+            "connectTimeoutMilliseconds",
+            "userAgent",
+            "trustedRootCertificates",
+        ],
+        "configuration",
+        "authorization.privateKeyJwt options must be omitted instead of null",
     )?;
     let endpoint = required_string(
         object,
@@ -673,11 +704,11 @@ fn private_key_jwt(value: &Value) -> Result<PrivateKeyJwt> {
     }
     if let Some(value) = optional_u64(
         object,
-        "requestTimeoutMilliseconds",
+        "attemptTimeoutMilliseconds",
         "configuration",
-        "private-key JWT request timeout must be a non-negative integer",
+        "private-key JWT attempt timeout must be a non-negative integer",
     )? {
-        config = config.with_request_timeout(Duration::from_millis(value));
+        config = config.with_attempt_timeout(Duration::from_millis(value));
     }
     if let Some(value) = optional_u64(
         object,
@@ -752,6 +783,199 @@ fn bearer_value(token: registry_breg_client::BearerToken) -> Result<String> {
         .ok_or_else(|| binding_error("token", "the issued credential is invalid"))
 }
 
+fn validate_exchange_client(value: &Value, what: &'static str) -> Result<()> {
+    let object = required_object(value, what)?;
+    only_fields(
+        object,
+        &[
+            "tokenEndpoint",
+            "clientId",
+            "clientKey",
+            "audience",
+            "resource",
+            "scopes",
+            "assertionLifetimeSeconds",
+            "refreshMarginSeconds",
+            "attemptTimeoutMilliseconds",
+            "connectTimeoutMilliseconds",
+            "userAgent",
+            "trustedRootCertificates",
+        ],
+        "configuration",
+        "exchange client contains an unsupported field",
+    )?;
+    refuse_null_fields(
+        object,
+        &[
+            "audience",
+            "assertionLifetimeSeconds",
+            "refreshMarginSeconds",
+            "attemptTimeoutMilliseconds",
+            "connectTimeoutMilliseconds",
+            "userAgent",
+            "trustedRootCertificates",
+        ],
+        "configuration",
+        "exchange client options must be omitted instead of null",
+    )?;
+    optional_i64(
+        object,
+        "assertionLifetimeSeconds",
+        "exchange assertionLifetimeSeconds must be a safe integer",
+    )?;
+    optional_i64(
+        object,
+        "refreshMarginSeconds",
+        "exchange refreshMarginSeconds must be a safe integer",
+    )?;
+    optional_u64(
+        object,
+        "attemptTimeoutMilliseconds",
+        "configuration",
+        "exchange attemptTimeoutMilliseconds must be a non-negative safe integer",
+    )?;
+    optional_u64(
+        object,
+        "connectTimeoutMilliseconds",
+        "configuration",
+        "exchange connectTimeoutMilliseconds must be a non-negative safe integer",
+    )?;
+    Ok(())
+}
+
+fn validate_exchange_config(value: &Value) -> Result<()> {
+    let object = required_object(value, "authorization.exchange must be an object")?;
+    only_fields(
+        object,
+        &["client", "context", "firstParty", "remote"],
+        "configuration",
+        "authorization.exchange contains an unsupported field",
+    )?;
+    refuse_null_fields(
+        object,
+        &["firstParty", "remote"],
+        "configuration",
+        "authorization.exchange options must be omitted instead of null",
+    )?;
+
+    validate_exchange_client(
+        object.get("client").ok_or_else(|| {
+            binding_error(
+                "configuration",
+                "authorization.exchange.client must be present",
+            )
+        })?,
+        "authorization.exchange.client must be an object",
+    )?;
+
+    let context = required_object(
+        object.get("context").ok_or_else(|| {
+            binding_error(
+                "configuration",
+                "authorization.exchange.context must be present",
+            )
+        })?,
+        "authorization.exchange.context must be an object",
+    )?;
+    only_fields(
+        context,
+        &[
+            "issuer",
+            "subject",
+            "audience",
+            "generation",
+            "deadlineSeconds",
+            "grantId",
+        ],
+        "configuration",
+        "authorization.exchange.context contains an unsupported field",
+    )?;
+    refuse_null_fields(
+        context,
+        &["grantId"],
+        "configuration",
+        "authorization.exchange.context options must be omitted instead of null",
+    )?;
+    let deadline = context.get("deadlineSeconds").ok_or_else(|| {
+        binding_error(
+            "configuration",
+            "authorization.exchange.context.deadlineSeconds must be present",
+        )
+    })?;
+    safe_integer(
+        deadline,
+        0,
+        MAXIMUM_JAVASCRIPT_SAFE_INTEGER,
+        "configuration",
+        "authorization.exchange.context.deadlineSeconds must be a non-negative safe integer",
+    )?;
+
+    if let Some(first_party) = object.get("firstParty") {
+        let first_party = required_object(
+            first_party,
+            "authorization.exchange.firstParty must be an object",
+        )?;
+        only_fields(
+            first_party,
+            &["key", "attributes"],
+            "configuration",
+            "authorization.exchange.firstParty contains an unsupported field",
+        )?;
+    }
+
+    if let Some(remote) = object.get("remote") {
+        let remote = required_object(remote, "authorization.exchange.remote must be an object")?;
+        only_fields(
+            remote,
+            &[
+                "endpoint",
+                "bootstrap",
+                "bootstrapResource",
+                "bootstrapScope",
+                "attemptTimeoutMilliseconds",
+                "connectTimeoutMilliseconds",
+                "userAgent",
+                "trustedRootCertificates",
+            ],
+            "configuration",
+            "authorization.exchange.remote contains an unsupported field",
+        )?;
+        refuse_null_fields(
+            remote,
+            &[
+                "attemptTimeoutMilliseconds",
+                "connectTimeoutMilliseconds",
+                "userAgent",
+                "trustedRootCertificates",
+            ],
+            "configuration",
+            "authorization.exchange.remote options must be omitted instead of null",
+        )?;
+        validate_exchange_client(
+            remote.get("bootstrap").ok_or_else(|| {
+                binding_error(
+                    "configuration",
+                    "authorization.exchange.remote.bootstrap must be present",
+                )
+            })?,
+            "authorization.exchange.remote.bootstrap must be an object",
+        )?;
+        optional_u64(
+            remote,
+            "attemptTimeoutMilliseconds",
+            "configuration",
+            "remote exchange attemptTimeoutMilliseconds must be a non-negative safe integer",
+        )?;
+        optional_u64(
+            remote,
+            "connectTimeoutMilliseconds",
+            "configuration",
+            "remote exchange connectTimeoutMilliseconds must be a non-negative safe integer",
+        )?;
+    }
+    Ok(())
+}
+
 fn authorization_provider(value: &Value) -> Result<Option<Arc<dyn TokenProvider>>> {
     if value.is_null() {
         return Ok(None);
@@ -776,6 +1000,7 @@ fn authorization_provider(value: &Value) -> Result<Option<Arc<dyn TokenProvider>
             .map(|provider| Some(Arc::new(provider) as Arc<dyn TokenProvider>));
     }
     if let Some(value) = object.get("exchange") {
+        validate_exchange_config(value)?;
         return exchange_authorization_from_json(value)
             .map(|provider| Some(Arc::new(provider) as Arc<dyn TokenProvider>))
             .map_err(|error| mapped_error(token_error_value(error)));
@@ -793,15 +1018,29 @@ fn client_from_config(value: Value) -> Result<CoreClient> {
         &[
             "baseUrl",
             "authorization",
-            "requestTimeoutMilliseconds",
+            "attemptTimeoutMilliseconds",
             "connectTimeoutMilliseconds",
-            "maxResponseBytes",
+            "maximumResponseBytes",
             "userAgent",
             "trustedRootCertificates",
-            "maxMutationRetries",
+            "maximumMutationRetries",
         ],
         "configuration",
         "client configuration contains an unsupported field",
+    )?;
+    refuse_null_fields(
+        object,
+        &[
+            "authorization",
+            "attemptTimeoutMilliseconds",
+            "connectTimeoutMilliseconds",
+            "maximumResponseBytes",
+            "userAgent",
+            "trustedRootCertificates",
+            "maximumMutationRetries",
+        ],
+        "configuration",
+        "client configuration options must be omitted instead of null",
     )?;
     let base_url = required_string(
         object,
@@ -819,11 +1058,11 @@ fn client_from_config(value: Value) -> Result<CoreClient> {
     }
     if let Some(value) = optional_u64(
         object,
-        "requestTimeoutMilliseconds",
+        "attemptTimeoutMilliseconds",
         "configuration",
-        "requestTimeoutMilliseconds must be a non-negative integer",
+        "attemptTimeoutMilliseconds must be a non-negative integer",
     )? {
-        config = config.with_request_timeout(Duration::from_millis(value));
+        config = config.with_attempt_timeout(Duration::from_millis(value));
     }
     if let Some(value) = optional_u64(
         object,
@@ -835,27 +1074,27 @@ fn client_from_config(value: Value) -> Result<CoreClient> {
     }
     if let Some(value) = optional_u64(
         object,
-        "maxResponseBytes",
+        "maximumResponseBytes",
         "configuration",
-        "maxResponseBytes must be a non-negative integer",
+        "maximumResponseBytes must be a non-negative integer",
     )? {
-        config = config.with_max_response_bytes(value);
+        config = config.with_maximum_response_bytes(value);
     }
     if let Some(value) = optional_u64(
         object,
-        "maxMutationRetries",
+        "maximumMutationRetries",
         "configuration",
-        "maxMutationRetries must be a whole number from 0 to 2",
+        "maximumMutationRetries must be a whole number from 0 to 2",
     )? {
         // Only a value in the `u8` range reaches the client, which refuses one
         // above its own bound.
         let value = u8::try_from(value).map_err(|_| {
             binding_error(
                 "configuration",
-                "maxMutationRetries must be a whole number from 0 to 2",
+                "maximumMutationRetries must be a whole number from 0 to 2",
             )
         })?;
-        config = config.with_max_mutation_retries(value);
+        config = config.with_maximum_mutation_retries(value);
     }
     if let Some(value) = optional_string(
         object,
@@ -3186,7 +3425,7 @@ impl BaseRegistryClient {
 
     /// Invoke one metadata-selected immediate action. An invocation whose
     /// outcome is unknown is resent identically under the same key, at most
-    /// `maxMutationRetries` times.
+    /// `maximumMutationRetries` times.
     #[napi]
     pub async fn invoke_action(
         &self,
@@ -3252,7 +3491,7 @@ impl BaseRegistryClient {
 
     /// Explicitly send a recovered invocation under its original key. An
     /// invocation whose outcome is unknown is resent identically under that
-    /// key, at most `maxMutationRetries` times.
+    /// key, at most `maximumMutationRetries` times.
     #[napi]
     pub async fn execute_recovered_action(
         &self,
@@ -3408,7 +3647,7 @@ impl BaseRegistryClient {
 
     /// Execute one metadata-selected atomic batch. A batch whose outcome is
     /// unknown is resent identically under the same key, at most
-    /// `maxMutationRetries` times.
+    /// `maximumMutationRetries` times.
     #[napi]
     pub async fn batch_records(
         &self,

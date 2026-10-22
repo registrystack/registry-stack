@@ -41,14 +41,14 @@ pub fn submission_digest(
 #[napi(object)]
 pub struct CaseworkClientConfig {
     pub base_url: String,
-    pub request_timeout_milliseconds: Option<u32>,
-    pub connect_timeout_milliseconds: Option<u32>,
-    pub max_response_bytes: Option<u32>,
+    pub attempt_timeout_milliseconds: Option<f64>,
+    pub connect_timeout_milliseconds: Option<f64>,
+    pub maximum_response_bytes: Option<f64>,
     pub user_agent: Option<String>,
     pub trusted_root_certificates: Option<String>,
     /// How many times a keyed mutation whose outcome is unknown is resent under
     /// the same idempotency key: 0 to 2, default 2, and 0 disables the resend.
-    pub max_mutation_retries: Option<f64>,
+    pub maximum_mutation_retries: Option<f64>,
 }
 
 /// Identify a human task grant read without positional string ambiguity.
@@ -78,14 +78,16 @@ impl CaseworkClient {
             binding_error("configuration", "Casework client configuration is invalid")
         })?;
         let mut core = CoreConfig::new(base_url);
-        if let Some(value) = config.request_timeout_milliseconds {
-            core = core.with_request_timeout(Duration::from_millis(u64::from(value)));
+        if let Some(value) = config.attempt_timeout_milliseconds {
+            let value = positive_u32(value)?;
+            core = core.with_attempt_timeout(Duration::from_millis(u64::from(value)));
         }
         if let Some(value) = config.connect_timeout_milliseconds {
+            let value = positive_u32(value)?;
             core = core.with_connect_timeout(Duration::from_millis(u64::from(value)));
         }
-        if let Some(value) = config.max_response_bytes {
-            core = core.with_max_response_bytes(u64::from(value));
+        if let Some(value) = config.maximum_response_bytes {
+            core = core.with_maximum_response_bytes(u64::from(positive_u32(value)?));
         }
         if let Some(value) = config.user_agent {
             core = core.with_user_agent(value);
@@ -93,8 +95,8 @@ impl CaseworkClient {
         if let Some(value) = config.trusted_root_certificates {
             core = core.with_trusted_root_certificates(value.into_bytes());
         }
-        if let Some(value) = config.max_mutation_retries {
-            core = core.with_max_mutation_retries(mutation_retries(value)?);
+        if let Some(value) = config.maximum_mutation_retries {
+            core = core.with_maximum_mutation_retries(mutation_retries(value)?);
         }
         CoreClient::new(core)
             .map(|inner| Self { inner })
@@ -1254,6 +1256,19 @@ fn binding_error(kind: &'static str, message: &'static str) -> NapiError {
         json!({ "kind": kind, "message": message, "outcomeUnknown": kind == "protocol" })
             .to_string(),
     )
+}
+
+/// Validate a JavaScript number before narrowing it to the native millisecond
+/// and byte-count representation.
+fn positive_u32(value: f64) -> Result<u32> {
+    if value.is_finite() && value.fract() == 0.0 && (1.0..=f64::from(u32::MAX)).contains(&value) {
+        Ok(value as u32)
+    } else {
+        Err(binding_error(
+            "configuration",
+            "Casework client configuration is invalid",
+        ))
+    }
 }
 
 /// The retry ceiling as a JavaScript number. Only a whole number in the

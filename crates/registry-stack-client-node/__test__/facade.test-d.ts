@@ -1,16 +1,42 @@
 import { breg, casework, discovery, evidence, messaging, scheduling } from '..'
 
 const bregClient = new breg.BaseRegistryClient({ baseUrl: 'https://registry.example.invalid/' })
-const discoveryClient = new discovery.DiscoveryClient({ baseUrl: 'https://discovery.example.invalid/' })
+const discoveryClient = new discovery.DiscoveryClient({
+  baseUrl: 'https://discovery.example.invalid/',
+  maximumResponseBytes: 1500,
+  trustedRootCertificates: '-----BEGIN CERTIFICATE-----\nplaceholder\n-----END CERTIFICATE-----',
+})
 const evidenceClient = new evidence.EvidenceClient({
   baseUrl: 'https://evidence.example.invalid/',
   trustedJwks: { keys: [] },
   revokedKeyIds: [],
   token: { static: 'placeholder-token' },
 })
-const caseworkClient = new casework.CaseworkClient({ baseUrl: 'https://casework.example.invalid/' })
-const messagingClient = new messaging.MessagingClient({ baseUrl: 'https://messaging.example.invalid/' })
-const schedulingClient = new scheduling.SchedulingClient({ baseUrl: 'https://scheduling.example.invalid/' })
+const caseworkClient = new casework.CaseworkClient({
+  baseUrl: 'https://casework.example.invalid/', maximumResponseBytes: 1500,
+})
+const messagingClient = new messaging.MessagingClient({
+  baseUrl: 'https://messaging.example.invalid/',
+  attemptTimeoutMilliseconds: 5_000,
+  maximumResponseBytes: 1500,
+  maximumMutationRetries: 1,
+  trustedRootCertificates: '-----BEGIN CERTIFICATE-----\nplaceholder\n-----END CERTIFICATE-----',
+})
+const schedulingClient = new scheduling.SchedulingClient({
+  baseUrl: 'https://scheduling.example.invalid/',
+  attemptTimeoutMilliseconds: 5_000,
+  maximumResponseBytes: 1500,
+  maximumMutationRetries: 1,
+  trustedRootCertificates: '-----BEGIN CERTIFICATE-----\nplaceholder\n-----END CERTIFICATE-----',
+})
+// @ts-expect-error the public response-bound name is maximumResponseBytes
+new messaging.MessagingClient({ baseUrl: 'https://messaging.example.invalid/', maxResponseBytes: 1500 })
+// @ts-expect-error the public attempt-timeout name is attemptTimeoutMilliseconds
+new messaging.MessagingClient({ baseUrl: 'https://messaging.example.invalid/', requestTimeoutMilliseconds: 5_000 })
+// @ts-expect-error the public retry name is maximumMutationRetries
+new scheduling.SchedulingClient({ baseUrl: 'https://scheduling.example.invalid/', maxMutationRetries: 1 })
+// @ts-expect-error null is not an omission in JavaScript configuration
+new scheduling.SchedulingClient({ baseUrl: 'https://scheduling.example.invalid/', userAgent: null })
 
 bregClient.listRecords('people', { top: 25 })
 void bregClient.registryContract('reader').then((metadata) => {

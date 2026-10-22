@@ -583,7 +583,7 @@ class NativeRequestTests(unittest.TestCase):
     def test_an_oversized_answer_is_a_transport_failure(self) -> None:
         self.service.script(ok(STATUS))
         with self.assertRaises(CoordinatorClientError) as raised:
-            CoordinatorClient(self.service.base_url, max_response_bytes=16).status("token", RUN)
+            CoordinatorClient(self.service.base_url, maximum_response_bytes=16).status("token", RUN)
         self.assertEqual(raised.exception.kind, "transport")
         self.assertIsInstance(raised.exception.transport_kind, str)
 

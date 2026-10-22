@@ -986,7 +986,7 @@ async fn malformed_media_oversize_and_header_excess_are_refused() {
         ReviewClientConfig::new(
             Url::parse(&format!("http://{address}/oversize/")).expect("fixture URL"),
         )
-        .with_max_response_bytes(32),
+        .with_maximum_response_bytes(32),
     )
     .expect("client");
     let error = client

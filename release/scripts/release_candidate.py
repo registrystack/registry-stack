@@ -23,6 +23,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import release_roster  # noqa: E402
+import rstack_components  # noqa: E402
 
 
 V2_SCHEMA_VERSION = "registry-stack.release-candidate.v2"
@@ -505,6 +506,14 @@ def _release_payload_inventory(version: str) -> dict[str, str]:
     if release_roster.coordinator_in_release(version_tuple):
         inventory[f"coordinator-{tag}-linux-amd64"] = "binary"
         inventory[f"coordinatorctl-{tag}-linux-amd64"] = "binary"
+    if (
+        release_roster.RSTACK_FIRST_RELEASE is not None
+        and version_tuple >= release_roster.RSTACK_FIRST_RELEASE
+    ):
+        for platform in rstack_components.PLATFORMS:
+            inventory[f"rstack-{tag}-{platform}"] = "binary"
+        inventory[f"rstack-{tag}-install.sh"] = "installer"
+        inventory["rstack-install.sh"] = "installer"
     if version_tuple >= THIRD_PARTY_NOTICES_MINIMUM_VERSION:
         inventory["THIRD_PARTY_NOTICES"] = "notice"
     if version_tuple >= MACOS_FIPS_BUNDLE_MINIMUM_VERSION:
@@ -1261,7 +1270,8 @@ def validate_candidate_manifest(
     manifest = require_object(
         document,
         "manifest",
-        DOCS_V2_TOP_LEVEL_FIELDS if uses_release_docs else V2_TOP_LEVEL_FIELDS,
+        (DOCS_V2_TOP_LEVEL_FIELDS if uses_release_docs else V2_TOP_LEVEL_FIELDS)
+        | ({"components"} if parsed_version_hint is not None and release_roster.RSTACK_FIRST_RELEASE is not None and parsed_version_hint >= release_roster.RSTACK_FIRST_RELEASE else set()),
     )
     if manifest["schema_version"] != V2_SCHEMA_VERSION:
         raise CandidateError(
@@ -1442,6 +1452,16 @@ def validate_candidate_manifest(
             "payload inventory must be exactly the supported release set: "
             f"{'; '.join(details)}"
         )
+    if (
+        release_roster.RSTACK_FIRST_RELEASE is not None
+        and release_version >= release_roster.RSTACK_FIRST_RELEASE
+    ):
+        try:
+            expected_components = rstack_components.build_component_manifest(version, payloads)
+        except ValueError as exc:
+            raise CandidateError(f"component manifest does not match payloads: {exc}") from exc
+        if manifest["components"] != expected_components:
+            raise CandidateError("component manifest does not match payloads and release roster")
 
     images = require_list(manifest["images"], "images")
     if not images:

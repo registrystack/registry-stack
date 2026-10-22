@@ -9,18 +9,19 @@ export type JsonValue = JsonScalar | ReadonlyArray<JsonValue> | { readonly [key:
 
 export interface CoordinatorClientConfig {
   baseUrl: string
-  requestTimeoutMilliseconds?: SafeInteger | null
-  connectTimeoutMilliseconds?: SafeInteger | null
-  maxResponseBytes?: SafeInteger | null
-  userAgent?: string | null
-  trustedRootCertificates?: string | null
+  attemptTimeoutMilliseconds?: SafeInteger
+  connectTimeoutMilliseconds?: SafeInteger
+  maximumResponseBytes?: SafeInteger
+  userAgent?: string
+  /** Additional trust roots for the deployment, as PEM text. */
+  trustedRootCertificates?: string
   /**
    * How many times an admission whose outcome is unknown is resent,
    * identically and under the same idempotency key, before its error is
    * returned: a whole number from 0 to 2, default 2; 0 sends it once. Any
    * other value is a `configuration` error.
    */
-  maxMutationRetries?: SafeInteger | null
+  maximumMutationRetries?: SafeInteger
 }
 
 export interface StartRunRequest { workflow: string; workflowRevision: string; input: JsonValue }
@@ -184,7 +185,7 @@ export class CoordinatorClient {
    * Admit `{workflow, workflowRevision, input}` under the caller's key. Fresh
    * starts must match the active revision. Recover unknown admissions with the
    * original revision even after activation changes. An unknown outcome is resent with
-   * the same key and body at most `maxMutationRetries` times; a 4xx is never
+   * the same key and body at most `maximumMutationRetries` times; a 4xx is never
    * resent. The key is scoped to the caller and the workflow, so the same key
    * under two workflows starts two runs, and an allowed workflow the deployment does
    * not serve is refused with 404 `workflow.not-served`, a known outcome never resent.

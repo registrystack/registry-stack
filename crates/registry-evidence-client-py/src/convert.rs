@@ -775,14 +775,14 @@ fn private_key_jwt_provider_from_json(value: &Value) -> Result<PrivateKeyJwt, Co
         config = config.with_refresh_margin_seconds(seconds);
     }
     if let Some(seconds) =
-        optional_f64(object, "request_timeout_seconds").map_err(ConfigError::Shape)?
+        optional_f64(object, "attempt_timeout_seconds").map_err(ConfigError::Shape)?
     {
         let timeout = duration_from_seconds(
             seconds,
-            "`token[\"private_key_jwt\"][\"request_timeout_seconds\"]`",
+            "`token[\"private_key_jwt\"][\"attempt_timeout_seconds\"]`",
         )
         .map_err(ConfigError::Shape)?;
-        config = config.with_request_timeout(timeout);
+        config = config.with_attempt_timeout(timeout);
     }
     if let Some(seconds) =
         optional_f64(object, "connect_timeout_seconds").map_err(ConfigError::Shape)?
@@ -849,11 +849,11 @@ pub fn config_from_parts(
     trusted_jwks: &Value,
     revoked_key_ids: Vec<String>,
     token: &Value,
-    request_timeout_seconds: Option<f64>,
+    attempt_timeout_seconds: Option<f64>,
     connect_timeout_seconds: Option<f64>,
     user_agent: Option<String>,
     trusted_root_certificates: Option<Vec<u8>>,
-    max_response_bytes: Option<u64>,
+    maximum_response_bytes: Option<u64>,
     max_metadata_bytes: Option<u64>,
 ) -> Result<EvidenceClientConfig, ConfigError> {
     config_from_parts_with_authorization(
@@ -862,27 +862,65 @@ pub fn config_from_parts(
         revoked_key_ids,
         token,
         None,
-        request_timeout_seconds,
+        attempt_timeout_seconds,
         connect_timeout_seconds,
         user_agent,
         trusted_root_certificates,
-        max_response_bytes,
+        maximum_response_bytes,
         max_metadata_bytes,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub fn config_from_parts_with_authorization(
     base_url: &str,
     trusted_jwks: &Value,
     revoked_key_ids: Vec<String>,
     token: &Value,
     authorization: Option<&Value>,
-    request_timeout_seconds: Option<f64>,
+    attempt_timeout_seconds: Option<f64>,
     connect_timeout_seconds: Option<f64>,
     user_agent: Option<String>,
     trusted_root_certificates: Option<Vec<u8>>,
-    max_response_bytes: Option<u64>,
+    maximum_response_bytes: Option<u64>,
+    max_metadata_bytes: Option<u64>,
+) -> Result<EvidenceClientConfig, ConfigError> {
+    let request_timeout = attempt_timeout_seconds
+        .map(|seconds| duration_from_seconds(seconds, "`attempt_timeout_seconds`"))
+        .transpose()
+        .map_err(ConfigError::Shape)?;
+    let connect_timeout = connect_timeout_seconds
+        .map(|seconds| duration_from_seconds(seconds, "`connect_timeout_seconds`"))
+        .transpose()
+        .map_err(ConfigError::Shape)?;
+    config_from_parts_with_authorization_durations(
+        base_url,
+        trusted_jwks,
+        revoked_key_ids,
+        token,
+        authorization,
+        request_timeout,
+        connect_timeout,
+        user_agent,
+        trusted_root_certificates,
+        maximum_response_bytes,
+        max_metadata_bytes,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn config_from_parts_with_authorization_durations(
+    base_url: &str,
+    trusted_jwks: &Value,
+    revoked_key_ids: Vec<String>,
+    token: &Value,
+    authorization: Option<&Value>,
+    request_timeout: Option<Duration>,
+    connect_timeout: Option<Duration>,
+    user_agent: Option<String>,
+    trusted_root_certificates: Option<Vec<u8>>,
+    maximum_response_bytes: Option<u64>,
     max_metadata_bytes: Option<u64>,
 ) -> Result<EvidenceClientConfig, ConfigError> {
     let base_url = parse_url(base_url, "`base_url`").map_err(ConfigError::Shape)?;
@@ -908,14 +946,10 @@ pub fn config_from_parts_with_authorization(
     let mut config =
         EvidenceClientConfig::new(base_url, token_provider, trusted_jwks, revoked_key_ids);
 
-    if let Some(seconds) = request_timeout_seconds {
-        let timeout = duration_from_seconds(seconds, "`request_timeout_seconds`")
-            .map_err(ConfigError::Shape)?;
-        config = config.with_request_timeout(timeout);
+    if let Some(timeout) = request_timeout {
+        config = config.with_attempt_timeout(timeout);
     }
-    if let Some(seconds) = connect_timeout_seconds {
-        let timeout = duration_from_seconds(seconds, "`connect_timeout_seconds`")
-            .map_err(ConfigError::Shape)?;
+    if let Some(timeout) = connect_timeout {
         config = config.with_connect_timeout(timeout);
     }
     if let Some(user_agent) = user_agent {
@@ -924,8 +958,8 @@ pub fn config_from_parts_with_authorization(
     if let Some(pem_bundle) = trusted_root_certificates {
         config = config.with_trusted_root_certificates(pem_bundle);
     }
-    if let Some(max_bytes) = max_response_bytes {
-        config = config.with_max_response_bytes(max_bytes);
+    if let Some(maximum_bytes) = maximum_response_bytes {
+        config = config.with_maximum_response_bytes(maximum_bytes);
     }
     if let Some(max_bytes) = max_metadata_bytes {
         config = config.with_max_metadata_bytes(max_bytes);

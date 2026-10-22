@@ -123,6 +123,30 @@ const EVENT_DESTINATION_PATH_SCHEMA_PATTERN: &str =
 pub const RUNTIME_CONFIG_API_VERSION: &str = "id.registrystack.org/formats/breg/runtime/v1alpha1";
 pub const RUNTIME_CONFIG_KIND: &str = "BRegRuntimeConfig";
 
+/// The operational log level selected by the runtime file when `BREG_LOG`
+/// is not set. The closed vocabulary prevents configuration from enabling
+/// debug output or dependency logging.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Error,
+    Warn,
+    #[default]
+    Info,
+}
+
+impl LogLevel {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warn => "warn",
+            Self::Info => "info",
+        }
+    }
+}
+
 /// The apiVersion a runtime file carried before it took the shared identifier
 /// form, refused with the value that replaces it.
 const RETIRED_RUNTIME_API_VERSIONS: &[RetiredApiVersion<'static>] = &[RetiredApiVersion {
@@ -845,6 +869,7 @@ const fn runtime_config_loader() -> RuntimeConfigLoader {
 
 #[derive(Clone)]
 pub struct RuntimeConfig {
+    log_level: LogLevel,
     listener: ListenerConfig,
     identity: DeploymentIdentity,
     secret_providers: SecretProvidersConfig,
@@ -914,6 +939,7 @@ impl RuntimeConfig {
             metrics.validate_separate_binding(&listener)?;
         }
         Ok(Self {
+            log_level: raw.log_level,
             listener,
             identity,
             secret_providers,
@@ -934,6 +960,11 @@ impl RuntimeConfig {
             wasm_execution,
             metrics_listener,
         })
+    }
+
+    #[must_use]
+    pub const fn log_level(&self) -> LogLevel {
+        self.log_level
     }
 
     pub fn activate_task_status(
@@ -997,7 +1028,7 @@ impl RuntimeConfig {
             .with_audience(oauth.assertion_audience.clone())
             .with_resource(oauth.resource.clone())
             .with_scopes(oauth.scopes.clone())
-            .with_request_timeout(self.operational_timeouts.http_request)
+            .with_attempt_timeout(self.operational_timeouts.http_request)
             .with_connect_timeout(self.operational_timeouts.http_request);
             if let Some(reference) = &oauth.ca_bundle_ref {
                 let ca = resolver.resolve_reference(reference)?;
@@ -1044,7 +1075,7 @@ impl RuntimeConfig {
                 .transpose()?;
             let client = registry_review_client::ReviewClient::new(
                 registry_review_client::ReviewClientConfig::new(config.endpoint.clone())
-                    .with_request_timeout(self.operational_timeouts.http_request)
+                    .with_attempt_timeout(self.operational_timeouts.http_request)
                     .with_connect_timeout(self.operational_timeouts.http_request),
             )
             .map_err(|_| RuntimeConfigError::InvalidBinding)?;
@@ -1358,6 +1389,7 @@ impl fmt::Debug for RuntimeConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RuntimeConfig")
+            .field("log_level", &self.log_level)
             .field("listener", &self.listener)
             .field("identity", &self.identity)
             .field("secret_providers", &self.secret_providers)
@@ -2805,6 +2837,10 @@ struct RawRuntimeConfig {
     api_version: String,
     #[cfg(feature = "schema")]
     kind: String,
+    /// Operational log level when `BREG_LOG` is not set. Defaults to `info`;
+    /// accepted values are `error`, `warn`, and `info`.
+    #[serde(default)]
+    log_level: LogLevel,
     listener: RawRegistryListener,
     identity: RawDeploymentIdentity,
     secret_providers: registry_platform_config::SecretProvidersConfig,

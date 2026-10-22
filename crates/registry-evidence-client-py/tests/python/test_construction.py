@@ -97,9 +97,58 @@ class ConstructionTest(unittest.TestCase):
         # the specific rules, not "any base URL fails". Port 1 is never
         # connected to here; construction never performs I/O.
         client = revc.EvidenceClient(
-            "http://127.0.0.1:1", fixtures.VALID_JWKS, [], "test-token"
+            "http://127.0.0.1:1",
+            fixtures.VALID_JWKS,
+            [],
+            "test-token",
+            attempt_timeout_seconds=5,
+            connect_timeout_seconds=2,
         )
         self.assertIsInstance(client, revc.EvidenceClient)
+
+    def test_none_means_omission_for_optional_configuration(self):
+        client = revc.EvidenceClient(
+            "https://example.org",
+            fixtures.VALID_JWKS,
+            [],
+            "test-token",
+            attempt_timeout_seconds=None,
+            connect_timeout_seconds=None,
+            user_agent=None,
+            trusted_root_certificates=None,
+            maximum_response_bytes=None,
+            max_metadata_bytes=None,
+            authorization=None,
+        )
+        self.assertIsInstance(client, revc.EvidenceClient)
+
+    def test_numeric_configuration_rejects_booleans_and_overflow(self):
+        for options in (
+            {"attempt_timeout_seconds": True},
+            {"connect_timeout_seconds": False},
+            {"maximum_response_bytes": True},
+            {"maximum_response_bytes": 2**64},
+            {"max_metadata_bytes": True},
+            {"max_metadata_bytes": 2**64},
+        ):
+            with self.subTest(options=options), self.assertRaises(revc.ConfigurationError):
+                revc.EvidenceClient(
+                    "https://example.org",
+                    fixtures.VALID_JWKS,
+                    [],
+                    "test-token",
+                    **options,
+                )
+
+    def test_retired_top_level_timeout_name_is_rejected(self):
+        with self.assertRaises(TypeError):
+            revc.EvidenceClient(
+                "https://example.org",
+                fixtures.VALID_JWKS,
+                [],
+                "test-token",
+                request_timeout_seconds=30,
+            )
 
     def test_every_exception_carries_every_stable_attribute(self):
         with self.assertRaises(revc.EvidenceClientError) as raised:

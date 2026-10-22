@@ -409,7 +409,7 @@ pub(crate) fn private_key_jwt(
             "scopes",
             "assertion_lifetime_seconds",
             "refresh_margin_seconds",
-            "request_timeout_seconds",
+            "attempt_timeout_seconds",
             "connect_timeout_seconds",
             "user_agent",
         ],
@@ -442,8 +442,8 @@ pub(crate) fn private_key_jwt(
     if let Some(value) = optional_i64(value, "refresh_margin_seconds", WHAT)? {
         config = config.with_refresh_margin_seconds(value);
     }
-    if let Some(value) = optional_f64(value, "request_timeout_seconds", WHAT)? {
-        config = config.with_request_timeout(duration(value, "private-key JWT request timeout")?);
+    if let Some(value) = optional_f64(value, "attempt_timeout_seconds", WHAT)? {
+        config = config.with_attempt_timeout(duration(value, "private-key JWT attempt timeout")?);
     }
     if let Some(value) = optional_f64(value, "connect_timeout_seconds", WHAT)? {
         config = config.with_connect_timeout(duration(value, "private-key JWT connect timeout")?);
@@ -497,10 +497,10 @@ pub fn config_from_parts(
     base_url: &str,
     authorization: &Value,
     roots: Option<Vec<u8>>,
-    request_timeout_seconds: Option<f64>,
-    connect_timeout_seconds: Option<f64>,
+    request_timeout: Option<Duration>,
+    connect_timeout: Option<Duration>,
     user_agent: Option<String>,
-    max_response_bytes: Option<u64>,
+    maximum_response_bytes: Option<u64>,
     trusted_root_certificates: Option<Vec<u8>>,
 ) -> Result<BaseRegistryClientConfig, ConfigError> {
     let base_url =
@@ -509,17 +509,17 @@ pub fn config_from_parts(
     if let Some(provider) = authorization_provider(authorization, roots)? {
         config = config.with_token_provider(provider);
     }
-    if let Some(value) = request_timeout_seconds {
-        config = config.with_request_timeout(duration(value, "request_timeout_seconds")?);
+    if let Some(value) = request_timeout {
+        config = config.with_attempt_timeout(value);
     }
-    if let Some(value) = connect_timeout_seconds {
-        config = config.with_connect_timeout(duration(value, "connect_timeout_seconds")?);
+    if let Some(value) = connect_timeout {
+        config = config.with_connect_timeout(value);
     }
     if let Some(value) = user_agent {
         config = config.with_user_agent(value);
     }
-    if let Some(value) = max_response_bytes {
-        config = config.with_max_response_bytes(value);
+    if let Some(value) = maximum_response_bytes {
+        config = config.with_maximum_response_bytes(value);
     }
     if let Some(value) = trusted_root_certificates {
         config = config.with_trusted_root_certificates(value);

@@ -7,8 +7,8 @@ use url::Url;
 use zeroize::Zeroizing;
 
 use crate::{
-    BaseRegistryClientError, DEFAULT_CONNECT_TIMEOUT, DEFAULT_MAX_RESPONSE_BYTES,
-    DEFAULT_REQUEST_TIMEOUT,
+    BaseRegistryClientError, DEFAULT_ATTEMPT_TIMEOUT, DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_MAXIMUM_RESPONSE_BYTES,
 };
 
 /// Transport policy for one Base Registry Engine deployment.
@@ -16,12 +16,12 @@ use crate::{
 pub struct BaseRegistryClientConfig {
     pub(crate) base_url: Url,
     pub(crate) token_provider: Option<Arc<dyn TokenProvider>>,
-    pub(crate) request_timeout: Duration,
+    pub(crate) attempt_timeout: Duration,
     pub(crate) connect_timeout: Duration,
-    pub(crate) max_response_bytes: u64,
+    pub(crate) maximum_response_bytes: u64,
     pub(crate) user_agent: Option<String>,
     pub(crate) trusted_root_certificates: Option<Zeroizing<Vec<u8>>>,
-    pub(crate) max_mutation_retries: u8,
+    pub(crate) maximum_mutation_retries: u8,
 }
 
 impl BaseRegistryClientConfig {
@@ -30,12 +30,12 @@ impl BaseRegistryClientConfig {
         Self {
             base_url,
             token_provider: None,
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            attempt_timeout: DEFAULT_ATTEMPT_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+            maximum_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
             user_agent: None,
             trusted_root_certificates: None,
-            max_mutation_retries: DEFAULT_MUTATION_RETRIES,
+            maximum_mutation_retries: DEFAULT_MUTATION_RETRIES,
         }
     }
 
@@ -46,8 +46,8 @@ impl BaseRegistryClientConfig {
     }
 
     #[must_use]
-    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
-        self.request_timeout = timeout;
+    pub fn with_attempt_timeout(mut self, timeout: Duration) -> Self {
+        self.attempt_timeout = timeout;
         self
     }
 
@@ -58,8 +58,8 @@ impl BaseRegistryClientConfig {
     }
 
     #[must_use]
-    pub fn with_max_response_bytes(mut self, maximum: u64) -> Self {
-        self.max_response_bytes = maximum;
+    pub fn with_maximum_response_bytes(mut self, maximum: u64) -> Self {
+        self.maximum_response_bytes = maximum;
         self
     }
 
@@ -81,8 +81,8 @@ impl BaseRegistryClientConfig {
     /// returned. Defaults to 2, accepts at most 2, and 0 disables the
     /// resend.
     #[must_use]
-    pub fn with_max_mutation_retries(mut self, value: u8) -> Self {
-        self.max_mutation_retries = value;
+    pub fn with_maximum_mutation_retries(mut self, value: u8) -> Self {
+        self.maximum_mutation_retries = value;
         self
     }
 
@@ -97,17 +97,17 @@ impl BaseRegistryClientConfig {
                 "the service base URL must be an HTTPS URL, or loopback HTTP, with no credentials, query, or fragment",
             )
         })?;
-        if self.request_timeout.is_zero() || self.connect_timeout.is_zero() {
+        if self.attempt_timeout.is_zero() || self.connect_timeout.is_zero() {
             return Err(BaseRegistryClientError::configuration(
-                "request and connection timeouts must be greater than zero",
+                "attempt and connection timeouts must be greater than zero",
             ));
         }
-        if self.max_response_bytes == 0 {
+        if self.maximum_response_bytes == 0 {
             return Err(BaseRegistryClientError::configuration(
                 "the response body bound must be greater than zero",
             ));
         }
-        if self.max_mutation_retries > MAXIMUM_MUTATION_RETRIES {
+        if self.maximum_mutation_retries > MAXIMUM_MUTATION_RETRIES {
             return Err(BaseRegistryClientError::configuration(
                 "the mutation retry count exceeds the accepted bound",
             ));
@@ -122,11 +122,11 @@ impl fmt::Debug for BaseRegistryClientConfig {
             .debug_struct("BaseRegistryClientConfig")
             .field("base_url", &"<validated service URL>")
             .field("token_provider", &self.token_provider.is_some())
-            .field("request_timeout", &self.request_timeout)
+            .field("attempt_timeout", &self.attempt_timeout)
             .field("connect_timeout", &self.connect_timeout)
-            .field("max_response_bytes", &self.max_response_bytes)
+            .field("maximum_response_bytes", &self.maximum_response_bytes)
             .field("user_agent", &self.user_agent.is_some())
-            .field("max_mutation_retries", &self.max_mutation_retries)
+            .field("maximum_mutation_retries", &self.maximum_mutation_retries)
             .finish_non_exhaustive()
     }
 }
@@ -163,7 +163,7 @@ mod tests {
     fn the_mutation_retry_count_is_bounded() {
         let url = Url::parse("https://registry.example.invalid/").expect("fixture URL");
         let error = BaseRegistryClientConfig::new(url.clone())
-            .with_max_mutation_retries(MAXIMUM_MUTATION_RETRIES + 1)
+            .with_maximum_mutation_retries(MAXIMUM_MUTATION_RETRIES + 1)
             .validate()
             .expect_err("a retry count above the bound is refused");
         assert!(matches!(
@@ -174,13 +174,26 @@ mod tests {
         ));
         for retries in 0..=MAXIMUM_MUTATION_RETRIES {
             assert!(BaseRegistryClientConfig::new(url.clone())
-                .with_max_mutation_retries(retries)
+                .with_maximum_mutation_retries(retries)
                 .validate()
                 .is_ok());
         }
         assert_eq!(
-            BaseRegistryClientConfig::new(url).max_mutation_retries,
+            BaseRegistryClientConfig::new(url).maximum_mutation_retries,
             DEFAULT_MUTATION_RETRIES
         );
+    }
+
+    #[test]
+    fn the_response_bound_keeps_its_default_and_refuses_zero() {
+        let url = Url::parse("https://registry.example.invalid/").expect("fixture URL");
+        assert_eq!(
+            BaseRegistryClientConfig::new(url.clone()).maximum_response_bytes,
+            DEFAULT_MAXIMUM_RESPONSE_BYTES
+        );
+        assert!(BaseRegistryClientConfig::new(url)
+            .with_maximum_response_bytes(0)
+            .validate()
+            .is_err());
     }
 }

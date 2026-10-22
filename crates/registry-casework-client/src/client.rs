@@ -59,8 +59,8 @@ const ORIGINAL_ATTEMPT_HEADER: &str = "registry-casework-attempt";
 pub struct CaseworkClient {
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
-    max_response_bytes: u64,
-    max_mutation_retries: u8,
+    maximum_response_bytes: u64,
+    maximum_mutation_retries: u8,
     review: ProducerReviewClient,
 }
 
@@ -69,8 +69,8 @@ impl fmt::Debug for CaseworkClient {
         formatter
             .debug_struct("CaseworkClient")
             .field("base_url", &"<validated service URL>")
-            .field("max_response_bytes", &self.max_response_bytes)
-            .field("max_mutation_retries", &self.max_mutation_retries)
+            .field("maximum_response_bytes", &self.maximum_response_bytes)
+            .field("maximum_mutation_retries", &self.maximum_mutation_retries)
             .finish_non_exhaustive()
     }
 }
@@ -78,9 +78,13 @@ impl fmt::Debug for CaseworkClient {
 impl CaseworkClient {
     pub fn new(config: CaseworkClientConfig) -> Result<Self, CaseworkClientError> {
         let mut review_config = ProducerReviewClientConfig::new(config.base_url.clone())
-            .with_request_timeout(config.request_timeout)
+            .with_attempt_timeout(config.attempt_timeout)
             .with_connect_timeout(config.connect_timeout)
-            .with_max_response_bytes(config.max_response_bytes.min(MAXIMUM_REVIEW_RESPONSE_BYTES));
+            .with_maximum_response_bytes(
+                config
+                    .maximum_response_bytes
+                    .min(MAXIMUM_REVIEW_RESPONSE_BYTES),
+            );
         if let Some(user_agent) = &config.user_agent {
             review_config = review_config.with_user_agent(user_agent.clone());
         }
@@ -91,7 +95,7 @@ impl CaseworkClient {
             ProducerReviewClient::new(review_config).map_err(CaseworkClientError::from_review)?;
         let base_url = config.validate()?;
         let http = build_client(OutboundOptions {
-            request_timeout: config.request_timeout,
+            request_timeout: config.attempt_timeout,
             connect_timeout: config.connect_timeout,
             user_agent: config.user_agent.as_deref(),
             trusted_root_certificates: config.trusted_root_certificates.as_deref(),
@@ -100,8 +104,8 @@ impl CaseworkClient {
         Ok(Self {
             http,
             base_url,
-            max_response_bytes: config.max_response_bytes,
-            max_mutation_retries: config.max_mutation_retries,
+            maximum_response_bytes: config.maximum_response_bytes,
+            maximum_mutation_retries: config.maximum_mutation_retries,
             review,
         })
     }
@@ -636,7 +640,7 @@ impl CaseworkClient {
                         Some(trace_id),
                     ));
                 }
-                let body = read_bounded(response, self.max_response_bytes)
+                let body = read_bounded(response, self.maximum_response_bytes)
                     .await
                     .map_err(|error| CaseworkClientError::Transport {
                         kind: read_failure_kind(&error),
@@ -1510,7 +1514,7 @@ impl CaseworkClient {
         expected_status: StatusCode,
     ) -> Result<CaseworkComplete<T>, CaseworkClientError> {
         let request = &request;
-        retry_keyed_mutation(self.max_mutation_retries, || async move {
+        retry_keyed_mutation(self.maximum_mutation_retries, || async move {
             let Some(attempt) = request.try_clone() else {
                 return KeyedMutationAttempt::Settled(Err(CaseworkClientError::invalid_request(
                     "the request could not be prepared for sending",
@@ -1539,7 +1543,7 @@ impl CaseworkClient {
         expected_status: StatusCode,
     ) -> Result<CaseworkComplete<()>, CaseworkClientError> {
         let request = &request;
-        retry_keyed_mutation(self.max_mutation_retries, || async move {
+        retry_keyed_mutation(self.maximum_mutation_retries, || async move {
             let Some(attempt) = request.try_clone() else {
                 return KeyedMutationAttempt::Settled(Err(CaseworkClientError::invalid_request(
                     "the request could not be prepared for sending",
@@ -1586,7 +1590,7 @@ impl CaseworkClient {
                 Some(trace_id),
             ));
         }
-        let body = read_bounded(response, self.max_response_bytes)
+        let body = read_bounded(response, self.maximum_response_bytes)
             .await
             .map_err(|error| CaseworkClientError::Transport {
                 kind: read_failure_kind(&error),

@@ -173,7 +173,7 @@ test('a 200 response under the wrong media type is refused as a protocol failure
   });
 });
 
-test('a response over maxResponseBytes is refused as a transport failure, not a protocol failure', async () => {
+test('a response over maximumResponseBytes is refused as a transport failure, not a protocol failure', async () => {
   const oversized = Buffer.alloc(4096, 'a');
   const stub = await startStubServer({
     'POST /v1/evidence': (req, res) => {
@@ -190,7 +190,7 @@ test('a response over maxResponseBytes is refused as a transport failure, not a 
       trustedJwks: DUMMY_JWKS,
       revokedKeyIds: [],
       token: { static: 'errors-test-token' },
-      maxResponseBytes: 16,
+      maximumResponseBytes: 16,
     });
     const prepared = client.prepare(requestSpec());
     await assert.rejects(client.send(prepared), (error) => {

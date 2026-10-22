@@ -261,28 +261,28 @@ struct CoordinatorClient {
 #[pymethods]
 impl CoordinatorClient {
     #[new]
-    #[pyo3(signature = (base_url, request_timeout_seconds=None, connect_timeout_seconds=None, max_response_bytes=None, user_agent=None, trusted_root_certificates=None, max_mutation_retries=None))]
+    #[pyo3(signature = (base_url, attempt_timeout_seconds=None, connect_timeout_seconds=None, maximum_response_bytes=None, user_agent=None, trusted_root_certificates=None, maximum_mutation_retries=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
         base_url: &str,
-        request_timeout_seconds: Option<&Bound<'_, PyAny>>,
+        attempt_timeout_seconds: Option<&Bound<'_, PyAny>>,
         connect_timeout_seconds: Option<&Bound<'_, PyAny>>,
-        max_response_bytes: Option<&Bound<'_, PyAny>>,
+        maximum_response_bytes: Option<&Bound<'_, PyAny>>,
         user_agent: Option<String>,
         trusted_root_certificates: Option<Vec<u8>>,
-        max_mutation_retries: Option<&Bound<'_, PyAny>>,
+        maximum_mutation_retries: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let base_url = Url::parse(base_url).map_err(|_| invalid_configuration(py))?;
         let mut config = CoordinatorClientConfig::new(base_url);
-        if let Some(value) = request_timeout_seconds {
-            config = config.with_request_timeout(duration(py, value)?);
+        if let Some(value) = attempt_timeout_seconds {
+            config = config.with_attempt_timeout(duration(py, value)?);
         }
         if let Some(value) = connect_timeout_seconds {
             config = config.with_connect_timeout(duration(py, value)?);
         }
-        if let Some(value) = max_response_bytes {
-            config = config.with_max_response_bytes(response_bytes(py, value)?);
+        if let Some(value) = maximum_response_bytes {
+            config = config.with_maximum_response_bytes(response_bytes(py, value)?);
         }
         if let Some(value) = user_agent {
             config = config.with_user_agent(value);
@@ -290,8 +290,8 @@ impl CoordinatorClient {
         if let Some(value) = trusted_root_certificates {
             config = config.with_trusted_root_certificates(value);
         }
-        if let Some(value) = max_mutation_retries {
-            config = config.with_max_mutation_retries(mutation_retries(py, value)?);
+        if let Some(value) = maximum_mutation_retries {
+            config = config.with_maximum_mutation_retries(mutation_retries(py, value)?);
         }
         let inner = py
             .detach(|| RustClient::new(config))

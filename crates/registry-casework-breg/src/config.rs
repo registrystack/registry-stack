@@ -154,7 +154,7 @@ pub fn build_provider(
     let endpoint =
         url::Url::parse(&binding.token_endpoint).map_err(|_| ReviewContextError::Invalid)?;
     let mut token = PrivateKeyJwtConfig::new(endpoint, client_id, key)
-        .with_request_timeout(Duration::from_secs(30))
+        .with_attempt_timeout(Duration::from_secs(30))
         .with_connect_timeout(Duration::from_secs(10));
     if let Some(audience) = &binding.client_assertion_audience {
         token = token.with_audience(audience);
@@ -170,8 +170,8 @@ pub fn build_provider(
         url::Url::parse(&binding.base_url).map_err(|_| ReviewContextError::Invalid)?,
     )
     .with_token_provider(Arc::new(token))
-    .with_max_response_bytes(1024 * 1024)
-    .with_request_timeout(Duration::from_secs(30))
+    .with_maximum_response_bytes(1024 * 1024)
+    .with_attempt_timeout(Duration::from_secs(30))
     .with_connect_timeout(Duration::from_secs(10));
     let client = BaseRegistryClient::new(config).map_err(|_| ReviewContextError::Invalid)?;
     crate::BregContextProvider::new(

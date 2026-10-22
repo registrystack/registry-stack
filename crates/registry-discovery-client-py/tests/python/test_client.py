@@ -486,7 +486,7 @@ class DiscoveryClientTests(unittest.TestCase):
 
     def test_configuration_values_are_bounded_and_value_free(self) -> None:
         invalid_configurations = [
-            {"request_timeout_seconds": 1e300},
+            {"attempt_timeout_seconds": 1e300},
             {"connect_timeout_seconds": float("inf")},
             {"maximum_response_bytes": True},
             {"trusted_root_certificates": bytearray(b"not ordinary bytes")},
@@ -508,6 +508,21 @@ class DiscoveryClientTests(unittest.TestCase):
             str(caught.exception),
             "the Discovery client configuration is invalid",
         )
+
+    def test_none_means_omission_for_optional_configuration(self) -> None:
+        client = DiscoveryClient(
+            "https://provider.example.invalid/",
+            attempt_timeout_seconds=None,
+            connect_timeout_seconds=None,
+            maximum_response_bytes=None,
+            trusted_root_certificates=None,
+        )
+        self.assertIsInstance(client, DiscoveryClient)
+
+        with self.assertRaises(TypeError):
+            DiscoveryClient(
+                "https://provider.example.invalid/", request_timeout_seconds=1.0
+            )
 
     def test_query_and_selection_values_use_stable_errors(self) -> None:
         client = DiscoveryClient("https://provider.example.invalid/")

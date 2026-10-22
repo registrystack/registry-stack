@@ -19,12 +19,12 @@ const MAXIMUM_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 #[derive(Clone)]
 pub struct MessagingClientConfig {
     pub(crate) base_url: Url,
-    pub(crate) request_timeout: Duration,
+    pub(crate) attempt_timeout: Duration,
     pub(crate) connect_timeout: Duration,
-    pub(crate) max_response_bytes: u64,
+    pub(crate) maximum_response_bytes: u64,
     pub(crate) user_agent: Option<String>,
     pub(crate) trusted_root_certificates: Option<Vec<u8>>,
-    pub(crate) max_mutation_retries: u8,
+    pub(crate) maximum_mutation_retries: u8,
 }
 
 impl MessagingClientConfig {
@@ -32,18 +32,18 @@ impl MessagingClientConfig {
     pub fn new(base_url: Url) -> Self {
         Self {
             base_url,
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            attempt_timeout: DEFAULT_REQUEST_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-            max_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
+            maximum_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
             user_agent: None,
             trusted_root_certificates: None,
-            max_mutation_retries: DEFAULT_MUTATION_RETRIES,
+            maximum_mutation_retries: DEFAULT_MUTATION_RETRIES,
         }
     }
 
     #[must_use]
-    pub fn with_request_timeout(mut self, value: Duration) -> Self {
-        self.request_timeout = value;
+    pub fn with_attempt_timeout(mut self, value: Duration) -> Self {
+        self.attempt_timeout = value;
         self
     }
 
@@ -54,8 +54,8 @@ impl MessagingClientConfig {
     }
 
     #[must_use]
-    pub fn with_max_response_bytes(mut self, value: u64) -> Self {
-        self.max_response_bytes = value;
+    pub fn with_maximum_response_bytes(mut self, value: u64) -> Self {
+        self.maximum_response_bytes = value;
         self
     }
 
@@ -76,8 +76,8 @@ impl MessagingClientConfig {
     /// returned. Defaults to 2, accepts at most 2, and 0 disables the
     /// resend.
     #[must_use]
-    pub fn with_max_mutation_retries(mut self, value: u8) -> Self {
-        self.max_mutation_retries = value;
+    pub fn with_maximum_mutation_retries(mut self, value: u8) -> Self {
+        self.maximum_mutation_retries = value;
         self
     }
 
@@ -85,12 +85,13 @@ impl MessagingClientConfig {
         let base_url = ServiceBaseUrl::new(self.base_url.clone()).map_err(|_| {
             MessagingClientError::configuration("the service base URL is not usable")
         })?;
-        if self.request_timeout.is_zero() || self.connect_timeout.is_zero() {
+        if self.attempt_timeout.is_zero() || self.connect_timeout.is_zero() {
             return Err(MessagingClientError::configuration(
                 "client timeouts must be greater than zero",
             ));
         }
-        if self.max_response_bytes == 0 || self.max_response_bytes > MAXIMUM_RESPONSE_BYTES {
+        if self.maximum_response_bytes == 0 || self.maximum_response_bytes > MAXIMUM_RESPONSE_BYTES
+        {
             return Err(MessagingClientError::configuration(
                 "the response body bound is outside the accepted range",
             ));
@@ -104,7 +105,7 @@ impl MessagingClientConfig {
                 "the trusted root certificate bundle exceeds the accepted bound",
             ));
         }
-        if self.max_mutation_retries > MAXIMUM_MUTATION_RETRIES {
+        if self.maximum_mutation_retries > MAXIMUM_MUTATION_RETRIES {
             return Err(MessagingClientError::configuration(
                 "the mutation retry count exceeds the accepted bound",
             ));
@@ -118,15 +119,15 @@ impl fmt::Debug for MessagingClientConfig {
         formatter
             .debug_struct("MessagingClientConfig")
             .field("base_url", &"<validated service URL>")
-            .field("request_timeout", &self.request_timeout)
+            .field("attempt_timeout", &self.attempt_timeout)
             .field("connect_timeout", &self.connect_timeout)
-            .field("max_response_bytes", &self.max_response_bytes)
+            .field("maximum_response_bytes", &self.maximum_response_bytes)
             .field("user_agent_present", &self.user_agent.is_some())
             .field(
                 "trusted_root_certificates_present",
                 &self.trusted_root_certificates.is_some(),
             )
-            .field("max_mutation_retries", &self.max_mutation_retries)
+            .field("maximum_mutation_retries", &self.maximum_mutation_retries)
             .finish_non_exhaustive()
     }
 }
@@ -152,12 +153,16 @@ mod tests {
     #[test]
     fn configuration_bounds_are_enforced_before_any_client_exists() {
         let url = Url::parse("https://messaging.example.invalid/").expect("fixture URL");
+        assert_eq!(
+            MessagingClientConfig::new(url.clone()).maximum_response_bytes,
+            DEFAULT_MAXIMUM_RESPONSE_BYTES
+        );
         let refused = [
-            MessagingClientConfig::new(url.clone()).with_request_timeout(Duration::ZERO),
+            MessagingClientConfig::new(url.clone()).with_attempt_timeout(Duration::ZERO),
             MessagingClientConfig::new(url.clone()).with_connect_timeout(Duration::ZERO),
-            MessagingClientConfig::new(url.clone()).with_max_response_bytes(0),
+            MessagingClientConfig::new(url.clone()).with_maximum_response_bytes(0),
             MessagingClientConfig::new(url.clone())
-                .with_max_response_bytes(MAXIMUM_RESPONSE_BYTES + 1),
+                .with_maximum_response_bytes(MAXIMUM_RESPONSE_BYTES + 1),
             MessagingClientConfig::new(url.clone()).with_trusted_root_certificates(vec![
                 0;
                 MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES
@@ -167,7 +172,7 @@ mod tests {
                 Url::parse("https://user:pass@messaging.example.invalid/").expect("fixture URL"),
             ),
             MessagingClientConfig::new(url.clone())
-                .with_max_mutation_retries(MAXIMUM_MUTATION_RETRIES + 1),
+                .with_maximum_mutation_retries(MAXIMUM_MUTATION_RETRIES + 1),
         ];
         for config in refused {
             assert!(
@@ -180,10 +185,14 @@ mod tests {
         }
         for retries in 0..=MAXIMUM_MUTATION_RETRIES {
             assert!(MessagingClientConfig::new(url.clone())
-                .with_max_mutation_retries(retries)
+                .with_maximum_mutation_retries(retries)
                 .validate()
                 .is_ok());
         }
+        assert!(MessagingClientConfig::new(url.clone())
+            .with_maximum_response_bytes(MAXIMUM_RESPONSE_BYTES)
+            .validate()
+            .is_ok());
         assert!(MessagingClientConfig::new(url).validate().is_ok());
     }
 }

@@ -8,6 +8,7 @@
 # Every host here is under `.example.invalid`, which never resolves.
 apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
+logLevel: info
 
 # Where the server listens. Client addresses and TLS termination belong to
 # whatever sits in front of it: the runtime reads neither peer addresses nor

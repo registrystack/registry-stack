@@ -194,10 +194,10 @@ statistical publication and withdrawal) whose outcome is unknown, with the
 same key, headers, and body bytes, at most twice by default, waiting 250 ms
 and then 500 ms, or the service's `Retry-After` when that is longer and at
 most 5 seconds. A longer requested wait ends the retries. Configure the count
-with `BaseRegistryClientConfig::with_max_mutation_retries` (0 to 2; 0 disables
+with `BaseRegistryClientConfig::with_maximum_mutation_retries` (0 to 2; 0 disables
 the resend). Reads, ingestion run calls, and action target-condition requests
-are never resent. Each attempt has the full request timeout, so a call can
-take up to three request timeouts plus the waits.
+are never resent. Each attempt has the full attempt timeout, so a call can
+take up to three attempt timeouts plus the waits.
 
 BReg holds a response under the key only for a committed success, so a resend
 after a 5xx either replays that success or runs the operation again.

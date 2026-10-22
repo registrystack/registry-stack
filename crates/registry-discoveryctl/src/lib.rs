@@ -4,9 +4,9 @@
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{Command as ProcessCommand, ExitCode};
 
-use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use registry_platform_yaml::{Diagnostic, Report};
 use serde_json::{json, Value};
 
@@ -16,6 +16,7 @@ mod project;
 mod report;
 #[cfg(feature = "schema")]
 pub mod schema;
+mod selected_binary;
 
 pub use build::{package_project, package_project_at, BuildError, PackagedDiscovery};
 pub use index::{inspect_index_file, IndexReport};
@@ -54,6 +55,8 @@ enum OutputFormat {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Run the production Discovery service with the selected runtime.
+    Serve(ServeArgs),
     /// Check an authoring project, a runtime file, or an index without
     /// network I/O.
     #[command(group(
@@ -106,6 +109,17 @@ enum Command {
         #[arg(allow_hyphen_values = true)]
         _legacy_arguments: Vec<OsString>,
     },
+}
+
+#[derive(Debug, Args)]
+struct ServeArgs {
+    /// Runtime configuration file passed unchanged to the Discovery runtime.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Discovery runtime executable for an unmanaged installation.
+    #[arg(long, hide = true, env = "DISCOVERY_BIN", value_name = "BINARY")]
+    discovery_bin: Option<PathBuf>,
 }
 
 const RETIRED_BUILD_ERROR: &str =
@@ -165,6 +179,7 @@ where
         }
     };
     match arguments.command {
+        Command::Serve(args) => serve(args, stderr),
         Command::Check {
             project,
             runtime_config,
@@ -324,6 +339,7 @@ fn envelope(command: &str, exit: u8, mut body: Value) -> Value {
 
 fn run(command: Command) -> Result<String, String> {
     match command {
+        Command::Serve(_) => unreachable!("serve replaces the ctl process before report dispatch"),
         Command::Check { .. } => unreachable!("check reports through its own path"),
         Command::Package {
             project,
@@ -353,6 +369,61 @@ fn run(command: Command) -> Result<String, String> {
                     .map_err(|error| error.to_string())
             }),
         Command::Build { .. } => Err(RETIRED_BUILD_ERROR.to_owned()),
+    }
+}
+
+fn serve(args: ServeArgs, stderr: &mut dyn io::Write) -> ExitCode {
+    let binary = match selected_binary::resolve_managed(
+        selected_binary::DISCOVERY,
+        args.discovery_bin.as_deref(),
+    ) {
+        Ok(Some(binary)) => binary,
+        Ok(None) => args
+            .discovery_bin
+            .unwrap_or_else(|| PathBuf::from("discovery")),
+        Err(error) => {
+            let _ = writeln!(
+                stderr,
+                "discoveryctl serve could not select discovery: {error}"
+            );
+            return ExitCode::from(report::OPERATIONAL_FAILURE_EXIT);
+        }
+    };
+    let mut command = ProcessCommand::new(binary);
+    command.arg("--runtime-config").arg(args.runtime_config);
+    replace_with_service(command, "discovery", stderr)
+}
+
+#[cfg(unix)]
+fn replace_with_service(
+    mut command: ProcessCommand,
+    name: &str,
+    stderr: &mut dyn io::Write,
+) -> ExitCode {
+    use std::os::unix::process::CommandExt as _;
+
+    let error = command.exec();
+    let _ = writeln!(stderr, "discoveryctl serve could not start {name}: {error}");
+    ExitCode::from(report::OPERATIONAL_FAILURE_EXIT)
+}
+
+#[cfg(not(unix))]
+fn replace_with_service(
+    mut command: ProcessCommand,
+    name: &str,
+    stderr: &mut dyn io::Write,
+) -> ExitCode {
+    match command.status() {
+        Ok(status) => ExitCode::from(
+            status
+                .code()
+                .and_then(|code| u8::try_from(code).ok())
+                .unwrap_or(report::OPERATIONAL_FAILURE_EXIT),
+        ),
+        Err(error) => {
+            let _ = writeln!(stderr, "discoveryctl serve could not start {name}: {error}");
+            ExitCode::from(report::OPERATIONAL_FAILURE_EXIT)
+        }
     }
 }
 

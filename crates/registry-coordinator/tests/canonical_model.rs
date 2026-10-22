@@ -531,15 +531,15 @@ fn explain_exposes_the_registered_host_contract_pinned_by_the_operation_revision
     assert_eq!(
         expected["limits"]["http"],
         json!({
-            "maximumResponseBytes":65536,"requestTimeoutMilliseconds":2000,
-            "connectTimeoutMilliseconds":1000,"mutationRetries":0
+            "maximumResponseBytes":65536,"attemptTimeoutMilliseconds":2000,
+            "connectTimeoutMilliseconds":1000,"maximumMutationRetries":0
         })
     );
     let external = registry_coordinator::protocol::Operation::ExternalGet
         .descriptor()
         .host_contract();
     assert_eq!(
-        external["limits"]["http"]["requestTimeoutMilliseconds"],
+        external["limits"]["http"]["attemptTimeoutMilliseconds"],
         2000
     );
     assert_eq!(external["limits"]["http"]["connectionMayLowerLimits"], true);
@@ -547,10 +547,16 @@ fn explain_exposes_the_registered_host_contract_pinned_by_the_operation_revision
         .descriptor()
         .host_contract();
     assert_eq!(
-        evaluation["limits"]["http"]["requestTimeoutMilliseconds"],
+        evaluation["limits"]["http"]["attemptTimeoutMilliseconds"],
         8000
     );
     assert_eq!(evaluation["limits"]["http"]["maximumRequestBytes"], 65536);
+    for contract in [&expected, &external, &evaluation] {
+        assert!(contract["limits"]["http"]
+            .get("requestTimeoutMilliseconds")
+            .is_none());
+        assert!(contract["limits"]["http"].get("mutationRetries").is_none());
+    }
     assert_eq!(
         initial.explain().unwrap()["valueLimits"],
         expected["limits"]["value"]

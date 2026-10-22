@@ -861,7 +861,7 @@ async fn oversized_answers_stay_bounded() {
         SchedulingClientConfig::new(
             Url::parse(&format!("http://{address}/")).expect("fixture URL"),
         )
-        .with_max_response_bytes(64),
+        .with_maximum_response_bytes(64),
     )
     .expect("client");
     match bounded.list_resources(auth(&token), None).await {

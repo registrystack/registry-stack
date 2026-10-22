@@ -63,16 +63,16 @@ export declare class CaseworkClient {
 
 export interface CaseworkClientConfig {
   baseUrl: string
-  requestTimeoutMilliseconds?: number
+  attemptTimeoutMilliseconds?: number
   connectTimeoutMilliseconds?: number
-  maxResponseBytes?: number
+  maximumResponseBytes?: number
   userAgent?: string
   trustedRootCertificates?: string
   /**
    * How many times a keyed mutation whose outcome is unknown is resent under
    * the same idempotency key: 0 to 2, default 2, and 0 disables the resend.
    */
-  maxMutationRetries?: number
+  maximumMutationRetries?: number
 }
 
 export interface CaseworkOutcome {

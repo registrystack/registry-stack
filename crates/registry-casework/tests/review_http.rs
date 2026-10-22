@@ -512,7 +512,7 @@ async fn native_review_client(app: axum::Router) -> (CaseworkClient, tokio::task
                 .parse()
                 .expect("test service URL"),
         )
-        .with_max_mutation_retries(0),
+        .with_maximum_mutation_retries(0),
     )
     .expect("candidate native client");
     (client, server)

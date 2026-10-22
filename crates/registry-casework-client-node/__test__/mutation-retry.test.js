@@ -82,7 +82,7 @@ test('an absence answered 503 is resent once under the same key and succeeds', a
 });
 
 test('a retry ceiling of zero sends an absence once and reports the outcome unknown', async (context) => {
-  const { client, requests } = await retrying(context, [UNAVAILABLE, CREATED], { maxMutationRetries: 0 });
+  const { client, requests } = await retrying(context, [UNAVAILABLE, CREATED], { maximumMutationRetries: 0 });
   const { CaseworkClientError } = require('../client');
 
   await assert.rejects(client.createAbsence('one-call-secret', 'administrator', 2, 'absence-1', ABSENCE), (error) => {
@@ -97,7 +97,7 @@ test('a retry ceiling of zero sends an absence once and reports the outcome unkn
 });
 
 test('a 4xx refusal of an absence is never resent and reports the outcome known', async (context) => {
-  const { client, requests } = await retrying(context, [PRECONDITION_FAILED, CREATED], { maxMutationRetries: 2 });
+  const { client, requests } = await retrying(context, [PRECONDITION_FAILED, CREATED], { maximumMutationRetries: 2 });
 
   await assert.rejects(client.createAbsence('one-call-secret', 'administrator', 2, 'absence-1', ABSENCE), (error) => {
     assert.equal(error.kind, 'problem');
@@ -122,13 +122,13 @@ test('a request refused before any exchange reports the outcome known', async (c
 
 test('a retry ceiling outside zero to two is a configuration error', () => {
   const { CaseworkClient, CaseworkClientError } = require('../client');
-  for (const maxMutationRetries of [0, 1, 2]) {
-    assert.ok(new CaseworkClient({ baseUrl: 'https://casework.example/', maxMutationRetries }));
+  for (const maximumMutationRetries of [0, 1, 2]) {
+    assert.ok(new CaseworkClient({ baseUrl: 'https://casework.example/', maximumMutationRetries }));
   }
-  for (const maxMutationRetries of [3, 255, 256, -1, 1.5, '1']) {
-    assert.throws(() => new CaseworkClient({ baseUrl: 'https://casework.example/', maxMutationRetries }), (error) => {
-      assert.ok(error instanceof CaseworkClientError, `${maxMutationRetries}`);
-      assert.equal(error.kind, 'configuration', `${maxMutationRetries}`);
+  for (const maximumMutationRetries of [3, 255, 256, -1, 1.5, '1']) {
+    assert.throws(() => new CaseworkClient({ baseUrl: 'https://casework.example/', maximumMutationRetries }), (error) => {
+      assert.ok(error instanceof CaseworkClientError, `${maximumMutationRetries}`);
+      assert.equal(error.kind, 'configuration', `${maximumMutationRetries}`);
       assert.equal(error.outcomeUnknown, false);
       return true;
     });

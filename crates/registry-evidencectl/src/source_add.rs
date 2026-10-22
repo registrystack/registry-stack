@@ -80,7 +80,7 @@ pub(crate) struct SourceAddArgs {
     /// Perform the reviewed connection; without it this command reviews new choices only.
     #[arg(long)]
     pub apply: bool,
-    /// Public Base Registry Engine tooling binary; otherwise BREGCTL_BIN or bregctl on PATH.
+    /// Public Base Registry Engine tooling binary; otherwise the rstack-selected helper, BREGCTL_BIN, or bregctl on PATH.
     #[arg(long)]
     pub bregctl_bin: Option<PathBuf>,
 }
@@ -143,11 +143,7 @@ struct RowScope {
 }
 
 pub(crate) fn run(args: SourceAddArgs, format: OutputFormat) -> Result<ExitCode> {
-    let binary = args
-        .bregctl_bin
-        .clone()
-        .or_else(|| std::env::var_os("BREGCTL_BIN").map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("bregctl"));
+    let binary = resolve_bregctl(args.bregctl_bin.as_deref())?;
     check_public_bregctl(&binary)?;
     // A JSON run writes one report and nothing else: it neither prompts nor
     // narrates the review on standard error.
@@ -167,6 +163,44 @@ pub(crate) fn run(args: SourceAddArgs, format: OutputFormat) -> Result<ExitCode>
         OutputFormat::Human => print_human_report(&report),
     }
     Ok(ExitCode::SUCCESS)
+}
+
+const BREGCTL_HELPER: evidence_binary::HelperSpec = evidence_binary::HelperSpec {
+    binary: "bregctl",
+    component: "breg",
+    explicit_flag: "--bregctl-bin",
+    explicit_env: "BREGCTL_BIN",
+    managed_env: "RSTACK_BREGCTL_BIN",
+};
+
+fn resolve_bregctl(explicit: Option<&Path>) -> Result<PathBuf> {
+    resolve_bregctl_with_environment(
+        explicit,
+        std::env::var_os(BREGCTL_HELPER.explicit_env).as_deref(),
+        std::env::var_os("RSTACK_GENERATION_DIR").as_deref(),
+        std::env::var_os(BREGCTL_HELPER.managed_env).as_deref(),
+        std::env::var_os("RSTACK_RELEASE_TAG").as_deref(),
+        std::env::var_os("PATH").as_deref(),
+    )
+}
+
+fn resolve_bregctl_with_environment(
+    explicit: Option<&Path>,
+    explicit_env: Option<&std::ffi::OsStr>,
+    generation_dir: Option<&std::ffi::OsStr>,
+    managed_path: Option<&std::ffi::OsStr>,
+    release_tag: Option<&std::ffi::OsStr>,
+    path: Option<&std::ffi::OsStr>,
+) -> Result<PathBuf> {
+    evidence_binary::resolve_helper_with_environment(
+        BREGCTL_HELPER,
+        explicit,
+        explicit_env,
+        generation_dir,
+        managed_path,
+        release_tag,
+        path,
+    )
 }
 
 fn print_human_report(report: &Value) {
@@ -193,7 +227,7 @@ fn print_human_report(report: &Value) {
 fn check_public_bregctl(binary: &Path) -> Result<()> {
     let expected = format!("bregctl {}", registry_platform_buildinfo::DISPLAY_VERSION);
     let requirement = format!(
-        "source add drives public Base Registry Engine tooling and requires {expected} on PATH; set --bregctl-bin or BREGCTL_BIN to that binary"
+        "source add drives public Base Registry Engine tooling and requires {expected}; outside rstack, set --bregctl-bin or BREGCTL_BIN to that binary, or put it on PATH"
     );
     let version = public_output(binary, &["--version".into()]).context(requirement.clone())?;
     let reported = std::str::from_utf8(&version).ok().map(str::trim);
@@ -224,11 +258,11 @@ impl std::fmt::Display for BregctlVersionMismatch {
         match &self.found {
             Some(found) => write!(
                 formatter,
-                "source add drives public Base Registry Engine tooling and found {found} on PATH; it requires {required}, set --bregctl-bin or BREGCTL_BIN to that binary"
+                "source add drives public Base Registry Engine tooling and found {found}; it requires {required}. Outside rstack, set --bregctl-bin or BREGCTL_BIN to that binary, or put it on PATH"
             ),
             None => write!(
                 formatter,
-                "source add drives public Base Registry Engine tooling and requires {required} on PATH; set --bregctl-bin or BREGCTL_BIN to that binary"
+                "source add drives public Base Registry Engine tooling and requires {required}. Outside rstack, set --bregctl-bin or BREGCTL_BIN to that binary, or put it on PATH"
             ),
         }
     }
@@ -2101,6 +2135,78 @@ assertionDefinitions:
             assert!(error.contains("BREGCTL_BIN"), "{error}");
         }
         check_public_bregctl(&script("bregctl", &expected)).unwrap();
+    }
+
+    #[test]
+    fn managed_source_add_uses_selected_bregctl_when_path_conflicts() {
+        let root = tempfile::tempdir().unwrap();
+        let generation = root.path().join("selected-generation");
+        let selected = generation.join("components/breg/bregctl/bregctl");
+        fs::create_dir_all(selected.parent().unwrap()).unwrap();
+        let conflicting_directory = root.path().join("conflicting-path");
+        fs::create_dir(&conflicting_directory).unwrap();
+        let script = |path: &Path| {
+            fs::write(
+                path,
+                format!(
+                    "#!/bin/sh\necho 'bregctl {}'\n",
+                    registry_platform_buildinfo::DISPLAY_VERSION
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        };
+        script(&selected);
+        script(&conflicting_directory.join("bregctl"));
+        let path = std::env::join_paths([conflicting_directory]).unwrap();
+
+        let resolved = resolve_bregctl_with_environment(
+            None,
+            None,
+            Some(generation.as_os_str()),
+            Some(selected.as_os_str()),
+            Some(std::ffi::OsStr::new("v-test")),
+            Some(&path),
+        )
+        .unwrap();
+
+        assert_eq!(resolved, fs::canonicalize(selected).unwrap());
+    }
+
+    #[test]
+    fn managed_source_add_refuses_same_version_bregctl_override_with_wrong_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let generation = root.path().join("selected-generation");
+        let selected = generation.join("components/breg/bregctl/bregctl");
+        fs::create_dir_all(selected.parent().unwrap()).unwrap();
+        let override_path = root.path().join("same-version-bregctl");
+        for path in [&selected, &override_path] {
+            fs::write(
+                path,
+                format!(
+                    "#!/bin/sh\necho 'bregctl {}'\n",
+                    registry_platform_buildinfo::DISPLAY_VERSION
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+
+        let error = resolve_bregctl_with_environment(
+            Some(&override_path),
+            None,
+            Some(generation.as_os_str()),
+            Some(selected.as_os_str()),
+            Some(std::ffi::OsStr::new("v-test")),
+            None,
+        )
+        .unwrap_err();
+        let diagnostic = format!("{error:#}");
+
+        assert!(diagnostic.contains("v-test"), "{diagnostic}");
+        assert!(diagnostic.contains("selected generation"), "{diagnostic}");
+        assert!(diagnostic.contains("--bregctl-bin"), "{diagnostic}");
+        assert!(diagnostic.contains("same-version-bregctl"), "{diagnostic}");
     }
 
     #[test]

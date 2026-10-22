@@ -434,7 +434,7 @@ impl Breg {
         BaseRegistryClient::new(
             BaseRegistryClientConfig::new(base_url.parse().unwrap())
                 .with_token_provider(std::sync::Arc::new(StaticToken::new(token).unwrap()))
-                .with_max_mutation_retries(0),
+                .with_maximum_mutation_retries(0),
         )
         .unwrap()
     }

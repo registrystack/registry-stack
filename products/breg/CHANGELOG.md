@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add the closed `logLevel` runtime setting to BReg, `breg-mcp`, and
+  `breg-review`. Each existing product environment variable takes precedence,
+  then the runtime file, then `info`; an unknown environment or configuration
+  value refuses startup instead of falling back.
 - Add optional `writableInputs` to Proposal grants. When present, Start refuses
   a value for any other Action input, and Edit, Revise and Rebase refuse a
   change to one, with `400 request.invalid` located at `/input/<apiName>`.

@@ -83,12 +83,12 @@ key, headers, and body bytes, at most twice by default, waiting 250 ms and
 then 500 ms, or the service's `Retry-After` when that is longer and at most 5
 seconds. Casework answers every 503 with `Retry-After: 5`, so a resend after
 one waits 5 seconds. A longer requested wait ends the retries. Configure the
-count with `CaseworkClientConfig::with_max_mutation_retries` (0 to 2; 0
+count with `CaseworkClientConfig::with_maximum_mutation_retries` (0 to 2; 0
 disables the resend). Reads, unkeyed operations (task grant revocations, task
 assertions and previews), and the review request create
 and cancel calls, which go through the review client's single exchange, are
-never resent. Each attempt has the full request timeout, so a call can take up
-to three request timeouts plus the waits.
+never resent. Each attempt has the full attempt timeout, so a call can take up
+to three attempt timeouts plus the waits.
 
 When the returned error still reports `is_outcome_unknown()`, recover by
 sending the same request with the same key, which the service replays or

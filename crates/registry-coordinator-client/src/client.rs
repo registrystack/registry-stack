@@ -39,16 +39,16 @@ pub struct CoordinatorComplete<T> {
 pub struct CoordinatorClient {
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
-    max_response_bytes: u64,
-    max_mutation_retries: u8,
+    maximum_response_bytes: u64,
+    maximum_mutation_retries: u8,
 }
 
 impl fmt::Debug for CoordinatorClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CoordinatorClient")
             .field("base_url", &"<validated service URL>")
-            .field("max_response_bytes", &self.max_response_bytes)
-            .field("max_mutation_retries", &self.max_mutation_retries)
+            .field("maximum_response_bytes", &self.maximum_response_bytes)
+            .field("maximum_mutation_retries", &self.maximum_mutation_retries)
             .finish_non_exhaustive()
     }
 }
@@ -57,7 +57,7 @@ impl CoordinatorClient {
     pub fn new(config: CoordinatorClientConfig) -> Result<Self, Error> {
         let base_url = config.validate()?;
         let http = build_client(OutboundOptions {
-            request_timeout: config.request_timeout,
+            request_timeout: config.attempt_timeout,
             connect_timeout: config.connect_timeout,
             user_agent: config.user_agent.as_deref(),
             trusted_root_certificates: config.trusted_root_certificates.as_deref(),
@@ -66,8 +66,8 @@ impl CoordinatorClient {
         Ok(Self {
             http,
             base_url,
-            max_response_bytes: config.max_response_bytes,
-            max_mutation_retries: config.max_mutation_retries,
+            maximum_response_bytes: config.maximum_response_bytes,
+            maximum_mutation_retries: config.maximum_mutation_retries,
         })
     }
 
@@ -79,7 +79,7 @@ impl CoordinatorClient {
     /// The caller chooses the key; the client never invents one. When the
     /// outcome is unknown, after a timeout or broken exchange or on a 5xx
     /// answer, the client resends the identical request under the same key,
-    /// at most `CoordinatorClientConfig::with_max_mutation_retries` times (2
+    /// at most `CoordinatorClientConfig::with_maximum_mutation_retries` times (2
     /// by default; 0 disables it). An error for which
     /// `CoordinatorClientError::is_outcome_unknown` is true may still have
     /// admitted a run: recover with the same identity, key, workflow, revision and
@@ -110,7 +110,7 @@ impl CoordinatorClient {
         let prepared = &prepared;
         let workflow = request.workflow.as_str();
         let revision = request.workflow_revision.as_str();
-        let value = retry_keyed_mutation(self.max_mutation_retries, || async move {
+        let value = retry_keyed_mutation(self.maximum_mutation_retries, || async move {
             let Some(attempt) = prepared.try_clone() else {
                 return KeyedMutationAttempt::Settled(Err(Error::invalid_request(
                     "the request could not be prepared for sending",
@@ -394,7 +394,7 @@ impl CoordinatorClient {
         if !exact_media_type(response.headers(), JSON_MEDIA_TYPE) {
             return Err(protocol(status.as_u16(), Failure::MediaType));
         }
-        let bytes = read_bounded(response, self.max_response_bytes)
+        let bytes = read_bounded(response, self.maximum_response_bytes)
             .await
             .map_err(|e| Error::Transport {
                 kind: read_failure_kind(&e),
@@ -422,7 +422,7 @@ impl CoordinatorClient {
             return protocol(status.as_u16(), Failure::MediaType);
         }
         let trace = response_trace_id(response.headers()).ok();
-        let bound = self.max_response_bytes.min(MAXIMUM_PROBLEM_BYTES);
+        let bound = self.maximum_response_bytes.min(MAXIMUM_PROBLEM_BYTES);
         let bytes = match read_bounded(response, bound).await {
             Ok(bytes) => bytes,
             Err(error) => {

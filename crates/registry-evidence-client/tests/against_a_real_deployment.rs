@@ -1414,8 +1414,8 @@ impl Deployment {
     }
 
     /// The same client under a smaller response bound.
-    fn bounded_client(&self, access_token: &str, max_response_bytes: u64) -> EvidenceClient {
-        self.build_client(access_token, Some(max_response_bytes))
+    fn bounded_client(&self, access_token: &str, maximum_response_bytes: u64) -> EvidenceClient {
+        self.build_client(access_token, Some(maximum_response_bytes))
     }
 
     /// A client that acquires its credential from a provider rather than
@@ -1430,15 +1430,19 @@ impl Deployment {
         .expect("the client configuration is usable")
     }
 
-    fn build_client(&self, access_token: &str, max_response_bytes: Option<u64>) -> EvidenceClient {
+    fn build_client(
+        &self,
+        access_token: &str,
+        maximum_response_bytes: Option<u64>,
+    ) -> EvidenceClient {
         let mut config = EvidenceClientConfig::new(
             self.base_url.clone(),
             Arc::new(StaticToken::new(access_token).expect("the credential is header-safe")),
             self.runtime.jwks().clone(),
             Vec::new(),
         );
-        if let Some(max_response_bytes) = max_response_bytes {
-            config = config.with_max_response_bytes(max_response_bytes);
+        if let Some(maximum_response_bytes) = maximum_response_bytes {
+            config = config.with_maximum_response_bytes(maximum_response_bytes);
         }
         EvidenceClient::new(config).expect("the client configuration is usable")
     }

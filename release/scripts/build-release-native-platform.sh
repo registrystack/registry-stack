@@ -124,6 +124,11 @@ include_schedulingctl=0
 if ((version_major > 0 || version_minor >= 36)); then
   include_schedulingctl=1
 fi
+include_rstack=0
+if [[ "$(python3 "${script_dir}/release_roster.py" \
+  rstack-in-release "${version}")" == true ]]; then
+  include_rstack=1
+fi
 
 output_parent="$(dirname -- "${output}")"
 output_name="$(basename -- "${output}")"
@@ -185,6 +190,13 @@ stage() {
 }
 
 build_core() {
+  if [[ "${include_rstack}" -eq 1 ]]; then
+    "${cargo_bin}" build --release --locked \
+      -p registry-rstack --bin rstack --target "${target}"
+    stage rstack "rstack-${tag}-${asset}"
+    test "$("${staged_executable}" --version)" = \
+      "rstack ${display_version}"
+  fi
   "${cargo_bin}" build --release --locked \
     -p registry-evidence -p registry-evidencectl \
     -p registry-evidence-oid4vci \
@@ -293,6 +305,9 @@ rm -rf -- "${temporary}/smoke"
 
 assets=()
 if [[ "${group}" == core || "${group}" == all ]]; then
+  if [[ "${include_rstack}" -eq 1 ]]; then
+    assets+=("rstack-${tag}-${asset}")
+  fi
   assets+=(
     "evidence-${tag}-${asset}"
     "evidencectl-${tag}-${asset}"

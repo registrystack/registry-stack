@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- BREAKING: `render` uses `--artifact-format` because its standard output is
+  the exact artifact stream. `publish` uses `--output` and supports a separate
+  `--format human|json` report. Replace retired `render --format`, `publish
+  --out`, and `--json` invocations with the named new options; the CLI refuses
+  retired spellings before effects and names the replacement.
+
 ## 0.43.0
 
 - BREAKING: metadata display fields, profile names and descriptions, and

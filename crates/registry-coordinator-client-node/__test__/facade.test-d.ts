@@ -12,7 +12,7 @@ import {
 
 const client = new CoordinatorClient({
   baseUrl: 'https://coordinator.example.invalid/',
-  requestTimeoutMilliseconds: 5_000,
+  attemptTimeoutMilliseconds: 5_000,
 })
 
 const started: Promise<CoordinatorOutcome<RunStatus>> = client.start(
@@ -63,10 +63,14 @@ if (error.kind === 'problem') {
 
 // @ts-expect-error Coordinator start requires a caller-selected idempotency key.
 client.start('header.payload.signature', { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: {} })
-const once = new CoordinatorClient({ baseUrl: 'https://coordinator.example.invalid/', maxMutationRetries: 0 })
+const once = new CoordinatorClient({ baseUrl: 'https://coordinator.example.invalid/', maximumMutationRetries: 0 })
 void once
 // @ts-expect-error The retry count is a number, never a string.
-new CoordinatorClient({ baseUrl: 'https://coordinator.example.invalid/', maxMutationRetries: '2' })
+new CoordinatorClient({ baseUrl: 'https://coordinator.example.invalid/', maximumMutationRetries: '2' })
+// @ts-expect-error null is a value, not omission, for configuration members.
+new CoordinatorClient({ baseUrl: 'https://coordinator.example.invalid/', attemptTimeoutMilliseconds: null })
+// @ts-expect-error trusted roots are PEM text, not binary data.
+new CoordinatorClient({ baseUrl: 'https://coordinator.example.invalid/', trustedRootCertificates: Buffer.from('not PEM text') })
 
 const workflow: Promise<CoordinatorOutcome<WorkflowContract>> = client.workflow('token', 'decision-follow-up')
 declare const contract: WorkflowContract

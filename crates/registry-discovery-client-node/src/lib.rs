@@ -5,10 +5,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use napi::{
-    bindgen_prelude::{Buffer, Either},
-    Error, Result,
-};
+use napi::{bindgen_prelude::Either, Error, Result};
 use napi_derive::napi;
 use registry_discovery_client::{
     renew_unchanged_service_selection, validate_service_selection_structure,
@@ -25,10 +22,10 @@ const MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BYTES: usize = 4 * 1024 * 1024;
 #[napi(object)]
 pub struct DiscoveryClientOptions {
     pub base_url: String,
-    pub request_timeout_milliseconds: Option<u32>,
-    pub connect_timeout_milliseconds: Option<u32>,
-    pub maximum_response_bytes: Option<u32>,
-    pub trusted_root_certificates: Option<Buffer>,
+    pub attempt_timeout_milliseconds: Option<f64>,
+    pub connect_timeout_milliseconds: Option<f64>,
+    pub maximum_response_bytes: Option<f64>,
+    pub trusted_root_certificates: Option<String>,
 }
 
 fn error(source: DiscoveryClientError) -> Error {
@@ -112,6 +109,14 @@ fn encode<T: Serialize>(value: &T) -> Result<Value> {
     serde_json::to_value(value).map_err(|_| error(DiscoveryClientError::Protocol))
 }
 
+fn positive_u32(value: f64) -> Result<u32> {
+    if value.is_finite() && value.fract() == 0.0 && (1.0..=f64::from(u32::MAX)).contains(&value) {
+        Ok(value as u32)
+    } else {
+        Err(error(DiscoveryClientError::Configuration))
+    }
+}
+
 fn selection(response: Value, request: Value) -> Result<Value> {
     let response: ServiceSearchResponse = decode(response)?;
     let request: SelectionRequest = decode(request)?;
@@ -174,7 +179,7 @@ impl DiscoveryClient {
         let options = match options {
             Either::A(base_url) => DiscoveryClientOptions {
                 base_url,
-                request_timeout_milliseconds: None,
+                attempt_timeout_milliseconds: None,
                 connect_timeout_milliseconds: None,
                 maximum_response_bytes: None,
                 trusted_root_certificates: None,
@@ -184,20 +189,24 @@ impl DiscoveryClient {
         let base_url = url::Url::parse(&options.base_url)
             .map_err(|_| error(DiscoveryClientError::Configuration))?;
         let mut config = DiscoveryClientConfig::new(base_url);
-        if let Some(milliseconds) = options.request_timeout_milliseconds {
-            config = config.with_request_timeout(Duration::from_millis(milliseconds.into()));
+        if let Some(milliseconds) = options.attempt_timeout_milliseconds {
+            config = config.with_attempt_timeout(Duration::from_millis(u64::from(positive_u32(
+                milliseconds,
+            )?)));
         }
         if let Some(milliseconds) = options.connect_timeout_milliseconds {
-            config = config.with_connect_timeout(Duration::from_millis(milliseconds.into()));
+            config = config.with_connect_timeout(Duration::from_millis(u64::from(positive_u32(
+                milliseconds,
+            )?)));
         }
         if let Some(maximum) = options.maximum_response_bytes {
-            config = config.with_maximum_response_bytes(maximum.into());
+            config = config.with_maximum_response_bytes(u64::from(positive_u32(maximum)?));
         }
         if let Some(certificates) = options.trusted_root_certificates {
             if certificates.len() > MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BYTES {
                 return Err(error(DiscoveryClientError::Configuration));
             }
-            config = config.with_trusted_root_certificates(certificates.to_vec());
+            config = config.with_trusted_root_certificates(certificates.into_bytes());
         }
         Ok(Self {
             inner: Arc::new(CoreClient::new(config).map_err(error)?),

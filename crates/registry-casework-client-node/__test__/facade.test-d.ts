@@ -2,7 +2,17 @@ import { CaseworkClient, CaseworkClientError, submissionDigest, type ContentDige
   type PolicyBinding, type ReviewCreateRequest, type ReviewRequestAccepted,
   type ReviewTask, type SupervisoryReviewTask, type StaffingDiagnostic, type ReviewTaskDecisionRequest, type ReviewStaffingQuery,
   type ReviewCaseloadMoveRequest, type ReviewClockRecomputeRequest } from '../client'
-const client = new CaseworkClient({ baseUrl: 'https://casework.example.test/', maxMutationRetries: 0 })
+const client = new CaseworkClient({ baseUrl: 'https://casework.example.test/', attemptTimeoutMilliseconds: 1500, maximumResponseBytes: 1500, maximumMutationRetries: 0 })
+// @ts-expect-error the public response-bound name is maximumResponseBytes
+new CaseworkClient({ baseUrl: 'https://casework.example.test/', maxResponseBytes: 1500 })
+// @ts-expect-error null is not an omission in JavaScript configuration
+new CaseworkClient({ baseUrl: 'https://casework.example.test/', attemptTimeoutMilliseconds: null })
+// @ts-expect-error trust roots are PEM text, not binary data
+new CaseworkClient({ baseUrl: 'https://casework.example.test/', trustedRootCertificates: Buffer.from('certificate') })
+// @ts-expect-error the per-exchange timeout is named for one attempt
+new CaseworkClient({ baseUrl: 'https://casework.example.test/', requestTimeoutMilliseconds: 1500 })
+// @ts-expect-error the retry ceiling uses the authored maximum spelling
+new CaseworkClient({ baseUrl: 'https://casework.example.test/', maxMutationRetries: 0 })
 const token = 'one-call-secret', profile = 'staff', id = '00000000-0000-4000-8000-000000000001'
 const digest: ContentDigest = `sha256:${'a'.repeat(64)}`
 const subject: SubjectBinding = { source: 'registry', type: 'proposal', id: 'proposal-1', version: '1', digest }

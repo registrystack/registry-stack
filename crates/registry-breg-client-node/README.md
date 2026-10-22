@@ -114,11 +114,19 @@ Fixed-scale decimals remain JSON strings. Null and absent members remain distinc
 Do not round unsupported input to make it pass. JSON whitespace and equivalent
 number spellings may be canonicalized; the promise concerns values and types.
 
+Client configuration uses `maximumResponseBytes`; the retired
+`maxResponseBytes` spelling is refused. Optional configuration values are
+omitted rather than set to `null`. `trustedRootCertificates` accepts PEM text,
+and the supplied bundle keeps the Rust client's explicit trust-root semantics.
+`attemptTimeoutMilliseconds` bounds one outbound attempt, including its body,
+and `connectTimeoutMilliseconds` bounds connection setup.
+
 Actions retain their original opaque authority and exact retry semantics.
 A keyed mutation (create, patch, attachment upload or delete, Proposal
 transition, immediate Action, batch, tombstone, statistics publish or withdraw)
 whose outcome is unknown is resent identically under the same key up to
-`maxMutationRetries` times: 0 to 2, default 2, and 0 sends it once. The
+`maximumMutationRetries` additional times: 0 to 2, default 2, and 0 sends it
+once, while the default permits up to three total attempts. The
 outcome is unknown after a timeout or broken exchange once the request was
 sent, an unusable answer, or a 5xx other than `action.handler_failed` and
 `statistical_dataset.domain_violation`, which the engine returns only with the

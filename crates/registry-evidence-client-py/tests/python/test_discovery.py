@@ -113,13 +113,13 @@ class DiscoveryTest(unittest.TestCase):
     def test_the_metadata_bound_governs_discovery_and_the_response_bound_does_not(self):
         """The two bounds answer different questions.
 
-        `max_response_bytes` is derived from what the verifier accepts as a
+        `maximum_response_bytes` is derived from what the verifier accepts as a
         signed response, and the discovery document is neither signed nor
         verified, so tightening one must not silently disable the other
         endpoint.
         """
         body = self._serve_definitions()
-        document = self._client(max_response_bytes=1).discover()
+        document = self._client(maximum_response_bytes=1).discover()
         self.assertEqual(document, DEFINITIONS_DOCUMENT)
 
         with self.assertRaises(revc.TransportError) as raised:

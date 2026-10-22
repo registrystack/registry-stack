@@ -146,22 +146,36 @@ test('nullable record options use request defaults', async () => {
 });
 
 test('constructors reject unsupported fields and unsafe integers', () => {
+  assert.ok(new BaseRegistryClient({
+    baseUrl,
+    attemptTimeoutMilliseconds: 5_000,
+    connectTimeoutMilliseconds: 2_000,
+    maximumMutationRetries: 1,
+  }));
   assert.throws(() => new BaseRegistryClient({ baseUrl, retry: true }), (error) => (
     error instanceof BaseRegistryClientError && error.kind === 'configuration'
   ));
   assert.throws(() => new BaseRegistryClient({
     baseUrl,
-    maxResponseBytes: Number.MAX_SAFE_INTEGER + 1,
+    maximumResponseBytes: Number.MAX_SAFE_INTEGER + 1,
+  }), (error) => error instanceof BaseRegistryClientError && error.kind === 'configuration');
+  assert.throws(() => new BaseRegistryClient({
+    baseUrl,
+    maxResponseBytes: 8 * 1024 * 1024,
   }), (error) => error instanceof BaseRegistryClientError && error.kind === 'configuration');
 });
 
 test('a configuration value the sanitizer refuses is a configuration error', () => {
   for (const [label, config] of [
-    ['an unsafe integer', { baseUrl, requestTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 }],
-    ['a non-finite number', { baseUrl, maxResponseBytes: Infinity }],
+    ['an unsafe integer', { baseUrl, attemptTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 }],
+    ['a negative number', { baseUrl, maximumResponseBytes: -1 }],
+    ['a fractional number', { baseUrl, maximumResponseBytes: 1.5 }],
+    ['a non-finite number', { baseUrl, maximumResponseBytes: Infinity }],
+    ['a null member', { baseUrl, maximumResponseBytes: null }],
+    ['a binary trust bundle', { baseUrl, trustedRootCertificates: Buffer.from('not PEM text') }],
     ['an undefined member', { baseUrl, userAgent: undefined }],
     ['a function', { baseUrl, userAgent: () => 'breg-test' }],
-    ['a date', { baseUrl, requestTimeoutMilliseconds: new Date(0) }],
+    ['a date', { baseUrl, attemptTimeoutMilliseconds: new Date(0) }],
     ['a proxy', new Proxy({ baseUrl }, {})],
     ['no configuration', undefined],
   ]) {
@@ -174,7 +188,7 @@ test('a configuration value the sanitizer refuses is a configuration error', () 
   }
 });
 
-test('nullable private-key JWT durations use provider defaults', () => {
+test('omitted private-key JWT durations use provider defaults and null is refused', () => {
   const { privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const clientKey = privateKey.export({ format: 'jwk' });
   clientKey.alg = 'ES256';
@@ -186,12 +200,29 @@ test('nullable private-key JWT durations use provider defaults', () => {
         tokenEndpoint: 'https://issuer.invalid/oauth/token',
         clientId: 'breg-node-binding-test-client',
         clientKey,
-        assertionLifetimeSeconds: null,
-        refreshMarginSeconds: null,
+        attemptTimeoutMilliseconds: 5_000,
       },
     },
   };
   assert.ok(new BaseRegistryClient(config));
+  assert.throws(() => new BaseRegistryClient({
+    ...config,
+    authorization: {
+      privateKeyJwt: {
+        ...config.authorization.privateKeyJwt,
+        requestTimeoutMilliseconds: 5_000,
+      },
+    },
+  }), (error) => error instanceof BaseRegistryClientError && error.kind === 'configuration');
+  assert.throws(() => new BaseRegistryClient({
+    ...config,
+    authorization: {
+      privateKeyJwt: {
+        ...config.authorization.privateKeyJwt,
+        assertionLifetimeSeconds: null,
+      },
+    },
+  }), (error) => error instanceof BaseRegistryClientError && error.kind === 'configuration');
   assert.throws(() => new BaseRegistryClient({
     ...config,
     authorization: {
