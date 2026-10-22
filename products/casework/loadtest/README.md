@@ -11,11 +11,11 @@ The example is copied into `.run/project` with two changes. Its producer
 binding names the local issuer on the port this environment reserved and the
 subject `caseworkctl dev identity loadtest-producer` reports, because the
 checked-in example names a fixed port and a placeholder subject. The copy also
-gets a `dev-clients.yaml` with four synthetic clients, one per access profile
-the example declares, and a directory seed that puts `loadtest-staff` on the
-`decisions` queue. A development project binds exactly one client to each
-access profile, so every Staff request in a run comes from one principal and
-every producer request from another.
+gets a `dev-clients.yaml` with four synthetic clients and a directory seed that
+puts `loadtest-staff` on the `decisions` queue. The current harness uses one
+Staff principal and one producer principal; additional local clients may bind
+the same access profile when a workload needs distinct people with the same
+role.
 
 ## Prerequisites
 

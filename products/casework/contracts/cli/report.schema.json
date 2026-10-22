@@ -1104,7 +1104,7 @@
         },
         "stages": {
           "items": {
-            "$ref": "#/$defs/ReviewStagePolicy"
+            "$ref": "#/$defs/ExplainStage"
           },
           "type": "array"
         }
@@ -1153,6 +1153,48 @@
         "caseload",
         "routing",
         "clockRecompute"
+      ],
+      "type": "object"
+    },
+    "ExplainStage": {
+      "additionalProperties": false,
+      "properties": {
+        "decidingProfiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "excludeInitiator": {
+          "type": "boolean"
+        },
+        "excludePreviousStageReviewers": {
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "negativeDecisions": {
+          "$ref": "#/$defs/ReviewNegativeDecisionMode"
+        },
+        "queue": {
+          "type": "string"
+        },
+        "requiredApprovals": {
+          "format": "uint32",
+          "maximum": 32,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "queue",
+        "decidingProfiles",
+        "requiredApprovals",
+        "negativeDecisions",
+        "excludeInitiator",
+        "excludePreviousStageReviewers"
       ],
       "type": "object"
     },
@@ -1530,6 +1572,186 @@
       ],
       "type": "object"
     },
+    "ProviderAddBypass": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mutationPolicy": {
+          "x-registry-passthrough": "A bounded mutationPolicy fragment from the closed BReg project format; bregctl remains its format owner."
+        },
+        "operation": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "recordType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "recordType",
+        "operation",
+        "profile",
+        "fields",
+        "mutationPolicy"
+      ],
+      "type": "object"
+    },
+    "ProviderAddChange": {
+      "additionalProperties": false,
+      "properties": {
+        "explanation": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "yaml": {
+          "x-registry-passthrough": "A bounded YAML fragment from the closed BReg authoring format; bregctl remains its format owner."
+        }
+      },
+      "required": [
+        "path",
+        "explanation",
+        "yaml"
+      ],
+      "type": "object"
+    },
+    "ProviderAddData": {
+      "additionalProperties": false,
+      "properties": {
+        "actionId": {
+          "type": "string"
+        },
+        "authorityId": {
+          "type": "string"
+        },
+        "bypassPaths": {
+          "items": {
+            "$ref": "#/$defs/ProviderAddBypass"
+          },
+          "type": "array"
+        },
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/ProviderAddChange"
+          },
+          "type": "array"
+        },
+        "check": {
+          "x-registry-passthrough": "The existing typed caseworkctl check payload is embedded unchanged."
+        },
+        "contextFields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "deployment": {
+          "items": {
+            "$ref": "#/$defs/ProviderAddChange"
+          },
+          "type": "array"
+        },
+        "inputsOnlyAlternative": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderAddNotice"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next": {
+          "type": "string"
+        },
+        "package": {
+          "x-registry-passthrough": "The existing typed caseworkctl package payload is embedded unchanged."
+        },
+        "pairing": {
+          "x-registry-passthrough": "The existing typed caseworkctl provider-pair agreement payload is embedded unchanged."
+        },
+        "pattern": {
+          "type": "string"
+        },
+        "policyId": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "providerId": {
+          "type": "string"
+        },
+        "readGrant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderAddNotice"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceNamespace": {
+          "type": "string"
+        },
+        "sourceWrites": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/ProviderAddState"
+        }
+      },
+      "required": [
+        "project",
+        "actionId",
+        "pattern",
+        "state",
+        "sourceNamespace",
+        "policyId",
+        "authorityId",
+        "providerId",
+        "contextFields",
+        "changes",
+        "deployment",
+        "bypassPaths",
+        "sourceWrites",
+        "next"
+      ],
+      "type": "object"
+    },
+    "ProviderAddNotice": {
+      "additionalProperties": false,
+      "properties": {
+        "explanation": {
+          "type": "string"
+        },
+        "yaml": {
+          "x-registry-passthrough": "A bounded YAML fragment from the closed BReg authoring format; bregctl remains its format owner."
+        }
+      },
+      "required": [
+        "explanation",
+        "yaml"
+      ],
+      "type": "object"
+    },
+    "ProviderAddState": {
+      "enum": [
+        "changes-needed",
+        "created",
+        "in-agreement"
+      ],
+      "type": "string"
+    },
     "ProviderPairData": {
       "additionalProperties": false,
       "properties": {
@@ -1797,6 +2019,20 @@
       ],
       "type": "object"
     },
+    "ReviewNegativeDecisionMode": {
+      "oneOf": [
+        {
+          "const": "settle",
+          "description": "A rejection or change request settles the whole review immediately.",
+          "type": "string"
+        },
+        {
+          "const": "advise",
+          "description": "A negative decision counts toward this stage and the review continues.",
+          "type": "string"
+        }
+      ]
+    },
     "ReviewOutcomePolicy": {
       "additionalProperties": false,
       "properties": {
@@ -2028,46 +2264,6 @@
       "required": [
         "terminalRetentionDays",
         "accountabilityRetentionDays"
-      ],
-      "type": "object"
-    },
-    "ReviewStagePolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "decidingProfiles": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "excludeInitiator": {
-          "default": false,
-          "type": "boolean"
-        },
-        "excludePreviousStageReviewers": {
-          "default": false,
-          "type": "boolean"
-        },
-        "id": {
-          "$ref": "#/$defs/LocalId"
-        },
-        "queue": {
-          "type": "string"
-        },
-        "requiredApprovals": {
-          "format": "uint32",
-          "maximum": 32,
-          "minimum": 1,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "id",
-        "queue",
-        "decidingProfiles",
-        "requiredApprovals",
-        "excludeInitiator",
-        "excludePreviousStageReviewers"
       ],
       "type": "object"
     },
@@ -2999,6 +3195,54 @@
           "anyOf": [
             {
               "$ref": "#/$defs/TypesData"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "const": "CaseworkReport",
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/$defs/ReportStatus"
+        }
+      },
+      "required": [
+        "command",
+        "ok",
+        "status",
+        "apiVersion",
+        "kind",
+        "diagnostics"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "apiVersion": {
+          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "type": "string"
+        },
+        "command": {
+          "const": "provider-add",
+          "type": "string"
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderAddData"
             },
             {
               "type": "null"

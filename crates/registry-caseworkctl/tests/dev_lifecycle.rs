@@ -21,9 +21,12 @@
 //! release gate. This is real HTTP/native-facade proof, not installed tarball
 //! or wheel proof.
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use registry_casework_client::{
     submission_digest, BearerToken, CaseworkAuth, CaseworkClient, CaseworkClientConfig,
-    ContentDigest, ReviewContext, ReviewCreateRequest, ReviewResultResponse, SubjectBinding,
+    ContentDigest, DecisionKind, HumanIdentity, ReviewContext, ReviewCreateRequest,
+    ReviewRequestAccepted, ReviewResultResponse, ReviewResultStatus, ReviewStaffingQuery,
+    ReviewTaskDecisionRequest, SubjectBinding,
 };
 #[path = "../../registry-casework/src/task_grants/dev_session_logs.rs"]
 mod dev_session_logs;
@@ -318,7 +321,6 @@ fn required_path(name: &str) -> PathBuf {
 struct Session {
     project: PathBuf,
     casework_bin: PathBuf,
-    native: NativeClients,
     ports: [u16; 3],
     _workspace: tempfile::TempDir,
 }
@@ -523,6 +525,19 @@ fn client<'a>(report: &'a Value, id: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("the report names the {id} client"))
 }
 
+fn token_subject(token: &str) -> String {
+    let payload = token
+        .split('.')
+        .nth(1)
+        .and_then(|payload| URL_SAFE_NO_PAD.decode(payload).ok())
+        .and_then(|payload| serde_json::from_slice::<Value>(&payload).ok())
+        .expect("the local issuer writes a JSON Web Token payload");
+    payload["sub"]
+        .as_str()
+        .expect("the local token names its subject")
+        .to_owned()
+}
+
 fn http(
     method: &str,
     url: &str,
@@ -565,6 +580,17 @@ fn http(
 
 /// Create one submitted-context review as the admitted producer.
 fn create_review_request(session: &Session, report: &Value, reference: &str) -> Value {
+    create_review_request_for(session, report, reference, "decision", "standalone", None)
+}
+
+fn create_review_request_for(
+    session: &Session,
+    report: &Value,
+    reference: &str,
+    policy_id: &str,
+    source: &str,
+    initiator: Option<HumanIdentity>,
+) -> Value {
     let token = BearerToken::new(session.token(report, "requester")).expect("a bounded bearer");
     // The issuer identity is rewritten before startup. Compile its actual dependency
     // closure, then prove the served discovery contract has that exact identity.
@@ -573,20 +599,20 @@ fn create_review_request(session: &Session, report: &Value, reference: &str) -> 
     )
     .expect("canonical project");
     let expected = project
-        .compile_policy("decision")
+        .compile_policy(policy_id)
         .expect("compiled producer policy")
         .binding();
     let request = ReviewCreateRequest {
         policy: expected.clone().into(),
         subject: SubjectBinding {
-            source: "standalone".into(),
+            source: source.into(),
             subject_type: "batch".into(),
             id: reference.into(),
             version: "1".into(),
             digest: ContentDigest::for_bytes(reference.as_bytes()),
         },
         requester_reference: reference.into(),
-        initiator: None,
+        initiator,
         context: ReviewContext::Submitted {
             snapshot: json!({"summary":"Confirm the prepared synthetic batch","reference":reference}),
         },
@@ -611,7 +637,7 @@ fn create_review_request(session: &Session, report: &Value, reference: &str) -> 
         .expect("public Rust client");
         let auth = || CaseworkAuth::new(&token, "requester");
         let discovered = client
-            .review_policy(auth(), "decision")
+            .review_policy(auth(), policy_id)
             .await
             .expect("authenticated policy discovery")
             .value;
@@ -664,6 +690,142 @@ fn inbox(session: &Session, report: &Value) -> Vec<Value> {
 }
 
 #[test]
+#[ignore = "requires Docker and candidate Casework service and CLI binaries"]
+fn dev_completes_two_peer_approvals_with_one_staff_profile() {
+    let workspace = tempfile::tempdir().expect("a work directory");
+    let session = Session {
+        project: workspace.path().join("casework"),
+        casework_bin: prerequisite("casework"),
+        ports: free_ports(),
+        _workspace: workspace,
+    };
+    let project = session.project.to_str().expect("a UTF-8 project path");
+    session.success(&["init", project, "--template", "two-peer-approval"]);
+
+    let policy_path = session.project.join("casework.yaml");
+    let mut policy: Value = serde_norway::from_slice(
+        &fs::read(&policy_path).expect("the initialized policy is readable"),
+    )
+    .expect("the initialized policy is valid YAML");
+    policy["trustedProducers"]["requester"]["issuer"] =
+        format!("http://127.0.0.1:{}", session.ports[1]).into();
+    policy["trustedProducers"]["requester"]["trustedInitiatorIssuer"] =
+        format!("http://127.0.0.1:{}", session.ports[1]).into();
+    policy["trustedProducers"]["requester"]["subject"] =
+        registry_thunderid_tooling::local::agent_id("casework-local", "requester").into();
+    fs::write(
+        &policy_path,
+        serde_norway::to_string(&policy).expect("the adjusted policy is valid YAML"),
+    )
+    .expect("the adjusted policy is writable");
+
+    session.success(&["check", project]);
+    let report = session.start();
+    let first_token = session.token(&report, "staff");
+    let second_token = session.token(&report, "staff-two");
+    assert_ne!(
+        first_token, second_token,
+        "each local client gets its own token"
+    );
+    assert_ne!(
+        token_subject(&first_token),
+        token_subject(&second_token),
+        "clients sharing a profile still resolve to distinct principals"
+    );
+
+    let accepted: ReviewRequestAccepted = serde_json::from_value(create_review_request_for(
+        &session,
+        &report,
+        "two-peer-synthetic-batch",
+        "two-peer-approval",
+        "submitted",
+        Some(HumanIdentity {
+            issuer: format!("http://127.0.0.1:{}", session.ports[1]),
+            subject: "initiator".into(),
+        }),
+    ))
+    .expect("the accepted request has the public response shape");
+    let requester_token =
+        BearerToken::new(session.token(&report, "requester")).expect("a bounded requester bearer");
+    let staff_tokens = [
+        BearerToken::new(first_token).expect("a bounded first staff bearer"),
+        BearerToken::new(second_token).expect("a bounded second staff bearer"),
+    ];
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a local runtime");
+    runtime.block_on(async {
+        let client = CaseworkClient::new(CaseworkClientConfig::new(
+            report["caseworkUrl"].as_str().unwrap().parse().unwrap(),
+        ))
+        .expect("public Rust client");
+        for (index, token) in staff_tokens.iter().enumerate() {
+            let auth = || CaseworkAuth::new(token, "staff");
+            let page = client
+                .review_tasks(auth(), &ReviewStaffingQuery::default())
+                .await
+                .expect("the peer sees the shared-profile task")
+                .value;
+            assert_eq!(
+                page.items.len(),
+                2 - index,
+                "each recorded approval consumes one of the stage's task slots"
+            );
+            assert!(page
+                .items
+                .iter()
+                .all(|task| task.request_id == accepted.request_id));
+            assert!(page
+                .items
+                .iter()
+                .all(|task| task.staffing_diagnostic.is_none()));
+            let task = &page.items[0];
+            let claimed = client
+                .claim_review_task(
+                    auth(),
+                    task.task_id,
+                    task.revision,
+                    &format!("two-peer-claim-{index}"),
+                )
+                .await
+                .expect("the peer claims the task")
+                .value;
+            client
+                .decide_review_task(
+                    auth(),
+                    claimed.task_id,
+                    claimed.revision,
+                    &format!("two-peer-decision-{index}"),
+                    &ReviewTaskDecisionRequest {
+                        decision: DecisionKind::Approve {
+                            outcome: "approved".into(),
+                            public_reason: None,
+                        },
+                    },
+                )
+                .await
+                .expect("the peer records a distinct decision");
+            let observed = client
+                .review_result(CaseworkAuth::new(&requester_token, "requester"), &accepted)
+                .await
+                .expect("the producer reads the bounded result state");
+            if index == 0 {
+                assert!(matches!(observed, ReviewResultResponse::Pending { .. }));
+            } else {
+                let ReviewResultResponse::Available(complete) = observed else {
+                    panic!("the second distinct peer completes the review");
+                };
+                assert_eq!(complete.value.status, ReviewResultStatus::Approved);
+                assert_eq!(complete.value.outcome.as_deref(), Some("approved"));
+            }
+        }
+    });
+
+    session.stop(&["--remove"]);
+}
+
+#[test]
 #[ignore = "requires Docker and candidate Casework service, CLI, Node, and Python bindings"]
 fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_records() {
     let workspace = tempfile::tempdir().expect("a work directory");
@@ -671,7 +833,6 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     let session = Session {
         project: workspace.path().join("casework"),
         casework_bin: prerequisite("casework"),
-        native,
         ports: free_ports(),
         _workspace: workspace,
     };
@@ -786,14 +947,14 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     // The exact unified Node Casework facade reaches the candidate native
     // binding and real service. A producer cannot use that path to read the
     // reviewer inbox, and the permitted Staff call still observes the item.
-    let refused = session.native.node(&json!({
+    let refused = native.node(&json!({
         "operation": "refuseUnauthorizedList",
         "baseUrl": first["caseworkUrl"],
         "token": session.token(&first, "requester"),
         "profile": "requester"
     }));
     assert_eq!(refused, json!({"refused": true, "status": 403}));
-    let node_page = session.native.node(&json!({
+    let node_page = native.node(&json!({
         "operation": "list",
         "baseUrl": first["caseworkUrl"],
         "token": session.token(&first, "staff"),
@@ -806,14 +967,14 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     assert_eq!(items.len(), 1, "{items:#?}");
     assert_eq!(items[0]["requestId"], request);
     assert_eq!(items[0]["queue"], "decisions");
-    let supervision = session.native.node(&json!({
+    let supervision = native.node(&json!({
         "operation": "supervision",
         "baseUrl": first["caseworkUrl"],
         "token": session.token(&first, "supervisor"),
         "profile": "supervisor"
     }));
     assert_eq!(supervision["items"][0]["taskId"], items[0]["taskId"]);
-    let staff_refused = session.native.node(&json!({
+    let staff_refused = native.node(&json!({
         "operation": "refuseStaffSupervision",
         "baseUrl": first["caseworkUrl"],
         "token": session.token(&first, "staff"),
@@ -826,7 +987,7 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     // restart so both the pending and terminal forms cross a process boundary.
     assert_eq!(session.stop(&[])["state"], "stopped");
     let second = session.start();
-    let completed = session.native.python(&json!({
+    let completed = native.python(&json!({
         "baseUrl": second["caseworkUrl"],
         "token": session.token(&second, "staff"),
         "profile": "staff",
@@ -835,7 +996,7 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     assert_eq!(completed["requestId"], request, "{completed:#}");
     assert_eq!(completed["claimedRevision"], 2, "{completed:#}");
     assert!(inbox(&session, &second).is_empty());
-    let result_outcome = session.native.node(&json!({
+    let result_outcome = native.node(&json!({
         "operation": "result",
         "baseUrl": second["caseworkUrl"],
         "token": session.token(&second, "requester"),
@@ -852,7 +1013,7 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     assert_eq!(session.stop(&[])["state"], "stopped");
     let terminal_restart = session.start();
     assert!(inbox(&session, &terminal_restart).is_empty());
-    let retained_result = session.native.node(&json!({
+    let retained_result = native.node(&json!({
         "operation": "result",
         "baseUrl": terminal_restart["caseworkUrl"],
         "token": session.token(&terminal_restart, "requester"),
@@ -861,7 +1022,7 @@ fn dev_serves_a_tutorial_project_through_candidate_facades_and_retains_its_recor
     }));
     assert_eq!(retained_result["kind"], "available", "{retained_result:#}");
     assert_eq!(retained_result["value"], result);
-    let receipt = session.native.node(&json!({
+    let receipt = native.node(&json!({
         "operation": "receipt",
         "baseUrl": terminal_restart["caseworkUrl"],
         "token": session.token(&terminal_restart, "staff"),

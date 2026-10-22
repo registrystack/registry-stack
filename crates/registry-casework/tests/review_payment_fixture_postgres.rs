@@ -21,10 +21,10 @@ use registry_casework_core::{
     AccessProfile, ActorContext, CaseworkProject, CaseworkRole, ContentDigest, DecisionKind,
     InboxPolicy, IssuerPrincipal, ProjectIdentity, QueuePolicy, ReviewCompletion,
     ReviewCompletionDestinationPolicy, ReviewCompletionType, ReviewContext, ReviewContextPolicy,
-    ReviewCreateRequest, ReviewPolicy, ReviewProducerPolicy, ReviewPurpose, ReviewRequestAccepted,
-    ReviewResult, ReviewResultFeedPage, ReviewResultStatus, ReviewRetentionPolicy,
-    ReviewStagePolicy, ReviewTaskPage, SubjectBinding, CASEWORK_PROFILE_HEADER,
-    REVIEW_PROFILE_HEADER,
+    ReviewCreateRequest, ReviewNegativeDecisionMode, ReviewPolicy, ReviewProducerPolicy,
+    ReviewPurpose, ReviewRequestAccepted, ReviewResult, ReviewResultFeedPage, ReviewResultStatus,
+    ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskPage, SubjectBinding,
+    CASEWORK_PROFILE_HEADER, REVIEW_PROFILE_HEADER,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::FetchUrlPolicy;
@@ -355,6 +355,7 @@ fn project(issuer: &str) -> CaseworkProject {
                 queue: "payment-review".to_owned(),
                 deciding_profiles: vec!["reviewer".to_owned()],
                 required_approvals: 1,
+                negative_decisions: ReviewNegativeDecisionMode::Settle,
                 exclude_initiator: false,
                 exclude_previous_stage_reviewers: false,
             }],

@@ -27,7 +27,7 @@ scalar values and credentials.
 [report.schema.json](report.schema.json) is the command-tagged union of the
 owning Rust output DTOs. Command-specific data is under `data`; a failure that
 cannot produce data carries diagnostics without `data`. The commands are
-`init`, `check`, `explain`, `test`, `types`, `provider-pair`, `lifecycle`,
+`init`, `check`, `explain`, `test`, `types`, `provider-add`, `provider-pair`, `lifecycle`,
 `package`, `doctor`, `plan`, `apply`, `status`, `dev`, `dev-events`, `dev-token`,
 `dev-grant`, `dev-identity`, and `usage`. Dev reports expose session state as
 `data.state`; the envelope status remains the command outcome.

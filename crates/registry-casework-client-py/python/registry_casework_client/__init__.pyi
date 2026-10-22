@@ -741,6 +741,7 @@ class ReviewStagePolicy(TypedDict):
     queue: str
     decidingProfiles: list[str]
     requiredApprovals: SafeInteger
+    negativeDecisions: NotRequired[Literal["settle", "advise"]]
     excludeInitiator: NotRequired[bool]
     excludePreviousStageReviewers: NotRequired[bool]
 class ReviewRetentionPolicy(TypedDict):

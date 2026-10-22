@@ -473,6 +473,16 @@ class TypingContractTests(unittest.TestCase):
         classes = {node.name: node for node in module.body if isinstance(node, ast.ClassDef)}
         for name in ("ReviewPolicy", "ReviewCreateRequest", "ReviewTask", "Decision", "ReviewResult"):
             self.assertIn(name, classes)
+        stage = classes["ReviewStagePolicy"]
+        annotations = {
+            node.target.id: ast.unparse(node.annotation)
+            for node in stage.body
+            if isinstance(node, ast.AnnAssign)
+        }
+        self.assertEqual(
+            annotations["negativeDecisions"],
+            "NotRequired[Literal['settle', 'advise']]",
+        )
         for name in ("WorkItem", "Draft", "RecoverAttemptRequest", "MutationResponse"):
             self.assertNotIn(name, classes)
         request = classes["ReviewTaskDecisionRequest"]

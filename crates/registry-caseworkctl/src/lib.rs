@@ -4,10 +4,12 @@ mod dev;
 mod fixture_tests;
 mod project;
 mod project_types;
+mod provider_add;
 mod provider_pair;
 mod report;
 #[cfg(feature = "schema")]
 pub mod schema;
+mod templates;
 use anyhow::Result;
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use serde_json::{json, Value};
@@ -40,7 +42,7 @@ enum Command {
         #[arg(value_name = "DIRECTORY")]
         project: PathBuf,
         /// Starter to create.
-        #[arg(long, default_value = "standalone-decision", value_parser = ["standalone-decision", "canonical-review"])]
+        #[arg(long, default_value = "standalone-decision", value_parser = templates::TEMPLATE_NAMES)]
         template: String,
     },
     /// Validate policy, closed context schemas and required provider capabilities offline.
@@ -58,7 +60,7 @@ enum Command {
         #[arg(long, value_name = "DIRECTORY")]
         output: PathBuf,
     },
-    /// Pair a context provider with an existing native producer export and reader authority.
+    /// Create approval projects and pair context providers with native producer exports.
     Provider {
         #[command(subcommand)]
         command: ProviderCommand,
@@ -108,6 +110,30 @@ enum Command {
 }
 #[derive(Debug, Subcommand)]
 enum ProviderCommand {
+    /// Create an approval project from a Base Registry Engine (BReg) Action and print missing configuration.
+    Add {
+        /// New Casework directory, or a previously generated project to check without rewriting.
+        #[arg(value_name = "DIRECTORY")]
+        project: PathBuf,
+        /// Authored BReg project inspected through its matching bregctl executable.
+        #[arg(long, value_name = "PROJECT")]
+        breg_project: PathBuf,
+        /// Proposal-mode BReg Action to review.
+        #[arg(long)]
+        action: String,
+        /// Approval stages and outcomes shared with caseworkctl init.
+        #[arg(long, value_parser = templates::PATTERN_NAMES)]
+        pattern: String,
+        /// Sealed BReg package to pair and compare before packaging Casework.
+        #[arg(long, value_name = "DIRECTORY")]
+        breg_package: Option<PathBuf>,
+        /// Package directory written with a new project; omit to inspect the package without writing it.
+        #[arg(long, value_name = "DIRECTORY", requires = "breg_package")]
+        package_output: Option<PathBuf>,
+        /// Matching bregctl executable used for public project and package inspection.
+        #[arg(long, default_value = "bregctl", value_name = "BINARY")]
+        bregctl_bin: PathBuf,
+    },
     /// Verify native context and reader authority, then optionally retain its provider export.
     Pair {
         /// Existing Casework project with the exact vendored schema and context pin.
@@ -305,6 +331,16 @@ fn command_kind(command: &Command) -> CommandKind {
 fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
     if let Some(failure) = error
         .chain()
+        .find_map(|cause| cause.downcast_ref::<provider_add::ProviderAddFailure>())
+    {
+        let (code, path, message, action) = failure.diagnostic();
+        return (
+            DOMAIN_REFUSAL_EXIT,
+            json!({"severity":"error","code":code,"path":path,"message":message,"suggestedAction":action}),
+        );
+    }
+    if let Some(failure) = error
+        .chain()
         .find_map(|cause| cause.downcast_ref::<provider_pair::PairingFailure>())
     {
         let (code, path, message, action) = failure.diagnostic();
@@ -398,7 +434,10 @@ impl Command {
             Self::Explain(_) => "explain",
             Self::Test(_) => "test",
             Self::Types { .. } => "types",
-            Self::Provider { .. } => "provider-pair",
+            Self::Provider { command } => match command {
+                ProviderCommand::Add { .. } => "provider-add",
+                ProviderCommand::Pair { .. } => "provider-pair",
+            },
             Self::Lifecycle => "lifecycle",
             Self::Package { .. } => "package",
             Self::Doctor(_) => "doctor",
@@ -444,6 +483,26 @@ fn run(command: Command) -> Result<Value> {
         Command::Explain(args) => project::explain(&args.project),
         Command::Test(args) => project::test(&args.project, args.deny_warnings),
         Command::Types { project, output } => project_types::generate(&project, &output),
+        Command::Provider {
+            command:
+                ProviderCommand::Add {
+                    project,
+                    breg_project,
+                    action,
+                    pattern,
+                    breg_package,
+                    package_output,
+                    bregctl_bin,
+                },
+        } => provider_add::add(
+            &project,
+            &breg_project,
+            &action,
+            &pattern,
+            breg_package.as_deref(),
+            package_output.as_deref(),
+            &bregctl_bin,
+        ),
         Command::Provider {
             command:
                 ProviderCommand::Pair {
@@ -506,14 +565,72 @@ fn render_human(value: &Value, out: &mut (impl Write + ?Sized)) -> io::Result<()
             "{}",
             registry_platform_yaml::Report::new(diagnostics).render_human()
         )?;
-        if value["ok"] == false {
+        if value["ok"] == false && value["command"] != "provider-add" {
             return Ok(());
         }
+    }
+    if value["command"] == "provider-add" {
+        if let Some(data) = value.get("data") {
+            return render_provider_add(data, out);
+        }
+        return Ok(());
     }
     writeln!(
         out,
         "{}",
         serde_json::to_string_pretty(value).map_err(io::Error::other)?
+    )
+}
+
+fn render_provider_add(data: &Value, out: &mut (impl Write + ?Sized)) -> io::Result<()> {
+    for field in ["changes", "deployment"] {
+        if let Some(changes) = data[field].as_array() {
+            for change in changes {
+                writeln!(
+                    out,
+                    "{}: {}",
+                    change["path"].as_str().unwrap_or_default(),
+                    change["explanation"].as_str().unwrap_or_default()
+                )?;
+                write_yaml(&change["yaml"], out)?;
+            }
+        }
+    }
+    for notice in ["readGrant", "inputsOnlyAlternative"] {
+        if let Some(notice) = data.get(notice) {
+            writeln!(
+                out,
+                "{}",
+                notice["explanation"].as_str().unwrap_or_default()
+            )?;
+            write_yaml(&notice["yaml"], out)?;
+        }
+    }
+    if let Some(bypasses) = data["bypassPaths"].as_array() {
+        for bypass in bypasses {
+            writeln!(
+                out,
+                "Bypass: profile {} can {} {}. Review this mutationPolicy change:",
+                bypass["profile"].as_str().unwrap_or_default(),
+                bypass["operation"].as_str().unwrap_or_default(),
+                bypass["recordType"].as_str().unwrap_or_default()
+            )?;
+            write_yaml(&bypass["mutationPolicy"], out)?;
+        }
+    }
+    writeln!(
+        out,
+        "{}: {}",
+        data["state"].as_str().unwrap_or_default(),
+        data["next"].as_str().unwrap_or_default()
+    )
+}
+
+fn write_yaml(value: &Value, out: &mut (impl Write + ?Sized)) -> io::Result<()> {
+    writeln!(
+        out,
+        "{}",
+        serde_norway::to_string(value).map_err(io::Error::other)?
     )
 }
 pub(crate) fn configuration_report(

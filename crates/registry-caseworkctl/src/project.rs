@@ -99,7 +99,7 @@ expect:
 pub(super) const STANDALONE_DEV_CLIENTS: &str = r#"# yaml-language-server: $schema=.casework/schemas/dev-clients.schema.json
 # Local callers for `caseworkctl dev`. The pinned local token issuer
 # that `dev` starts beside Casework, registers each client below and issues it
-# short-lived tokens carrying these claims. One client binds each access
+# short-lived tokens carrying these claims. Each client binds an access
 # profile `casework.yaml` declares, so a first start serves every role in the
 # tutorial without another file. `registry_actor_kind: human` is the claim
 # Casework requires of a person; a Requester is a calling system, so it carries
@@ -140,8 +140,8 @@ directory:
 "#;
 
 pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
-    if !matches!(template, "standalone-decision" | "canonical-review") {
-        bail!("unknown template; available templates: standalone-decision, canonical-review");
+    if !crate::templates::TEMPLATE_NAMES.contains(&template) {
+        bail!("unknown template; use caseworkctl init --help to list available templates");
     }
     if project.exists() {
         bail!("destination already exists; init never overwrites a project");
@@ -163,9 +163,20 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     fs::create_dir_all(stage.path().join(".casework/schemas"))?;
     fs::create_dir_all(stage.path().join(".vscode"))?;
     let canonical_review = template == "canonical-review";
+    let approval_pattern = crate::templates::PATTERN_NAMES.contains(&template);
+    let approval_yaml = if approval_pattern {
+        Some(format!(
+            "# yaml-language-server: $schema=.casework/schemas/project.schema.json\n{}",
+            serde_norway::to_string(&crate::templates::approval_project(template)?)?
+        ))
+    } else {
+        None
+    };
     fs::write(
         stage.path().join("casework.yaml"),
-        if canonical_review {
+        if let Some(yaml) = approval_yaml.as_deref() {
+            yaml
+        } else if canonical_review {
             include_str!("../../../products/casework/examples/canonical-review/casework.yaml")
         } else {
             STANDALONE_YAML
@@ -184,13 +195,33 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
             include_bytes!("../../../products/casework/examples/canonical-review/README.md"),
         )?;
     }
-    fs::write(
-        stage.path().join("fixtures/standalone-decision.yaml"),
-        STANDALONE_FIXTURE,
-    )?;
+    if approval_pattern {
+        fs::write(
+            stage.path().join("fixtures/approval.yaml"),
+            format!(
+                "# yaml-language-server: $schema=../.casework/schemas/fixture.schema.json\n{}",
+                serde_norway::to_string(&crate::templates::approval_fixture(template)?)?
+            ),
+        )?;
+    } else {
+        fs::write(
+            stage.path().join("fixtures/standalone-decision.yaml"),
+            STANDALONE_FIXTURE,
+        )?;
+    }
+    let approval_clients = if approval_pattern {
+        Some(format!(
+            "# yaml-language-server: $schema=.casework/schemas/dev-clients.schema.json\n{}",
+            serde_norway::to_string(&crate::templates::approval_dev_clients(template)?)?
+        ))
+    } else {
+        None
+    };
     fs::write(
         stage.path().join("dev-clients.yaml"),
-        if canonical_review {
+        if let Some(clients) = approval_clients.as_deref() {
+            clients
+        } else if canonical_review {
             include_str!("../../../products/casework/examples/canonical-review/dev-clients.yaml")
         } else {
             STANDALONE_DEV_CLIENTS
@@ -528,7 +559,7 @@ pub(super) fn explain(project: &Path) -> Result<Value> {
             "contextCustody": custody,
             "displaySchema": review.display_schema,
             "resultSchema": review.result_schema,
-            "stages": review.stages,
+            "stages": review.stages.iter().map(crate::report::ExplainStage::from).collect::<Vec<_>>(),
             "outcomes": review.outcomes,
             "routing": review.routing,
             "routingFields": review.routing_fields(),

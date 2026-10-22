@@ -229,10 +229,33 @@ pub struct ReviewStagePolicy {
         )
     )]
     pub required_approvals: u16,
+    /// Controls whether a rejection or change request settles the whole review.
+    /// `settle` is the default; `advise` records and counts the decision toward
+    /// this non-final stage without settling the review.
+    #[serde(default, skip_serializing_if = "ReviewNegativeDecisionMode::is_settle")]
+    #[cfg_attr(feature = "schema", schemars(extend("default" = "settle")))]
+    pub negative_decisions: ReviewNegativeDecisionMode,
     #[serde(default)]
     pub exclude_initiator: bool,
     #[serde(default)]
     pub exclude_previous_stage_reviewers: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewNegativeDecisionMode {
+    /// A rejection or change request settles the whole review immediately.
+    #[default]
+    Settle,
+    /// A negative decision counts toward this stage and the review continues.
+    Advise,
+}
+
+impl ReviewNegativeDecisionMode {
+    pub fn is_settle(&self) -> bool {
+        *self == Self::Settle
+    }
 }
 
 impl ReviewStagePolicy {
@@ -501,6 +524,19 @@ impl ReviewPolicy {
             tag(ReviewPolicyError::StageIdentity, identity);
             tag(ReviewPolicyError::StageThreshold, threshold);
         }
+
+        let mut advisory_stages = Findings::default();
+        if let Some((index, stage)) = self.stages.iter().enumerate().next_back() {
+            if stage.negative_decisions == ReviewNegativeDecisionMode::Advise {
+                advisory_stages.push(
+                    "casework.review-policy.advisory-final-stage",
+                    format!("/stages/{index}/negativeDecisions"),
+                    "the final review stage cannot treat negative decisions as advice",
+                    "Write negativeDecisions: settle, or move the advisory check before a settling stage.",
+                );
+            }
+        }
+        tag(ReviewPolicyError::FinalStageAdvisory, advisory_stages);
 
         match self.purpose {
             ReviewPurpose::Approval => {
@@ -1707,7 +1743,7 @@ pub fn record_review_decision(
                 public_reason: public_reason.clone(),
                 result: result.clone(),
             },
-            true,
+            stage.negative_decisions == ReviewNegativeDecisionMode::Settle,
         ),
         DecisionKind::ChangesRequested {
             outcome,
@@ -1720,7 +1756,7 @@ pub fn record_review_decision(
                 public_reason: public_reason.clone(),
                 result: result.clone(),
             },
-            true,
+            stage.negative_decisions == ReviewNegativeDecisionMode::Settle,
         ),
         DecisionKind::Answer {
             outcome,
@@ -1756,18 +1792,20 @@ pub fn record_review_decision(
         return Ok(ReviewTransition::Settled { settlement });
     }
 
-    let approvals = progress
+    let completed_decisions = progress
         .decisions
         .iter()
         .filter(|decision| {
             decision.stage_id == stage.id
-                && matches!(&decision.decision, DecisionKind::Approve { .. })
+                && (stage.negative_decisions == ReviewNegativeDecisionMode::Advise
+                    || matches!(&decision.decision, DecisionKind::Approve { .. }))
         })
         .count();
-    let approvals = u16::try_from(approvals).expect("review approval count is policy bounded");
-    if approvals < stage.required_approvals {
+    let completed_decisions =
+        u16::try_from(completed_decisions).expect("review decision count is policy bounded");
+    if completed_decisions < stage.required_approvals {
         return Ok(ReviewTransition::Recorded {
-            remaining_approvals: stage.required_approvals - approvals,
+            remaining_approvals: stage.required_approvals - completed_decisions,
         });
     }
 
@@ -1821,6 +1859,8 @@ pub enum ReviewPolicyError {
     Identity,
     #[error("a review policy must declare one to thirty-two ordered stages")]
     Stages,
+    #[error("the final review stage cannot be advisory")]
+    FinalStageAdvisory,
     #[error("review stage identifiers, queues, or deciding profiles are invalid")]
     StageIdentity,
     #[error("review clock identifiers must be unique and bounded")]
@@ -2791,6 +2831,7 @@ mod tests {
             queue: "review".to_owned(),
             deciding_profiles: vec!["reviewer".to_owned()],
             required_approvals,
+            negative_decisions: ReviewNegativeDecisionMode::Settle,
             exclude_initiator: true,
             exclude_previous_stage_reviewers: true,
         }
@@ -2885,7 +2926,7 @@ mod tests {
         request_id: Uuid,
         stage_index: u16,
         stage_id: &str,
-        nonce: u128,
+        task_number: u128,
         holder: &str,
     ) -> ReviewTask {
         ReviewTask {
@@ -2900,7 +2941,7 @@ mod tests {
             deadline_at: None,
             created_at: Utc::now(),
             display_reference: None,
-            task_id: Uuid::from_u128(nonce),
+            task_id: Uuid::from_u128(task_number),
             request_id,
             stage_index,
             stage_id: stage_id.to_owned(),
@@ -3087,6 +3128,15 @@ mod tests {
         snapshot.stages[0].exclude_initiator = false;
         assert_eq!(snapshot.verify(), Err(ReviewPolicyError::DigestMismatch));
 
+        let mut advisory_snapshot = approval_policy(vec![stage("first", 1), stage("final", 1)])
+            .closure_with(crate::ReviewPolicyDependencies::default())
+            .unwrap();
+        advisory_snapshot.stages[0].negative_decisions = ReviewNegativeDecisionMode::Advise;
+        assert_eq!(
+            advisory_snapshot.verify(),
+            Err(ReviewPolicyError::DigestMismatch)
+        );
+
         let mut context_snapshot = approval_policy(vec![stage("first", 1)])
             .closure_with(crate::ReviewPolicyDependencies::default())
             .unwrap();
@@ -3140,6 +3190,7 @@ mod tests {
                         .map(|profile_index| identifier('p', profile_index))
                         .collect(),
                     required_approvals: MAXIMUM_REVIEW_APPROVALS_PER_STAGE,
+                    negative_decisions: ReviewNegativeDecisionMode::Settle,
                     exclude_initiator: true,
                     exclude_previous_stage_reviewers: true,
                 })
@@ -3865,6 +3916,200 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn advisory_negative_decisions_are_recorded_without_settling() {
+        for decision_kind in [
+            DecisionKind::Reject {
+                outcome: "rejected".to_owned(),
+                reason: Some("unsafe".to_owned()),
+                public_reason: None,
+                result: None,
+            },
+            DecisionKind::ChangesRequested {
+                outcome: "changes-requested".to_owned(),
+                reason: Some("correct target".to_owned()),
+                public_reason: None,
+                result: None,
+            },
+        ] {
+            let mut advisory = stage("technical", 2);
+            advisory.negative_decisions = ReviewNegativeDecisionMode::Advise;
+            let snapshot = approval_policy(vec![advisory, stage("authority", 1)])
+                .closure_with(crate::ReviewPolicyDependencies::default())
+                .unwrap();
+            let request_id = Uuid::from_u128(101);
+            let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+            let task = task(request_id, 0, "technical", 1, "reviewer");
+            let decision = Decision {
+                task_id: task.task_id,
+                request_id,
+                stage_id: "technical".to_owned(),
+                reviewer: person("reviewer"),
+                profile_id: "reviewer".to_owned(),
+                decision: decision_kind,
+            };
+
+            assert_eq!(
+                record_review_decision(&snapshot, &mut progress, &task, decision),
+                Ok(ReviewTransition::Recorded {
+                    remaining_approvals: 1
+                })
+            );
+            assert!(progress.settlement.is_none());
+        }
+    }
+
+    #[test]
+    fn an_all_negative_advisory_stage_advances() {
+        let mut advisory = stage("technical", 2);
+        advisory.negative_decisions = ReviewNegativeDecisionMode::Advise;
+        let snapshot = approval_policy(vec![advisory, stage("authority", 1)])
+            .closure_with(crate::ReviewPolicyDependencies::default())
+            .unwrap();
+        let request_id = Uuid::from_u128(102);
+        let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+        let first = task(request_id, 0, "technical", 1, "first");
+        let first_decision = Decision {
+            task_id: first.task_id,
+            request_id,
+            stage_id: "technical".to_owned(),
+            reviewer: person("first"),
+            profile_id: "reviewer".to_owned(),
+            decision: DecisionKind::Reject {
+                outcome: "rejected".to_owned(),
+                reason: Some("unsafe".to_owned()),
+                public_reason: None,
+                result: None,
+            },
+        };
+        assert_eq!(
+            record_review_decision(&snapshot, &mut progress, &first, first_decision),
+            Ok(ReviewTransition::Recorded {
+                remaining_approvals: 1
+            })
+        );
+
+        let second = task(request_id, 0, "technical", 2, "second");
+        let second_decision = Decision {
+            task_id: second.task_id,
+            request_id,
+            stage_id: "technical".to_owned(),
+            reviewer: person("second"),
+            profile_id: "reviewer".to_owned(),
+            decision: DecisionKind::ChangesRequested {
+                outcome: "changes-requested".to_owned(),
+                reason: Some("correct target".to_owned()),
+                public_reason: None,
+                result: None,
+            },
+        };
+        assert_eq!(
+            record_review_decision(&snapshot, &mut progress, &second, second_decision),
+            Ok(ReviewTransition::StageAdvanced {
+                completed_stage: "technical".to_owned(),
+                next_stage: "authority".to_owned(),
+            })
+        );
+        assert!(progress.settlement.is_none());
+    }
+
+    #[test]
+    fn advisory_thresholds_count_mixed_decisions_and_still_require_distinct_reviewers() {
+        let mut advisory = stage("technical", 2);
+        advisory.negative_decisions = ReviewNegativeDecisionMode::Advise;
+        let snapshot = approval_policy(vec![advisory, stage("authority", 1)])
+            .closure_with(crate::ReviewPolicyDependencies::default())
+            .unwrap();
+        let request_id = Uuid::from_u128(103);
+        let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+        let first = task(request_id, 0, "technical", 1, "first");
+        let first_decision = Decision {
+            task_id: first.task_id,
+            request_id,
+            stage_id: "technical".to_owned(),
+            reviewer: person("first"),
+            profile_id: "reviewer".to_owned(),
+            decision: DecisionKind::Reject {
+                outcome: "rejected".to_owned(),
+                reason: Some("unsafe".to_owned()),
+                public_reason: None,
+                result: None,
+            },
+        };
+        assert_eq!(
+            record_review_decision(&snapshot, &mut progress, &first, first_decision),
+            Ok(ReviewTransition::Recorded {
+                remaining_approvals: 1
+            })
+        );
+
+        let second = task(request_id, 0, "technical", 2, "first");
+        assert_eq!(
+            record_review_decision(
+                &snapshot,
+                &mut progress,
+                &second,
+                approve(&second, person("first"))
+            ),
+            Err(ReviewDecisionError::DuplicateReviewer)
+        );
+
+        let second = task(request_id, 0, "technical", 2, "second");
+        assert_eq!(
+            record_review_decision(
+                &snapshot,
+                &mut progress,
+                &second,
+                approve(&second, person("second"))
+            ),
+            Ok(ReviewTransition::StageAdvanced {
+                completed_stage: "technical".to_owned(),
+                next_stage: "authority".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn the_final_stage_cannot_be_advisory() {
+        let mut final_stage = stage("authority", 1);
+        final_stage.negative_decisions = ReviewNegativeDecisionMode::Advise;
+        let policy = approval_policy(vec![stage("technical", 1), final_stage]);
+
+        assert_eq!(policy.check(), Err(ReviewPolicyError::FinalStageAdvisory));
+        let finding = policy
+            .findings()
+            .into_iter()
+            .find(|finding| finding.code == "casework.review-policy.advisory-final-stage")
+            .expect("the advisory final stage is reported");
+        assert_eq!(finding.pointer, "/stages/1/negativeDecisions");
+
+        let mut answer = answer_policy();
+        answer.stages[0].negative_decisions = ReviewNegativeDecisionMode::Advise;
+        assert_eq!(answer.check(), Err(ReviewPolicyError::FinalStageAdvisory));
+        assert_eq!(
+            answer
+                .findings()
+                .into_iter()
+                .find(|finding| finding.code == "casework.review-policy.advisory-final-stage")
+                .expect("an advisory answer stage is reported")
+                .pointer,
+            "/stages/0/negativeDecisions"
+        );
+    }
+
+    #[test]
+    fn the_default_negative_decision_mode_is_omitted_from_policy_bytes() {
+        let stage = stage("review", 1);
+        let encoded = serde_json::to_value(&stage).unwrap();
+        assert!(encoded.get("negativeDecisions").is_none());
+
+        let decoded: ReviewStagePolicy = serde_json::from_value(encoded).unwrap();
+        assert_eq!(
+            decoded.negative_decisions,
+            ReviewNegativeDecisionMode::Settle
+        );
     }
 
     #[test]

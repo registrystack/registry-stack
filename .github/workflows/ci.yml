@@ -829,6 +829,8 @@ jobs:
         # Every maintained Casework target uses a unique schema. The service
         # database is disposable; no test resets public or shares task state.
         env:
+          CASEWORKCTL_BIN: ${{ github.workspace }}/target/debug/caseworkctl
+          BREGCTL_BIN: ${{ github.workspace }}/target/debug/bregctl
           CASEWORK_REVIEW_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
           CASEWORK_ACTIVATION_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework
           CASEWORK_ASSIGNMENT_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework

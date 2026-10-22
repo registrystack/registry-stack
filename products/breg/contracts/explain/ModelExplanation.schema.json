@@ -141,6 +141,9 @@
                 "display"
               ],
               "properties": {
+                "encrypted": {
+                  "type": "boolean"
+                },
                 "fieldType": {
                   "type": "object",
                   "x-registry-passthrough": "The compiled FieldTypeSource, as in query field summaries; its internal shape follows the engine's field type contract."

@@ -296,6 +296,7 @@ fn project(version: &str) -> CaseworkProject {
                     queue: "review".to_owned(),
                     deciding_profiles: vec!["staff".to_owned()],
                     required_approvals: 1,
+                    negative_decisions: ReviewNegativeDecisionMode::Settle,
                     exclude_initiator: true,
                     exclude_previous_stage_reviewers: false,
                 },
@@ -304,6 +305,7 @@ fn project(version: &str) -> CaseworkProject {
                     queue: "review".to_owned(),
                     deciding_profiles: vec!["staff".to_owned()],
                     required_approvals: 1,
+                    negative_decisions: ReviewNegativeDecisionMode::Settle,
                     exclude_initiator: true,
                     exclude_previous_stage_reviewers: true,
                 },
@@ -4544,6 +4546,445 @@ async fn review_decisions_are_audited_after_the_decision_commits() {
         json!({"event": "casework.review-decided", "outcome": "replayed"}),
         "the replay appends only its terminal outcome"
     );
+}
+
+#[tokio::test]
+async fn advisory_rejection_advances_to_final_approval_without_releasing_its_reason() {
+    let fixture = fixture().await;
+    let mut advisory_project = project("advisory-1");
+    advisory_project.review_policies[0].stages[0].negative_decisions =
+        ReviewNegativeDecisionMode::Advise;
+    advisory_project.review_policies[0].stages[0]
+        .deciding_profiles
+        .push("supervisor".to_owned());
+    advisory_project.check().expect("advisory review project");
+    let (service, audit) = service_with_audit(&fixture, advisory_project.clone());
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            bind_request(&service, request("advisory-review", "advisory-review-ref")),
+            "create-advisory-review",
+        )
+        .await
+        .expect("create advisory review");
+    let request_id = created.accepted.request_id;
+    let advisory_task = task_id(&fixture, request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            advisory_task,
+            None,
+            "",
+            1,
+            "claim-advisory-review",
+        )
+        .await
+        .expect("claim advisory task");
+    assert_eq!(
+        service
+            .decide_review_task(
+                &fixture.reviewer_a,
+                advisory_task,
+                ReviewTaskDecisionRequest {
+                    decision: DecisionKind::Reject {
+                        outcome: "incorrect".to_owned(),
+                        reason: Some("advisory private reason".to_owned()),
+                        public_reason: Some("advisory public reason".to_owned()),
+                        result: Some(json!({
+                            "correction": "advisory structured result"
+                        })),
+                    },
+                },
+                None,
+                "",
+                2,
+                "reject-advisory-review",
+            )
+            .await
+            .expect("record advisory rejection"),
+        ReviewTransition::StageAdvanced {
+            completed_stage: "primary".to_owned(),
+            next_stage: "secondary".to_owned(),
+        }
+    );
+
+    let accountability_event: Uuid = fixture
+        .database
+        .query_one(
+            "SELECT event_id FROM casework_review_accountability WHERE task_id=$1",
+            &[&advisory_task],
+        )
+        .await
+        .expect("advisory accountability event")
+        .get(0);
+    let (refusing, refused) = service_with_audit(&fixture, advisory_project.clone());
+    refused.refuse_after(0);
+    assert!(matches!(
+        refusing
+            .review_history(&fixture.reviewer_b, request_id, None, "", None, 100)
+            .await,
+        Err(ReviewRuntimeError::Store(StoreError::AuditUnavailable))
+    ));
+    assert!(refused.entries().is_empty());
+    for (actor, label) in [
+        (&fixture.reviewer_a, "earlier-stage reviewer"),
+        (&fixture.supervisor, "earlier-stage supervisor"),
+    ] {
+        let ordinary_history = refusing
+            .review_history(actor, request_id, None, "", None, 100)
+            .await
+            .unwrap_or_else(|error| {
+                panic!("{label} reads ordinary history while audit is unavailable: {error}")
+            });
+        let ordinary_advisory = ordinary_history
+            .items
+            .iter()
+            .find(|entry| entry.task_id == Some(advisory_task) && entry.kind == "review-decided")
+            .unwrap_or_else(|| panic!("advisory decision is visible to {label}"));
+        assert_eq!(ordinary_advisory.detail["decision"], "reject");
+        assert!(ordinary_advisory.detail.get("outcome").is_none());
+        assert!(ordinary_advisory.detail.get("privateReason").is_none());
+    }
+    assert!(
+        refused.entries().is_empty(),
+        "redacted history does not touch the unavailable audit writer"
+    );
+
+    let (refusing, refused) = service_with_audit(&fixture, advisory_project);
+    refused.refuse_after(1);
+    assert!(matches!(
+        refusing
+            .review_history(&fixture.reviewer_b, request_id, None, "", None, 100)
+            .await,
+        Err(ReviewRuntimeError::Store(StoreError::AuditUnavailable))
+    ));
+    let refused_entries = refused.entries();
+    assert_eq!(
+        refused_entries.len(),
+        1,
+        "only the audit request was accepted"
+    );
+    assert_eq!(refused_entries[0]["phase"], "request");
+
+    let reviewer_history = service
+        .review_history(&fixture.reviewer_b, request_id, None, "", None, 100)
+        .await
+        .expect("later reviewer reads advisory history");
+    let advisory_history = reviewer_history
+        .items
+        .iter()
+        .find(|entry| entry.task_id == Some(advisory_task) && entry.kind == "review-decided")
+        .expect("advisory decision is in reviewer history");
+    assert_eq!(advisory_history.detail["decision"], "reject");
+    assert_eq!(advisory_history.detail["outcome"], "incorrect");
+    assert_eq!(
+        advisory_history.detail["privateReason"],
+        "advisory private reason"
+    );
+    let accountability_read = audited_response(
+        &audit,
+        "review-accountability-read",
+        "accountabilityEventId",
+        &accountability_event.to_string(),
+    );
+    assert_eq!(
+        accountability_read["profileId"],
+        fixture.reviewer_b.profile_id
+    );
+
+    for (actor, label) in [
+        (&fixture.reviewer_a, "earlier-stage reviewer"),
+        (&fixture.supervisor, "earlier-stage supervisor"),
+    ] {
+        let ordinary_history = service
+            .review_history(actor, request_id, None, "", None, 100)
+            .await
+            .unwrap_or_else(|error| panic!("{label} reads ordinary history: {error}"));
+        let ordinary_advisory = ordinary_history
+            .items
+            .iter()
+            .find(|entry| entry.task_id == Some(advisory_task) && entry.kind == "review-decided")
+            .unwrap_or_else(|| panic!("advisory decision is visible to {label}"));
+        assert_eq!(ordinary_advisory.detail["decision"], "reject");
+        assert!(ordinary_advisory.detail.get("outcome").is_none());
+        assert!(ordinary_advisory.detail.get("privateReason").is_none());
+    }
+
+    let producer_history = service
+        .review_history(&fixture.producer, request_id, None, "", None, 100)
+        .await
+        .expect("producer reads bounded history");
+    let producer_history = serde_json::to_string(&producer_history).expect("producer history JSON");
+    assert!(!producer_history.contains("advisory private reason"));
+    assert!(!producer_history.contains("incorrect"));
+
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_accountability
+             SET occurred_at=now()-interval '2 days',
+                 retained_until=now()-interval '1 day'
+             WHERE event_id=$1",
+            &[&accountability_event],
+        )
+        .await
+        .expect("expire provisional advisory accountability");
+    let active_history = service
+        .review_history(&fixture.reviewer_b, request_id, None, "", None, 100)
+        .await
+        .expect("active review preserves advisory accountability past provisional expiry");
+    let active_advisory = active_history
+        .items
+        .iter()
+        .find(|entry| entry.task_id == Some(advisory_task) && entry.kind == "review-decided")
+        .expect("advisory decision remains in ordinary history");
+    assert_eq!(active_advisory.detail["outcome"], "incorrect");
+    assert_eq!(
+        active_advisory.detail["privateReason"],
+        "advisory private reason"
+    );
+
+    let final_task = task_id(&fixture, request_id, 1).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_b,
+            final_task,
+            None,
+            "",
+            1,
+            "claim-final-review",
+        )
+        .await
+        .expect("claim final task");
+    assert!(matches!(
+        service
+            .decide_review_task(
+                &fixture.reviewer_b,
+                final_task,
+                ReviewTaskDecisionRequest {
+                    decision: DecisionKind::Approve {
+                        outcome: "approved".to_owned(),
+                        public_reason: None,
+                    },
+                },
+                None,
+                "",
+                2,
+                "approve-final-review",
+            )
+            .await,
+        Ok(ReviewTransition::Settled {
+            settlement: ReviewSettlement::Approved { .. }
+        })
+    ));
+
+    let ReviewResultRead::Available(result) = service
+        .review_result(&fixture.producer, request_id)
+        .await
+        .expect("producer reads approved result")
+    else {
+        panic!("approved result is available");
+    };
+    assert_eq!(result.status, ReviewResultStatus::Approved);
+    assert_eq!(result.outcome.as_deref(), Some("approved"));
+    assert!(result.public_reason.is_none());
+    assert!(result.result.is_none());
+    let producer_result = serde_json::to_string(&result).expect("producer result JSON");
+    for advisory_value in [
+        "advisory private reason",
+        "advisory public reason",
+        "advisory structured result",
+        "incorrect",
+    ] {
+        assert!(!producer_result.contains(advisory_value));
+    }
+
+    let terminal_history = service
+        .review_history(&fixture.reviewer_b, request_id, None, "", None, 100)
+        .await
+        .expect("later reviewer reads terminal ordinary history");
+    let terminal_advisory = terminal_history
+        .items
+        .iter()
+        .find(|entry| entry.task_id == Some(advisory_task) && entry.kind == "review-decided")
+        .expect("advisory decision remains in terminal ordinary history");
+    assert!(terminal_advisory.detail.get("outcome").is_none());
+    assert!(terminal_advisory.detail.get("privateReason").is_none());
+
+    let advisory_event = history_event(&fixture, request_id, advisory_task, "review-decided").await;
+    let final_event = history_event(&fixture, request_id, final_task, "review-decided").await;
+    let decision_audits = [advisory_event, final_event].map(|event_id| {
+        audited_response(&audit, "review-decided", "eventId", &event_id.to_string())
+    });
+    for record in decision_audits {
+        let encoded = record.to_string();
+        assert!(!encoded.contains("advisory private reason"));
+        assert!(!encoded.contains("advisory public reason"));
+        assert!(!encoded.contains("advisory structured result"));
+    }
+}
+
+#[tokio::test]
+async fn advisory_history_uses_the_active_tasks_routed_queue() {
+    let fixture = fixture().await;
+    let mut routed_project = project("routed-advisory-1");
+    routed_project.queues.push(QueuePolicy {
+        id: "specialist-review".to_owned(),
+        label: "Specialist review".to_owned(),
+    });
+    routed_project.teams.push(TeamPolicy {
+        id: "specialist-team".to_owned(),
+        label: "Specialist team".to_owned(),
+        serves: vec!["specialist-review".to_owned()],
+        member_profiles: vec!["staff".to_owned()],
+        supervisor_profiles: vec!["supervisor".to_owned()],
+    });
+    let policy = &mut routed_project.review_policies[0];
+    policy.stages[0].negative_decisions = ReviewNegativeDecisionMode::Advise;
+    policy.stages[1].exclude_previous_stage_reviewers = false;
+    policy.routing.push(RoutingRule {
+        id: "specialist-stage".to_owned(),
+        because: "Route the authorization stage to its specialist team".to_owned(),
+        when: RoutingCondition {
+            stage: Some("secondary".to_owned()),
+            fields: BTreeMap::new(),
+        },
+        queue: "specialist-review".to_owned(),
+    });
+    routed_project.check().expect("routed advisory project");
+    fixture
+        .database
+        .batch_execute(
+            "INSERT INTO casework_teams(team_id,revision) VALUES('specialist-team',1);
+             INSERT INTO casework_queue_service(queue_id,team_id,revision)
+             VALUES('specialist-review','specialist-team',1);
+             INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
+             VALUES('specialist-team','https://issuer.test','specialist','staff');",
+        )
+        .await
+        .expect("seed the routed queue's separate team");
+    let specialist = actor("specialist", CaseworkRole::Staff, "staff");
+    let (service, audit) = service_with_audit(&fixture, routed_project);
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            bind_request(&service, request("routed-advisory", "routed-advisory-ref")),
+            "create-routed-advisory",
+        )
+        .await
+        .expect("create routed advisory review");
+    let request_id = created.accepted.request_id;
+    let advisory_task = task_id(&fixture, request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            advisory_task,
+            None,
+            "",
+            1,
+            "claim-routed-advisory",
+        )
+        .await
+        .expect("claim initial advisory task");
+    service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            advisory_task,
+            ReviewTaskDecisionRequest {
+                decision: DecisionKind::Reject {
+                    outcome: "incorrect".to_owned(),
+                    reason: Some("private specialist finding".to_owned()),
+                    public_reason: Some("Review the correction".to_owned()),
+                    result: Some(json!({"correction": "synthetic correction"})),
+                },
+            },
+            None,
+            "",
+            2,
+            "decide-routed-advisory",
+        )
+        .await
+        .expect("advance to the routed authorization stage");
+    let active_task = task_id(&fixture, request_id, 1).await;
+    let effective_queue: String = fixture
+        .database
+        .query_one(
+            "SELECT queue_id FROM casework_review_tasks WHERE task_id=$1",
+            &[&active_task],
+        )
+        .await
+        .expect("active task's effective queue")
+        .get(0);
+    assert_eq!(effective_queue, "specialist-review");
+
+    let audit_before = audit.entries().len();
+    let ordinary = service
+        .review_history(&fixture.reviewer_a, request_id, None, "", None, 100)
+        .await
+        .expect("a prior task still permits ordinary history");
+    let decision = ordinary
+        .items
+        .iter()
+        .find(|entry| entry.task_id == Some(advisory_task) && entry.kind == "review-decided")
+        .expect("ordinary advisory decision");
+    assert_eq!(decision.detail["decision"], "reject");
+    assert!(
+        decision.detail.get("privateReason").is_none(),
+        "serving the default queue does not authorize the routed stage's advisory details"
+    );
+    assert!(decision.detail.get("outcome").is_none());
+    assert_eq!(audit.entries().len(), audit_before);
+
+    let privileged = service
+        .review_history(&specialist, request_id, None, "", None, 100)
+        .await
+        .expect("the routed queue's member reads advisory details");
+    let decision = privileged
+        .items
+        .iter()
+        .find(|entry| entry.task_id == Some(advisory_task) && entry.kind == "review-decided")
+        .expect("advisory decision for the routed reviewer");
+    assert_eq!(decision.detail["outcome"], "incorrect");
+    assert_eq!(
+        decision.detail["privateReason"],
+        "private specialist finding"
+    );
+    let read = audited_response(
+        &audit,
+        "review-accountability-read",
+        "accountabilityEventId",
+        decision.detail["accountabilityEventId"].as_str().unwrap(),
+    );
+    assert_eq!(read["profileId"], "staff");
+    assert!(read["principalPseudonym"].as_str().is_some());
+    assert!(read.get("actor").is_none());
+    assert!(!audit
+        .entries()
+        .iter()
+        .any(|entry| { entry.to_string().contains("private specialist finding") }));
+
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_tasks SET queue_id='review' WHERE task_id=$1",
+            &[&active_task],
+        )
+        .await
+        .expect("move the active task to a different currently served queue");
+    assert!(matches!(
+        service
+            .review_history(&specialist, request_id, None, "", None, 100)
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    let moved = service
+        .review_history(&fixture.reviewer_a, request_id, None, "", None, 100)
+        .await
+        .expect("the destination queue's member gains advisory access");
+    assert!(moved.items.iter().any(|entry| {
+        entry.task_id == Some(advisory_task)
+            && entry.detail["privateReason"] == "private specialist finding"
+    }));
 }
 
 #[tokio::test]

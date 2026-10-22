@@ -364,7 +364,7 @@ export interface ReviewAccountabilityRecord {
   occurredAt: string; retainedUntil: string
   decisionReceipt?: ReviewDecisionReceipt
 }
-export interface ReviewStagePolicy { id: string; queue: string; decidingProfiles: ReadonlyArray<string>; requiredApprovals: SafeInteger; excludeInitiator?: boolean; excludePreviousStageReviewers?: boolean }
+export interface ReviewStagePolicy { id: string; queue: string; decidingProfiles: ReadonlyArray<string>; requiredApprovals: SafeInteger; negativeDecisions?: 'settle' | 'advise'; excludeInitiator?: boolean; excludePreviousStageReviewers?: boolean }
 export interface ReviewRetentionPolicy { terminalRetentionDays: SafeInteger; accountabilityRetentionDays: SafeInteger }
 export interface ReviewContextContract { id: string; revision: ContentDigest; schemaDigest: ContentDigest }
 export type ReviewContextPolicy = { mode: 'submitted' } | { mode: 'current-source'; provider: string; contract: ReviewContextContract }

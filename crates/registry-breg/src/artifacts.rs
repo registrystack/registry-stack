@@ -668,6 +668,7 @@ pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
                     "fieldType": field.logical.field_type,
                     "schema": field_value_schema(&field.logical.field_type, !field.required),
                     "classification": field.logical.classification,
+                    "encrypted": field.logical.encryption.is_some(),
                     "required": field.required, "validTimeRole": field.valid_time_role,
                 })).chain(record_type.derived_fields.values().map(|field| json!({
                     "id": field.logical.id, "apiName": field.logical.api_name,
@@ -675,6 +676,7 @@ pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
                     "fieldType": field.logical.field_type,
                     "schema": field_value_schema(&field.logical.field_type, true),
                     "classification": field.logical.classification,
+                    "encrypted": false,
                     "required": false, "derivation": field.derivation_id,
                 }))).collect::<Vec<_>>()
             })

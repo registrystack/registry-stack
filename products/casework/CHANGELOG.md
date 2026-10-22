@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Add shared approval templates for one reviewer, two independent peers, and
+  a technical check followed by authorization. `caseworkctl provider add`
+  prepares the matching Casework project from a BReg Action, prints missing
+  BReg configuration for review, and verifies native package agreement.
+- Allow a non-final stage to opt into `negativeDecisions: advise`. Negative
+  findings count toward that stage's completed-decision threshold without
+  settling the review; only the settling outcome and public reason reach the
+  producer. The default preserves immediate negative settlement.
+- Allow distinct local clients to share an access profile, so development
+  sessions can exercise independent reviewers without changing the policy.
+- Correct the peer version-mismatch remedy to name `--bregctl-bin`.
+
 ## 0.43.0 - 2026-10-21
 
 - BREAKING: checked project, runtime, and dev-client definition namespaces reject

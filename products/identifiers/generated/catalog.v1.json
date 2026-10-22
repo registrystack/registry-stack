@@ -3687,7 +3687,7 @@
       "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project.",
       "source": {
         "path": "crates/registry-breg/src/artifacts.rs",
-        "sha256": "af7d83ffc410311f9efb19545e4a34411fb6558c38d2fae6b27453039c223882"
+        "sha256": "6a9f6ae09d4f02d30cbe7694bf59249e9f3b2ed9ee0e29936bbd15852a034138"
       },
       "artifact": {
         "path": "products/breg/generated/facility/generated/action-contracts.schema.json",
@@ -3705,11 +3705,11 @@
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/ActionsExplanation.schema.json",
-        "sha256": "b519a0321f4da6dad7e578bacc32cc02af395f959ea8bc60e06089dbc267e6f2"
+        "sha256": "23566aecb0dc32a049df59c9b7c5eb9f9c838e12c3ff26b59c53c4e8e3740111"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/ActionsExplanation.schema.json",
-        "sha256": "b519a0321f4da6dad7e578bacc32cc02af395f959ea8bc60e06089dbc267e6f2",
+        "sha256": "23566aecb0dc32a049df59c9b7c5eb9f9c838e12c3ff26b59c53c4e8e3740111",
         "mediaType": "application/schema+json"
       }
     },
@@ -3867,11 +3867,11 @@
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "2786376fa2511102b84de8d63f3affaa1fe0f7b239fb344f4e42abd828f4d0cb"
+        "sha256": "dc11c8afacefd122e8568335b92a82ca255153c8366dda7dc77bf6dd6edc01b0"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "2786376fa2511102b84de8d63f3affaa1fe0f7b239fb344f4e42abd828f4d0cb",
+        "sha256": "dc11c8afacefd122e8568335b92a82ca255153c8366dda7dc77bf6dd6edc01b0",
         "mediaType": "application/schema+json"
       }
     },
@@ -4051,7 +4051,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/dev-clients/dev-clients.schema.json",
-        "sha256": "58f76c1433576860b28b2c344acfc51d2d57b9915aab08d782704d522f96554c",
+        "sha256": "380773252359404415884957981c52dce712aedd3ffc5878890014e4753e8264",
         "mediaType": "application/schema+json"
       }
     },
@@ -4065,7 +4065,7 @@
       "description": "Registry Casework fixture JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "5f769f9f2edf54312300a2c9d1090ad91f99fef0b84a4ba7399dcd6e2879bd30"
+        "sha256": "1604cf79433172ea4553b2f56365ea9e999a515aa3f16d60959cc652972ae185"
       },
       "artifact": {
         "path": "products/casework/generated/fixture/fixture.schema.json",
@@ -4083,7 +4083,7 @@
       "description": "Registry Casework holiday set JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "5f769f9f2edf54312300a2c9d1090ad91f99fef0b84a4ba7399dcd6e2879bd30"
+        "sha256": "1604cf79433172ea4553b2f56365ea9e999a515aa3f16d60959cc652972ae185"
       },
       "artifact": {
         "path": "products/casework/generated/holiday-set/holiday-set.schema.json",
@@ -4101,11 +4101,11 @@
       "description": "Registry Casework project JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "5f769f9f2edf54312300a2c9d1090ad91f99fef0b84a4ba7399dcd6e2879bd30"
+        "sha256": "1604cf79433172ea4553b2f56365ea9e999a515aa3f16d60959cc652972ae185"
       },
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
-        "sha256": "8711ca3efe9fbbd9e1851270802ba89e6ae1559017bc6a2a76f7bfad04c3c37c",
+        "sha256": "2d8387b93154092233274435d0803231f02b84881374c34eb14e113daa9a39e1",
         "mediaType": "application/schema+json"
       }
     },
@@ -4123,7 +4123,7 @@
       },
       "artifact": {
         "path": "products/casework/contracts/cli/report.schema.json",
-        "sha256": "0e12c37c7e1f4f34b30ea6fa3444a98c84bba52a3c9b575b1a8fa14019b82b56",
+        "sha256": "9634939ed3cb7cfd5c2a6a12a8136fe19eb5ad7aa64d87839ef5c6c8d8fa38e2",
         "mediaType": "application/schema+json"
       }
     },

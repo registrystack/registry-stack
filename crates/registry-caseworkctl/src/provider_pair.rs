@@ -29,9 +29,9 @@ impl PairingFailure {
                 "Remove the unserved capability at this path or select a provider that serves it, then pair again.",
             ),
             Self::VersionMismatch => (
-                "casework.provider-pair.version-mismatch", "--bregctl",
+                "casework.provider-pair.version-mismatch", "--bregctl-bin",
                 "bregctl must be the same Registry Stack release as caseworkctl",
-                "Select a bregctl executable from the same Registry Stack release with --bregctl, then pair again.",
+                "Select a bregctl executable from the same Registry Stack release with --bregctl-bin, then pair again.",
             ),
         }
     }
@@ -518,7 +518,29 @@ mod tests {
 
     #[test]
     fn pairing_refusal_names_version_mismatch() {
-        pairing_refusal("version-mismatch", "--bregctl", "release");
+        let flag = PairingFailure::VersionMismatch.diagnostic().1;
+        pairing_refusal("version-mismatch", flag, "release");
+        for arguments in [
+            vec![
+                "caseworkctl",
+                "provider",
+                "pair",
+                "review",
+                "--provider-id",
+                "source",
+                "--breg-package",
+                "package",
+                "--action-id",
+                "submit",
+                flag,
+                "matching-bregctl",
+            ],
+            vec!["caseworkctl", "check", "review", flag, "matching-bregctl"],
+        ] {
+            crate::command()
+                .try_get_matches_from(arguments)
+                .expect("both commands accept the diagnostic's suggested flag");
+        }
     }
 
     fn pairing_refusal(cause: &str, pointer: &str, message: &str) {
