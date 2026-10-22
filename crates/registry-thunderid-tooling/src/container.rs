@@ -27,6 +27,7 @@ pub const SESSION_ID_LABEL: &str = "registry.stack.thunderid.session-id";
 /// (worktrees, retained copies); each owns only the container serving its own
 /// retained database.
 pub const SESSION_STATE_LABEL: &str = "registry.stack.thunderid.state-root";
+const BRANDING_ASSETS_MOUNT_POINT: &str = "/opt/thunderid/apps/gate/assets/registry-stack";
 
 const IMAGE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -328,6 +329,10 @@ impl Session<'_> {
             self.state_root.join("resources"),
             "/opt/thunderid/config/resources".into(),
         ));
+        let branding_assets = self.state_root.join(crate::render::BRANDING_ASSETS_DIR);
+        if branding_assets.is_dir() {
+            mounts.push((branding_assets, BRANDING_ASSETS_MOUNT_POINT.into()));
+        }
         mounts
     }
 
@@ -462,11 +467,7 @@ impl Session<'_> {
         ]);
         for (host, container) in self.serving_mounts() {
             args.push("--mount".into());
-            args.push(format!(
-                "type=bind,src={},dst={}",
-                host.display(),
-                container
-            ));
+            args.push(serving_mount_argument(&host, &container));
         }
         args.push(self.image.to_owned());
         args.push("./start.sh".into());
@@ -509,6 +510,18 @@ impl Session<'_> {
         let _ = std::fs::remove_file(self.state_path());
         Ok(())
     }
+}
+
+fn serving_mount_argument(host: &Path, container: &str) -> String {
+    let read_only = if container == BRANDING_ASSETS_MOUNT_POINT {
+        ",readonly"
+    } else {
+        ""
+    };
+    format!(
+        "type=bind,src={},dst={container}{read_only}",
+        host.display()
+    )
 }
 
 /// The deployment configuration for one local session: one issuer URL fixed
@@ -562,6 +575,10 @@ jwt:
 resource:
   store: composite
 role:
+  store: composite
+theme:
+  store: composite
+layout:
   store: composite
 identity_provider:
   store: declarative
@@ -687,6 +704,58 @@ mod tests {
             state_root: root,
             image: "pinned-test-image",
         }
+    }
+
+    #[test]
+    fn presentation_stores_and_assets_are_wired_without_breaking_old_state() {
+        let deployment = deployment_yaml("http://127.0.0.1:18091");
+        assert!(
+            deployment.contains("theme:\n  store: composite\nlayout:\n  store: composite"),
+            "{deployment}"
+        );
+
+        let root = std::env::temp_dir().join(format!(
+            "thunderid-branding-mount-test-{}-{}",
+            std::process::id(),
+            random_urlsafe(8).unwrap()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let session = state_session(&root);
+        assert!(
+            session
+                .serving_mounts()
+                .iter()
+                .all(|(_, target)| target != BRANDING_ASSETS_MOUNT_POINT),
+            "a retained machine-only or pre-branding state must start without an asset mount"
+        );
+
+        let assets = root.join(crate::render::BRANDING_ASSETS_DIR);
+        std::fs::create_dir(&assets).unwrap();
+        let branding_mounts: Vec<_> = session
+            .serving_mounts()
+            .into_iter()
+            .filter(|(_, target)| target == BRANDING_ASSETS_MOUNT_POINT)
+            .collect();
+        assert_eq!(
+            branding_mounts,
+            [(assets.clone(), BRANDING_ASSETS_MOUNT_POINT.into())]
+        );
+        assert_eq!(
+            serving_mount_argument(&assets, BRANDING_ASSETS_MOUNT_POINT),
+            format!(
+                "type=bind,src={},dst={BRANDING_ASSETS_MOUNT_POINT},readonly",
+                assets.display()
+            )
+        );
+        assert_eq!(
+            serving_mount_argument(&root.join("resources"), "/opt/thunderid/config/resources"),
+            format!(
+                "type=bind,src={},dst=/opt/thunderid/config/resources",
+                root.join("resources").display()
+            ),
+            "the existing mutable resource mount must stay unchanged"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

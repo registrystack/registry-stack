@@ -13,7 +13,9 @@ or OID4VCI runtime crate may depend on it.
    every authority decision on its side.
 3. Renders the pinned release's native declarative resources (`render`),
    including the `default` agent-schema update derived additively from the
-   pinned bundle, preserving every upstream field.
+   pinned bundle, preserving every upstream field. Sessions with an explicit
+   synthetic browser application also receive the shared Registry Stack theme,
+   layout, application presentation fields, and public Gate assets.
 4. Performs the explicit upstream bootstrap one-shot
    (`bootstrap::Bootstrap::apply_agent_schema`) with `--defaults` and a
    file-injected throwaway `ADMIN_PASSWORD`.
@@ -117,6 +119,11 @@ description can declare browser applications and synthetic users with owner-only
 secret files, exact local redirect URIs, authorization code with PKCE, and
 short-lived access tokens. Those local identities are explicit fixtures; the
 tooling crate does not infer staff from machine clients.
+
+An interactive render writes the public font, licence, and wordmark under
+`branding-assets/` in the session state. The serving container mounts only
+that directory read-only at `/opt/thunderid/apps/gate/assets/registry-stack`;
+machine-only and older retained session states have no such mount.
 
 `LocalClient.allow_human_fixture` must be explicit when teaching fixtures need a
 human marker on a local machine token. This option neither creates production

@@ -28,6 +28,21 @@ use crate::ToolingError;
 /// with other agents merges rather than overwrites.
 const PINNED_DEFAULT_AGENT_TYPE: &str = include_str!("../fixtures/default-agent-type-v1.0.1.yaml");
 const INSTITUTIONAL_REQUESTER_ATTRIBUTES: [&str; 2] = ["evidence_audience", "evidence_tags"];
+const BRANDING_METADATA: &str =
+    include_str!("../../../products/identity/thunderid/branding/branding.json");
+const BRANDING_THEME: &str =
+    include_str!("../../../products/identity/thunderid/branding/theme.json");
+const BRANDING_STYLESHEET: &str =
+    include_str!("../../../products/identity/thunderid/branding/registry-stack.css");
+const BRANDING_WORDMARK: &[u8] = include_bytes!(
+    "../../../products/identity/thunderid/branding/assets/registry-stack-wordmark.svg"
+);
+const BRANDING_FONT: &[u8] = include_bytes!(
+    "../../../products/identity/thunderid/branding/assets/fonts/public-sans-latin-wght-normal.woff2"
+);
+const BRANDING_FONT_LICENSE: &[u8] = include_bytes!(
+    "../../../products/identity/thunderid/branding/assets/fonts/OFL-public-sans.txt"
+);
 
 /// Where serving-time documents land, relative to the description's state
 /// root. The pinned release reads these through composite stores, so the
@@ -41,6 +56,18 @@ pub const RESOURCES_DIR: &str = "resources";
 /// does not, which is why registrations render here and not under
 /// `resources/`.
 pub const BOOTSTRAP_DIR: &str = "registry-schema";
+/// Public presentation files rendered only for sessions with an interactive
+/// application. The container mounts exactly this directory into Gate's
+/// static asset tree, leaving the image's application files untouched.
+pub const BRANDING_ASSETS_DIR: &str = "branding-assets";
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BrandingMetadata {
+    theme_id: String,
+    layout_id: String,
+    asset_base_path: String,
+}
 
 /// Everything this render produced, including the digest an owning CLI
 /// records only after the bootstrap one-shot has succeeded.
@@ -207,6 +234,83 @@ fn serde_yaml_parse(text: &str) -> Result<Value, ToolingError> {
     })
 }
 
+fn branding_metadata() -> Result<BrandingMetadata, ToolingError> {
+    let metadata: BrandingMetadata =
+        serde_json::from_str(BRANDING_METADATA).map_err(|_| ToolingError::InvalidRender {
+            reason: "the embedded Registry Stack branding metadata did not parse",
+        })?;
+    if !metadata.asset_base_path.starts_with('/')
+        || metadata.asset_base_path.starts_with("//")
+        || metadata.asset_base_path.ends_with('/')
+    {
+        return Err(ToolingError::InvalidRender {
+            reason: "the embedded Registry Stack asset path is not a root-relative directory",
+        });
+    }
+    Ok(metadata)
+}
+
+fn render_branding(root: &Path) -> Result<BrandingMetadata, ToolingError> {
+    let metadata = branding_metadata()?;
+    let mut theme: Value =
+        serde_json::from_str(BRANDING_THEME).map_err(|_| ToolingError::InvalidRender {
+            reason: "the embedded Registry Stack theme did not parse",
+        })?;
+    let Some(theme_fields) = theme.as_object_mut() else {
+        return Err(ToolingError::InvalidRender {
+            reason: "the embedded Registry Stack theme is not an object",
+        });
+    };
+    theme_fields.insert("resource_type".into(), json!("theme"));
+    theme_fields.insert("id".into(), json!(&metadata.theme_id));
+    write_owner_only(
+        &root
+            .join("themes")
+            .join(format!("{}.yaml", metadata.theme_id)),
+        yaml_document(&theme)?.as_bytes(),
+    )?;
+
+    let layout = json!({
+        "resource_type": "layout",
+        "id": metadata.layout_id,
+        "handle": "registry-stack",
+        "displayName": "Registry Stack",
+        "layout": {
+            "head": {
+                "stylesheets": [{
+                    "id": "registry-stack",
+                    "type": "inline",
+                    "content": BRANDING_STYLESHEET,
+                }]
+            }
+        },
+    });
+    write_owner_only(
+        &root
+            .join("layouts")
+            .join(format!("{}.yaml", metadata.layout_id)),
+        yaml_document(&layout)?.as_bytes(),
+    )?;
+
+    let assets = root
+        .parent()
+        .expect("resources is always below the state root")
+        .join(BRANDING_ASSETS_DIR);
+    write_owner_only(
+        &assets.join("registry-stack-wordmark.svg"),
+        BRANDING_WORDMARK,
+    )?;
+    write_owner_only(
+        &assets.join("fonts/public-sans-latin-wght-normal.woff2"),
+        BRANDING_FONT,
+    )?;
+    write_owner_only(
+        &assets.join("fonts/OFL-public-sans.txt"),
+        BRANDING_FONT_LICENSE,
+    )?;
+    Ok(metadata)
+}
+
 /// Render every native resource document for one validated description.
 ///
 /// The caller validates first; this function refuses an unvalidated shape
@@ -222,6 +326,11 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
     prepare_private_root(&description.state_root)?;
     let root = description.state_root.join(RESOURCES_DIR);
     let bootstrap_root = description.state_root.join(BOOTSTRAP_DIR);
+    let branding = if description.interactive_applications.is_empty() {
+        None
+    } else {
+        Some(render_branding(&root)?)
+    };
 
     // The bootstrap bundle already created the default organization unit,
     // and the upstream loader refuses a second document for an id the
@@ -433,6 +542,9 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
         )?;
     }
     for app in &description.interactive_applications {
+        let branding = branding
+            .as_ref()
+            .expect("interactive applications render branding");
         let secret = fs::read_to_string(description.state_root.join(&app.client_secret_file))
             .map_err(|_| ToolingError::Filesystem {
                 reason: "a browser application secret file could not be read",
@@ -448,6 +560,12 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
             "type": "fullstack", "ouHandle": description.organization_unit.handle,
             "url": app.origin,
             "authFlowId": "01900000-0000-7000-8000-000000000068",
+            "themeId": branding.theme_id,
+            "layoutId": branding.layout_id,
+            "logoUrl": format!(
+                "http://127.0.0.1:{}{}/registry-stack-wordmark.svg",
+                description.port, branding.asset_base_path
+            ),
             "isRegistrationFlowEnabled": false, "isRecoveryFlowEnabled": false,
             "allowedUserTypes": ["RegistryPerson"],
             "inboundAuthConfig": [{"type": "oauth2", "config": {
@@ -737,6 +855,12 @@ mod tests {
             json!(["evidence:invoke"])
         );
         assert_eq!(role["assignments"][0]["type"], json!("agent"));
+        assert!(
+            !description.state_root.join(BRANDING_ASSETS_DIR).exists(),
+            "machine-only sessions must not render presentation files"
+        );
+        assert!(!rendered.resources_dir.join("themes").exists());
+        assert!(!rendered.resources_dir.join("layouts").exists());
     }
 
     #[test]
@@ -1073,11 +1197,85 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert_eq!(app["inboundAuthConfig"][0]["config"]["pkceRequired"], true);
+        assert_eq!(app["authFlowId"], "01900000-0000-7000-8000-000000000068");
+        assert_eq!(app["themeId"], "019a05b7-1000-7000-8000-000000000001");
+        assert_eq!(app["layoutId"], "019a05b7-1000-7000-8000-000000000002");
         assert_eq!(
-            app["inboundAuthConfig"][0]["config"]["token"]["accessToken"]["userConfig"]
-                ["attributes"],
+            app["logoUrl"],
+            format!(
+                "http://127.0.0.1:{}/gate/assets/registry-stack/registry-stack-wordmark.svg",
+                description.port
+            )
+        );
+        let oauth = &app["inboundAuthConfig"][0]["config"];
+        assert_eq!(oauth["clientId"], "synthetic-browser");
+        assert_eq!(oauth["clientSecret"], "synthetic-application-secret");
+        assert_eq!(
+            oauth["redirectUris"],
+            json!(["http://127.0.0.1:3000/auth/callback"])
+        );
+        assert_eq!(oauth["grantTypes"], json!(["authorization_code"]));
+        assert_eq!(oauth["responseTypes"], json!(["code"]));
+        assert_eq!(oauth["tokenEndpointAuthMethod"], "client_secret_post");
+        assert_eq!(oauth["pkceRequired"], true);
+        assert_eq!(oauth["publicClient"], false);
+        assert_eq!(
+            oauth["token"]["accessToken"]["defaultAudience"],
+            "urn:registry:tooling-test:evidence"
+        );
+        assert_eq!(
+            oauth["token"]["accessToken"]["userConfig"]["attributes"],
             json!(["registry_role"])
+        );
+        assert_eq!(
+            oauth["token"]["accessToken"]["userConfig"]["validityPeriod"],
+            300
+        );
+        assert_eq!(oauth["token"]["idToken"]["validityPeriod"], 3600);
+
+        let theme: Value = serde_yaml_parse(
+            &fs::read_to_string(
+                rendered
+                    .resources_dir
+                    .join("themes/019a05b7-1000-7000-8000-000000000001.yaml"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let source_theme: Value = serde_json::from_str(BRANDING_THEME).unwrap();
+        assert_eq!(theme["resource_type"], "theme");
+        assert_eq!(theme["id"], "019a05b7-1000-7000-8000-000000000001");
+        for key in ["handle", "displayName", "description", "theme"] {
+            assert_eq!(theme[key], source_theme[key], "theme field {key} drifted");
+        }
+        let layout: Value = serde_yaml_parse(
+            &fs::read_to_string(
+                rendered
+                    .resources_dir
+                    .join("layouts/019a05b7-1000-7000-8000-000000000002.yaml"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(layout["resource_type"], "layout");
+        assert_eq!(layout["id"], "019a05b7-1000-7000-8000-000000000002");
+        assert_eq!(layout["handle"], "registry-stack");
+        assert_eq!(
+            layout["layout"]["head"]["stylesheets"][0],
+            json!({"id": "registry-stack", "type": "inline", "content": BRANDING_STYLESHEET})
+        );
+        let assets = description.state_root.join(BRANDING_ASSETS_DIR);
+        assert_eq!(
+            fs::read(assets.join("registry-stack-wordmark.svg")).unwrap(),
+            BRANDING_WORDMARK
+        );
+        assert_eq!(
+            fs::read(assets.join("fonts/public-sans-latin-wght-normal.woff2")).unwrap(),
+            BRANDING_FONT
+        );
+        assert_eq!(
+            fs::read(assets.join("fonts/OFL-public-sans.txt")).unwrap(),
+            BRANDING_FONT_LICENSE
         );
         assert!(rendered
             .resources_dir
