@@ -24,6 +24,7 @@ attribution because the pinned Gate version does not render layout footer slots.
 | `assets/` | Public Sans, its OFL licence, and the plain-text wordmark rendered as SVG paths. |
 | `build.py` | Packages API payloads, an importable YAML bundle, CSS, and static assets. Python 3.9 or later; no dependencies. |
 | `generate-wordmark.py` | Reproduces the wordmark from the included font; optional for ordinary use. |
+| `test_build.py` | Unit tests for `build.py`'s asset base URL handling; CI runs them on every pull request. |
 
 ## Build
 

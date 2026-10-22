@@ -33,7 +33,7 @@ def build(output: Path, asset_base: str) -> None:
     if output.resolve().is_relative_to(ROOT):
         raise ValueError("output must be outside the branding source directory")
     parsed = urlsplit(asset_base)
-    if parsed.query or parsed.fragment or parsed.username or parsed.password:
+    if "?" in asset_base or "#" in asset_base or parsed.username or parsed.password:
         raise ValueError("asset base must not contain credentials, a query, or a fragment")
     if not (asset_base.startswith("/") and not asset_base.startswith("//")) and not (
         parsed.scheme == "https" and parsed.netloc
