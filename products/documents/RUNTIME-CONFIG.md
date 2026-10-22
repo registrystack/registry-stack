@@ -191,9 +191,10 @@ whatever `audit.destination` is, and only from the Document Store's own
 crates: a dependency's log lines never reach it. `DOCUMENTS_LOG` selects the
 level, one of `error`, `warn`, or `info`, and defaults to `info` when unset.
 Any other value, including an empty one or a `RUST_LOG`-style directive,
-stops `documents` before it reads its arguments, with
+stops `documents serve` before it reads its runtime configuration, with
 `documents: DOCUMENTS_LOG must be one of error, warn, or info` and exit
-status 2. There is no `debug` level.
+status 2; `documents --version` and `--help` answer whatever the variable
+holds. There is no `debug` level.
 
 The log records startup, the background workers, and failures. It holds no
 access log: a request writes no log line at any level unless something fails

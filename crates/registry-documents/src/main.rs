@@ -8,6 +8,9 @@ use tracing_subscriber::prelude::*;
 
 #[tokio::main]
 async fn main() {
+    // Arguments are parsed first, so `--version` and `--help` answer whatever
+    // `DOCUMENTS_LOG` holds; a command still refuses an invalid level.
+    let matches = command().get_matches();
     let level = match operational_log_level(std::env::var("DOCUMENTS_LOG").ok().as_deref()) {
         Ok(level) => level,
         Err(error) => {
@@ -17,7 +20,6 @@ async fn main() {
     };
     initialize_logging(level);
 
-    let matches = command().get_matches();
     if let Err(error) = run(&matches).await {
         eprintln!("documents: {error}");
         std::process::exit(1);

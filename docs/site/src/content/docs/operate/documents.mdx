@@ -248,7 +248,7 @@ documents --runtime-config /etc/registry-documents/runtime.yaml serve
 
 It logs JSON lines on standard error, starting with `the Document Store is serving` and the
 address. `DOCUMENTS_LOG` sets the level to `error`, `warn`, or `info`, the default; any other value
-stops `documents` with exit status 2. The log has no line per request: a request is logged only when
+stops `documents serve` with exit status 2. The log has no line per request: a request is logged only when
 something fails behind it, such as the database or the token verifier, or when its token lacks a
 scope its profile requires. A refused request is explained by its problem response, and every
 audited operation, such as an upload, a download, or a grant, is in the audit journal.

@@ -37,6 +37,9 @@ The Document Store is held out of releases.
   startup message, the same `documentsctl.activation.*` code `documentsctl`
   reports for that database, so a supervisor log can be matched to the
   operator's diagnostic.
+- `documents --version` and `documents --help` answer whatever
+  `DOCUMENTS_LOG` holds; an invalid level still stops `documents serve` with
+  exit status 2.
 - An upload that finalizes a version wakes the verification worker of its
   process at once, so the version is verified without waiting for the
   five-second idle poll; the poll still picks up jobs enqueued by another
