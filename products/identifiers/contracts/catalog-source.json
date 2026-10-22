@@ -100,6 +100,16 @@
       "reason": "The unknown BReg request.plan_refused Problem is a synthetic client decoding fixture, not a current runtime Problem inventory entry."
     },
     {
+      "glob": "crates/registry-discovery-client-node/__test__/surface.test.js",
+      "classification": "fixture",
+      "reason": "The unknown future Registry Discovery Problem is a synthetic client decoding fixture outside the active resolver catalog by design."
+    },
+    {
+      "glob": "crates/registry-discovery-client/src/client.rs",
+      "classification": "fixture",
+      "reason": "The unknown future Registry Discovery Problem is a synthetic client decoding fixture outside the active resolver catalog by design."
+    },
+    {
       "glob": "crates/registry-manifest-core/tests/**",
       "classification": "fixture",
       "reason": "Manifest test shapes are local conformance fixtures, not Registry Stack identifier contracts."

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
@@ -84,7 +84,7 @@ async function fixture(t, {
   const prepare = (options = {}) => prepareReleaseDocsMetadata({
     siteRoot, version: '0.29.0', releaseId, date: '2026-09-10', ...options,
   });
-  return { read, write, prepare };
+  return { root, read, write, prepare };
 }
 
 test('prepares a future candidate from current product metadata and explicit external refs', async (t) => {
@@ -170,6 +170,35 @@ test('refuses a distribution selection for a different Stack version', async (t)
   };
   const { prepare } = await fixture(t, { distribution: selection });
   await assert.rejects(prepare(), /distribution selection stack_version must match/);
+});
+
+test('refuses symlinked and non-regular distribution selections', async (t) => {
+  const symlinkFixture = await fixture(t);
+  const symlinkPath = resolve(
+    symlinkFixture.root,
+    'release/distributions/v0.29.0.json',
+  );
+  const symlinkTarget = resolve(symlinkFixture.root, 'selection.json');
+  await mkdir(resolve(symlinkFixture.root, 'release/distributions'), { recursive: true });
+  await writeFile(symlinkTarget, '{}');
+  await symlink(symlinkTarget, symlinkPath);
+  await assert.rejects(symlinkFixture.prepare(), /distribution selection must be a regular file/);
+
+  const danglingFixture = await fixture(t);
+  const danglingPath = resolve(
+    danglingFixture.root,
+    'release/distributions/v0.29.0.json',
+  );
+  await mkdir(resolve(danglingFixture.root, 'release/distributions'), { recursive: true });
+  await symlink(resolve(danglingFixture.root, 'missing-selection.json'), danglingPath);
+  await assert.rejects(danglingFixture.prepare(), /distribution selection must be a regular file/);
+
+  const directoryFixture = await fixture(t);
+  await mkdir(resolve(
+    directoryFixture.root,
+    'release/distributions/v0.29.0.json',
+  ), { recursive: true });
+  await assert.rejects(directoryFixture.prepare(), /distribution selection must be a regular file/);
 });
 
 test('refuses a current product that names no release artifact', async (t) => {
