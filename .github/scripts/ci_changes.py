@@ -381,6 +381,19 @@ RENDER_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/first-render-document.mdx",
 )
 
+# Every input the Document Store tutorial gate replays or is built from. The
+# page runs against the registry-documentsctl binary built from the workspace,
+# with no database, container or network; package routing carries the crates.
+DOCUMENTS_TUTORIAL_INPUTS = (
+    "Cargo.lock",
+    "Cargo.toml",
+    "docs/site/package-lock.json",
+    "docs/site/package.json",
+    "docs/site/scripts/run-tutorial.mjs",
+    "docs/site/scripts/tutorial-runner/**",
+    "docs/site/src/content/docs/tutorials/first-documents.mdx",
+)
+
 # Every input the Registry Scheduling tutorial gate replays or is built from.
 # The pages run offline against schedulingctl built from the workspace and
 # start no service or container; package routing carries the crates.
@@ -524,6 +537,10 @@ CASEWORK_TUTORIAL_PACKAGES = frozenset(
 # calls carry. The client crates in the Messaging shard are not on the
 # replayed path.
 MESSAGING_TUTORIAL_PACKAGES = frozenset({"registry-messaging", "registry-messagingctl"})
+
+# The Document Store tutorial replays against the one registry-documentsctl
+# binary.
+DOCUMENTS_TUTORIAL_PACKAGES = frozenset({"registry-documentsctl"})
 
 # The Render tutorial replays against the one registry-render binary.
 RENDER_TUTORIAL_PACKAGES = frozenset({"registry-render"})
@@ -1466,6 +1483,12 @@ def classify(
         or bool(affected & MESSAGING_TUTORIAL_PACKAGES)
     )
 
+    documents_tutorial = (
+        complete
+        or any(matches(path, *DOCUMENTS_TUTORIAL_INPUTS) for path in paths)
+        or bool(affected & DOCUMENTS_TUTORIAL_PACKAGES)
+    )
+
     render_tutorial = (
         complete
         or any(matches(path, *RENDER_TUTORIAL_INPUTS) for path in paths)
@@ -1563,6 +1586,7 @@ def classify(
         "breg_tutorial": breg_tutorial,
         "casework_tutorial": casework_tutorial,
         "messaging_tutorial": messaging_tutorial,
+        "documents_tutorial": documents_tutorial,
         "render_tutorial": render_tutorial,
         "scheduling_tutorial": scheduling_tutorial,
         "breg_evidence_composition": breg_evidence_composition,
