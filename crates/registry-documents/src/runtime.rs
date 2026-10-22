@@ -27,7 +27,7 @@ use registry_platform_audit::{AuditDestination, AuditProfile, AuditWriter};
 use registry_platform_dispatch::postgres::{DispatchWorker, Dispatcher, WorkerConfig};
 use registry_platform_yaml::Report;
 use thiserror::Error;
-use tokio::sync::watch;
+use tokio::sync::{watch, Notify};
 use tracing_subscriber::filter::LevelFilter;
 
 use crate::activation::{self, ActivationError, ApplyRequest};
@@ -796,6 +796,22 @@ impl Prepared {
         self.hook_delivery.deliver_once().await
     }
 
+    /// One drain of the content verification worker per call, stopping
+    /// early once `stopped` turns true.
+    fn drain(
+        &self,
+        stopped: watch::Receiver<bool>,
+    ) -> impl FnMut() -> futures::future::BoxFuture<'static, ()> {
+        let worker = Arc::new(self.worker());
+        move || {
+            let worker = Arc::clone(&worker);
+            let stopped = stopped.clone();
+            Box::pin(async move {
+                worker.drain(&stopped).await;
+            })
+        }
+    }
+
     fn worker(&self) -> DispatchWorker<VerificationStore, VerificationTransport> {
         DispatchWorker::new(
             self.dispatcher.clone(),
@@ -822,7 +838,12 @@ impl Prepared {
         let mut tasks = vec![
             (
                 "content verification worker",
-                tokio::spawn(self.worker().run(stopped.clone())),
+                tokio::spawn(drain_until_stopped(
+                    self.drain(stopped.clone()),
+                    self.routes.service.verification_wake(),
+                    WORKER_IDLE_POLL,
+                    stopped.clone(),
+                )),
             ),
             (
                 "hook delivery worker",
@@ -851,6 +872,38 @@ impl Prepared {
                 .map_err(RuntimeError::Listen)
         };
         supervise(served, shutdown, stop, tasks).await
+    }
+}
+
+/// Run `drain` until `stopped` turns true or its sender closes. Between
+/// drains it waits for `wake`, which an upload in this process signals
+/// once its verification job is enqueued, or for `idle_poll`, which picks
+/// up jobs enqueued by another instance or retried after a backoff. A
+/// wake signalled while `drain` runs is kept, so the next drain follows
+/// at once.
+async fn drain_until_stopped<F, Fut>(
+    mut drain: F,
+    wake: Arc<Notify>,
+    idle_poll: Duration,
+    mut stopped: watch::Receiver<bool>,
+) where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    loop {
+        if *stopped.borrow() {
+            return;
+        }
+        drain().await;
+        tokio::select! {
+            changed = stopped.changed() => {
+                if changed.is_err() || *stopped.borrow() {
+                    return;
+                }
+            }
+            () = wake.notified() => {}
+            () = tokio::time::sleep(idle_poll) => {}
+        }
     }
 }
 
@@ -1053,6 +1106,77 @@ mod tests {
         .await;
         assert!(result.is_ok(), "{result:?}");
         assert!(worker_done.is_finished());
+    }
+
+    /// The verification loop over a drain that reports each run on a
+    /// channel, under paused time. The runtime advances the paused clock
+    /// only when every task waits, so a drain reached before
+    /// [`WORKER_IDLE_POLL`] has elapsed was not reached by the idle poll.
+    fn counted_loop(
+        wake: &Arc<Notify>,
+    ) -> (
+        tokio::sync::mpsc::UnboundedReceiver<()>,
+        watch::Sender<bool>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (drained, drains) = tokio::sync::mpsc::unbounded_channel();
+        let (stop, stopped) = watch::channel(false);
+        let worker = tokio::spawn(drain_until_stopped(
+            move || {
+                let drained = drained.clone();
+                async move {
+                    drained.send(()).unwrap();
+                }
+            },
+            Arc::clone(wake),
+            WORKER_IDLE_POLL,
+            stopped,
+        ));
+        (drains, stop, worker)
+    }
+
+    /// An upload in this process wakes the verification worker at once;
+    /// without a wake it drains again only after the idle poll, which is
+    /// how it finds work another instance enqueued.
+    #[tokio::test(start_paused = true)]
+    async fn a_wake_runs_the_verification_worker_before_its_idle_poll() {
+        let wake = Arc::new(Notify::new());
+        let (mut drains, stop, worker) = counted_loop(&wake);
+        let started = tokio::time::Instant::now();
+        drains.recv().await.unwrap();
+
+        wake.notify_one();
+        drains.recv().await.unwrap();
+        assert!(
+            started.elapsed() < WORKER_IDLE_POLL,
+            "the wake waited {:?}",
+            started.elapsed()
+        );
+
+        drains.recv().await.unwrap();
+        assert!(started.elapsed() >= WORKER_IDLE_POLL);
+
+        stop.send_replace(true);
+        worker.await.unwrap();
+    }
+
+    /// A wake that arrives while the worker drains is kept, so the job it
+    /// announces is run by the next drain rather than after the idle poll.
+    #[tokio::test(start_paused = true)]
+    async fn a_wake_during_a_drain_is_not_lost() {
+        let wake = Arc::new(Notify::new());
+        wake.notify_one();
+        let (mut drains, stop, worker) = counted_loop(&wake);
+        let started = tokio::time::Instant::now();
+        drains.recv().await.unwrap();
+        drains.recv().await.unwrap();
+        assert!(
+            started.elapsed() < WORKER_IDLE_POLL,
+            "the wake waited {:?}",
+            started.elapsed()
+        );
+        stop.send_replace(true);
+        worker.await.unwrap();
     }
 
     #[test]

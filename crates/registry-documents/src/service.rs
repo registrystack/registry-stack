@@ -35,6 +35,7 @@ use registry_platform_objectstore::ObjectStoreError;
 use registry_platform_yaml::{Digest, ExternalId, LocalId};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
+use tokio::sync::Notify;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
@@ -193,6 +194,10 @@ pub struct DocumentService {
     audit: DocumentsAudit,
     settings: ServiceSettings,
     hooks: ActivatedHooks,
+    /// Signalled when an upload finalizes a version and enqueues its
+    /// verification job, so the verification worker of this process runs
+    /// it without waiting for its idle poll.
+    verification_wake: Arc<Notify>,
 }
 
 impl std::fmt::Debug for DocumentService {
@@ -558,6 +563,7 @@ impl DocumentService {
             audit,
             settings,
             hooks,
+            verification_wake: Arc::new(Notify::new()),
         }
     }
 
@@ -574,7 +580,16 @@ impl DocumentService {
             audit,
             settings: self.settings.clone(),
             hooks: self.hooks.clone(),
+            verification_wake: Arc::clone(&self.verification_wake),
         }
+    }
+
+    /// What this service signals when an upload enqueues a verification
+    /// job. It holds one permit while no worker waits, so a job enqueued
+    /// while the worker drains is run by its next drain.
+    #[must_use]
+    pub fn verification_wake(&self) -> Arc<Notify> {
+        Arc::clone(&self.verification_wake)
     }
 
     /// The in-flight byte budget this service and content verification
@@ -1302,6 +1317,7 @@ impl DocumentService {
             .commit()
             .await
             .map_err(|error| unavailable("finalize commit", &error))?;
+        self.verification_wake.notify_one();
         Ok(true)
     }
 

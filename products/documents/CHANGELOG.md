@@ -22,6 +22,10 @@ The Document Store is held out of releases.
   access to the activation ledger, as `documentsctl.activation.ledger-unreadable`
   with the action to restore the role's grants, rather than as a database no
   package was applied to.
+- An upload that finalizes a version wakes the verification worker of its
+  process at once, so the version is verified without waiting for the
+  five-second idle poll; the poll still picks up jobs enqueued by another
+  instance.
 
 - The product skeleton: `registry-documents-core`, the `registry-documents`
   runtime and `documents` binary, `registry-documentsctl` and the

@@ -1330,6 +1330,29 @@ async fn identical_content_uploaded_twice_gives_two_documents() {
     assert_eq!(contents, 2);
 }
 
+/// An upload that finalizes a version wakes the verification worker of
+/// its process, so the version is verified without waiting for the idle
+/// poll; a reservation alone enqueues nothing and wakes nothing.
+#[tokio::test]
+async fn a_finalized_upload_wakes_the_verification_worker() {
+    use futures::FutureExt as _;
+
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let wake = prepared.service().verification_wake();
+    let content = pdf(128, 14);
+    let reserved = api
+        .reserve(APP, "citizen-delivery", CITIZEN.subject, &content, PDF)
+        .await;
+    assert!(wake.notified().now_or_never().is_none());
+
+    let (_, _, path) = reservation(&reserved);
+    let put = api.put(APP, &path, PDF, Body::from(content)).await;
+    assert_eq!(put.status, 200, "{}", String::from_utf8_lossy(&put.body));
+    assert!(wake.notified().now_or_never().is_some());
+}
+
 #[tokio::test]
 async fn an_expired_or_unknown_upload_is_refused() {
     let deployment = deployment().await;
