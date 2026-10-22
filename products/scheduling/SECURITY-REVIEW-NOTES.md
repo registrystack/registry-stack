@@ -433,7 +433,7 @@ refusal that reports it offline.
 Package activation moved from `scheduling migrate` and a startup that
 adopted the database and published the policy to `schedulingctl plan`,
 `schedulingctl apply`, and `schedulingctl status` over a database
-activation ledger, `scheduling_activations`, part of the schema version 100
+activation ledger, `scheduling_activations`, part of the schema version 200
 baseline. It changes
 what authorizes the runtime to serve a package, the split between the two
 database credentials, deployment defaults, and audit, so it is
@@ -760,7 +760,7 @@ built for.
 **Accepted residual.** The removed-key refusals remain. Installation neither
 creates nor drops an audit outbox. A database an earlier release migrated is
 refused as a pre-1.0 schema, because its ledger holds a version below the
-version 100 baseline, with an instruction to apply to a new database; no
+version 200 baseline, with an instruction to apply to a new database; no
 release upgrades that state in place.
 
 ## Fresh task-grant status stays outside the capacity transaction
@@ -1041,7 +1041,7 @@ covers that entry point; unit tests pin the 16/17 version boundary.
 
 ## Fresh attempt keys and claim ownership
 
-Threat and enforcement: Installation must not rewrite the identity of a spent attempt or invent a claim owner. The baseline carries the live attempt-reference and owner constraints and no attempt digest backfill or erased-receipt caller rewrite. Fresh creation omits the obsolete audit outbox, and installation never drops an existing one; a database holding an earlier release's schema is refused as a pre-1.0 schema, because its ledger holds a version below the version 100 baseline, and nothing is committed. The stored-policy reader does not discard obsolete windows, same-policy publication does not reconstruct a missing document, and window-head creation does not copy earlier window rows. Capacity transactions, whole owner-pair checks, audit rotation, caller replay, and retention behavior are unchanged.
+Threat and enforcement: Installation must not rewrite the identity of a spent attempt or invent a claim owner. The baseline carries the live attempt-reference and owner constraints and no attempt digest backfill or erased-receipt caller rewrite. Fresh creation omits the obsolete audit outbox, and installation never drops an existing one; a database holding an earlier release's schema is refused as a pre-1.0 schema, because its ledger holds a version below the version 200 baseline, and nothing is committed. The stored-policy reader does not discard obsolete windows, same-policy publication does not reconstruct a missing document, and window-head creation does not copy earlier window rows. Capacity transactions, whole owner-pair checks, audit rotation, caller replay, and retention behavior are unchanged.
 
 Verification: `registry-scheduling/tests/postgres_commitments.rs::rotating_the_audit_key_keeps_existing_claims_with_their_owner` and `registry-schedulingctl/tests/activation_postgres.rs::fresh_claim_storage_refuses_a_partial_owner`. Schema-only dumps of separate fresh
 installations are compared before and after, with no ledger data.
@@ -1316,7 +1316,7 @@ finish an intent another worker has since re-leased, or send a reminder for
 an appointment that was cancelled or moved.
 
 Enforcement: `scheduling_outbox` in
-`crates/registry-scheduling/migrations/0100_scheduling.sql` is the
+`crates/registry-scheduling/migrations/0200_scheduling.sql` is the
 `registry-platform-dispatch` job table shape keyed by `outbox_id` and
 `purpose`, with Scheduling's own columns and constraints added after it; a
 row set aside must name its `last_failure_class`, and a delivered row names

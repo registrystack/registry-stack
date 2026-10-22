@@ -9014,6 +9014,17 @@ async fn due_intents_are_claimed_by_instant_then_identifier() {
 
 #[tokio::test]
 async fn a_pre_1_0_schema_is_refused_by_migrate_and_readiness() {
+    refuses_a_pre_1_0_ledger_at_migrate_and_readiness(1).await;
+}
+
+/// v0.42.0 and v0.43.0 recorded their baseline as version 100, whose outbox
+/// is not the shared dispatch shape this release reads.
+#[tokio::test]
+async fn a_v0_43_0_baseline_ledger_is_refused_by_migrate_and_readiness() {
+    refuses_a_pre_1_0_ledger_at_migrate_and_readiness(100).await;
+}
+
+async fn refuses_a_pre_1_0_ledger_at_migrate_and_readiness(version: i64) {
     let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
         .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
     let schema = format!("scheduling_{}", Uuid::new_v4().simple());
@@ -9031,7 +9042,7 @@ async fn a_pre_1_0_schema_is_refused_by_migrate_and_readiness() {
                  applied_at timestamptz NOT NULL
              );
              INSERT INTO {schema}.scheduling_schema_migrations(version, applied_at)
-                 VALUES (1, now());"
+                 VALUES ({version}, now());"
         ))
         .await
         .expect("seed the ledger a pre-1.0 release left");
@@ -9053,12 +9064,12 @@ async fn a_pre_1_0_schema_is_refused_by_migrate_and_readiness() {
         .expect_err("a pre-1.0 schema is never upgraded in place");
     assert!(matches!(
         &refusal,
-        StoreError::Pre1_0Schema { versions } if versions == &vec![1]
+        StoreError::Pre1_0Schema { versions } if versions == &vec![version]
     ));
     assert!(refusal.to_string().contains("fresh database"), "{refusal}");
     assert!(matches!(
         store.ready().await,
-        Err(StoreError::Pre1_0Schema { versions }) if versions == vec![1]
+        Err(StoreError::Pre1_0Schema { versions }) if versions == vec![version]
     ));
 }
 

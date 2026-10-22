@@ -58,8 +58,8 @@ pub struct SchemaState {
 }
 
 impl SchemaState {
-    /// Refuse a version this release does not know: one below the 1.0
-    /// baseline was left by a pre-1.0 release, a newer one belongs to a later
+    /// Refuse a version this release does not know: one below the
+    /// baseline was left by an earlier pre-1.0 release, a newer one belongs to a later
     /// release, and an unknown one in between is a damaged ledger.
     pub fn check(&self) -> Result<(), StoreError> {
         self.check_against(&SCHEMA_VERSIONS)
@@ -902,42 +902,52 @@ mod tests {
     #[test]
     fn a_newer_schema_version_names_the_release_that_applied_it() {
         let state = SchemaState {
-            applied: SCHEMA_VERSIONS.iter().copied().chain([199]).collect(),
+            applied: SCHEMA_VERSIONS.iter().copied().chain([299]).collect(),
             pending: Vec::new(),
         };
         assert!(matches!(
             state.check(),
-            Err(StoreError::SchemaNewer { version: 199 })
+            Err(StoreError::SchemaNewer { version: 299 })
         ));
         let damaged = SchemaState {
-            applied: vec![100, 102],
+            applied: vec![200, 202],
             pending: Vec::new(),
         };
         assert!(matches!(
-            damaged.check_against(&[100, 101, 103]),
+            damaged.check_against(&[200, 201, 203]),
             Err(StoreError::Corrupt)
         ));
     }
 
     #[test]
-    fn the_baseline_is_version_100_and_later_versions_increase() {
-        assert_eq!(SCHEMA_VERSIONS[0], 100);
+    fn the_baseline_is_version_200_and_later_versions_increase() {
+        assert_eq!(SCHEMA_VERSIONS[0], 200);
         assert!(crate::store::versions_start_at_baseline_and_increase(
             &SCHEMA_VERSIONS
         ));
         assert!(crate::store::versions_start_at_baseline_and_increase(&[
-            100, 101
+            200, 201
         ]));
         assert!(!crate::store::versions_start_at_baseline_and_increase(&[1]));
         assert!(!crate::store::versions_start_at_baseline_and_increase(&[
-            100, 100
+            100
+        ]));
+        assert!(!crate::store::versions_start_at_baseline_and_increase(&[
+            200, 200
         ]));
     }
 
     #[test]
     fn every_ledger_below_the_baseline_is_a_named_pre_1_0_refusal() {
         let beta_range: Vec<i64> = (1..=13).collect();
-        for applied in [vec![1], vec![1, 2], beta_range, vec![19], vec![1, 100]] {
+        for applied in [
+            vec![1],
+            vec![1, 2],
+            beta_range,
+            vec![19],
+            vec![1, 100],
+            vec![100],
+        ] {
             let state = SchemaState {
                 applied: applied.clone(),
                 pending: Vec::new(),
@@ -953,7 +963,7 @@ mod tests {
             assert!(message.contains("pre-1.0 schema"), "{message}");
             assert!(message.contains("fresh database"), "{message}");
         }
-        for applied in [vec![], vec![100]] {
+        for applied in [vec![], vec![200]] {
             SchemaState {
                 applied,
                 pending: Vec::new(),
