@@ -62,6 +62,9 @@ class GateInventoryTest(unittest.TestCase):
         self.messaging_checkpoint_runner = (
             ROOT / "products" / "messaging" / "scripts" / "check-checkpoint.sh"
         ).read_text(encoding="utf-8")
+        self.documents_checkpoint_runner = (
+            ROOT / "products" / "documents" / "scripts" / "check-checkpoint.sh"
+        ).read_text(encoding="utf-8")
         self.nightly_security = (
             ROOT / ".github" / "workflows" / "nightly-security.yml"
         ).read_text(encoding="utf-8")
@@ -1161,6 +1164,96 @@ class GateInventoryTest(unittest.TestCase):
             with self.subTest(gate=gate):
                 text = self.workflow.replace(snippet, "true # disabled", 1)
                 self.assertIn(gate, self.module.missing_gates(text))
+
+    def test_missing_documents_workflow_gates_are_reported(self) -> None:
+        for snippet, gate in (
+            (
+                "documents_contracts: ${{ steps.filter.outputs.documents_contracts }}",
+                "Document Store contract path filter",
+            ),
+            (
+                "documents-contracts:\n    name: Document Store product contracts",
+                "Document Store contract gate",
+            ),
+            (
+                "run: uv run --no-project --with PyYAML==6.0.2 products/documents/scripts/check-contracts.sh",
+                "Document Store contract reproduction",
+            ),
+            (
+                "documents_postgres: ${{ steps.filter.outputs.documents_postgres }}",
+                "Document Store PostgreSQL path filter",
+            ),
+            (
+                "documents-postgres:\n    name: Document Store PostgreSQL runtime",
+                "Document Store PostgreSQL gate",
+            ),
+            (
+                "          POSTGRES_DB: documents",
+                "Document Store PostgreSQL 17 image pin",
+            ),
+            (
+                "run: uv run --no-project --with PyYAML==6.0.2 products/documents/scripts/check-checkpoint.sh",
+                "Document Store product checkpoint wrapper",
+            ),
+            (
+                "cargo test --locked -p registry-documents --features postgres-test --test postgres_startup --test postgres_operator --test postgres_documents --test postgres_s3",
+                "Document Store runtime PostgreSQL suites",
+            ),
+            (
+                "cargo test --locked -p registry-documentsctl --features postgres-test --test postgres_cli",
+                "Document Store operator PostgreSQL suite",
+            ),
+            (
+                "cargo test --locked -p registry-documents --features postgres-test --test postgres_journey",
+                "Document Store golden journey PostgreSQL suite",
+            ),
+            (
+                "cargo test --locked -p registry-documents --features postgres-test --test postgres_hooks",
+                "Document Store hooks PostgreSQL suite",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, "true # disabled", 1)
+                self.assertIn(gate, self.module.missing_gates(text))
+
+    def test_missing_documents_checkpoint_wrapper_steps_are_reported(self) -> None:
+        for snippet, gate in (
+            (
+                "python3 products/documents/scripts/check_dependency_direction.py",
+                "Document Store dependency-direction guard",
+            ),
+            (
+                "python3 products/documents/scripts/check_database_test_isolation.py",
+                "Document Store database test isolation guard",
+            ),
+            (
+                "python3 -m unittest discover -s products/documents/scripts -p 'test_*.py'",
+                "Document Store product script tests",
+            ),
+            (
+                "python3 products/documents/scripts/validate_contracts.py",
+                "Document Store security contract validation",
+            ),
+            (
+                "cargo test --locked --quiet -p registry-documents --features schema",
+                "Document Store generated document drift check",
+            ),
+            (
+                "expect_refusal unknown-key --runtime-config /listener/port config.unknown-key",
+                "Document Store configuration refusal journeys",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                runner = self.documents_checkpoint_runner.replace(
+                    snippet, "true # disabled", 1
+                )
+                self.assertIn(
+                    gate,
+                    self.module.missing_gates(
+                        self.workflow,
+                        documents_checkpoint_runner_text=runner,
+                    ),
+                )
 
     def test_missing_messaging_checkpoint_wrapper_steps_are_reported(self) -> None:
         for snippet, gate in (

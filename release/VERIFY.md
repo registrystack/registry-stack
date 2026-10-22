@@ -205,6 +205,8 @@ the separate Evidence OID4VCI adapter image join at `v0.38.0`.
 Registry Relay's final numbered release is `v0.38.0`; releases from `v0.39.0`
 omit it from the image and payload rosters. Registry Coordinator runtime publication remains held. Its first binary and image release is
 set by `COORDINATOR_FIRST_RELEASE` once publication prerequisites are ready.
+The Registry Document Store is held out of every release while
+`DOCUMENTS_FIRST_RELEASE` is `None`, and no release roster names it.
 `BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,
 `RENDER_FIRST_RELEASE`, `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE`, and
 `COORDINATOR_FIRST_RELEASE` in `release/scripts/release_roster.py` own these
@@ -292,6 +294,8 @@ The Coordinator runtime `coordinator` and operator tool `coordinatorctl` join th
 verified binary payload only when `COORDINATOR_FIRST_RELEASE` enables publication.
 Until then, build them from the release source. The unified client packages carry no
 Coordinator client; build the `registry-coordinator-client` crate and its bindings from source.
+No release payload carries the Document Store runtime `documents` or operator tool
+`documentsctl`; build them from the release source.
 
 ## Verify client registries
 
