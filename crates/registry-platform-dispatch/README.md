@@ -134,6 +134,43 @@ doubling schedule from 30 seconds, eight attempts, `Retry` on an uncertain
 outcome, no expiry, quarantine of rows a claim cannot take, and a fixed
 5-second attempt timeout. See `crates/registry-scheduling/src/runtime/intents.rs`.
 
+Base Registry Engine verifies uploaded attachments on this core over its
+`registry_internal.registry_attachment_verification_jobs` table, one job per
+pending verdict row enqueued in the upload transaction, with a frozen backoff
+from 30 seconds doubling to one hour under equal jitter, `i16::MAX` attempts,
+`Retry` on an uncertain outcome, no expiry, no quarantine, no replay, and a
+fixed 60-second attempt timeout of which the storage read and the verifier
+call share at most 55 seconds. See
+`crates/registry-breg/src/attachment_verification_worker.rs`.
+
+Registry Document Store verifies finalized content on this core over its
+`documents_verification_jobs` table, one job per version and verifier
+binding, with a frozen backoff from 30 seconds doubling to one hour under
+equal jitter, 231 attempts (about seven days), `Retry` on an uncertain
+outcome, no expiry, no quarantine, operator replay of dead-lettered jobs, and
+a 60-second attempt timeout whose storage read and verifier call are cut to
+the attempt budget that remains. See `crates/registry-documents/src/verification.rs`.
+
+Registry Document Store erases due content on this core over its
+`documents_erasure_jobs` table, one job per version, with the same frozen
+backoff, attempt count, uncertain-outcome policy, expiry, replay and attempt
+timeout as its verification jobs. See `crates/registry-documents/src/erasure.rs`.
+
+Registry Messaging dispatches accepted messages on this core over its
+`messaging_dispatch_jobs` table, with each message's policy captured at
+acceptance: its attempt count and its backoff bounds doubling under equal
+jitter, `Hold` or retry-then-hold on an uncertain outcome, the message's
+`expiresAt` as its expiry, quarantine of rows a claim cannot take, operator
+replay of dead-lettered and unknown jobs, and the provider's timeout as the
+attempt timeout, from 1 to 60 seconds. See `crates/registry-messaging/src/dispatch.rs`.
+
+Registry Coordinator runs process steps on this core over the `jobs` table of
+its `coordinator_` namespace, with a frozen backoff from 1 second doubling to
+five minutes under equal jitter, ten attempts, `Hold` on an uncertain outcome,
+the run deadline as the expiry of every step that calls a product, no
+quarantine, operator replay of dead-lettered and unknown jobs, and a fixed
+10-second attempt timeout. See `crates/registry-coordinator/src/store.rs`.
+
 The `postgres-test` feature enables the PostgreSQL test consumer in
 `tests/postgres_dispatch.rs`. Its tests require `DISPATCH_TEST_DATABASE_URL`,
 naming a disposable database, and fail when it is absent.
