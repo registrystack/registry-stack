@@ -690,10 +690,10 @@ shape is refused at construction with kind `configuration`.
     crates/registry-breg-client-node/client.d.ts, requestTimeoutMilliseconds,
     crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, request_timeout_seconds */}
 
-### Verify a webhook delivery
+### Verify a hook delivery
 
 `verifyHookDelivery` in Node and `verify_hook_delivery` in Python authenticate one exact BReg
-Version 1 webhook request with the shared Rust verifier. Pass the received method, request target,
+Version 1 hook request with the shared Rust verifier. Pass the received method, request target,
 headers, body bytes, and key without normalizing them. The result carries the authenticated
 CloudEvents attributes, delivery metadata, and body. It does not decide whether the delivery is
 fresh, expected by this receiver, or already applied; the receiver checks those, in this order.
@@ -749,7 +749,7 @@ async function receiveWebhook(request, response, key, eventStore) {
 
   const skew = Math.abs(Date.now() - Date.parse(delivery.deliveryTime));
   if (!Number.isFinite(skew) || skew > MAX_CLOCK_SKEW_MS) {
-    throw new Error('webhook delivery is outside the accepted clock skew');
+    throw new Error('hook delivery is outside the accepted clock skew');
   }
   if (delivery.source !== EXPECTED_SOURCE
       || delivery.type !== EXPECTED_TYPE
@@ -787,7 +787,7 @@ def receive_webhook(method, path, headers, body, key, event_store):
     sent = datetime.fromisoformat(delivery["delivery_time"])
     skew = abs((datetime.now(timezone.utc) - sent).total_seconds())
     if skew > MAX_CLOCK_SKEW_SECONDS:
-        raise ValueError("webhook delivery is outside the accepted clock skew")
+        raise ValueError("hook delivery is outside the accepted clock skew")
     if (delivery["source"], delivery["type"], delivery["dataschema"]) != (
         EXPECTED_SOURCE, EXPECTED_TYPE, EXPECTED_DATASCHEMA,
     ):
@@ -921,7 +921,7 @@ optional `code`, `refusalCode`, `reasonCode`, `fieldPath`, `constraint`, `status
 | `problem` | The server answered with any other Problem |
 | `protocol` | The response broke the contract |
 | `metadata-selection` | No binding matched the metadata |
-| `hook-verification` | A webhook delivery failed authentication |
+| `hook-verification` | A hook delivery failed authentication |
 | `client` | Any other client-side failure |
 
 `refusalCode` carries the declared reason for `action.refused` or

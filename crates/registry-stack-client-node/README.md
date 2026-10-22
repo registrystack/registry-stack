@@ -105,7 +105,7 @@ the exact bytes of one Version 1 hook delivery. The result returns
 `deliveryTime` and `idempotencyKey`; the receiver must bound clock skew and
 deduplicate once-only effects on authenticated `source` plus `id`, or on an
 application business key. See
-[Verify a hook delivery](https://docs.registrystack.org/reference/client-api/#verify-a-webhook-delivery)
+[Verify a hook delivery](https://docs.registrystack.org/reference/client-api/#verify-a-hook-delivery)
 for a receiver example.
 
 ## Versioning
