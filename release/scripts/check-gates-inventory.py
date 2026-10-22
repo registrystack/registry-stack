@@ -25,6 +25,9 @@ SCHEDULING_CHECKPOINT_RUNNER = (
 MESSAGING_CHECKPOINT_RUNNER = (
     ROOT / "products" / "messaging" / "scripts" / "check-checkpoint.sh"
 )
+DOCUMENTS_CHECKPOINT_RUNNER = (
+    ROOT / "products" / "documents" / "scripts" / "check-checkpoint.sh"
+)
 
 REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
@@ -503,6 +506,76 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Messaging product script tests",
         "python3 -m unittest discover -s products/messaging/scripts -p 'test_*.py'",
+    ),
+    (
+        "Document Store contract path filter",
+        "documents_contracts: ${{ steps.filter.outputs.documents_contracts }}",
+    ),
+    (
+        "Document Store contract gate",
+        "documents-contracts:\n    name: Document Store product contracts",
+    ),
+    (
+        "Document Store contract reproduction",
+        "run: uv run --no-project --with PyYAML==6.0.2 products/documents/scripts/check-contracts.sh",
+    ),
+    (
+        "Document Store PostgreSQL path filter",
+        "documents_postgres: ${{ steps.filter.outputs.documents_postgres }}",
+    ),
+    (
+        "Document Store PostgreSQL gate",
+        "documents-postgres:\n    name: Document Store PostgreSQL runtime",
+    ),
+    (
+        "Document Store PostgreSQL 17 image pin",
+        "image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
+        "        env:\n"
+        "          POSTGRES_DB: documents",
+    ),
+    (
+        "Document Store product checkpoint wrapper",
+        "run: uv run --no-project --with PyYAML==6.0.2 products/documents/scripts/check-checkpoint.sh",
+    ),
+    (
+        "Document Store dependency-direction guard",
+        "python3 products/documents/scripts/check_dependency_direction.py",
+    ),
+    (
+        "Document Store database test isolation guard",
+        "python3 products/documents/scripts/check_database_test_isolation.py",
+    ),
+    (
+        "Document Store product script tests",
+        "python3 -m unittest discover -s products/documents/scripts -p 'test_*.py'",
+    ),
+    (
+        "Document Store security contract validation",
+        "python3 products/documents/scripts/validate_contracts.py",
+    ),
+    (
+        "Document Store generated document drift check",
+        "cargo test --locked --quiet -p registry-documents --features schema",
+    ),
+    (
+        "Document Store configuration refusal journeys",
+        "expect_refusal unknown-key --runtime-config /listener/port config.unknown-key",
+    ),
+    (
+        "Document Store runtime PostgreSQL suites",
+        "cargo test --locked -p registry-documents --features postgres-test --test postgres_startup --test postgres_operator --test postgres_documents --test postgres_s3",
+    ),
+    (
+        "Document Store operator PostgreSQL suite",
+        "cargo test --locked -p registry-documentsctl --features postgres-test --test postgres_cli",
+    ),
+    (
+        "Document Store golden journey PostgreSQL suite",
+        "cargo test --locked -p registry-documents --features postgres-test --test postgres_journey",
+    ),
+    (
+        "Document Store hooks PostgreSQL suite",
+        "cargo test --locked -p registry-documents --features postgres-test --test postgres_hooks",
     ),
     (
         "Coordinator dependency-direction guard",
@@ -1411,6 +1484,7 @@ def missing_gates(
     scheduling_checkpoint_runner_text: str | None = None,
     messaging_checkpoint_runner_text: str | None = None,
     casework_schema_runner_text: str | None = None,
+    documents_checkpoint_runner_text: str | None = None,
 ) -> list[str]:
     if classifier_text is None:
         classifier_text = CI_CLASSIFIER.read_text(encoding="utf-8")
@@ -1444,10 +1518,17 @@ def missing_gates(
             if MESSAGING_CHECKPOINT_RUNNER.is_file()
             else ""
         )
+    if documents_checkpoint_runner_text is None:
+        documents_checkpoint_runner_text = (
+            DOCUMENTS_CHECKPOINT_RUNNER.read_text(encoding="utf-8")
+            if DOCUMENTS_CHECKPOINT_RUNNER.is_file()
+            else ""
+        )
     inventory_text = (
         f"{workflow_text}\n{classifier_text}\n{platform_fuzz_runner_text}\n"
         f"{casework_checkpoint_runner_text}\n{casework_schema_runner_text}\n"
-        f"{scheduling_checkpoint_runner_text}\n{messaging_checkpoint_runner_text}"
+        f"{scheduling_checkpoint_runner_text}\n{messaging_checkpoint_runner_text}\n"
+        f"{documents_checkpoint_runner_text}"
     )
     return [name for name, snippet in REQUIRED_GATES if snippet not in inventory_text]
 

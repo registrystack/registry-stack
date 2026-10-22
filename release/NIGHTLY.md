@@ -42,8 +42,9 @@ Coordinator joined. `registry-stack.nightly-roster.v2.1` adds the
 binaries, and nightlies use it from the base version that
 `COORDINATOR_FIRST_RELEASE` in `release/scripts/release_roster.py` names. The
 reader accepts both, so a v2.0 nightly built from the same base version before
-Coordinator joined stays readable. An incompatible inventory requires a new
-schema and profile. The reader still accepts frozen
+Coordinator joined stays readable. No profile carries the Registry Document
+Store, which stays held out while `DOCUMENTS_FIRST_RELEASE` is `None`. An
+incompatible inventory requires a new schema and profile. The reader still accepts frozen
 `registry-stack.nightly.v1` manifests, including historical v0.39.0 nightlies
 that carried Relay, so an existing channel head can be reconciled and advanced
 without rewriting published bytes.
