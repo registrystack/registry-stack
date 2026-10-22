@@ -27,8 +27,8 @@ the check refuse an unsafe setting, and package the project for a deployment to 
 
 ## Build documentsctl
 
-The Document Store is held out of releases, so build its tooling from the checkout. From the
-checkout's root:
+Build the tooling from the checkout, as the [overview](../../start/documents/#status) explains.
+From the checkout's root:
 
 ```sh test-skip="builds from source; the gate puts the binary under test on PATH"
 . scripts/cargo-runtime-library-path.sh
@@ -85,9 +85,9 @@ including in continuous integration.
 
 ## Read a refusal
 
-Every policy waits a grace period between a removal request and erasing the bytes, so an operator
-can still restore from a mistaken request. Set the first policy's grace period to zero in
-`my-documents/documents.yaml`:
+Every policy waits a grace period of at least one hour between a removal request and erasing the
+bytes; [Removal and erasure](../../operate/documents/#removal-and-erasure) says why. Set the first
+policy's grace period to zero in `my-documents/documents.yaml`:
 
 ```diff lang="yaml" title="my-documents/documents.yaml" test-edit
        # erasure of the bytes; at least one hour. Grant expiry and
@@ -149,6 +149,15 @@ digest as `package.expectedDigest`, so the service refuses to start on any other
 
 {/* Evidence: crates/registry-documentsctl/src/lib.rs, package;
     products/documents/RUNTIME-CONFIG.md, Startup. */}
+
+## Clean up
+
+Nothing ran in the background, and nothing was written outside the directory you are in. Keep the
+project if you will deploy it; otherwise remove the two directories:
+
+```sh
+rm -r my-documents package
+```
 
 ## Next
 

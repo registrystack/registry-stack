@@ -84,19 +84,19 @@ Product names are always in English, including on future translated pages.
   <dd>Registry Casework's runtime record of <a href="#team">teams</a>, their staff and supervisors, and the <a href="#queue">queues</a> they serve, maintained by an administrator through the directory API under revisions. See <a href="../../configure/casework-directory/">Staff the directory</a>.</dd>
 
   <dt id="document">document</dt>
-  <dd>In the <a href="#registry-documents">Registry Document Store</a>, a record reserved under one document policy by an owning system, holding one or more immutable <a href="#document-version">document versions</a>. Its <a href="#document-custody">custody</a> is fixed when it is reserved. A <a href="#registry-render">Registry Render</a> PDF can become a document's bytes, but the two products do not call each other.</dd>
+  <dd>In the <a href="#registry-documents">Registry Document Store</a>, a record reserved under one document policy by an owning system, holding one immutable <a href="#document-version">document version</a>. Its <a href="#document-custody">custody</a> is fixed when it is reserved. A <a href="#registry-render">Registry Render</a> PDF can become a document's bytes, but the two products do not call each other.</dd>
 
   <dt id="document-custody">document custody</dt>
   <dd>Who holds a Registry Document Store <a href="#document">document</a>, fixed by its policy: the person it was placed for (`represented-principal`) or the institution whose system reserved it (`institution`). Only the custodian may remove the document.</dd>
 
   <dt id="document-grant">document grant</dt>
-  <dd>A Registry Document Store release of one exact, `ready` <a href="#document-version">document version</a> to one named recipient until a fixed expiry within the policy's bounds. It keeps the policy terms it was issued under. Revoking it or letting it expire erases nothing.</dd>
+  <dd>A Registry Document Store release of one exact, `ready` <a href="#document-version">document version</a> to one named recipient until a fixed expiry within the policy's bounds. It keeps its expiry; who may hold it follows the active package, so a policy change applies to grants already issued. Revoking it or letting it expire erases nothing.</dd>
 
   <dt id="document-version">document version</dt>
-  <dd>One immutable upload of a Registry Document Store <a href="#document">document</a>'s bytes, checked against the digest and length declared when it was reserved. Its status moves from `awaiting-content` through `pending` to `ready` after <a href="#content-verification">content verification</a>, or to `rejected`; removal moves it to `erasure-pending` and then `erased`, and its record stays.</dd>
+  <dd>One immutable upload of a Registry Document Store <a href="#document">document</a>'s bytes, checked against the digest and length declared when it was reserved. Its status moves from `awaiting-content` through `pending` to `ready` after <a href="#content-verification">content verification</a>, or to `rejected`, which it reads until its bytes are erased. A `ready` version reads `suspended` while it is not releasable, such as while a changed verifier checks it again. Removal moves it to `erasure-pending` and then `erased`, and its record stays.</dd>
 
   <dt id="erasure">erasure</dt>
-  <dd>The irreversible removal of retained detail under an approved retention request. In Base Registry Engine, `bregctl history erase` and `bregctl proposal-retention erase` remove retained revisions or Proposal detail, never the current record or the <a href="#audit-journal">audit journal</a>; Registry Casework erases expired review data through runtime maintenance. In the Registry Document Store, removing a <a href="#document">document</a> or a rejection erases its bytes after the policy's grace period and keeps its record; backups and replicas keep their own copies.</dd>
+  <dd>The irreversible removal of retained detail under an approved retention request. In Base Registry Engine, `bregctl history erase` and `bregctl proposal-retention erase` remove retained revisions or Proposal detail, never the current record or the <a href="#audit-journal">audit journal</a>; Registry Casework erases expired review data through runtime maintenance. In the Registry Document Store, removing a <a href="#document">document</a> or a rejection erases its bytes after the policy's grace period and keeps its record. Erased bytes stay on PostgreSQL pages until they are overwritten, and backups, replicas, and the old versions a versioned bucket keeps hold their own copies.</dd>
 
   <dt id="evidence-gateway">Registry Evidence</dt>
   <dd>The minimum-disclosure assertion product: it answers one predefined question from a fixed read of your system with a signed <a href="#assertion">assertion</a>, never the source record. Binaries `evidence` and `evidencectl`.</dd>
@@ -186,7 +186,7 @@ Product names are always in English, including on future translated pages.
   <dd>A curated, read-only index that tells an application which Evidence types meet a requirement and which Registry Evidence services assert them. It holds no credentials and vouches for no provider; trust stays with the application. See the <a href="../../start/discovery/">Registry Discovery overview</a>.</dd>
 
   <dt id="registry-documents">Registry Document Store</dt>
-  <dd>The custody product: it holds <a href="#document">document</a> bytes for the system that owns them and releases one verified <a href="#document-version">version</a> to each recipient a <a href="#document-grant">document grant</a> names. Binaries `documents` and `documentsctl`; pre-1.0 and held out of releases.</dd>
+  <dd>The document custody product: it holds <a href="#document">document</a> bytes for the system that owns them and releases one verified <a href="#document-version">version</a> to each recipient a <a href="#document-grant">document grant</a> names. Binaries `documents` and `documentsctl`; pre-1.0 and held out of releases.</dd>
 
   <dt id="registry-manifest">Registry Manifest</dt>
   <dd>The Rust library and `registry-manifest` command that check one portable `metadata.yaml` and render it into standards-shaped metadata, without running a service. See the <a href="../../products/registry-manifest/">Registry Manifest overview</a>; the <a href="../../products/registry-manifest/reference/">Registry Manifest reference</a> is authoritative for the current top-level keys.</dd>
@@ -198,7 +198,7 @@ Product names are always in English, including on future translated pages.
   <dd>The directory of YAML files an adopter writes for one Base Registry Engine registry: `registry.yaml` plus optional <a href="#module">modules</a> and <a href="#journey">journeys</a>. `bregctl` checks, tests, and packages it. See <a href="../../configure/breg/">Author a registry project</a>.</dd>
 
   <dt id="registry-render">Registry Render</dt>
-  <dd>The document product: it renders PDF documents from registry data through Typst, byte for byte the same for the same inputs, as a service with an audit journal or as a command line for authoring and counter printing. See the <a href="../../start/registry-render/">Registry Render overview</a>.</dd>
+  <dd>The document rendering product: it renders PDF documents from registry data through Typst, byte for byte the same for the same inputs, as a service with an audit journal or as a command line for authoring and counter printing. See the <a href="../../start/registry-render/">Registry Render overview</a>.</dd>
 
   <dt id="registry-scheduling">Registry Scheduling</dt>
   <dd>The booking product: it publishes bookable services over supply the operator anchored and gives authorized callers short <a href="#hold">holds</a> and confirmed <a href="#appointment">appointments</a>, with every capacity decision made in one transaction under a <a href="#task-grant">task grant</a>. See the <a href="../../start/scheduling/">Registry Scheduling overview</a>.</dd>
