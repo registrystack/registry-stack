@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `messaging_dispatch_jobs` refuses a `leased` row without a
+  `lease_expires_at`, through the corrected shared dispatch job shape. A
+  database created by an earlier release keeps its earlier check: the
+  migration ledger records versions only, so startup does not refuse it, and
+  the dispatcher writes an expiry on every claim in either case. Recreate the
+  database to take the stricter check.
+
 ## 0.43.0 - 2026-10-21
 
 - BREAKING: authored display fields reject prohibited Unicode controls, and

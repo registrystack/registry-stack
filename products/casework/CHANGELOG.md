@@ -14,6 +14,10 @@
   sessions can exercise independent reviewers without changing the policy.
 - Correct the peer version-mismatch remedy to name `--bregctl-bin`.
 
+- `casework_review_completion_outbox` refuses a `leased` row without a
+  `lease_expires_at`, through the corrected shared dispatch job shape. Apply
+  this release to a fresh database.
+
 - BREAKING: review completion delivery runs on the shared dispatch core.
   `casework_review_completion_outbox` takes the dispatch job table shape: the
   attempt count is `attempt`, a lease carries `lease_token`, and a row that

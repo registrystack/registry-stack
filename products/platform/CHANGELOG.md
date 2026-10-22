@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- The `registry-platform-dispatch` job table shape and the
+  `registry-platform-hooks` `registry_webhook_delivery_state` shape refuse a
+  `leased` row without a `lease_expires_at`. The check compared the expiry
+  with `attempt_started_at` only, and a comparison with a missing expiry let
+  a lease that never lapses through. The dispatch core always writes an
+  expiry, so no row it claims changes; tables created by an earlier version
+  keep their earlier check until the owning product recreates them.
+
 - BREAKING: `registry-platform-hooks` holds the hook adapter every product
   wrote for itself and the local handler executor. Behind `postgres`: the
   signing URL destination, the pooled connection, the audit entry builder

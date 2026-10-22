@@ -3779,3 +3779,62 @@ async fn terminal_prune_rechecks_state_cutoff_batch_bound_and_caller_transaction
         "the product owns parent-record retention"
     );
 }
+
+#[tokio::test]
+async fn the_shape_check_refuses_a_lease_without_an_expiry() {
+    let harness = harness().await;
+    let dispatcher = dispatcher(&harness);
+    let key = enqueue_message(&harness, &Message::default()).await;
+    let job = dispatcher.claim().await.unwrap().leased().unwrap();
+    assert_eq!(job.key, key);
+
+    // A NULL expiry makes `lease_expires_at > attempt_started_at` NULL, and
+    // PostgreSQL admits a check that is NULL, so the leased arm has to
+    // require the expiry itself. A lease that never expires is never reaped.
+    let error = harness
+        .admin
+        .execute(
+            &format!(
+                "UPDATE {}.{JOB_TABLE} SET lease_expires_at = NULL
+                  WHERE message_id = $1 AND recipient = $2",
+                harness.schema
+            ),
+            &[&key.id(), &key.part()],
+        )
+        .await
+        .expect_err("a leased job without a lease expiry is refused");
+    let database = error.as_db_error().expect("a database refusal");
+    assert_eq!(
+        database.code(),
+        &tokio_postgres::error::SqlState::CHECK_VIOLATION
+    );
+    assert_eq!(database.constraint(), Some("test_message_jobs_shape"));
+
+    let error = harness
+        .admin
+        .execute(
+            &format!(
+                "INSERT INTO {}.{JOB_TABLE}
+                     (message_id, recipient, generation, state, attempt,
+                      attempt_started_at, lease_token)
+                 VALUES ($1, 'recipient-2', 1, 'leased', 1,
+                         transaction_timestamp(), gen_random_uuid())",
+                harness.schema
+            ),
+            &[&key.id()],
+        )
+        .await
+        .expect_err("a leased job inserted without a lease expiry is refused");
+    let database = error.as_db_error().expect("a database refusal");
+    assert_eq!(
+        database.code(),
+        &tokio_postgres::error::SqlState::CHECK_VIOLATION
+    );
+    assert_eq!(database.constraint(), Some("test_message_jobs_shape"));
+
+    assert_eq!(
+        state_row(&harness, &key).await.state,
+        "leased",
+        "the refused write leaves the live lease in place"
+    );
+}
