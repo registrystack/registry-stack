@@ -490,6 +490,37 @@ async fn serve_refuses_a_runtime_role_that_lost_a_grant() {
     drop_role(&deployment, &role).await;
 }
 
+/// A runtime role that lost USAGE on the schema the package was applied in
+/// sees no ledger through its search path. Startup is refused as a missing
+/// grant, never as a database nobody activated, so the operator restores
+/// the role's grants rather than looking for an apply that never ran.
+#[tokio::test]
+async fn serve_refuses_a_runtime_role_that_lost_usage_on_the_schema_as_a_grant_problem() {
+    let (deployment, role) = split_deployment().await;
+    deployment
+        .execute(&format!(
+            "REVOKE USAGE ON SCHEMA {} FROM {role}",
+            deployment.schema
+        ))
+        .await;
+    let error = prepare(&deployment.runtime)
+        .await
+        .expect_err("a runtime role without schema usage is refused");
+    let message = error.to_string();
+    assert!(
+        matches!(
+            error,
+            RuntimeError::Activation(ActivationError::LedgerUnreadable)
+        ),
+        "{message}"
+    );
+    assert!(
+        message.contains("restore the runtime role's grants"),
+        "{message}"
+    );
+    drop_role(&deployment, &role).await;
+}
+
 /// DOCUMENTS-DEC-17: the ledger is read first, so an activated database
 /// whose schema has moved past this release is refused as a schema
 /// mismatch, never as unactivated.

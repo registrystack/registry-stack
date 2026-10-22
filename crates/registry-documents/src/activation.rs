@@ -193,6 +193,11 @@ pub enum ActivationError {
     RoleModeWeakened,
     #[error("the runtime credential is missing required grants; run `documentsctl apply --runtime-config FILE` with the migration credential")]
     GrantsStale,
+    /// The runtime role cannot use the schema the activation ledger is in,
+    /// or cannot read the ledger, so whether a package is active is
+    /// unknown rather than absent.
+    #[error("the runtime credential cannot read the activation ledger: its role lacks usage on the schema or read access to the ledger; restore the runtime role's grants by running `documentsctl apply --runtime-config FILE` with the migration credential")]
+    LedgerUnreadable,
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error("the Document Store activation audit failed: {0}")]
@@ -593,13 +598,22 @@ async fn apply_begun(
 /// for `database_id`, whose schema is not exactly this release's, or whose
 /// runtime role has lost the split-role boundary or its grants. The ledger
 /// is read first, so a database nobody applied a package to is refused as
-/// not activated rather than as a schema mismatch.
+/// not activated rather than as a schema mismatch. A ledger the runtime
+/// role cannot see for want of a grant is refused as that, before the
+/// ledger is read, since it would otherwise look like no ledger at all.
 pub async fn check_runtime(
     store: &PostgresStore,
     database_id: &str,
     package_digest: &str,
 ) -> Result<Activation, ActivationError> {
     let client = store.client().await?;
+    if platform::unreadable_ledger(&**client, &layout())
+        .await
+        .map_err(platform_error)?
+        .is_some()
+    {
+        return Err(ActivationError::LedgerUnreadable);
+    }
     let active = platform::check_active_package(&**client, &layout(), database_id, package_digest)
         .await
         .map_err(|error| match error {

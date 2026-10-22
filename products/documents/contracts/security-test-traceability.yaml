@@ -181,6 +181,7 @@ entries:
       - {path: crates/registry-documentsctl/tests/postgres_cli.rs, name: apply_refuses_a_package_that_is_not_the_pinned_one}
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: serve_refuses_a_runtime_role_that_gained_authority_over_the_schema}
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: serve_refuses_a_runtime_role_that_lost_a_grant}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: serve_refuses_a_runtime_role_that_lost_usage_on_the_schema_as_a_grant_problem}
       - {path: crates/registry-documents/tests/postgres_operator.rs, name: serve_refuses_an_activated_database_with_a_newer_schema_version}
   - id: DOCUMENTS-SEC-36
     tests:

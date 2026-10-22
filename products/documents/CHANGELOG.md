@@ -17,6 +17,11 @@ The Document Store is held out of releases.
   bind, as `documents.runtime.unbound-hook-destination` at
   `/destinations/hooks`. The runtime's startup refusal leads with the same
   code.
+- `documents serve` and the operator commands that need an activated
+  database refuse a runtime role that lost `USAGE` on the schema, or read
+  access to the activation ledger, as `documentsctl.activation.ledger-unreadable`
+  with the action to restore the role's grants, rather than as a database no
+  package was applied to.
 
 - The product skeleton: `registry-documents-core`, the `registry-documents`
   runtime and `documents` binary, `registry-documentsctl` and the

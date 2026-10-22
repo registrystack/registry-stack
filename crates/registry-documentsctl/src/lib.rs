@@ -406,7 +406,7 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
         ),
         "documentsctl.activation.ledger-unreadable" => (
             "database-activation",
-            "Restore the runtime credential's read access to the activation ledger, then retry.",
+            "Restore the runtime role's grants: run documentsctl apply with the migration credential, which grants usage on the schema and read access to the activation ledger, then retry.",
         ),
         "documentsctl.activation.schema-unresolved" => (
             "database-activation",

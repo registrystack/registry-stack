@@ -304,6 +304,11 @@ fn failure(path: &Path, error: RuntimeError) -> Outcome {
             "documentsctl.activation.grants-stale",
             "database.runtimeUrlRef",
         ),
+        RuntimeError::Activation(ActivationError::LedgerUnreadable) => refused(
+            DOMAIN_REFUSAL_EXIT,
+            "documentsctl.activation.ledger-unreadable",
+            "database.runtimeUrlRef",
+        ),
         RuntimeError::Activation(ActivationError::AppliedUnaudited { .. }) => {
             refused(OPERATIONAL_FAILURE_EXIT, "audit.unconfirmed", "audit")
         }
