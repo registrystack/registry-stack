@@ -4718,7 +4718,7 @@
       "description": "Registry Document Store event data JSON Schemas, one per event family.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "dc89ecb2ce2742b5167a2956ac0a5cf6f2fb22418d998169c5f42dbe872f2d13"
+        "sha256": "02faac5cbcc79c9973e62d5a616b72b235ed0d8b143828845d438894c4631154"
       },
       "artifact": {
         "path": "products/documents/generated/events/document-grant-changed.schema.json",
@@ -4736,7 +4736,7 @@
       "description": "Registry Document Store event data JSON Schemas, one per event family.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "dc89ecb2ce2742b5167a2956ac0a5cf6f2fb22418d998169c5f42dbe872f2d13"
+        "sha256": "02faac5cbcc79c9973e62d5a616b72b235ed0d8b143828845d438894c4631154"
       },
       "artifact": {
         "path": "products/documents/generated/events/document-version-ready.schema.json",
@@ -4754,7 +4754,7 @@
       "description": "Registry Document Store event data JSON Schemas, one per event family.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "dc89ecb2ce2742b5167a2956ac0a5cf6f2fb22418d998169c5f42dbe872f2d13"
+        "sha256": "02faac5cbcc79c9973e62d5a616b72b235ed0d8b143828845d438894c4631154"
       },
       "artifact": {
         "path": "products/documents/generated/events/document-version-rejected.schema.json",
@@ -4772,7 +4772,7 @@
       "description": "Registry Document Store project JSON Schema.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "dc89ecb2ce2742b5167a2956ac0a5cf6f2fb22418d998169c5f42dbe872f2d13"
+        "sha256": "02faac5cbcc79c9973e62d5a616b72b235ed0d8b143828845d438894c4631154"
       },
       "artifact": {
         "path": "products/documents/generated/project/project.schema.json",
@@ -4790,11 +4790,11 @@
       "description": "Registry Document Store runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-documents/src/schema.rs",
-        "sha256": "dc89ecb2ce2742b5167a2956ac0a5cf6f2fb22418d998169c5f42dbe872f2d13"
+        "sha256": "02faac5cbcc79c9973e62d5a616b72b235ed0d8b143828845d438894c4631154"
       },
       "artifact": {
         "path": "products/documents/generated/runtime/runtime.schema.json",
-        "sha256": "92dbff214f4360f20a7f76ac8de3c691bb819eeaf4690c5c8daed17882286994",
+        "sha256": "8f4833f26187b81d360edb0849313806ecdc55191a2dc1bbad731023130fa873",
         "mediaType": "application/schema+json"
       }
     },
