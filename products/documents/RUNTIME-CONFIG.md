@@ -37,7 +37,7 @@ provider.
 
 The runtime reads and checks every key below. It acts on `identity`,
 `package`, `listener`, `secretProviders`, `database`, `authentication`,
-`audit`, `storage`, `contentVerification`, `transfers`, and
+`audit`, `storage`, `contentVerification`, `transfers`, `cleanup`, and
 `retention.receiptRetentionDays`; the other blocks are checked so
 a deployment written now keeps its meaning when the behaviour behind them
 arrives.
