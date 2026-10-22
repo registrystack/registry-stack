@@ -36,6 +36,14 @@ contract.
 | `POST /documents/{documentId}/erasure` | Remove a document from custody; only its custodian may. Takes no `Idempotency-Key`: a repeat moves nothing and answers the same view |
 | `GET /document-policies` | List the policies the caller may reserve under, with their bounds |
 
+A grant names its recipient by subject and actor kind, not by access
+profile, so issuing one does not check where the recipient's token will
+resolve. Release is decided when the recipient reads: the token must then
+resolve to one of the policy's `recipientProfiles`. A grant to someone whose
+token resolves to another profile is issued (201) but releases nothing:
+`GET /document-grants` does not list it to them, and their download answers
+`resource.not-found` (404).
+
 A document the caller may not see answers `resource.not-found`, the same as
 one that does not exist. Lists page by `cursor` and `limit` (at most 100) in a
 stable order.

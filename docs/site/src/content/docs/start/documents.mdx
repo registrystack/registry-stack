@@ -41,6 +41,12 @@ was placed for may too, when the policy permits it. The
 [document version](../../reference/glossary/#document-version) entry lists every status a version
 moves through.
 
+A grant names its recipient by subject and actor kind, not by access profile, so issuing it does
+not check which profile the recipient's token will resolve to. That is decided when the recipient
+reads: only a token that resolves to one of the policy's `recipientProfiles` is released anything.
+A grant to someone who signs in under another profile is issued (201) but releases nothing; their
+download answers `404 resource.not-found`, as for a document that does not exist.
+
 A stored document stays until its custodian removes it or the verifier rejects it, and a grant
 that expires or is revoked erases nothing. Only what never became a stored version goes on its
 own: a reservation whose bytes never arrive expires when its upload window lapses, and on S3 the
@@ -49,7 +55,10 @@ bytes of an upload that never completed are deleted.
 what erasure reaches.
 
 {/* Evidence: crates/registry-documents-core/src/project.rs, DocumentPolicy and CustodianRule;
-    crates/registry-documents-core/src/access.rs, standing (may_grant, may_request_erasure);
+    crates/registry-documents-core/src/access.rs, standing (may_grant, may_request_erasure) and
+    is_recipient;
+    crates/registry-documents/src/service.rs, access (released_by_grant) and releasable;
+    crates/registry-documents/src/service/grants.rs, issue_inner;
     crates/registry-documents/src/service/grants.rs, revoke_inner;
     crates/registry-documents/src/erasure.rs, cleanup_once, expire_uploads, and erase_orphans. */}
 
