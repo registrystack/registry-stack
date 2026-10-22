@@ -408,6 +408,10 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
             "database-activation",
             "Restore the runtime credential's read access to the activation ledger, then retry.",
         ),
+        "documentsctl.activation.schema-unresolved" => (
+            "database-activation",
+            "Grant the credential's role usage on the schema the package was applied in, or correct its search_path, then retry.",
+        ),
         "documentsctl.activation.schema-newer" => (
             "database-activation",
             "Use the Document Store release that owns the recorded schema version.",
@@ -1526,6 +1530,7 @@ mod tests {
             "documentsctl.activation.ledger-unreadable",
             "documentsctl.activation.schema-newer",
             "documentsctl.activation.schema-invalid",
+            "documentsctl.activation.schema-unresolved",
             "documentsctl.activation.invalid-reference",
             "documents.verification.not-found",
             "documents.verification.not-dead-lettered",

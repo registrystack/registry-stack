@@ -7,6 +7,11 @@ The Document Store is held out of releases.
 - `documents_verification_jobs` and `documents_erasure_jobs` refuse a
   `leased` row without a `lease_expires_at`, through the corrected shared
   dispatch job shape.
+- `documentsctl plan` and `documentsctl status` report the initial
+  activation on a database provisioned as the operate page says, where the
+  runtime role holds only `CONNECT` until the first apply. A credential whose
+  role resolves no schema once the ledger exists refuses as
+  `documentsctl.activation.schema-unresolved`.
 
 - The product skeleton: `registry-documents-core`, the `registry-documents`
   runtime and `documents` binary, `registry-documentsctl` and the

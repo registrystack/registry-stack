@@ -55,6 +55,11 @@ pub enum StoreError {
     SecretConfiguration(String),
     #[error("the Document Store database schema is not the version this runtime expects; apply the schema with the migration connection")]
     SchemaVersion,
+    /// The connection's role has usage on no schema its `search_path`
+    /// names, so `current_schema()` is null. After apply that is a
+    /// misconfiguration, never a reason to guess a schema.
+    #[error("the Document Store database credential resolves no schema: its role has usage on no schema its search_path names; grant it usage on the schema the package was applied in")]
+    SchemaUnresolved,
     #[error("the Document Store database server is older than PostgreSQL 17, which the activation ledger requires")]
     UnsupportedPostgres,
     // Both carry the driver's own account of what went wrong. Neither the
@@ -161,7 +166,7 @@ impl PostgresStore {
         let client = self.client().await?;
         let row = client.query_one("SELECT current_schema()", &[]).await?;
         row.try_get::<_, Option<String>>(0)?
-            .ok_or(StoreError::Configuration)
+            .ok_or(StoreError::SchemaUnresolved)
     }
 
     /// The role this store's sessions run as.
@@ -231,7 +236,7 @@ pub(crate) async fn migrate_in(
                 .query_one("SELECT current_schema()", &[])
                 .await?
                 .try_get(0)?;
-            let schema = schema.ok_or(StoreError::Configuration)?;
+            let schema = schema.ok_or(StoreError::SchemaUnresolved)?;
             registry_platform_hooks::delivery_schema::install(transaction, &schema).await?;
         }
         transaction

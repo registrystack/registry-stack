@@ -22,6 +22,7 @@ use registry_documents::runtime::{
     activation_plan, activation_status, apply_activation, dead_lettered_erasures,
     dead_lettered_verifications, erasure_report, replay_erasure, replay_verification, RuntimeError,
 };
+use registry_documents::store::StoreError;
 use registry_platform_config::PackageErrorKind;
 use registry_platform_yaml::{Diagnostic, Report};
 use serde_json::{json, Value};
@@ -322,6 +323,15 @@ fn failure(path: &Path, error: RuntimeError) -> Outcome {
         RuntimeError::ErasureReplayFailed(failure) => {
             replay_failure(Job::Erasure, failure, refused)
         }
+        RuntimeError::Activation(ActivationError::Store(StoreError::SchemaUnresolved))
+        | RuntimeError::Database {
+            source: StoreError::SchemaUnresolved,
+            ..
+        } => refused(
+            DOMAIN_REFUSAL_EXIT,
+            "documentsctl.activation.schema-unresolved",
+            "database",
+        ),
         RuntimeError::Activation(ActivationError::Store(_)) | RuntimeError::Database { .. } => {
             refused(OPERATIONAL_FAILURE_EXIT, "database.unavailable", "database")
         }
