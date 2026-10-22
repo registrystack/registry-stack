@@ -148,7 +148,9 @@ DOCUMENTS-SEC-14 to DOCUMENTS-SEC-20:
   content read is re-read and answered as a version under removal.
 - Reservation, upload, verification, and download each write an audit
   request entry before they act and a response entry with outcome and byte
-  count after. The journal names a caller only by a keyed reference. A
+  count after. A download's `released` entry is written before the body
+  streams: it means the content was admitted for transfer, not that the
+  caller received every byte. The journal names a caller only by a keyed reference. A
   request whose audit entry cannot be written is refused with 503. A
   verification attempt whose leasing entry cannot be written is refused
   before the verifier is asked and records no verdict; a result entry that

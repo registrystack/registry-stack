@@ -501,7 +501,10 @@ invariants:
       Every audited request writes its request entry before it acts: the
       upload before it looks up its reservation, the download before it sends
       the first byte. The response entry is written after the operation
-      commits.
+      commits. A download's response entry is written once its content is
+      read and checked, before the body streams, so its released outcome and
+      byte count mean the content was admitted for transfer, not that the
+      caller received it.
     refusal: >-
       A request entry that cannot be written answers 503 service.unavailable
       and changes nothing. A response entry that cannot be written after the
