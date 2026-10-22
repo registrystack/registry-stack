@@ -710,6 +710,10 @@ class PublicReleaseVerifierTest(TestCase):
             with (
                 mock.patch.object(self.module.shutil, "which", return_value="/tool"),
                 mock.patch.object(
+                    self.module.platform, "machine", return_value="x86_64"
+                ),
+                mock.patch.object(self.module.os.sys, "platform", "linux"),
+                mock.patch.object(
                     self.module, "resolve_annotated_tag", return_value=source
                 ),
                 mock.patch.object(self.module, "run_text", side_effect=run_text),
@@ -997,6 +1001,29 @@ class PublicReleaseVerifierTest(TestCase):
         with mock.patch.object(self.module.platform, "machine", return_value="arm64"), mock.patch.object(self.module.os.sys, "platform", "darwin"):
             self.assertEqual("evidence-v0.32.0-macos-arm64", self.module.smoke_asset_name("v0.32.0"))
             self.assertEqual("evidence-v0.33.0-macos-arm64.tar.gz", self.module.smoke_asset_name("v0.33.0"))
+
+    def test_discovery_smoke_refuses_unsupported_hosts(self) -> None:
+        for system, machine in (("darwin", "arm64"), ("linux", "aarch64")):
+            with (
+                self.subTest(system=system, machine=machine),
+                mock.patch.object(self.module.platform, "machine", return_value=machine),
+                mock.patch.object(self.module.os.sys, "platform", system),
+                self.assertRaisesRegex(
+                    self.module.PublicReleaseError,
+                    f"no maintained public binary smoke for {system}/{machine}",
+                ),
+            ):
+                self.module.smoke_asset_name("discovery/v1.2.3")
+
+    def test_discovery_smoke_selects_published_linux_amd64_asset(self) -> None:
+        with (
+            mock.patch.object(self.module.platform, "machine", return_value="x86_64"),
+            mock.patch.object(self.module.os.sys, "platform", "linux"),
+        ):
+            self.assertEqual(
+                "discovery-v1.2.3-linux-amd64",
+                self.module.smoke_asset_name("discovery/v1.2.3"),
+            )
 
     def test_macos_public_smoke_extracts_complete_archive_outside_download_directory(self) -> None:
         stem = "evidence-v0.33.0-macos-arm64"

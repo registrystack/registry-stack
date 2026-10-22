@@ -450,10 +450,17 @@ def validate_release_manifest(
 
 def smoke_asset_name(tag: str) -> str:
     identity = release_identity(tag)
+    machine = platform.machine().lower()
     if identity.unit == "discovery":
+        if not os.sys.platform.startswith("linux") or machine not in {
+            "x86_64",
+            "amd64",
+        }:
+            raise PublicReleaseError(
+                f"no maintained public binary smoke for {os.sys.platform}/{machine}"
+            )
         return f"discovery-{identity.asset_tag}-linux-amd64"
 
-    machine = platform.machine().lower()
     if os.sys.platform == "darwin" and machine in {"arm64", "aarch64"}:
         platform_name = "macos-arm64"
     elif os.sys.platform.startswith("linux") and machine in {"x86_64", "amd64"}:

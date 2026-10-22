@@ -261,7 +261,41 @@ def bind_optional_dependencies(package_json: Path, version: str, client: str) ->
             f"root manifest {package_json} must identify "
             f"{definition.npm_root_package} at version {version}"
         )
+    compatibility_path = package_json.with_name("compatibility.json")
+    compatibility = None
+    if client == "stack":
+        try:
+            compatibility = json.loads(
+                compatibility_path.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ClientRegistryError(
+                f"cannot read stack compatibility metadata {compatibility_path}: {exc}"
+            ) from exc
+        package = (
+            compatibility.get("sdkPackage")
+            if isinstance(compatibility, dict)
+            else None
+        )
+        if (
+            not isinstance(compatibility, dict)
+            or compatibility.get("schemaVersion")
+            != "registry-stack.sdk-compatibility.v1"
+            or not isinstance(package, dict)
+            or package.get("name") != "registry-stack-client"
+            or not isinstance(package.get("version"), str)
+            or not isinstance(compatibility.get("namespaces"), dict)
+        ):
+            raise ClientRegistryError(
+                f"stack compatibility metadata {compatibility_path} is malformed"
+            )
+        package["version"] = version
     metadata["optionalDependencies"] = expected_optional_dependencies(client, version)
+    if compatibility is not None:
+        compatibility_path.write_text(
+            json.dumps(compatibility, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
     package_json.write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )

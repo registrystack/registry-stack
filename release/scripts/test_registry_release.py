@@ -301,6 +301,37 @@ class RegistryReleaseTest(TestCase):
         lookup.assert_not_called()
         self.assertIn("invalid DCO", errors.getvalue())
 
+    def test_candidate_request_rejects_component_collision_before_dispatch(self) -> None:
+        registry_release = load_registry_release()
+        source = "a" * 40
+        with (
+            mock.patch.object(
+                registry_release,
+                "prepare_release_context",
+                side_effect=registry_release.ReleasePlanError(
+                    "independent Discovery release tag discovery/v0.44.0 already exists"
+                ),
+            ) as prepare,
+            mock.patch.object(registry_release, "refresh_protected_main") as refresh,
+            mock.patch.object(registry_release, "run_checked") as dispatch,
+            redirect_stderr(io.StringIO()) as errors,
+        ):
+            result = registry_release.request_release_candidate(
+                ROOT,
+                "0.44.0",
+                "beta-57",
+                source,
+                "origin/main",
+                "registrystack/registry-stack",
+                print_request=False,
+            )
+
+        self.assertEqual(1, result)
+        prepare.assert_called_once_with(ROOT, "0.44.0", "beta-57")
+        refresh.assert_not_called()
+        dispatch.assert_not_called()
+        self.assertIn("discovery/v0.44.0", errors.getvalue())
+
     def test_candidate_request_requires_current_source_workflow_revision(
         self,
     ) -> None:
@@ -647,7 +678,118 @@ class RegistryReleaseTest(TestCase):
                 "discovery": "1.2.2", "discoveryctl": "1.2.2",
             }):
                 tool.validate_stack_component_selection(root, "0.44.0")
-            tool.validate_stack_component_selection(root, "1.2.3")
+            with (
+                mock.patch.object(tool, "local_tag_target", return_value=None),
+                mock.patch.object(tool, "remote_candidate_tag", return_value=None),
+            ):
+                tool.validate_stack_component_selection(root, "1.2.3")
+
+    def test_stack_requires_selection_for_matching_local_discovery_release(self) -> None:
+        tool = load_registry_release()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("registry-discovery", "registry-discoveryctl"):
+                path = root / "crates" / name / "Cargo.toml"
+                path.parent.mkdir(parents=True)
+                path.write_text('[package]\nversion = "0.44.0"\n')
+            with (
+                mock.patch.object(
+                    tool, "local_tag_target", return_value="a" * 40
+                ) as local,
+                mock.patch.object(tool, "remote_candidate_tag") as remote,
+                self.assertRaisesRegex(
+                    tool.ReleasePlanError, "discovery/v0.44.0.*distribution selection"
+                ),
+            ):
+                tool.validate_stack_component_selection(root, "0.44.0")
+            local.assert_called_once_with(root, "discovery/v0.44.0")
+            remote.assert_not_called()
+
+    def test_stack_requires_selection_for_matching_origin_discovery_release(self) -> None:
+        tool = load_registry_release()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("registry-discovery", "registry-discoveryctl"):
+                path = root / "crates" / name / "Cargo.toml"
+                path.parent.mkdir(parents=True)
+                path.write_text('[package]\nversion = "0.44.0"\n')
+            with (
+                mock.patch.object(tool, "local_tag_target", return_value=None),
+                mock.patch.object(
+                    tool,
+                    "remote_candidate_tag",
+                    return_value={
+                        "refs/tags/discovery/v0.44.0": "a" * 40,
+                        "refs/tags/discovery/v0.44.0^{}": "b" * 40,
+                    },
+                ) as remote,
+                self.assertRaisesRegex(
+                    tool.ReleasePlanError, "discovery/v0.44.0.*distribution selection"
+                ),
+            ):
+                tool.validate_stack_component_selection(root, "0.44.0")
+            remote.assert_called_once_with(root, "discovery/v0.44.0")
+
+    def test_stack_component_tag_lookup_failure_is_not_treated_as_absence(self) -> None:
+        tool = load_registry_release()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("registry-discovery", "registry-discoveryctl"):
+                path = root / "crates" / name / "Cargo.toml"
+                path.parent.mkdir(parents=True)
+                path.write_text('[package]\nversion = "0.44.0"\n')
+            with (
+                mock.patch.object(tool, "local_tag_target", return_value=None),
+                mock.patch.object(
+                    tool,
+                    "remote_candidate_tag",
+                    side_effect=tool.ReleasePlanError("origin tag lookup failed"),
+                ),
+                self.assertRaisesRegex(tool.ReleasePlanError, "lookup failed"),
+            ):
+                tool.validate_stack_component_selection(root, "0.44.0")
+
+    def test_matching_discovery_release_is_allowed_when_explicitly_selected(self) -> None:
+        tool = load_registry_release()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("registry-discovery", "registry-discoveryctl"):
+                path = root / "crates" / name / "Cargo.toml"
+                path.parent.mkdir(parents=True)
+                path.write_text('[package]\nversion = "0.44.0"\n')
+            with (
+                mock.patch.object(
+                    tool,
+                    "component_artifact_versions",
+                    return_value={
+                        "discovery": "0.44.0",
+                        "discoveryctl": "0.44.0",
+                    },
+                ),
+                mock.patch.object(tool, "local_tag_target") as local,
+                mock.patch.object(tool, "remote_candidate_tag") as remote,
+            ):
+                tool.validate_stack_component_selection(root, "0.44.0")
+            local.assert_not_called()
+            remote.assert_not_called()
+
+    def test_legacy_train_release_does_not_require_discovery_selection(self) -> None:
+        tool = load_registry_release()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("registry-discovery", "registry-discoveryctl"):
+                path = root / "crates" / name / "Cargo.toml"
+                path.parent.mkdir(parents=True)
+                path.write_text('[package]\nversion = "0.43.0"\n')
+            with (
+                mock.patch.object(tool, "local_tag_target", return_value=None) as local,
+                mock.patch.object(
+                    tool, "remote_candidate_tag", return_value=None
+                ) as remote,
+            ):
+                tool.validate_stack_component_selection(root, "0.43.0")
+            local.assert_called_once_with(root, "discovery/v0.43.0")
+            remote.assert_called_once_with(root, "discovery/v0.43.0")
 
     def test_discovery_plan_uses_independent_version_and_no_docs(self) -> None:
         tool = load_registry_release()

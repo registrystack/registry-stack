@@ -134,6 +134,7 @@ else
 	release_tag="discovery/$version"
 	verification_guide="release/VERIFY.md"
 fi
+release_tag_url="${release_tag//\//%2F}"
 # BEGIN generated libc preflight
 # Generated from release/glibc-floor.env by
 # release/scripts/render-installer-libc-preflight.py. Do not edit by hand.
@@ -205,8 +206,8 @@ if [ "$os_label" = "linux" ]; then
 fi
 
 # END generated libc preflight
-base_url="https://github.com/${repo}/releases/download/${release_tag}"
-verify_url="https://github.com/${repo}/blob/${release_tag}/${verification_guide}"
+base_url="https://github.com/${repo}/releases/download/${release_tag_url}"
+verify_url="https://github.com/${repo}/blob/${release_tag_url}/${verification_guide}"
 tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t discovery)"
 
 cleanup_downloads() {
@@ -247,7 +248,7 @@ for binary in "${binaries[@]}"; do
 	asset="$(asset_name "$binary")"
 	if ! download "$base_url/$asset" "$tmpdir/$asset"; then
 		printf 'Could not read the published %s %s binary for Linux/amd64.\n' "$binary" "$version" >&2
-		printf 'Check the product release at https://github.com/%s/releases/tag/%s\n' "$repo" "$release_tag" >&2
+		printf 'Check the product release at https://github.com/%s/releases/tag/%s\n' "$repo" "$release_tag_url" >&2
 		exit 1
 	fi
 done

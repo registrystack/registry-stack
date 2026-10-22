@@ -45,7 +45,7 @@ INSTALLERS = (
     Installer(
         "crates/registry-discovery/install.sh",
         "Registry Discovery",
-        'base_url="https://github.com/${repo}/releases/download/${release_tag}"',
+        'base_url="https://github.com/${repo}/releases/download/${release_tag_url}"',
     ),
 )
 

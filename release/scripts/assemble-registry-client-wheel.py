@@ -8,6 +8,7 @@ import base64
 import csv
 import hashlib
 import io
+import json
 import re
 import sys
 import tempfile
@@ -26,6 +27,7 @@ from macos_fips_packaging import bundle_macos_fips
 
 ROOT = Path(__file__).resolve().parents[2]
 FACADE = ROOT / "crates" / "registry-stack-client-py"
+COMPATIBILITY = ROOT / "crates" / "registry-stack-client" / "compatibility.json"
 PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling")
 WHEEL_PATTERN = re.compile(r"^[^-]+-(?P<version>[^-]+)-(?P<tag>.+)\.whl$")
 MACOS_SHARED_FIPS_MINIMUM_VERSION = (0, 33, 0)
@@ -36,6 +38,21 @@ def digest(data: bytes) -> str:
         base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
     )
     return f"sha256={value}"
+
+
+def compatibility_metadata(version: str) -> bytes:
+    metadata = json.loads(COMPATIBILITY.read_text(encoding="utf-8"))
+    package = metadata.get("sdkPackage")
+    if (
+        metadata.get("schemaVersion") != "registry-stack.sdk-compatibility.v1"
+        or not isinstance(package, dict)
+        or package.get("name") != "registry-stack-client"
+        or not isinstance(package.get("version"), str)
+        or not isinstance(metadata.get("namespaces"), dict)
+    ):
+        raise ValueError(f"malformed SDK compatibility metadata: {COMPATIBILITY}")
+    package["version"] = version
+    return (json.dumps(metadata, indent=2, ensure_ascii=False) + "\n").encode()
 
 
 def metadata(version: str) -> bytes:
@@ -213,6 +230,12 @@ def main() -> int:
     for path in sorted(facade_root.iterdir()):
         if path.is_file():
             files[f"registry_client/{path.name}"] = path.read_bytes()
+    try:
+        files["registry_client/compatibility.json"] = compatibility_metadata(
+            args.version
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        parser.error(f"cannot read SDK compatibility metadata: {exc}")
     dist_info = f"registry_stack_client-{args.version}.dist-info"
     files[f"{dist_info}/METADATA"] = metadata(args.version)
     files[f"{dist_info}/WHEEL"] = wheel_metadata(tag)

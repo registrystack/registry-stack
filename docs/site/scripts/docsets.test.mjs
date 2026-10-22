@@ -226,6 +226,28 @@ test('validateDocsets accepts only Registry Discovery at its canonical independe
   assert.throws(() => validateDocsets(manifest), /products\.registry-relay\.ref must be a full 40-character SHA/);
 });
 
+test('validateDocsets keeps the canonical Discovery tag after Stack docset promotion', () => {
+  const manifest = validDocsets();
+  manifest.released = 'v2.0.0';
+  manifest.docsets[1] = {
+    ...manifest.docsets[1],
+    id: 'v2.0.0',
+    label: 'v2.0.0',
+    path: '/v/2.0.0/',
+    source: 'registry-stack-v2.0.0',
+    products: {
+      'registry-discovery': { version: 'v1.4.2', ref: 'discovery/v1.4.2' },
+    },
+  };
+
+  assert.doesNotThrow(() => validateDocsets(manifest));
+  manifest.docsets[1].products['registry-discovery'].ref = 'discovery/v1.4.3';
+  assert.throws(
+    () => validateDocsets(manifest),
+    /products\.registry-discovery\.ref must be a full 40-character SHA/,
+  );
+});
+
 test('validateDocsets requires SHA refs for external candidate products', () => {
   const manifest = validDocsets();
   manifest.docsets[1].availability = 'candidate';

@@ -10,8 +10,11 @@
   "repository": { "type": "git", "url": "https://github.com/registrystack/registry-stack", "directory": "crates/registry-stack-client-node" },
   "main": "index.js",
   "types": "index.d.ts",
-  "exports": { ".": { "types": "./index.d.ts", "default": "./index.js" } },
-  "files": ["index.js", "index.d.ts", "native.js", "discovery", "evidence", "breg", "casework", "messaging", "scheduling"],
+  "exports": {
+    ".": { "types": "./index.d.ts", "default": "./index.js" },
+    "./compatibility.json": "./compatibility.json"
+  },
+  "files": ["index.js", "index.d.ts", "native.js", "compatibility.json", "discovery", "evidence", "breg", "casework", "messaging", "scheduling"],
   "engines": { "node": ">=24.11.0" },
   "scripts": {
     "sync": "python3 ../../release/scripts/sync-registry-client-node.py",

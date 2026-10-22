@@ -142,7 +142,7 @@ class DiscoveryInstallerTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             base = (
                 "https://github.com/registrystack/registry-stack/releases/download/"
-                "discovery/v1.2.3"
+                "discovery%2Fv1.2.3"
             )
             self.assertEqual(
                 [
@@ -151,6 +151,15 @@ class DiscoveryInstallerTests(unittest.TestCase):
                     f"{base}/SHA256SUMS",
                 ],
                 fixture.requests(),
+            )
+            self.assertIn(
+                "https://github.com/registrystack/registry-stack/blob/"
+                "discovery%2Fv1.2.3/release/VERIFY.md",
+                result.stdout,
+            )
+            self.assertNotIn(
+                "/releases/download/discovery/v1.2.3",
+                "\n".join(fixture.requests()),
             )
 
     def test_nightly_uses_the_global_tag_and_product_binary_version(self) -> None:

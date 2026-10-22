@@ -5,6 +5,7 @@ import csv
 import contextlib
 import importlib.util
 import io
+import json
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release/scripts/assemble-registry-client-wheel.py"
 PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling")
 TAG = "cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64"
+COMPATIBILITY = ROOT / "crates/registry-stack-client/compatibility.json"
 
 
 def load_module():
@@ -168,6 +170,14 @@ class AssembleRegistryClientWheelTest(TestCase):
             )
             facade = archive.read("registry_client/__init__.py").decode()
             self.assertIn(f'__version__ = "{self.version}"', facade)
+            compatibility_name = "registry_client/compatibility.json"
+            compatibility_bytes = archive.read(compatibility_name)
+            compatibility = json.loads(compatibility_bytes)
+            expected_compatibility = json.loads(
+                COMPATIBILITY.read_text(encoding="utf-8")
+            )
+            expected_compatibility["sdkPackage"]["version"] = self.version
+            self.assertEqual(compatibility, expected_compatibility)
             for product in PRODUCTS:
                 self.assertIn(
                     f"import registry_client.{product} as {product}",
@@ -178,6 +188,17 @@ class AssembleRegistryClientWheelTest(TestCase):
             )
             recorded = {row[0] for row in rows}
             self.assertEqual(recorded, names)
+            compatibility_row = next(
+                row for row in rows if row[0] == compatibility_name
+            )
+            self.assertEqual(
+                compatibility_row,
+                [
+                    compatibility_name,
+                    load_module().digest(compatibility_bytes),
+                    str(len(compatibility_bytes)),
+                ],
+            )
 
     def test_the_pypi_page_states_the_install_name_and_the_import_name(self) -> None:
         result = self.run_assembler()
@@ -189,6 +210,8 @@ class AssembleRegistryClientWheelTest(TestCase):
         _, _, description = metadata.partition("\n\n")
         self.assertIn("pip install \"registry-stack-client", description)
         self.assertIn("from registry_client import", description)
+        self.assertIn("registry_client/compatibility.json", description)
+        self.assertIn("importlib.resources", description)
         # The README wraps its lines, so compare against the unwrapped prose.
         prose = " ".join(description.split())
         self.assertIn(
