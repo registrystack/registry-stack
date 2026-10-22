@@ -1778,6 +1778,9 @@ jobs:
       - name: Test release candidate manifest and promotion verifier
         run: python3 -m unittest release/scripts/test_release_candidate.py
 
+      - name: Test rstack release component inventory
+        run: python3 -m unittest release/scripts/test_rstack_components.py
+
       - name: Test public release verifier
         run: python3 -m unittest release/scripts/test_verify_public_release.py
 
