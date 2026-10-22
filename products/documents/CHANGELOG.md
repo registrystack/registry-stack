@@ -92,6 +92,8 @@ The Document Store is held out of releases.
 - `documentsctl erasure status`, `erasure list`, and `erasure replay` report
   the erasure state and counts and return a dead-lettered erasure job to
   pending, audited the same way.
+- A `documentsctl` human report whose diagnostics it cannot read exits as
+  an operational failure with `report.unreadable`, never as a clean check.
 - Removal from custody: `POST /documents/{documentId}/erasure`, custodian
   only, suspends release, revokes the document's active grants, cancels
   pending verification, and schedules erasure after the policy's
