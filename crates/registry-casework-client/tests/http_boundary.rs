@@ -17,8 +17,8 @@ use registry_casework_client::{
     ReviewTaskDraftInput, ReviewValidationReason, SourceContextBinding,
 };
 use registry_casework_core::{
-    ReviewContextPolicy, ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewPolicy,
-    ReviewPublicReasonRule, ReviewPurpose, ReviewRetentionPolicy, ReviewStagePolicy,
+    ReviewContextPolicy, ReviewNegativeDecisionMode, ReviewOutcomePolicy, ReviewOutcomeSettlement,
+    ReviewPolicy, ReviewPublicReasonRule, ReviewPurpose, ReviewRetentionPolicy, ReviewStagePolicy,
     SubjectBinding, TaskApprovalRequest,
 };
 use serde_json::{json, Value};
@@ -41,6 +41,7 @@ async fn review_policy_refuses_a_valid_snapshot_for_another_identifier() {
             queue: "reviews".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,
+            negative_decisions: ReviewNegativeDecisionMode::Settle,
             exclude_initiator: false,
             exclude_previous_stage_reviewers: false,
         }],
@@ -1806,6 +1807,7 @@ fn context_body(strategy: ReviewContextPolicy, display_schema: Value, context: V
             queue: "answers".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,
+            negative_decisions: ReviewNegativeDecisionMode::Settle,
             exclude_initiator: false,
             exclude_previous_stage_reviewers: false,
         }],
@@ -2981,6 +2983,7 @@ async fn task_context_response() -> impl IntoResponse {
             queue: "answers".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,
+            negative_decisions: ReviewNegativeDecisionMode::Settle,
             exclude_initiator: false,
             exclude_previous_stage_reviewers: false,
         }],

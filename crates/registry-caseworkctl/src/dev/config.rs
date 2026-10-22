@@ -64,7 +64,7 @@ pub(crate) const DEV_CLIENTS_FORMAT: FormatSpec<'static> = FormatSpec {
 pub(crate) struct Clients {
     pub api_version: String,
     pub kind: String,
-    /// One teaching client for each access profile `casework.yaml` declares.
+    /// Local teaching clients bound to access profiles `casework.yaml` declares.
     pub clients: Vec<Client>,
     /// The teams the first start seeds, one for each queue.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -83,7 +83,7 @@ pub(crate) struct Client {
     #[serde(deserialize_with = "registry_casework_core::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub id: String,
-    /// The access profile this client binds; each profile binds one client.
+    /// The access profile this client binds. Several clients may share a profile.
     pub access_profile: String,
     /// 1 to 32 distinct RFC 6749 scope-tokens of at most 256 bytes.
     pub scopes: Vec<String>,
@@ -431,11 +431,10 @@ pub(super) fn findings(clients: &Clients) -> Vec<ConfigFinding> {
             "casework.dev-clients.clients-out-of-range",
             "/clients",
             "expected 1 to 32 clients",
-            "Declare between 1 and 32 clients, one for each access profile casework.yaml declares.",
+            "Declare between 1 and 32 clients.",
         ));
     }
     let mut ids = FirstSeen::default();
-    let mut profiles = FirstSeen::default();
     for (index, client) in clients.clients.iter().enumerate() {
         let at = format!("/clients/{index}");
         let id = format!("{at}/id");
@@ -465,16 +464,6 @@ pub(super) fn findings(clients: &Clients) -> Vec<ConfigFinding> {
                 "expected 1 to 128 ASCII letters, digits, '-', '_', '.', or ':'",
                 "Write the ID of an access profile casework.yaml declares.",
             ));
-        } else if let Some(first) = profiles.repeat(&client.access_profile, &profile) {
-            found.push(
-                ConfigFinding::new(
-                    "casework.dev-clients.duplicate-access-profile",
-                    &profile,
-                    "another client already binds this access profile; each binds exactly one client",
-                    "Bind each access profile to one client.",
-                )
-                .with_related(first, "first bound here"),
-            );
         }
         scope_findings(
             &mut found,

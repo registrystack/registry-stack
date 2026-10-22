@@ -74,6 +74,11 @@ replaces the request state machine with the Proposal state machine.
 
 Model field entries always include `id`, `apiName`, `required`, `classification`,
 `schema` and `fieldType`, including fields absent from every query projection.
+Current formatters also include boolean `encrypted` metadata in the author-only
+Model and Actions inventories; derived fields report `false`. This extends the
+compiler-owned field metadata without closing its passthrough shape. Consumers
+must validate this value before using it to propose before/after review context;
+the schema permits older field metadata without this member.
 `fieldType` carries the same compiled type object as query field summaries, so
 a form can distinguish multiline `text` from a bounded `string` and discover a
 reference's target. Its internal shape follows the engine field type contract;

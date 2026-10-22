@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-10-22"
 doc_type: tutorial
 persona:
   - operator
@@ -44,9 +44,8 @@ In `facility`, the `correct-address` Action creates a Proposal that requires rev
 authority named `casework`. In `review`, a
 [context provider](../../reference/glossary/#context-provider) named `facility-proposal-context`
 lets reviewers see that Proposal: Casework reads it from your registry under each reviewer's own
-access. For your own Action, declare the same pieces with your own
-identifiers, as [Author a Casework policy](../../configure/casework/#read-the-review-policy-and-its-producer)
-describes.
+access. For another Action, [create its approval project](#create-a-policy-for-another-action)
+with `provider add` after choosing its review grants.
 
 Pairing reads the built registry package, not your editable source. Before you go on, test
 `facility` against its own database and seal its package with
@@ -89,7 +88,9 @@ caseworkctl provider pair "$casework_project" \
 ```
 
 The report now says `"applied": true`. If the pin and the export differ, the command exits 1 with
-`caseworkctl.refused`; rebuild the registry package, then pair again.
+`casework.provider-pair.contract-mismatch`; review the context changes and update the authored
+pins before pairing again. If the binaries differ, select the matching executable with
+`--bregctl-bin`.
 
 {/* Evidence: crates/registry-caseworkctl/src/provider_pair.rs, pair and native_export;
     crates/registry-caseworkctl/src/lib.rs, classify_failure and DOMAIN_REFUSAL_EXIT. */}
@@ -109,6 +110,35 @@ not that either service is reachable. Rebuild and recheck whenever the registry 
 {/* Evidence: crates/registry-caseworkctl/src/provider_pair.rs, compare;
     crates/registry-caseworkctl/src/lib.rs, against_breg_package;
     crates/registry-caseworkctl/src/project.rs. */}
+
+## Create a policy for another Action
+
+For your own Proposal-mode Action, choose an approval pattern and a new Casework directory:
+
+```sh test-skip="the reader supplies their own Action and sealed BReg package"
+caseworkctl provider add ./action-review \
+  --breg-project ./registry --action <action-id> \
+  --pattern two-peer-approval --breg-package <sealed-package>
+```
+
+When BReg needs changes, the command exits 1 with
+`casework.provider-add.breg-changes-needed`, prints the missing YAML, and creates no project.
+Review the proposed grants and any bypass warnings, apply the intended changes to BReg, rebuild
+its package, and rerun. The proposed context shows used inputs and changed fields. Its
+`changes` projection requires a real `records.get` grant; the output also offers an inputs-only
+alternative. Documents are never proposed.
+
+Once BReg is ready, the command creates the pattern with current-source pins and its exported
+schema, pairs, checks, and inspects the package. Add `--package-output <new-directory>` on
+creation to write that package. Without `--breg-package`, creation stops after checking and prints the pairing
+step. Repeating the command checks agreement without rewriting files. To package an existing
+project, use `caseworkctl package --output`.
+Replace the generated `.test` producer identities and configure runtime secret references
+before deployment.
+
+{/* Evidence: crates/registry-caseworkctl/src/provider_add.rs;
+    crates/registry-caseworkctl/src/templates.rs;
+    crates/registry-caseworkctl/src/lib.rs, ProviderCommand. */}
 
 ## Bind Casework as the review authority
 

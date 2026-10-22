@@ -318,6 +318,20 @@ mod tests {
     }
 
     #[test]
+    fn project_schema_publishes_the_settling_negative_decision_default() {
+        let documents = project_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[PROJECT_SCHEMA_FILE]).unwrap();
+        let negative_decisions =
+            &document["$defs"]["ReviewStagePolicy"]["properties"]["negativeDecisions"];
+        assert_eq!(negative_decisions["default"], "settle");
+        assert!(!document["$defs"]["ReviewStagePolicy"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|required| required == "negativeDecisions"));
+    }
+
+    #[test]
     fn context_contract_id_and_service_profile_keys_publish_the_reader_contract() {
         let documents = project_documents().unwrap();
         let document: Value = serde_json::from_str(&documents[PROJECT_SCHEMA_FILE]).unwrap();

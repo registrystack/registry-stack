@@ -155,6 +155,29 @@ fn model_retains_record_policy_shape_read_paths_and_field_classification() {
 }
 
 #[test]
+fn author_inspection_identifies_encrypted_fields() {
+    let mut source = source();
+    record_mut(&mut source, "facility")["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"private-note", "type":"string", "maximumLength":200,
+            "classification":"restricted", "encrypted":true
+        }));
+    let registry = compile(&source);
+    let inspection = inspect_registry(&registry);
+    let fields = &definition(&inspection["recordTypes"], "facility")["fields"];
+    assert_eq!(definition(fields, "private-note")["encrypted"], true);
+    assert_eq!(definition(fields, "address-line")["encrypted"], false);
+    validates("actions", inspection.clone());
+    let mut model = inspection;
+    model["version"] = json!(registry.version());
+    model["moduleOrder"] = json!(registry.module_order());
+    model["moduleClosure"] = json!(registry.module_closure());
+    validates("model", model);
+}
+
+#[test]
 fn model_retains_authored_display_without_inventing_input_labels() {
     let mut source = source();
     let baseline = compile(&source);

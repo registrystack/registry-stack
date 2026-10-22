@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-20"
+last_reviewed: "2026-10-22"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -101,6 +101,23 @@ A ReviewPolicy fixes the purpose, the stages in order, the profiles that decide 
 `settlement`, whether a reason is required, and whether a public reason is `required`,
 `optional`, or `none`. A larger policy adds `routing` rules that send a task to another queue by its
 fields, and `teams` that state which profiles a queue's staff must hold.
+
+For an approval policy, you can start with `caseworkctl init --template
+single-reviewer-approval`, `two-peer-approval`, or
+`technical-check-then-authorization`. The two-peer pattern supplies two local people on one
+Staff profile. The technical pattern gives its first stage `negativeDecisions: advise`:
+each completed decision counts toward its threshold, including a rejection or request for
+changes, then a separate authorizer decides. The default, `settle`, retains the immediate
+negative veto. An advisory stage must have a later stage; `check` refuses an advisory final
+stage. `explain` reports the effective mode.
+
+Earlier advisory reasons remain available to authorized reviewers in decision history.
+The producer receives only the settling outcome and its public reason. All three patterns
+exclude the initiator; the technical pattern also excludes earlier reviewers from authorization.
+
+{/* Evidence: crates/registry-caseworkctl/src/templates.rs, approval_project;
+    crates/registry-casework-core/src/review.rs, ReviewNegativeDecisionMode and record_review_decision;
+    crates/registry-caseworkctl/src/report.rs, ExplainStage. */}
 
 `context: {mode: submitted}` reviews the snapshot the producer sent. A policy whose reviewers
 must see the source's current record sets `mode: current-source` and names a

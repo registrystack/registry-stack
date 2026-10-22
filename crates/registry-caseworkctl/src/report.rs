@@ -293,6 +293,32 @@ payload!(ProducerAgreement {
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]
     schema_digest: String
 });
+payload!(ExplainStage {
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    id: String,
+    queue: String,
+    deciding_profiles: Vec<String>,
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::BoundedU32<1, { registry_casework_core::MAXIMUM_REVIEW_APPROVALS_PER_STAGE as u32 }>"))]
+    required_approvals: u16,
+    negative_decisions: registry_casework_core::ReviewNegativeDecisionMode,
+    exclude_initiator: bool,
+    exclude_previous_stage_reviewers: bool
+});
+
+impl From<&ReviewStagePolicy> for ExplainStage {
+    fn from(stage: &ReviewStagePolicy) -> Self {
+        Self {
+            id: stage.id.clone(),
+            queue: stage.queue.clone(),
+            deciding_profiles: stage.deciding_profiles.clone(),
+            required_approvals: stage.required_approvals,
+            negative_decisions: stage.negative_decisions,
+            exclude_initiator: stage.exclude_initiator,
+            exclude_previous_stage_reviewers: stage.exclude_previous_stage_reviewers,
+        }
+    }
+}
+
 payload!(ExplainPolicy {
     binding: ReviewPolicyIdentity,
     purpose: ReviewPurpose,
@@ -309,7 +335,7 @@ payload!(ExplainPolicy {
     clocks: Vec<String>,
     context: ReviewContextPolicy,
     context_custody: String,
-    stages: Vec<ReviewStagePolicy>,
+    stages: Vec<ExplainStage>,
     outcomes: Vec<ReviewOutcomePolicy>,
     routing: Vec<RoutingRule>,
     routing_fields: Vec<String>,
@@ -431,7 +457,7 @@ macro_rules! reports {
         }
     }
 }
-reports!(Init=>"init":InitData,Check=>"check":CheckData,Explain=>"explain":ExplainData,Test=>"test":TestData,Types=>"types":TypesData,ProviderPair=>"provider-pair":ProviderPairData,Lifecycle=>"lifecycle":LifecycleData,Package=>"package":PackageData,Doctor=>"doctor":DoctorData,Plan=>"plan":PlanData,Apply=>"apply":ApplyData,Status=>"status":StatusData,Dev=>"dev":DevData,DevEvents=>"dev-events":DevEventsData,DevToken=>"dev-token":DevTokenData,DevGrant=>"dev-grant":DevGrantData,DevIdentity=>"dev-identity":DevIdentityData,Usage=>"usage":UsageData);
+reports!(Init=>"init":InitData,Check=>"check":CheckData,Explain=>"explain":ExplainData,Test=>"test":TestData,Types=>"types":TypesData,ProviderAdd=>"provider-add":crate::provider_add::ProviderAddData,ProviderPair=>"provider-pair":ProviderPairData,Lifecycle=>"lifecycle":LifecycleData,Package=>"package":PackageData,Doctor=>"doctor":DoctorData,Plan=>"plan":PlanData,Apply=>"apply":ApplyData,Status=>"status":StatusData,Dev=>"dev":DevData,DevEvents=>"dev-events":DevEventsData,DevToken=>"dev-token":DevTokenData,DevGrant=>"dev-grant":DevGrantData,DevIdentity=>"dev-identity":DevIdentityData,Usage=>"usage":UsageData);
 
 impl CliReport {
     pub(crate) fn from_value(command: &str, value: Value) -> anyhow::Result<Self> {

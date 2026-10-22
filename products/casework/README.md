@@ -149,6 +149,11 @@ so reordering a map changes neither the served policy nor its digest.
 ## Distinct approvals and source versions
 
 Each approval in a stage must come from a different eligible person.
+A development clients file may bind several clients to the same access profile.
+Each client has its own identity and token. Two clients on a team's staff list
+that resolve to the same principal are refused. Use two clients on one Staff
+profile to exercise `requiredApprovals: 2` locally; separate profile names are
+not a substitute for independent people.
 A repeat claim after that person's decision returns `403 review.distinct-approver-required`.
 The bounded `insufficient-distinct-approvers` task notice identifies a staffing shortfall without
 listing team members. `caseworkctl doctor` warns when current serving-team membership cannot staff
@@ -160,7 +165,96 @@ metadata cannot decode. `source.version-mismatch` names an incompatible peer;
 `source.version-unavailable` means the peer did not supply a usable version.
 Neither refusal echoes the peer's header or source data.
 
+## Approval patterns
+
+Create a submitted-snapshot approval project with a shared pattern:
+
+```sh
+caseworkctl init ./review --template two-peer-approval
+caseworkctl check ./review
+caseworkctl explain ./review
+caseworkctl test ./review
+```
+
+`single-reviewer-approval` requires one reviewer. `two-peer-approval` requires
+two distinct people on one Staff profile and creates two synthetic local
+clients for them. `technical-check-then-authorization` creates a technical
+check followed by a separate authorizer. Every pattern excludes the initiator;
+the authorization stage also excludes earlier reviewers. Inspect the generated
+policy, staffing, retention, and producer bindings before using it for your
+institution.
+
+By default, `negativeDecisions: settle` lets a rejection or request for changes
+settle the review immediately. Set `negativeDecisions: advise` on a non-final
+stage to record the finding and continue. On that stage, `requiredApprovals`
+counts completed decisions by distinct eligible people, including negative
+ones. The next stage opens when the threshold is met even if every finding was
+negative. The technical-check pattern uses this mode; only the authorizer can
+settle its review. A final advisory stage is refused with
+`casework.review-policy.advisory-final-stage` at its `negativeDecisions` field.
+
+Later authorized reviewers serving an active-stage task's effective queue can
+read earlier advisory decisions and private reasons through the existing
+decision history. Routing determines that queue; membership in the stage's
+default queue alone does not grant access. Each advisory decision is
+audited. The producer receives only the settling outcome and that decision's
+public reason; earlier findings and reasons remain in Casework. `explain`
+reports each stage's effective mode. Omitting the field preserves existing
+policy behavior and digests.
+
 ## Current-source BReg review
+
+To generate one of the approval patterns for an existing Proposal-mode Action,
+use `caseworkctl provider add`:
+
+```sh
+caseworkctl provider add ./review --breg-project ./facility \
+  --action correct-address --pattern single-reviewer-approval \
+  --breg-package ./facility-package
+```
+
+The command reads BReg through the matching `bregctl` public CLI. Missing
+review requirements, context, or reader grants produce
+`casework.provider-add.breg-changes-needed`, proposed YAML, and no project.
+Review and apply those source changes, then rerun. Existing context, policy
+IDs, and authority names are retained. The suggested context contains the
+Plan's used inputs and changed fields; a changes projection needs ordinary
+Record read authority over those fields and rows. An inputs-only alternative
+is printed beside that grant. Bypass writes are warnings for an operator to
+assess, and documents are never added to the proposed context.
+If the Action writes encrypted fields, BReg cannot export their before/after
+values. The command asks you to author a supported context explicitly, such as
+an inputs-only context, then rerun. It never silently drops changed fields.
+An automatic context exceeding 64 context fields or 64 selected fields in one
+changes projection also requires an explicitly authored, minimized context.
+
+If the Action's start profiles use different row boundaries, author the human
+reviewer's Proposal and Record grants explicitly, then rerun. The command
+preserves a complete reviewer grant bound to `actorKind: human` and explicit
+`requesterClients`. Existing profiles without a human binding remain unchanged;
+the proposed profile uses a separate ID. Bind its suggested reviewer client ID
+to the intended UI clients before applying it. Its status service must have only the
+selected Action's Review status authority, with no Record, Action, other
+Proposal, or statistical dataset authority.
+
+When BReg is ready, Casework writes the pattern with exact current-source
+pins and the native exported schema. With `--breg-package`, its compiled registry
+revision must match the inspected project before pairing and schema comparison.
+The selected policy ID must fit Casework's local identifier format. An exact
+BReg policy selection must match the compiled Casework policy's version and
+digest; matching exact selections and ID-only selections are both supported.
+`--package-output` writes a package when creating the project and sets the
+runtime example's package root to that destination.
+Without a package it checks the generated project and prints the pairing
+step. A repeat invocation compares effective policy values and the source status
+profile, accepts explicitly written defaults, and rechecks agreement without
+rewriting files. When `runtime.example.yaml` is present, its status profile must
+match and its scopes must include every scope currently required by BReg;
+additional operator-configured scopes are preserved. To write
+a package for an existing project, use `caseworkctl package --output`.
+Generated producer identities use reserved `.test` placeholders; runtime
+examples contain secret references only. The command never edits BReg or
+creates credentials.
 
 The canonical project pins a BReg Proposal review-context export. Its
 `facility-address-review` policy has `purpose: approval` and
@@ -191,7 +285,7 @@ caseworkctl check products/casework/examples/canonical-review \
 Pairing refusals retain `casework.provider-pair.contract-mismatch`,
 `casework.provider-pair.unserved-capability`, or
 `casework.provider-pair.version-mismatch`. The diagnostic names the review
-policy's contract path, the provider's capabilities path, or `--bregctl`, with a
+policy's contract path, the provider's capabilities path, or `--bregctl-bin`, with a
 specific corrective action. Peer command output and secret values are excluded.
 
 The offline check compares the export's exact source, action, context contract,

@@ -19,10 +19,26 @@ if [ ! -x "$caseworkctl_bin" ]; then
   echo "CASEWORKCTL_BIN must name an executable candidate" >&2
   exit 2
 fi
+# The provider-add authoring proof drives the matching public BReg CLI.
+if [ -z "${BREGCTL_BIN:-}" ]; then
+  registry_cargo_build "$repo_root" --locked --offline -j2 -p registry-bregctl
+  target_directory=$(cargo metadata --locked --offline --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+  BREGCTL_BIN="$target_directory/debug/bregctl"
+fi
+CASEWORKCTL_BIN=$caseworkctl_bin
+export BREGCTL_BIN CASEWORKCTL_BIN
+cargo test --locked --offline -j2 -p registry-caseworkctl --test provider_add
 work=$(mktemp -d "${TMPDIR:-/tmp}/casework-checkpoint.XXXXXX")
 cleanup() { rm -rf -- "$work"; }
 trap cleanup EXIT HUP INT TERM
 "$caseworkctl_bin" init "$work/standalone" --template standalone-decision >/dev/null
+for pattern in single-reviewer-approval two-peer-approval technical-check-then-authorization; do
+  "$caseworkctl_bin" init "$work/$pattern" --template "$pattern" >/dev/null
+  "$caseworkctl_bin" --format json check "$work/$pattern" >"$work/check.json"
+  "$caseworkctl_bin" --format json explain "$work/$pattern" >"$work/explain.json"
+  "$caseworkctl_bin" --format json test "$work/$pattern" >"$work/test.json"
+  "$caseworkctl_bin" --format json package "$work/$pattern" --dry-run >"$work/dry-run.json"
+done
 for project in "$work/standalone" "$repo_root/products/casework/examples/standalone-decision" "$repo_root/products/casework/examples/canonical-review" "$repo_root/products/casework/examples/multi-stage-routing-clocks"; do
   "$caseworkctl_bin" --format json check "$project" >"$work/check.json"
   "$caseworkctl_bin" --format json explain "$project" >"$work/explain.json"

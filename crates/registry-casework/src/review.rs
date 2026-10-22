@@ -1214,7 +1214,7 @@ impl CaseworkService {
             require_human_reviewer(actor)?;
             None
         };
-        let history = self
+        let mut history = self
             .store
             .review_history(actor, request_id, requester.as_ref(), cursor, limit)
             .await?;
@@ -1222,6 +1222,9 @@ impl CaseworkService {
             self.preflight_review_request_read_source(request_id, source_profile_id, token)
                 .await?;
             self.store.recheck_review_access(actor, request_id).await?;
+            self.store
+                .enrich_advisory_history(actor, &mut history)
+                .await?;
         }
         Ok(history)
     }
@@ -4101,6 +4104,162 @@ impl PostgresStore {
         Ok(ReviewHistoryPage { items, next_cursor })
     }
 
+    async fn enrich_advisory_history(
+        &self,
+        actor: &ActorContext,
+        history: &mut ReviewHistoryPage,
+    ) -> Result<(), ReviewRuntimeError> {
+        let accountability_events = history
+            .items
+            .iter()
+            .filter(|entry| {
+                entry.kind == "review-decided" && entry.detail["advisory"] == Value::Bool(true)
+            })
+            .map(|entry| {
+                entry.detail["accountabilityEventId"]
+                    .as_str()
+                    .ok_or(ReviewRuntimeError::Corrupt)
+                    .and_then(|value| {
+                        Uuid::parse_str(value).map_err(|_| ReviewRuntimeError::Corrupt)
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if accountability_events.is_empty() {
+            return Ok(());
+        }
+
+        let request_id = history
+            .items
+            .first()
+            .map(|entry| entry.request_id)
+            .ok_or(ReviewRuntimeError::Corrupt)?;
+        if history
+            .items
+            .iter()
+            .any(|entry| entry.request_id != request_id)
+        {
+            return Err(ReviewRuntimeError::Corrupt);
+        }
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        let record = load_request_by_id(&transaction, request_id, false).await?;
+        let Some(active_stage_index) = record.active_stage else {
+            return Ok(());
+        };
+        if record.lifecycle != ReviewRequestLifecycle::Reviewing || active_stage_index == 0 {
+            return Ok(());
+        }
+        let active_stage = record
+            .policy
+            .stages
+            .get(usize::from(active_stage_index))
+            .ok_or(ReviewRuntimeError::Corrupt)?;
+        if !active_stage.deciding_profiles.contains(&actor.profile_id) {
+            return Ok(());
+        }
+        if active_stage.exclude_initiator && record.initiator.as_ref() == Some(&actor.principal) {
+            return Ok(());
+        }
+        if active_stage.exclude_previous_stage_reviewers
+            && transaction
+                .query_opt(
+                    "SELECT 1 FROM casework_review_decisions
+                     WHERE request_id=$1 AND actor_issuer=$2 AND actor_subject=$3
+                       AND stage_index<$4 LIMIT 1",
+                    &[
+                        &request_id,
+                        &actor.principal.issuer,
+                        &actor.principal.subject,
+                        &i32::from(active_stage_index),
+                    ],
+                )
+                .await?
+                .is_some()
+        {
+            return Ok(());
+        }
+        match ensure_review_stage_queue_access(
+            &transaction,
+            record.request_id,
+            actor,
+            &[i32::from(active_stage_index)],
+            None,
+            true,
+        )
+        .await
+        {
+            Ok(()) => {}
+            Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound) => return Ok(()),
+            Err(error) => return Err(error),
+        }
+
+        let mut audit = self
+            .begin_audit(crate::audit::request_record(
+                "review-accountability-read",
+                Some(actor),
+                &actor.profile_id,
+                json!({"reviewRequestId": request_id}),
+            ))
+            .await?;
+        let rows = transaction
+            .query(
+                "SELECT a.event_id,a.outcome,a.private_reason
+                   FROM casework_review_accountability a
+                   JOIN casework_review_tasks t ON t.task_id=a.task_id
+                   JOIN casework_review_requests r ON r.request_id=a.request_id
+                  WHERE a.event_id=ANY($1) AND a.request_id=$2
+                    AND (r.lifecycle='reviewing' OR a.retained_until>now())
+                    AND t.stage_index<$3
+                    AND COALESCE(
+                        r.policy_snapshot->'stages'->t.stage_index->>'negativeDecisions',
+                        'settle')='advise'",
+                &[
+                    &accountability_events,
+                    &request_id,
+                    &i32::from(active_stage_index),
+                ],
+            )
+            .await?;
+        if rows.is_empty() {
+            audit.record_outcome(crate::audit::AuditOutcome::Unchanged);
+        }
+        for row in rows {
+            let accountability_event_id = row.get::<_, Uuid>(0);
+            let accountability_event_id_text = accountability_event_id.to_string();
+            let entry = history
+                .items
+                .iter_mut()
+                .find(|entry| {
+                    entry.detail["accountabilityEventId"].as_str()
+                        == Some(accountability_event_id_text.as_str())
+                })
+                .ok_or(ReviewRuntimeError::Corrupt)?;
+            entry.detail["outcome"] = Value::String(
+                row.get::<_, Option<String>>(1)
+                    .ok_or(ReviewRuntimeError::Corrupt)?,
+            );
+            if let Some(private_reason) = row.get::<_, Option<String>>(2) {
+                entry.detail["privateReason"] = Value::String(private_reason);
+            }
+            let read_event_id = Uuid::new_v4();
+            audit.record(
+                read_event_id,
+                json!({
+                    "event": "casework.review-accountability-read",
+                    "eventId": read_event_id,
+                    "accountabilityEventId": accountability_event_id,
+                    "actor": {
+                        "issuer": actor.principal.issuer,
+                        "subject": actor.principal.subject,
+                    },
+                    "profileId": actor.profile_id,
+                }),
+            )?;
+        }
+        audit.commit(transaction).await?;
+        Ok(())
+    }
+
     async fn review_clocks(
         &self,
         actor: &ActorContext,
@@ -4761,6 +4920,14 @@ impl PostgresStore {
             }
         }
         let decision_event_id = Uuid::new_v4();
+        let mut decision_history_detail = json!({
+            "decision": decision_name,
+            "transition": transition_kind(&transition),
+            "accountabilityEventId": accountability_event_id,
+        });
+        if stage.negative_decisions == registry_casework_core::ReviewNegativeDecisionMode::Advise {
+            decision_history_detail["advisory"] = json!(true);
+        }
         transaction
             .execute(
                 "INSERT INTO casework_review_history(event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
@@ -4770,11 +4937,7 @@ impl PostgresStore {
                     &request_id,
                     &task_id,
                     &actor_ref,
-                    &json!({
-                        "decision": decision_name,
-                        "transition": transition_kind(&transition),
-                        "accountabilityEventId": accountability_event_id,
-                    }),
+                    &decision_history_detail,
                     &now,
                 ],
             )
@@ -6188,13 +6351,6 @@ async fn ensure_review_reviewer_access(
     task_id: Option<Uuid>,
     lock_membership: bool,
 ) -> Result<(), ReviewRuntimeError> {
-    let membership = match actor.role {
-        CaseworkRole::Staff => "staff",
-        CaseworkRole::Supervisor => "supervisor",
-        CaseworkRole::Administrator | CaseworkRole::Requester => {
-            return Err(ReviewRuntimeError::Forbidden);
-        }
-    };
     let eligible_stages = record
         .policy
         .stages
@@ -6203,6 +6359,32 @@ async fn ensure_review_reviewer_access(
         .filter(|(_, stage)| stage.deciding_profiles.contains(&actor.profile_id))
         .map(|(index, _)| i32::try_from(index).map_err(|_| ReviewRuntimeError::Corrupt))
         .collect::<Result<Vec<_>, _>>()?;
+    ensure_review_stage_queue_access(
+        client,
+        record.request_id,
+        actor,
+        &eligible_stages,
+        task_id,
+        lock_membership,
+    )
+    .await
+}
+
+async fn ensure_review_stage_queue_access(
+    client: &impl GenericClient,
+    request_id: Uuid,
+    actor: &ActorContext,
+    eligible_stages: &[i32],
+    task_id: Option<Uuid>,
+    lock_membership: bool,
+) -> Result<(), ReviewRuntimeError> {
+    let membership = match actor.role {
+        CaseworkRole::Staff => "staff",
+        CaseworkRole::Supervisor => "supervisor",
+        CaseworkRole::Administrator | CaseworkRole::Requester => {
+            return Err(ReviewRuntimeError::Forbidden);
+        }
+    };
     if eligible_stages.is_empty() {
         return Err(ReviewRuntimeError::NotFound);
     }
@@ -6223,7 +6405,7 @@ async fn ensure_review_reviewer_access(
         .query_opt(
             &query,
             &[
-                &record.request_id,
+                &request_id,
                 &eligible_stages,
                 &actor.principal.issuer,
                 &actor.principal.subject,

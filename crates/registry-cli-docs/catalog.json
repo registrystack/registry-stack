@@ -5275,7 +5275,10 @@
               ],
               "possible_values": [
                 "standalone-decision",
-                "canonical-review"
+                "canonical-review",
+                "single-reviewer-approval",
+                "two-peer-approval",
+                "technical-check-then-authorization"
               ],
               "environment": null
             },
@@ -5587,7 +5590,7 @@
         {
           "name": "provider",
           "invocation": "caseworkctl provider",
-          "about": "Pair a context provider with an existing native producer export and reader authority",
+          "about": "Create approval projects and pair context providers with native producer exports",
           "long_about": null,
           "usage": "caseworkctl provider [OPTIONS] <COMMAND>",
           "arguments": [],
@@ -5618,6 +5621,119 @@
           ],
           "constraints": [],
           "subcommands": [
+            {
+              "name": "add",
+              "invocation": "caseworkctl provider add",
+              "about": "Create an approval project from a Base Registry Engine (BReg) Action and print missing configuration",
+              "long_about": null,
+              "usage": "caseworkctl provider add [OPTIONS] --breg-project <PROJECT> --action <ACTION> --pattern <PATTERN> <DIRECTORY>",
+              "arguments": [
+                {
+                  "display": "<DIRECTORY>",
+                  "description": "New Casework directory, or a previously generated project to check without rewriting",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--breg-project <PROJECT>",
+                  "description": "Authored BReg project inspected through its matching bregctl executable",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--action <ACTION>",
+                  "description": "Proposal-mode BReg Action to review",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--pattern <PATTERN>",
+                  "description": "Approval stages and outcomes shared with caseworkctl init",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [
+                    "single-reviewer-approval",
+                    "two-peer-approval",
+                    "technical-check-then-authorization"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--breg-package <DIRECTORY>",
+                  "description": "Sealed BReg package to pair and compare before packaging Casework",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--package-output <DIRECTORY>",
+                  "description": "Package directory written with a new project; omit to inspect the package without writing it",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--bregctl-bin <BINARY>",
+                  "description": "Matching bregctl executable used for public project and package inspection",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "bregctl"
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Write human diagnostics and reports, or one typed JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--package-output <DIRECTORY>",
+                  "arguments": [
+                    "--breg-package <DIRECTORY>"
+                  ]
+                }
+              ],
+              "subcommands": []
+            },
             {
               "name": "pair",
               "invocation": "caseworkctl provider pair",

@@ -202,6 +202,18 @@ fn clients_file_refuses_unknown_keys_and_repeated_identity() {
 }
 
 #[test]
+fn clients_file_accepts_distinct_clients_bound_to_one_access_profile() {
+    let clients = accepted(
+        one_staff("  - id: second-staff\n    accessProfile: staff\n    scopes: [casework:staff]\n")
+            .as_bytes(),
+    );
+
+    assert_eq!(clients.clients.len(), 2);
+    assert_eq!(clients.clients[0].access_profile, "staff");
+    assert_eq!(clients.clients[1].access_profile, "staff");
+}
+
+#[test]
 fn clients_file_names_its_format_and_refuses_the_retired_version_key() {
     let envelope = one_staff("");
     assert_eq!(accepted(envelope.as_bytes()).kind, config::DEV_CLIENTS_KIND);
@@ -242,7 +254,7 @@ fn clients_file_findings_name_no_value() {
         "    claims:\n      aud: {secretive}\n  - id: second\n    accessProfile: staff\n    scopes: ['{secretive}', '{secretive}']\n"
     ));
     let decoded = one_staff("").replace("id: staff", &format!("id: '{secretive}'"));
-    for (text, at_least) in [(checked, 3), (decoded, 1)] {
+    for (text, at_least) in [(checked, 2), (decoded, 1)] {
         let report = config::read("dev-clients.yaml", text.as_bytes()).unwrap_err();
         assert!(
             report.diagnostics().len() >= at_least,
@@ -774,9 +786,6 @@ fn binding_refuses_repeated_resolved_principals_within_each_membership_kind() {
             .find(|profile| profile.role == role)
             .unwrap();
         profile.principal_claim = "registry_principal".to_owned();
-        let mut second_profile = profile.clone();
-        second_profile.id = second_id.to_owned();
-        policy.access_profiles.push(second_profile);
 
         let mut clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
         let client = clients
@@ -789,7 +798,6 @@ fn binding_refuses_repeated_resolved_principals_within_each_membership_kind() {
             .insert("registry_principal".to_owned(), "shared-person".to_owned());
         let mut second_client = client.clone();
         second_client.id = second_id.to_owned();
-        second_client.access_profile = second_id.to_owned();
         clients.clients.push(second_client);
         match role {
             CaseworkRole::Staff => clients.directory[0].staff.push(second_id.to_owned()),

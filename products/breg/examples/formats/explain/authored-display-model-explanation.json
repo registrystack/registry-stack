@@ -548,6 +548,7 @@
             "description": "The institution's reference for this entry.",
             "label": "Entry code"
           },
+          "encrypted": false,
           "fieldType": {
             "maximumLength": 80,
             "minimumLength": 0,
@@ -566,6 +567,7 @@
           "apiName": "active",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "type": "boolean"
           },
@@ -580,6 +582,7 @@
           "apiName": "recordedOn",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "type": "date"
           },

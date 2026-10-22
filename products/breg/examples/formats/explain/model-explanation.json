@@ -2120,6 +2120,7 @@
           "apiName": "name",
           "classification": "public",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "maximumLength": 160,
             "minimumLength": 1,
@@ -2138,6 +2139,7 @@
           "apiName": "email",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "maximumLength": 254,
             "minimumLength": 1,
@@ -2156,6 +2158,7 @@
           "apiName": "jurisdiction",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "maximumLength": 40,
             "minimumLength": 1,
@@ -2217,6 +2220,7 @@
           "apiName": "facilityCode",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "maximumLength": 64,
             "minimumLength": 1,
@@ -2235,6 +2239,7 @@
           "apiName": "name",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "maximumLength": 200,
             "minimumLength": 1,
@@ -2253,6 +2258,7 @@
           "apiName": "addressLine",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "maximumLength": 240,
             "minimumLength": 1,
@@ -2271,6 +2277,7 @@
           "apiName": "city",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "maximumLength": 120,
             "minimumLength": 1,
@@ -2289,6 +2296,7 @@
           "apiName": "postalCode",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "maximumLength": 24,
             "minimumLength": 1,
@@ -2307,6 +2315,7 @@
           "apiName": "status",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "type": "vocabulary-code",
             "values": [
@@ -2331,6 +2340,7 @@
           "apiName": "jurisdiction",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "maximumLength": 40,
             "minimumLength": 1,
@@ -2413,6 +2423,7 @@
           "apiName": "facility",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "onDelete": "restrict",
             "target": "facility",
@@ -2430,6 +2441,7 @@
           "apiName": "operator",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "onDelete": "restrict",
             "target": "operator",
@@ -2447,6 +2459,7 @@
           "apiName": "jurisdiction",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "maximumLength": 40,
             "minimumLength": 1,
@@ -2536,6 +2549,7 @@
           "apiName": "operatorCode",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "maximumLength": 64,
             "minimumLength": 1,
@@ -2554,6 +2568,7 @@
           "apiName": "status",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "type": "vocabulary-code",
             "values": [
@@ -2578,6 +2593,7 @@
           "apiName": "jurisdiction",
           "classification": "internal",
           "display": {},
+          "encrypted": false,
           "fieldType": {
             "maximumLength": 40,
             "minimumLength": 1,

@@ -324,6 +324,20 @@
         }
       ]
     },
+    "ReviewNegativeDecisionMode": {
+      "oneOf": [
+        {
+          "const": "settle",
+          "description": "A rejection or change request settles the whole review immediately.",
+          "type": "string"
+        },
+        {
+          "const": "advise",
+          "description": "A negative decision counts toward this stage and the review continues.",
+          "type": "string"
+        }
+      ]
+    },
     "ReviewOutcomeSettlement": {
       "enum": [
         "approved",
@@ -390,6 +404,11 @@
         },
         "id": {
           "$ref": "#/$defs/LocalId"
+        },
+        "negativeDecisions": {
+          "$ref": "#/$defs/ReviewNegativeDecisionMode",
+          "default": "settle",
+          "description": "Controls whether a rejection or change request settles the whole review.\n`settle` is the default; `advise` records and counts the decision toward\nthis non-final stage without settling the review."
         },
         "queue": {
           "type": "string"

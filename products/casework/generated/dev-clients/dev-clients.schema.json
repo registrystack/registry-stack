@@ -45,7 +45,7 @@
       "additionalProperties": false,
       "properties": {
         "accessProfile": {
-          "description": "The access profile this client binds; each profile binds one client.",
+          "description": "The access profile this client binds. Several clients may share a profile.",
           "type": "string"
         },
         "claims": {
@@ -261,7 +261,7 @@
       "type": "string"
     },
     "clients": {
-      "description": "One teaching client for each access profile `casework.yaml` declares.",
+      "description": "Local teaching clients bound to access profiles `casework.yaml` declares.",
       "items": {
         "$ref": "#/$defs/Client"
       },
