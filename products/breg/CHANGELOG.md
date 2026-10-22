@@ -172,6 +172,17 @@
   catalog `apply.database.catalog-refused`, a refused database setting
   `apply.database-configuration.refused`, and a package id that derives no
   lock key `apply.package.lock-key-refused`. Each says nothing was changed.
+- An initial `bregctl plan` or `bregctl apply` of a package whose declared
+  schema fingerprint differs from the catalog its DDL installs, as one built
+  by another release, is refused with `apply.package.fingerprint-mismatch`
+  before maintenance begins. It previously failed after the DDL committed,
+  leaving the database pinned in failed maintenance, and plan reported the
+  package ready. The same rehearsal refuses, before maintenance and with
+  nothing changed, a DDL statement PostgreSQL refuses
+  (`apply.package.ddl-refused`, naming the SQLSTATE), a native pattern it
+  rejects (`breg.field.pattern-syntax-invalid`), and a managed catalog it
+  does not admit (`apply.database.catalog-refused`). Successor activations
+  are not rehearsed this way.
 
 ## 0.43.0 - 2026-10-21
 

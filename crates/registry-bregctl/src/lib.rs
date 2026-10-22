@@ -6340,6 +6340,52 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 DiagnosticArtifact::PackageActivation,
                 SuggestedAction::CorrectPackageBuild,
             ),
+            registry_breg::migration::MigrationError::SchemaFingerprintMismatch {
+                declared,
+                measured,
+            } => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.package.fingerprint-mismatch",
+                        "package",
+                        &format!(
+                            "the package declares schema fingerprint {declared}, but its DDL installs {measured} on this database, as when the package was built by another release. Nothing was changed. Rebuild the package with this release: run `bregctl test`, then `bregctl package`"
+                        ),
+                    ),
+                    DiagnosticArtifact::PackageActivation,
+                    SuggestedAction::CorrectPackageBuild,
+                );
+            }
+            registry_breg::migration::MigrationError::PackageDdlRefused(failure) => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.package.ddl-refused",
+                        "database",
+                        &format!(
+                            "PostgreSQL refused the package's initial DDL with {failure} when apply rehearsed it before maintenance began. Nothing was changed. Fix the cause the SQLSTATE and the named objects point at in the database setup, or correct the package and rebuild it with `bregctl test`, then `bregctl package`, and run the same command again"
+                        ),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::VerifyMigrationAuthority,
+                );
+            }
+            registry_breg::migration::MigrationError::FieldPatternSyntaxRefused {
+                entity_id,
+                field_id,
+            } => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "breg.field.pattern-syntax-invalid",
+                        &format!("recordTypes[{entity_id}].fields[{field_id}].pattern"),
+                        "PostgreSQL rejected the native pattern syntax when apply rehearsed the package's initial DDL before maintenance began. Nothing was changed. Correct the PostgreSQL ARE syntax, then run `bregctl test` and `bregctl package` and apply the rebuilt package",
+                    ),
+                    DiagnosticArtifact::PackageActivation,
+                    SuggestedAction::CorrectPackageBuild,
+                );
+            }
             registry_breg::migration::MigrationError::MigrationRoleRefused(reason) => {
                 return source_failure(
                     command,
@@ -15833,14 +15879,34 @@ fn apply_reports_an_unavailable_database_before_maintenance_as_retryable() {
     );
 }
 
+#[cfg(test)]
+#[test]
+fn apply_names_both_schema_fingerprints_and_the_rebuild() {
+    use registry_breg::migration::MigrationError;
+
+    let declared = format!("sha256:{}", "0".repeat(64));
+    let measured = format!("sha256:{}", "1".repeat(64));
+    let report = lifecycle_failure(
+        "apply",
+        ApplyLifecycleError::Apply(MigrationError::SchemaFingerprintMismatch {
+            declared: declared.clone(),
+            measured: measured.clone(),
+        }),
+    );
+    let message = &report.diagnostics[0].message;
+    for fragment in [&declared, &measured, "bregctl test", "bregctl package"] {
+        assert!(message.contains(fragment), "{fragment}: {message}");
+    }
+}
+
 /// A refusal before maintenance began has its own code for `apply` and
 /// `plan` alike: it keeps the kernel's value-free reason, says nothing was
 /// changed, and never sends the operator to reconcile a migration that
 /// never started.
-#[cfg(test)]
 #[test]
 fn apply_names_each_refusal_before_maintenance() {
     use registry_breg::migration::MigrationError;
+    use registry_breg::postgres::PostgresFailure;
 
     let cases = [
         (
@@ -15886,6 +15952,40 @@ fn apply_names_each_refusal_before_maintenance() {
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::VerifyMigrationAuthority,
             "a managed NOT NULL constraint is not validated",
+        ),
+        (
+            MigrationError::SchemaFingerprintMismatch {
+                declared: format!("sha256:{}", "0".repeat(64)),
+                measured: format!("sha256:{}", "1".repeat(64)),
+            },
+            "apply.package.fingerprint-mismatch",
+            "package",
+            DiagnosticArtifact::PackageActivation,
+            SuggestedAction::CorrectPackageBuild,
+            "built by another release",
+        ),
+        (
+            MigrationError::PackageDdlRefused(PostgresFailure {
+                sqlstate: Some("42501".to_owned()),
+                table: Some("registry_data.asset".to_owned()),
+                ..PostgresFailure::default()
+            }),
+            "apply.package.ddl-refused",
+            "database",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+            "SQLSTATE 42501 (syntax error or access rule violation), table registry_data.asset",
+        ),
+        (
+            MigrationError::FieldPatternSyntaxRefused {
+                entity_id: "asset".to_owned(),
+                field_id: "legacy".to_owned(),
+            },
+            "breg.field.pattern-syntax-invalid",
+            "recordTypes[asset].fields[legacy].pattern",
+            DiagnosticArtifact::PackageActivation,
+            SuggestedAction::CorrectPackageBuild,
+            "native pattern syntax",
         ),
     ];
     for (error, code, path, artifact, action, reason) in cases {

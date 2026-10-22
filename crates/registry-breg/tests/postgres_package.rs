@@ -59,7 +59,7 @@ use registry_breg::package::{
 };
 use registry_breg::postgres::{
     begin_record_transaction, install_compiled_schema, managed_schema_fingerprint, ClaimContext,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresFailure, RegistryLockKey,
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_breg::startup::{prepare_startup, StartupError};
@@ -1685,8 +1685,12 @@ async fn a_missing_prerequisite_is_named_by_plan_and_apply_before_maintenance() 
     database.cleanup().await;
 }
 
+/// A signed package whose declared schema fingerprint differs from the
+/// catalog its DDL installs is refused by plan and apply before maintenance
+/// begins: no control plane, ledger, or audit is written, and startup still
+/// finds an uninitialized database rather than a ready one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready() {
+async fn signed_schema_fingerprint_mismatch_is_refused_before_maintenance_and_never_ready() {
     let database = TestDatabase::create(1).await;
     database
         .admin
@@ -1697,6 +1701,16 @@ async fn signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready() 
     let initial_context = fixture.context();
     let package = load_package(fixture.root.path(), &initial_context)
         .expect("production-shaped package verifies before catalog apply");
+    let planned = plan_verified_package(ApplyVerifiedPackageRequest::plan(
+        &database.migration_config,
+        &package,
+        ActivationDeployment::new("local", INSTANCE, DATABASE),
+        ApplyPrecondition::InitialActivation,
+        ApplyRoles::new(&database.migration_role, &database.runtime_role),
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(1))
+            .expect("test timeouts are bounded"),
+    ))
+    .await;
     let refused = apply_package(
         &database,
         &package,
@@ -1705,7 +1719,137 @@ async fn signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready() 
         Duration::from_secs(1),
     )
     .await;
-    assert_eq!(refused.err(), Some(MigrationError::ApplyFailed));
+    for error in [planned.err(), refused.err()] {
+        match error {
+            Some(MigrationError::SchemaFingerprintMismatch { declared, measured }) => {
+                assert_eq!(declared, fingerprint(7));
+                assert_ne!(measured, fingerprint(7));
+                assert!(measured.starts_with("sha256:"), "{measured}");
+            }
+            other => panic!("expected a schema fingerprint refusal, got {other:?}"),
+        }
+    }
+    let state_table: Option<String> = database
+        .admin
+        .query_one(
+            "SELECT to_regclass('registry_internal.registry_state')::text",
+            &[],
+        )
+        .await
+        .expect("the administrator can inspect control-plane absence")
+        .get(0);
+    assert_eq!(state_table, None);
+    assert!(database.activation_audit_entries().is_empty());
+
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("runtime pool builds");
+    let mut runtime = pool.get_for_test().await.expect("runtime connects");
+    let startup_context = fixture.context();
+    let startup = prepare_startup(
+        fixture.root.path(),
+        &startup_context,
+        DATABASE,
+        &mut runtime,
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await;
+    assert_eq!(startup.err(), Some(StartupError::DatabaseUninitialized));
+    drop(runtime);
+    database.cleanup().await;
+}
+
+/// A failed initial activation leaves a state row naming its own target,
+/// yet the ledger records no applied activation, so the recorded state says
+/// so and a plan of the same package reports the initial activation the
+/// next apply resumes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_initial_activation_is_recorded_unapplied_and_plans_as_its_resume() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs prerequisite");
+    let fixture = PackageFixture::build(None, fingerprint(7), PlanChoice::Schema);
+    let provisional = load_package(fixture.root.path(), &local_context())
+        .expect("initial package verifies before its fingerprint is measured");
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("fingerprint transaction starts");
+    install_compiled_schema(&transaction, provisional.registry(), &database.runtime_role)
+        .await
+        .expect("the compiled schema installs for fingerprinting");
+    let schema = managed_schema_fingerprint(
+        &transaction,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(provisional.registry()),
+    )
+    .await
+    .expect("the compiled fingerprint computes");
+    transaction
+        .rollback()
+        .await
+        .expect("fingerprint transaction rolls back");
+    drop(migration);
+    migration_task.abort();
+    rewrite_unsigned(fixture.root.path(), |manifest| {
+        manifest.schema_fingerprint.clone_from(&schema);
+    });
+    let package = load_package(fixture.root.path(), &local_context())
+        .expect("initial package verifies with its exact fingerprint");
+    // The first transaction to create a registry_data object, the rehearsal
+    // before maintenance, records its id in a sequence, which its rollback
+    // keeps. Registry DDL in any later transaction is refused, so the
+    // rehearsal passes and the DDL after maintenance began fails.
+    database
+        .admin
+        .batch_execute(
+            "CREATE SEQUENCE public.rehearsed_ddl_transaction MINVALUE 0 START 0;
+             CREATE FUNCTION public.refuse_unrehearsed_registry_ddl() RETURNS event_trigger
+                 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
+             DECLARE
+                 rehearsed bigint;
+             BEGIN
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_event_trigger_ddl_commands()
+                     WHERE schema_name = 'registry_data'
+                 ) THEN
+                     RETURN;
+                 END IF;
+                 SELECT last_value INTO rehearsed FROM public.rehearsed_ddl_transaction;
+                 IF rehearsed = 0 THEN
+                     PERFORM pg_catalog.setval(
+                         'public.rehearsed_ddl_transaction', pg_catalog.txid_current());
+                 ELSIF rehearsed <> pg_catalog.txid_current() THEN
+                     RAISE EXCEPTION 'unrehearsed' USING ERRCODE = 'P0001';
+                 END IF;
+             END
+             $$;
+             CREATE EVENT TRIGGER refuse_unrehearsed_registry_ddl ON ddl_command_end
+                 EXECUTE FUNCTION public.refuse_unrehearsed_registry_ddl()",
+        )
+        .await
+        .expect("administrator installs an event trigger that admits only the rehearsal");
+    let refused = apply_package(
+        &database,
+        &package,
+        ApplyPrecondition::InitialActivation,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await;
+    assert_eq!(
+        refused.err(),
+        Some(MigrationError::StatementFailed(PostgresFailure {
+            sqlstate: Some("P0001".to_owned()),
+            ..PostgresFailure::default()
+        }))
+    );
     let state = registry_state_snapshot(&database.admin).await;
     assert_eq!(state.5, "failed");
     assert_eq!(state.6.as_deref(), Some(package.package_digest()));
@@ -1738,52 +1882,6 @@ async fn signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready() 
             ("response".to_owned(), "failed".to_owned()),
         ]
     );
-
-    let pool = database
-        .runtime_config
-        .build_pool()
-        .expect("runtime pool builds");
-    let mut runtime = pool.get_for_test().await.expect("runtime connects");
-    let startup_context = fixture.context();
-    let startup = prepare_startup(
-        fixture.root.path(),
-        &startup_context,
-        DATABASE,
-        &mut runtime,
-        &database.migration_role,
-        &database.runtime_role,
-    )
-    .await;
-    assert_eq!(startup.err(), Some(StartupError::DatabaseUnready));
-    drop(runtime);
-    database.cleanup().await;
-}
-
-/// A failed initial activation leaves a state row naming its own target,
-/// yet the ledger records no applied activation, so the recorded state says
-/// so and a plan of the same package reports the initial activation the
-/// next apply resumes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_failed_initial_activation_is_recorded_unapplied_and_plans_as_its_resume() {
-    let database = TestDatabase::create(1).await;
-    database
-        .admin
-        .batch_execute("CREATE EXTENSION btree_gist")
-        .await
-        .expect("administrator installs prerequisite");
-    let fixture = PackageFixture::build(None, fingerprint(7), PlanChoice::Schema);
-    let context = fixture.context();
-    let package = load_package(fixture.root.path(), &context)
-        .expect("production-shaped package verifies before catalog apply");
-    let refused = apply_package(
-        &database,
-        &package,
-        ApplyPrecondition::InitialActivation,
-        Duration::from_secs(1),
-        Duration::from_secs(1),
-    )
-    .await;
-    assert_eq!(refused.err(), Some(MigrationError::ApplyFailed));
     let failed_activation: String = database
         .admin
         .query_one(

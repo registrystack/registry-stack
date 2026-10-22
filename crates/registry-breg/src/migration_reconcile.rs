@@ -226,10 +226,14 @@ impl From<PostgresKernelError> for ReconcileError {
 impl From<MigrationError> for ReconcileError {
     fn from(error: MigrationError) -> Self {
         match error {
-            MigrationError::PackageBinding | MigrationError::EmptyPlan => Self::PackageBinding,
+            MigrationError::PackageBinding
+            | MigrationError::EmptyPlan
+            | MigrationError::SchemaFingerprintMismatch { .. }
+            | MigrationError::FieldPatternSyntaxRefused { .. } => Self::PackageBinding,
             MigrationError::MigrationLockHeld => Self::NotExecutable(ReconcileOutcome::InProgress),
             MigrationError::ApplyFailed
             | MigrationError::StatementFailed(_)
+            | MigrationError::PackageDdlRefused(_)
             | MigrationError::ActivePackageMismatch
             | MigrationError::AlreadyActive
             | MigrationError::DatabaseMismatch

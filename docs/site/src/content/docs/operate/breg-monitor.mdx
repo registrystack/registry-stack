@@ -277,6 +277,8 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `apply.package.already-active` | This package already serves. | Nothing to do. |
 | `apply.package.empty-plan` | The successor changes nothing. | Keep the active package. |
 | `apply.package.lock-key-refused` | The package's Registry id derives no migration lock key. Nothing changed. | Correct the project id and rebuild the package. |
+| `apply.package.fingerprint-mismatch` | Before an initial apply changed anything, the schema fingerprint the package declares differed from the one its DDL installs on this database, as when the package was built by another release; the message names both. | Rebuild the package with this release: run `bregctl test`, then `bregctl package`, then rerun. |
+| `apply.package.ddl-refused` | Before an initial apply changed anything, PostgreSQL refused a statement of the package's DDL when apply rehearsed it; the SQLSTATE and the objects the server named are reported. | Fix the database setup the SQLSTATE points at, or correct and rebuild the package, then rerun. |
 | `apply.package.deployment-identity-refused` | The package's `canonicalBaseIri` is in the reserved `.invalid` namespace, which only a database initialized for `local` accepts. | Point `canonicalBaseIri` at a hostname you control, rerun `schema-test`, and rebuild the package. |
 | `apply.backup-evidence.refused` | The backup binding is missing, stale, or for another database. | Take a fresh backup; pass it with `--backup`. |
 | `apply.history.coverage-incomplete` | An erasure left history uncovered. | Run [`history rebaseline`](../breg-retention/#restore-snapshot-coverage-after-an-erasure). |

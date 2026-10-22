@@ -116,6 +116,23 @@ pub enum MigrationError {
     /// this boundary. Nothing was changed.
     #[error("the database catalog was refused before maintenance began: {0}")]
     CatalogRefused(&'static str),
+    /// Refused before maintenance began: the schema fingerprint the package
+    /// declares differs from the one its DDL installs on this database, as
+    /// when the package was built by another release. Nothing was changed.
+    #[error("the package declares schema fingerprint {declared}, but its DDL installs {measured}")]
+    SchemaFingerprintMismatch { declared: String, measured: String },
+    /// Refused before maintenance began: PostgreSQL refused a statement of
+    /// a fresh initial activation when apply rehearsed its begin, DDL, and
+    /// grants in a transaction that rolled back. Only the SQLSTATE and the
+    /// object names the server reported cross this boundary. Nothing was
+    /// changed.
+    #[error("PostgreSQL refused the package's initial DDL before maintenance began: {0}")]
+    PackageDdlRefused(PostgresFailure),
+    /// Refused before maintenance began: PostgreSQL rejected the syntax of a
+    /// persisted field pattern when apply rehearsed a fresh initial
+    /// activation's DDL. Nothing was changed.
+    #[error("a persisted field pattern has invalid PostgreSQL syntax")]
+    FieldPatternSyntaxRefused { entity_id: String, field_id: String },
     #[error("a persisted field pattern has invalid PostgreSQL syntax")]
     FieldPatternSyntax { entity_id: String, field_id: String },
     #[error("existing rows do not conform to a persisted field pattern")]
@@ -707,6 +724,26 @@ fn named_refusal(error: crate::postgres::PostgresKernelError) -> Option<Migratio
             Some(MigrationError::CatalogRefused(reason))
         }
         _ => None,
+    }
+}
+
+/// The refusal of a fresh initial activation's rehearsal, which rolled back
+/// before maintenance began: a statement PostgreSQL refused and a field
+/// pattern it rejected are named as package DDL refusals, and any other
+/// failure is refused as [`refusal_before_maintenance`] refuses it.
+fn initial_rehearsal_refusal(error: crate::postgres::PostgresKernelError) -> MigrationError {
+    match error {
+        crate::postgres::PostgresKernelError::Statement(failure) => {
+            MigrationError::PackageDdlRefused(failure)
+        }
+        crate::postgres::PostgresKernelError::FieldPatternSyntax {
+            entity_id,
+            field_id,
+        } => MigrationError::FieldPatternSyntaxRefused {
+            entity_id,
+            field_id,
+        },
+        error => refusal_before_maintenance(error),
     }
 }
 
@@ -1373,6 +1410,38 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         request.deployment.database_id(),
         ledger.activation_id,
     );
+    // A fresh initial activation rehearses its begin, DDL, and grants in a
+    // transaction that rolls back and measures the catalog they install, so
+    // a package that declares another schema fingerprint, as one built by
+    // another release, is refused before maintenance begins. A rehearsal
+    // that fails is refused here too, with its named reason: plan and apply
+    // alike report a statement PostgreSQL refuses before anything changed.
+    // A resumed or successor activation is not rehearsed, since its DDL
+    // meets tables that already exist.
+    if current.is_none() && resumes_activation_id.is_none() {
+        let measured = connection
+            .rehearse_initial_schema_fingerprint(
+                request.package.registry(),
+                &target,
+                &ledger,
+                &statements,
+                request.roles.runtime,
+                request.timeouts.statement,
+            )
+            .await;
+        let refusal = match measured {
+            Ok(measured) if measured == target.schema_fingerprint => None,
+            Ok(measured) => Some(MigrationError::SchemaFingerprintMismatch {
+                declared: target.schema_fingerprint.clone(),
+                measured,
+            }),
+            Err(error) => Some(initial_rehearsal_refusal(error)),
+        };
+        if let Some(refusal) = refusal {
+            let _ = connection.release().await;
+            return Err(refusal);
+        }
+    }
     if mode == ApplyMode::Plan {
         let rehearsed = rehearse_begin(&mut connection, &request, current, &target, &ledger).await;
         let released = connection.release().await;

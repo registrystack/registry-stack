@@ -34,8 +34,9 @@ use crate::package::CompiledRegistryMigrationBaseline;
 
 use super::{
     catalog::{
-        install_registry_state_schema, pre_1_0_attachment_verification_present,
-        registry_state_shape, verify_managed_catalog, ExpectedManagedCatalog, RegistryStateShape,
+        install_registry_state_schema, managed_schema_fingerprint,
+        pre_1_0_attachment_verification_present, registry_state_shape, verify_managed_catalog,
+        ExpectedManagedCatalog, RegistryStateShape,
     },
     config::ConnectionTls,
     migration_ledger::{
@@ -1355,100 +1356,73 @@ impl DedicatedApplyConnection {
         statement_timeout: Duration,
     ) -> Result<()> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
-        validate_package_ddl(statements, statement_timeout)?;
-        if statements.len() != registry.ddl().statements.len()
-            || statements
-                .iter()
-                .zip(&registry.ddl().statements)
-                .any(|(package, compiled)| package.sql != compiled.sql)
-        {
-            return Err(PostgresKernelError::RegistryUnavailable);
-        }
+        let migration_role = self
+            .migration_role
+            .clone()
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
         let transaction = self.client.transaction().await?;
-        set_local_statement_timeout(&transaction, statement_timeout).await?;
-        verify_compiled_prerequisites_for_client(
+        if let Err(error) = execute_initial_package_ddl_in(
             &transaction,
             registry,
-            self.migration_role
-                .as_ref()
-                .ok_or(PostgresKernelError::RegistryUnavailable)?,
+            package_revision,
+            statements,
+            &migration_role,
             runtime_role,
+            statement_timeout,
         )
-        .await?;
-        install_mutation_schema(&transaction, runtime_role)
-            .await
-            .map_err(|_| PostgresKernelError::Connection)?;
-        install_history_schema_store(&transaction, runtime_role)
-            .await
-            .map_err(|_| PostgresKernelError::Connection)?;
-        install_history_commit_schema(&transaction, runtime_role)
-            .await
-            .map_err(|_| PostgresKernelError::Connection)?;
-        let mut spatial_candidate_view_statements = Vec::new();
-        for (statement, compiled) in statements.iter().zip(&registry.ddl().statements) {
-            validate_statement_checksum(statement)?;
-            // The two managed schemas are administrator-provisioned and owned
-            // by the migration role before apply. Requiring database CREATE
-            // here would violate that role boundary, so the exact compiler
-            // schema statement is checksum-validated above but not rerun.
-            if compiled.kind == DdlStatementKind::Schema {
-                continue;
-            }
-            if is_spatial_candidate_view_sql(statement.sql) {
-                spatial_candidate_view_statements.push(statement);
-                continue;
-            }
-            if let Err(error) = execute_compiled_ddl_statement(
-                &transaction,
-                statement.sql,
-                statement.kind,
-                statement.pattern_field,
-                runtime_role,
-            )
-            .await
-            {
-                transaction.rollback().await?;
-                return Err(error);
-            }
+        .await
+        {
+            transaction.rollback().await?;
+            return Err(error);
         }
-        for statement in spatial_candidate_view_statements {
-            if let Err(error) = execute_compiled_ddl_statement(
-                &transaction,
-                statement.sql,
-                statement.kind,
-                statement.pattern_field,
-                runtime_role,
-            )
-            .await
-            {
-                transaction.rollback().await?;
-                return Err(error);
-            }
-        }
-        reconcile_compiled_runtime_acl(&transaction, registry, runtime_role).await?;
-        retain_descriptor(&transaction, registry, package_revision)
-            .await
-            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
-        for table in &registry.ddl().tables {
-            let table_name = SqlIdentifier::parse(&table.physical_name)?;
-            let row = transaction
-                .query_one(
-                    &format!(
-                        "SELECT count(*)::bigint FROM registry_data.{}",
-                        table_name.quoted()
-                    ),
-                    &[],
-                )
-                .await?;
-            if row.get::<_, i64>(0) != 0 {
-                return Err(PostgresKernelError::RegistryUnavailable);
-            }
-        }
-        install_empty_history_baseline(&transaction, package_revision)
-            .await
-            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
         transaction.commit().await?;
         Ok(())
+    }
+
+    /// Runs the begin, the initial DDL, and the runtime grants a fresh
+    /// initial activation runs, in one transaction it rolls back, and
+    /// returns the schema fingerprint the resulting catalog would have, so a
+    /// package that declares another fingerprint is refused before
+    /// maintenance begins rather than after its DDL committed.
+    pub(crate) async fn rehearse_initial_schema_fingerprint(
+        &mut self,
+        registry: &CompiledRegistry,
+        target: &ExpectedRegistryIdentity,
+        ledger: &MigrationLedgerEntry,
+        statements: &[PackageDdlStatement<'_>],
+        runtime_role: &SqlIdentifier,
+        statement_timeout: Duration,
+    ) -> Result<String> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        verify_initial_ledger(target, ledger)?;
+        let migration_role = self
+            .migration_role
+            .clone()
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        let transaction = self.client.transaction().await?;
+        let measured = async {
+            begin_initial_in(&transaction, target, ledger, runtime_role).await?;
+            execute_initial_package_ddl_in(
+                &transaction,
+                registry,
+                &target.activation_id,
+                statements,
+                &migration_role,
+                runtime_role,
+                statement_timeout,
+            )
+            .await?;
+            reconcile_runtime_acl_in(&transaction, registry, runtime_role).await?;
+            managed_schema_fingerprint(
+                &transaction,
+                runtime_role,
+                &ExpectedManagedCatalog::compiled(registry),
+            )
+            .await
+        }
+        .await;
+        transaction.rollback().await?;
+        measured
     }
 
     /// Verifies current successor history under the dedicated apply lock.
@@ -1567,16 +1541,7 @@ impl DedicatedApplyConnection {
         runtime_role: &SqlIdentifier,
     ) -> Result<()> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
-        target.validate()?;
-        ledger.validate()?;
-        if ledger.plan_kind != ActivationPlanKind::Initial
-            || ledger.package_digest != target.package_digest
-            || ledger.activation_id != target.activation_uuid()?
-        {
-            return Err(PostgresKernelError::Configuration(
-                "initial package and migration ledger differ",
-            ));
-        }
+        verify_initial_ledger(target, ledger)?;
         let transaction = self.client.transaction().await?;
         begin_initial_in(&transaction, target, ledger, runtime_role).await?;
         transaction.commit().await?;
@@ -1593,16 +1558,7 @@ impl DedicatedApplyConnection {
         runtime_role: &SqlIdentifier,
     ) -> Result<()> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
-        target.validate()?;
-        ledger.validate()?;
-        if ledger.plan_kind != ActivationPlanKind::Initial
-            || ledger.package_digest != target.package_digest
-            || ledger.activation_id != target.activation_uuid()?
-        {
-            return Err(PostgresKernelError::Configuration(
-                "initial package and migration ledger differ",
-            ));
-        }
+        verify_initial_ledger(target, ledger)?;
         let transaction = self.client.transaction().await?;
         let rehearsed = begin_initial_in(&transaction, target, ledger, runtime_role).await;
         transaction.rollback().await?;
@@ -2404,6 +2360,24 @@ async fn verify_complete_history_coverage(
     Ok(())
 }
 
+/// Refuses a ledger entry that is not this initial package's.
+fn verify_initial_ledger(
+    target: &ExpectedRegistryIdentity,
+    ledger: &MigrationLedgerEntry,
+) -> Result<()> {
+    target.validate()?;
+    ledger.validate()?;
+    if ledger.plan_kind != ActivationPlanKind::Initial
+        || ledger.package_digest != target.package_digest
+        || ledger.activation_id != target.activation_uuid()?
+    {
+        return Err(PostgresKernelError::Configuration(
+            "initial package and migration ledger differ",
+        ));
+    }
+    Ok(())
+}
+
 /// The begin of an initial activation, inside the caller's transaction.
 async fn begin_initial_in(
     transaction: &tokio_postgres::Transaction<'_>,
@@ -2436,6 +2410,97 @@ async fn begin_initial_in(
         verify_initial_resumable_state(transaction, target).await?;
         verify_resumable(transaction, ledger).await?;
     }
+    Ok(())
+}
+
+/// The mutation tables and every compiler-produced initial DDL statement,
+/// inside the caller's transaction, after the same checks
+/// [`VerifiedPackageApplyConnection::execute_initial_package_ddl`] makes.
+async fn execute_initial_package_ddl_in(
+    transaction: &tokio_postgres::Transaction<'_>,
+    registry: &CompiledRegistry,
+    package_revision: &str,
+    statements: &[PackageDdlStatement<'_>],
+    migration_role: &SqlIdentifier,
+    runtime_role: &SqlIdentifier,
+    statement_timeout: Duration,
+) -> Result<()> {
+    validate_package_ddl(statements, statement_timeout)?;
+    if statements.len() != registry.ddl().statements.len()
+        || statements
+            .iter()
+            .zip(&registry.ddl().statements)
+            .any(|(package, compiled)| package.sql != compiled.sql)
+    {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    set_local_statement_timeout(transaction, statement_timeout).await?;
+    verify_compiled_prerequisites_for_client(transaction, registry, migration_role, runtime_role)
+        .await?;
+    install_mutation_schema(transaction, runtime_role)
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?;
+    install_history_schema_store(transaction, runtime_role)
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?;
+    install_history_commit_schema(transaction, runtime_role)
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?;
+    let mut spatial_candidate_view_statements = Vec::new();
+    for (statement, compiled) in statements.iter().zip(&registry.ddl().statements) {
+        validate_statement_checksum(statement)?;
+        // The two managed schemas are administrator-provisioned and owned
+        // by the migration role before apply. Requiring database CREATE
+        // here would violate that role boundary, so the exact compiler
+        // schema statement is checksum-validated above but not rerun.
+        if compiled.kind == DdlStatementKind::Schema {
+            continue;
+        }
+        if is_spatial_candidate_view_sql(statement.sql) {
+            spatial_candidate_view_statements.push(statement);
+            continue;
+        }
+        execute_compiled_ddl_statement(
+            transaction,
+            statement.sql,
+            statement.kind,
+            statement.pattern_field,
+            runtime_role,
+        )
+        .await?;
+    }
+    for statement in spatial_candidate_view_statements {
+        execute_compiled_ddl_statement(
+            transaction,
+            statement.sql,
+            statement.kind,
+            statement.pattern_field,
+            runtime_role,
+        )
+        .await?;
+    }
+    reconcile_compiled_runtime_acl(transaction, registry, runtime_role).await?;
+    retain_descriptor(transaction, registry, package_revision)
+        .await
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    for table in &registry.ddl().tables {
+        let table_name = SqlIdentifier::parse(&table.physical_name)?;
+        let row = transaction
+            .query_one(
+                &format!(
+                    "SELECT count(*)::bigint FROM registry_data.{}",
+                    table_name.quoted()
+                ),
+                &[],
+            )
+            .await?;
+        if row.get::<_, i64>(0) != 0 {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+    }
+    install_empty_history_baseline(transaction, package_revision)
+        .await
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
     Ok(())
 }
 
