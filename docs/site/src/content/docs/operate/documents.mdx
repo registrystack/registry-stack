@@ -13,14 +13,14 @@ standards_referenced: []
 
 You have a checked Document Store project and its package digest, from
 [Check your first Document Store project](../../tutorials/first-documents/). Serve it behind your
-TLS edge, change it, and recover what it holds. The Registry Document Store is pre-1.0 and held
-out of releases, so build `documents` and `documentsctl` from the same source checkout.
+TLS edge, change it, and recover what it holds. Build `documents` and `documentsctl` from one source
+checkout, as the [overview](../../start/documents/#status) explains.
 
 ## What you provide
 
-- **PostgreSQL 17 or newer**, with one database and two login roles: a migration role that owns
-  the schema, and a runtime role that serves. `documentsctl apply` uses the first and grants the
-  second what serving needs.
+- **PostgreSQL 17 or newer**, reached over TLS, with one database and two login roles: a migration
+  role that owns the schema, and a runtime role that serves. `documentsctl apply` uses the first
+  and grants the second what serving needs.
 - **Your OpenID Connect issuer.** Every route except `GET /health` takes a bearer access token it
   signed; the token's client, scopes, and actor kind select one access profile in the project.
 - **A content verifier**: an HTTP endpoint that receives each stored version's bytes and answers
@@ -28,25 +28,59 @@ out of releases, so build `documents` and `documentsctl` from the same source ch
   [external attachment verification](../../reference/breg-configuration/#external-attachment-verification).
 - **A TLS-terminating proxy** in front of the listener, which binds `127.0.0.1:8116` in the
   starter.
-- **Optionally, an S3-compatible bucket** for the bytes, used by this deployment alone. Without
-  one, the bytes are held in PostgreSQL.
+- **Optionally, an S3-compatible bucket** for the bytes, used by this deployment alone and without
+  object versioning. Without one, the bytes are held in PostgreSQL.
 
 {/* Evidence: crates/registry-documents/src/store.rs, PostgreSQL 17 refusal;
     products/documents/RUNTIME-CONFIG.md, Keys and Startup;
     crates/registry-documents/src/verification.rs, activate_verifier;
     crates/registry-platform-objectstore/src/verifier.rs, HttpVerifier. */}
 
+## Provision PostgreSQL
+
+Create the roles and the database:
+
+```sql
+CREATE ROLE documents_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS;
+CREATE ROLE documents_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOINHERIT NOBYPASSRLS;
+CREATE DATABASE documents;
+```
+
+Set each role's password with `\password documents_migration` and `\password documents_runtime` in
+`psql`, which prompts for it instead of taking it in a statement.
+
+In the `documents` database, hand the schema to the migration role:
+
+```sql
+REVOKE ALL ON DATABASE documents FROM PUBLIC;
+GRANT CONNECT ON DATABASE documents TO documents_migration, documents_runtime;
+ALTER SCHEMA public OWNER TO documents_migration;
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+```
+
+Grant the runtime role nothing more. `apply` grants it what serving needs, and `serve` refuses a
+runtime role that holds authority over the schema.
+
+{/* Evidence: crates/registry-documents/src/activation.rs, apply (grant_runtime_role and
+    stray_authority); products/documents/RUNTIME-CONFIG.md, Startup; observed with documents
+    0.43.0-dev on 2026-10-22 against PostgreSQL 17. */}
+
 ## Write the runtime file
 
-Start from the `runtime.example.yaml` that `documentsctl init` wrote. Every path in it is absolute,
-the file may not be writable by its group or by others, and every credential is a `secret:`
-reference to a declared provider. The choices that matter most:
+Start from the `runtime.example.yaml` that `documentsctl init` wrote and copy it to
+`/etc/registry-documents/runtime.yaml`. Every path in it is absolute, the file may not be writable by its group or
+by others, and every credential is a `secret:` reference to a declared provider. The choices that
+matter most:
 
 | Key | Decide |
 | --- | ------ |
 | `identity.databaseId` | A name for the one database this deployment owns. The service refuses a database recorded for another. |
 | `package.root` and `package.expectedDigest` | The package directory, and the digest `documentsctl package` printed. |
-| `storage.type` | `database` (at most 16 MiB per version) or `s3` (at most 64 MiB). The first upload pins the choice: a later start under another backend or bucket is refused. |
+| `database.trustedRootCertificateRef` | The CA that signs the database certificate, when a private CA does. |
+| `storage.type` | `database` or `s3`. The first upload pins the choice: a later start under another backend or bucket is refused. |
+| `storage.maximumDocumentBytes` | The largest version the deployment takes: 16 MiB by default on both backends. On `s3` you may raise it up to 64 MiB. |
 | `contentVerification` | `type: http` with the verifier's `url`, `authorizationRef`, and `policyId`. `type: disabled` approves everything and is accepted only on a development loopback listener. |
 | `retention.receiptRetentionDays` | How long a retry with the same `Idempotency-Key` gets the same answer. Seven days is a placeholder for your retention schedule to approve. |
 
@@ -54,44 +88,121 @@ Size the host for about 512 MiB of document memory on top of the process's own n
 downloads, and verification attempts share one transfer budget of at least 256 MiB; a transfer
 that finds no room is refused with `service.unavailable` and `Retry-After`, and is never queued.
 
-Check the file before you deploy it:
-
-```sh
-documentsctl check --project PROJECT --runtime-config /etc/registry-documents/runtime.yaml
-```
-
-Add `--environment` to check `${VAR}` values against the current environment. The
-[configuration reference](../../reference/documents-configuration/) lists every key.
+The [configuration reference](../../reference/documents-configuration/) lists every key.
 
 {/* Evidence: products/documents/RUNTIME-CONFIG.md, Keys and Transfer memory;
-    crates/registry-documents/src/config.rs, ContentVerificationConfig. */}
+    crates/registry-documents/src/config.rs, DATABASE_MAXIMUM_DOCUMENT_BYTES,
+    S3_MAXIMUM_DOCUMENT_BYTES, and ContentVerificationConfig. */}
 
-## Apply and start
+## Create the secret files
+
+Create each file under the `secretProviders.file.root` directory as the user that runs `documents`,
+with no trailing newline. `read -rs` takes a value without echoing it or keeping it in shell
+history; paste `postgres://documents_runtime:<password>@<database-host>:5432/documents` at its
+prompt:
+
+```bash
+install -d -m 0700 /run/secrets/registry-documents
+(umask 077; openssl rand -hex 32 | tr -d '\n' \
+  > /run/secrets/registry-documents/documents-audit-key)
+read -rs value
+(umask 077; printf '%s' "$value" > /run/secrets/registry-documents/runtime-database-url)
+unset value
+```
+
+Write the other files the runtime file names the same way: `migration-database-url` for
+`documents_migration`, `content-verifier-authorization`, and each key a hook destination or the
+S3 storage names. The verifier file holds the token alone; the runtime sends it as
+`Bearer <token>`. Each file must be a regular file owned by the runtime user, mode `0400` or
+`0600`, with one link.
+
+`serve` never reads the migration credential; only `apply` connects with it. Write
+`migration-database-url` only on the host that runs `apply`.
+
+{/* Evidence: crates/registry-platform-config/src/secrets.rs, file provider checks;
+    crates/registry-platform-objectstore/src/verifier.rs, HttpVerifier authorization;
+    crates/registry-documents/src/runtime.rs, connect_migration only in apply. */}
+
+## Check, apply, and start
+
+Check the file and the package before you deploy them:
 
 ```sh
-documentsctl package PROJECT --output /srv/registry-documents/package
+documentsctl check --project "<project-directory>" --runtime-config /etc/registry-documents/runtime.yaml
+```
+
+```text
+checked: 0 errors, 0 warnings in 2 files
+```
+
+Add `--environment` to check `${VAR}` values against the current environment. Then package the
+project, review what activation would change, and record the package:
+
+```sh
+documentsctl package "<project-directory>" --output /srv/registry-documents/package
 documentsctl plan --runtime-config /etc/registry-documents/runtime.yaml
+```
+
+```text
+package digest: sha256:568967a5183bff1a1cfaaa3f4bf872cc7213d75f0fd74401ad0755ea58644db1
+change: activate
+```
+
+```sh
 documentsctl apply --runtime-config /etc/registry-documents/runtime.yaml \
-  --operator-reference CHANGE-123 --backup SNAPSHOT-ID
+  --operator-reference "<change-reference>" --backup "<snapshot-id>"
+```
+
+```text
+package digest: sha256:568967a5183bff1a1cfaaa3f4bf872cc7213d75f0fd74401ad0755ea58644db1
+change: activate
+restart documents serve to load the activated package
+```
+
+`plan` writes nothing. `apply` applies the schema, records the package digest as active, and grants
+the runtime role; applying the active package again records nothing. `status` shows the result:
+
+```sh
+documentsctl status --runtime-config /etc/registry-documents/runtime.yaml
+```
+
+```text
+active: sha256:568967a5183bff1a1cfaaa3f4bf872cc7213d75f0fd74401ad0755ea58644db1
+schema version: 100
+runtime role mode: split
+```
+
+Start the service:
+
+```sh
 documents --runtime-config /etc/registry-documents/runtime.yaml serve
 ```
 
-`plan` reports what `apply` would change and writes nothing. `apply` applies the schema, records
-the package digest as active, and grants the runtime role; applying the active package again
-records nothing. `serve` never applies the schema. It refuses to start on a database with no
-active package, an active package other than the configured one, or a schema from another
-release, and names every finding before it binds the socket.
+It logs JSON lines on standard error, starting with `the Document Store is serving` and the
+address. `serve` never applies the schema. It refuses to start on a database with no active
+package, an active package other than the configured one, or a schema from another release, and
+names every finding before it binds the socket. Check that it answers:
 
-`documentsctl status --runtime-config FILE` shows the active package and the activation history.
-The operator commands write their own audit journal beside the service's.
+```sh
+curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8116/health
+```
+
+```text
+200
+```
+
+Every other route answers `401 authentication.refused` without a valid token. The operator
+commands write their own audit journal beside the service's.
 
 {/* Evidence: products/documents/README.md, Operate;
     products/documents/RUNTIME-CONFIG.md, Startup;
-    crates/registry-documentsctl/src/operate.rs. */}
+    crates/registry-documentsctl/src/operate.rs; observed with documentsctl and documents
+    0.43.0-dev on 2026-10-22, paths and references replaced. */}
 
 ## Change the project
 
-A grant keeps the policy terms it was issued under. To change a policy, a profile, or a hook, edit
+A grant keeps its expiry; who may hold it follows the active package, so a change to a policy's
+recipients applies to grants already issued. To change a policy, a profile, or a hook, edit
 `documents.yaml`, check it, and run `package`, `plan`, and `apply` again, then restart `serve`.
 Changing only the runtime file, such as a hook destination's URL or key, needs only a restart.
 
@@ -99,7 +210,9 @@ Changing the verifier's `url` or `policyId` changes its binding. At the next sta
 verified under the old binding is suspended and verified again under the new one, so plan the
 change for a quiet period.
 
-{/* Evidence: crates/registry-documents/src/verification.rs, module documentation. */}
+{/* Evidence: crates/registry-documents/src/verification.rs, module documentation and
+    sweep_bindings; crates/registry-documents/src/service.rs, release by grant reads the active
+    policy; crates/registry-documents/src/service/grants.rs, a grant stores only its expiry. */}
 
 ## Replay a stuck verification
 
@@ -110,27 +223,41 @@ its version stays `pending`. List the stuck jobs, oldest first, with their gener
 documentsctl verification list --runtime-config /etc/registry-documents/runtime.yaml
 ```
 
-When the verifier answers again, return one job to pending:
+```text
+b5631893-0b76-4871-97e6-e0934e60b1ab  generation 1  attempt 231  dead-lettered 2026-10-22T00:00:59Z
+```
+
+With none, it prints `no dead-lettered content verification jobs`. When the verifier answers
+again, return one job to pending:
 
 ```sh
 documentsctl verification replay --runtime-config /etc/registry-documents/runtime.yaml \
-  --version-id VERSION-ID --expected-generation GENERATION
+  --version-id "<version-id>" --expected-generation "<generation>"
+```
+
+```text
+replayed: b5631893-0b76-4871-97e6-e0934e60b1ab is pending at generation 2
 ```
 
 A generation other than the current one is refused, so two operators cannot replay the same job
-twice. A version whose removal was requested, or whose bytes are being or have been erased, is
-refused too. No HTTP route lists or replays a job.
+twice; a second replay of the same job is refused with
+`error[documents.verification.not-dead-lettered]` and exits 1. A version whose removal was
+requested, or whose bytes are being or have been erased, is refused too. No HTTP route lists or
+replays a job.
 
 {/* Evidence: crates/registry-documents/src/verification.rs, dead_letters, replay, and
-    ReplayRefusal. */}
+    ReplayRefusal; crates/registry-documentsctl/src/lib.rs, View::DeadLetters and View::Replayed;
+    observed with documentsctl 0.43.0-dev on 2026-10-22 against a job dead-lettered for the
+    capture. */}
 
 ## Removal and erasure
 
-A custodian removes a document with `POST /documents/{documentId}/erasure`. In one transaction
-the Store stops release, revokes every active grant, and marks the version `erasure-pending`,
-due after the policy's `cleanupGraceHours`. A sweep every minute erases what is due; a rejected
-version's bytes are erased the same way. The record of the document, its versions, and grants
-stays.
+The custodian removes a document with `POST /documents/{documentId}/erasure`. In one transaction
+the Document Store stops release, revokes every active grant, and marks the version
+`erasure-pending`, due after the policy's `cleanupGraceHours`. That grace period is at least one
+hour, so you can still restore from a backup after a mistaken request. A sweep every minute erases
+what is due; a rejected version's bytes are erased the same way. The record of the document, its
+version, and its grants stays.
 
 What "erased" reaches depends on the storage:
 
@@ -139,25 +266,56 @@ What "erased" reaches depends on the storage:
 | PostgreSQL | The content row is deleted. Its bytes stay on disk until PostgreSQL overwrites the pages or `VACUUM FULL` rewrites the table. |
 | S3 | The object is deleted, and a read must then answer 404 before the version reads `erased`. |
 
-Backups, archived WAL, replicas, and bucket versions keep erased bytes for as long as you keep
-them. Set their retention to the longest period your retention schedule allows erased content to
-survive; nothing in the runtime file controls it.
+On a versioned bucket that check passes on the delete marker while the old versions keep the bytes.
+Use an unversioned bucket, or a lifecycle rule that expires noncurrent versions. Backups, archived
+WAL, replicas, and bucket replicas keep erased bytes for as long as you keep them. Set their
+retention to the longest period your retention schedule allows erased content to survive; nothing
+in the runtime file controls it.
+
+`erasure status` shows whether erasure runs and what waits:
+
+```sh
+documentsctl erasure status --runtime-config /etc/registry-documents/runtime.yaml
+```
+
+```text
+erasure: active
+awaiting grace: 1
+due: 0
+dead-lettered: 0
+```
 
 An erasure job retries for about seven days before it dead-letters, and its version stays
-`erasure-pending`; the sweep never retries it on its own. `documentsctl erasure status` shows
-whether erasure is active or paused and counts the versions in their grace, those due, and the
-dead-lettered jobs. `documentsctl erasure list` names the dead-lettered jobs with their
-generation, and `documentsctl erasure replay`, with the same `--version-id` and
-`--expected-generation` options as a verification replay, returns one to pending once the
-storage answers again.
+`erasure-pending`; the sweep never retries it on its own. List the dead-lettered jobs:
+
+```sh
+documentsctl erasure list --runtime-config /etc/registry-documents/runtime.yaml
+```
+
+```text
+no dead-lettered erasure jobs
+```
+
+Each job it lists has the same line as a dead-lettered verification: version id, generation,
+attempt, and time. Once the storage answers again, return one to pending:
+
+```sh
+documentsctl erasure replay --runtime-config /etc/registry-documents/runtime.yaml \
+  --version-id "<version-id>" --expected-generation "<generation>"
+```
+
+A replay prints `replayed: <version-id> is pending at generation <generation>`. A version with no
+dead-lettered erasure is refused with `error[documents.erasure.not-found]`, and a stale generation
+is refused, as for a verification.
 
 To halt erasure without stopping the service, set `cleanup.erasure: paused` and restart. The
 service still serves, still takes removal requests, and logs a warning at startup. Due versions
-wait until you set it back to `active` and restart.
+wait until you set it back to `active` and restart, and a replayed job waits with them.
 
 {/* Evidence: products/documents/README.md, Retention and erasure;
     products/documents/RUNTIME-CONFIG.md, Keys;
-    crates/registry-documents/src/erasure.rs, cleanup_once, dead_letters, and replay. */}
+    crates/registry-documents/src/erasure.rs, cleanup_once, dead_letters, report, and replay;
+    observed with documentsctl 0.43.0-dev on 2026-10-22. */}
 
 ## Events
 
@@ -182,24 +340,37 @@ it and records the refusal.
 ## Restore from a backup
 
 :::caution
-A restore brings back grants revoked and documents removed after the backup. Repeat those changes
-from the audit file before you serve traffic again.
+A restore brings back grants revoked and documents removed after the backup. They must be repeated
+before you serve traffic again, and only their original callers can repeat them.
 :::
 
 1. Set `cleanup.erasure: paused` and stop traffic at your edge.
 2. Restore the database, and the audit file from the same point if you have it.
 3. Start the service. It erases nothing while paused.
-4. Compare the restored state with the audit file, and repeat every revocation and removal newer
-   than the backup. A repeated removal gets a fresh due time.
+4. Compare the restored state with the audit file to find every revocation and removal newer than
+   the backup. An operator holds no custodian or granting token, and no `documentsctl` command
+   revokes a grant or removes a document, so ask each original caller to repeat its revocations
+   and removals over HTTP. A repeated removal gets a fresh due time, so its bytes stay for another
+   full `cleanupGraceHours` after the repeat.
 5. On S3, if you restored the database and not the bucket, delete the objects uploaded after the
-   backup: no row names them, so no sweep reaches them. The
-   [product README](https://github.com/registrystack/registry-stack/blob/main/products/documents/README.md#restore-drill)
-   gives the object key layout.
+   backup: no row names them, so no sweep reaches them. Each object key is
+   `documents/<scope>/<sha256>`, where `<scope>` is the lowercase hex SHA-256 of
+   `<identity.databaseId>/<object-id>`, with the object id in lowercase hyphenated form. Compute the
+   scope of every `object_id` in `documents_staged_objects`, list the keys under `documents/`, and
+   delete every key whose scope none of them produces.
+
+   :::danger
+   Run this step only on a bucket the deployment uses alone. Another deployment's keys under the
+   same prefix are indistinguishable from orphans, and this step deletes them.
+   :::
+
 6. Set `cleanup.erasure: active` and restart. The next sweep handles everything that became due.
 
 Rehearse this drill before you rely on it.
 
-{/* Evidence: products/documents/README.md, Restore drill. */}
+{/* Evidence: products/documents/README.md, Restore drill;
+    crates/registry-documents/src/content.rs, S3_KEY_PREFIX and object scope;
+    crates/registry-documentsctl/src/lib.rs, no revoke or removal command. */}
 
 ## Next
 

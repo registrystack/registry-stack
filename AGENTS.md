@@ -33,8 +33,11 @@ The maintained runtime products include:
   Neither admission path grants authority to mutate the source or another product.
 - **Document Store** holds document bytes in custody for an owning system and
   releases an exact, verified document version to a recipient a document grant
-  names. It is a bootstrap skeleton held out of releases: the runtime checks
-  its configuration and database and serves only its liveness route.
+  names. It is held out of releases. Behind OAuth access-token verification
+  it serves custody, upload checked by digest and length, content verification,
+  document grants, and release of a verified version, from PostgreSQL or S3
+  storage; a cleanup sweep erases removed and rejected content after the
+  policy's grace period, and `documentsctl` replays dead-lettered jobs.
 
 The products compose without merging their boundaries. Evidence may use a Base
 Registry Engine route or another bounded HTTP endpoint as a fixed source and
