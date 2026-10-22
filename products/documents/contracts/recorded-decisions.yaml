@@ -61,8 +61,10 @@ decisions:
       documents.project.unknown-profile, and one that lists a profile in a
       member its role does not admit with
       documents.project.profile-role-mismatch. It also refuses a requester
-      client listed in two profiles and a default grant expiry above the
-      policy's maximum, and reports every such finding in one run.
+      client listed in two profiles, two profiles of one actor kind that name
+      different principal claims (documents.project.mixed-principal-claim),
+      and a default grant expiry above the policy's maximum, and reports
+      every such finding in one run.
     reasoning: >-
       A policy reference that resolves to no profile, or to one with the
       wrong role, would leave a document nobody can hold or let the wrong
@@ -75,6 +77,7 @@ decisions:
       - {path: crates/registry-documents-core/src/project.rs, name: a_policy_naming_an_undeclared_profile_is_refused_at_the_reference}
       - {path: crates/registry-documents-core/src/project.rs, name: a_profile_listed_against_its_role_is_refused}
       - {path: crates/registry-documents-core/src/project.rs, name: a_requester_client_shared_by_two_profiles_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: profiles_of_one_actor_kind_reading_different_principal_claims_are_refused}
       - {path: crates/registry-documents-core/src/project.rs, name: every_reference_finding_is_reported_in_one_run}
       - {path: crates/registry-documentsctl/src/lib.rs, name: the_starter_project_and_runtime_check_clean}
   - id: DOCUMENTS-DEC-05

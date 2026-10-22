@@ -193,7 +193,8 @@ exhaust memory; a caller-chosen label is trusted.
 
 `crates/registry-documents/src/auth.rs`, `http.rs`, `service.rs`,
 `service/grants.rs`, and `transfer.rs` enforce, with the invariant rows
-DOCUMENTS-SEC-10, DOCUMENTS-SEC-19, and DOCUMENTS-SEC-21 to DOCUMENTS-SEC-33:
+DOCUMENTS-SEC-10, DOCUMENTS-SEC-19, DOCUMENTS-SEC-21 to DOCUMENTS-SEC-33, and
+DOCUMENTS-SEC-54:
 
 - Every document route verifies the bearer token through
   `registry-platform-oidc` (issuer, audience, `at+jwt`, allowed clients,
@@ -202,6 +203,13 @@ DOCUMENTS-SEC-10, DOCUMENTS-SEC-19, and DOCUMENTS-SEC-21 to DOCUMENTS-SEC-33:
   or the store; a JSON body is buffered, under the default body limit, only
   after the caller is verified. A refused token answers 401 with a `Bearer`
   challenge; a key set the runtime cannot reach answers 503, never 401.
+- A caller's subject comes from its profile's `principalClaim`, and
+  custody, ownership, and grants match a caller by issuer, subject, and
+  kind. Every profile accepts the deployment's one issuer, so project check
+  refuses two profiles of one actor kind that name different claims with
+  `documents.project.mixed-principal-claim`: otherwise a token whose claim
+  value equals another profile's subject would inherit that caller's
+  standing (DOCUMENTS-SEC-54).
 - Custody: a reservation needs the caller's profile among the policy's
   `custodyProfiles`. A service may name any custodian; a human caller only
   itself, matched by issuer, subject, and kind. The policy's `custodian`
