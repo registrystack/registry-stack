@@ -2845,6 +2845,7 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         )
         self.assertIn("Registry Coordinator runtime publication remains held", verify)
         self.assertIn("`COORDINATOR_FIRST_RELEASE`", verify)
+        self.assertIn("`DOCUMENTS_FIRST_RELEASE` is `None`", verify)
         self.assertIn("Registry Casework joins at `v0.30.0`", verify)
         self.assertIn("Registry Scheduling joins at `v0.33.0`", verify)
         self.assertIn("Registry Messaging", verify)

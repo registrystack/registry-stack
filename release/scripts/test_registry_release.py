@@ -3772,6 +3772,21 @@ class RegistryReleaseTest(TestCase):
                         ),
                     )
 
+        # The Document Store is held out by DOCUMENTS_FIRST_RELEASE and has no
+        # release packaging yet, so an inventory naming it is refused.
+        self.assertIsNone(module.release_roster.DOCUMENTS_FIRST_RELEASE)
+        for version in ("0.44.0", "1.0.0"):
+            with self.subTest(version=version, product="documents"):
+                held = released(version)
+                self.assertEqual([], module.artifact_inventory_errors(version, held))
+                self.assertNotEqual(
+                    [],
+                    module.artifact_inventory_errors(
+                        version,
+                        held | {"documents": version, "documentsctl": version},
+                    ),
+                )
+
         recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
             encoding="utf-8"
         )
