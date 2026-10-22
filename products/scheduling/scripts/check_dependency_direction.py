@@ -16,6 +16,7 @@ PRODUCT_PREFIXES = (
     "registry-casework",
     "registry-documents",
     "registry-evidence",
+    "registry-messaging",
 )
 
 # The Coordinator composes products through their public clients. It may use

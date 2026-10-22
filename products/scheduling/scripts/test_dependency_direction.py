@@ -23,6 +23,7 @@ def metadata(edges: dict[str, list[str]]) -> dict:
         "breg-client": "registry-breg-client",
         "casework-core": "registry-casework-core",
         "evidence-client": "registry-evidence-client",
+        "messaging-client": "registry-messaging-client",
         "coordinator": "registry-coordinator",
         "coordinator-client": "registry-coordinator-client",
         "documents-core": "registry-documents-core",
@@ -122,6 +123,27 @@ class DependencyDirectionTests(unittest.TestCase):
             failures,
         )
 
+    def test_messaging_dependency_from_core_is_rejected(self):
+        graph = metadata(
+            {
+                "core": ["serde"],
+                "client": ["core"],
+                "runtime": ["core"],
+                "ctl": ["core"],
+                "breg-client": [],
+                "casework-core": [],
+                "evidence-client": [],
+                "messaging-client": [],
+                "platform": [],
+                "serde": ["messaging-client"],
+            }
+        )
+        failures = "\n".join(MODULE.violations(graph))
+        self.assertIn(
+            "registry-scheduling-core transitively depends on other-product package(s): registry-messaging-client",
+            failures,
+        )
+
     def test_core_depending_on_the_runtime_is_rejected(self):
         graph = metadata(
             {
@@ -182,6 +204,27 @@ class DependencyDirectionTests(unittest.TestCase):
             failures,
         )
 
+
+    def test_messaging_dependency_on_scheduling_is_rejected(self):
+        graph = metadata(
+            {
+                "core": ["serde"],
+                "client": ["core"],
+                "runtime": ["core"],
+                "ctl": ["core"],
+                "breg-client": [],
+                "casework-core": [],
+                "evidence-client": [],
+                "messaging-client": ["client"],
+                "platform": [],
+                "serde": [],
+            }
+        )
+        failures = "\n".join(MODULE.violations(graph))
+        self.assertIn(
+            "registry-messaging-client transitively depends on Scheduling package(s): registry-scheduling-client",
+            failures,
+        )
 
     def test_bindings_and_the_unified_client_beside_other_products_are_accepted(self):
         graph = metadata(

@@ -236,10 +236,11 @@ under `products/scheduling`. It refuses conditions, principals, local handlers,
 and every proposal returned by an observer. The source-neutral core and the
 client must not depend on the runtime or another product's protocol types.
 
-For the MVP, no scheduling crate may reach a BReg, Casework, or Evidence crate
-in either direction, and the dependency-direction gate enforces that on the
-whole forward closure. The restriction is scoped to the MVP because the crates
-that would compose across those boundaries do not exist yet: a
+For the MVP, no scheduling crate may reach a BReg, Casework, Document Store,
+Evidence, or Messaging crate in either direction, and the dependency-direction
+gate enforces that on the whole forward closure. The restriction is scoped to
+the MVP because the crates that would compose across those boundaries do not
+exist yet: a
 `registry-scheduling-casework` adapter would depend on
 `registry-casework-client`, a `registry-scheduling-breg` adapter on
 `registry-breg-client`, and the runtime may one day consume an Evidence

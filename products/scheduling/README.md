@@ -413,13 +413,13 @@ is not database verification.
 ## Dependency boundary
 
 No scheduling crate, directly or through any shared dependency, may reach a
-Base Registry Engine, Casework, or Evidence crate, and none of those products
-may reach a scheduling crate. The restriction is scoped to the MVP, because
-the crates that would compose across those boundaries do not exist yet; the
-workspace `AGENTS.md` records what changes when one does. The source-neutral
-core sits at the bottom of the product depending on no other scheduling
-crate, and the client shares the core without ever linking the runtime or
-adopter tooling.
+Base Registry Engine, Casework, Document Store, Evidence, or Messaging crate,
+and none of those products may reach a scheduling crate. The restriction is
+scoped to the MVP, because the crates that would compose across those
+boundaries do not exist yet; the workspace `AGENTS.md` records what changes when one does. The
+source-neutral core sits at the bottom of the product depending on no other
+scheduling crate, and the client shares the core without ever linking the
+runtime or adopter tooling.
 
 ## Observe an original receipt
 
