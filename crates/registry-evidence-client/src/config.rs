@@ -25,12 +25,12 @@ use crate::{
 /// The verifier refuses a signed response larger than 256 KiB, so a bigger
 /// body could never verify and reading it would only waste the relying party's
 /// memory.
-pub const DEFAULT_MAX_RESPONSE_BYTES: u64 = 256 * 1024;
+pub const DEFAULT_MAXIMUM_RESPONSE_BYTES: u64 = 256 * 1024;
 
 /// Longest deployment metadata document the client will read: the discovery
 /// document, and the published key set.
 ///
-/// This is a separate decision from [`DEFAULT_MAX_RESPONSE_BYTES`], which is
+/// This is a separate decision from [`DEFAULT_MAXIMUM_RESPONSE_BYTES`], which is
 /// derived from what the verifier will accept as a signed response. Neither
 /// document is signed and neither is verified, so that reasoning does not reach
 /// them, and a relying party that tightens one bound to what its own assertions
@@ -42,8 +42,8 @@ pub const DEFAULT_MAX_RESPONSE_BYTES: u64 = 256 * 1024;
 /// publishes more.
 pub const DEFAULT_MAX_METADATA_BYTES: u64 = 256 * 1024;
 
-/// Total time allowed for one exchange, including reading the response body.
-pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Total time allowed for one outbound attempt, including reading the response body.
+pub const DEFAULT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Time allowed for connection setup, including TLS negotiation.
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = DEFAULT_OUTBOUND_CONNECT_TIMEOUT;
@@ -75,11 +75,11 @@ pub struct EvidenceClientConfig {
     pub(crate) trusted_jwks: JwksDocument,
     pub(crate) revoked_key_ids: Vec<String>,
     verification: VerificationStance,
-    pub(crate) request_timeout: Duration,
+    pub(crate) attempt_timeout: Duration,
     pub(crate) connect_timeout: Duration,
     pub(crate) user_agent: Option<String>,
     pub(crate) trusted_root_certificates: Option<Zeroizing<Vec<u8>>>,
-    pub(crate) max_response_bytes: u64,
+    pub(crate) maximum_response_bytes: u64,
     pub(crate) max_metadata_bytes: u64,
 }
 
@@ -92,11 +92,11 @@ impl EvidenceClientConfig {
             trusted_jwks: JwksDocument { keys: Vec::new() },
             revoked_key_ids: Vec::new(),
             verification: VerificationStance::Progressive,
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            attempt_timeout: DEFAULT_ATTEMPT_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             user_agent: None,
             trusted_root_certificates: None,
-            max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+            maximum_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
             max_metadata_bytes: DEFAULT_MAX_METADATA_BYTES,
         })
     }
@@ -120,11 +120,11 @@ impl EvidenceClientConfig {
             trusted_jwks,
             revoked_key_ids,
             verification: VerificationStance::Pinned,
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            attempt_timeout: DEFAULT_ATTEMPT_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             user_agent: None,
             trusted_root_certificates: None,
-            max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+            maximum_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
             max_metadata_bytes: DEFAULT_MAX_METADATA_BYTES,
         }
     }
@@ -152,18 +152,18 @@ impl EvidenceClientConfig {
             trusted_jwks: JwksDocument { keys: Vec::new() },
             revoked_key_ids: Vec::new(),
             verification: VerificationStance::Declined,
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            attempt_timeout: DEFAULT_ATTEMPT_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             user_agent: None,
             trusted_root_certificates: None,
-            max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+            maximum_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
             max_metadata_bytes: DEFAULT_MAX_METADATA_BYTES,
         }
     }
 
     #[must_use]
-    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
-        self.request_timeout = timeout;
+    pub fn with_attempt_timeout(mut self, timeout: Duration) -> Self {
+        self.attempt_timeout = timeout;
         self
     }
 
@@ -190,8 +190,8 @@ impl EvidenceClientConfig {
     /// Bound the signed response body, which only [`crate::EvidenceClient::send`]
     /// reads.
     #[must_use]
-    pub fn with_max_response_bytes(mut self, max_response_bytes: u64) -> Self {
-        self.max_response_bytes = max_response_bytes;
+    pub fn with_maximum_response_bytes(mut self, maximum_response_bytes: u64) -> Self {
+        self.maximum_response_bytes = maximum_response_bytes;
         self
     }
 
@@ -233,8 +233,8 @@ impl EvidenceClientConfig {
     }
 
     #[must_use]
-    pub fn max_response_bytes(&self) -> u64 {
-        self.max_response_bytes
+    pub fn maximum_response_bytes(&self) -> u64 {
+        self.maximum_response_bytes
     }
 
     #[must_use]
@@ -313,12 +313,12 @@ impl EvidenceClientConfig {
                 }
             }
         }
-        if self.max_response_bytes == 0 || self.max_metadata_bytes == 0 {
+        if self.maximum_response_bytes == 0 || self.max_metadata_bytes == 0 {
             return Err(EvidenceClientError::configuration(
                 "the response bounds must allow at least one byte",
             ));
         }
-        if self.request_timeout.is_zero() || self.connect_timeout.is_zero() {
+        if self.attempt_timeout.is_zero() || self.connect_timeout.is_zero() {
             return Err(EvidenceClientError::configuration(
                 "the timeouts must be greater than zero",
             ));
@@ -336,10 +336,10 @@ impl fmt::Debug for EvidenceClientConfig {
             .debug_struct("EvidenceClientConfig")
             .field("base_url", &base_url_without_userinfo(&self.base_url))
             .field("verifies", &self.verifies())
-            .field("request_timeout", &self.request_timeout)
+            .field("attempt_timeout", &self.attempt_timeout)
             .field("connect_timeout", &self.connect_timeout)
             .field("user_agent", &self.user_agent)
-            .field("max_response_bytes", &self.max_response_bytes)
+            .field("maximum_response_bytes", &self.maximum_response_bytes)
             .field("max_metadata_bytes", &self.max_metadata_bytes)
             .finish_non_exhaustive()
     }
@@ -564,8 +564,12 @@ mod tests {
 
     #[test]
     fn unusable_bounds_are_refused() {
+        assert_eq!(
+            config("https://evidence.example.org").maximum_response_bytes(),
+            DEFAULT_MAXIMUM_RESPONSE_BYTES
+        );
         assert!(config("https://evidence.example.org")
-            .with_max_response_bytes(0)
+            .with_maximum_response_bytes(0)
             .validate()
             .is_err());
         assert!(config("https://evidence.example.org")
@@ -573,7 +577,7 @@ mod tests {
             .validate()
             .is_err());
         assert!(config("https://evidence.example.org")
-            .with_request_timeout(Duration::ZERO)
+            .with_attempt_timeout(Duration::ZERO)
             .validate()
             .is_err());
         assert!(config("https://evidence.example.org")
@@ -661,7 +665,7 @@ mod tests {
         );
 
         let failure = non_verifying_config("https://evidence.example.org")
-            .with_request_timeout(Duration::ZERO)
+            .with_attempt_timeout(Duration::ZERO)
             .validate()
             .expect_err("the timeouts still decide");
         assert!(

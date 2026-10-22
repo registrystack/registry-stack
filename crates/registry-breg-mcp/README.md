@@ -161,9 +161,11 @@ accepted, 1 when something is refused (or a warning is reported under
 `serve` refuses a file `check` would refuse, with the same lines on standard
 error, then resolves every secret before it listens, and answers until
 `SIGINT` or `SIGTERM`. Logs are JSON lines on standard output from the gateway
-alone, at the level `BREG_MCP_LOG` names: `error`, `warn`, or `info` (the
-default). Any other value, including a filter directive, is refused on
-standard error with exit status 2 before any work.
+alone. `BREG_MCP_LOG` selects the level when set, otherwise the runtime file's
+top-level `logLevel` applies, with `info` as its default. Both sources accept
+only `error`, `warn`, or `info`; any other value, including a filter directive,
+is refused. `check` validates `logLevel`, reads no environment override, and
+emits no operational log.
 
 The runtime file below is
 [`products/breg/examples/mcp-runtime/runtime.yaml`](../../products/breg/examples/mcp-runtime/runtime.yaml);

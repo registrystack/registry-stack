@@ -3,6 +3,7 @@
 
 use std::{
     env,
+    ffi::OsStr,
     fs::{self, File},
     io::{Read as _, Seek as _},
     path::{Path, PathBuf},
@@ -53,6 +54,23 @@ const MAX_VERSION_OUTPUT_BYTES: u64 = 64 * 1024;
 /// How often a delegated run is checked while it is still running.
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
+#[derive(Clone, Copy)]
+pub(crate) struct HelperSpec {
+    pub(crate) binary: &'static str,
+    pub(crate) component: &'static str,
+    pub(crate) explicit_flag: &'static str,
+    pub(crate) explicit_env: &'static str,
+    pub(crate) managed_env: &'static str,
+}
+
+const EVIDENCE_HELPER: HelperSpec = HelperSpec {
+    binary: "evidence",
+    component: "evidence",
+    explicit_flag: "--evidence-bin",
+    explicit_env: "EVIDENCE_BIN",
+    managed_env: "RSTACK_EVIDENCE_BIN",
+};
+
 #[derive(Debug)]
 pub(crate) struct DelegatedRunBoundError {
     message: String,
@@ -75,32 +93,167 @@ impl DelegatedRunBoundError {
     }
 }
 
-/// Resolve an explicit binary, `EVIDENCE_BIN`, or the first executable on
-/// `PATH`, in that order.
+/// Resolve the selected-generation Evidence runtime for an rstack invocation,
+/// or an explicit binary, `EVIDENCE_BIN`, or `PATH` outside rstack.
 pub(crate) fn resolve(explicit: Option<&Path>) -> Result<PathBuf> {
+    resolve_with_environment(
+        explicit,
+        env::var_os(EVIDENCE_HELPER.explicit_env).as_deref(),
+        env::var_os("RSTACK_GENERATION_DIR").as_deref(),
+        env::var_os(EVIDENCE_HELPER.managed_env).as_deref(),
+        env::var_os("RSTACK_RELEASE_TAG").as_deref(),
+        env::var_os("PATH").as_deref(),
+    )
+}
+
+pub(crate) fn resolve_with_environment(
+    explicit: Option<&Path>,
+    explicit_env: Option<&OsStr>,
+    generation_dir: Option<&OsStr>,
+    managed_path: Option<&OsStr>,
+    release_tag: Option<&OsStr>,
+    path: Option<&OsStr>,
+) -> Result<PathBuf> {
+    resolve_helper_with_environment(
+        EVIDENCE_HELPER,
+        explicit,
+        explicit_env,
+        generation_dir,
+        managed_path,
+        release_tag,
+        path,
+    )
+}
+
+pub(crate) fn resolve_helper_with_environment(
+    spec: HelperSpec,
+    explicit: Option<&Path>,
+    explicit_env: Option<&OsStr>,
+    generation_dir: Option<&OsStr>,
+    managed_path: Option<&OsStr>,
+    release_tag: Option<&OsStr>,
+    path: Option<&OsStr>,
+) -> Result<PathBuf> {
+    if let Some(generation_dir) = generation_dir {
+        return resolve_managed_helper(
+            spec,
+            explicit,
+            explicit_env,
+            Path::new(generation_dir),
+            managed_path,
+            release_tag,
+        );
+    }
+    resolve_unmanaged_helper(spec, explicit, explicit_env, path)
+}
+
+fn resolve_unmanaged_helper(
+    spec: HelperSpec,
+    explicit: Option<&Path>,
+    explicit_env: Option<&OsStr>,
+    path: Option<&OsStr>,
+) -> Result<PathBuf> {
     if let Some(path) = explicit {
-        if !path.is_file() {
-            return Err(operational_error(format!(
-                "evidence binary not found at {}",
-                path.display()
-            )));
-        }
+        require_file(path, spec.binary, None)?;
         return Ok(path.to_path_buf());
     }
-    if let Ok(env_path) = env::var("EVIDENCE_BIN") {
-        let path = PathBuf::from(&env_path);
-        if !path.is_file() {
-            return Err(operational_error(format!(
-                "evidence binary not found at {} (from EVIDENCE_BIN)",
-                path.display()
-            )));
-        }
+    if let Some(env_path) = explicit_env {
+        let path = PathBuf::from(env_path);
+        require_file(&path, spec.binary, Some(spec.explicit_env))?;
         return Ok(path);
     }
-    find_on_path("evidence").ok_or_else(|| {
-        operational_error(
-            "evidence binary not found: pass --evidence-bin, set EVIDENCE_BIN, or add `evidence` to PATH",
-        )
+    find_on_path_value(spec.binary, path).ok_or_else(|| {
+        operational_error(format!(
+            "{} binary not found: pass {}, set {}, or add `{}` to PATH",
+            spec.binary, spec.explicit_flag, spec.explicit_env, spec.binary
+        ))
+    })
+}
+
+fn resolve_managed_helper(
+    spec: HelperSpec,
+    explicit: Option<&Path>,
+    explicit_env: Option<&OsStr>,
+    generation_dir: &Path,
+    managed_path: Option<&OsStr>,
+    release_tag: Option<&OsStr>,
+) -> Result<PathBuf> {
+    let release = release_tag
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "selected release".to_owned());
+    let generation = fs::canonicalize(generation_dir).map_err(|error| {
+        operational_invalid_data(format!(
+            "rstack {release} selected generation {} cannot be resolved: {error}",
+            generation_dir.display()
+        ))
+    })?;
+    let layout_path = generation
+        .join("components")
+        .join(spec.component)
+        .join(spec.binary)
+        .join(spec.binary);
+    let managed_path = managed_path.ok_or_else(|| {
+        operational_invalid_data(format!(
+            "rstack {release} did not provide {} for its selected generation; install or repair component {} with rstack before retrying, evidencectl will not install helpers automatically",
+            spec.managed_env, spec.component
+        ))
+    })?;
+    let selected = canonical_helper(Path::new(managed_path), spec, Some(spec.managed_env))?;
+    let layout = canonical_helper(&layout_path, spec, Some("the selected generation"))?;
+    if selected != layout {
+        return Err(operational_invalid_data(format!(
+            "rstack {release} provided {} outside the selected generation helper path: {} (expected {})",
+            spec.managed_env,
+            selected.display(),
+            layout.display()
+        )));
+    }
+
+    for (override_path, source) in [
+        (explicit, spec.explicit_flag),
+        (explicit_env.map(Path::new), spec.explicit_env),
+    ] {
+        let Some(override_path) = override_path else {
+            continue;
+        };
+        let canonical = canonical_helper(override_path, spec, Some(source))?;
+        if canonical != selected {
+            return Err(operational_invalid_data(format!(
+                "{} points to {} but rstack {release} requires the {} helper from its selected generation at {}; a matching version string does not establish selected-generation identity",
+                source,
+                override_path.display(),
+                spec.binary,
+                selected.display()
+            )));
+        }
+    }
+    Ok(selected)
+}
+
+fn require_file(path: &Path, binary: &str, source: Option<&str>) -> Result<()> {
+    if path.is_file() {
+        return Ok(());
+    }
+    let suffix = source
+        .map(|source| format!(" (from {source})"))
+        .unwrap_or_default();
+    Err(operational_error(format!(
+        "{binary} binary not found at {}{suffix}",
+        path.display()
+    )))
+}
+
+fn canonical_helper(path: &Path, spec: HelperSpec, source: Option<&str>) -> Result<PathBuf> {
+    require_file(path, spec.binary, source)?;
+    fs::canonicalize(path).map_err(|error| {
+        operational_invalid_data(format!(
+            "cannot resolve {} helper at {}{}: {error}",
+            spec.binary,
+            path.display(),
+            source
+                .map(|source| format!(" (from {source})"))
+                .unwrap_or_default()
+        ))
     })
 }
 
@@ -280,9 +433,8 @@ fn reported_version(stdout: &str) -> Option<&str> {
     (!version.is_empty()).then_some(version)
 }
 
-fn find_on_path(name: &str) -> Option<PathBuf> {
-    let path_var = env::var_os("PATH")?;
-    env::split_paths(&path_var).find_map(|dir| {
+fn find_on_path_value(name: &str, path_var: Option<&OsStr>) -> Option<PathBuf> {
+    env::split_paths(path_var?).find_map(|dir| {
         let candidate = dir.join(name);
         is_candidate_executable(&candidate).then_some(candidate)
     })
@@ -342,11 +494,18 @@ fn retry_busy_stub_while<T>(
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::OpenOptions, io::Write as _, os::unix::fs::OpenOptionsExt as _, path::Path};
+    use std::{
+        env,
+        ffi::OsStr,
+        fs::{self, OpenOptions},
+        io::Write as _,
+        os::unix::fs::OpenOptionsExt as _,
+        path::Path,
+    };
 
     use super::{
-        ensure_matching_version_within, reported_version, retry_busy_stub, retry_busy_stub_while,
-        Duration,
+        ensure_matching_version_within, reported_version, resolve_with_environment,
+        retry_busy_stub, retry_busy_stub_while, Duration,
     };
 
     fn write_stub(path: &Path, script: &str) {
@@ -357,6 +516,137 @@ mod tests {
             .open(path)
             .expect("stub");
         file.write_all(script.as_bytes()).expect("write stub");
+    }
+
+    fn managed_evidence_paths(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        let generation = root.join("selected-generation");
+        let evidence = generation.join("components/evidence/evidence/evidence");
+        fs::create_dir_all(evidence.parent().unwrap()).unwrap();
+        write_stub(
+            &evidence,
+            &format!(
+                "#!/bin/sh\necho 'evidence {}'\n",
+                registry_platform_buildinfo::DISPLAY_VERSION
+            ),
+        );
+        (generation, evidence)
+    }
+
+    #[test]
+    fn managed_resolution_uses_the_selected_generation_when_path_conflicts() {
+        let root = tempfile::tempdir().unwrap();
+        let (generation, selected) = managed_evidence_paths(root.path());
+        let conflicting_directory = root.path().join("conflicting-path");
+        fs::create_dir(&conflicting_directory).unwrap();
+        write_stub(
+            &conflicting_directory.join("evidence"),
+            &format!(
+                "#!/bin/sh\necho 'evidence {}'\n",
+                registry_platform_buildinfo::DISPLAY_VERSION
+            ),
+        );
+        let path = env::join_paths([conflicting_directory]).unwrap();
+
+        let resolved = resolve_with_environment(
+            None,
+            None,
+            Some(generation.as_os_str()),
+            Some(selected.as_os_str()),
+            Some(OsStr::new("v-test")),
+            Some(&path),
+        )
+        .unwrap();
+
+        assert_eq!(resolved, fs::canonicalize(selected).unwrap());
+    }
+
+    #[test]
+    fn managed_resolution_refuses_an_explicit_same_version_binary_with_wrong_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let (generation, selected) = managed_evidence_paths(root.path());
+        let override_path = root.path().join("same-version-evidence");
+        write_stub(
+            &override_path,
+            &format!(
+                "#!/bin/sh\necho 'evidence {}'\n",
+                registry_platform_buildinfo::DISPLAY_VERSION
+            ),
+        );
+
+        let error = resolve_with_environment(
+            Some(&override_path),
+            None,
+            Some(generation.as_os_str()),
+            Some(selected.as_os_str()),
+            Some(OsStr::new("v-test")),
+            None,
+        )
+        .unwrap_err();
+        let diagnostic = format!("{error:#}");
+
+        assert!(diagnostic.contains("v-test"), "{diagnostic}");
+        assert!(diagnostic.contains("selected generation"), "{diagnostic}");
+        assert!(diagnostic.contains("--evidence-bin"), "{diagnostic}");
+        assert!(diagnostic.contains("same-version-evidence"), "{diagnostic}");
+    }
+
+    #[test]
+    fn managed_resolution_refuses_a_same_version_environment_override_with_wrong_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let (generation, selected) = managed_evidence_paths(root.path());
+        let override_path = root.path().join("same-version-evidence");
+        write_stub(
+            &override_path,
+            &format!(
+                "#!/bin/sh\necho 'evidence {}'\n",
+                registry_platform_buildinfo::DISPLAY_VERSION
+            ),
+        );
+
+        let error = resolve_with_environment(
+            None,
+            Some(override_path.as_os_str()),
+            Some(generation.as_os_str()),
+            Some(selected.as_os_str()),
+            Some(OsStr::new("v-test")),
+            None,
+        )
+        .unwrap_err();
+        let diagnostic = format!("{error:#}");
+
+        assert!(diagnostic.contains("EVIDENCE_BIN"), "{diagnostic}");
+        assert!(diagnostic.contains("selected generation"), "{diagnostic}");
+    }
+
+    #[test]
+    fn managed_resolution_does_not_fall_back_to_path_when_the_selected_helper_is_absent() {
+        let root = tempfile::tempdir().unwrap();
+        let generation = root.path().join("selected-generation");
+        fs::create_dir(&generation).unwrap();
+        let path_directory = root.path().join("path");
+        fs::create_dir(&path_directory).unwrap();
+        write_stub(
+            &path_directory.join("evidence"),
+            &format!(
+                "#!/bin/sh\necho 'evidence {}'\n",
+                registry_platform_buildinfo::DISPLAY_VERSION
+            ),
+        );
+        let path = env::join_paths([path_directory]).unwrap();
+
+        let error = resolve_with_environment(
+            None,
+            None,
+            Some(generation.as_os_str()),
+            None,
+            Some(OsStr::new("v-test")),
+            Some(&path),
+        )
+        .unwrap_err();
+        let diagnostic = format!("{error:#}");
+
+        assert!(diagnostic.contains("RSTACK_EVIDENCE_BIN"), "{diagnostic}");
+        assert!(diagnostic.contains("will not install"), "{diagnostic}");
     }
 
     /// A binary that never answers is exactly what the handshake exists to

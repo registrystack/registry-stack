@@ -8,11 +8,11 @@ export type JsonObject = { readonly [key: string]: JsonValue }
 
 export interface CaseworkClientConfig {
   baseUrl: string
-  requestTimeoutMilliseconds?: SafeInteger | null
-  connectTimeoutMilliseconds?: SafeInteger | null
-  maxResponseBytes?: SafeInteger | null
-  userAgent?: string | null
-  trustedRootCertificates?: string | null
+  attemptTimeoutMilliseconds?: SafeInteger
+  connectTimeoutMilliseconds?: SafeInteger
+  maximumResponseBytes?: SafeInteger
+  userAgent?: string
+  trustedRootCertificates?: string
   /**
    * How many times an idempotency-keyed mutation whose outcome is unknown is
    * resent, identically and under the same key, before its error is
@@ -20,7 +20,7 @@ export interface CaseworkClientConfig {
    * unkeyed operations, and review request create and cancel are never
    * resent. Any other value is a `configuration` error.
    */
-  maxMutationRetries?: SafeInteger | null
+  maximumMutationRetries?: SafeInteger
 }
 
 export type PageStatus = 'complete' | 'budget-exhausted' | 'source-unavailable'

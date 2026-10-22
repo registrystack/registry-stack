@@ -2,6 +2,7 @@
 # it offline with `breg-review --runtime-config runtime.yaml check`.
 apiVersion: id.registrystack.org/formats/breg/review-runtime/v1alpha1
 kind: BRegReviewRuntimeConfig
+logLevel: info
 listener:
   bind: 127.0.0.1:8115
   tlsTermination: operator-controlled-upstream

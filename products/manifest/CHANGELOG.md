@@ -7,6 +7,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- BREAKING: `render` selects its artifact with `--artifact-format`; report
+  `--format` does not apply to artifact stdout. `publish` writes its bundle to
+  `--output` and can emit a separate human or JSON report. Replace `render
+  --format <artifact>` with `render --artifact-format <artifact>`, `publish
+  --out <directory>` with `publish --output <directory>`, and `--json` with
+  `--format json`. Retired spellings are refused before file reads or writes
+  and name their replacement.
+
 ## [0.43.0] - 2026-10-21
 
 - BREAKING: metadata display fields use the shared display-text rules, and

@@ -121,11 +121,18 @@ client.batch_records(
 All action inputs, conditions, batch fields, item counts, correction context,
 and byte limits are validated by the Rust client before network I/O.
 
+Client configuration uses `maximum_response_bytes`; the retired
+`max_response_bytes` spelling is refused. Passing `None` for a typed optional
+constructor argument has the same effect as omitting that argument.
+`attempt_timeout_seconds` bounds one outbound attempt, including its body, and
+`connect_timeout_seconds` bounds connection setup.
+
 A keyed mutation (create, patch, attachment upload or delete, Proposal
 transition, immediate action, batch, tombstone, statistics publish or withdraw)
 whose outcome is unknown is resent identically under the same key up to
-`max_mutation_retries` times, a `BaseRegistryClient` keyword: 0 to 2, default
-2, and 0 sends it once. The outcome is unknown after a timeout or broken
+`maximum_mutation_retries` additional times, a `BaseRegistryClient` keyword: 0
+to 2, default 2, and 0 sends it once, while the default permits up to three
+total attempts. The outcome is unknown after a timeout or broken
 exchange once the request was sent, an unusable answer, or a 5xx other than
 `action.handler_failed` and `statistical_dataset.domain_violation`, which the
 engine returns only with the attempt rolled back. When the returned

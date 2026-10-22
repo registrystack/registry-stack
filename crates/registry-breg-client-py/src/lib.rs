@@ -3,7 +3,7 @@
 
 #![deny(unsafe_code)]
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use breg_client_sdk::{
     verify_webhook_delivery as verify_core_webhook_delivery, BRegActionAvailabilityRequest,
@@ -30,7 +30,7 @@ use breg_client_sdk::{
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
     prelude::*,
-    types::{PyBool, PyBytes, PyDict, PyString},
+    types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyString},
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
@@ -235,7 +235,7 @@ fn mutation_retries(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<u8> {
             py,
             MappedError::binding(
                 "configuration",
-                "max_mutation_retries must be a whole number from 0 to 2",
+                "maximum_mutation_retries must be a whole number from 0 to 2",
             ),
         )
     };
@@ -243,6 +243,46 @@ fn mutation_retries(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<u8> {
         return Err(invalid());
     }
     value.extract::<u8>().map_err(|_| invalid())
+}
+
+fn configuration_error(py: Python<'_>, message: &'static str) -> PyErr {
+    to_py_err(py, MappedError::binding("configuration", message))
+}
+
+fn timeout_duration(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Duration> {
+    if value.is_exact_instance_of::<PyFloat>() {
+        return value
+            .extract::<f64>()
+            .ok()
+            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+            .ok_or_else(|| {
+                configuration_error(py, "client timeouts must be finite non-negative seconds")
+            });
+    }
+    if value.is_exact_instance_of::<PyInt>() {
+        return value
+            .extract::<u64>()
+            .map(Duration::from_secs)
+            .map_err(|_| {
+                configuration_error(py, "client timeouts must be finite non-negative seconds")
+            });
+    }
+    Err(configuration_error(
+        py,
+        "client timeouts must be finite non-negative seconds",
+    ))
+}
+
+fn parse_maximum_response_bytes(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<u64> {
+    if !value.is_exact_instance_of::<PyInt>() {
+        return Err(configuration_error(
+            py,
+            "maximum_response_bytes must be a non-negative integer",
+        ));
+    }
+    value.extract::<u64>().map_err(|_| {
+        configuration_error(py, "maximum_response_bytes must be a non-negative integer")
+    })
 }
 
 fn record_format(py: Python<'_>, value: &str) -> PyResult<BRegRecordFormat> {
@@ -1640,18 +1680,18 @@ struct BaseRegistryClient {
 #[pymethods]
 impl BaseRegistryClient {
     #[new]
-    #[pyo3(signature = (base_url, authorization=None, request_timeout_seconds=None, connect_timeout_seconds=None, user_agent=None, max_response_bytes=None, trusted_root_certificates=None, max_mutation_retries=None))]
+    #[pyo3(signature = (base_url, authorization=None, attempt_timeout_seconds=None, connect_timeout_seconds=None, user_agent=None, maximum_response_bytes=None, trusted_root_certificates=None, maximum_mutation_retries=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
         base_url: &str,
         authorization: Option<&Bound<'_, PyAny>>,
-        request_timeout_seconds: Option<f64>,
-        connect_timeout_seconds: Option<f64>,
+        attempt_timeout_seconds: Option<&Bound<'_, PyAny>>,
+        connect_timeout_seconds: Option<&Bound<'_, PyAny>>,
         user_agent: Option<String>,
-        max_response_bytes: Option<u64>,
+        maximum_response_bytes: Option<&Bound<'_, PyAny>>,
         trusted_root_certificates: Option<Vec<u8>>,
-        max_mutation_retries: Option<&Bound<'_, PyAny>>,
+        maximum_mutation_retries: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let (authorization, private_roots) = authorization_from_python(authorization)
             .map_err(|error| conversion_error(py, "configuration", error))?;
@@ -1659,15 +1699,21 @@ impl BaseRegistryClient {
             base_url,
             &authorization,
             private_roots,
-            request_timeout_seconds,
-            connect_timeout_seconds,
+            attempt_timeout_seconds
+                .map(|value| timeout_duration(py, value))
+                .transpose()?,
+            connect_timeout_seconds
+                .map(|value| timeout_duration(py, value))
+                .transpose()?,
             user_agent,
-            max_response_bytes,
+            maximum_response_bytes
+                .map(|value| parse_maximum_response_bytes(py, value))
+                .transpose()?,
             trusted_root_certificates,
         )
         .map_err(|error| config_error(py, error))?;
-        let config = match max_mutation_retries {
-            Some(value) => config.with_max_mutation_retries(mutation_retries(py, value)?),
+        let config = match maximum_mutation_retries {
+            Some(value) => config.with_maximum_mutation_retries(mutation_retries(py, value)?),
             None => config,
         };
         let inner = py

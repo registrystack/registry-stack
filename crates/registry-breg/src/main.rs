@@ -5,8 +5,8 @@ use clap::Parser;
 use registry_breg::cli::Arguments;
 use registry_breg::runtime_config::load_runtime_config;
 use registry_breg::startup::{
-    map_runtime_config_error, operational_log_level, prepare_loaded, serve, OperationalEvent,
-    OperationalLogLevel,
+    map_runtime_config_error, operational_log_level, prepare_loaded, select_operational_log_level,
+    serve, OperationalEvent, OperationalLogLevel,
 };
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
@@ -14,24 +14,40 @@ use tracing_subscriber::prelude::*;
 #[tokio::main]
 async fn main() {
     let arguments = Arguments::parse();
-    let level = match operational_log_level(std::env::var("BREG_LOG").ok().as_deref()) {
-        Ok(level) => level,
-        Err(error) => {
+    let environment_log_level = match std::env::var("BREG_LOG") {
+        Ok(value) => match operational_log_level(Some(&value)) {
+            Ok(_) => Some(value),
+            Err(error) => {
+                initialize_logging(OperationalLogLevel::Error);
+                OperationalEvent::StoppedWithError(error).emit();
+                std::process::exit(2);
+            }
+        },
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
             initialize_logging(OperationalLogLevel::Error);
-            OperationalEvent::StoppedWithError(error).emit();
+            OperationalEvent::StoppedWithError(registry_breg::startup::StartupError::Logging)
+                .emit();
             std::process::exit(2);
         }
     };
-    initialize_logging_filter(level);
 
     if !arguments.runtime_config.is_absolute() {
+        initialize_logging_filter(
+            select_operational_log_level(environment_log_level.as_deref(), "info")
+                .expect("the environment log level was validated"),
+        );
         OperationalEvent::Stopped.emit();
         std::process::exit(2);
     }
-    OperationalEvent::StartupBegan.emit();
     let config = match load_runtime_config(&arguments.runtime_config) {
         Ok(config) => config,
         Err(error) => {
+            initialize_logging_filter(
+                select_operational_log_level(environment_log_level.as_deref(), "info")
+                    .expect("the environment log level was validated"),
+            );
+            OperationalEvent::StartupBegan.emit();
             // The operator reads every reader diagnostic, with its position
             // and fix, on stderr; the operational log on stdout carries only
             // the closed refusal class.
@@ -41,6 +57,13 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    let level = select_operational_log_level(
+        environment_log_level.as_deref(),
+        config.log_level().as_str(),
+    )
+    .expect("the environment and runtime log levels were validated");
+    initialize_logging_filter(level);
+    OperationalEvent::StartupBegan.emit();
     let clients_unrestricted = config.authentication().oidc().admits_every_client();
     let prepared = match prepare_loaded(config).await {
         Ok(prepared) => prepared,

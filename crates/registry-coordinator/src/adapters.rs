@@ -113,7 +113,7 @@ fn tokens(
         .with_resource(resource)
         .with_scopes(scopes.iter().cloned())
         .with_fetch_url_policy(configured_endpoint_policy(&auth.token_endpoint))
-        .with_request_timeout(REQUEST_TIMEOUT)
+        .with_attempt_timeout(REQUEST_TIMEOUT)
         .with_connect_timeout(Duration::from_millis(
             crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
         ));
@@ -130,12 +130,12 @@ fn breg_client(
     BaseRegistryClient::new(
         BaseRegistryClientConfig::new(url)
             .with_token_provider(tokens)
-            .with_max_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
-            .with_request_timeout(REQUEST_TIMEOUT)
+            .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
+            .with_attempt_timeout(REQUEST_TIMEOUT)
             .with_connect_timeout(Duration::from_millis(
                 crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
             ))
-            .with_max_response_bytes(FILE_BOUND),
+            .with_maximum_response_bytes(FILE_BOUND),
     )
 }
 
@@ -247,12 +247,12 @@ impl HttpAdapters {
                     };
                     let client = SchedulingClient::new(
                         SchedulingClientConfig::new(binding.base_url.clone())
-                            .with_max_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
-                            .with_request_timeout(REQUEST_TIMEOUT)
+                            .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
+                            .with_attempt_timeout(REQUEST_TIMEOUT)
                             .with_connect_timeout(Duration::from_millis(
                                 crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
                             ))
-                            .with_max_response_bytes(FILE_BOUND),
+                            .with_maximum_response_bytes(FILE_BOUND),
                     )
                     .map_err(|_| config_error())?;
                     Connection::Scheduling(Box::new(SchedulingConnection {
@@ -270,12 +270,12 @@ impl HttpAdapters {
                     );
                     let client = MessagingClient::new(
                         MessagingClientConfig::new(binding.base_url.clone())
-                            .with_max_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
-                            .with_request_timeout(REQUEST_TIMEOUT)
+                            .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
+                            .with_attempt_timeout(REQUEST_TIMEOUT)
                             .with_connect_timeout(Duration::from_millis(
                                 crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
                             ))
-                            .with_max_response_bytes(FILE_BOUND),
+                            .with_maximum_response_bytes(FILE_BOUND),
                     )
                     .map_err(|_| config_error())?;
                     Connection::Messaging { client, tokens }
@@ -306,12 +306,12 @@ impl HttpAdapters {
                         .map_err(|_| config_error())?;
                     let client = CaseworkClient::new(
                         CaseworkClientConfig::new(binding.base_url.clone())
-                            .with_max_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
-                            .with_request_timeout(REQUEST_TIMEOUT)
+                            .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
+                            .with_attempt_timeout(REQUEST_TIMEOUT)
                             .with_connect_timeout(Duration::from_millis(
                                 crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
                             ))
-                            .with_max_response_bytes(FILE_BOUND),
+                            .with_maximum_response_bytes(FILE_BOUND),
                     )
                     .map_err(|_| config_error())?;
                     Connection::Casework(Box::new(crate::review::CaseworkConnection::new(
@@ -422,12 +422,12 @@ fn task_provider(
     .map_err(|error| token_failure(&error))?;
     let casework = CaseworkClient::new(
         CaseworkClientConfig::new(authority.base_url.clone())
-            .with_max_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
-            .with_request_timeout(REQUEST_TIMEOUT)
+            .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
+            .with_attempt_timeout(REQUEST_TIMEOUT)
             .with_connect_timeout(Duration::from_millis(
                 crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
             ))
-            .with_max_response_bytes(FILE_BOUND),
+            .with_maximum_response_bytes(FILE_BOUND),
     )
     .map_err(|_| refused("credential-configuration"))?;
     let source = CaseworkTaskAssertionSource::new(

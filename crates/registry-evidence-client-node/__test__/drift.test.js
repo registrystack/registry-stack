@@ -87,12 +87,10 @@ function configurationKeysRead(functionName) {
 
 // The exchange configuration members `client.d.ts` names by hand are read by
 // `exchange_config.rs` in `registry-platform-httputil`, not by `src/convert.rs`:
-// the binding hands that object through unchanged. That parser is
-// `deny_unknown_fields` over `rename_all = "camelCase"`, so a member the stub
-// declares but the parser does not accept type-checks and then fails at run
-// time as a malformed configuration, and a member the parser accepts but the
-// stub omits is unreachable for a TypeScript caller. The struct's own fields
-// are the list.
+// the binding hands that object through after enforcing the Node spelling.
+// The shared parser also accepts second-valued snake-case fields for Python;
+// those serialize to camel case internally but are deliberately not part of
+// the public Node surface. The remaining struct fields are the Node list.
 function exchangeParserFields(structName) {
   const source = fs.readFileSync(
     path.join(__dirname, '..', '..', 'registry-platform-httputil', 'src', 'client', 'exchange_config.rs'),
@@ -103,6 +101,7 @@ function exchangeParserFields(structName) {
   const body = source.slice(start, source.indexOf('\n}\n', start));
   return [...body.matchAll(/^    (\w+): /gm)]
     .map((match) => match[1].replace(/_(\w)/g, (_, letter) => letter.toUpperCase()))
+    .filter((field) => !['attemptTimeoutSeconds', 'connectTimeoutSeconds'].includes(field))
     .sort();
 }
 

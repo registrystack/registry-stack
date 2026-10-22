@@ -187,8 +187,8 @@ pub use client::{
     EvidenceClient, NonVerifyingEvidenceClient, RawEvidenceResponse, VerifiedEvidence,
 };
 pub use config::{
-    EvidenceClientConfig, DEFAULT_CONNECT_TIMEOUT, DEFAULT_MAX_RESPONSE_BYTES,
-    DEFAULT_REQUEST_TIMEOUT,
+    EvidenceClientConfig, DEFAULT_ATTEMPT_TIMEOUT, DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_MAXIMUM_RESPONSE_BYTES,
 };
 pub use definitions::{
     ConceptForm, DefinitionCardinality, DefinitionConcept, DefinitionKind,

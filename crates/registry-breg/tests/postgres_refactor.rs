@@ -261,7 +261,7 @@ async fn facility_action_is_atomic_checks_references_and_recovers_exactly_once()
         .await;
     lost.client = registry_breg_client::BaseRegistryClient::new(
         registry_breg_client::BaseRegistryClientConfig::new(lost.base_url.parse().unwrap())
-            .with_max_mutation_retries(0),
+            .with_maximum_mutation_retries(0),
     )
     .unwrap();
     let lost_contract = lost

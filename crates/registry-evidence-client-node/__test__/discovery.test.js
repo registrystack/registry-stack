@@ -90,14 +90,14 @@ test('discover reads a valid definitions document from a stub deployment', async
   }
 });
 
-// The two bounds answer different questions: `maxResponseBytes` is derived from
+// The two bounds answer different questions: `maximumResponseBytes` is derived from
 // what the verifier accepts as a signed response, and the discovery document is
 // neither signed nor verified. Tightening one must not silently disable the
 // other endpoint.
 test('the metadata bound governs discovery, and the signed response bound does not', async () => {
   const stub = await definitionsStub();
   try {
-    const document = await clientAgainst(stub, { maxResponseBytes: 1 }).discover();
+    const document = await clientAgainst(stub, { maximumResponseBytes: 1 }).discover();
     assert.equal(document.definitions.length, 1);
 
     const bounded = clientAgainst(stub, {

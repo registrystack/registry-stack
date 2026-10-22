@@ -5,7 +5,7 @@
 //! generates one. A keyed mutation whose outcome is unknown (a timeout or
 //! broken exchange after the request was sent, or a 5xx answer) is resent,
 //! byte for byte and under the same key, at most
-//! `CaseworkClientConfig::with_max_mutation_retries` times (2 by default, 0
+//! `CaseworkClientConfig::with_maximum_mutation_retries` times (2 by default, 0
 //! disables it). Reads, unkeyed operations, and the review request create and
 //! cancel calls are never resent. A 5xx answer may follow a commit: when
 //! `CaseworkClientError::is_outcome_unknown` is still true, the safe recovery

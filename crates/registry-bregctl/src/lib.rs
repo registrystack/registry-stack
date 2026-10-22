@@ -11,7 +11,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command as ProcessCommand, ExitCode};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -65,6 +65,7 @@ mod report;
 mod review_recovery;
 mod reviewed_migrations;
 mod safe_path;
+mod selected_binary;
 mod starters;
 mod statistics_lifecycle;
 mod test_lifecycle;
@@ -182,6 +183,12 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Run the production Base Registry Engine service with the selected runtime.
+    Serve(ServeArgs),
+    /// Operate the optional citizen-facing MCP gateway.
+    Mcp(McpArgs),
+    /// Operate the optional citizen review page.
+    Review(ReviewArgs),
     /// Create an authoring project in a new directory: a domain-neutral example,
     /// one derived from an embedded reference model with `--from`, or a shipped
     /// starter with `--template`.
@@ -254,6 +261,67 @@ enum Command {
     InstanceClaim(InstanceClaimArgs),
     /// Maintain field-encryption key material.
     FieldEncryption(FieldEncryptionArgs),
+}
+
+#[derive(Debug, Args)]
+struct ServeArgs {
+    /// Runtime configuration file passed unchanged to the Base Registry Engine runtime.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// BReg runtime executable for an unmanaged installation.
+    #[arg(long, hide = true, env = "BREG_BIN", value_name = "BINARY")]
+    breg_bin: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct McpArgs {
+    /// MCP gateway executable for an unmanaged installation.
+    #[arg(long, hide = true, env = "BREG_MCP_BIN", value_name = "BINARY")]
+    breg_mcp_bin: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: SupportingServiceCommand,
+}
+
+#[derive(Debug, Args)]
+struct ReviewArgs {
+    /// Review page executable for an unmanaged installation.
+    #[arg(long, hide = true, env = "BREG_REVIEW_BIN", value_name = "BINARY")]
+    breg_review_bin: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: SupportingServiceCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum SupportingServiceCommand {
+    /// Check the runtime file offline, reading no secret and opening no socket.
+    Check(SupportingServiceCheckArgs),
+    /// Serve until terminated.
+    Serve(SupportingServiceServeArgs),
+}
+
+#[derive(Debug, Args)]
+struct SupportingServiceCheckArgs {
+    /// Runtime configuration file to check.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+
+    /// Exit 1 when a warning is reported.
+    #[arg(long)]
+    deny_warnings: bool,
+
+    /// Fill environment expressions while checking the runtime file.
+    #[arg(long)]
+    environment: bool,
+}
+
+#[derive(Debug, Args)]
+struct SupportingServiceServeArgs {
+    /// Runtime configuration file for the service.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -2335,6 +2403,7 @@ where
 {
     let arguments: Vec<OsString> = arguments.into_iter().map(Into::into).collect();
     let machine_mode = requested_json(&arguments);
+    let format_explicit = report_format_requested(&arguments);
     if machine_mode && help_requested(&arguments) {
         let catalog = registry_cli_reference::binary_catalog(
             command(),
@@ -2379,6 +2448,37 @@ where
 
     let format = cli.format;
     let result = match cli.command {
+        Command::Serve(args) => {
+            return serve(args, format, format_explicit, stdout, stderr);
+        }
+        Command::Mcp(args) => {
+            return supporting_service(
+                SupportingServiceInvocation {
+                    command: "mcp",
+                    spec: selected_binary::BREG_MCP,
+                    explicit_binary: args.breg_mcp_bin,
+                    action: args.command,
+                },
+                format,
+                format_explicit,
+                stdout,
+                stderr,
+            );
+        }
+        Command::Review(args) => {
+            return supporting_service(
+                SupportingServiceInvocation {
+                    command: "review",
+                    spec: selected_binary::BREG_REVIEW,
+                    explicit_binary: args.breg_review_bin,
+                    action: args.command,
+                },
+                format,
+                format_explicit,
+                stdout,
+                stderr,
+            );
+        }
         Command::Examples(args) => {
             return match dev::examples::run(args) {
                 Ok(report) => write_examples_success(&report, format, stdout, stderr),
@@ -2967,6 +3067,166 @@ where
     match result {
         Ok(report) => write_success(&report, format, stdout, stderr),
         Err(failure) => write_failure(&failure, format, stdout, stderr),
+    }
+}
+
+fn serve(
+    args: ServeArgs,
+    format: OutputFormat,
+    format_explicit: bool,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    if format_explicit {
+        return reject_service_format("serve", format, stdout, stderr);
+    }
+
+    let binary =
+        match selected_binary::resolve_managed(selected_binary::BREG, args.breg_bin.as_deref()) {
+            Ok(Some(binary)) => binary,
+            Ok(None) => args.breg_bin.unwrap_or_else(|| PathBuf::from("breg")),
+            Err(error) => {
+                let _ = writeln!(stderr, "bregctl serve could not select breg: {error:#}");
+                return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
+            }
+        };
+    let mut command = ProcessCommand::new(binary);
+    command.arg("--runtime-config").arg(args.runtime_config);
+    replace_with_service(command, "breg", stderr)
+}
+
+struct SupportingServiceInvocation {
+    command: &'static str,
+    spec: selected_binary::HelperSpec,
+    explicit_binary: Option<PathBuf>,
+    action: SupportingServiceCommand,
+}
+
+fn supporting_service(
+    invocation: SupportingServiceInvocation,
+    format: OutputFormat,
+    format_explicit: bool,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    if matches!(&invocation.action, SupportingServiceCommand::Serve(_)) && format_explicit {
+        return reject_service_format(invocation.command, format, stdout, stderr);
+    }
+
+    let binary = match selected_binary::resolve_managed(
+        invocation.spec,
+        invocation.explicit_binary.as_deref(),
+    ) {
+        Ok(Some(binary)) => binary,
+        Ok(None) => invocation
+            .explicit_binary
+            .unwrap_or_else(|| PathBuf::from(invocation.spec.binary)),
+        Err(error) => {
+            let _ = writeln!(
+                stderr,
+                "bregctl {} could not select {}: {error:#}",
+                invocation.command, invocation.spec.binary
+            );
+            return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
+        }
+    };
+    let mut command = ProcessCommand::new(binary);
+    match invocation.action {
+        SupportingServiceCommand::Serve(args) => {
+            command
+                .arg("--runtime-config")
+                .arg(args.runtime_config)
+                .arg("serve");
+        }
+        SupportingServiceCommand::Check(args) => {
+            command
+                .arg("--runtime-config")
+                .arg(args.runtime_config)
+                .arg("check")
+                .arg("--format")
+                .arg(match format {
+                    OutputFormat::Human => "human",
+                    OutputFormat::Json => "json",
+                });
+            if args.deny_warnings {
+                command.arg("--deny-warnings");
+            }
+            if args.environment {
+                command.arg("--environment");
+            }
+        }
+    }
+    replace_with_service(command, invocation.spec.binary, stderr)
+}
+
+fn reject_service_format(
+    command: &'static str,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let report = source_failure(
+        "usage",
+        diagnostic(
+            "usage.invalid",
+            "format",
+            &format!(
+                "--format does not apply to the {command} service because service logs keep the runtime contract"
+            ),
+        ),
+        DiagnosticArtifact::CommandArguments,
+        SuggestedAction::CorrectCommandUsage,
+    );
+    match format {
+        OutputFormat::Json => {
+            let result = write_ctl_report(&mut *stdout, &report)
+                .map_err(io::Error::other)
+                .and_then(|()| writeln!(stdout));
+            if result.is_err() {
+                let _ = writeln!(stderr, "bregctl: output could not be written");
+                return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
+            }
+        }
+        OutputFormat::Human => {
+            let _ = writeln!(
+                stderr,
+                "error: --format does not apply to the {command} service"
+            );
+        }
+    }
+    ExitCode::from(USAGE_EXIT)
+}
+
+#[cfg(unix)]
+fn replace_with_service(
+    mut command: ProcessCommand,
+    name: &str,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    use std::os::unix::process::CommandExt as _;
+
+    let error = command.exec();
+    let _ = writeln!(stderr, "bregctl serve could not start {name}: {error}");
+    ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+}
+
+#[cfg(not(unix))]
+fn replace_with_service(
+    mut command: ProcessCommand,
+    name: &str,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    match command.status() {
+        Ok(status) => ExitCode::from(
+            status
+                .code()
+                .and_then(|code| u8::try_from(code).ok())
+                .unwrap_or(OPERATIONAL_FAILURE_EXIT),
+        ),
+        Err(error) => {
+            let _ = writeln!(stderr, "bregctl serve could not start {name}: {error}");
+            ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+        }
     }
 }
 
@@ -7111,6 +7371,19 @@ fn requested_json(arguments: &[OsString]) -> bool {
             || (argument == "--format"
                 && arguments.get(index + 1).is_some_and(|next| next == "json"))
     })
+}
+
+fn report_format_requested(arguments: &[OsString]) -> bool {
+    arguments
+        .iter()
+        .skip(1)
+        .take_while(|argument| *argument != "--")
+        .any(|argument| {
+            argument == "--format"
+                || argument
+                    .to_str()
+                    .is_some_and(|value| value.starts_with("--format="))
+        })
 }
 
 /// Describe a command line clap refused by the error kind and the argument
@@ -14066,6 +14339,9 @@ mod tests {
         assert_eq!(
             names,
             [
+                "serve",
+                "mcp",
+                "review",
                 "init",
                 "check",
                 "project",
@@ -14096,6 +14372,35 @@ mod tests {
                 "field-encryption"
             ]
         );
+    }
+
+    #[test]
+    fn supporting_service_runtime_arguments_have_public_catalog_help() {
+        let reference = registry_cli_reference::command_reference(
+            command(),
+            None,
+            Some(registry_cli_reference::SYMBOLIC_LINK_REFUSAL),
+        );
+        for service_name in ["mcp", "review"] {
+            let service = reference
+                .subcommands
+                .iter()
+                .find(|command| command.name == service_name)
+                .expect("supporting service subtree");
+            for action_name in ["check", "serve"] {
+                let action = service
+                    .subcommands
+                    .iter()
+                    .find(|command| command.name == action_name)
+                    .expect("supporting service action");
+                let runtime = action
+                    .options
+                    .iter()
+                    .find(|option| option.display == "--runtime-config <ABSOLUTE_FILE>")
+                    .expect("runtime configuration option");
+                assert!(runtime.description.contains("Runtime configuration file"));
+            }
+        }
     }
 
     #[test]

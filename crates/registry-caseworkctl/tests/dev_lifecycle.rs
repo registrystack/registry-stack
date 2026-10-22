@@ -632,7 +632,7 @@ fn create_review_request_for(
     runtime.block_on(async {
         let client = CaseworkClient::new(
             CaseworkClientConfig::new(report["caseworkUrl"].as_str().unwrap().parse().unwrap())
-                .with_max_mutation_retries(0),
+                .with_maximum_mutation_retries(0),
         )
         .expect("public Rust client");
         let auth = || CaseworkAuth::new(&token, "requester");

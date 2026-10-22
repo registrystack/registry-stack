@@ -806,6 +806,12 @@ fn issuer_keys(issuer: &str) -> Result<Vec<u8>> {
 }
 
 fn start(args: StartArgs) -> Result<Value> {
+    // Bind an rstack-managed invocation to its selected runtime before this
+    // command creates or changes any retained development state.
+    let managed_casework = crate::selected_binary::resolve_managed(
+        crate::selected_binary::CASEWORK,
+        args.casework_bin.as_deref(),
+    )?;
     let project = project(&args.project)?;
     let requested_issuer = args
         .issuer_project
@@ -991,7 +997,10 @@ fn start(args: StartArgs) -> Result<Value> {
     if clients.integrations.is_some() {
         integrations::validate_bindings(&root, &project)?;
     }
-    let casework = executable("casework", args.casework_bin.as_deref())?;
+    let casework = match managed_casework {
+        Some(path) => path,
+        None => executable("casework", args.casework_bin.as_deref())?,
+    };
     let docker = executable("docker", args.docker_bin.as_deref())?;
     // Identify the prerequisites before the session stops a container or
     // launches the supervisor: a casework from another release has to

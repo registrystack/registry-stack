@@ -125,6 +125,9 @@
         }
       }
     },
+    "components": {
+      "$ref": "#/$defs/componentManifest"
+    },
     "images": {
       "type": "array",
       "minItems": 1,
@@ -260,9 +263,93 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "release": {
+            "properties": {
+              "version": {
+                "anyOf": [
+                  { "pattern": "^0\\.(?:4[4-9]|[5-9][0-9])\\.[0-9]+$" },
+                  { "pattern": "^0\\.[1-9][0-9]{2,}\\.[0-9]+$" },
+                  { "pattern": "^[1-9][0-9]*\\.[0-9]+\\.[0-9]+$" }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": ["components"]
+      },
+      "else": {
+        "not": {
+          "required": ["components"]
+        }
+      }
     }
   ],
   "$defs": {
+    "componentManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "release", "launcher", "components"],
+      "properties": {
+        "schema_version": { "const": "registry-stack.components.v1" },
+        "release": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "launcher": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["linux-amd64", "linux-arm64", "macos-arm64"],
+          "properties": {
+            "linux-amd64": { "$ref": "#/$defs/componentAsset" },
+            "linux-arm64": { "$ref": "#/$defs/componentAsset" },
+            "macos-arm64": { "$ref": "#/$defs/componentAsset" }
+          }
+        },
+        "components": {
+          "type": "object",
+          "propertyNames": {
+            "enum": ["breg", "casework", "discovery", "evidence", "manifest", "messaging", "render", "scheduling", "coordinator"]
+          },
+          "additionalProperties": { "$ref": "#/$defs/component" }
+        }
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entrypoint", "dependencies", "platforms"],
+      "properties": {
+        "entrypoint": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "dependencies": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "platforms": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "enum": ["linux-amd64", "linux-arm64", "macos-arm64"] },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["assets", "capabilities"],
+            "properties": {
+              "assets": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/componentAsset" } },
+              "capabilities": { "type": "object", "additionalProperties": { "type": "boolean" } }
+            }
+          }
+        }
+      }
+    },
+    "componentAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "size", "sha256"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "size": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
     "sha": {
       "type": "string",
       "pattern": "^[0-9a-f]{40}$"

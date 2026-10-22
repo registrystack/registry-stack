@@ -32,7 +32,7 @@ cancel) whose outcome is unknown, with the same key, headers, and body bytes,
 at most twice by default, waiting 250 ms and then 500 ms, or the service's
 `Retry-After` when that is longer and at most 5 seconds. A longer requested
 wait ends the retries. Configure the count with
-`SchedulingClientConfig::with_max_mutation_retries` (0 to 2; 0 disables the
+`SchedulingClientConfig::with_maximum_mutation_retries` (0 to 2; 0 disables the
 resend). Reads and the unkeyed hold release are never resent. Each attempt has
 the full request timeout, so a call can take up to three request timeouts plus
 the waits.

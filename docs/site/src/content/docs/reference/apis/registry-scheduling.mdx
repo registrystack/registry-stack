@@ -50,11 +50,11 @@ or settles the command, while a new key can commit it twice. The Rust client in
 `is_outcome_unknown()` is true in those cases and false for a typed 4xx refusal, and it resends the
 identical request at most twice by default, waiting 250 ms and then 500 ms, or the runtime's
 `Retry-After` when that is longer. A `Retry-After` over 5 seconds ends the retries and returns
-the answer. `with_max_mutation_retries` on its
+the answer. `with_maximum_mutation_retries` on its
 configuration sets the count from 0, which sends once, to 2. It never resends a read or a release.
 
 {/* Evidence: crates/registry-scheduling-client/src/error.rs, is_outcome_unknown;
-    crates/registry-scheduling-client/src/config.rs, with_max_mutation_retries;
+    crates/registry-scheduling-client/src/config.rs, with_maximum_mutation_retries;
     crates/registry-scheduling-client/tests/mutation_retry.rs;
     crates/registry-platform-httputil/src/client/retry.rs, retry_keyed_mutation. */}
 

@@ -117,7 +117,7 @@ test('exact JSON reads preserve and follow the largest server cursor envelope', 
   try {
     const client = new BaseRegistryClient({
       baseUrl: `http://127.0.0.1:${server.address().port}`,
-      maxResponseBytes: 32 * 1024,
+      maximumResponseBytes: 32 * 1024,
     });
     const first = await client.listRecordsJson('companies', { top: 1, count: true });
     assert.equal(first.continuation.skiptoken.length, cursor.length);

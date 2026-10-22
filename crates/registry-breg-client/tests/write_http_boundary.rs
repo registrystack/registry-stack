@@ -193,7 +193,7 @@ async fn serve_test_client(responses: Vec<MockResponse>, max_mutation_retries: u
         Url::parse(&format!("http://{address}/tenant/base")).expect("base URL"),
     )
     .with_token_provider(token.clone())
-    .with_max_mutation_retries(max_mutation_retries);
+    .with_maximum_mutation_retries(max_mutation_retries);
     TestClient {
         client: BaseRegistryClient::new(config).expect("client"),
         requests,

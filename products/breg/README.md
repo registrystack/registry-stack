@@ -242,6 +242,11 @@ Runtime files set `apiVersion` to
 documents bounded defaults for operational tuning while keeping package,
 database, authority, role, and secret-reference fields explicit.
 
+The top-level `logLevel` accepts `error`, `warn`, or `info` and defaults to
+`info`. `BREG_LOG` overrides the authored value for process-local operation.
+An unknown value in either source refuses startup; neither source accepts
+filter directives or enables dependency logging.
+
 ## Scope
 
 ### Record response contract

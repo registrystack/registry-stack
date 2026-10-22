@@ -89,13 +89,14 @@ block must stay literal. The redirect URI registered with the provider is
 loopback listener only: it drops `Secure`, the `__Host-` cookie prefix, and
 HSTS, and relaxes the provider endpoint policy to loopback HTTP.
 
-`BREG_REVIEW_LOG` selects the operational log level: `error`, `warn`, or
-`info` (the default). Any other value stops startup with exit status 2, so a
-typo cannot silently change what is logged. `check` reads no level. The
-operational log is JSON on standard output. A refused runtime file is
-reported on standard error in the same lines `check` prints, and any other
-startup refusal is one line on standard error; either way the process exits
-with status 1.
+`BREG_REVIEW_LOG` selects the operational log level when set, otherwise the
+runtime file's top-level `logLevel` applies, with `info` as its default. Both
+sources accept only `error`, `warn`, or `info`; any other value refuses startup
+instead of falling back. `check` validates `logLevel`, reads no environment
+override, and emits no operational log. The operational log is JSON on standard
+output. A refused runtime file is reported on standard error in the same lines
+`check` prints, and any other startup refusal is one line on standard error;
+either way the process exits with status 1.
 
 ## Sign-in
 

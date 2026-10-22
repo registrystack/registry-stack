@@ -22,6 +22,8 @@ pub fn catalog() -> Catalog {
         command_reference(registry_schedulingctl::command(), None, None),
         command_reference(registry_messaging::runtime::command(), None, None),
         command_reference(registry_messagingctl::command(), None, None),
+        command_reference(registry_manifest_cli::command(), None, None),
+        command_reference(registry_rstack::command(), None, None),
         command_reference(registry_breg::command(), None, None),
         command_reference(registry_breg_mcp::command(), None, None),
         command_reference(registry_breg_review::command(), None, None),
@@ -125,13 +127,84 @@ mod tests {
                 "evidence",
                 "evidence-oid4vci",
                 "evidencectl",
+                "manifest",
                 "messaging",
                 "messagingctl",
                 "registry-render",
+                "rstack",
                 "scheduling",
                 "schedulingctl",
             ]
         );
+    }
+
+    #[test]
+    fn launcher_publishes_the_managed_installation_commands() {
+        let catalog = catalog();
+        for invocation in [
+            "rstack components list",
+            "rstack install",
+            "rstack update",
+            "rstack uninstall",
+            "rstack cleanup",
+            "rstack doctor",
+            "rstack help",
+            "rstack completions",
+        ] {
+            assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());
+        }
+        let root = find_command(&catalog.binaries, "rstack");
+        assert!(root.options.iter().any(|option| {
+            option.display == "--format <FORMAT>"
+                && option.default_values == ["human"]
+                && option.possible_values == ["human", "json"]
+        }));
+    }
+
+    #[test]
+    fn manifest_publishes_report_and_artifact_modes_from_its_canonical_tree() {
+        let catalog = catalog();
+        let render = find_command(&catalog.binaries, "manifest render");
+        let artifact_format = render
+            .options
+            .iter()
+            .find(|option| option.display.starts_with("--artifact-format "))
+            .expect("render artifact selector");
+        assert!(artifact_format.always_required);
+        assert_eq!(
+            artifact_format.possible_values,
+            [
+                "catalog",
+                "evidence-offerings",
+                "evidence-offering",
+                "policies",
+                "policy",
+                "dcat",
+                "bregdcat-ap",
+                "cpsv-ap",
+                "shacl",
+                "json-schema",
+                "form-json-schema",
+                "ogc-records",
+            ]
+        );
+        assert!(!render
+            .options
+            .iter()
+            .any(|option| option.display.starts_with("--format ")));
+        assert!(render.long_about.as_deref().is_some_and(|about| {
+            about.contains("exact artifact JSON bytes") && about.contains("does not apply")
+        }));
+
+        let publish = find_command(&catalog.binaries, "manifest publish");
+        assert!(publish.options.iter().any(|option| {
+            option.display == "--output <DIRECTORY>" && option.default_values == ["public/metadata"]
+        }));
+        assert!(publish.options.iter().any(|option| {
+            option.display == "--format <FORMAT>"
+                && option.default_values == ["human"]
+                && option.possible_values == ["human", "json"]
+        }));
     }
 
     #[test]

@@ -79,6 +79,10 @@ const SCHEMA_VERSIONS: [i64; 1] = [100];
 /// The 1.0 baseline schema version. A ledger holding any version below it
 /// was left by a pre-1.0 release, which this release refuses by name.
 const BASELINE_SCHEMA_VERSION: i64 = 100;
+/// The most undelivered intents one operator query returns. This matches the
+/// product's 200-item maximum for public listings, so an operator read does
+/// not create a second, unbounded listing policy.
+pub const MAXIMUM_UNDELIVERED_INTENTS_LIMIT: i64 = 200;
 const _: () = assert!(
     versions_start_at_baseline_and_increase(&SCHEMA_VERSIONS),
     "Scheduling migrations must start at BASELINE_SCHEMA_VERSION and strictly increase"
@@ -149,6 +153,8 @@ pub enum StoreError {
     UnsupportedPostgres,
     #[error("the Scheduling database configuration is invalid")]
     Configuration,
+    #[error("the undelivered-intents limit must be between 1 and 200")]
+    InvalidUndeliveredIntentsLimit,
     #[error("the Scheduling database secret could not be resolved: {0}")]
     SecretConfiguration(String),
     #[error("the Scheduling database is not in the state this runtime expects")]
@@ -2231,6 +2237,7 @@ impl PostgresStore {
         &self,
         limit: i64,
     ) -> Result<Vec<UndeliveredIntent>, StoreError> {
+        let limit = validated_undelivered_intents_limit(limit)?;
         let client = self.client().await?;
         let rows = client
             .query(
@@ -3927,6 +3934,14 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
     }
 }
 
+fn validated_undelivered_intents_limit(limit: i64) -> Result<i64, StoreError> {
+    if (1..=MAXIMUM_UNDELIVERED_INTENTS_LIMIT).contains(&limit) {
+        Ok(limit)
+    } else {
+        Err(StoreError::InvalidUndeliveredIntentsLimit)
+    }
+}
+
 fn tls_connector(
     config: &DatabaseConfig,
     secrets: &SecretResolver,
@@ -3967,5 +3982,25 @@ fn tls_connector(
         tokio_postgres_rustls::MakeRustlsConnect::with_native_certs()
             .map(|value| value.0)
             .map_err(|_| StoreError::Configuration)
+    }
+}
+
+#[cfg(test)]
+mod query_bound_tests {
+    use super::*;
+
+    #[test]
+    fn undelivered_intents_limit_is_positive_and_bounded() {
+        assert_eq!(validated_undelivered_intents_limit(1).unwrap(), 1);
+        assert_eq!(
+            validated_undelivered_intents_limit(MAXIMUM_UNDELIVERED_INTENTS_LIMIT).unwrap(),
+            MAXIMUM_UNDELIVERED_INTENTS_LIMIT
+        );
+        for limit in [0, -1, MAXIMUM_UNDELIVERED_INTENTS_LIMIT + 1, i64::MAX] {
+            assert!(matches!(
+                validated_undelivered_intents_limit(limit),
+                Err(StoreError::InvalidUndeliveredIntentsLimit)
+            ));
+        }
     }
 }

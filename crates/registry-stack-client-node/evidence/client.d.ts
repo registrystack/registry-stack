@@ -120,8 +120,8 @@ export interface PrivateKeyJwtConfig {
   scopes?: ReadonlyArray<string>
   assertionLifetimeSeconds?: number
   refreshMarginSeconds?: number
-  requestTimeoutMs?: number
-  connectTimeoutMs?: number
+  attemptTimeoutMilliseconds?: number
+  connectTimeoutMilliseconds?: number
   userAgent?: string
   /** Additional trust roots for the token endpoint, as a PEM bundle. */
   trustedRootCertificates?: string
@@ -151,11 +151,8 @@ export interface EvidenceExchangeContext {
  * This is not a `PrivateKeyJwtConfig`, even though the two describe the same
  * kind of client: an exchange is pinned to one resource and scope set, so both
  * are required here, and the object is read by the shared exchange
- * configuration parser rather than by the binding's own reader, so its timeout
- * members are the full-word ones that parser accepts. State at most one of
- * `requestTimeoutMilliseconds` and `requestTimeoutSeconds`, and at most one of
- * `connectTimeoutMilliseconds` and `connectTimeoutSeconds`; naming both of a
- * pair is refused.
+ * configuration parser rather than by the binding's own reader. Node exposes
+ * both timeout controls in milliseconds.
  */
 export interface EvidenceExchangeClientConfig {
   tokenEndpoint: string
@@ -180,10 +177,8 @@ export interface EvidenceExchangeClientConfig {
   scopes: ReadonlyArray<string>
   assertionLifetimeSeconds?: number
   refreshMarginSeconds?: number
-  requestTimeoutMilliseconds?: number
-  requestTimeoutSeconds?: number
+  attemptTimeoutMilliseconds?: number
   connectTimeoutMilliseconds?: number
-  connectTimeoutSeconds?: number
   userAgent?: string
   /** Additional trust roots for the token endpoint, as a PEM bundle. */
   trustedRootCertificates?: string
@@ -195,10 +190,8 @@ export interface EvidenceExchangeRemoteSourceConfig {
   bootstrap: EvidenceExchangeClientConfig
   bootstrapResource: string
   bootstrapScope: string
-  requestTimeoutMilliseconds?: number
-  requestTimeoutSeconds?: number
+  attemptTimeoutMilliseconds?: number
   connectTimeoutMilliseconds?: number
-  connectTimeoutSeconds?: number
   userAgent?: string
   /** Additional trust roots for the authority, as a PEM bundle. */
   trustedRootCertificates?: string
@@ -220,12 +213,12 @@ export interface EvidenceClientConfig {
   /** Configure exactly one of `token` or `authorization`. */
   token?: EvidenceTokenConfig
   authorization?: { exchange: EvidenceExchangeAuthorizationConfig }
-  requestTimeoutMs?: number
-  connectTimeoutMs?: number
+  attemptTimeoutMilliseconds?: number
+  connectTimeoutMilliseconds?: number
   userAgent?: string
   /** Additional trust roots for the deployment, as a PEM bundle. */
   trustedRootCertificates?: string
-  maxResponseBytes?: number
+  maximumResponseBytes?: number
   maxMetadataBytes?: number
 }
 

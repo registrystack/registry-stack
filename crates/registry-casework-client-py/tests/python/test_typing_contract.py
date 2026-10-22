@@ -12,6 +12,32 @@ STUB = (
 
 
 class TypingContractTests(unittest.TestCase):
+    def test_client_configuration_uses_the_canonical_authored_names(self) -> None:
+        module = ast.parse(STUB.read_text(encoding="utf-8"))
+        client = next(
+            node
+            for node in module.body
+            if isinstance(node, ast.ClassDef) and node.name == "CaseworkClient"
+        )
+        constructor = next(
+            node
+            for node in client.body
+            if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+        )
+        self.assertEqual(
+            [argument.arg for argument in constructor.args.args],
+            [
+                "self",
+                "base_url",
+                "attempt_timeout_seconds",
+                "connect_timeout_seconds",
+                "maximum_response_bytes",
+                "user_agent",
+                "trusted_root_certificates",
+                "maximum_mutation_retries",
+            ],
+        )
+
     def test_admission_selects_a_policy_and_acceptance_keeps_the_exact_binding(self) -> None:
         module = ast.parse(STUB.read_text(encoding="utf-8"))
         classes = {node.name: node for node in module.body if isinstance(node, ast.ClassDef)}

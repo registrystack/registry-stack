@@ -46,8 +46,8 @@ const EXTERNAL_REFERENCE_IDENTIFIER_QUERY_PARAMETER: &str = "externalReferenceId
 pub struct SchedulingClient {
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
-    max_response_bytes: u64,
-    max_mutation_retries: u8,
+    maximum_response_bytes: u64,
+    maximum_mutation_retries: u8,
 }
 
 impl fmt::Debug for SchedulingClient {
@@ -55,8 +55,8 @@ impl fmt::Debug for SchedulingClient {
         formatter
             .debug_struct("SchedulingClient")
             .field("base_url", &"<validated service URL>")
-            .field("max_response_bytes", &self.max_response_bytes)
-            .field("max_mutation_retries", &self.max_mutation_retries)
+            .field("maximum_response_bytes", &self.maximum_response_bytes)
+            .field("maximum_mutation_retries", &self.maximum_mutation_retries)
             .finish_non_exhaustive()
     }
 }
@@ -65,7 +65,7 @@ impl SchedulingClient {
     pub fn new(config: SchedulingClientConfig) -> Result<Self, SchedulingClientError> {
         let base_url = config.validate()?;
         let http = build_client(OutboundOptions {
-            request_timeout: config.request_timeout,
+            request_timeout: config.attempt_timeout,
             connect_timeout: config.connect_timeout,
             user_agent: config.user_agent.as_deref(),
             trusted_root_certificates: config.trusted_root_certificates.as_deref(),
@@ -74,8 +74,8 @@ impl SchedulingClient {
         Ok(Self {
             http,
             base_url,
-            max_response_bytes: config.max_response_bytes,
-            max_mutation_retries: config.max_mutation_retries,
+            maximum_response_bytes: config.maximum_response_bytes,
+            maximum_mutation_retries: config.maximum_mutation_retries,
         })
     }
 
@@ -407,7 +407,7 @@ impl SchedulingClient {
         expected_status: StatusCode,
     ) -> Result<SchedulingComplete<T>, SchedulingClientError> {
         let request = &request;
-        retry_keyed_mutation(self.max_mutation_retries, || async move {
+        retry_keyed_mutation(self.maximum_mutation_retries, || async move {
             let Some(attempt) = request.try_clone() else {
                 return KeyedMutationAttempt::Settled(Err(SchedulingClientError::invalid_request(
                     "the request could not be prepared for sending",
@@ -466,7 +466,7 @@ impl SchedulingClient {
                 Some(trace_id),
             ));
         }
-        let body = read_bounded(response, self.max_response_bytes)
+        let body = read_bounded(response, self.maximum_response_bytes)
             .await
             .map_err(|error| SchedulingClientError::Transport {
                 kind: read_failure_kind(&error),

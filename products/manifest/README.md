@@ -78,13 +78,13 @@ cargo run -p registry-manifest-cli --features schema --example manifest-schema -
 Render one artifact:
 
 ```sh
-cargo run --locked -p registry-manifest-cli -- render profiles/example-civil-registration/fixtures/metadata.yaml --format bregdcat-ap
+cargo run --locked -p registry-manifest-cli -- render profiles/example-civil-registration/fixtures/metadata.yaml --artifact-format bregdcat-ap
 ```
 
 Publish a static metadata directory:
 
 ```sh
-cargo run --locked -p registry-manifest-cli -- publish profiles/example-civil-registration/fixtures/metadata.yaml --out target/metadata/public
+cargo run --locked -p registry-manifest-cli -- publish profiles/example-civil-registration/fixtures/metadata.yaml --output target/metadata/public
 ```
 
 The generated bundle uses `/metadata/index.json` as its canonical metadata

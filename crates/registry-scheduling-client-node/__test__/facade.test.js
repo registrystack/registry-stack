@@ -545,7 +545,7 @@ test('an unreachable service is a transport failure', async () => {
 
 test('an invalid configuration is a configuration error', () => {
   const { SchedulingClient, SchedulingClientError } = require('../client');
-  for (const config of [{ baseUrl: 'not a url' }, { baseUrl: 'https://scheduling.example/', maxResponseBytes: 0 }]) {
+  for (const config of [{ baseUrl: 'not a url' }, { baseUrl: 'https://scheduling.example/', maximumResponseBytes: 0 }]) {
     assert.throws(() => new SchedulingClient(config), (error) => {
       assert.ok(error instanceof SchedulingClientError);
       assert.equal(error.kind, 'configuration');
@@ -559,14 +559,13 @@ test('a configuration member outside the declared set is a configuration error',
   const baseUrl = 'https://scheduling.example/';
   assert.ok(new SchedulingClient({
     baseUrl,
-    requestTimeoutMilliseconds: 1500,
+    attemptTimeoutMilliseconds: 1500,
     connectTimeoutMilliseconds: 1500,
-    maxResponseBytes: 1500,
+    maximumResponseBytes: 1500,
     userAgent: 'scheduling-test',
-    trustedRootCertificates: null,
-    maxMutationRetries: 1,
+    maximumMutationRetries: 1,
   }));
-  for (const member of ['maxMutationRetry', 'requestTimeoutMs', 'authorization']) {
+  for (const member of ['maxMutationRetries', 'maximumMutationRetry', 'requestTimeoutMilliseconds', 'attemptTimeoutMs', 'maxResponseBytes', 'authorization']) {
     for (const value of [0, null]) {
       assert.throws(() => new SchedulingClient({ baseUrl, [member]: value }), (error) => {
         assert.ok(error instanceof SchedulingClientError, member);
@@ -578,17 +577,25 @@ test('a configuration member outside the declared set is a configuration error',
   }
 });
 
-test('every optional configuration member accepts null, as its declaration says', () => {
-  const { SchedulingClient } = require('../client');
+test('null is not an omission for non-nullable JavaScript configuration', () => {
+  const { SchedulingClient, SchedulingClientError } = require('../client');
   for (const member of [
-    'requestTimeoutMilliseconds',
+    'attemptTimeoutMilliseconds',
     'connectTimeoutMilliseconds',
-    'maxResponseBytes',
+    'maximumResponseBytes',
     'userAgent',
     'trustedRootCertificates',
-    'maxMutationRetries',
+    'maximumMutationRetries',
   ]) {
-    assert.ok(new SchedulingClient({ baseUrl: 'https://scheduling.example/', [member]: null }), member);
+    assert.throws(
+      () => new SchedulingClient({ baseUrl: 'https://scheduling.example/', [member]: null }),
+      (error) => {
+        assert.ok(error instanceof SchedulingClientError, member);
+        assert.equal(error.kind, 'configuration', member);
+        assert.equal(error.outcomeUnknown, false, member);
+        return true;
+      },
+    );
   }
 });
 
@@ -598,14 +605,14 @@ test('a timeout or response bound that is not a whole number in range is a confi
   // A 32-bit conversion would read -1 as 4294967295, 1.5 as 1, 2 ** 32 as 0,
   // and 2 ** 32 + 1024 as 1024, so each value is checked whole.
   const accepted = {
-    requestTimeoutMilliseconds: [1500, 2 ** 32],
+    attemptTimeoutMilliseconds: [1500, 2 ** 32],
     connectTimeoutMilliseconds: [1500, 2 ** 32],
-    maxResponseBytes: [1500],
+    maximumResponseBytes: [1500],
   };
   const refused = {
-    requestTimeoutMilliseconds: [-1, 1.5, '1500'],
-    connectTimeoutMilliseconds: [-1, 1.5, '1500'],
-    maxResponseBytes: [-1, 1.5, 2 ** 32, 2 ** 32 + 1024, '1500'],
+    attemptTimeoutMilliseconds: [true, false, -1, 1.5, '1500'],
+    connectTimeoutMilliseconds: [true, false, -1, 1.5, '1500'],
+    maximumResponseBytes: [true, false, -1, 1.5, 2 ** 32, 2 ** 32 + 1024, '1500'],
   };
   for (const [field, values] of Object.entries(accepted)) {
     for (const value of values) {
@@ -628,11 +635,12 @@ test('a configuration value the sanitizer refuses is a configuration error', () 
   const { SchedulingClient, SchedulingClientError } = require('../client');
   const baseUrl = 'https://scheduling.example/';
   for (const [label, config] of [
-    ['an unsafe integer', { baseUrl, requestTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 }],
-    ['a non-finite number', { baseUrl, maxResponseBytes: Infinity }],
+    ['an unsafe integer', { baseUrl, attemptTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 }],
+    ['a non-finite number', { baseUrl, maximumResponseBytes: Infinity }],
+    ['a binary trust bundle', { baseUrl, trustedRootCertificates: Buffer.from('not PEM text') }],
     ['an undefined member', { baseUrl, userAgent: undefined }],
     ['a function', { baseUrl, userAgent: () => 'scheduling-test' }],
-    ['a date', { baseUrl, requestTimeoutMilliseconds: new Date(0) }],
+    ['a date', { baseUrl, attemptTimeoutMilliseconds: new Date(0) }],
     ['a proxy', new Proxy({ baseUrl }, {})],
     ['no configuration', undefined],
   ]) {
@@ -717,7 +725,7 @@ test('a retry ceiling of zero sends a hold once and reports the outcome unknown'
   const { client: scheduling, requests } = await retrying(
     context,
     [UNAVAILABLE, answered(201, HOLD)],
-    { maxMutationRetries: 0 },
+    { maximumMutationRetries: 0 },
   );
   const { SchedulingClientError } = require('../client');
 
@@ -741,7 +749,7 @@ test('a 4xx refusal of a hold is never resent and reports the outcome known', as
       'The supply is fully committed for the requested interval. Choose another time.',
     ),
     answered(201, HOLD),
-  ], { maxMutationRetries: 2 });
+  ], { maximumMutationRetries: 2 });
 
   await assert.rejects(scheduling.createHold('one-call-secret', 'key-1', ADMISSION), (error) => {
     assert.equal(error.kind, 'problem');
@@ -754,13 +762,13 @@ test('a 4xx refusal of a hold is never resent and reports the outcome known', as
 
 test('a retry ceiling outside zero to two is a configuration error', () => {
   const { SchedulingClient, SchedulingClientError } = require('../client');
-  for (const maxMutationRetries of [0, 1, 2]) {
-    assert.ok(new SchedulingClient({ baseUrl: 'https://scheduling.example/', maxMutationRetries }));
+  for (const maximumMutationRetries of [0, 1, 2]) {
+    assert.ok(new SchedulingClient({ baseUrl: 'https://scheduling.example/', maximumMutationRetries }));
   }
-  for (const maxMutationRetries of [3, 255, 256, -1, 1.5, '1']) {
-    assert.throws(() => new SchedulingClient({ baseUrl: 'https://scheduling.example/', maxMutationRetries }), (error) => {
-      assert.ok(error instanceof SchedulingClientError, `${maxMutationRetries}`);
-      assert.equal(error.kind, 'configuration', `${maxMutationRetries}`);
+  for (const maximumMutationRetries of [true, false, 3, 255, 256, -1, 1.5, '1']) {
+    assert.throws(() => new SchedulingClient({ baseUrl: 'https://scheduling.example/', maximumMutationRetries }), (error) => {
+      assert.ok(error instanceof SchedulingClientError, `${maximumMutationRetries}`);
+      assert.equal(error.kind, 'configuration', `${maximumMutationRetries}`);
       assert.equal(error.outcomeUnknown, false);
       return true;
     });
@@ -792,7 +800,7 @@ for (const [code, status, title, detail] of [
   test(`receipt observation maps ${code} without retry or exposing caller values`, async (context) => {
     const { baseUrl, requests } = await serve(context, () => problem(code, status, title, detail));
     const { SchedulingClient, SchedulingClientError } = require('../client');
-    const client = new SchedulingClient({ baseUrl, maxMutationRetries: 2 });
+    const client = new SchedulingClient({ baseUrl, maximumMutationRetries: 2 });
     await assert.rejects(client.appointmentReceipt('token-canary', 'key-canary', { admission: ADMISSION }), (error) => {
       assert.ok(error instanceof SchedulingClientError);
       assert.equal(error.kind, 'problem');

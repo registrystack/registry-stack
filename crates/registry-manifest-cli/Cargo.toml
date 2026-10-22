@@ -29,6 +29,7 @@ name = "manifest-schema"
 required-features = ["schema"]
 
 [dependencies]
+clap.workspace = true
 registry-manifest-core = { workspace = true }
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true

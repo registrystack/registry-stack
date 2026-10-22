@@ -134,6 +134,7 @@ registry-review-protocol.workspace = true
 registry-scheduling-client.workspace = true
 registry-scheduling-core.workspace = true
 reqwest.workspace = true
+rustix.workspace = true
 rustls.workspace = true
 rhai.workspace = true
 schemars = { workspace = true, optional = true, features = ["chrono04", "uuid1"] }

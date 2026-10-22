@@ -409,11 +409,16 @@ test('binding failures expose a stable value-free kind', () => {
 test('a configuration value the sanitizer refuses is a configuration error', () => {
   const baseUrl = 'https://discovery.example.invalid/';
   for (const [label, options] of [
-    ['an unsafe integer', { baseUrl, requestTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 }],
+    ['an unsafe integer', { baseUrl, attemptTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 }],
+    ['an overflowing response bound', { baseUrl, maximumResponseBytes: 4294967297 }],
+    ['a fractional connect timeout', { baseUrl, connectTimeoutMilliseconds: 1.5 }],
     ['a non-finite number', { baseUrl, maximumResponseBytes: Infinity }],
-    ['an undefined member', { baseUrl, requestTimeoutMilliseconds: undefined }],
-    ['a function', { baseUrl, requestTimeoutMilliseconds: () => 1500 }],
-    ['a date', { baseUrl, requestTimeoutMilliseconds: new Date(0) }],
+    ['an undefined member', { baseUrl, attemptTimeoutMilliseconds: undefined }],
+    ['a null member', { baseUrl, attemptTimeoutMilliseconds: null }],
+    ['the retired timeout spelling', { baseUrl, requestTimeoutMilliseconds: 1500 }],
+    ['a binary trust bundle', { baseUrl, trustedRootCertificates: Buffer.from('not PEM text') }],
+    ['a function', { baseUrl, attemptTimeoutMilliseconds: () => 1500 }],
+    ['a date', { baseUrl, attemptTimeoutMilliseconds: new Date(0) }],
     ['a proxy', new Proxy({ baseUrl }, {})],
     ['no configuration', undefined],
   ]) {

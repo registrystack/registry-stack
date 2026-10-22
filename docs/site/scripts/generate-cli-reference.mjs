@@ -33,9 +33,11 @@ export const expectedBinaries = [
   'evidence',
   'evidence-oid4vci',
   'evidencectl',
+  'manifest',
   'messaging',
   'messagingctl',
   'registry-render',
+  'rstack',
   'scheduling',
   'schedulingctl',
 ];
@@ -54,6 +56,7 @@ const hiddenCommands = new Set([
   'local-audit-last-operation',
 ]);
 const groups = [
+  { title: 'Registry Stack local command', binaries: ['rstack'] },
   { title: 'Base Registry Engine', binaries: ['breg', 'bregctl'] },
   // A group with a product is published only by docsets carrying that product
   // (docs/site/src/lib/docset-products.mjs gates its command pages).
@@ -68,6 +71,7 @@ const groups = [
   { title: 'Registry Messaging', binaries: ['messaging', 'messagingctl'], product: 'registry-messaging' },
   { title: 'Registry Evidence', binaries: ['evidence', 'evidencectl'] },
   { title: 'Evidence credential delivery', binaries: ['evidence-oid4vci'] },
+  { title: 'Registry Manifest', binaries: ['manifest'] },
   { title: 'Registry Render', binaries: ['registry-render'] },
 ];
 

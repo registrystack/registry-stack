@@ -98,7 +98,7 @@ echo "==> registry-manifest: validate ${manifest}"
 cargo run -p registry-manifest-cli -- validate "${manifest}"
 
 echo "==> registry-manifest: publish ${out_dir}"
-cargo run -p registry-manifest-cli -- publish "${manifest}" --out "${out_dir}"
+cargo run -p registry-manifest-cli -- publish "${manifest}" --output "${out_dir}"
 
 if [[ -z "${json_validator_url}" && "${run_remote}" != "1" ]]; then
   echo "remote ITB/SEMIC validators skipped; rerun with ITB_SEMIC_REMOTE=1"

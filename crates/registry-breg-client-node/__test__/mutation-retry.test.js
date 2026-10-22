@@ -74,7 +74,7 @@ test('a publication answered 503 is resent once under the same key and succeeds'
 
 test('a retry ceiling of zero sends a publication once and reports the outcome unknown', async (context) => {
   const { baseUrl, requests } = await serve(context, [unavailable, publication]);
-  const client = new BaseRegistryClient({ baseUrl, maxMutationRetries: 0 });
+  const client = new BaseRegistryClient({ baseUrl, maximumMutationRetries: 0 });
 
   await assert.rejects(publish(client), (error) => {
     assert.ok(error instanceof BaseRegistryClientError);
@@ -95,7 +95,7 @@ test('a refusal or a failure before commit is never resent and reports the outco
     }),
   ]) {
     const { baseUrl, requests } = await serve(context, [refusal, publication]);
-    const client = new BaseRegistryClient({ baseUrl, maxMutationRetries: 2 });
+    const client = new BaseRegistryClient({ baseUrl, maximumMutationRetries: 2 });
 
     await assert.rejects(publish(client), (error) => {
       assert.equal(error.kind, 'problem');
@@ -108,17 +108,21 @@ test('a refusal or a failure before commit is never resent and reports the outco
 });
 
 test('a retry ceiling outside zero to two is a configuration error', () => {
-  for (const maxMutationRetries of [0, 1, 2]) {
-    assert.ok(new BaseRegistryClient({ baseUrl: 'https://registry.example/', maxMutationRetries }));
+  for (const maximumMutationRetries of [0, 1, 2]) {
+    assert.ok(new BaseRegistryClient({ baseUrl: 'https://registry.example/', maximumMutationRetries }));
   }
-  for (const maxMutationRetries of [3, 255, 256, -1, 1.5, '1']) {
-    assert.throws(() => new BaseRegistryClient({ baseUrl: 'https://registry.example/', maxMutationRetries }), (error) => {
-      assert.ok(error instanceof BaseRegistryClientError, `${maxMutationRetries}`);
-      assert.equal(error.kind, 'configuration', `${maxMutationRetries}`);
+  for (const maximumMutationRetries of [3, 255, 256, -1, 1.5, '1']) {
+    assert.throws(() => new BaseRegistryClient({ baseUrl: 'https://registry.example/', maximumMutationRetries }), (error) => {
+      assert.ok(error instanceof BaseRegistryClientError, `${maximumMutationRetries}`);
+      assert.equal(error.kind, 'configuration', `${maximumMutationRetries}`);
       assert.equal(error.outcomeUnknown, false);
       return true;
     });
   }
+  assert.throws(
+    () => new BaseRegistryClient({ baseUrl: 'https://registry.example/', maxMutationRetries: 1 }),
+    (error) => error instanceof BaseRegistryClientError && error.kind === 'configuration',
+  );
 });
 
 test('a request refused before any exchange reports the outcome known', async () => {

@@ -129,7 +129,7 @@ class ErrorMappingTest(unittest.TestCase):
             body=b"x" * 64,
         )
         with self.assertRaises(revc.TransportError) as raised:
-            self._send(self._client(max_response_bytes=16))
+            self._send(self._client(maximum_response_bytes=16))
         error = raised.exception
         self.assertEqual(error.kind, "transport")
         self.assertEqual(error.transport_kind, "response-too-large")

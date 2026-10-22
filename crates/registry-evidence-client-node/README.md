@@ -159,13 +159,18 @@ A response that exceeds its size bound maps to `kind: "transport"` with
 response status itself was a plain 200: the size limit is enforced against the
 transport, before any attempt to interpret the body as a problem response.
 
-Which bound applies depends on the call. `maxResponseBytes` bounds the signed
-response body that `send()` and `requestAndVerify()` read, and its default
-follows what the verifier will accept as a signed response. Request-batch
-responses use the smaller of `maxResponseBytes` and the protocol's independent
-1 MiB envelope ceiling. `maxMetadataBytes` bounds the documents `discover()`
-and `fetchJwks()` read, neither of which is signed or verified. Tightening one
-does not tighten the other.
+Which bound applies depends on the call. `maximumResponseBytes` bounds the
+signed response body that `send()` and `requestAndVerify()` read, and its
+default follows what the verifier will accept as a signed response.
+Request-batch responses use the smaller of `maximumResponseBytes` and the
+protocol's independent 1 MiB envelope ceiling. `maxMetadataBytes` bounds the
+documents `discover()` and `fetchJwks()` read, neither of which is signed or
+verified. Tightening one does not tighten the other. The retired
+`maxResponseBytes` spelling is refused, and optional configuration values are
+omitted rather than set to `null`.
+`attemptTimeoutMilliseconds` bounds one outbound attempt, including its body,
+and `connectTimeoutMilliseconds` bounds connection setup. Direct private-key
+JWT and exchange providers use the same timeout names for their own requests.
 
 ### Nonce and the golden fixture
 

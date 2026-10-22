@@ -24,6 +24,8 @@ profile. Supply those explicitly on each call. Mutations also require the
 revision and idempotency key chosen by the caller; the binding never replaces
 them. Results use the canonical Rust client's camel-case wire DTOs
 inside a `{"kind": "complete", "value": ..., "trace_id": ...}` envelope.
+Transport configuration uses `attempt_timeout_seconds`,
+`connect_timeout_seconds`, and `maximum_response_bytes`.
 
 Requester review operations omit a source profile. Officer task reads, claims,
 assignment, delegation, drafts, decisions, history, notes, and review clocks
@@ -62,7 +64,7 @@ or idempotency expiry explicitly; the binding never replaces a key.
 
 A keyed mutation whose outcome is unknown (a timeout or broken exchange after
 it was sent, an unusable answer, or a 5xx) is resent identically under the same
-key up to `max_mutation_retries` times: 0 to 2, default 2, and 0 sends it once.
+key up to `maximum_mutation_retries` times: 0 to 2, default 2, and 0 sends it once.
 Reads, unkeyed operations, and review request create and cancel are never
 resent. When the returned `CaseworkClientError` still reports
 `outcome_unknown`, the mutation may have taken effect: recover by sending it

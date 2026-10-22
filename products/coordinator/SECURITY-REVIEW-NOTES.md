@@ -5,6 +5,42 @@ material because commit messages do not survive a squash. Each section names
 the threat it answers, the defaults the product ships, where Rust enforces it,
 the tests that pin it, and the residual risk it accepts.
 
+## Coordinatorctl access-token files
+
+### Threat
+
+An authenticated `coordinatorctl` command reads `--token-file` before it calls
+the service. Opening a FIFO with an ordinary blocking read can hold the command
+indefinitely, and following a symbolic link means the named path does not
+identify the file the operator intended to use.
+
+### Enforcement and defaults
+
+On Unix, `coordinatorctl` opens the token path read-only with `NOFOLLOW`,
+`NONBLOCK`, and `CLOEXEC`, then verifies from the opened descriptor that it is
+a regular file before reading any bytes. Other platforms reject a symlink or
+non-regular path before opening it and verify that the opened handle is a
+regular file. The existing 16,384-byte bound, compact-token validation, and
+value-free diagnostics remain unchanged. This check applies only to
+`--token-file`; ordinary authored input files keep their existing contract.
+
+### Tests
+
+- `crates/registry-coordinator/tests/cli_remote.rs`:
+  `token_file_refuses_symlinks_and_fifos_without_blocking` bounds the child
+  process wait, exercises a symbolic link and FIFO, and proves neither output
+  stream contains the synthetic token.
+- The same target's
+  `a_relative_token_file_is_read_from_the_current_directory` keeps the normal
+  regular-file path and relative-path behavior covered.
+
+### Accepted residuals
+
+- `coordinatorctl` remains local operator tooling on a trusted single-user
+  machine. The Unix open is race-safe for the final path component; broader
+  filesystem and directory-component races remain accepted for this adopter
+  CLI rather than introducing a directory-descriptor traversal policy.
+
 ## OIDC issuer transport and private addresses
 
 ### Threat

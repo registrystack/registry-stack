@@ -977,7 +977,10 @@ impl BaseRegistryClient {
         }
         let body = self
             .transport
-            .read(response, maximum_bytes.min(self.config.max_response_bytes))
+            .read(
+                response,
+                maximum_bytes.min(self.config.maximum_response_bytes),
+            )
             .await?;
         Ok(BRegComplete {
             value: BRegRawDocument::new(media_type, body),
@@ -1447,7 +1450,7 @@ impl BaseRegistryClient {
         }
         let body = self
             .transport
-            .read(response, self.config.max_response_bytes)
+            .read(response, self.config.maximum_response_bytes)
             .await?;
         crate::strict_json::from_slice(&body)
             .map_err(|_| body_failure(status.as_u16(), trace.clone()))?;
@@ -1574,7 +1577,7 @@ impl BaseRegistryClient {
         let engine_version = breg_engine_version(&headers);
         let body = self
             .transport
-            .read(response, self.config.max_response_bytes)
+            .read(response, self.config.maximum_response_bytes)
             .await?;
         let representation_digest = match digest {
             Some((value, expected)) if expected == Sha256::digest(&body).as_slice() => {
@@ -1750,7 +1753,7 @@ impl BaseRegistryClient {
 
     /// Send one idempotency-keyed mutation and decode its answer, resending
     /// the identical request under the same key while its outcome stays
-    /// unknown, at most `max_mutation_retries` times. The credential is
+    /// unknown, at most `maximum_mutation_retries` times. The credential is
     /// acquired once, so every attempt carries the same headers and body bytes.
     async fn send_keyed<T, D, F>(
         &self,
@@ -1763,7 +1766,7 @@ impl BaseRegistryClient {
     {
         let builder = self.authorize(builder, Credential::Optional).await?;
         let (builder, decode) = (&builder, &decode);
-        retry_keyed_mutation(self.config.max_mutation_retries, || async move {
+        retry_keyed_mutation(self.config.maximum_mutation_retries, || async move {
             let Some(attempt) = builder.try_clone() else {
                 return KeyedMutationAttempt::Settled(Err(
                     BaseRegistryClientError::invalid_request(
@@ -1809,7 +1812,7 @@ impl BaseRegistryClient {
             response,
             expected_media,
             etag_expectation,
-            self.config.max_response_bytes,
+            self.config.maximum_response_bytes,
         )
         .await
     }
@@ -1853,7 +1856,10 @@ impl BaseRegistryClient {
         let engine_version = breg_engine_version(&headers);
         let body = self
             .transport
-            .read(response, self.config.max_response_bytes.min(maximum_bytes))
+            .read(
+                response,
+                self.config.maximum_response_bytes.min(maximum_bytes),
+            )
             .await?;
         Ok(BRegWire {
             body,
@@ -1909,7 +1915,7 @@ impl BaseRegistryClient {
         }
         let body = self
             .transport
-            .read(response, self.config.max_response_bytes)
+            .read(response, self.config.maximum_response_bytes)
             .await?;
         Ok(BRegWire {
             body,
@@ -1966,7 +1972,7 @@ impl BaseRegistryClient {
         }
         let body = self
             .transport
-            .read(response, self.config.max_response_bytes)
+            .read(response, self.config.maximum_response_bytes)
             .await?;
         let mut metadata = BRegResponseMetadata::new(trace_id, Some(etag));
         if let Some(location) = location {

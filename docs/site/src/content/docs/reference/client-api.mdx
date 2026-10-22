@@ -210,9 +210,9 @@ the rest of that answer could not be read. Each attempt has the full request tim
 operations that carry no idempotency key, are never resent.
 
 In Rust, `is_outcome_unknown()` on the client error reports the classification, and
-`with_max_mutation_retries` on the client configuration sets the count from 0, which sends once, to
+`with_maximum_mutation_retries` on the client configuration sets the count from 0, which sends once, to
 2. The Python and Node clients run the Rust client and apply the same rule. Python takes the count
-as the `max_mutation_retries` constructor keyword and Node as the `maxMutationRetries` config member;
+as the `maximum_mutation_retries` constructor keyword and Node as the `maximumMutationRetries` config member;
 a value outside 0 to 2 is a `configuration` error. The Python error's `outcome_unknown` attribute and
 the Node error's `outcomeUnknown` property report the classification as a boolean.
 
@@ -242,11 +242,11 @@ the key is refused with `410`.</DocsetProduct>
     crates/registry-scheduling-core/src/problem.rs, IdempotencyExpired and IdempotencyKeyReused;
     crates/registry-casework/src/http.rs, IdempotencyKeyReused;
     crates/registry-breg-client/src/error.rs, is_outcome_unknown;
-    crates/registry-breg-client/src/config.rs, with_max_mutation_retries;
+    crates/registry-breg-client/src/config.rs, with_maximum_mutation_retries;
     crates/registry-breg-client/tests/mutation_retry.rs;
-    crates/registry-breg-client-node/client.d.ts, maxMutationRetries, outcomeUnknown;
+    crates/registry-breg-client-node/client.d.ts, maximumMutationRetries, outcomeUnknown;
     crates/registry-breg-client-node/__test__/mutation-retry.test.js;
-    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, max_mutation_retries,
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, maximum_mutation_retries,
     outcome_unknown; crates/registry-breg-client-py/tests/python/test_mutation_retry.py */}
 
 <DocsetProduct product="registry-messaging">
@@ -257,7 +257,7 @@ the key is refused with `410`.</DocsetProduct>
     crates/registry-messaging/src/messages.rs, replay();
     crates/registry-messaging/src/retention.rs, delete_records();
     crates/registry-messaging-client/tests/mutation_retry.rs;
-    crates/registry-messaging-client-node/client.d.ts, maxMutationRetries, outcomeUnknown;
+    crates/registry-messaging-client-node/client.d.ts, maximumMutationRetries, outcomeUnknown;
     crates/registry-messaging-client-py/tests/python/test_mutation_retry.py */}
 
 </DocsetProduct>
@@ -267,7 +267,7 @@ hold carries no key and is never resent.
 
 {/* Evidence: crates/registry-scheduling-client/src/error.rs, is_outcome_unknown;
     crates/registry-scheduling-client/tests/mutation_retry.rs;
-    crates/registry-scheduling-client-node/client.d.ts, maxMutationRetries, outcomeUnknown;
+    crates/registry-scheduling-client-node/client.d.ts, maximumMutationRetries, outcomeUnknown;
     crates/registry-scheduling-client-py/tests/python/test_mutation_retry.py */}
 
 In Casework, every keyed review-task and Directory mutation is resent, and the error's
@@ -282,7 +282,7 @@ Casework answers every 503 with `Retry-After: 5`, so a resend after one waits 5 
     crates/registry-casework/src/http.rs, Retry-After on 503;
     crates/registry-casework/src/problem.rs, IdempotencyExpired;
     crates/registry-casework-client/tests/mutation_retry.rs;
-    crates/registry-casework-client-node/client.d.ts, maxMutationRetries, outcomeUnknown;
+    crates/registry-casework-client-node/client.d.ts, maximumMutationRetries, outcomeUnknown;
     crates/registry-casework-client-node/__test__/mutation-retry.test.js;
     crates/registry-casework-client-py/tests/python/test_mutation_retry.py */}
 
@@ -308,7 +308,7 @@ from registry_client import discovery
 
 client = discovery.DiscoveryClient(
     base_url="https://discovery.example.invalid/",
-    request_timeout_seconds=30,
+    attempt_timeout_seconds=30,
     connect_timeout_seconds=10,
     maximum_response_bytes=8 * 1024 * 1024,
 )
@@ -319,7 +319,7 @@ const { discovery } = require('@registrystack/client');
 
 const client = new discovery.DiscoveryClient({
   baseUrl: 'https://discovery.example.invalid/',
-  requestTimeoutMilliseconds: 30_000,
+  attemptTimeoutMilliseconds: 30_000,
   connectTimeoutMilliseconds: 10_000,
   maximumResponseBytes: 8 * 1024 * 1024,
 });
@@ -328,7 +328,7 @@ const client = new discovery.DiscoveryClient({
 Node also accepts the base URL as a bare string. The client sends no credentials: a Discovery index
 is public by construction, so there is no authorization option to set.
 
-`DiscoveryClientConfig` provides `with_request_timeout`, `with_connect_timeout`,
+`DiscoveryClientConfig` provides `with_attempt_timeout`, `with_connect_timeout`,
 `with_maximum_response_bytes`, and `with_trusted_root_certificates`.
 
 ### Discovery operations
@@ -427,7 +427,7 @@ client = evidence.EvidenceClient(
     trusted_jwks=trusted_jwks,
     revoked_key_ids=[],
     token=token,
-    request_timeout_seconds=30,
+    attempt_timeout_seconds=30,
     connect_timeout_seconds=10,
 )
 ```
@@ -440,12 +440,12 @@ const client = new evidence.EvidenceClient({
   trustedJwks: trustedJwks,
   revokedKeyIds: [],
   token: { static: token },
-  requestTimeoutMs: 30_000,
-  connectTimeoutMs: 10_000,
+  attemptTimeoutMilliseconds: 30_000,
+  connectTimeoutMilliseconds: 10_000,
 });
 ```
 
-`maxResponseBytes` and `max_response_bytes` bound the signed response `send` reads.
+`maximumResponseBytes` and `maximum_response_bytes` bound the signed response `send` reads.
 `maxMetadataBytes` and `max_metadata_bytes` bound the documents `discover` and `fetch_jwks` read,
 which are neither signed nor verified, and are a separate decision. `user_agent` and `userAgent`
 replace the default; `trusted_root_certificates` and `trustedRootCertificates` add trust roots for
@@ -470,8 +470,8 @@ in both languages.
 The private-key-JWT configuration requires `token_endpoint`, `client_id`, and `client_key` (Node:
 `tokenEndpoint`, `clientId`, `clientKey`). Its optional members in Python are `audience`,
 `resource`, `scopes`, `assertion_lifetime_seconds`, `refresh_margin_seconds`,
-`request_timeout_seconds`, `connect_timeout_seconds`, and `user_agent`. Node takes the same eight
-in camel case, with `requestTimeoutMs` and `connectTimeoutMs` for the timeouts, and adds string-valued
+`attempt_timeout_seconds`, `connect_timeout_seconds`, and `user_agent`. Node takes the same eight
+in camel case, with `attemptTimeoutMilliseconds` and `connectTimeoutMilliseconds` for the timeouts, and adds string-valued
 `trustedRootCertificates` for the token endpoint. Python has no nested trust anchor for the token
 endpoint: its top-level `trusted_root_certificates` crosses as genuine `bytes` and the nested
 configuration crosses as JSON, which carries no byte values. `client_key` holds the private half; it
@@ -648,9 +648,9 @@ from registry_client import breg
 client = breg.BaseRegistryClient(
     base_url="https://breg.example.invalid/institution-a",
     authorization={"static": token},
-    request_timeout_seconds=30,
+    attempt_timeout_seconds=30,
     connect_timeout_seconds=10,
-    max_response_bytes=8 * 1024 * 1024,
+    maximum_response_bytes=8 * 1024 * 1024,
 )
 ```
 
@@ -660,25 +660,25 @@ const { breg } = require('@registrystack/client');
 const client = new breg.BaseRegistryClient({
   baseUrl: 'https://breg.example.invalid/institution-a',
   authorization: { static: token },
-  requestTimeoutMilliseconds: 30_000,
+  attemptTimeoutMilliseconds: 30_000,
   connectTimeoutMilliseconds: 10_000,
-  maxResponseBytes: 8 * 1024 * 1024,
+  maximumResponseBytes: 8 * 1024 * 1024,
 });
 ```
 
 The Rust facade does not re-export `Url`; add the `url` crate beside it. `BaseRegistryClientConfig`
-provides `with_token_provider`, `with_request_timeout`, `with_connect_timeout`,
-`with_max_response_bytes`, `with_user_agent`, `with_trusted_root_certificates`, and
-`with_max_mutation_retries`. Node and Python take the same settings as constructor options.
+provides `with_token_provider`, `with_attempt_timeout`, `with_connect_timeout`,
+`with_maximum_response_bytes`, `with_user_agent`, `with_trusted_root_certificates`, and
+`with_maximum_mutation_retries`. Node and Python take the same settings as constructor options.
 
 `authorization` is optional. Without it the client reaches only the health and readiness probes,
 which never send a bearer token; every other route refuses a request without one. An unsupported
 shape is refused at construction with kind `configuration`.
 
 {/* Evidence: crates/registry-stack-client/src/lib.rs, BaseRegistryClient, BaseRegistryClientConfig,
-    crates/registry-breg-client/src/config.rs, with_token_provider, with_max_mutation_retries,
-    crates/registry-breg-client-node/client.d.ts, requestTimeoutMilliseconds,
-    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, request_timeout_seconds */}
+    crates/registry-breg-client/src/config.rs, with_token_provider, with_maximum_mutation_retries,
+    crates/registry-breg-client-node/client.d.ts, attemptTimeoutMilliseconds,
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, attempt_timeout_seconds */}
 
 ### Verify a webhook delivery
 
@@ -1187,11 +1187,13 @@ const client = new messaging.MessagingClient({
 });
 ```
 
-`MessagingClientConfig` provides `with_request_timeout`, `with_connect_timeout`,
-`with_max_response_bytes`, `with_user_agent`, and `with_trusted_root_certificates`. The Python
-constructor takes the same settings as keyword arguments and the Node constructor as config members.
-`with_max_mutation_retries`, the Python `max_mutation_retries` keyword, and the Node
-`maxMutationRetries` member set the [same-key retry](#unknown-outcomes-and-the-same-key-retry) count
+`MessagingClientConfig` provides `with_attempt_timeout`, `with_connect_timeout`,
+`with_maximum_response_bytes`, `with_user_agent`, and `with_trusted_root_certificates`. The Python
+constructor takes the same settings as snake case keyword arguments, including
+`maximum_response_bytes`; the Node constructor takes camel case config members, including
+`maximumResponseBytes`.
+`with_maximum_mutation_retries`, the Python `maximum_mutation_retries` keyword, and the Node
+`maximumMutationRetries` member set the [same-key retry](#unknown-outcomes-and-the-same-key-retry) count
 for `submit`.
 A response is bounded to 4 MiB by default and to 16 MiB at most. The configuration holds no
 credential, and its debug output redacts the base URL, the user agent, and any trusted root
@@ -1372,10 +1374,11 @@ const client = new scheduling.SchedulingClient({
 });
 ```
 
-`SchedulingClientConfig` provides `with_request_timeout`, `with_connect_timeout`,
-`with_max_response_bytes`, `with_user_agent`, `with_trusted_root_certificates`, and
-`with_max_mutation_retries`. The Python constructor takes the same settings as keyword arguments and
-the Node constructor as config members.
+`SchedulingClientConfig` provides `with_attempt_timeout`, `with_connect_timeout`,
+`with_maximum_response_bytes`, `with_user_agent`, `with_trusted_root_certificates`, and
+`with_maximum_mutation_retries`. The Python constructor takes the same settings as snake case keyword
+arguments, including `maximum_response_bytes`; the Node constructor takes camel case config
+members, including `maximumResponseBytes`.
 
 {/* Evidence: crates/registry-scheduling-client/src/config.rs, SchedulingClientConfig;
     crates/registry-scheduling-client/src/client.rs, SchedulingClient;

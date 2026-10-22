@@ -13,8 +13,8 @@ pub(super) struct ReviewArgs {
     #[arg(long)]
     approve: bool,
     /// Casework authoring CLI from the same installation.
-    #[arg(long, default_value = "caseworkctl")]
-    caseworkctl_bin: PathBuf,
+    #[arg(long)]
+    caseworkctl_bin: Option<PathBuf>,
     /// Casework runtime executable; otherwise resolve casework on PATH.
     #[arg(long)]
     casework_bin: Option<PathBuf>,
@@ -153,6 +153,24 @@ fn observation_is_pending(report: &Value) -> bool {
 }
 
 pub(super) fn prepare(args: ReviewArgs) -> Result<Value> {
+    // Resolve every rstack-managed helper before creating the destination, so
+    // an absent component or a conflicting override has no local effects.
+    let caseworkctl_bin = crate::selected_binary::resolve_managed(
+        crate::selected_binary::CASEWORKCTL,
+        args.caseworkctl_bin.as_deref(),
+    )?
+    .or(args.caseworkctl_bin)
+    .unwrap_or_else(|| PathBuf::from("caseworkctl"));
+    let breg_bin = crate::selected_binary::resolve_managed(
+        crate::selected_binary::BREG,
+        args.breg_bin.as_deref(),
+    )?
+    .or(args.breg_bin);
+    let casework_bin = crate::selected_binary::resolve_managed(
+        crate::selected_binary::CASEWORK,
+        args.casework_bin.as_deref(),
+    )?
+    .or(args.casework_bin);
     let root = std::path::absolute(&args.directory)?;
     if root.exists() {
         bail!("review example requires a fresh destination; existing projects and sessions are preserved");
@@ -177,7 +195,7 @@ pub(super) fn prepare(args: ReviewArgs) -> Result<Value> {
         &logs,
     )?;
     ctl(
-        &args.caseworkctl_bin,
+        &caseworkctl_bin,
         vec![
             "init".into(),
             path(&casework),
@@ -214,7 +232,7 @@ pub(super) fn prepare(args: ReviewArgs) -> Result<Value> {
         "--database-port".into(),
         ports[2].to_string(),
     ];
-    if let Some(binary) = &args.breg_bin {
+    if let Some(binary) = &breg_bin {
         start.extend(["--breg-bin".into(), path(binary)]);
     }
     let source = ctl(&self_bin, start, &logs)?;
@@ -256,7 +274,7 @@ pub(super) fn prepare(args: ReviewArgs) -> Result<Value> {
     .context("source state has no parent")?
     .join("build/package");
     ctl(
-        &args.caseworkctl_bin,
+        &caseworkctl_bin,
         vec![
             "provider".into(),
             "pair".into(),
@@ -274,7 +292,7 @@ pub(super) fn prepare(args: ReviewArgs) -> Result<Value> {
         &logs,
     )?;
     ctl(
-        &args.caseworkctl_bin,
+        &caseworkctl_bin,
         vec!["check".into(), path(&casework)],
         &logs,
     )?;
@@ -289,10 +307,10 @@ pub(super) fn prepare(args: ReviewArgs) -> Result<Value> {
         "--database-port".into(),
         ports[4].to_string(),
     ];
-    if let Some(binary) = &args.casework_bin {
+    if let Some(binary) = &casework_bin {
         start.extend(["--casework-bin".into(), path(binary)]);
     }
-    ctl(&args.caseworkctl_bin, start, &logs)?;
+    ctl(&caseworkctl_bin, start, &logs)?;
     let registration = ctl(
         &self_bin,
         vec![
@@ -335,7 +353,7 @@ pub(super) fn prepare(args: ReviewArgs) -> Result<Value> {
     )?;
     if args.approve {
         let credentials = ctl(
-            &args.caseworkctl_bin,
+            &caseworkctl_bin,
             vec![
                 "dev".into(),
                 "token".into(),

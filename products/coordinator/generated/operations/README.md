@@ -38,10 +38,10 @@ Host execution and completion contract:
   "limits": {
     "attemptTimeoutSeconds": 10,
     "http": {
+      "attemptTimeoutMilliseconds": 2000,
       "connectTimeoutMilliseconds": 1000,
-      "maximumResponseBytes": 65536,
-      "mutationRetries": 0,
-      "requestTimeoutMilliseconds": 2000
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
     },
     "maximumCallAttempts": 10,
     "maximumCallRetryDelaySeconds": 300,
@@ -102,10 +102,10 @@ Host execution and completion contract:
   "limits": {
     "attemptTimeoutSeconds": 10,
     "http": {
+      "attemptTimeoutMilliseconds": 2000,
       "connectTimeoutMilliseconds": 1000,
-      "maximumResponseBytes": 65536,
-      "mutationRetries": 0,
-      "requestTimeoutMilliseconds": 2000
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
     },
     "maximumCallAttempts": 10,
     "maximumCallRetryDelaySeconds": 300,
@@ -172,10 +172,10 @@ Host execution and completion contract:
   "limits": {
     "attemptTimeoutSeconds": 10,
     "http": {
+      "attemptTimeoutMilliseconds": 2000,
       "connectTimeoutMilliseconds": 1000,
-      "maximumResponseBytes": 65536,
-      "mutationRetries": 0,
-      "requestTimeoutMilliseconds": 2000
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
     },
     "maximumCallAttempts": 10,
     "maximumCallRetryDelaySeconds": 300,
@@ -234,10 +234,10 @@ Host execution and completion contract:
   "limits": {
     "attemptTimeoutSeconds": 10,
     "http": {
+      "attemptTimeoutMilliseconds": 2000,
       "connectTimeoutMilliseconds": 1000,
-      "maximumResponseBytes": 65536,
-      "mutationRetries": 0,
-      "requestTimeoutMilliseconds": 2000
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
     },
     "maximumCallAttempts": 10,
     "maximumCallRetryDelaySeconds": 300,
@@ -299,10 +299,10 @@ Host execution and completion contract:
   "limits": {
     "attemptTimeoutSeconds": 10,
     "http": {
+      "attemptTimeoutMilliseconds": 2000,
       "connectTimeoutMilliseconds": 1000,
-      "maximumResponseBytes": 65536,
-      "mutationRetries": 0,
-      "requestTimeoutMilliseconds": 2000
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
     },
     "maximumCallAttempts": 10,
     "maximumCallRetryDelaySeconds": 300,
@@ -372,10 +372,10 @@ Host execution and completion contract:
   "limits": {
     "attemptTimeoutSeconds": 10,
     "http": {
+      "attemptTimeoutMilliseconds": 2000,
       "connectTimeoutMilliseconds": 1000,
-      "maximumResponseBytes": 65536,
-      "mutationRetries": 0,
-      "requestTimeoutMilliseconds": 2000
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
     },
     "maximumCallAttempts": 10,
     "maximumCallRetryDelaySeconds": 300,
@@ -458,11 +458,11 @@ Host execution and completion contract:
   "limits": {
     "attemptTimeoutSeconds": 10,
     "http": {
+      "attemptTimeoutMilliseconds": 2000,
       "connectionMayLowerLimits": true,
+      "maximumMutationRetries": 0,
       "maximumResponseBytes": 65536,
-      "mutationRetries": 0,
-      "redirects": "refused",
-      "requestTimeoutMilliseconds": 2000
+      "redirects": "refused"
     },
     "maximumCallAttempts": 10,
     "maximumCallRetryDelaySeconds": 300,
@@ -521,12 +521,12 @@ Host execution and completion contract:
   "limits": {
     "attemptTimeoutSeconds": 10,
     "http": {
+      "attemptTimeoutMilliseconds": 8000,
       "connectionMayLowerLimits": true,
+      "maximumMutationRetries": 0,
       "maximumRequestBytes": 65536,
       "maximumResponseBytes": 65536,
-      "mutationRetries": 0,
-      "redirects": "refused",
-      "requestTimeoutMilliseconds": 8000
+      "redirects": "refused"
     },
     "maximumCallAttempts": 10,
     "maximumCallRetryDelaySeconds": 300,
@@ -606,10 +606,10 @@ Host execution and completion contract:
   "limits": {
     "attemptTimeoutSeconds": 10,
     "http": {
+      "attemptTimeoutMilliseconds": 2000,
       "connectTimeoutMilliseconds": 1000,
-      "maximumResponseBytes": 65536,
-      "mutationRetries": 0,
-      "requestTimeoutMilliseconds": 2000
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
     },
     "maximumCallAttempts": 10,
     "maximumCallRetryDelaySeconds": 300,
@@ -674,10 +674,10 @@ Host execution and completion contract:
   "limits": {
     "attemptTimeoutSeconds": 10,
     "http": {
+      "attemptTimeoutMilliseconds": 2000,
       "connectTimeoutMilliseconds": 1000,
-      "maximumResponseBytes": 65536,
-      "mutationRetries": 0,
-      "requestTimeoutMilliseconds": 2000
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
     },
     "maximumCallAttempts": 10,
     "maximumCallRetryDelaySeconds": 300,

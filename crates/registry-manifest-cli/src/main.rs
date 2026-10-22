@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
+use clap::{error::ErrorKind, ArgMatches};
 use registry_manifest_cli::{
-    check_metadata_file, check_profiles, manifest_digest, metadata_error_diagnostics, ReadManifest,
-    CTL_REPORT_API_VERSION, CTL_REPORT_KIND,
+    check_metadata_file, check_profiles, command, manifest_digest, metadata_error_diagnostics,
+    ReadManifest, CTL_REPORT_API_VERSION, CTL_REPORT_KIND,
 };
 use registry_manifest_core::{
     canonicalize_json, compile_manifest, render_base_dcat, render_breg_dcat_ap, render_catalog,
@@ -29,7 +29,7 @@ const USAGE_ACTION: &str =
      arguments.";
 
 fn main() -> ExitCode {
-    let args = env::args().skip(1).collect::<Vec<_>>();
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
     ExitCode::from(run(&args))
 }
 
@@ -55,36 +55,68 @@ impl From<String> for Failure {
 }
 
 fn run(args: &[String]) -> u8 {
-    let command = args.first().map(String::as_str);
-    if matches!(
-        command,
-        Some("validate" | "validate-profiles" | "render" | "publish")
-    ) && args[1..].iter().any(|arg| arg == "--help" || arg == "-h")
-    {
-        println!("{}", usage());
-        return 0;
+    if let Some(message) = migration_error(args) {
+        return finish(args, Err(Failure::Usage(message)));
     }
-    let result = match command {
-        Some("--version") => {
-            println!(
-                "registry-manifest {}",
-                registry_platform_buildinfo::DISPLAY_VERSION
-            );
-            Ok(0)
+    let parsed = command()
+        .bin_name("registry-manifest")
+        .display_name("registry-manifest")
+        .try_get_matches_from(
+            std::iter::once("registry-manifest").chain(args.iter().map(String::as_str)),
+        );
+    let matches = match parsed {
+        Ok(matches) => matches,
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
+            print!("{error}");
+            return 0;
         }
-        Some("--help" | "-h" | "help") => {
-            println!("{}", usage());
-            Ok(0)
+        Err(_) => {
+            return finish(
+                args,
+                Err(Failure::Usage("the command arguments are invalid")),
+            )
         }
-        Some("validate") => validate_command(&args[1..]),
-        Some("validate-profiles") => validate_profiles_command(&args[1..]),
-        Some("render") => render_command(&args[1..]).map(|()| 0),
-        Some("publish") => publish_command(&args[1..]).map(|()| 0),
-        Some(_) => Err(Failure::Usage(
-            "the command is not one registry-manifest runs",
-        )),
-        None => Err(Failure::Usage("registry-manifest needs a command")),
     };
+    let result = match matches.subcommand() {
+        Some(("validate", matches)) => validate_command(matches),
+        Some(("validate-profiles", matches)) => validate_profiles_command(matches),
+        Some(("render", matches)) => render_command(matches).map(|()| 0),
+        Some(("publish", matches)) => publish_command(matches).map(|()| 0),
+        _ => Err(Failure::Usage("registry-manifest needs a command")),
+    };
+    finish(args, result)
+}
+
+fn migration_error(args: &[String]) -> Option<&'static str> {
+    let command = args.first().map(String::as_str);
+    let has_option = |name: &str| {
+        args.iter().skip(1).any(|argument| {
+            argument == name
+                || argument
+                    .strip_prefix(name)
+                    .is_some_and(|suffix| suffix.starts_with('='))
+        })
+    };
+    match command {
+        Some("render") if has_option("--format") => {
+            Some("render --format is retired; use --artifact-format instead")
+        }
+        Some("publish") if has_option("--out") => {
+            Some("publish --out is retired; use --output instead")
+        }
+        Some("validate" | "validate-profiles" | "publish") if has_option("--json") => {
+            Some("--json is retired; use --format json instead")
+        }
+        _ => None,
+    }
+}
+
+fn finish(args: &[String], result: Result<u8, Failure>) -> u8 {
     match result {
         Ok(exit) => exit,
         Err(Failure::Usage(message)) => {
@@ -100,7 +132,18 @@ fn run(args: &[String]) -> u8 {
             USAGE_EXIT
         }
         Err(Failure::Refused(message)) => {
-            eprintln!("{message}");
+            if machine_readable(args) {
+                let mut report = Report::new(vec![Diagnostic::error(
+                    "manifest.operation.refused",
+                    "",
+                    &message,
+                    "Correct the manifest or command inputs and retry.",
+                )]);
+                report.set_files_checked(1);
+                write_report(&CtlReport::new(command_name(args), 1, &report));
+            } else {
+                eprintln!("{message}");
+            }
             1
         }
         Err(Failure::Diagnostics {
@@ -108,17 +151,25 @@ fn run(args: &[String]) -> u8 {
             exit,
             sentence,
         }) => {
-            eprintln!("{sentence}");
-            eprint!("{}", report.render_human());
+            if machine_readable(args) {
+                write_report(&CtlReport::new(command_name(args), exit, &report));
+            } else {
+                eprintln!("{sentence}");
+                eprint!("{}", report.render_human());
+            }
             exit
         }
     }
 }
 
+fn command_name(args: &[String]) -> &str {
+    args.first().map(String::as_str).unwrap_or("usage")
+}
+
 /// Whether a usage error is reported as JSON: `--format json` was asked of a
 /// command whose `--format` selects the report format.
 fn machine_readable(args: &[String]) -> bool {
-    !matches!(args.first().map(String::as_str), Some("render" | "publish"))
+    !matches!(args.first().map(String::as_str), Some("render"))
         && args.iter().enumerate().any(|(index, arg)| {
             arg == "--format=json"
                 || (arg == "--format" && args.get(index + 1).map(String::as_str) == Some("json"))
@@ -126,48 +177,22 @@ fn machine_readable(args: &[String]) -> bool {
 }
 
 /// The options `validate` and `validate-profiles` share.
-struct CheckOptions {
-    path: Option<String>,
+struct CheckOptions<'a> {
+    path: &'a str,
     json: bool,
     deny_warnings: bool,
 }
 
-impl CheckOptions {
-    fn parse(args: &[String]) -> Result<Self, Failure> {
-        let mut options = Self {
-            path: None,
-            json: false,
-            deny_warnings: false,
-        };
-        let mut args = args.iter();
-        while let Some(arg) = args.next() {
-            let format = match arg.as_str() {
-                "--deny-warnings" => {
-                    options.deny_warnings = true;
-                    continue;
-                }
-                "--format" => args.next().map(String::as_str),
-                other => match other.strip_prefix("--format=") {
-                    Some(value) => Some(value),
-                    None if other.starts_with('-') => {
-                        return Err(Failure::Usage("an option is not one this command accepts"))
-                    }
-                    None if options.path.is_some() => {
-                        return Err(Failure::Usage("this command takes one path"))
-                    }
-                    None => {
-                        options.path = Some(other.to_owned());
-                        continue;
-                    }
-                },
-            };
-            options.json = match format {
-                Some("json") => true,
-                Some("human") => false,
-                _ => return Err(Failure::Usage("--format accepts human or json")),
-            };
-        }
-        Ok(options)
+impl<'a> CheckOptions<'a> {
+    fn parse(matches: &'a ArgMatches, path: &str) -> Result<Self, Failure> {
+        Ok(Self {
+            path: matches
+                .get_one::<String>(path)
+                .map(String::as_str)
+                .ok_or(Failure::Usage("the command needs an input path"))?,
+            json: matches.get_one::<String>("format").map(String::as_str) == Some("json"),
+            deny_warnings: matches.get_flag("deny-warnings"),
+        })
     }
 }
 
@@ -199,6 +224,8 @@ struct CtlReport<'a> {
     source_manifest_digest: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     profiles: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<String>,
     diagnostics: &'a [Diagnostic],
 }
 
@@ -220,6 +247,7 @@ impl<'a> CtlReport<'a> {
             warnings: report.warning_count(),
             source_manifest_digest: None,
             profiles: None,
+            output: None,
             diagnostics: report.diagnostics(),
         }
     }
@@ -233,12 +261,10 @@ fn write_report(report: &CtlReport<'_>) {
 }
 
 /// `validate`: check one metadata manifest offline (CFG-CHECK-1).
-fn validate_command(args: &[String]) -> Result<u8, Failure> {
-    let options = CheckOptions::parse(args)?;
-    let path = options.path.ok_or(Failure::Usage(
-        "validate needs the path of a metadata manifest",
-    ))?;
-    let check = check_metadata_file(Path::new(&path));
+fn validate_command(matches: &ArgMatches) -> Result<u8, Failure> {
+    let options = CheckOptions::parse(matches, "metadata")?;
+    let path = options.path;
+    let check = check_metadata_file(Path::new(path));
     let mut report = check.report;
     let digest = match check.manifest.as_ref().map(manifest_digest) {
         Some(Ok(digest)) => Some(digest),
@@ -275,9 +301,9 @@ fn validate_command(args: &[String]) -> Result<u8, Failure> {
 
 /// `validate-profiles`: check every profile descriptor and the fixtures it
 /// lists offline (CFG-CHECK-1).
-fn validate_profiles_command(args: &[String]) -> Result<u8, Failure> {
-    let options = CheckOptions::parse(args)?;
-    let root = PathBuf::from(options.path.as_deref().unwrap_or("profiles"));
+fn validate_profiles_command(matches: &ArgMatches) -> Result<u8, Failure> {
+    let options = CheckOptions::parse(matches, "profiles")?;
+    let root = PathBuf::from(options.path);
     let check = check_profiles(&root);
     let exit = check_exit(&check.report, check.unavailable, options.deny_warnings);
     if options.json {
@@ -361,34 +387,32 @@ fn compile(read: &ReadManifest, sentences: Sentences) -> Result<CompiledMetadata
     })
 }
 
-fn render_command(args: &[String]) -> Result<(), Failure> {
-    let manifest_path = args.first().ok_or(Failure::Usage(
-        "render needs the path of a metadata manifest",
-    ))?;
-    let format = option_value(args, "--format").ok_or(Failure::Usage(
-        "render needs --format and the artifact to render",
-    ))?;
-    let profile = option_value(args, "--profile");
+fn render_command(matches: &ArgMatches) -> Result<(), Failure> {
+    let manifest_path = match_value(matches, "metadata")?;
+    let format = match_value(matches, "artifact-format")?;
+    let profile = matches.get_one::<String>("profile");
     let read = load_manifest(manifest_path, RENDER)?;
     let compiled = compile(&read, RENDER)?;
-    let value = match format.as_str() {
+    let value = match format {
         "catalog" => render_catalog(&compiled),
         "evidence-offerings" => render_evidence_offerings(&compiled),
         "evidence-offering" => {
-            let offering = option_value(args, "--offering")
+            let offering = matches
+                .get_one::<String>("offering")
                 .ok_or_else(|| "evidence-offering render requires --offering <id>".to_string())?;
-            render_evidence_offering(&compiled, &offering)
+            render_evidence_offering(&compiled, offering)
                 .ok_or_else(|| format!("evidence offering not found: {offering}"))?
         }
         "policies" => render_policy_collection(&compiled),
         "policy" => {
-            let dataset = option_value(args, "--dataset")
+            let dataset = matches
+                .get_one::<String>("dataset")
                 .ok_or_else(|| "policy render requires --dataset <id>".to_string())?;
-            render_dataset_policy_document(&compiled, &dataset)
+            render_dataset_policy_document(&compiled, dataset)
                 .ok_or_else(|| format!("dataset not found: {dataset}"))?
         }
         "dcat" => {
-            if let Some(profile) = profile.as_deref() {
+            if let Some(profile) = profile.map(String::as_str) {
                 ensure_dcat_profile_available(&compiled, profile)?;
                 render_dcat_profile(&compiled, profile)
                     .ok_or_else(|| format!("unsupported DCAT profile: {profile}"))?
@@ -406,19 +430,20 @@ fn render_command(args: &[String]) -> Result<(), Failure> {
         }
         "shacl" => render_shacl(&compiled),
         "json-schema" => {
-            let dataset = option_value(args, "--dataset").ok_or_else(|| {
+            let dataset = matches.get_one::<String>("dataset").ok_or_else(|| {
                 "json-schema render requires --dataset <id> and --entity <name>".to_string()
             })?;
-            let entity = option_value(args, "--entity").ok_or_else(|| {
+            let entity = matches.get_one::<String>("entity").ok_or_else(|| {
                 "json-schema render requires --dataset <id> and --entity <name>".to_string()
             })?;
-            render_entity_schema_draft_2020_12(&compiled, &dataset, &entity)
+            render_entity_schema_draft_2020_12(&compiled, dataset, entity)
                 .ok_or_else(|| format!("entity not found: {dataset}/{entity}"))?
         }
         "form-json-schema" => {
-            let form = option_value(args, "--form")
+            let form = matches
+                .get_one::<String>("form")
                 .ok_or_else(|| "form-json-schema render requires --form <id>".to_string())?;
-            render_form_schema_draft_2020_12(&compiled, &form)
+            render_form_schema_draft_2020_12(&compiled, form)
                 .ok_or_else(|| format!("form not found: {form}"))?
         }
         "ogc-records" => render_ogc_records_items(&compiled),
@@ -427,11 +452,10 @@ fn render_command(args: &[String]) -> Result<(), Failure> {
     Ok(print_json(&value)?)
 }
 
-fn publish_command(args: &[String]) -> Result<(), Failure> {
-    let manifest_path = args.first().ok_or(Failure::Usage(
-        "publish needs the path of a metadata manifest",
-    ))?;
-    let out = option_value(args, "--out").unwrap_or_else(|| "public/metadata".to_string());
+fn publish_command(matches: &ArgMatches) -> Result<(), Failure> {
+    let manifest_path = match_value(matches, "metadata")?;
+    let out = match_value(matches, "output")?;
+    let json = matches.get_one::<String>("format").map(String::as_str) == Some("json");
     let read = load_manifest(manifest_path, PUBLISH)?;
     let compiled = compile(&read, PUBLISH)?;
     let source_digest = manifest_digest(&read).map_err(|diagnostic| {
@@ -445,7 +469,8 @@ fn publish_command(args: &[String]) -> Result<(), Failure> {
     })?;
     let out = PathBuf::from(out);
     let out_root = prepare_publish_root(&out, "metadata.publish.out_not_directory")?;
-    let site_root = option_value(args, "--site-root")
+    let site_root = matches
+        .get_one::<String>("site-root")
         .map(PathBuf::from)
         .map(|site_root| {
             prepare_publish_root(&site_root, "metadata.publish.site_root_not_directory")
@@ -641,10 +666,19 @@ fn publish_command(args: &[String]) -> Result<(), Failure> {
     write_json(&out_root, "index.json", &index)?;
     let public_root = site_root.as_ref().unwrap_or(&out_root);
     write_well_known_discovery(public_root, &index)?;
-    println!(
-        "published metadata artifacts to {}",
-        out_root.root.display()
-    );
+    if json {
+        let mut report = Report::new(Vec::new());
+        report.set_files_checked(1);
+        let mut written = CtlReport::new("publish", 0, &report);
+        written.source_manifest_digest = Some(&source_digest);
+        written.output = Some(out_root.root.display().to_string());
+        write_report(&written);
+    } else {
+        println!(
+            "published metadata artifacts to {}",
+            out_root.root.display()
+        );
+    }
     Ok(())
 }
 
@@ -889,9 +923,11 @@ fn write_legacy_registry_manifest_discovery(
     )
 }
 
-fn option_value(args: &[String], name: &str) -> Option<String> {
-    args.windows(2)
-        .find_map(|window| (window[0] == name).then(|| window[1].clone()))
+fn match_value<'a>(matches: &'a ArgMatches, name: &str) -> Result<&'a str, Failure> {
+    matches
+        .get_one::<String>(name)
+        .map(String::as_str)
+        .ok_or(Failure::Usage("the command is missing a required argument"))
 }
 
 fn ensure_dcat_profile_available(
@@ -1047,5 +1083,9 @@ fn print_json(value: &serde_json::Value) -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage: registry-manifest validate <metadata.yaml> [--format human|json] [--deny-warnings] | validate-profiles [profiles-dir] [--format human|json] [--deny-warnings] | render <metadata.yaml> --format <catalog|evidence-offerings|evidence-offering|policies|policy|dcat|bregdcat-ap|cpsv-ap|shacl|json-schema|form-json-schema|ogc-records> [--profile <id>] [--dataset <id> --entity <name>] [--form <id>] [--offering <id>] | publish <metadata.yaml> --out <dir> [--site-root <dir>]".to_string()
+    command()
+        .bin_name("registry-manifest")
+        .display_name("registry-manifest")
+        .render_usage()
+        .to_string()
 }

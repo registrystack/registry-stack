@@ -630,7 +630,7 @@ impl EvidenceClient {
     /// mandatory trust inputs. A key set or revoked-key list the verifier could
     /// never use is refused, exactly as the Rust configuration refuses it.
     ///
-    /// `maxResponseBytes` bounds the signed response `send` reads.
+    /// `maximumResponseBytes` bounds the signed response `send` reads.
     /// `maxMetadataBytes` bounds the documents `discover` and `fetchJwks` read,
     /// which are neither signed nor verified, and is a separate decision.
     #[napi(constructor)]

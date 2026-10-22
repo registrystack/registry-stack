@@ -18,7 +18,7 @@ a protocol failure.
 
 A keyed command (hold, appointment create, reschedule, cancel) whose outcome is
 unknown (a timeout or broken exchange after it was sent, an unusable answer,
-or a 5xx) is resent identically under the same key up to `maxMutationRetries`
+or a 5xx) is resent identically under the same key up to `maximumMutationRetries`
 times: 0 to 2, default 2, and 0 sends it once. Reads and the unkeyed hold
 release are never resent. When the returned `SchedulingClientError` still
 reports `outcomeUnknown`, the command may have taken effect: recover by

@@ -28,7 +28,7 @@
 //! The client never generates an idempotency key. A submission whose outcome
 //! is unknown (a timeout or broken exchange after the request was sent, or a
 //! 5xx answer) is resent, byte for byte and under the same key, at most
-//! `MessagingClientConfig::with_max_mutation_retries` times (2 by default, 0
+//! `MessagingClientConfig::with_maximum_mutation_retries` times (2 by default, 0
 //! disables it). Reads, the preview, and the unkeyed cancellation are never
 //! resent. A 5xx answer may follow an acceptance: when
 //! `MessagingClientError::is_outcome_unknown` is still true, the safe

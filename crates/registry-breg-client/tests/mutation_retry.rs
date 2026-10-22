@@ -235,7 +235,7 @@ fn assert_identical_resends(observations: &[Captured]) {
 #[tokio::test]
 async fn a_timed_out_mutation_is_resent_identically_under_the_same_key() {
     let (address, script, server) = serve(&[Answer::Stall, Answer::Published]).await;
-    let client = client(config(&address).with_request_timeout(Duration::from_millis(500)));
+    let client = client(config(&address).with_attempt_timeout(Duration::from_millis(500)));
 
     let published = publish(&client)
         .await
@@ -395,7 +395,7 @@ async fn the_retry_count_is_honored() {
         .await;
         let mut config = config(&address);
         if let Some(retries) = retries {
-            config = config.with_max_mutation_retries(retries);
+            config = config.with_maximum_mutation_retries(retries);
         }
         let error = publish(&client(config))
             .await
@@ -417,8 +417,8 @@ async fn zero_retries_disables_the_resend() {
     let (address, script, server) = serve(&[Answer::Stall, Answer::Published]).await;
     let error = publish(&client(
         config(&address)
-            .with_request_timeout(Duration::from_millis(500))
-            .with_max_mutation_retries(0),
+            .with_attempt_timeout(Duration::from_millis(500))
+            .with_maximum_mutation_retries(0),
     ))
     .await
     .expect_err("the only attempt timed out");
@@ -569,7 +569,7 @@ async fn an_unreadable_4xx_answer_is_unknown_but_never_resent() {
         (Unfinished::Close, TransportKind::Exchange),
     ] {
         let (address, requests, server) = serve_unfinished_conflict(ending).await;
-        let client = client(config(&address).with_request_timeout(Duration::from_millis(500)));
+        let client = client(config(&address).with_attempt_timeout(Duration::from_millis(500)));
         let error = publish(&client)
             .await
             .expect_err("the refusal body never arrives");

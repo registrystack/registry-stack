@@ -32,5 +32,5 @@ for manifest in "$@"; do
   fi
   name="$(slug "${manifest}")"
   run cargo run -p registry-manifest-cli -- validate "${resolved_manifest}"
-  run cargo run -p registry-manifest-cli -- publish "${resolved_manifest}" --out "${out_dir}/${name}"
+  run cargo run -p registry-manifest-cli -- publish "${resolved_manifest}" --output "${out_dir}/${name}"
 done

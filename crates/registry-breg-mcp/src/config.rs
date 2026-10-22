@@ -43,6 +43,33 @@ pub const RUNTIME_KIND: &str = "BRegMcpRuntimeConfig";
 /// The single path the MCP endpoint is served at.
 pub const MCP_PATH: &str = "/mcp";
 
+/// The operational log level. The vocabulary is closed so configuration
+/// cannot turn on debug output or dependency logging.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Error,
+    Warn,
+    #[default]
+    Info,
+}
+
+impl LogLevel {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warn => "warn",
+            Self::Info => "info",
+        }
+    }
+}
+
+const fn default_log_level() -> LogLevel {
+    LogLevel::Info
+}
+
 /// The most characters a citizen-facing service text may hold.
 const MAXIMUM_SERVICE_TEXT_CHARS: usize = 4096;
 /// The most items a client, scope, or algorithm list may hold.
@@ -109,6 +136,11 @@ const REMOVED_KEYS: &[RemovedKey] = &[
 pub struct RuntimeConfig {
     pub api_version: String,
     pub kind: String,
+    /// Operational log level when `BREG_MCP_LOG` is not set. Defaults to
+    /// `info`; accepted values are `error`, `warn`, and `info`.
+    #[serde(default = "default_log_level")]
+    #[cfg_attr(feature = "schema", schemars(default))]
+    pub log_level: LogLevel,
     pub listener: PrivateListenerConfig,
     pub secret_providers: SecretProvidersConfig,
     /// Who may call the gateway: the chat hosts' authorization server.
@@ -1115,6 +1147,7 @@ rateLimits:
     #[test]
     fn a_complete_document_loads() {
         let config = load(&document()).expect("document loads");
+        assert_eq!(config.log_level.as_str(), "info");
         assert_eq!(config.registry.access_profile.as_str(), "citizen-agent");
         assert_eq!(config.limits.request_bytes(), 64 * 1024);
         assert_eq!(config.registry.attempt_timeout_milliseconds.get(), 10_000);
@@ -1127,6 +1160,34 @@ rateLimits:
             config.resource_server.jwks_source,
             JwksSource::Uri { .. }
         ));
+    }
+
+    #[test]
+    fn log_level_accepts_only_the_closed_vocabulary() {
+        for accepted in ["error", "warn", "info"] {
+            let text = document().replacen(
+                "kind: BRegMcpRuntimeConfig\n",
+                &format!("kind: BRegMcpRuntimeConfig\nlogLevel: {accepted}\n"),
+                1,
+            );
+            assert_eq!(
+                load(&text).expect("level loads").log_level.as_str(),
+                accepted
+            );
+        }
+        for refused_value in ["debug", "trace", "off", "Info", ""] {
+            let yaml_value = if refused_value.is_empty() {
+                "''"
+            } else {
+                refused_value
+            };
+            let text = document().replacen(
+                "kind: BRegMcpRuntimeConfig\n",
+                &format!("kind: BRegMcpRuntimeConfig\nlogLevel: {yaml_value}\n"),
+                1,
+            );
+            refused(&text, "config.unknown-variant", "/logLevel");
+        }
     }
 
     #[test]

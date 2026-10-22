@@ -158,7 +158,7 @@ function configurationValue(options) {
   }
   const allowed = new Set([
     'baseUrl',
-    'requestTimeoutMilliseconds',
+    'attemptTimeoutMilliseconds',
     'connectTimeoutMilliseconds',
     'maximumResponseBytes',
     'trustedRootCertificates',
@@ -172,10 +172,10 @@ function configurationValue(options) {
     }
     const value = descriptor.value;
     if (key === 'trustedRootCertificates') {
-      if (!Buffer.isBuffer(value) || value.length > 4 * 1024 * 1024) {
+      if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 4 * 1024 * 1024) {
         throw inputError('configuration');
       }
-      copy[key] = Buffer.from(value);
+      copy[key] = value;
     } else if (key === 'baseUrl') {
       if (typeof value !== 'string') throw inputError('configuration');
       copy[key] = value;

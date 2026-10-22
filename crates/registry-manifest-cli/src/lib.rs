@@ -14,6 +14,7 @@ use std::fs;
 use std::io::{self, Read as _};
 use std::path::Path;
 
+use clap::{Arg, ArgAction, Command};
 use registry_platform_yaml::{
     Diagnostic, EnvelopeRule, FormatSpec, Report, Severity, Source, MAXIMUM_DOCUMENT_BYTES,
 };
@@ -49,6 +50,153 @@ pub const METADATA_SCHEMA_VERSION: &str = "registry-manifest/v1";
 pub const PROFILE_SCHEMA_VERSION: &str = "registry-manifest-profile/v1";
 /// The file name of a profile descriptor inside its profile's directory.
 pub const PROFILE_FILE_NAME: &str = "profile.yaml";
+
+const ARTIFACT_FORMATS: [&str; 12] = [
+    "catalog",
+    "evidence-offerings",
+    "evidence-offering",
+    "policies",
+    "policy",
+    "dcat",
+    "bregdcat-ap",
+    "cpsv-ap",
+    "shacl",
+    "json-schema",
+    "form-json-schema",
+    "ogc-records",
+];
+
+/// Registry Manifest's canonical public command tree.
+///
+/// The private executable sets its displayed binary name to `registry-manifest`.
+/// The unified launcher and generated catalog retain the public product name
+/// `manifest`, so help and metadata do not expose a private entrypoint.
+pub fn command() -> Command {
+    Command::new("manifest")
+        .about("Validate, render, and publish portable registry metadata")
+        .version(registry_platform_buildinfo::DISPLAY_VERSION)
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(check_command(
+            "validate",
+            "Validate one Registry Manifest metadata document",
+            Arg::new("metadata")
+                .value_name("FILE")
+                .help("Registry Manifest metadata document to validate")
+                .required(true),
+        ))
+        .subcommand(check_command(
+            "validate-profiles",
+            "Validate profile descriptors and their declared fixtures",
+            Arg::new("profiles")
+                .value_name("DIRECTORY")
+                .help("Directory containing Registry Manifest profiles")
+                .default_value("profiles"),
+        ))
+        .subcommand(
+            Command::new("render")
+                .about("Render one artifact from a Registry Manifest document")
+                .long_about(
+                    "Render one artifact from a Registry Manifest document. The exact artifact \
+                     JSON bytes are written to standard output; report --format does not apply.",
+                )
+                .arg(
+                    Arg::new("metadata")
+                        .value_name("FILE")
+                        .help("Registry Manifest metadata document to render")
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("artifact-format")
+                        .long("artifact-format")
+                        .value_name("ARTIFACT")
+                        .help("Artifact to render to standard output")
+                        .value_parser(ARTIFACT_FORMATS)
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("profile")
+                        .long("profile")
+                        .value_name("ID")
+                        .help("Declared DCAT application profile to render"),
+                )
+                .arg(
+                    Arg::new("dataset")
+                        .long("dataset")
+                        .value_name("ID")
+                        .help("Dataset whose policy or entity schema to render"),
+                )
+                .arg(
+                    Arg::new("entity")
+                        .long("entity")
+                        .value_name("NAME")
+                        .help("Entity whose JSON Schema to render"),
+                )
+                .arg(
+                    Arg::new("form")
+                        .long("form")
+                        .value_name("ID")
+                        .help("Form whose JSON Schema to render"),
+                )
+                .arg(
+                    Arg::new("offering")
+                        .long("offering")
+                        .value_name("ID")
+                        .help("Evidence offering document to render"),
+                ),
+        )
+        .subcommand(
+            Command::new("publish")
+                .about("Publish a static Registry Manifest metadata bundle")
+                .long_about(
+                    "Publish a static Registry Manifest metadata bundle beneath --output. The \
+                     command emits a separate human or JSON report and never writes artifact \
+                     bytes to standard output.",
+                )
+                .arg(
+                    Arg::new("metadata")
+                        .value_name("FILE")
+                        .help("Registry Manifest metadata document to publish")
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("output")
+                        .long("output")
+                        .value_name("DIRECTORY")
+                        .help("Directory that receives the metadata bundle")
+                        .default_value("public/metadata"),
+                )
+                .arg(
+                    Arg::new("site-root")
+                        .long("site-root")
+                        .value_name("DIRECTORY")
+                        .help("Separate site root that receives .well-known discovery files"),
+                )
+                .arg(report_format()),
+        )
+}
+
+fn check_command(name: &'static str, about: &'static str, path: Arg) -> Command {
+    Command::new(name)
+        .about(about)
+        .arg(path)
+        .arg(report_format())
+        .arg(
+            Arg::new("deny-warnings")
+                .long("deny-warnings")
+                .help("Treat warnings as a domain refusal")
+                .action(ArgAction::SetTrue),
+        )
+}
+
+fn report_format() -> Arg {
+    Arg::new("format")
+        .long("format")
+        .value_name("FORMAT")
+        .help("Report format")
+        .value_parser(["human", "json"])
+        .default_value("human")
+}
 
 /// A metadata manifest, as the shared reader reads it.
 pub const METADATA_FORMAT: FormatSpec<'static> = FormatSpec {

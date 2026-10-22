@@ -120,6 +120,24 @@ class DriftTest(unittest.TestCase):
             with self.subTest(cls=name):
                 self.assertIsInstance(getattr(discovery, name), type)
 
+    def test_client_configuration_uses_the_canonical_authored_names(self) -> None:
+        constructor = next(
+            node
+            for node in self.stub_classes["DiscoveryClient"].body
+            if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+        )
+        self.assertEqual(
+            [argument.arg for argument in constructor.args.args],
+            [
+                "self",
+                "base_url",
+                "attempt_timeout_seconds",
+                "connect_timeout_seconds",
+                "maximum_response_bytes",
+                "trusted_root_certificates",
+            ],
+        )
+
     def test_client_methods_match_the_stub_in_both_directions(self) -> None:
         self.assertEqual(
             class_members(self.stub_classes["DiscoveryClient"]),

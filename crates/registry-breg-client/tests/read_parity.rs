@@ -130,10 +130,14 @@ fn response(media: &str, value: Value, link: bool, etag: bool) -> Response<Body>
 }
 
 async fn client(provider: Arc<CountingToken>) -> (BaseRegistryClient, Arc<Mutex<Vec<String>>>) {
-    client_with_max_response_bytes(provider, registry_breg_client::DEFAULT_MAX_RESPONSE_BYTES).await
+    client_with_maximum_response_bytes(
+        provider,
+        registry_breg_client::DEFAULT_MAXIMUM_RESPONSE_BYTES,
+    )
+    .await
 }
 
-async fn client_with_max_response_bytes(
+async fn client_with_maximum_response_bytes(
     provider: Arc<CountingToken>,
     maximum: u64,
 ) -> (BaseRegistryClient, Arc<Mutex<Vec<String>>>) {
@@ -152,7 +156,7 @@ async fn client_with_max_response_bytes(
     let config =
         BaseRegistryClientConfig::new(Url::parse(&format!("http://{address}/prefix")).unwrap())
             .with_token_provider(provider)
-            .with_max_response_bytes(maximum);
+            .with_maximum_response_bytes(maximum);
     (BaseRegistryClient::new(config).unwrap(), captured)
 }
 
@@ -203,7 +207,7 @@ async fn snapshot_valid_at_uses_the_servers_canonical_utc_representation() {
 async fn geojson_uses_the_configured_response_body_bound() {
     let provider = Arc::new(CountingToken(AtomicUsize::new(0)));
     let high_limit = 3 * 1024 * 1024;
-    let (client, _) = client_with_max_response_bytes(provider.clone(), high_limit).await;
+    let (client, _) = client_with_maximum_response_bytes(provider.clone(), high_limit).await;
     let feature = client
         .get_geojson_record("large-geojson", RECORD_ID, &BRegGeoJsonOptions::default())
         .await
@@ -238,7 +242,7 @@ async fn geojson_uses_the_configured_response_body_bound() {
         2 * 1024 * 1024
     );
 
-    let (client, _) = client_with_max_response_bytes(provider, 2 * 1024 * 1024).await;
+    let (client, _) = client_with_maximum_response_bytes(provider, 2 * 1024 * 1024).await;
     let error = client
         .get_geojson_record("large-geojson", RECORD_ID, &BRegGeoJsonOptions::default())
         .await

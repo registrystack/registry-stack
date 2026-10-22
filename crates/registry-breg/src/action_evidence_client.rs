@@ -48,7 +48,7 @@ impl EvidenceProviderBinding {
             return Err(EvidenceAcquisitionFailure::Configuration);
         }
         let client = EvidenceClient::new(
-            config.with_max_response_bytes(MAXIMUM_ACTION_EVIDENCE_RESPONSE_BYTES),
+            config.with_maximum_response_bytes(MAXIMUM_ACTION_EVIDENCE_RESPONSE_BYTES),
         )
         .map_err(|_| EvidenceAcquisitionFailure::Configuration)?;
         Ok(Self {

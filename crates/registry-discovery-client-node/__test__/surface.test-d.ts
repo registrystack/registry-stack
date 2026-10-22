@@ -22,7 +22,18 @@ declare function expectType<T>(value: T): void;
 declare function adopterChooseRecord(items: ServiceRecord[]): ServiceRecord;
 
 async function useDiscoveryClient(): Promise<void> {
-  const client = new DiscoveryClient('https://discovery.example.invalid/');
+  const client = new DiscoveryClient({
+    baseUrl: 'https://discovery.example.invalid/',
+    attemptTimeoutMilliseconds: 1500,
+    maximumResponseBytes: 1500,
+    trustedRootCertificates: '-----BEGIN CERTIFICATE-----\nplaceholder\n-----END CERTIFICATE-----',
+  });
+  // @ts-expect-error trust roots are PEM text, not binary data
+  new DiscoveryClient({ baseUrl: 'https://discovery.example.invalid/', trustedRootCertificates: Buffer.from('certificate') });
+  // @ts-expect-error null is not an omission in JavaScript configuration
+  new DiscoveryClient({ baseUrl: 'https://discovery.example.invalid/', attemptTimeoutMilliseconds: null });
+  // @ts-expect-error the per-exchange timeout is named for one attempt
+  new DiscoveryClient({ baseUrl: 'https://discovery.example.invalid/', requestTimeoutMilliseconds: 1500 });
   const resolved = await client.resolveEvidenceTypes({ requirementId: 'urn:example:requirement' });
   const context = selectEvidenceAlternative(resolved);
   const response = await client.searchEvidenceServices({

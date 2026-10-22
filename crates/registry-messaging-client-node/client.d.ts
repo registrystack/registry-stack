@@ -9,18 +9,19 @@ export type JsonValue = JsonScalar | ReadonlyArray<JsonValue> | { readonly [key:
 
 export interface MessagingClientConfig {
   baseUrl: string
-  requestTimeoutMilliseconds?: SafeInteger | null
-  connectTimeoutMilliseconds?: SafeInteger | null
-  maxResponseBytes?: SafeInteger | null
-  userAgent?: string | null
-  trustedRootCertificates?: string | null
+  attemptTimeoutMilliseconds?: SafeInteger
+  connectTimeoutMilliseconds?: SafeInteger
+  maximumResponseBytes?: SafeInteger
+  userAgent?: string
+  /** Additional trust roots for the deployment, as PEM text. */
+  trustedRootCertificates?: string
   /**
    * How many times a submission whose outcome is unknown is resent,
    * identically and under the same idempotency key, before its error is
    * returned: a whole number from 0 to 2, default 2; 0 sends it once. Any
    * other value is a `configuration` error.
    */
-  maxMutationRetries?: SafeInteger | null
+  maximumMutationRetries?: SafeInteger
 }
 
 export type Channel = 'email' | 'sms'

@@ -30,6 +30,15 @@ import {
 } from '..'
 
 declare const client: BaseRegistryClient
+new BaseRegistryClient({
+  baseUrl: 'https://registry.example.test/',
+  maximumResponseBytes: 8 * 1024 * 1024,
+  trustedRootCertificates: '-----BEGIN CERTIFICATE-----\nplaceholder\n-----END CERTIFICATE-----',
+})
+// @ts-expect-error The abbreviated response-bound spelling is retired.
+new BaseRegistryClient({ baseUrl: 'https://registry.example.test/', maxResponseBytes: 1024 })
+// @ts-expect-error Optional configuration values are omitted rather than set to null.
+new BaseRegistryClient({ baseUrl: 'https://registry.example.test/', maximumResponseBytes: null })
 declare const failure: BaseRegistryClientError
 if (failure.constraint?.constraintKind === 'compare') {
   failure.constraint.left.toUpperCase()
@@ -236,8 +245,17 @@ client.createRecordJson(create, { wide: 9007199254740992 }, 'exact-create')
 
 client.statisticsLive('population', null, null, 'reader', 'csv').then((raw) => raw.reprDigest?.toUpperCase())
 
-const once = new BaseRegistryClient({ baseUrl: 'https://registry.example.test/', maxMutationRetries: 0 })
+const once = new BaseRegistryClient({
+  baseUrl: 'https://registry.example.test/',
+  attemptTimeoutMilliseconds: 30_000,
+  connectTimeoutMilliseconds: 10_000,
+  maximumMutationRetries: 0,
+})
 void once
+// @ts-expect-error Retired option names are refused before I/O.
+new BaseRegistryClient({ baseUrl: 'https://registry.example.test/', requestTimeoutMilliseconds: 30_000 })
+// @ts-expect-error Retired option names are refused before I/O.
+new BaseRegistryClient({ baseUrl: 'https://registry.example.test/', maxMutationRetries: 0 })
 
 function mayHaveTakenEffect(error: BaseRegistryClientError): boolean {
   const unknown: boolean = error.outcomeUnknown

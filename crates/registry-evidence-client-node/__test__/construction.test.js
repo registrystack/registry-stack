@@ -48,6 +48,13 @@ test('a non-HTTPS, non-loopback base URL is refused', () => {
   );
 });
 
+test('canonical attempt and connection timeout options construct offline', () => {
+  assert.ok(new EvidenceClient(validConfig({
+    attemptTimeoutMilliseconds: 5_000,
+    connectTimeoutMilliseconds: 2_000,
+  })) instanceof EvidenceClient);
+});
+
 test('exchange authorization constructs offline and rejects an ambiguous token', () => {
   const key = () => ({
     ...crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ format: 'jwk' }),
@@ -66,6 +73,20 @@ test('exchange authorization constructs offline and rejects an ambiguous token',
   assertConfigurationRefusal(() => new EvidenceClient(config));
   delete config.token;
   assert.ok(new EvidenceClient(config) instanceof EvidenceClient);
+
+  for (const exchange of [
+    { ...config.authorization.exchange, context: { ...config.authorization.exchange.context, grantId: null } },
+    { ...config.authorization.exchange, client: { ...config.authorization.exchange.client,
+      attemptTimeoutMilliseconds: Number.MAX_SAFE_INTEGER + 1 } },
+    { ...config.authorization.exchange, client: { ...config.authorization.exchange.client,
+      requestTimeoutMilliseconds: 100 } },
+    { ...config.authorization.exchange, client: { ...config.authorization.exchange.client,
+      attemptTimeoutSeconds: 0.1 } },
+    { ...config.authorization.exchange, client: { ...config.authorization.exchange.client,
+      request_timeout_milliseconds: 100 } },
+  ]) {
+    assertConfigurationRefusal(() => new EvidenceClient({ ...config, authorization: { exchange } }));
+  }
 });
 
 test('an empty trusted key set is refused', () => {
@@ -89,11 +110,46 @@ test('a base URL with an empty path segment is refused', () => {
 });
 
 test('a numeric setting that is not a whole number in range is refused', () => {
-  for (const member of ['requestTimeoutMs', 'connectTimeoutMs', 'maxResponseBytes', 'maxMetadataBytes']) {
+  for (const member of ['attemptTimeoutMilliseconds', 'connectTimeoutMilliseconds', 'maximumResponseBytes', 'maxMetadataBytes']) {
     for (const value of [Number.MAX_SAFE_INTEGER + 1, -1, 1.5, '1500', new Date(0)]) {
       assertConfigurationRefusal(() => new EvidenceClient(validConfig({ [member]: value })));
     }
   }
+});
+
+test('unknown, retired, null, and binary configuration members are refused', () => {
+  for (const options of [
+    { requestTimeoutMs: 1_500 },
+    { connectTimeoutMs: 1_500 },
+    { maximumResponseByte: 1024 },
+    { maxResponseBytes: 1024 },
+    { maximumResponseBytes: null },
+    { userAgent: null },
+  ]) {
+    assertConfigurationRefusal(() => new EvidenceClient(validConfig(options)));
+  }
+  assert.throws(() => new EvidenceClient(validConfig({
+    trustedRootCertificates: Buffer.from('not PEM text'),
+  })));
+});
+
+test('direct private-key JWT timeouts use attempt and connection names', () => {
+  const clientKey = {
+    ...crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ format: 'jwk' }),
+    alg: 'ES256', kid: 'synthetic-direct-provider-test',
+  };
+  const token = { privateKeyJwt: {
+    tokenEndpoint: 'https://issuer.example/token',
+    clientId: 'direct-client',
+    clientKey,
+    attemptTimeoutMilliseconds: 5_000,
+    connectTimeoutMilliseconds: 2_000,
+  } };
+  assert.ok(new EvidenceClient(validConfig({ token })) instanceof EvidenceClient);
+  assertConfigurationRefusal(() => new EvidenceClient(validConfig({ token: { privateKeyJwt: {
+    ...token.privateKeyJwt,
+    requestTimeoutMs: 5_000,
+  } } })));
 });
 
 test('fromProfile returns the public wrapper and preserves consumer subclasses', () => {

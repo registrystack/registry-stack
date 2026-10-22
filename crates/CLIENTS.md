@@ -39,7 +39,7 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   with the attempt rolled back), and never after a 4xx status line:
   `registry_platform_httputil::client::retry_keyed_mutation` owns its loop and
   waits, the BReg, Casework, Coordinator, Messaging, and Scheduling clients
-  expose the count as `with_max_mutation_retries` (2 by default, at most 2,
+  expose the count as `with_maximum_mutation_retries` (2 by default, at most 2,
   0 disables), and the resend repeats the caller's exact key, headers, and
   body. The other
   clients never resend. Reads and unkeyed operations are never resent, and

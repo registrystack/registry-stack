@@ -46,8 +46,8 @@ pub struct MessagingComplete<T> {
 pub struct MessagingClient {
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
-    max_response_bytes: u64,
-    max_mutation_retries: u8,
+    maximum_response_bytes: u64,
+    maximum_mutation_retries: u8,
 }
 
 impl fmt::Debug for MessagingClient {
@@ -55,8 +55,8 @@ impl fmt::Debug for MessagingClient {
         formatter
             .debug_struct("MessagingClient")
             .field("base_url", &"<validated service URL>")
-            .field("max_response_bytes", &self.max_response_bytes)
-            .field("max_mutation_retries", &self.max_mutation_retries)
+            .field("maximum_response_bytes", &self.maximum_response_bytes)
+            .field("maximum_mutation_retries", &self.maximum_mutation_retries)
             .finish_non_exhaustive()
     }
 }
@@ -65,7 +65,7 @@ impl MessagingClient {
     pub fn new(config: MessagingClientConfig) -> Result<Self, MessagingClientError> {
         let base_url = config.validate()?;
         let http = build_client(OutboundOptions {
-            request_timeout: config.request_timeout,
+            request_timeout: config.attempt_timeout,
             connect_timeout: config.connect_timeout,
             user_agent: config.user_agent.as_deref(),
             trusted_root_certificates: config.trusted_root_certificates.as_deref(),
@@ -74,8 +74,8 @@ impl MessagingClient {
         Ok(Self {
             http,
             base_url,
-            max_response_bytes: config.max_response_bytes,
-            max_mutation_retries: config.max_mutation_retries,
+            maximum_response_bytes: config.maximum_response_bytes,
+            maximum_mutation_retries: config.maximum_mutation_retries,
         })
     }
 
@@ -102,7 +102,7 @@ impl MessagingClient {
     /// The caller chooses the key; the client never invents one. When the
     /// outcome is unknown, after a timeout or broken exchange or on a 5xx
     /// answer, the client resends the identical request under the same key,
-    /// at most `MessagingClientConfig::with_max_mutation_retries` times (2 by
+    /// at most `MessagingClientConfig::with_maximum_mutation_retries` times (2 by
     /// default; 0 disables it). An error for which
     /// `MessagingClientError::is_outcome_unknown` is true may still have
     /// accepted the message: recover with the same key and request, never a
@@ -310,7 +310,7 @@ impl MessagingClient {
         expected: StatusCode,
     ) -> Result<MessagingComplete<T>, MessagingClientError> {
         let request = &request;
-        retry_keyed_mutation(self.max_mutation_retries, || async move {
+        retry_keyed_mutation(self.maximum_mutation_retries, || async move {
             let Some(attempt) = request.try_clone() else {
                 return KeyedMutationAttempt::Settled(Err(MessagingClientError::invalid_request(
                     "the request could not be prepared for sending",
@@ -348,7 +348,7 @@ impl MessagingClient {
                 Some(trace_id),
             ));
         }
-        let body = read_bounded(response, self.max_response_bytes)
+        let body = read_bounded(response, self.maximum_response_bytes)
             .await
             .map_err(|error| MessagingClientError::Transport {
                 kind: read_failure_kind(&error),

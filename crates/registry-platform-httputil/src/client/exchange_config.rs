@@ -41,10 +41,10 @@ struct KeyClient {
     assertion_lifetime_seconds: Option<i64>,
     #[serde(alias = "refresh_margin_seconds")]
     refresh_margin_seconds: Option<i64>,
-    #[serde(alias = "request_timeout_milliseconds")]
-    request_timeout_milliseconds: Option<u64>,
-    #[serde(alias = "request_timeout_seconds")]
-    request_timeout_seconds: Option<f64>,
+    #[serde(alias = "attempt_timeout_milliseconds")]
+    attempt_timeout_milliseconds: Option<u64>,
+    #[serde(alias = "attempt_timeout_seconds")]
+    attempt_timeout_seconds: Option<f64>,
     #[serde(alias = "connect_timeout_milliseconds")]
     connect_timeout_milliseconds: Option<u64>,
     #[serde(alias = "connect_timeout_seconds")]
@@ -57,7 +57,7 @@ struct KeyClient {
 
 impl KeyClient {
     fn build(self) -> Result<PrivateKeyJwt, TokenError> {
-        if self.request_timeout_milliseconds.is_some() && self.request_timeout_seconds.is_some()
+        if self.attempt_timeout_milliseconds.is_some() && self.attempt_timeout_seconds.is_some()
             || self.connect_timeout_milliseconds.is_some() && self.connect_timeout_seconds.is_some()
         {
             return Err(malformed());
@@ -76,12 +76,12 @@ impl KeyClient {
         if let Some(value) = self.refresh_margin_seconds {
             config = config.with_refresh_margin_seconds(value);
         }
-        if let Some(value) = self.request_timeout_milliseconds {
-            config = config.with_request_timeout(Duration::from_millis(value));
+        if let Some(value) = self.attempt_timeout_milliseconds {
+            config = config.with_attempt_timeout(Duration::from_millis(value));
         }
-        if let Some(value) = self.request_timeout_seconds {
+        if let Some(value) = self.attempt_timeout_seconds {
             config = config
-                .with_request_timeout(Duration::try_from_secs_f64(value).map_err(|_| malformed())?);
+                .with_attempt_timeout(Duration::try_from_secs_f64(value).map_err(|_| malformed())?);
         }
         if let Some(value) = self.connect_timeout_milliseconds {
             config = config.with_connect_timeout(Duration::from_millis(value));
@@ -152,10 +152,10 @@ struct Remote {
     bootstrap_resource: String,
     #[serde(alias = "bootstrap_scope")]
     bootstrap_scope: String,
-    #[serde(alias = "request_timeout_milliseconds")]
-    request_timeout_milliseconds: Option<u64>,
-    #[serde(alias = "request_timeout_seconds")]
-    request_timeout_seconds: Option<f64>,
+    #[serde(alias = "attempt_timeout_milliseconds")]
+    attempt_timeout_milliseconds: Option<u64>,
+    #[serde(alias = "attempt_timeout_seconds")]
+    attempt_timeout_seconds: Option<f64>,
     #[serde(alias = "connect_timeout_milliseconds")]
     connect_timeout_milliseconds: Option<u64>,
     #[serde(alias = "connect_timeout_seconds")]
@@ -196,8 +196,8 @@ pub fn exchange_authorization_from_json(
             ExchangeAuthorization::first_party(client, context, source)
         }
         (None, Some(remote)) => {
-            if remote.request_timeout_milliseconds.is_some()
-                && remote.request_timeout_seconds.is_some()
+            if remote.attempt_timeout_milliseconds.is_some()
+                && remote.attempt_timeout_seconds.is_some()
                 || remote.connect_timeout_milliseconds.is_some()
                     && remote.connect_timeout_seconds.is_some()
             {
@@ -209,9 +209,9 @@ pub fn exchange_authorization_from_json(
                 .trusted_root_certificates
                 .as_deref()
                 .map(str::as_bytes);
-            let request_timeout = if let Some(value) = remote.request_timeout_milliseconds {
+            let request_timeout = if let Some(value) = remote.attempt_timeout_milliseconds {
                 Duration::from_millis(value)
-            } else if let Some(value) = remote.request_timeout_seconds {
+            } else if let Some(value) = remote.attempt_timeout_seconds {
                 Duration::try_from_secs_f64(value).map_err(|_| malformed())?
             } else {
                 DEFAULT_REQUEST_TIMEOUT
@@ -238,5 +238,43 @@ pub fn exchange_authorization_from_json(
             ExchangeAuthorization::from_authority(client, context, Arc::new(source))
         }
         _ => Err(malformed()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KeyClient, Remote};
+    use serde_json::json;
+
+    #[test]
+    fn nested_exchange_timeouts_use_the_attempt_name_in_both_binding_languages() {
+        let base = json!({
+            "tokenEndpoint": "https://issuer.example.invalid/token",
+            "clientId": "client",
+            "clientKey": {},
+            "resource": "urn:registry:resource",
+            "scopes": []
+        });
+        for (field, value) in [
+            ("attemptTimeoutMilliseconds", json!(3_000)),
+            ("attempt_timeout_seconds", json!(3.0)),
+        ] {
+            let mut authored = base.clone();
+            authored[field] = value;
+            assert!(serde_json::from_value::<KeyClient>(authored.clone()).is_ok());
+            let mut remote = json!({
+                "endpoint": "https://issuer.example.invalid/assertion",
+                "bootstrap": base.clone(),
+                "bootstrapResource": "urn:registry:bootstrap",
+                "bootstrapScope": "bootstrap"
+            });
+            remote[field] = authored[field].clone();
+            assert!(serde_json::from_value::<Remote>(remote).is_ok());
+        }
+        for retired in ["requestTimeoutMilliseconds", "request_timeout_seconds"] {
+            let mut authored = base.clone();
+            authored[retired] = json!(3);
+            assert!(serde_json::from_value::<KeyClient>(authored).is_err());
+        }
     }
 }

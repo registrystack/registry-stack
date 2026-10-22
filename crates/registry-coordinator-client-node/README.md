@@ -10,7 +10,7 @@ chosen key. A fresh start must match the active revision, or it returns
 `409 workflow.revision-mismatch`. Retain the original identity, key, revision, and input when
 recovering an unknown admission, including after activation changes. The binding never acquires a
 token or invents a key. `start` resends an admission whose outcome is unknown,
-identically and under the caller's same key, at most `maxMutationRetries` times
+identically and under the caller's same key, at most `maximumMutationRetries` times
 (default 2, at most 2, 0 disables); a 4xx refusal is never resent. A key is
 scoped to the caller and the workflow, so the same key under two workflows starts two
 runs, and an allowed workflow the deployment does not serve is refused with 404

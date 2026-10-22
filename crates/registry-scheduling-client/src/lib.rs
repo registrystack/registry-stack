@@ -18,7 +18,7 @@
 //! the client never generates one. A keyed command whose outcome is unknown
 //! (a timeout or broken exchange after the request was sent, or a 5xx answer)
 //! is resent, byte for byte and under the same key, at most
-//! `SchedulingClientConfig::with_max_mutation_retries` times (2 by default, 0
+//! `SchedulingClientConfig::with_maximum_mutation_retries` times (2 by default, 0
 //! disables it). Reads and the unkeyed hold release are never resent. A 5xx
 //! answer may follow a commit: when `SchedulingClientError::is_outcome_unknown`
 //! is still true, the safe recovery is the same request under the same key,

@@ -50,7 +50,7 @@ on a 429 or retries it.
 
 A submission whose outcome is unknown (a timeout or broken exchange after it
 was sent, an unusable answer, or a 5xx) is resent identically under the same
-key up to `max_mutation_retries` times: 0 to 2, default 2, and 0 sends it
+key up to `maximum_mutation_retries` times: 0 to 2, default 2, and 0 sends it
 once. When the returned `MessagingClientError` still reports
 `outcome_unknown`, the submission may have been accepted: recover by sending it
 again under the same key, because a new key could send the message twice.

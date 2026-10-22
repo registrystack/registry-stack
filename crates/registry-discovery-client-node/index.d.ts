@@ -21,10 +21,10 @@ export declare class DiscoveryClient {
 
 export interface DiscoveryClientOptions {
   baseUrl: string
-  requestTimeoutMilliseconds?: number
+  attemptTimeoutMilliseconds?: number
   connectTimeoutMilliseconds?: number
   maximumResponseBytes?: number
-  trustedRootCertificates?: Buffer
+  trustedRootCertificates?: string
 }
 
 export declare function renewUnchangedSelection(previous: any, current: any): any

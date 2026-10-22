@@ -17,24 +17,24 @@ cargo run -p registry-manifest-cli -- validate products/manifest/profiles/exampl
 Render one artifact:
 
 ```sh
-cargo run -p registry-manifest-cli -- render products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml --format catalog
+cargo run -p registry-manifest-cli -- render products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml --artifact-format catalog
 ```
 
 Render a service-form JSON Schema:
 
 ```sh
-cargo run -p registry-manifest-cli -- render products/manifest/fixtures/cpsv-ap/health-linked-child-support.metadata.yaml --format form-json-schema --form child-support-review-form
+cargo run -p registry-manifest-cli -- render products/manifest/fixtures/cpsv-ap/health-linked-child-support.metadata.yaml --artifact-format form-json-schema --form child-support-review-form
 ```
 
 Publish a static metadata directory:
 
 ```sh
-cargo run -p registry-manifest-cli -- publish products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml --out target/metadata/public
+cargo run -p registry-manifest-cli -- publish products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml --output target/metadata/public
 ```
 
 By default, publishing writes every artifact, including `.well-known/api-catalog`
 and `.well-known/registry-manifest.json`, inside the directory passed to
-`--out`. Serve that directory as `/`; `/metadata/index.json` is the canonical
+`--output`. Serve that directory as `/`; `/metadata/index.json` is the canonical
 metadata entry point, `/.well-known/api-catalog` is the standards-facing
 discovery document, and `/.well-known/registry-manifest.json` remains for
 compatibility with older Registry Manifest clients.
@@ -42,18 +42,22 @@ compatibility with older Registry Manifest clients.
 package-level digest, and SHA-256 digests for each indexed metadata artifact.
 
 If the metadata bundle is a sibling of the site root rather than the site root
-itself (for example, when `--out` points at `/srv/site/metadata-public/`), pass
+itself (for example, when `--output` points at `/srv/site/metadata-public/`), pass
 `--site-root` so the discovery files land at the URL root:
 
 ```sh
 cargo run -p registry-manifest-cli -- publish products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
-    --out /srv/site/metadata-public \
+    --output /srv/site/metadata-public \
     --site-root /srv/site
 ```
 
 With `--site-root SITE`, `.well-known/*` is written under `SITE/.well-known/`
-while the metadata bundle still lands under `--out`. No files are written
-outside `--out` (or `SITE`, when set).
+while the metadata bundle still lands under `--output`. No files are written
+outside `--output` (or `SITE`, when set).
+Publishing reports in human-readable form by default. Pass `--format json` for
+the versioned JSON report; artifact files still go only to `--output` and never
+to standard output. The retired `--out` option is refused with `--output` named
+as its replacement.
 
 Validate all checked-in profile descriptors and fixtures:
 
@@ -65,6 +69,9 @@ cargo run -p registry-manifest-cli -- validate-profiles products/manifest/profil
 print every finding as `severity[code] file:line:column /pointer` with the fix.
 Both accept `--format json` and `--deny-warnings`, and exit 0 when nothing was
 refused, 1 on a refusal, 2 on a usage error, and 3 when a file cannot be read.
+The retired `--json` flag is refused with `--format json` named as its
+replacement. `render` writes exact artifact JSON to standard output, so it uses
+`--artifact-format` and refuses report `--format`.
 
 Regenerate the editor schemas after changing a reader type:
 

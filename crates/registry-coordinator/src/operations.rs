@@ -116,9 +116,9 @@ impl OperationDescriptor {
         }
         let mut http = json!({
             "maximumResponseBytes":MAXIMUM_HTTP_RESPONSE_BYTES,
-            "requestTimeoutMilliseconds":HTTP_REQUEST_TIMEOUT_MILLISECONDS,
+            "attemptTimeoutMilliseconds":HTTP_REQUEST_TIMEOUT_MILLISECONDS,
             "connectTimeoutMilliseconds":HTTP_CONNECT_TIMEOUT_MILLISECONDS,
-            "mutationRetries":HTTP_MUTATION_RETRIES
+            "maximumMutationRetries":HTTP_MUTATION_RETRIES
         });
         if matches!(self.product, "external-http" | "evaluation") {
             let fields = http.as_object_mut().expect("HTTP contract is an object");
@@ -127,7 +127,7 @@ impl OperationDescriptor {
             fields.insert("redirects".into(), json!("refused"));
             if self.product == "evaluation" {
                 fields.insert(
-                    "requestTimeoutMilliseconds".into(),
+                    "attemptTimeoutMilliseconds".into(),
                     json!(EVALUATION_TIMEOUT_MILLISECONDS),
                 );
                 fields.insert(

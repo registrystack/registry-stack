@@ -49,7 +49,7 @@ class MutationRetryTests(unittest.TestCase):
 
     def test_a_ceiling_of_zero_sends_once_and_reports_the_outcome_unknown(self) -> None:
         self.service.script(UNAVAILABLE, ok(STATUS))
-        client = CoordinatorClient(self.service.base_url, max_mutation_retries=0)
+        client = CoordinatorClient(self.service.base_url, maximum_mutation_retries=0)
 
         with self.assertRaises(CoordinatorClientError) as raised:
             client.start("one-call-token", KEY, START_REQUEST)
@@ -62,7 +62,7 @@ class MutationRetryTests(unittest.TestCase):
 
     def test_a_4xx_refusal_is_never_resent_and_reports_the_outcome_known(self) -> None:
         self.service.script(KEY_REUSED, ok(STATUS))
-        client = CoordinatorClient(self.service.base_url, max_mutation_retries=2)
+        client = CoordinatorClient(self.service.base_url, maximum_mutation_retries=2)
 
         with self.assertRaises(CoordinatorClientError) as raised:
             client.start("one-call-token", KEY, START_REQUEST)
@@ -76,7 +76,7 @@ class MutationRetryTests(unittest.TestCase):
         self,
     ) -> None:
         self.service.script(problem(404, "workflow.not-served"), ok(STATUS))
-        client = CoordinatorClient(self.service.base_url, max_mutation_retries=2)
+        client = CoordinatorClient(self.service.base_url, maximum_mutation_retries=2)
 
         with self.assertRaises(CoordinatorClientError) as raised:
             client.start("one-call-token", KEY, START_REQUEST)
@@ -101,7 +101,7 @@ class MutationRetryTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.service.script(problem(404, "run.not-visible"), ok(INSPECTION))
                 with self.assertRaises(CoordinatorClientError) as raised:
-                    call(CoordinatorClient(self.service.base_url, max_mutation_retries=2))
+                    call(CoordinatorClient(self.service.base_url, maximum_mutation_retries=2))
                 self.assertEqual(raised.exception.kind, "problem")
                 self.assertEqual(raised.exception.status, 404)
                 self.assertEqual(raised.exception.code, "run.not-visible")
@@ -120,7 +120,7 @@ class MutationRetryTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.service.script(UNAVAILABLE, ok(INSPECTION))
                 with self.assertRaises(CoordinatorClientError) as raised:
-                    call(CoordinatorClient(self.service.base_url, max_mutation_retries=2))
+                    call(CoordinatorClient(self.service.base_url, maximum_mutation_retries=2))
                 self.assertEqual(raised.exception.status, 503)
                 self.assertIs(raised.exception.outcome_unknown, True)
                 self.assertEqual([o["path"] for o in self.service.observations()], [path])

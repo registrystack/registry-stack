@@ -7,6 +7,8 @@ Producer, human-review, and Directory calls take a bearer token and an explicit
 Casework profile. Current-source context operations also take the caller's source
 profile; submitted-context reviews need no provider or source profile.
 The binding does not retain credentials and exposes no browser credential API.
+Transport configuration uses `attemptTimeoutMilliseconds`,
+`connectTimeoutMilliseconds`, and `maximumResponseBytes`.
 
 `reviewTasks(token, profile, { ownership: 'assigned-to-me' })` filters the
 reviewer inbox before pagination. `supervisoryReviewTasks` provides current
@@ -56,7 +58,7 @@ for expiry, revocation, and changes that require another approval.
 
 A keyed mutation whose outcome is unknown (a timeout or broken exchange after
 it was sent, an unusable answer, or a 5xx) is resent identically under the same
-key up to `maxMutationRetries` times: 0 to 2, default 2, and 0 sends it once.
+key up to `maximumMutationRetries` times: 0 to 2, default 2, and 0 sends it once.
 Reads, unkeyed operations, and review request create and cancel are never
 resent. When the returned `CaseworkClientError` still reports `outcomeUnknown`,
 the mutation may have taken effect: recover by sending it again under the same

@@ -84,15 +84,16 @@ Validation checks include:
 
 ### 2. Render a single artifact
 
-Use `render` to write one renderer's output to stdout.
-The `--format` flag selects the renderer.
+Use `render` to write one renderer's exact JSON output to stdout.
+The `--artifact-format` flag selects the renderer. Report `--format` does not
+apply to this artifact stream.
 
 Render the catalog JSON:
 
 ```sh
 cargo run --bin registry-manifest -- render \
   products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
-  --format catalog
+  --artifact-format catalog
 ```
 
 Render base DCAT JSON-LD:
@@ -100,7 +101,7 @@ Render base DCAT JSON-LD:
 ```sh
 cargo run --bin registry-manifest -- render \
   products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
-  --format dcat
+  --artifact-format dcat
 ```
 
 Render a Core Public Service Vocabulary Application Profile (CPSV-AP) service catalogue:
@@ -108,18 +109,19 @@ Render a Core Public Service Vocabulary Application Profile (CPSV-AP) service ca
 ```sh
 cargo run --bin registry-manifest -- render \
   products/manifest/fixtures/cpsv-ap/health-linked-child-support.metadata.yaml \
-  --format cpsv-ap
+  --artifact-format cpsv-ap
 ```
 
-To render the BRegDCAT-AP profile variant via `--format dcat`, pass `--profile bregdcat-ap`.
-Alternatively, use the `--format bregdcat-ap` shorthand:
+To render the BRegDCAT-AP profile variant via `--artifact-format dcat`, pass
+`--profile bregdcat-ap`. Alternatively, use the `--artifact-format
+bregdcat-ap` shorthand:
 
 Render BRegDCAT-AP JSON-LD:
 
 ```sh
 cargo run --bin registry-manifest -- render \
   products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
-  --format bregdcat-ap
+  --artifact-format bregdcat-ap
 ```
 
 For optional public ITB/SEMIC validator smoke checks against rendered DCAT and
@@ -131,7 +133,7 @@ Render SHACL (Shapes Constraint Language) node shapes:
 ```sh
 cargo run --bin registry-manifest -- render \
   products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
-  --format shacl
+  --artifact-format shacl
 ```
 
 Render a JSON Schema Draft 2020-12 for a specific dataset and entity.
@@ -205,7 +207,7 @@ Redirect to a file when you want to inspect or diff it:
 ```sh
 cargo run --bin registry-manifest -- render \
   products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
-  --format bregdcat-ap > /tmp/breg.jsonld
+  --artifact-format bregdcat-ap > /tmp/breg.jsonld
 ```
 
 ### 3. Publish a static bundle
@@ -217,7 +219,7 @@ digest.
 ```sh
 cargo run --bin registry-manifest -- publish \
   products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
-  --out target/metadata/public
+  --output target/metadata/public
 ```
 
 The output directory will contain `catalog.json`, `dcat.jsonld`, `cpsv-ap.jsonld` when the
@@ -230,14 +232,14 @@ Linked-data outputs include embedded SKOS-shaped codelist nodes when the manifes
 codelists.
 See [Registry Manifest reference](./reference.md) for the full artifact list.
 
-By default, `.well-known/*` writes under `--out` alongside every other artifact. Pass
+By default, `.well-known/*` writes under `--output` alongside every other artifact. Pass
 `--site-root <dir>` to write the two well-known documents under a separate directory instead,
 useful when the metadata bundle is published as a sibling of a larger site root:
 
 ```sh
 cargo run --bin registry-manifest -- publish \
   products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
-  --out target/metadata/public \
+  --output target/metadata/public \
   --site-root target/site
 ```
 

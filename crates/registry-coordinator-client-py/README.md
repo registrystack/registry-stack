@@ -60,9 +60,9 @@ canonical Rust client's camel-case wire DTOs inside a `{"kind": "complete", "val
 Complete outcome envelopes have no trace field; problem validation still binds the response trace.
 
 Configuration members are keyword arguments: `base_url` (required),
-`request_timeout_seconds`, `connect_timeout_seconds`,
-`max_response_bytes`, `user_agent`, `trusted_root_certificates`, and
-`max_mutation_retries`. Timeouts are seconds, as a finite non-negative `int` or `float`; the response
+`attempt_timeout_seconds`, `connect_timeout_seconds`,
+`maximum_response_bytes`, `user_agent`, `trusted_root_certificates`, and
+`maximum_mutation_retries`. Timeouts are seconds, as a finite positive `int` or `float`; the response
 bound is an `int`. A `bool` is not a number here. An unknown keyword is a Python `TypeError`.
 
 `CoordinatorClientError` preserves the status and the `family.reason` code of
@@ -77,7 +77,7 @@ the answer; anything else is a `protocol` failure. Its `kind` is one of `configu
 The only resend is the Rust client's bounded same-key retry of `start`. An
 admission whose outcome is unknown (a timeout or broken exchange after it was
 sent, an unusable answer, or a 5xx) is resent identically under the same key up
-to `max_mutation_retries` times: 0 to 2, default 2, and 0 sends it once. A 4xx
+to `maximum_mutation_retries` times: 0 to 2, default 2, and 0 sends it once. A 4xx
 answer is never resent. `workflow`, `list`, `status`, `inspect`, `reconcile`,
 `retry_same`, and `cancel` send exactly one request; `retry_same` and `cancel`
 take no idempotency key, so after an unknown outcome read the run before

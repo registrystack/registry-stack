@@ -312,6 +312,334 @@
       "constraints": [],
       "subcommands": [
         {
+          "name": "serve",
+          "invocation": "bregctl serve",
+          "about": "Run the production Base Registry Engine service with the selected runtime",
+          "long_about": null,
+          "usage": "bregctl serve [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration file passed unchanged to the Base Registry Engine runtime. A symbolic link at any component of this path is refused.",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "mcp",
+          "invocation": "bregctl mcp",
+          "about": "Operate the optional citizen-facing MCP gateway",
+          "long_about": null,
+          "usage": "bregctl mcp [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "check",
+              "invocation": "bregctl mcp check",
+              "about": "Check the runtime file offline, reading no secret and opening no socket",
+              "long_about": null,
+              "usage": "bregctl mcp check [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file to check. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--deny-warnings",
+                  "description": "Exit 1 when a warning is reported",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--environment",
+                  "description": "Fill environment expressions while checking the runtime file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "serve",
+              "invocation": "bregctl mcp serve",
+              "about": "Serve until terminated",
+              "long_about": null,
+              "usage": "bregctl mcp serve [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file for the service. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "review",
+          "invocation": "bregctl review",
+          "about": "Operate the optional citizen review page",
+          "long_about": null,
+          "usage": "bregctl review [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "check",
+              "invocation": "bregctl review check",
+              "about": "Check the runtime file offline, reading no secret and opening no socket",
+              "long_about": null,
+              "usage": "bregctl review check [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file to check. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--deny-warnings",
+                  "description": "Exit 1 when a warning is reported",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--environment",
+                  "description": "Fill environment expressions while checking the runtime file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "serve",
+              "invocation": "bregctl review serve",
+              "about": "Serve until terminated",
+              "long_about": null,
+              "usage": "bregctl review serve [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file for the service. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "name": "init",
           "invocation": "bregctl init",
           "about": "Create an authoring project in a new directory: a domain-neutral example, one derived from an embedded reference model with `--from`, or a shipped starter with `--template`",
@@ -1787,9 +2115,7 @@
                   "description": "Casework authoring CLI from the same installation",
                   "always_required": false,
                   "repeatable": false,
-                  "default_values": [
-                    "caseworkctl"
-                  ],
+                  "default_values": [],
                   "possible_values": [],
                   "environment": null
                 },
@@ -5248,6 +5574,50 @@
       "constraints": [],
       "subcommands": [
         {
+          "name": "serve",
+          "invocation": "caseworkctl serve",
+          "about": "Run the production Casework service with the selected runtime",
+          "long_about": null,
+          "usage": "caseworkctl serve [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration file passed unchanged to the Casework runtime",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
           "name": "init",
           "invocation": "caseworkctl init",
           "about": "Create a standalone or source-backed ReviewPolicy project",
@@ -5365,12 +5735,10 @@
             },
             {
               "display": "--bregctl-bin <BINARY>",
-              "description": "Matching bregctl executable used for native package verification",
+              "description": "Matching bregctl executable used for native package verification; otherwise use the rstack-selected helper or bregctl on PATH",
               "always_required": false,
               "repeatable": false,
-              "default_values": [
-                "bregctl"
-              ],
+              "default_values": [],
               "possible_values": [],
               "environment": null
             },
@@ -5690,12 +6058,10 @@
                 },
                 {
                   "display": "--bregctl-bin <BINARY>",
-                  "description": "Matching bregctl executable used for public project and package inspection",
+                  "description": "Matching bregctl executable used for public project and package inspection; otherwise use the rstack-selected helper or bregctl on PATH",
                   "always_required": false,
                   "repeatable": false,
-                  "default_values": [
-                    "bregctl"
-                  ],
+                  "default_values": [],
                   "possible_values": [],
                   "environment": null
                 },
@@ -5781,12 +6147,10 @@
                 },
                 {
                   "display": "--bregctl-bin <BINARY>",
-                  "description": "Matching bregctl executable used to verify the producer package",
+                  "description": "Matching bregctl executable used to verify the producer package; otherwise use the rstack-selected helper or bregctl on PATH",
                   "always_required": false,
                   "repeatable": false,
-                  "default_values": [
-                    "bregctl"
-                  ],
+                  "default_values": [],
                   "possible_values": [],
                   "environment": null
                 },
@@ -6723,6 +7087,50 @@
       "constraints": [],
       "subcommands": [
         {
+          "name": "serve",
+          "invocation": "coordinatorctl serve",
+          "about": "Run the production Coordinator service with the selected runtime",
+          "long_about": null,
+          "usage": "coordinatorctl serve [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
           "name": "init",
           "invocation": "coordinatorctl init",
           "about": "Create a reviewed four-file starter and its .gitignore in a new or empty directory",
@@ -7027,7 +7435,7 @@
             },
             {
               "display": "--token-file <FILE>",
-              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "description": "Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -7443,7 +7851,7 @@
             },
             {
               "display": "--token-file <FILE>",
-              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "description": "Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -7514,7 +7922,7 @@
             },
             {
               "display": "--token-file <FILE>",
-              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "description": "Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -7626,7 +8034,7 @@
             },
             {
               "display": "--token-file <FILE>",
-              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "description": "Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -7697,7 +8105,7 @@
             },
             {
               "display": "--token-file <FILE>",
-              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "description": "Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -7777,7 +8185,7 @@
             },
             {
               "display": "--token-file <FILE>",
-              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "description": "Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -7857,7 +8265,7 @@
             },
             {
               "display": "--token-file <FILE>",
-              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "description": "Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -7937,7 +8345,7 @@
             },
             {
               "display": "--token-file <FILE>",
-              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "description": "Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -7999,7 +8407,7 @@
             },
             {
               "display": "--token-file <FILE>",
-              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "description": "Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -8070,7 +8478,7 @@
             },
             {
               "display": "--token-file <FILE>",
-              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "description": "Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -8141,7 +8549,7 @@
             },
             {
               "display": "--token-file <FILE>",
-              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "description": "Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -8230,7 +8638,7 @@
             },
             {
               "display": "--token-file <FILE>",
-              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "description": "Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -8319,7 +8727,7 @@
             },
             {
               "display": "--token-file <FILE>",
-              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "description": "Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -8401,7 +8809,7 @@
             },
             {
               "display": "--token-file <FILE>",
-              "description": "File containing a current access token; a relative path is read from the current directory. Token values are never printed",
+              "description": "Regular file containing a current access token; symlinks and special files are refused. A relative path is read from the current directory. Token values are never printed",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -11731,6 +12139,241 @@
           ]
         },
         {
+          "name": "oid4vci",
+          "invocation": "evidencectl oid4vci",
+          "about": "Operate the optional Evidence wallet-delivery service",
+          "long_about": null,
+          "usage": "evidencectl oid4vci [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json",
+                "junit"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "check",
+              "invocation": "evidencectl oid4vci check",
+              "about": "Check the wallet-delivery runtime file offline",
+              "long_about": null,
+              "usage": "evidencectl oid4vci check [OPTIONS] --runtime-config <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file to validate",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
+                },
+                {
+                  "display": "--deny-warnings",
+                  "description": "Exit 1 when a warning is reported",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--environment",
+                  "description": "Resolve runtime environment expressions and check their values",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json",
+                    "junit"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "inspect",
+              "invocation": "evidencectl oid4vci inspect",
+              "about": "Print the derived protocol metadata for a deployment",
+              "long_about": null,
+              "usage": "evidencectl oid4vci inspect [OPTIONS] --runtime-config <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file to inspect",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json",
+                    "junit"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "openapi",
+              "invocation": "evidencectl oid4vci openapi",
+              "about": "Render the OpenAPI 3.1 document",
+              "long_about": null,
+              "usage": "evidencectl oid4vci openapi [OPTIONS]",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--output <OUTPUT>",
+                  "description": "Write the document to this file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json",
+                    "junit"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "serve",
+              "invocation": "evidencectl oid4vci serve",
+              "about": "Serve wallet-delivery endpoints until terminated",
+              "long_about": null,
+              "usage": "evidencectl oid4vci serve [OPTIONS] --runtime-config <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file for the service",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json",
+                    "junit"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "name": "audit",
           "invocation": "evidencectl audit",
           "about": "Inspect stopped local audit history",
@@ -12384,7 +13027,7 @@
                 },
                 {
                   "display": "--bregctl-bin <BREGCTL_BIN>",
-                  "description": "Public Base Registry Engine tooling binary; otherwise BREGCTL_BIN or bregctl on PATH",
+                  "description": "Public Base Registry Engine tooling binary; otherwise the rstack-selected helper, BREGCTL_BIN, or bregctl on PATH",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -13922,6 +14565,310 @@
       ]
     },
     {
+      "name": "manifest",
+      "invocation": "manifest",
+      "about": "Validate, render, and publish portable registry metadata",
+      "long_about": null,
+      "usage": "manifest <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "validate",
+          "invocation": "manifest validate",
+          "about": "Validate one Registry Manifest metadata document",
+          "long_about": null,
+          "usage": "manifest validate [OPTIONS] <FILE>",
+          "arguments": [
+            {
+              "display": "<FILE>",
+              "description": "Registry Manifest metadata document to validate",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Report format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--deny-warnings",
+              "description": "Treat warnings as a domain refusal",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "validate-profiles",
+          "invocation": "manifest validate-profiles",
+          "about": "Validate profile descriptors and their declared fixtures",
+          "long_about": null,
+          "usage": "manifest validate-profiles [OPTIONS] [DIRECTORY]",
+          "arguments": [
+            {
+              "display": "[DIRECTORY]",
+              "description": "Directory containing Registry Manifest profiles",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "profiles"
+              ],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Report format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--deny-warnings",
+              "description": "Treat warnings as a domain refusal",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "render",
+          "invocation": "manifest render",
+          "about": "Render one artifact from a Registry Manifest document",
+          "long_about": "Render one artifact from a Registry Manifest document. The exact artifact JSON bytes are written to standard output; report --format does not apply.",
+          "usage": "manifest render [OPTIONS] --artifact-format <ARTIFACT> <FILE>",
+          "arguments": [
+            {
+              "display": "<FILE>",
+              "description": "Registry Manifest metadata document to render",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--artifact-format <ARTIFACT>",
+              "description": "Artifact to render to standard output",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "catalog",
+                "evidence-offerings",
+                "evidence-offering",
+                "policies",
+                "policy",
+                "dcat",
+                "bregdcat-ap",
+                "cpsv-ap",
+                "shacl",
+                "json-schema",
+                "form-json-schema",
+                "ogc-records"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--profile <ID>",
+              "description": "Declared DCAT application profile to render",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--dataset <ID>",
+              "description": "Dataset whose policy or entity schema to render",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--entity <NAME>",
+              "description": "Entity whose JSON Schema to render",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--form <ID>",
+              "description": "Form whose JSON Schema to render",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--offering <ID>",
+              "description": "Evidence offering document to render",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "publish",
+          "invocation": "manifest publish",
+          "about": "Publish a static Registry Manifest metadata bundle",
+          "long_about": "Publish a static Registry Manifest metadata bundle beneath --output. The command emits a separate human or JSON report and never writes artifact bytes to standard output.",
+          "usage": "manifest publish [OPTIONS] <FILE>",
+          "arguments": [
+            {
+              "display": "<FILE>",
+              "description": "Registry Manifest metadata document to publish",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--output <DIRECTORY>",
+              "description": "Directory that receives the metadata bundle",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "public/metadata"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--site-root <DIRECTORY>",
+              "description": "Separate site root that receives .well-known discovery files",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Report format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "name": "messaging",
       "invocation": "messaging",
       "about": "Run and maintain Registry Messaging",
@@ -14025,6 +14972,50 @@
       ],
       "constraints": [],
       "subcommands": [
+        {
+          "name": "serve",
+          "invocation": "messagingctl serve",
+          "about": "Run the production Messaging service with the selected runtime",
+          "long_about": null,
+          "usage": "messagingctl serve [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration file passed unchanged to the Messaging runtime",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
         {
           "name": "init",
           "invocation": "messagingctl init",
@@ -15679,6 +16670,641 @@
       ]
     },
     {
+      "name": "rstack",
+      "invocation": "rstack",
+      "about": "Registry Stack command and component manager",
+      "long_about": null,
+      "usage": "rstack [OPTIONS] [COMMAND]",
+      "arguments": [],
+      "options": [
+        {
+          "display": "--format <FORMAT>",
+          "description": "Report encoding. Defaults to human even when stdout is piped",
+          "always_required": false,
+          "repeatable": true,
+          "default_values": [
+            "human"
+          ],
+          "possible_values": [
+            "human",
+            "json"
+          ],
+          "environment": null
+        },
+        {
+          "display": "--install-root <INSTALL_ROOT>",
+          "description": "Installation generation storage directory",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "--bin-dir <BIN_DIR>",
+          "description": "Directory for the single public rstack executable link",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "--asset-dir <ASSET_DIR>",
+          "description": "Directory of already downloaded, verified release assets",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "components",
+          "invocation": "rstack components",
+          "about": "List the selected release and component availability",
+          "long_about": null,
+          "usage": "rstack components [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Report encoding. Defaults to human even when stdout is piped",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--install-root <INSTALL_ROOT>",
+              "description": "Installation generation storage directory",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--bin-dir <BIN_DIR>",
+              "description": "Directory for the single public rstack executable link",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--asset-dir <ASSET_DIR>",
+              "description": "Directory of already downloaded, verified release assets",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "list",
+              "invocation": "rstack components list",
+              "about": "List every known product and its selected-release status",
+              "long_about": null,
+              "usage": "rstack components list [OPTIONS]",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Report encoding. Defaults to human even when stdout is piped",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--install-root <INSTALL_ROOT>",
+                  "description": "Installation generation storage directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--bin-dir <BIN_DIR>",
+                  "description": "Directory for the single public rstack executable link",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--asset-dir <ASSET_DIR>",
+                  "description": "Directory of already downloaded, verified release assets",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "install",
+          "invocation": "rstack install",
+          "about": "Install one or more components at the selected release",
+          "long_about": null,
+          "usage": "rstack install [OPTIONS] [COMPONENT]...",
+          "arguments": [
+            {
+              "display": "[COMPONENT]",
+              "description": "Product to install",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--all",
+              "description": "Install every product available for the selected platform",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Report encoding. Defaults to human even when stdout is piped",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--install-root <INSTALL_ROOT>",
+              "description": "Installation generation storage directory",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--bin-dir <BIN_DIR>",
+              "description": "Directory for the single public rstack executable link",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--asset-dir <ASSET_DIR>",
+              "description": "Directory of already downloaded, verified release assets",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "update",
+          "invocation": "rstack update",
+          "about": "Update the launcher and installed components to one exact release",
+          "long_about": null,
+          "usage": "rstack update [OPTIONS] --release <RELEASE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--release <RELEASE>",
+              "description": "Exact release tag to activate",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--preview",
+              "description": "Check the target release and report changes without activation",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Report encoding. Defaults to human even when stdout is piped",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--install-root <INSTALL_ROOT>",
+              "description": "Installation generation storage directory",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--bin-dir <BIN_DIR>",
+              "description": "Directory for the single public rstack executable link",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--asset-dir <ASSET_DIR>",
+              "description": "Directory of already downloaded, verified release assets",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "uninstall",
+          "invocation": "rstack uninstall",
+          "about": "Remove one or more installed components",
+          "long_about": null,
+          "usage": "rstack uninstall [OPTIONS] [COMPONENT]...",
+          "arguments": [
+            {
+              "display": "[COMPONENT]",
+              "description": "Product to remove",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--all",
+              "description": "Remove the complete managed installation",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Report encoding. Defaults to human even when stdout is piped",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--install-root <INSTALL_ROOT>",
+              "description": "Installation generation storage directory",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--bin-dir <BIN_DIR>",
+              "description": "Directory for the single public rstack executable link",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--asset-dir <ASSET_DIR>",
+              "description": "Directory of already downloaded, verified release assets",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "cleanup",
+          "invocation": "rstack cleanup",
+          "about": "Remove inactive, unused installation generations",
+          "long_about": null,
+          "usage": "rstack cleanup [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Report encoding. Defaults to human even when stdout is piped",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--install-root <INSTALL_ROOT>",
+              "description": "Installation generation storage directory",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--bin-dir <BIN_DIR>",
+              "description": "Directory for the single public rstack executable link",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--asset-dir <ASSET_DIR>",
+              "description": "Directory of already downloaded, verified release assets",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "doctor",
+          "invocation": "rstack doctor",
+          "about": "Check selected binaries, paths, and component availability",
+          "long_about": null,
+          "usage": "rstack doctor [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Report encoding. Defaults to human even when stdout is piped",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--install-root <INSTALL_ROOT>",
+              "description": "Installation generation storage directory",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--bin-dir <BIN_DIR>",
+              "description": "Directory for the single public rstack executable link",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--asset-dir <ASSET_DIR>",
+              "description": "Directory of already downloaded, verified release assets",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "completions",
+          "invocation": "rstack completions",
+          "about": "Generate shell completion script",
+          "long_about": null,
+          "usage": "rstack completions [OPTIONS] <SHELL>",
+          "arguments": [
+            {
+              "display": "<SHELL>",
+              "description": "Shell whose completion script to generate",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Report encoding. Defaults to human even when stdout is piped",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--install-root <INSTALL_ROOT>",
+              "description": "Installation generation storage directory",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--bin-dir <BIN_DIR>",
+              "description": "Directory for the single public rstack executable link",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--asset-dir <ASSET_DIR>",
+              "description": "Directory of already downloaded, verified release assets",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "name": "scheduling",
       "invocation": "scheduling",
       "about": "Run and maintain Registry Scheduling",
@@ -15782,6 +17408,50 @@
       ],
       "constraints": [],
       "subcommands": [
+        {
+          "name": "serve",
+          "invocation": "schedulingctl serve",
+          "about": "Run the production Scheduling service with the selected runtime",
+          "long_about": null,
+          "usage": "schedulingctl serve [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration file passed unchanged to the Scheduling runtime",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
         {
           "name": "init",
           "invocation": "schedulingctl init",
@@ -16354,7 +18024,7 @@
             },
             {
               "display": "--limit <LIMIT>",
-              "description": "Most intents to list",
+              "description": "Most intents to list, from 1 through 200",
               "always_required": false,
               "repeatable": false,
               "default_values": [

@@ -27,14 +27,14 @@ const INVALID_ARGUMENTS: &str = "Scheduling client arguments are invalid";
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SchedulingClientConfig {
     base_url: String,
-    request_timeout_milliseconds: Option<f64>,
+    attempt_timeout_milliseconds: Option<f64>,
     connect_timeout_milliseconds: Option<f64>,
-    max_response_bytes: Option<f64>,
+    maximum_response_bytes: Option<f64>,
     user_agent: Option<String>,
     trusted_root_certificates: Option<String>,
     /// How many times a keyed command whose outcome is unknown is resent under
     /// the same idempotency key: 0 to 2, default 2, and 0 disables the resend.
-    max_mutation_retries: Option<f64>,
+    maximum_mutation_retries: Option<f64>,
 }
 
 #[napi(object)]
@@ -71,6 +71,7 @@ pub struct SchedulingClient {
 impl SchedulingClient {
     #[napi(constructor)]
     pub fn new(config: Value) -> Result<Self> {
+        reject_null_configuration_members(&config)?;
         let config: SchedulingClientConfig = serde_json::from_value(config).map_err(|_| {
             binding_error(
                 "configuration",
@@ -84,14 +85,14 @@ impl SchedulingClient {
             )
         })?;
         let mut core = CoreConfig::new(base_url);
-        if let Some(value) = config.request_timeout_milliseconds {
-            core = core.with_request_timeout(Duration::from_millis(whole_number(value)?));
+        if let Some(value) = config.attempt_timeout_milliseconds {
+            core = core.with_attempt_timeout(Duration::from_millis(whole_number(value)?));
         }
         if let Some(value) = config.connect_timeout_milliseconds {
             core = core.with_connect_timeout(Duration::from_millis(whole_number(value)?));
         }
-        if let Some(value) = config.max_response_bytes {
-            core = core.with_max_response_bytes(whole_number(value)?);
+        if let Some(value) = config.maximum_response_bytes {
+            core = core.with_maximum_response_bytes(whole_number(value)?);
         }
         if let Some(value) = config.user_agent {
             core = core.with_user_agent(value);
@@ -99,8 +100,8 @@ impl SchedulingClient {
         if let Some(value) = config.trusted_root_certificates {
             core = core.with_trusted_root_certificates(value.into_bytes());
         }
-        if let Some(value) = config.max_mutation_retries {
-            core = core.with_max_mutation_retries(mutation_retries(value)?);
+        if let Some(value) = config.maximum_mutation_retries {
+            core = core.with_maximum_mutation_retries(mutation_retries(value)?);
         }
         CoreClient::new(core)
             .map(|inner| Self { inner })
@@ -512,6 +513,21 @@ fn binding_error(kind: &'static str, message: &'static str) -> NapiError {
         json!({ "kind": kind, "message": message, "outcomeUnknown": kind == "protocol" })
             .to_string(),
     )
+}
+
+/// JavaScript `null` is a value, not omission. Optional configuration is
+/// omitted by leaving the member absent.
+fn reject_null_configuration_members(config: &Value) -> Result<()> {
+    if config
+        .as_object()
+        .is_some_and(|members| members.values().any(Value::is_null))
+    {
+        return Err(binding_error(
+            "configuration",
+            "Scheduling client configuration is invalid",
+        ));
+    }
+    Ok(())
 }
 
 /// A millisecond or byte count as a JavaScript number. Only a whole number in

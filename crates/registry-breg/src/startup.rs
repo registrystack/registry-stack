@@ -2201,6 +2201,16 @@ pub fn operational_log_level(value: Option<&str>) -> Result<LevelFilter> {
     }
 }
 
+/// Select the process environment override, then the authored runtime level.
+/// Both inputs use the same closed vocabulary and an invalid value refuses
+/// startup rather than falling back.
+pub fn select_operational_log_level(
+    environment: Option<&str>,
+    configured: &str,
+) -> Result<LevelFilter> {
+    operational_log_level(environment.or(Some(configured)))
+}
+
 /// Verify the complete local package first, then require the configured
 /// database id, the package digest as the active package, the schema
 /// fingerprint, ready maintenance state, ownership, RLS, and ACL catalog

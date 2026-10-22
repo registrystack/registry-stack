@@ -281,8 +281,8 @@ impl ReviewAuthorityClient {
         }
         // Submission, cancellation, and result-poll claims all guard one
         // outbound exchange on this authority's client, so their lease is
-        // sized from that client's request timeout.
-        let lease_seconds = outbound_lease_seconds(client.request_timeout());
+        // sized from that client's per-attempt timeout.
+        let lease_seconds = outbound_lease_seconds(client.attempt_timeout());
         Ok(Self {
             authority,
             client,

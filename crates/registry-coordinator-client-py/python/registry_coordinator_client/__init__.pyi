@@ -179,9 +179,9 @@ class CoordinatorClientError(Exception):
     outcome_unknown: bool
 
 class CoordinatorClient:
-    def __init__(self, base_url: str, request_timeout_seconds: float | None = None, connect_timeout_seconds: float | None = None, max_response_bytes: int | None = None, user_agent: str | None = None, trusted_root_certificates: bytes | None = None, max_mutation_retries: int | None = None) -> None: ...
+    def __init__(self, base_url: str, attempt_timeout_seconds: float | None = None, connect_timeout_seconds: float | None = None, maximum_response_bytes: int | None = None, user_agent: str | None = None, trusted_root_certificates: bytes | None = None, maximum_mutation_retries: int | None = None) -> None: ...
     # Admit `{workflow, workflowRevision, input}` under the caller's key; resent under the same key
-    # up to `max_mutation_retries` times when the outcome is unknown. The key
+    # up to `maximum_mutation_retries` times when the outcome is unknown. The key
     # is scoped to the caller and the workflow, so the same key under two workflows
     # starts two runs, and an allowed workflow the deployment does not serve is
     # refused with 404 `workflow.not-served`, a known outcome never resent.

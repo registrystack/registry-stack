@@ -90,7 +90,7 @@ for the full rules.
 
 A keyed BReg, Casework, Messaging, or Scheduling mutation whose outcome is
 unknown is resent identically under the same idempotency key up to
-`maxMutationRetries` times, a client option: 0 to 2, default 2, and 0 sends it
+`maximumMutationRetries` times, a client option: 0 to 2, default 2, and 0 sends it
 once. Casework review-request create and cancel are excluded from this retry.
 Reads, unkeyed calls, and every 4xx refusal are never resent. When the returned error
 still reports `outcomeUnknown`, the mutation may have taken effect: recover by

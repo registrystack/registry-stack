@@ -27,6 +27,7 @@ mod jwk;
 mod jwks;
 mod keygen;
 mod normalized;
+mod oid4vci;
 mod project_snapshot;
 mod report;
 mod request;
@@ -112,6 +113,8 @@ enum Command {
     Artifact(ArtifactCommand),
     /// Run the private local issuer and Registry Evidence pair.
     Dev(dev::DevArgs),
+    /// Operate the optional Evidence wallet-delivery service.
+    Oid4vci(oid4vci::Oid4vciArgs),
     /// Prepare a closed request for the active local project.
     #[command(subcommand)]
     Request(request::RequestCommand),
@@ -438,6 +441,22 @@ fn run_entry() -> ExitCode {
     } else {
         OutputFormat::Human
     };
+    if let Command::Oid4vci(args) = &cli.command {
+        let supplied = arguments
+            .iter()
+            .skip(1)
+            .take_while(|argument| *argument != "--")
+            .any(|argument| {
+                argument == "--format"
+                    || argument
+                        .to_str()
+                        .is_some_and(|value| value.starts_with("--format="))
+            });
+        if supplied && !args.is_check() {
+            write_usage_failure(format);
+            return ExitCode::from(report::USAGE_EXIT);
+        }
+    }
     if format == OutputFormat::Json {
         if let Some(command) = human_only_command(&matches) {
             print_report(&unsupported_json_format_failure(&command));
@@ -558,6 +577,13 @@ fn run_entry() -> ExitCode {
             )
         }
         Command::Dev(args) => safe_dev_command(dev::run_with_format(args, format)),
+        Command::Oid4vci(args) => safe_command(
+            oid4vci::run(args, format),
+            "evidence.oid4vci.failed",
+            "wallet-delivery helper".to_owned(),
+            "Evidence could not run the selected wallet-delivery command.",
+            "Install or repair the Evidence wallet-delivery capability and retry.",
+        ),
         Command::Request(command) => request::run(command),
         Command::Verify(args) => verify::run(args),
         Command::Audit(command) => audit_view::run(command, format),
@@ -1255,6 +1281,26 @@ mod tests {
     use clap::error::ErrorKind;
 
     #[test]
+    fn wallet_delivery_has_a_named_product_subtree() {
+        let tree = command();
+        let wallet = tree.find_subcommand("oid4vci").expect("oid4vci subtree");
+        for action in ["check", "inspect", "openapi", "serve"] {
+            assert!(wallet.find_subcommand(action).is_some(), "missing {action}");
+        }
+        assert!(command()
+            .try_get_matches_from([
+                "evidencectl",
+                "oid4vci",
+                "check",
+                "--runtime-config",
+                "runtime.yaml",
+                "--format",
+                "json",
+            ])
+            .is_ok());
+    }
+
+    #[test]
     fn a_bounded_delegated_run_is_an_operational_failure() {
         let bound = anyhow::Error::new(evidence_binary::DelegatedRunBoundError::for_test())
             .context("evidence fixtures run");
@@ -1343,7 +1389,11 @@ mod tests {
         "source mock check",
         "target explain",
         "tooling editor",
+        "oid4vci check",
     ];
+
+    /// Protocol and artifact output, or a foreground service without a report.
+    const NON_REPORT_COMMANDS: &[&str] = &["oid4vci inspect", "oid4vci openapi", "oid4vci serve"];
 
     fn leaf_paths(command: &clap::Command, prefix: &mut Vec<String>, leaves: &mut Vec<String>) {
         let subcommands: Vec<_> = command
@@ -1386,8 +1436,8 @@ mod tests {
         assert_eq!(found, listed);
     }
 
-    /// Every command either reports JSON or is listed as human-only, so a
-    /// command added later cannot silently answer `--format json` with prose.
+    /// Every command declares its report or stream mode, so a command added
+    /// later cannot silently answer `--format json` with prose or an artifact.
     #[test]
     fn every_command_declares_whether_it_reports_json() {
         let mut leaves = Vec::new();
@@ -1396,6 +1446,7 @@ mod tests {
             .iter()
             .filter(|leaf| {
                 !JSON_REPORTING_COMMANDS.contains(&leaf.as_str())
+                    && !NON_REPORT_COMMANDS.contains(&leaf.as_str())
                     && !HUMAN_ONLY_COMMANDS
                         .iter()
                         .any(|path| path.join(" ") == **leaf)

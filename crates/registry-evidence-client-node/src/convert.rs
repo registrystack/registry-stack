@@ -22,6 +22,8 @@ use registry_platform_httputil::{exchange_authorization_from_json, ExchangeAutho
 use serde_json::{Map, Value};
 use url::Url;
 
+const MAXIMUM_JAVASCRIPT_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
 /// A JS-supplied value did not have the shape this binding requires.
 ///
 /// This is distinct from [`EvidenceClientError`]: it is refused before any
@@ -90,6 +92,22 @@ fn require_exact_fields(
     Ok(())
 }
 
+fn require_omitted_instead_of_null(
+    object: &Map<String, Value>,
+    fields: &[&str],
+    what: &str,
+) -> Result<(), ConversionError> {
+    if fields
+        .iter()
+        .any(|field| matches!(object.get(*field), Some(Value::Null)))
+    {
+        return Err(ConversionError::new(format!(
+            "{what} options must be omitted instead of null"
+        )));
+    }
+    Ok(())
+}
+
 fn required_string(object: &Map<String, Value>, field: &str) -> Result<String, ConversionError> {
     object
         .get(field)
@@ -102,6 +120,7 @@ fn required_u64(object: &Map<String, Value>, field: &str) -> Result<u64, Convers
     object
         .get(field)
         .and_then(Value::as_u64)
+        .filter(|value| *value <= MAXIMUM_JAVASCRIPT_SAFE_INTEGER)
         .ok_or_else(|| ConversionError::new(format!("`{field}` must be a non-negative integer")))
 }
 
@@ -129,7 +148,7 @@ fn optional_string(
     field: &str,
 ) -> Result<Option<String>, ConversionError> {
     match object.get(field) {
-        None | Some(Value::Null) => Ok(None),
+        None => Ok(None),
         Some(Value::String(text)) => Ok(Some(text.clone())),
         Some(_) => Err(ConversionError::new(format!("`{field}` must be a string"))),
     }
@@ -144,9 +163,6 @@ fn optional_string_array(
     let Some(values) = object.get(field) else {
         return Ok(None);
     };
-    if values.is_null() {
-        return Ok(None);
-    }
     let values = values
         .as_array()
         .ok_or_else(|| ConversionError::new(format!("`{field}` must be an array of strings")))?;
@@ -164,20 +180,153 @@ fn optional_string_array(
 
 fn optional_u64(object: &Map<String, Value>, field: &str) -> Result<Option<u64>, ConversionError> {
     match object.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => value.as_u64().map(Some).ok_or_else(|| {
-            ConversionError::new(format!("`{field}` must be a non-negative integer"))
-        }),
+        None => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .filter(|value| *value <= MAXIMUM_JAVASCRIPT_SAFE_INTEGER)
+            .map(Some)
+            .ok_or_else(|| {
+                ConversionError::new(format!("`{field}` must be a non-negative safe integer"))
+            }),
     }
 }
 
 fn optional_i64(object: &Map<String, Value>, field: &str) -> Result<Option<i64>, ConversionError> {
     match object.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => value.as_i64().map(Some).ok_or_else(|| {
-            ConversionError::new(format!("`{field}` must be an integer that fits in 64 bits"))
-        }),
+        None => Ok(None),
+        Some(value) => value
+            .as_i64()
+            .filter(|value| value.unsigned_abs() <= MAXIMUM_JAVASCRIPT_SAFE_INTEGER)
+            .map(Some)
+            .ok_or_else(|| ConversionError::new(format!("`{field}` must be a safe integer"))),
     }
+}
+
+fn validate_exchange_client(value: &Value, what: &str) -> Result<(), ConversionError> {
+    let object = as_object(value, what)?;
+    require_exact_fields(
+        object,
+        &[
+            "tokenEndpoint",
+            "clientId",
+            "clientKey",
+            "audience",
+            "resource",
+            "scopes",
+            "assertionLifetimeSeconds",
+            "refreshMarginSeconds",
+            "attemptTimeoutMilliseconds",
+            "connectTimeoutMilliseconds",
+            "userAgent",
+            "trustedRootCertificates",
+        ],
+        what,
+    )?;
+    require_omitted_instead_of_null(
+        object,
+        &[
+            "audience",
+            "assertionLifetimeSeconds",
+            "refreshMarginSeconds",
+            "attemptTimeoutMilliseconds",
+            "connectTimeoutMilliseconds",
+            "userAgent",
+            "trustedRootCertificates",
+        ],
+        what,
+    )?;
+    optional_i64(object, "assertionLifetimeSeconds")?;
+    optional_i64(object, "refreshMarginSeconds")?;
+    optional_u64(object, "attemptTimeoutMilliseconds")?;
+    optional_u64(object, "connectTimeoutMilliseconds")?;
+    Ok(())
+}
+
+fn validate_exchange_config(value: &Value) -> Result<(), ConversionError> {
+    let object = as_object(value, "`authorization.exchange`")?;
+    require_exact_fields(
+        object,
+        &["client", "context", "firstParty", "remote"],
+        "`authorization.exchange`",
+    )?;
+    require_omitted_instead_of_null(
+        object,
+        &["firstParty", "remote"],
+        "`authorization.exchange`",
+    )?;
+
+    validate_exchange_client(
+        object.get("client").ok_or_else(|| {
+            ConversionError::new("`authorization.exchange.client` must be present")
+        })?,
+        "`authorization.exchange.client`",
+    )?;
+
+    let context = as_object(
+        object.get("context").ok_or_else(|| {
+            ConversionError::new("`authorization.exchange.context` must be present")
+        })?,
+        "`authorization.exchange.context`",
+    )?;
+    require_exact_fields(
+        context,
+        &[
+            "issuer",
+            "subject",
+            "audience",
+            "generation",
+            "deadlineSeconds",
+            "grantId",
+        ],
+        "`authorization.exchange.context`",
+    )?;
+    require_omitted_instead_of_null(context, &["grantId"], "`authorization.exchange.context`")?;
+    required_u64(context, "deadlineSeconds")?;
+
+    if let Some(first_party) = object.get("firstParty") {
+        let first_party = as_object(first_party, "`authorization.exchange.firstParty`")?;
+        require_exact_fields(
+            first_party,
+            &["key", "attributes"],
+            "`authorization.exchange.firstParty`",
+        )?;
+    }
+    if let Some(remote) = object.get("remote") {
+        let remote = as_object(remote, "`authorization.exchange.remote`")?;
+        require_exact_fields(
+            remote,
+            &[
+                "endpoint",
+                "bootstrap",
+                "bootstrapResource",
+                "bootstrapScope",
+                "attemptTimeoutMilliseconds",
+                "connectTimeoutMilliseconds",
+                "userAgent",
+                "trustedRootCertificates",
+            ],
+            "`authorization.exchange.remote`",
+        )?;
+        require_omitted_instead_of_null(
+            remote,
+            &[
+                "attemptTimeoutMilliseconds",
+                "connectTimeoutMilliseconds",
+                "userAgent",
+                "trustedRootCertificates",
+            ],
+            "`authorization.exchange.remote`",
+        )?;
+        validate_exchange_client(
+            remote.get("bootstrap").ok_or_else(|| {
+                ConversionError::new("`authorization.exchange.remote.bootstrap` must be present")
+            })?,
+            "`authorization.exchange.remote.bootstrap`",
+        )?;
+        optional_u64(remote, "attemptTimeoutMilliseconds")?;
+        optional_u64(remote, "connectTimeoutMilliseconds")?;
+    }
+    Ok(())
 }
 
 fn parse_url(value: &str, what: &str) -> Result<Url, ConversionError> {
@@ -617,6 +766,41 @@ pub fn batch_spec_from_json(value: &Value) -> Result<EvidenceRequestBatchSpec, C
 /// exchange with the token endpoint.
 fn private_key_jwt_provider_from_json(value: &Value) -> Result<PrivateKeyJwt, ConfigError> {
     let object = as_object(value, "`token.privateKeyJwt`").map_err(ConfigError::Shape)?;
+    require_exact_fields(
+        object,
+        &[
+            "tokenEndpoint",
+            "clientId",
+            "clientKey",
+            "audience",
+            "resource",
+            "scopes",
+            "assertionLifetimeSeconds",
+            "refreshMarginSeconds",
+            "attemptTimeoutMilliseconds",
+            "connectTimeoutMilliseconds",
+            "userAgent",
+            "trustedRootCertificates",
+        ],
+        "`token.privateKeyJwt`",
+    )
+    .map_err(ConfigError::Shape)?;
+    require_omitted_instead_of_null(
+        object,
+        &[
+            "audience",
+            "resource",
+            "scopes",
+            "assertionLifetimeSeconds",
+            "refreshMarginSeconds",
+            "attemptTimeoutMilliseconds",
+            "connectTimeoutMilliseconds",
+            "userAgent",
+            "trustedRootCertificates",
+        ],
+        "`token.privateKeyJwt`",
+    )
+    .map_err(ConfigError::Shape)?;
 
     let token_endpoint = parse_url(
         &required_string(object, "tokenEndpoint").map_err(ConfigError::Shape)?,
@@ -661,10 +845,14 @@ fn private_key_jwt_provider_from_json(value: &Value) -> Result<PrivateKeyJwt, Co
     {
         config = config.with_refresh_margin_seconds(seconds);
     }
-    if let Some(millis) = optional_u64(object, "requestTimeoutMs").map_err(ConfigError::Shape)? {
-        config = config.with_request_timeout(Duration::from_millis(millis));
+    if let Some(millis) =
+        optional_u64(object, "attemptTimeoutMilliseconds").map_err(ConfigError::Shape)?
+    {
+        config = config.with_attempt_timeout(Duration::from_millis(millis));
     }
-    if let Some(millis) = optional_u64(object, "connectTimeoutMs").map_err(ConfigError::Shape)? {
+    if let Some(millis) =
+        optional_u64(object, "connectTimeoutMilliseconds").map_err(ConfigError::Shape)?
+    {
         config = config.with_connect_timeout(Duration::from_millis(millis));
     }
     if let Some(user_agent) = optional_string(object, "userAgent").map_err(ConfigError::Shape)? {
@@ -736,6 +924,7 @@ pub fn exchange_from_authorization_json(
             "`authorization` must carry exactly one `exchange`",
         ))
     })?;
+    validate_exchange_config(exchange).map_err(ConfigError::Shape)?;
     exchange_authorization_from_json(exchange).map_err(ConfigError::from)
 }
 
@@ -746,6 +935,37 @@ pub fn exchange_from_authorization_json(
 /// `EvidenceClientConfig` exists.
 pub fn config_from_json(value: &Value) -> Result<EvidenceClientConfig, ConfigError> {
     let object = as_object(value, "the client configuration").map_err(ConfigError::Shape)?;
+    require_exact_fields(
+        object,
+        &[
+            "baseUrl",
+            "trustedJwks",
+            "revokedKeyIds",
+            "token",
+            "authorization",
+            "attemptTimeoutMilliseconds",
+            "connectTimeoutMilliseconds",
+            "userAgent",
+            "trustedRootCertificates",
+            "maximumResponseBytes",
+            "maxMetadataBytes",
+        ],
+        "the client configuration",
+    )
+    .map_err(ConfigError::Shape)?;
+    require_omitted_instead_of_null(
+        object,
+        &[
+            "attemptTimeoutMilliseconds",
+            "connectTimeoutMilliseconds",
+            "userAgent",
+            "trustedRootCertificates",
+            "maximumResponseBytes",
+            "maxMetadataBytes",
+        ],
+        "client configuration",
+    )
+    .map_err(ConfigError::Shape)?;
 
     let base_url = parse_url(
         &required_string(object, "baseUrl").map_err(ConfigError::Shape)?,
@@ -770,10 +990,14 @@ pub fn config_from_json(value: &Value) -> Result<EvidenceClientConfig, ConfigErr
     let mut config =
         EvidenceClientConfig::new(base_url, token_provider, trusted_jwks, revoked_key_ids);
 
-    if let Some(millis) = optional_u64(object, "requestTimeoutMs").map_err(ConfigError::Shape)? {
-        config = config.with_request_timeout(Duration::from_millis(millis));
+    if let Some(millis) =
+        optional_u64(object, "attemptTimeoutMilliseconds").map_err(ConfigError::Shape)?
+    {
+        config = config.with_attempt_timeout(Duration::from_millis(millis));
     }
-    if let Some(millis) = optional_u64(object, "connectTimeoutMs").map_err(ConfigError::Shape)? {
+    if let Some(millis) =
+        optional_u64(object, "connectTimeoutMilliseconds").map_err(ConfigError::Shape)?
+    {
         config = config.with_connect_timeout(Duration::from_millis(millis));
     }
     if let Some(user_agent) = optional_string(object, "userAgent").map_err(ConfigError::Shape)? {
@@ -784,8 +1008,10 @@ pub fn config_from_json(value: &Value) -> Result<EvidenceClientConfig, ConfigErr
     {
         config = config.with_trusted_root_certificates(pem_bundle.into_bytes());
     }
-    if let Some(max_bytes) = optional_u64(object, "maxResponseBytes").map_err(ConfigError::Shape)? {
-        config = config.with_max_response_bytes(max_bytes);
+    if let Some(maximum_bytes) =
+        optional_u64(object, "maximumResponseBytes").map_err(ConfigError::Shape)?
+    {
+        config = config.with_maximum_response_bytes(maximum_bytes);
     }
     if let Some(max_bytes) = optional_u64(object, "maxMetadataBytes").map_err(ConfigError::Shape)? {
         config = config.with_max_metadata_bytes(max_bytes);

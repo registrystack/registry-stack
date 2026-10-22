@@ -35,28 +35,28 @@ class ConstructionTests(unittest.TestCase):
 
     def test_unknown_or_missing_members_are_refused(self) -> None:
         with self.assertRaises(TypeError):
-            CoordinatorClient(BASE, request_timeout_milliseconds=1)  # type: ignore[call-arg]
+            CoordinatorClient(BASE, attempt_timeout_milliseconds=1)  # type: ignore[call-arg]
         with self.assertRaises(TypeError):
             CoordinatorClient()  # type: ignore[call-arg]
 
     def test_none_is_the_default_for_every_optional_member(self) -> None:
         CoordinatorClient(
             BASE,
-            request_timeout_seconds=None,
+            attempt_timeout_seconds=None,
             connect_timeout_seconds=None,
-            max_response_bytes=None,
+            maximum_response_bytes=None,
             user_agent=None,
             trusted_root_certificates=None,
-            max_mutation_retries=None,
+            maximum_mutation_retries=None,
         )
 
     def test_members_accept_values_in_range(self) -> None:
         for keyword, value in (
-            ("request_timeout_seconds", 2),
-            ("request_timeout_seconds", 1.5),
+            ("attempt_timeout_seconds", 2),
+            ("attempt_timeout_seconds", 1.5),
             ("connect_timeout_seconds", 2),
             ("connect_timeout_seconds", 1.5),
-            ("max_response_bytes", 1500),
+            ("maximum_response_bytes", 1500),
             ("user_agent", "adopter/1"),
         ):
             with self.subTest(keyword=keyword):
@@ -64,23 +64,23 @@ class ConstructionTests(unittest.TestCase):
 
     def test_bool_or_out_of_range_members_are_configuration_errors(self) -> None:
         for keyword, value in (
-            ("request_timeout_seconds", True),
-            ("request_timeout_seconds", False),
-            ("request_timeout_seconds", 0),
-            ("request_timeout_seconds", -1),
-            ("request_timeout_seconds", float("nan")),
-            ("request_timeout_seconds", float("inf")),
-            ("request_timeout_seconds", 1e300),
-            ("request_timeout_seconds", "2"),
+            ("attempt_timeout_seconds", True),
+            ("attempt_timeout_seconds", False),
+            ("attempt_timeout_seconds", 0),
+            ("attempt_timeout_seconds", -1),
+            ("attempt_timeout_seconds", float("nan")),
+            ("attempt_timeout_seconds", float("inf")),
+            ("attempt_timeout_seconds", 1e300),
+            ("attempt_timeout_seconds", "2"),
             ("connect_timeout_seconds", True),
             ("connect_timeout_seconds", -1),
             ("connect_timeout_seconds", 0),
-            ("max_response_bytes", True),
-            ("max_response_bytes", 0),
-            ("max_response_bytes", -1),
-            ("max_response_bytes", 2**64),
-            ("max_response_bytes", 16 * 1024 * 1024 + 1),
-            ("max_response_bytes", "1500"),
+            ("maximum_response_bytes", True),
+            ("maximum_response_bytes", 0),
+            ("maximum_response_bytes", -1),
+            ("maximum_response_bytes", 2**64),
+            ("maximum_response_bytes", 16 * 1024 * 1024 + 1),
+            ("maximum_response_bytes", "1500"),
         ):
             with self.subTest(keyword=keyword, value=value):
                 with self.assertRaises(CoordinatorClientError) as raised:
@@ -91,11 +91,11 @@ class ConstructionTests(unittest.TestCase):
     def test_mutation_retries_accept_zero_to_two_only(self) -> None:
         for retries in (0, 1, 2):
             with self.subTest(retries=retries):
-                CoordinatorClient(BASE, max_mutation_retries=retries)
+                CoordinatorClient(BASE, maximum_mutation_retries=retries)
         for retries in (3, 255, 256, -1, 1.5, "1", True):
             with self.subTest(retries=retries):
                 with self.assertRaises(CoordinatorClientError) as raised:
-                    CoordinatorClient(BASE, max_mutation_retries=retries)
+                    CoordinatorClient(BASE, maximum_mutation_retries=retries)
                 self.assertEqual(raised.exception.kind, "configuration")
                 self.assertIs(raised.exception.outcome_unknown, False)
 
