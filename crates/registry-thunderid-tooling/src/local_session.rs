@@ -723,14 +723,18 @@ mod tests {
         let secret = "synthetic-admin-value-never-kept";
         let output = format!(
             "start {secret} middle{secret}\n\
-             Direct Auth Secret (Direct API): 0123synthetic\n  \
+             Direct Auth Secret (Direct API): synthetic-direct-auth-secret\n  \
              Password: generated-synthetic\n\
              plain diagnostic line\n"
         );
 
         let kept = redact_one_shot_output(output.as_bytes(), false, &[secret]);
 
-        for value in [secret, "0123synthetic", "generated-synthetic"] {
+        for value in [
+            secret,
+            "synthetic-direct-auth-secret",
+            "generated-synthetic",
+        ] {
             assert!(!kept.contains(value), "{kept}");
         }
         assert_eq!(kept.matches("[redacted]").count(), 4, "{kept}");
