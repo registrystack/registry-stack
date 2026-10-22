@@ -485,3 +485,49 @@ async fn the_runtime_scopes_spent_keys_to_the_verified_caller() {
         2
     );
 }
+
+#[tokio::test]
+async fn the_dispatch_job_shape_refuses_a_lease_without_an_expiry() {
+    let isolated = isolated_schema().await;
+    let store = PostgresStore::connect_migration(&database(&isolated.reference), &secrets())
+        .expect("a migration store");
+    store.migrate().await.expect("the fresh schema migrations");
+    // A copy with the job table's checks and without its foreign key, so one
+    // row exercises the shape check alone.
+    isolated
+        .admin
+        .batch_execute(&format!(
+            "CREATE TABLE {schema}.shape_probe
+                 (LIKE {schema}.messaging_dispatch_jobs
+                  INCLUDING DEFAULTS INCLUDING CONSTRAINTS);",
+            schema = isolated.schema,
+        ))
+        .await
+        .expect("copy the dispatch job checks");
+    let leased = |expiry: &str| {
+        format!(
+            "INSERT INTO {schema}.shape_probe
+                 (message_id, part, generation, state, attempt,
+                  attempt_started_at, lease_expires_at, lease_token)
+             VALUES (gen_random_uuid(), 'message', 1, 'leased', 1,
+                     transaction_timestamp(), {expiry}, gen_random_uuid())",
+            schema = isolated.schema,
+        )
+    };
+    let error = isolated
+        .admin
+        .batch_execute(&leased("NULL"))
+        .await
+        .expect_err("a leased job without a lease expiry is refused");
+    let database = error.as_db_error().expect("a database refusal");
+    assert_eq!(
+        database.code(),
+        &tokio_postgres::error::SqlState::CHECK_VIOLATION
+    );
+    assert_eq!(database.constraint(), Some("messaging_dispatch_jobs_shape"));
+    isolated
+        .admin
+        .batch_execute(&leased("transaction_timestamp() + interval '1 minute'"))
+        .await
+        .expect("the same lease with an expiry is admitted");
+}

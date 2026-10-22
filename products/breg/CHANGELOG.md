@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `registry_internal.registry_attachment_verification_jobs` and the hook
+  delivery state refuse a `leased` row without a `lease_expires_at`, through
+  the corrected shared dispatch job and delivery state shapes, and the managed
+  schema fingerprint changes with them. Install the release on a fresh
+  database.
+
 - BREAKING: attachment verification audit entries use the schema
   `breg-attachment-verification-audit/v3`, with the same record fields as
   `/v2`. The keyed verification reference is derived under the

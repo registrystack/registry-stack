@@ -717,7 +717,8 @@ invariants:
       The recording transaction moves a version to erased only from
       pending, deleting the rows that named its bytes in the same
       transaction; an attempt that did not commit leaves its job leased or
-      pending, and the lapsed lease is reclaimed.
+      pending, and the lapsed lease is reclaimed. The job table CHECK
+      refuses a leased job without a lease expiry, so every lease can lapse.
     refusal: >-
       Record nothing for the interrupted attempt; the next attempt
       confirms the bytes gone and records the erasure once.

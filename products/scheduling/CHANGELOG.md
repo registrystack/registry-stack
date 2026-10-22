@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `scheduling_outbox` and the hook delivery state refuse a `leased` row
+  without a `lease_expires_at`, through the corrected shared dispatch job and
+  delivery state shapes. Apply this release to a fresh database.
+
 - BREAKING: confirmation, change, cancellation, and reminder delivery runs on
   the shared dispatch core. `scheduling_outbox` takes the dispatch job table
   shape: the attempt count is `attempt`, a lease carries `lease_token`, and an
