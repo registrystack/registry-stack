@@ -72,14 +72,16 @@ pub use activation::{
 use activation::{apply_migrations_in, check_active_package_in, schema_state_in};
 pub use attempt_key::attempt_key_reference;
 
-const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0100_scheduling.sql");
-/// Every schema version, in the order it is applied. The 1.0 baseline is
-/// version [`BASELINE_SCHEMA_VERSION`], above every version a pre-1.0 release
-/// applied; each later migration takes the next number.
-const SCHEMA_VERSIONS: [i64; 1] = [100];
-/// The 1.0 baseline schema version. A ledger holding any version below it
-/// was left by a pre-1.0 release, which this release refuses by name.
-const BASELINE_SCHEMA_VERSION: i64 = 100;
+const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0200_scheduling.sql");
+/// Every schema version, in the order it is applied. The baseline is
+/// version [`BASELINE_SCHEMA_VERSION`], above every version an earlier
+/// release applied; each later migration takes the next number.
+const SCHEMA_VERSIONS: [i64; 1] = [200];
+/// The baseline schema version. A ledger holding any version below it was
+/// left by an earlier pre-1.0 release, which this release refuses by name:
+/// version 100 is the v0.42.0 and v0.43.0 baseline, whose outbox and hook
+/// delivery tables are not the shared dispatch shape this release reads.
+const BASELINE_SCHEMA_VERSION: i64 = 200;
 const _: () = assert!(
     versions_start_at_baseline_and_increase(&SCHEMA_VERSIONS),
     "Scheduling migrations must start at BASELINE_SCHEMA_VERSION and strictly increase"

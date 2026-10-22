@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- BREAKING: Scheduling installs its schema, with the hook delivery tables, as
+  a new baseline numbered version 200, and later migrations take 201, 202,
+  and onward. A database whose ledger holds any version below 200, including
+  the version 100 that v0.42.0 and v0.43.0 recorded, is refused by name as a
+  pre-1.0 schema at `schedulingctl plan`, `apply`, and startup. Recovery:
+  keep the old database with the release that wrote it, create a fresh
+  database, and apply the package. Holds, appointments, and queued intents in
+  the old database are not carried forward.
+
 - `scheduling_outbox` and the hook delivery state refuse a `leased` row
   without a `lease_expires_at`, through the corrected shared dispatch job and
   delivery state shapes. Apply this release to a fresh database.

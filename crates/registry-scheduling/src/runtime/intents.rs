@@ -578,7 +578,7 @@ mod tests {
 
     #[test]
     fn the_outbox_migration_is_exactly_the_dispatch_core_shape() {
-        let migration = include_str!("../../migrations/0100_scheduling.sql");
+        let migration = include_str!("../../migrations/0200_scheduling.sql");
         let table = JobTable::new("public", OUTBOX_TABLE, "outbox_id", "purpose")
             .expect("the outbox table names");
         let declared = normalized(&table.create_statements().join("\n").replace("public.", ""));
