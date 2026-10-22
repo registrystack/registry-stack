@@ -398,6 +398,7 @@ CREATE TABLE IF NOT EXISTS casework_review_completion_outbox (
                          AND attempt > 0
                          AND next_attempt_at IS NULL
                          AND attempt_started_at IS NOT NULL
+                         AND lease_expires_at IS NOT NULL
                          AND lease_expires_at > attempt_started_at
                          AND lease_token IS NOT NULL
                          AND delivered_at IS NULL
