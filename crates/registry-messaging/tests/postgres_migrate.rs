@@ -112,13 +112,13 @@ async fn concurrent_migrators_apply_each_version_once_and_both_succeed() {
     a.expect("the first concurrent migration");
     b.expect("the second concurrent migration");
     c.expect("the third concurrent migration");
-    assert_eq!(applied_versions(&isolated).await, [100]);
+    assert_eq!(applied_versions(&isolated).await, [100, 101]);
 
     first
         .migrate()
         .await
         .expect("a repeated migration applies nothing");
-    assert_eq!(applied_versions(&isolated).await, [100]);
+    assert_eq!(applied_versions(&isolated).await, [100, 101]);
 
     let runtime = PostgresStore::connect_runtime(&config, &secrets).expect("a runtime store");
     runtime.ready().await.expect("a migrated store is ready");
@@ -157,6 +157,286 @@ async fn a_pre_1_0_schema_is_refused_by_migrate_and_readiness() {
         Err(StoreError::Pre1_0Schema { versions }) if versions == vec![1]
     ));
     assert_eq!(applied_versions(&isolated).await, [1]);
+}
+
+/// The baseline v0.42.0 and v0.43.0 shipped and recorded as version 100,
+/// byte for byte. Its dispatch job shape accepted a `leased` row without a
+/// lease expiry; version 101 replaces that shape.
+const RELEASED_BASELINE: &str = include_str!("../migrations/0100_messaging.sql");
+
+/// A queued message as v0.43.0 accepted it: the message row, its payload,
+/// and its pending dispatch job.
+const QUEUED_MESSAGE: &str = "
+    INSERT INTO messaging_messages (
+        message_id, submitter_issuer, submitter_subject, access_profile,
+        sender_profile, channel, provider, sender, recipient_kind,
+        content_source, package_digest, maximum_attempts,
+        initial_retry_delay_ms, maximum_retry_delay_ms, on_uncertain,
+        provider_idempotent_submit, accepted_at, expires_at
+    ) VALUES (
+        '00000000-0000-0000-0000-000000000101', 'https://issuer.example',
+        'sender', 'senders', 'email', 'email', 'relay', 'from@example.org',
+        'email', 'direct',
+        'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        3, 1000, 1000, 'hold', false, now(), now() + interval '1 day'
+    );
+    INSERT INTO messaging_message_payloads (message_id, recipient, text_body)
+        VALUES ('00000000-0000-0000-0000-000000000101', 'to@example.org', 'body');
+    INSERT INTO messaging_dispatch_jobs (
+        message_id, part, generation, state, attempt, next_attempt_at
+    ) VALUES (
+        '00000000-0000-0000-0000-000000000101', 'message', 1, 'pending', 0, now()
+    );";
+
+/// Lease the queued job without a lease expiry, a row the dispatcher never
+/// writes and the corrected shape refuses.
+const LEASE_WITHOUT_EXPIRY: &str = "
+    UPDATE messaging_dispatch_jobs
+       SET state = 'leased', attempt = 1, next_attempt_at = NULL,
+           attempt_started_at = now(), lease_token = gen_random_uuid(),
+           lease_expires_at = NULL
+     WHERE message_id = '00000000-0000-0000-0000-000000000101'";
+
+#[tokio::test]
+async fn a_version_100_database_migrates_forward_keeps_its_queue_and_refuses_a_lease_without_expiry(
+) {
+    let isolated = isolated_schema().await;
+    let config = database(&isolated.reference);
+    let store = PostgresStore::connect_migration(&config, &secrets()).expect("a migration store");
+    isolated
+        .admin
+        .batch_execute(&format!(
+            "SET search_path TO {schema};
+             CREATE TABLE messaging_schema_migrations (
+                 version bigint PRIMARY KEY CHECK (version > 0),
+                 applied_at timestamptz NOT NULL
+             );
+             {RELEASED_BASELINE}
+             INSERT INTO messaging_schema_migrations(version, applied_at) VALUES (100, now());
+             {QUEUED_MESSAGE}",
+            schema = isolated.schema,
+        ))
+        .await
+        .expect("a database v0.43.0 installed, with one queued message");
+    isolated
+        .admin
+        .batch_execute(&format!("BEGIN; {LEASE_WITHOUT_EXPIRY}; ROLLBACK;"))
+        .await
+        .expect("the released shape accepts a lease without an expiry");
+    assert!(
+        matches!(store.ready().await, Err(StoreError::SchemaVersion)),
+        "a version 100 database is not ready before apply migrates it"
+    );
+
+    store.migrate().await.expect("version 100 migrates forward");
+    assert_eq!(applied_versions(&isolated).await, [100, 101]);
+    let queued = isolated
+        .admin
+        .query_one(
+            "SELECT state, attempt, generation FROM messaging_dispatch_jobs \
+             WHERE message_id = '00000000-0000-0000-0000-000000000101'",
+            &[],
+        )
+        .await
+        .expect("the queued job survives the migration");
+    assert_eq!(queued.get::<_, String>(0), "pending");
+    assert_eq!(queued.get::<_, i16>(1), 0);
+    assert_eq!(queued.get::<_, i64>(2), 1);
+
+    let refused = isolated
+        .admin
+        .batch_execute(LEASE_WITHOUT_EXPIRY)
+        .await
+        .expect_err("the migrated shape refuses a lease without an expiry");
+    let refused = refused.as_db_error().expect("a database refusal");
+    assert_eq!(
+        refused.code(),
+        &tokio_postgres::error::SqlState::CHECK_VIOLATION
+    );
+    assert_eq!(refused.constraint(), Some("messaging_dispatch_jobs_shape"));
+
+    PostgresStore::connect_runtime(&config, &secrets())
+        .expect("a runtime store")
+        .ready()
+        .await
+        .expect("the migrated store is ready");
+}
+
+/// The activation path `messagingctl apply` takes migrates a version 100
+/// database forward inside its own transaction, the path an operator upgrading
+/// from v0.43.0 runs, rather than the store's standalone migrator.
+#[tokio::test]
+async fn apply_migrates_a_version_100_database_forward_and_keeps_its_queue() {
+    let isolated = isolated_schema().await;
+    isolated
+        .admin
+        .batch_execute(&format!(
+            "SET search_path TO {schema};
+             CREATE TABLE messaging_schema_migrations (
+                 version bigint PRIMARY KEY CHECK (version > 0),
+                 applied_at timestamptz NOT NULL
+             );
+             {RELEASED_BASELINE}
+             INSERT INTO messaging_schema_migrations(version, applied_at) VALUES (100, now());
+             {QUEUED_MESSAGE}
+             RESET search_path;",
+            schema = isolated.schema,
+        ))
+        .await
+        .expect("a database v0.43.0 installed, with one queued message");
+    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+        .expect("a runtime directory");
+    write_runtime(
+        root.path(),
+        &isolated.reference,
+        free_port(),
+        free_port(),
+        file_audit(root.path()),
+    );
+    let config =
+        RuntimeConfig::load(&root.path().join("runtime.yaml")).expect("the runtime configuration");
+
+    let applied = apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect("messagingctl apply migrates version 100 forward");
+    assert_eq!(applied.schema_versions_applied, [101]);
+    assert!(applied.recorded);
+    assert_eq!(applied_versions(&isolated).await, [100, 101]);
+    let queued = isolated
+        .admin
+        .query_one(
+            &format!(
+                "SELECT state, attempt, generation FROM {}.messaging_dispatch_jobs \
+                 WHERE message_id = '00000000-0000-0000-0000-000000000101'",
+                isolated.schema
+            ),
+            &[],
+        )
+        .await
+        .expect("the queued job survives the migration");
+    assert_eq!(queued.get::<_, String>(0), "pending");
+    assert_eq!(queued.get::<_, i16>(1), 0);
+    assert_eq!(queued.get::<_, i64>(2), 1);
+    let refused = isolated
+        .admin
+        .batch_execute(&format!(
+            "SET search_path TO {}; {LEASE_WITHOUT_EXPIRY}",
+            isolated.schema
+        ))
+        .await
+        .expect_err("the migrated shape refuses a lease without an expiry");
+    let refused = refused.as_db_error().expect("a database refusal");
+    assert_eq!(
+        refused.code(),
+        &tokio_postgres::error::SqlState::CHECK_VIOLATION
+    );
+    assert_eq!(refused.constraint(), Some("messaging_dispatch_jobs_shape"));
+
+    let again = apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect("a repeated apply");
+    assert!(again.schema_versions_applied.is_empty());
+    assert!(!again.recorded);
+    PostgresStore::connect_runtime(&config.database, &secrets())
+        .expect("a runtime store")
+        .ready()
+        .await
+        .expect("the migrated store is ready");
+}
+
+/// The migrated dispatch job table is exactly the shape the dispatch core
+/// declares: every core column, constraint and index exists with the same
+/// definition. Messaging adds its own foreign key and part constraint and
+/// its own indexes beside them, never a different definition of a core
+/// one.
+#[tokio::test]
+async fn the_migrated_job_table_is_exactly_the_dispatch_core_shape() {
+    let isolated = isolated_schema().await;
+    PostgresStore::connect_migration(&database(&isolated.reference), &secrets())
+        .expect("a migration store")
+        .migrate()
+        .await
+        .expect("the migrations");
+    let core = format!("{}_core", isolated.schema);
+    let table = registry_platform_dispatch::postgres::JobTable::new(
+        &core,
+        registry_messaging::dispatch::JOB_TABLE,
+        "message_id",
+        "part",
+    )
+    .expect("the core job table");
+    isolated
+        .admin
+        .batch_execute(&format!(
+            "CREATE SCHEMA {core}; {}",
+            table.create_statements().join("\n")
+        ))
+        .await
+        .expect("a fresh core job table");
+
+    let migrated = job_table_catalog(&isolated.admin, &isolated.schema).await;
+    let declared = job_table_catalog(&isolated.admin, &core).await;
+    assert_eq!(migrated.columns, declared.columns, "the job table columns");
+    for (name, definition) in &declared.constraints {
+        assert_eq!(
+            migrated.constraints.get(name),
+            Some(definition),
+            "constraint {name}"
+        );
+    }
+    for (name, definition) in &declared.indexes {
+        assert_eq!(migrated.indexes.get(name), Some(definition), "index {name}");
+    }
+}
+
+struct JobTableCatalog {
+    columns: Vec<(String, String, String, Option<String>)>,
+    constraints: std::collections::BTreeMap<String, String>,
+    indexes: std::collections::BTreeMap<String, String>,
+}
+
+async fn job_table_catalog(admin: &tokio_postgres::Client, schema: &str) -> JobTableCatalog {
+    let table = registry_messaging::dispatch::JOB_TABLE;
+    let columns = admin
+        .query(
+            "SELECT column_name::text, data_type::text, is_nullable::text, column_default::text \
+             FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 \
+             ORDER BY ordinal_position",
+            &[&schema, &table],
+        )
+        .await
+        .expect("the job table columns")
+        .iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3)))
+        .collect();
+    let relation = format!("{schema}.{table}");
+    let constraints = admin
+        .query(
+            "SELECT conname::text, pg_get_constraintdef(oid) FROM pg_constraint \
+             WHERE conrelid = $1::text::regclass",
+            &[&relation],
+        )
+        .await
+        .expect("the job table constraints")
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    let indexes = admin
+        .query(
+            "SELECT indexname::text, replace(indexdef, $1 || '.', '') FROM pg_indexes \
+             WHERE schemaname = $1 AND tablename = $2",
+            &[&schema, &table],
+        )
+        .await
+        .expect("the job table indexes")
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    JobTableCatalog {
+        columns,
+        constraints,
+        indexes,
+    }
 }
 
 #[tokio::test]
