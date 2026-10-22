@@ -1,0 +1,285 @@
+/*
+ * Registry Stack branding for ThunderID 1.0.1 Gate.
+ * Brand source: registrystack-brand/tokens.json.
+ * The dark palette follows Registry Stack's documentation site.
+ * build.py replaces the asset path when --asset-base-url is supplied.
+ */
+@font-face {
+  font-family: "Public Sans Variable";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/gate/assets/registry-stack/fonts/public-sans-latin-wght-normal.woff2") format("woff2");
+}
+
+:root {
+  --rs-blue: #173b7a;
+  --rs-blue-hover: #102a56;
+  --rs-ink: #161616;
+  --rs-body: #3a3a3a;
+  --rs-muted: #6a6a6a;
+  --rs-paper: #eef2ec;
+  --rs-surface: #ffffff;
+  --rs-rule: #e5e5e5;
+  --rs-paper-rule: #d7ddd5;
+  --rs-control-rule: #6a6a6a;
+  --rs-wordmark: #173b7a;
+  --rs-shadow: 4px 4px 0 rgb(12 27 58 / 15%);
+}
+
+html[data-color-scheme="dark"] {
+  --rs-blue: #7da3e0;
+  --rs-blue-hover: #a8c4ef;
+  --rs-ink: #f2f3f5;
+  --rs-body: #c7cad0;
+  --rs-muted: #9aa0a8;
+  --rs-paper: #16181d;
+  --rs-surface: #1b1e24;
+  --rs-rule: #2f333b;
+  --rs-paper-rule: #2f333b;
+  --rs-control-rule: #9aa0a8;
+  --rs-wordmark: #ffffff;
+  --rs-shadow: 4px 4px 0 rgb(0 0 0 / 35%);
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--rs-ink);
+  background: var(--rs-paper);
+  font-family: "Public Sans Variable", "Public Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Gate 1.0.1's FontImporter also uses !important. Keep these after it so the
+ * self-hosted family is used even when the SDK font variable is absent. */
+body,
+.MuiTypography-root,
+.MuiInputBase-root,
+.MuiInputBase-input,
+.MuiButton-root,
+.MuiFormLabel-root,
+.MuiMenuItem-root,
+.MuiSelect-select,
+.MuiChip-label {
+  font-family: "Public Sans Variable", "Public Sans", system-ui, -apple-system, "Segoe UI", Arial, sans-serif !important;
+}
+
+/* Match the public component suffixes, including custom product-name prefixes. */
+main:is(
+  [class*="SignIn--root"],
+  [class*="SignUp--root"],
+  [class*="Recovery--root"],
+  [class*="SignOut--root"]
+) {
+  min-height: 100svh;
+  height: auto;
+  padding: 88px 24px 48px;
+  border-top: 4px solid var(--rs-blue);
+  background-color: var(--rs-paper);
+  background-image: linear-gradient(var(--rs-paper-rule) 1px, transparent 1px);
+  background-size: 100% 32px;
+}
+
+main[class*="--root"] > .MuiStack-root {
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+}
+
+main[class*="--root"] > .MuiStack-root > .MuiStack-root {
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+}
+
+:is(
+  [class*="SignInBox--root"],
+  [class*="SignUpBox--root"],
+  [class*="RecoveryBox--root"],
+  [class*="SignOutBox--root"]
+) {
+  width: 100%;
+  max-width: 480px;
+  min-width: 0;
+  margin-inline: auto;
+}
+
+:is(
+  [class*="SignInBox--paper"],
+  [class*="SignUpBox--paper"],
+  [class*="RecoveryBox--paper"],
+  [class*="SignOutBox--paper"]
+) {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding: 32px;
+  gap: 24px;
+  border: 1px solid var(--rs-paper-rule);
+  border-top: 3px solid var(--rs-blue);
+  border-radius: 0;
+  background: var(--rs-surface);
+  box-shadow: var(--rs-shadow);
+  backdrop-filter: none;
+}
+
+/* Gate 1.0.1 does not render layout footer slots. Keep this display-only
+ * attribution beneath the card without changing the application's flows. */
+:is(
+  [class*="SignInBox--root"],
+  [class*="SignUpBox--root"],
+  [class*="RecoveryBox--root"],
+  [class*="SignOutBox--root"]
+)::after {
+  content: "Powered by ThunderID";
+  display: block;
+  color: var(--rs-muted);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* The Console flow and some custom flows omit application.logoUrl. Supply
+ * the same name as text without changing their authentication components. */
+:is(
+  [class*="SignInBox--paper"],
+  [class*="SignUpBox--paper"],
+  [class*="RecoveryBox--paper"],
+  [class*="SignOutBox--paper"]
+):not(:has(img[src*="/registry-stack-wordmark.svg"]))::before {
+  content: "Registry Stack";
+  display: block;
+  margin-bottom: 8px;
+  color: var(--rs-wordmark);
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: start;
+}
+
+/* Only the supplied wordmark is resized; QR codes and provider logos retain their geometry. */
+img[class*="Flow--image"][src*="/registry-stack-wordmark.svg"] {
+  display: block;
+  width: 224px;
+  height: auto;
+  max-width: 100%;
+  margin: 0 0 8px;
+  object-fit: contain;
+  object-position: left center;
+}
+
+html[data-color-scheme="dark"] img[src*="/registry-stack-wordmark.svg"] {
+  filter: brightness(0) invert(1);
+}
+
+[class*="Box--paper"] :is(h1, h2, h3, h4, h5, h6) {
+  color: var(--rs-ink);
+  text-align: start;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+
+[class*="Box--paper"] .MuiFormLabel-root {
+  color: var(--rs-body);
+  font-weight: 600;
+}
+
+[class*="Box--paper"] .MuiFormLabel-root.Mui-error {
+  color: var(--oxygen-palette-error-main);
+}
+
+[class*="Box--paper"] a {
+  color: var(--rs-blue);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+[class*="Box--paper"] a:hover {
+  color: var(--rs-blue-hover);
+}
+
+[class*="Box--paper"] :is(p, a, label, .MuiAlert-message) {
+  overflow-wrap: anywhere;
+}
+
+[class*="Box--paper"] .MuiOutlinedInput-notchedOutline {
+  border-color: var(--rs-control-rule);
+}
+
+[class*="Box--paper"] .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline {
+  border-width: 2px;
+  border-color: var(--rs-blue);
+}
+
+[class*="Box--paper"] .MuiOutlinedInput-root.Mui-error .MuiOutlinedInput-notchedOutline {
+  border-color: var(--oxygen-palette-error-main);
+}
+
+[class*="Box--paper"] .MuiButton-root {
+  transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+  white-space: normal;
+}
+
+[class*="Box--paper"] .MuiButton-containedPrimary {
+  background-color: var(--rs-blue);
+  background-image: none;
+  border: 1px solid var(--rs-blue);
+}
+
+@media (hover: hover) {
+  [class*="Box--paper"] .MuiButton-containedPrimary:hover {
+    background-color: var(--rs-blue-hover);
+    border-color: var(--rs-blue-hover);
+    box-shadow: 3px 3px 0 rgb(12 27 58 / 25%);
+  }
+}
+
+/* Preserve the runtime's disabled state and error information. */
+[class*="Box--paper"] .MuiButton-containedPrimary.Mui-disabled {
+  background-color: var(--oxygen-palette-action-disabledBackground);
+  border-color: transparent;
+  color: var(--oxygen-palette-action-disabled);
+}
+
+:is(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--rs-blue);
+  outline-offset: 3px;
+}
+
+@media (max-width: 480px) {
+  main[class*="--root"] {
+    padding: 88px 16px 32px;
+  }
+
+  [class*="Box--paper"] {
+    padding: 24px 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [class*="Box--paper"] .MuiButton-root {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  main[class*="--root"] {
+    background-image: none;
+  }
+
+  [class*="Box--paper"] {
+    border-color: CanvasText;
+    box-shadow: none;
+  }
+
+  :is(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline-color: Highlight;
+  }
+}

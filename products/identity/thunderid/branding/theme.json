@@ -1,0 +1,134 @@
+{
+  "handle": "registry-stack",
+  "displayName": "Registry Stack",
+  "description": "Registry Stack public identity screens: Public Sans, Registry blue, square controls and ledger paper.",
+  "theme": {
+    "cssVarPrefix": "oxygen",
+    "defaultColorScheme": "light",
+    "direction": "ltr",
+    "colorSchemes": {
+      "light": {
+        "palette": {
+          "primary": {
+            "main": "#173b7a",
+            "dark": "#102a56",
+            "light": "#26375c",
+            "contrastText": "#ffffff"
+          },
+          "secondary": {
+            "main": "#3a3a3a",
+            "dark": "#161616",
+            "light": "#6a6a6a",
+            "contrastText": "#ffffff"
+          },
+          "background": {
+            "default": "#eef2ec",
+            "paper": "#ffffff",
+            "acrylic": "#ffffff"
+          },
+          "text": {
+            "primary": "#161616",
+            "secondary": "#6a6a6a"
+          },
+          "divider": "#e5e5e5",
+          "error": {"main": "#b91c1c", "contrastText": "#ffffff"},
+          "warning": {"main": "#855b00", "contrastText": "#ffffff"},
+          "success": {"main": "#166534", "contrastText": "#ffffff"},
+          "info": {"main": "#173b7a", "contrastText": "#ffffff"}
+        }
+      },
+      "dark": {
+        "palette": {
+          "primary": {
+            "main": "#7da3e0",
+            "dark": "#a8c4ef",
+            "light": "#a8c4ef",
+            "contrastText": "#16181d"
+          },
+          "secondary": {
+            "main": "#c7cad0",
+            "dark": "#f2f3f5",
+            "light": "#9aa0a8",
+            "contrastText": "#16181d"
+          },
+          "background": {
+            "default": "#16181d",
+            "paper": "#1b1e24",
+            "acrylic": "#1b1e24"
+          },
+          "text": {
+            "primary": "#f2f3f5",
+            "secondary": "#c7cad0"
+          },
+          "divider": "#2f333b",
+          "error": {"main": "#fca5a5", "contrastText": "#16181d"},
+          "warning": {"main": "#e6c66a", "contrastText": "#16181d"},
+          "success": {"main": "#86efac", "contrastText": "#16181d"},
+          "info": {"main": "#7da3e0", "contrastText": "#16181d"}
+        }
+      }
+    },
+    "shape": {"borderRadius": 0},
+    "typography": {
+      "fontFamily": "\"Public Sans Variable\", \"Public Sans\", system-ui, -apple-system, \"Segoe UI\", Arial, sans-serif",
+      "fontSize": 16,
+      "fontWeightRegular": 400,
+      "fontWeightMedium": 600,
+      "fontWeightBold": 700,
+      "h1": {"fontSize": "2rem", "fontWeight": 700, "lineHeight": 1.2, "letterSpacing": "-0.03em"},
+      "h2": {"fontSize": "1.75rem", "fontWeight": 700, "lineHeight": 1.2, "letterSpacing": "-0.03em"},
+      "h3": {"fontSize": "1.5rem", "fontWeight": 700, "lineHeight": 1.2, "letterSpacing": "-0.01em"},
+      "h4": {"fontSize": "1.5rem", "fontWeight": 700, "lineHeight": 1.2, "letterSpacing": "-0.01em"},
+      "h5": {"fontSize": "1.25rem", "fontWeight": 700, "lineHeight": 1.3},
+      "h6": {"fontSize": "1.125rem", "fontWeight": 600, "lineHeight": 1.4},
+      "body1": {"fontSize": "1rem", "lineHeight": 1.6},
+      "body2": {"fontSize": "0.875rem", "lineHeight": 1.6},
+      "button": {"fontSize": "1rem", "fontWeight": 700, "textTransform": "none"},
+      "caption": {"fontSize": "0.8125rem", "lineHeight": 1.5}
+    },
+    "blur": {"none": "none", "light": "none", "medium": "none", "heavy": "none"},
+    "gradient": {"primary": "none", "secondary": "none"},
+    "components": {
+      "MuiCssBaseline": {
+        "styleOverrides": {
+          "body": {"backgroundImage": "none"},
+          "*": {"boxSizing": "border-box"}
+        }
+      },
+      "MuiPaper": {
+        "styleOverrides": {
+          "root": {"backgroundImage": "none", "borderRadius": 0, "backdropFilter": "none"}
+        }
+      },
+      "MuiButton": {
+        "defaultProps": {"disableElevation": true},
+        "styleOverrides": {
+          "root": {
+            "minHeight": 48,
+            "padding": "10px 16px",
+            "borderRadius": 0,
+            "textTransform": "none",
+            "fontWeight": 700,
+            "backgroundImage": "none"
+          }
+        }
+      },
+      "MuiOutlinedInput": {
+        "styleOverrides": {"root": {"minHeight": 48, "borderRadius": 0}}
+      },
+      "MuiInputLabel": {
+        "styleOverrides": {"root": {"fontWeight": 600}}
+      },
+      "MuiLink": {
+        "defaultProps": {"underline": "always"},
+        "styleOverrides": {"root": {"textUnderlineOffset": "0.2em"}}
+      },
+      "MuiAlert": {
+        "styleOverrides": {"root": {"borderRadius": 0, "alignItems": "flex-start"}}
+      },
+      "MuiIconButton": {
+        "styleOverrides": {"root": {"minWidth": 44, "minHeight": 44}}
+      }
+    }
+  }
+}
