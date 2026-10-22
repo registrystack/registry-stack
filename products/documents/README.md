@@ -43,6 +43,19 @@ states every rule under "Access tokens".
 | `GET /health` | No token; `200` while the process serves |
 | `GET /ready` | No token; `200` while the database carries this release's schema, its activation ledger names the served package active for the configured database identity under the current runtime role, and the audit journal accepts writes; `503 service.unavailable` otherwise |
 
+The two routes that create a resource, `POST /v1/documents` and
+`POST /v1/documents/{documentId}/grants`, refuse a request without an
+`Idempotency-Key` of 1 to 128 printable ASCII characters as
+`request.invalid` (400). A key belongs to its caller, by issuer and subject,
+and to its operation, for a grant the document it names. A retry under the
+same key with the same body, compared in canonical JSON after parsing,
+answers `201` with the resource the first request created, changes nothing,
+and reports no second event. The same key with another body is
+`idempotency.key-reused` (409). The Store answers retries for
+`retention.receiptRetentionDays`; after that the key stays spent and answers
+`idempotency.expired` (410). There is no route that reads a receipt by its
+key: a client that lost the answer retries within the retention period.
+
 A grant names its recipient by subject and actor kind, not by access
 profile, so issuing one does not check where the recipient's token will
 resolve. Release is decided when the recipient reads: the token must then
