@@ -3532,7 +3532,7 @@ formats:
       boolean: none
       idList: /hooks
       set: /accessProfiles/custodian-app/requiredScopes
-      reference: none
+      reference: /documentPolicies/citizen-delivery/custodyProfiles/0
     securityMembers:
       - pointer: /accessProfiles/*/requiredScopes
         whenOmitted: refused
@@ -3566,7 +3566,7 @@ formats:
       file: crates/registry-documents/src/config.rs
       function: load
       type: RuntimeConfig
-    check: documentsctl check --runtime-config {file}
+    check: documentsctl check --project {project} --runtime-config {file}
     example: products/documents/examples/starter/runtime.example.yaml
     conformance:
       requiredText: /authentication/oidc/audience
