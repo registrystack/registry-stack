@@ -171,6 +171,49 @@ fixed logging or runtime-path variable.
     crates/registry-caseworkctl/src/lib.rs;
     products/casework/RUNTIME-CONFIG.md. */}
 
+<DocsetProduct product="registry-messaging">
+
+## Registry Messaging
+
+`MESSAGING_LOG` selects `error`, `warn`, or `info` for JSON operational records on standard
+error, with `info` as the default.
+Other values, including an empty value, tracing directives, and `debug`, stop `messaging` with
+exit status 2 before it parses its arguments.
+The level covers the Messaging crates only; a dependency's log lines never reach the stream.
+A `messagingctl dev` session reads the same variable and writes the records to the session's
+private log file instead.
+
+Pass the runtime file explicitly with `messaging --runtime-config <FILE> serve`.
+Messaging has no fixed environment variable for that path.
+
+{/* Evidence: crates/registry-messaging/src/main.rs;
+    crates/registry-messaging/src/runtime.rs, operational_log_level();
+    crates/registry-messagingctl/src/dev/mod.rs, initialize_logging(). */}
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-documents">
+
+## Registry Document Store
+
+`DOCUMENTS_LOG` selects `error`, `warn`, or `info` for JSON operational records on standard
+error, with `info` as the default.
+Other values, including an empty value, tracing directives, and `debug`, stop `documents serve`
+with exit status 2 before it reads its runtime configuration; `documents --version` and
+`--help` answer whatever the variable holds.
+The level covers the Document Store crates only; a dependency's log lines never reach the stream.
+
+Pass the runtime file explicitly with `documents --runtime-config <FILE> serve` or
+`documentsctl plan --runtime-config <FILE>`.
+The Document Store has no fixed environment variable for that path, and `documentsctl` reads no
+logging variable.
+
+{/* Evidence: crates/registry-documents/src/main.rs;
+    crates/registry-documents/src/runtime.rs, operational_log_level();
+    products/documents/RUNTIME-CONFIG.md. */}
+
+</DocsetProduct>
+
 <DocsetProduct product="registry-breg-services">
 
 ## Base Registry Engine citizen gateway
