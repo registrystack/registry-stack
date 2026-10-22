@@ -2534,6 +2534,104 @@ fn script(path: &Path, body: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
 }
 
+/// Run a freshly written executable stub, waiting only for Linux ETXTBSY.
+/// A concurrent test's fork can inherit the writer descriptor until its own
+/// exec closes it. Deployed binaries are not being written, so this bounded
+/// retry belongs exclusively to tests, never the prerequisite probe itself.
+fn retry_busy_stub<T>(run: impl FnMut() -> Result<T>) -> Result<T> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    retry_busy_stub_while(run, || {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(10));
+        true
+    })
+}
+
+fn retry_busy_stub_while<T>(
+    mut run: impl FnMut() -> Result<T>,
+    mut wait_and_retry: impl FnMut() -> bool,
+) -> Result<T> {
+    loop {
+        match run() {
+            Err(error)
+                if error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::ExecutableFileBusy)
+                }) && wait_and_retry() => {}
+            result => return result,
+        }
+    }
+}
+
+#[test]
+fn a_fresh_script_refused_as_busy_is_retried_from_its_context_chain() {
+    let mut attempts = 0;
+    let result = retry_busy_stub_while(
+        || {
+            attempts += 1;
+            if attempts == 1 {
+                Err(anyhow::Error::new(std::io::Error::from(
+                    std::io::ErrorKind::ExecutableFileBusy,
+                ))
+                .context("cannot launch native development prerequisite"))
+            } else {
+                Ok("completed")
+            }
+        },
+        || true,
+    );
+    assert_eq!(result.unwrap(), "completed");
+    assert_eq!(attempts, 2);
+}
+
+#[test]
+fn a_fresh_script_failing_for_another_reason_is_not_retried() {
+    let error = retry_busy_stub_while::<()>(
+        || {
+            Err(
+                anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+                    .context("cannot launch native development prerequisite"),
+            )
+        },
+        || panic!("only an executable-busy failure may wait"),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    assert_eq!(
+        error.to_string(),
+        "cannot launch native development prerequisite"
+    );
+}
+
+#[test]
+fn a_fresh_script_still_busy_when_the_wait_expires_reports_busy() {
+    let mut attempts = 0;
+    let mut waits = 0;
+    let error = retry_busy_stub_while::<()>(
+        || {
+            attempts += 1;
+            Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy).into())
+        },
+        || {
+            waits += 1;
+            waits < 3
+        },
+    )
+    .unwrap_err();
+    assert_eq!(attempts, 3);
+    assert_eq!(waits, 3);
+    assert_eq!(
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::ExecutableFileBusy
+    );
+}
+
 #[test]
 fn resolved_prerequisites_record_a_canonical_path_and_their_reported_version() {
     let (_temp, state, clients, files) = fixture();
@@ -2550,14 +2648,14 @@ fn resolved_prerequisites_record_a_canonical_path_and_their_reported_version() {
     assert_eq!(resolved, linked);
     // The recorded path resolves that symlink, so a later diagnosis names the
     // file that served the session rather than the name it was reached by.
-    let recorded = binary(&root, &resolved).unwrap();
+    let recorded = retry_busy_stub(|| binary(&root, &resolved)).unwrap();
     assert_eq!(recorded.path, fs::canonicalize(&installed).unwrap());
     assert_eq!(recorded.version, "probe 9.9.9 (build 1)");
 
     // A prerequisite that cannot answer keeps its path and says so.
     let silent = state.project.join("silent-probe");
     script(&silent, "exit 3");
-    let silent = binary(&root, &silent).unwrap();
+    let silent = retry_busy_stub(|| binary(&root, &silent)).unwrap();
     assert_eq!(silent.version, UNREPORTED_VERSION);
     assert!(silent.path.ends_with("silent-probe"));
 
@@ -2618,16 +2716,18 @@ fn prerequisites_from_another_release_are_refused_before_the_session_starts() {
     let ports = unused_ports();
     let refused = format!(
         "{:#}",
-        start(StartArgs {
-            project: project.clone(),
-            clients_file: None,
-            breg_port: Some(ports[0]),
-            issuer_port: Some(ports[1]),
-            issuer_project: None,
-            issuer_image: None,
-            database_port: Some(ports[2]),
-            breg_bin: Some(prerequisites.join("breg")),
-            docker_bin: Some(prerequisites.join("docker")),
+        retry_busy_stub(|| {
+            start(StartArgs {
+                project: project.clone(),
+                clients_file: None,
+                breg_port: Some(ports[0]),
+                issuer_port: Some(ports[1]),
+                issuer_project: None,
+                issuer_image: None,
+                database_port: Some(ports[2]),
+                breg_bin: Some(prerequisites.join("breg")),
+                docker_bin: Some(prerequisites.join("docker")),
+            })
         })
         .expect_err("a breg from another release never starts a session")
     );
