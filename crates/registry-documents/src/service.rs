@@ -31,6 +31,7 @@ use registry_documents_core::{
 };
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_dispatch::postgres::{enqueue, JobKey, JobTable};
+use registry_platform_objectstore::ObjectStoreError;
 use registry_platform_yaml::{Digest, ExternalId, LocalId};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
@@ -40,7 +41,9 @@ use uuid::Uuid;
 use crate::audit::{
     DocumentsAudit, CONTENT_DOWNLOAD_EVENT, UPLOAD_CONTENT_EVENT, UPLOAD_RESERVATION_EVENT,
 };
-use crate::content::{digest_hex, pin_storage, read_hashing, BodyRefusal, ContentStorage};
+use crate::content::{
+    digest_hex, pin_storage, read_hashing, BodyRefusal, ContentStorage, StorageError,
+};
 use crate::hooks::ActivatedHooks;
 use crate::store::PostgresStore;
 use crate::transfer::{ReleaseBody, TransferBudget, TransferDeadline};
@@ -1435,6 +1438,14 @@ impl DocumentService {
                 }),
                 Err(ProblemCode::ServiceUnavailable),
             ),
+            Err(Release::Unavailable) => (
+                json!({
+                    "event": CONTENT_DOWNLOAD_EVENT,
+                    "outcome": "storage-unavailable",
+                    "byteCount": 0,
+                }),
+                Err(ProblemCode::ServiceUnavailable),
+            ),
         };
         audit
             .finish(record)
@@ -1460,15 +1471,7 @@ impl DocumentService {
             .filter(|record| record.version_id == version_id)
             .ok_or(ProblemCode::ResourceNotFound)?;
         let access = self.access(caller, &record).await?;
-        let digest = match record.releasable_digest(&self.settings.verifier_binding) {
-            Some(digest) if access.standing.custodian || access.released_by_grant => digest,
-            None if access.standing.custodian => {
-                return Err(ProblemCode::DocumentVersionNotReleasable.into())
-            }
-            // The owning system sees the document but is never released it.
-            _ if access.standing.sees() => return Err(ProblemCode::ProfileNotAuthorized.into()),
-            _ => return Err(ProblemCode::ResourceNotFound.into()),
-        };
+        let digest = self.releasable(&record, access)?;
         let Some(permit) = self.settings.budget.try_reserve(record.length) else {
             tracing::warn!("the transfer budget is spent; the download was refused");
             return Err(ProblemCode::ServiceUnavailable.into());
@@ -1485,16 +1488,71 @@ impl DocumentService {
             .await
         {
             Ok(bytes) => Ok((bytes, permit, record.media_type.clone())),
-            Err(error) => {
-                tracing::error!(
-                    version = %version_id,
+            Err(error) => Err(self.read_failure(caller, &record, error).await),
+        }
+    }
+
+    /// The digest `access` may be released of `record`, or the answer to a
+    /// caller that may not have its content.
+    fn releasable<'a>(&self, record: &'a Record, access: Access) -> Result<&'a str, ProblemCode> {
+        match record.releasable_digest(&self.settings.verifier_binding) {
+            Some(digest) if access.standing.custodian || access.released_by_grant => Ok(digest),
+            None if access.standing.custodian => Err(ProblemCode::DocumentVersionNotReleasable),
+            // The owning system sees the document but is never released it.
+            _ if access.standing.sees() => Err(ProblemCode::ProfileNotAuthorized),
+            _ => Err(ProblemCode::ResourceNotFound),
+        }
+    }
+
+    /// Why reading the content of `record` failed. A digest or binding
+    /// mismatch is an integrity failure. Content that is gone is answered
+    /// as a download of removed content when the version is now under
+    /// removal, and is an integrity failure when it is not. Every other
+    /// failure is the storage being unavailable.
+    async fn read_failure(&self, caller: &Caller, record: &Record, error: StorageError) -> Release {
+        let version = record.version_id;
+        match error {
+            StorageError::Binding
+            | StorageError::BindingMismatch
+            | StorageError::Object(ObjectStoreError::Integrity) => integrity(version, &error),
+            StorageError::Missing | StorageError::Object(ObjectStoreError::Missing) => {
+                match self.record(record.document_id).await {
+                    Ok(Some(current))
+                        if current.version_id == version && current.status.is_erasing() =>
+                    {
+                        match self.access(caller, &current).await {
+                            Ok(access) => match self.releasable(&current, access) {
+                                Err(problem) => Release::Refused(problem),
+                                Ok(_) => integrity(version, &error),
+                            },
+                            // The failed read is logged where it happened.
+                            Err(_) => Release::Unavailable,
+                        }
+                    }
+                    Ok(_) => integrity(version, &error),
+                    Err(_) => Release::Unavailable,
+                }
+            }
+            StorageError::Object(_) | StorageError::Query(_) | StorageError::Store(_) => {
+                tracing::warn!(
+                    version = %version,
                     error = %error,
-                    "stored content failed its integrity check; nothing was released"
+                    "content storage is unavailable; nothing was released"
                 );
-                Err(Release::Integrity)
+                Release::Unavailable
             }
         }
     }
+}
+
+/// Log a content integrity failure and answer it.
+fn integrity(version: Uuid, error: &StorageError) -> Release {
+    tracing::error!(
+        version = %version,
+        error = %error,
+        "stored content failed its integrity check; nothing was released"
+    );
+    Release::Integrity
 }
 
 /// Why a release did not happen.
@@ -1502,6 +1560,8 @@ enum Release {
     Refused(ProblemCode),
     /// The stored content failed its integrity check.
     Integrity,
+    /// The content storage could not be read.
+    Unavailable,
 }
 
 impl From<ProblemCode> for Release {

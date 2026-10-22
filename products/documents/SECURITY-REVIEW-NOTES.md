@@ -141,6 +141,11 @@ DOCUMENTS-SEC-14 to DOCUMENTS-SEC-20:
   three. It reads the whole
   content and checks digest and length before the first byte; a mismatch
   answers 503, sends no byte, and writes a `storage-integrity` audit entry.
+  So does content gone from a version that is not under removal. A database
+  or object storage outage answers the same 503 but writes
+  `storage-unavailable`, logged at warn, so the integrity outcome stays a
+  signal worth alarming on. Content removed between the record read and the
+  content read is re-read and answered as a version under removal.
 - Reservation, upload, verification, and download each write an audit
   request entry before they act and a response entry with outcome and byte
   count after. The journal names a caller only by a keyed reference. A

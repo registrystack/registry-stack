@@ -300,6 +300,53 @@ async fn an_s3_object_that_no_longer_matches_is_never_released() {
     assert_eq!(refused, 1);
 }
 
+/// The download outcomes the journal recorded, in order.
+fn download_outcomes(fixture: &Fixture) -> Vec<serde_json::Value> {
+    fixture
+        .deployment
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| {
+            entry["record"]["event"] == "documents.content-download"
+                && entry["record"]["outcome"].is_string()
+        })
+        .map(|entry| entry["record"].clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn an_s3_outage_on_download_is_journaled_unavailable_not_as_an_integrity_failure() {
+    let fixture = Fixture::new().await;
+    let (prepared, api) = fixture.start().await;
+    let (document, version) = upload(&api, &pdf(900, 26)).await;
+    prepared.verify_due().await;
+
+    fixture.state.mode.store(UNAVAILABLE, Ordering::SeqCst);
+    api.download(CITIZEN, &document, &version)
+        .await
+        .assert_problem(ProblemCode::ServiceUnavailable);
+    let outcomes = download_outcomes(&fixture);
+    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+    assert_eq!(outcomes[0]["outcome"], "storage-unavailable");
+    assert_eq!(outcomes[0]["byteCount"], 0);
+}
+
+#[tokio::test]
+async fn an_s3_object_missing_outside_a_removal_is_an_integrity_failure() {
+    let fixture = Fixture::new().await;
+    let (prepared, api) = fixture.start().await;
+    let (document, version) = upload(&api, &pdf(900, 27)).await;
+    prepared.verify_due().await;
+
+    fixture.state.bytes.lock().await.clear();
+    api.download(CITIZEN, &document, &version)
+        .await
+        .assert_problem(ProblemCode::ServiceUnavailable);
+    let outcomes = download_outcomes(&fixture);
+    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+    assert_eq!(outcomes[0]["outcome"], "storage-integrity");
+}
+
 #[tokio::test]
 async fn an_http_verifier_rejection_or_outage_never_releases() {
     let fixture = Fixture::new().await;
