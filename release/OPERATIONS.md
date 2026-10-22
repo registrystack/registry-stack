@@ -821,6 +821,20 @@ legs stay exercised; `--fetch-only` says so, writes a `--report` that names no
 predecessor, and stops. Once the floor's release
 is published the same run downloads it, with no change to the script or the
 workflow.
+
+`v0.44.0` starts Casework and Scheduling at a fresh baseline: each installs
+schema version 200 and refuses a ledger below 200 as a pre-1.0 schema at plan,
+apply, and startup. BReg in `v0.44.0` likewise refuses the `v0.43.0`
+attachment verification schema at startup and in `bregctl doctor`
+(`startup.database.pre-1-0-schema`). For each, keep the old release and its
+database, provision a fresh database, and activate the current package on it;
+for BReg, run `bregctl apply --package DIR --initial`. The rehearsal omits
+their legs and says why, and a named `--product scheduling` request refuses
+with this guidance as `--product casework` does. Messaging keeps its
+version 100 baseline and migrates a `v0.43.0` ledger forward through
+version 101; its leg also checks that the upgraded dispatch job shape refuses
+a leased job without a lease expiry.
+
 Casework and Scheduling state are not rehearsed: `PRODUCTS` in the script
 names no leg for either product. Casework's current review-only contract starts
 with a fresh database and intentionally refuses the retired schema before
