@@ -35,6 +35,7 @@ use crate::{guidance, Job, Outcome, View};
 /// working directory, as an operator means a relative path.
 struct Runtime {
     given: PathBuf,
+    absolute: PathBuf,
     config: RuntimeConfig,
 }
 
@@ -52,6 +53,7 @@ fn load(path: &Path) -> Result<Runtime, Outcome> {
         RuntimeConfig::load(&absolute).map_err(|error| config_refusal(&absolute, &error))?;
     Ok(Runtime {
         given: path.to_owned(),
+        absolute,
         config,
     })
 }
@@ -218,6 +220,7 @@ pub(crate) fn replay(job: Job, path: &Path, version: Uuid, expected_generation: 
     };
     let replayed = match job {
         Job::Verification => block_on(replay_verification(
+            &runtime.absolute,
             &runtime.config,
             version,
             expected_generation,

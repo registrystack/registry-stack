@@ -607,7 +607,7 @@ async fn replay_returns_a_dead_lettered_verification_to_pending() {
     assert_eq!(listed[0].attempt, MAXIMUM_ATTEMPTS);
 
     // A stale generation is refused and changes nothing.
-    let error = replay_verification(&config(&deployment), version, 2)
+    let error = replay_verification(&deployment.runtime, &config(&deployment), version, 2)
         .await
         .expect_err("a stale generation is refused");
     assert!(
@@ -618,7 +618,7 @@ async fn replay_returns_a_dead_lettered_verification_to_pending() {
         "{error}"
     );
 
-    let replayed = replay_verification(&config(&deployment), version, 1)
+    let replayed = replay_verification(&deployment.runtime, &config(&deployment), version, 1)
         .await
         .expect("the dead letter replays");
     assert_eq!(replayed.version_id, version);
@@ -655,7 +655,7 @@ async fn replay_returns_a_dead_lettered_verification_to_pending() {
     assert!(journal.contains(&version.to_string()));
 
     // The job is no longer dead-lettered, so a second replay is refused.
-    let error = replay_verification(&config(&deployment), version, 2)
+    let error = replay_verification(&deployment.runtime, &config(&deployment), version, 2)
         .await
         .expect_err("a pending job is not replayed");
     assert!(
@@ -676,9 +676,46 @@ async fn replay_returns_a_dead_lettered_verification_to_pending() {
 }
 
 #[tokio::test]
+async fn replay_refuses_a_project_hook_whose_destination_is_not_bound_as_serve_does() {
+    let project = STARTER_PROJECT.replace(
+        "destinationId: owning-system-events",
+        "destinationId: unbound-events",
+    );
+    let deployment = Deployment::with_project(DATABASE_STORAGE, DISABLED_VERIFIER, &project).await;
+    deployment.migrate().await;
+    let error = replay_verification(&deployment.runtime, &config(&deployment), Uuid::new_v4(), 1)
+        .await
+        .expect_err("an unbound hook destination refuses the replay");
+    // The refusal is the positioned report `documents serve` gives for the
+    // same files: one diagnostic at `/destinations/hooks`, on its line of
+    // the runtime document.
+    let RuntimeError::ConfigurationRefused(report) = &error else {
+        panic!("a positioned configuration refusal, not {error}");
+    };
+    let found: Vec<(&str, &str)> = report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect();
+    assert_eq!(
+        found,
+        [(
+            "documents.runtime.unbound-hook-destination",
+            "/destinations/hooks"
+        )]
+    );
+    let source = report.diagnostics()[0]
+        .source
+        .as_ref()
+        .expect("the diagnostic names its file");
+    assert_eq!(source.file, deployment.runtime.display().to_string());
+    assert!(source.line.is_some(), "{error}");
+}
+
+#[tokio::test]
 async fn replay_refuses_an_unknown_version_and_an_unactivated_database() {
     let deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
-    let error = replay_verification(&config(&deployment), Uuid::new_v4(), 1)
+    let error = replay_verification(&deployment.runtime, &config(&deployment), Uuid::new_v4(), 1)
         .await
         .expect_err("an unactivated database is refused");
     assert!(
@@ -731,7 +768,7 @@ async fn replay_refuses_an_unknown_version_and_an_unactivated_database() {
     );
 
     deployment.migrate().await;
-    let error = replay_verification(&config(&deployment), Uuid::new_v4(), 1)
+    let error = replay_verification(&deployment.runtime, &config(&deployment), Uuid::new_v4(), 1)
         .await
         .expect_err("an unknown version is refused");
     assert!(
@@ -878,7 +915,7 @@ async fn replay_fails_closed_on_an_unwritable_audit_journal() {
     let (prepared, api) = start(&deployment, &verifier).await;
     let version = dead_lettered(&deployment, &prepared, &api).await;
     block_operator_journal(&deployment, "blocked");
-    let error = replay_verification(&config(&deployment), version, 1)
+    let error = replay_verification(&deployment.runtime, &config(&deployment), version, 1)
         .await
         .expect_err("replay refuses an unwritable audit journal");
     assert!(matches!(error, RuntimeError::AuditJournal(_)), "{error}");
@@ -943,7 +980,7 @@ async fn replay_refuses_a_verification_whose_content_is_being_removed() {
         ),
     ] {
         deployment.execute(state).await;
-        let error = replay_verification(&config(&deployment), version, 1)
+        let error = replay_verification(&deployment.runtime, &config(&deployment), version, 1)
             .await
             .expect_err("a replay of content being removed is refused");
         assert!(

@@ -526,8 +526,11 @@ pub async fn dead_lettered_verifications(
 /// reaches this: it runs over the runtime credential against an activated
 /// database, and the dispatcher records the replay in the operator's
 /// companion audit journal before and after it commits. No HTTP route
-/// replays a job.
+/// replays a job. `path` is the file `config` was read from: a hook
+/// destination `config` does not bind is refused at its position there, as
+/// `serve` refuses it.
 pub async fn replay_verification(
+    path: &Path,
     config: &RuntimeConfig,
     version_id: uuid::Uuid,
     expected_generation: i64,
@@ -543,6 +546,7 @@ pub async fn replay_verification(
         })?;
     let audit = open_audit(config, &secrets, Some(OPERATOR_PROCESS)).await?;
     let package = load_package(config)?;
+    check_against_project(path, config, &package)?;
     let hooks = activate_hooks(
         config,
         &package,

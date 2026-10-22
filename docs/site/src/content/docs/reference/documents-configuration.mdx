@@ -41,7 +41,8 @@ policy that uses it. The check also refuses:
 - a hook whose `handler.destinationId` the runtime configuration does not bind under
   `destinations.hooks` (`documents.runtime.unbound-hook-destination`, at `/destinations/hooks`),
   when the check is given both `--project` and `--runtime-config`. The runtime refuses to start
-  with the same diagnostic at the same position, before it connects to the database.
+  with the same diagnostic at the same position, before it connects to the database, and
+  `documentsctl verification replay`, which activates the same hooks, refuses with it too.
 
 A profile's `requesterClients`, `requiredScopes`, `actorKind`, and `principalClaim` are what an
 access token must match, beside the runtime's `authentication.oidc` block.

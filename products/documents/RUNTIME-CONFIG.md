@@ -121,6 +121,9 @@ database: a runtime role that cannot use the schema or read the activation
 ledger is refused as `documentsctl.activation.ledger-unreadable` at
 `database.runtimeUrlRef`. Run `documentsctl apply` with the migration
 credential, which grants the runtime role what it lacks, then retry.
+`verification replay` also activates the project's hooks, so it refuses a
+hook whose destination `destinations.hooks` does not bind with the
+diagnostic `serve` gives, on its line of this document.
 
 Every document route verifies a bearer access token against
 `authentication.oidc` before it reads a request body. A token the verifier

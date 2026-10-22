@@ -291,6 +291,38 @@ async fn init_package_plan_apply_and_status_activate_a_starter_deployment() {
         "documents.erasure.not-found"
     );
     assert_eq!(refused["diagnostics"][0]["path"], "erasure");
+
+    // A verification replay activates the project's hooks, so it refuses a
+    // hook destination the runtime does not bind with the positioned
+    // diagnostic `check` and `serve` give for the same files.
+    let document = std::fs::read_to_string(&runtime).unwrap();
+    std::fs::write(
+        &runtime,
+        document.replace("    owning-system-events:", "    other-events:"),
+    )
+    .unwrap();
+    let (code, refused) = ctl(&[
+        "verification",
+        "replay",
+        "--runtime-config",
+        &runtime,
+        "--version-id",
+        &Uuid::new_v4().to_string(),
+        "--expected-generation",
+        "1",
+    ]);
+    assert_eq!(code, 1, "{refused:#}");
+    assert_eq!(refused["status"], "domain-refusal");
+    assert_eq!(
+        refused["diagnostics"][0]["code"],
+        "documents.runtime.unbound-hook-destination"
+    );
+    assert_eq!(refused["diagnostics"][0]["path"], "/destinations/hooks");
+    assert_eq!(refused["diagnostics"][0]["source"]["file"], runtime);
+    assert!(
+        refused["diagnostics"][0]["source"]["line"].is_u64(),
+        "{refused:#}"
+    );
 }
 
 #[tokio::test]
