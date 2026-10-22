@@ -39,7 +39,7 @@ A few methods sit outside the inventory:
 | `health`, `ready` | Probes, sent without a bearer token |
 | `openapi`, `registryMetadata`, and the schema read for one Record type | Caller-filtered raw documents for the selected profile |
 | `executeRecoveredCreate`, `executeRecoveredAction`, `executeRecoveredProposalStart` | Send a recovered attempt; see [Recovery after a restart](#recovery-after-a-restart) |
-| `verifyHookDelivery` | Authenticate one webhook request; see [Verify a webhook delivery](../client-api/#verify-a-webhook-delivery) |
+| `verifyHookDelivery` | Authenticate one hook request; see [Verify a hook delivery](../client-api/#verify-a-hook-delivery) |
 
 Python spells each one in snake case. Read options are a request type in Rust, such as
 `BRegListRequest`, keyword arguments in Python, and one object in Node. Mutations take positional
@@ -346,7 +346,7 @@ attribute the failure does not carry is absent in Node and `None` in Python.
 | `problem` | The server answered with any other Problem | `status`, `traceId`; a known code adds `code` and any `fieldPath`, `constraint`, `refusalCode`, or `reasonCode` |
 | `protocol` | The response broke the contract | `status`, `traceId` when valid, and `code`: `header-bounds`, `trace-context`, `media-type`, `body`, `problem`, `entity-tag`, `profile-link`, `location`, `cache-policy`, `representation-digest`, `status`, or `protocol` |
 | `metadata-selection` | No binding matched | `code`: `not-found`, `unbound-source`, `profile-mismatch`, `unsupported-operation`, `required-capability`, or `contract-mismatch` |
-| `hook-verification` | A webhook delivery failed authentication | `code`: `missing-header`, `invalid-delivery-time`, `duplicate-header`, `body-too-large`, `invalid-key`, `malformed-signature`, `signature-mismatch`, or `unsupported-version` |
+| `hook-verification` | A hook delivery failed authentication | `code`: `missing-header`, `invalid-delivery-time`, `duplicate-header`, `body-too-large`, `invalid-key`, `malformed-signature`, `signature-mismatch`, or `unsupported-version` |
 | `client` | Any other client-side failure | none |
 
 A Problem code this client version does not know arrives as kind `problem` with only `status` and
