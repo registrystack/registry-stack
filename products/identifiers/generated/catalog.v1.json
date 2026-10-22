@@ -3835,7 +3835,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "e7ebb4c45984c87919a5c3b7d886488550bd4e45ec4a0213dc80dd2a722acc2e",
+        "sha256": "34d05bd2adc4b41a65becd76fa288943d2636b7b60e4cfaf17c026dbd962b0f1",
         "mediaType": "application/schema+json"
       }
     },
@@ -3979,7 +3979,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/review-runtime/review-runtime.schema.json",
-        "sha256": "25b93baf3a412d22d90d4d224560a18ae2d5499d8da11a93d090f4b0178c0002",
+        "sha256": "1c547522ee09c598590eaa302615aaabb5e5628516f85f2f5558989af25210b1",
         "mediaType": "application/schema+json"
       }
     },
@@ -4015,7 +4015,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "5d5ae3f256d6cbfa520d08836428edbcc9f62972155e4875336b25ae2af8cd3e",
+        "sha256": "98d90628f2edef3f491e885ce72415c8c2e1098adc1a71b74ce6b8ba44b6bccf",
         "mediaType": "application/schema+json"
       }
     },
