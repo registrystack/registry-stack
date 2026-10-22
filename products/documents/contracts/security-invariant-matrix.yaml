@@ -146,7 +146,11 @@ invariants:
     refusal: >-
       Answer 409 document-version.not-releasable for a pending, suspended, or
       rejected version, and 503 service.unavailable, with a storage-integrity
-      audit entry and no byte released, when stored content no longer matches.
+      audit entry and no byte released, when stored content no longer matches
+      or is gone from a version not under removal. A content read that fails
+      because the database or object storage is unavailable answers the same
+      503 with a storage-unavailable audit entry; content removed while it is
+      read is answered as a version under removal.
     negativeTest:
       path: crates/registry-documents/tests/postgres_documents.rs
       name: an_uploaded_document_is_released_only_after_it_is_verified
@@ -377,8 +381,10 @@ invariants:
     enforcementPoint: >-
       An Idempotency-Key is scoped to the caller's issuer and subject, the
       operation, and the key, and stores the request body's digest. A replay re-
-      runs authorization before it answers, and a key is held for
-      retention.receiptRetentionDays.
+      runs authorization before it answers. A replay is answered for
+      retention.receiptRetentionDays; after that the key stays spent and a
+      replay under it answers idempotency.expired. The row holds only the key
+      and request digests and the resource id, so it is never pruned.
     refusal: >-
       Answer 409 idempotency.key-reused for another body under a held key and
       410 idempotency.expired after the key lapses, reserving nothing in either
@@ -495,7 +501,10 @@ invariants:
       Every audited request writes its request entry before it acts: the
       upload before it looks up its reservation, the download before it sends
       the first byte. The response entry is written after the operation
-      commits.
+      commits. A download's response entry is written once its content is
+      read and checked, before the body streams, so its released outcome and
+      byte count mean the content was admitted for transfer, not that the
+      caller received it.
     refusal: >-
       A request entry that cannot be written answers 503 service.unavailable
       and changes nothing. A response entry that cannot be written after the

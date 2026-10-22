@@ -386,6 +386,94 @@ async fn stored_content_that_no_longer_matches_its_digest_is_never_released() {
     assert_eq!(refused[0]["record"]["byteCount"], 0);
 }
 
+/// The download outcomes the journal recorded, in order.
+fn download_outcomes(deployment: &Deployment) -> Vec<serde_json::Value> {
+    deployment
+        .audit_entries()
+        .into_iter()
+        .filter(|entry| {
+            entry["record"]["event"] == "documents.content-download"
+                && entry["record"]["outcome"].is_string()
+        })
+        .map(|entry| entry["record"].clone())
+        .collect()
+}
+
+/// A content read that fails for a reason other than the content itself
+/// is answered unavailable and journaled `storage-unavailable`, never as
+/// an integrity failure.
+#[tokio::test]
+async fn a_failed_content_query_is_journaled_unavailable_not_as_an_integrity_failure() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, version) = ready(&prepared, &api, &pdf(512, 70)).await;
+
+    deployment
+        .execute("ALTER TABLE documents_contents RENAME COLUMN content TO withheld")
+        .await;
+    api.download(CITIZEN, &document, &version)
+        .await
+        .assert_problem(ProblemCode::ServiceUnavailable);
+    let outcomes = download_outcomes(&deployment);
+    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+    assert_eq!(outcomes[0]["outcome"], "storage-unavailable");
+    assert_eq!(outcomes[0]["byteCount"], 0);
+}
+
+/// Content that is gone while its version is not under removal is an
+/// integrity event.
+#[tokio::test]
+async fn content_missing_outside_a_removal_is_an_integrity_failure() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, version) = ready(&prepared, &api, &pdf(512, 71)).await;
+
+    deployment.execute("DELETE FROM documents_contents").await;
+    api.download(CITIZEN, &document, &version)
+        .await
+        .assert_problem(ProblemCode::ServiceUnavailable);
+    let outcomes = download_outcomes(&deployment);
+    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+    assert_eq!(outcomes[0]["outcome"], "storage-integrity");
+}
+
+/// Content removed between the record read and the content read is
+/// answered and journaled as a download of removed content.
+#[tokio::test]
+async fn content_removed_during_a_download_is_answered_as_removed() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let (document, version) = ready(&prepared, &api, &pdf(512, 72)).await;
+
+    // Reading the content records the removal and removes the content, as
+    // a removal and its erasure committing between the two reads would.
+    deployment
+        .execute(
+            "ALTER TABLE documents_contents RENAME TO documents_contents_held;
+             CREATE FUNCTION documents_contents_removed() RETURNS SETOF documents_contents_held
+               LANGUAGE plpgsql VOLATILE AS $$
+               BEGIN
+                 UPDATE documents_versions
+                    SET erasure_state = 'pending', eligibility = 'suspended',
+                        erasure_requested_at = now(), erasure_due_at = now() + interval '1 day';
+                 DELETE FROM documents_contents_held;
+                 RETURN;
+               END $$;
+             CREATE VIEW documents_contents AS SELECT * FROM documents_contents_removed();",
+        )
+        .await;
+    api.download(CITIZEN, &document, &version)
+        .await
+        .assert_problem(ProblemCode::DocumentVersionNotReleasable);
+    let outcomes = download_outcomes(&deployment);
+    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+    assert_eq!(outcomes[0]["outcome"], "refused");
+    assert_eq!(outcomes[0]["code"], "document-version.not-releasable");
+}
+
 #[tokio::test]
 async fn the_storage_binding_is_pinned_at_the_first_write() {
     let deployment = deployment().await;
