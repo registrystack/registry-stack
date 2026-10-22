@@ -1413,6 +1413,8 @@ impl DocumentService {
                     .deadline
                     .for_length(length)
                     .saturating_sub(started.elapsed());
+                // Journaled before the body streams: `released` means the
+                // content was admitted for transfer, not that it arrived.
                 (
                     json!({
                         "event": CONTENT_DOWNLOAD_EVENT,
