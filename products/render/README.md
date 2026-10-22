@@ -13,7 +13,7 @@ Render is a **pure function**: data in, PDF out. One secret file in serve
 mode (the caller API key), no database, no outbound calls. It runs three ways
 with the same guarantees:
 
-- **CLI** — `registry-render compile --bundle … --data … --issued-at … --out …`,
+- **CLI** — `registry-render compile --bundle … --data … --issued-at … --output …`,
   offline, zero config: branch printing, template authoring, CI.
 - **Service** — `registry-render serve`: one POST endpoint (`/v1/render/{type}`),
   API-key auth, supervised worker processes, and value-free audit entries
@@ -27,7 +27,7 @@ with the same guarantees:
 cargo run -p registry-render -- init ./my-bundle
 # write data.json with {reference, body, footer-note}
 cargo run -p registry-render -- compile --bundle ./my-bundle --type letter \
-  --data data.json --issued-at 2026-01-01T00:00:00Z --out letter.pdf
+  --data data.json --issued-at 2026-01-01T00:00:00Z --output letter.pdf
 cargo run -p registry-render -- package --bundle ./my-bundle \
   --output ./my-package --revision "$(git rev-parse HEAD)"
 ```
@@ -58,8 +58,8 @@ Latin font set. Scripts beyond Latin (Arabic, Hebrew, …) need a bundle font
 ## Exit codes
 
 Every CLI failure is one closed vocabulary (`ProblemKind`), and each kind
-has one stable exit code — scripts branch exactly. With `--json`, the same
-failure prints an RFC 9457 problem document on stderr. 0 is success; the
+has one stable exit code — scripts branch exactly. With `--format json`, the same
+failure prints one RFC 9457 problem document on stdout. 0 is success; the
 failure codes are 2-22 (clap's own usage errors also exit 2, and a panic
 exits 101):
 

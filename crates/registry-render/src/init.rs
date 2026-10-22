@@ -113,7 +113,7 @@ const README: &str = r#"# Render bundle
 - `fixtures/data.json` — a valid first payload.
 
 Workflow: edit → `registry-render compile --bundle . --type letter
---data fixtures/data.json --issued-at … --out letter.pdf` (or `--watch`) →
+--data fixtures/data.json --issued-at … --output letter.pdf` (or `--watch`) →
 `registry-render check` → `registry-render package --bundle . --output ../letter-package`.
 Point `package.root` at the new package directory before serving.
 
@@ -215,7 +215,7 @@ pub fn scaffold(dir: &Path, labels: &[String]) -> Result<i32, RenderProblem> {
     write_new(&dir.join("fixtures/data.json"), FIXTURE_DATA)?;
     write_new(&dir.join("README.md"), README)?;
     println!(
-        "scaffolded {}. First render:\n  registry-render compile --bundle {} --type letter --data {} --issued-at 2026-01-01T00:00:00Z --out letter.pdf",
+        "scaffolded {}. First render:\n  registry-render compile --bundle {} --type letter --data {} --issued-at 2026-01-01T00:00:00Z --output letter.pdf",
         dir.display(),
         dir.display(),
         dir.join("fixtures").join("data.json").display()

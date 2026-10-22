@@ -32,7 +32,7 @@ fn compile(bundle: &Path) -> Output {
         bundle.join("fixtures/data.json").to_str().unwrap(),
         "--issued-at",
         "2026-01-01T00:00:00Z",
-        "--out",
+        "--output",
         bundle.join("letter.pdf").to_str().unwrap(),
     ])
 }
@@ -215,7 +215,7 @@ fn watch_and_emit_envelope_are_refused_together() {
         dir.join("fixtures/data.json").to_str().unwrap(),
         "--issued-at",
         "2026-01-01T00:00:00Z",
-        "--out",
+        "--output",
         dir.join("letter.pdf").to_str().unwrap(),
         "--watch",
         "--emit-envelope",
@@ -402,7 +402,7 @@ fn package_command_writes_repeatable_verified_envelopes_and_revision() {
         dir.join("fixtures/data.json").to_str().unwrap(),
         "--issued-at",
         "2026-01-01T00:00:00Z",
-        "--out",
+        "--output",
         packages.join("letter.pdf").to_str().unwrap(),
     ]);
     assert!(
@@ -445,7 +445,7 @@ fn compile_is_bounded_by_a_worker_resource_wall() {
         dir.join("fixtures/data.json").to_str().unwrap(),
         "--issued-at",
         "2026-01-01T00:00:00Z",
-        "--out",
+        "--output",
         dir.join("letter.pdf").to_str().unwrap(),
         "--timeout",
         "1",
@@ -477,7 +477,7 @@ fn now_is_loud_about_the_resolved_issued_at() {
         "--data",
         dir.join("fixtures/data.json").to_str().unwrap(),
         "--now",
-        "--out",
+        "--output",
         dir.join("letter.pdf").to_str().unwrap(),
     ]);
     assert!(out.status.success());
@@ -491,7 +491,7 @@ fn now_is_loud_about_the_resolved_issued_at() {
 }
 
 #[test]
-fn json_failures_are_problem_documents() {
+fn format_json_compile_failures_are_problem_documents_on_stdout() {
     let dir = tempdir();
     run(&["init", dir.to_str().unwrap()]);
     let bad = dir.join("bad.json");
@@ -506,16 +506,19 @@ fn json_failures_are_problem_documents() {
         bad.to_str().unwrap(),
         "--issued-at",
         "2026-01-01T00:00:00Z",
-        "--out",
+        "--output",
         dir.join("letter.pdf").to_str().unwrap(),
-        "--json",
+        // rstack forwards its report format after the product arguments.
+        "--format",
+        "json",
     ]);
     assert_eq!(
         out.status.code(),
         Some(registry_render::ProblemKind::DataInvalid.exit_code())
     );
+    assert!(out.stderr.is_empty(), "JSON mode has no stderr chatter");
     let problem: serde_json::Value =
-        serde_json::from_slice(&out.stderr).expect("stderr is one JSON problem document");
+        serde_json::from_slice(&out.stdout).expect("stdout is one JSON problem document");
     assert_eq!(problem["title"], "data-invalid", "{problem}");
     assert_eq!(
         problem["type"], "https://render.registrystack.org/problems/data-invalid",
@@ -530,7 +533,7 @@ fn json_failures_are_problem_documents() {
 }
 
 #[test]
-fn validate_supports_json() {
+fn validate_supports_format_json() {
     let dir = tempdir();
     run(&["init", dir.to_str().unwrap()]);
     let good = run(&[
@@ -541,7 +544,8 @@ fn validate_supports_json() {
         "letter",
         "--data",
         dir.join("fixtures/data.json").to_str().unwrap(),
-        "--json",
+        "--format",
+        "json",
     ]);
     assert_eq!(good.status.code(), Some(0));
     let value: serde_json::Value = serde_json::from_slice(&good.stdout).expect("json stdout");
@@ -557,15 +561,196 @@ fn validate_supports_json() {
         "letter",
         "--data",
         bad_path.to_str().unwrap(),
-        "--json",
+        "--format",
+        "json",
     ]);
     assert_eq!(
         bad.status.code(),
         Some(registry_render::ProblemKind::DataInvalid.exit_code())
     );
+    assert!(bad.stderr.is_empty(), "JSON mode has no stderr chatter");
     let problem: serde_json::Value =
-        serde_json::from_slice(&bad.stderr).expect("json problem on stderr");
+        serde_json::from_slice(&bad.stdout).expect("json problem on stdout");
     assert_eq!(problem["title"], "data-invalid", "{problem}");
+}
+
+#[test]
+fn compile_supports_format_json() {
+    let dir = tempdir();
+    run(&["init", dir.to_str().unwrap()]);
+    let pdf = dir.join("letter.pdf");
+    let compiled = run(&[
+        "compile",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--type",
+        "letter",
+        "--data",
+        dir.join("fixtures/data.json").to_str().unwrap(),
+        "--issued-at",
+        "2026-01-01T00:00:00Z",
+        "--output",
+        pdf.to_str().unwrap(),
+        "--format",
+        "json",
+    ]);
+    assert_eq!(compiled.status.code(), Some(0));
+    assert!(
+        compiled.stderr.is_empty(),
+        "JSON mode has no stderr chatter"
+    );
+    let summary: serde_json::Value =
+        serde_json::from_slice(&compiled.stdout).expect("JSON summary on stdout");
+    assert_eq!(summary["pdfPath"], pdf.display().to_string());
+    assert!(summary["pdfSha256"].is_string());
+    assert!(summary["dataSha256"].is_string());
+    assert!(pdf.is_file());
+}
+
+#[test]
+fn retired_out_is_refused_with_its_replacement_before_effects() {
+    let dir = tempdir();
+    run(&["init", dir.to_str().unwrap()]);
+    let pdf = dir.join("retired-out.pdf");
+    let compiled = run(&[
+        "compile",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--type",
+        "letter",
+        "--data",
+        dir.join("fixtures/data.json").to_str().unwrap(),
+        "--issued-at",
+        "2026-01-01T00:00:00Z",
+        "--out",
+        pdf.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        compiled.status.code(),
+        Some(registry_render::ProblemKind::InvalidArgument.exit_code())
+    );
+    assert!(!pdf.exists(), "retired syntax writes no PDF");
+    let error = String::from_utf8_lossy(&compiled.stderr);
+    assert!(error.contains("--out"), "{error}");
+    assert!(error.contains("--output"), "{error}");
+}
+
+#[test]
+fn retired_out_with_format_json_is_a_problem_document_on_stdout() {
+    let dir = tempdir();
+    run(&["init", dir.to_str().unwrap()]);
+    let pdf = dir.join("retired-out-json.pdf");
+    let compiled = run(&[
+        "compile",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--type",
+        "letter",
+        "--data",
+        dir.join("fixtures/data.json").to_str().unwrap(),
+        "--issued-at",
+        "2026-01-01T00:00:00Z",
+        "--out",
+        pdf.to_str().unwrap(),
+        "--format",
+        "json",
+    ]);
+    assert_eq!(
+        compiled.status.code(),
+        Some(registry_render::ProblemKind::InvalidArgument.exit_code())
+    );
+    assert!(!pdf.exists(), "retired syntax writes no PDF");
+    assert!(
+        compiled.stderr.is_empty(),
+        "JSON mode has no stderr chatter"
+    );
+    let problem: serde_json::Value =
+        serde_json::from_slice(&compiled.stdout).expect("JSON problem on stdout");
+    assert_eq!(problem["title"], "invalid-argument", "{problem}");
+    assert!(
+        problem["detail"]
+            .as_str()
+            .is_some_and(|detail| { detail.contains("--out") && detail.contains("--output") }),
+        "{problem}"
+    );
+}
+
+#[test]
+fn watch_refuses_an_explicit_report_format_before_effects() {
+    let dir = tempdir();
+    run(&["init", dir.to_str().unwrap()]);
+    let pdf = dir.join("watch.pdf");
+    let watched = run(&[
+        "compile",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--type",
+        "letter",
+        "--data",
+        dir.join("fixtures/data.json").to_str().unwrap(),
+        "--issued-at",
+        "2026-01-01T00:00:00Z",
+        "--watch",
+        "--output",
+        pdf.to_str().unwrap(),
+        "--format",
+        "human",
+    ]);
+    assert_eq!(
+        watched.status.code(),
+        Some(registry_render::ProblemKind::InvalidArgument.exit_code())
+    );
+    assert!(!pdf.exists(), "refused watch writes no PDF");
+    let error = String::from_utf8_lossy(&watched.stderr);
+    assert!(error.contains("--format"), "{error}");
+    assert!(error.contains("--watch"), "{error}");
+}
+
+#[test]
+fn retired_json_is_refused_with_its_replacement_before_effects() {
+    let dir = tempdir();
+    run(&["init", dir.to_str().unwrap()]);
+    let pdf = dir.join("retired-json.pdf");
+    let compiled = run(&[
+        "compile",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--type",
+        "letter",
+        "--data",
+        dir.join("fixtures/data.json").to_str().unwrap(),
+        "--issued-at",
+        "2026-01-01T00:00:00Z",
+        "--output",
+        pdf.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(
+        compiled.status.code(),
+        Some(registry_render::ProblemKind::InvalidArgument.exit_code())
+    );
+    assert!(!pdf.exists(), "retired syntax writes no PDF");
+    let compile_error = String::from_utf8_lossy(&compiled.stderr);
+    assert!(compile_error.contains("--json"), "{compile_error}");
+    assert!(compile_error.contains("--format json"), "{compile_error}");
+
+    let validated = run(&[
+        "validate",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--type",
+        "letter",
+        "--data",
+        dir.join("fixtures/data.json").to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(
+        validated.status.code(),
+        Some(registry_render::ProblemKind::InvalidArgument.exit_code())
+    );
+    let validate_error = String::from_utf8_lossy(&validated.stderr);
+    assert!(validate_error.contains("--json"), "{validate_error}");
+    assert!(validate_error.contains("--format json"), "{validate_error}");
 }
 
 #[test]

@@ -52,6 +52,45 @@ fn explicit_install_paths_do_not_require_home() {
     );
 }
 
+#[test]
+fn component_delimiter_is_forwarded_before_an_option_shaped_component() {
+    let fixture = InstallerFixture::new();
+    let mut command = fixture.command();
+    command.args(["--", "--all"]);
+    let output = command.output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let arguments = fs::read_to_string(&fixture.arguments).unwrap();
+    assert!(
+        arguments.ends_with("--\n--all\n"),
+        "launcher arguments: {arguments}"
+    );
+}
+
+#[test]
+fn ordinary_component_selection_is_forwarded_without_a_delimiter() {
+    let fixture = InstallerFixture::new();
+    let mut command = fixture.command();
+    command.arg("breg");
+    let output = command.output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let arguments = fs::read_to_string(&fixture.arguments).unwrap();
+    assert!(
+        arguments.ends_with("breg\n"),
+        "launcher arguments: {arguments}"
+    );
+    assert!(!arguments.ends_with("--\nbreg\n"));
+}
+
 struct InstallerFixture {
     _temp: TempDir,
     assets: PathBuf,

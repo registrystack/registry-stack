@@ -16383,17 +16383,22 @@
               "environment": null
             },
             {
-              "display": "--json",
-              "description": "Machine-readable result on stdout (failures: problem+json on stderr, typed exit code)",
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's finite report in this format",
               "always_required": false,
               "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
               "environment": null
             },
             {
               "display": "-h, --help",
-              "description": "Print help",
+              "description": "Print help (see a summary with '-h')",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -16457,7 +16462,7 @@
           "invocation": "registry-render compile",
           "about": "Render one document offline",
           "long_about": null,
-          "usage": "registry-render compile [OPTIONS] --bundle <BUNDLE> --type <DOCUMENT> --data <DATA> --out <OUT>",
+          "usage": "registry-render compile [OPTIONS] --bundle <BUNDLE> --type <DOCUMENT> --data <DATA> --output <OUTPUT>",
           "arguments": [],
           "options": [
             {
@@ -16551,7 +16556,7 @@
               "environment": null
             },
             {
-              "display": "--out <OUT>",
+              "display": "--output <OUTPUT>",
               "description": "Output PDF path",
               "always_required": true,
               "repeatable": false,
@@ -16560,12 +16565,17 @@
               "environment": null
             },
             {
-              "display": "--json",
-              "description": "Machine-readable result on stdout",
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's finite report in this format",
               "always_required": false,
               "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
               "environment": null
             },
             {
@@ -16579,7 +16589,7 @@
             },
             {
               "display": "-h, --help",
-              "description": "Print help",
+              "description": "Print help (see a summary with '-h')",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -16679,7 +16689,7 @@
       "options": [
         {
           "display": "--format <FORMAT>",
-          "description": "Report encoding. Defaults to human even when stdout is piped",
+          "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
           "always_required": false,
           "repeatable": true,
           "default_values": [
@@ -16749,7 +16759,7 @@
           "options": [
             {
               "display": "--format <FORMAT>",
-              "description": "Report encoding. Defaults to human even when stdout is piped",
+              "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
               "always_required": false,
               "repeatable": true,
               "default_values": [
@@ -16810,7 +16820,7 @@
               "options": [
                 {
                   "display": "--format <FORMAT>",
-                  "description": "Report encoding. Defaults to human even when stdout is piped",
+                  "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
                   "always_required": false,
                   "repeatable": true,
                   "default_values": [
@@ -16893,7 +16903,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Report encoding. Defaults to human even when stdout is piped",
+              "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
               "always_required": false,
               "repeatable": true,
               "default_values": [
@@ -16973,7 +16983,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Report encoding. Defaults to human even when stdout is piped",
+              "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
               "always_required": false,
               "repeatable": true,
               "default_values": [
@@ -17054,7 +17064,7 @@
             },
             {
               "display": "--format <FORMAT>",
-              "description": "Report encoding. Defaults to human even when stdout is piped",
+              "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
               "always_required": false,
               "repeatable": true,
               "default_values": [
@@ -17116,7 +17126,7 @@
           "options": [
             {
               "display": "--format <FORMAT>",
-              "description": "Report encoding. Defaults to human even when stdout is piped",
+              "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
               "always_required": false,
               "repeatable": true,
               "default_values": [
@@ -17178,7 +17188,7 @@
           "options": [
             {
               "display": "--format <FORMAT>",
-              "description": "Report encoding. Defaults to human even when stdout is piped",
+              "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
               "always_required": false,
               "repeatable": true,
               "default_values": [
@@ -17231,6 +17241,37 @@
           "subcommands": []
         },
         {
+          "name": "help",
+          "invocation": "rstack help",
+          "about": "Show offline product help",
+          "long_about": null,
+          "usage": "help [PRODUCT]",
+          "arguments": [
+            {
+              "display": "[PRODUCT]",
+              "description": "Product whose offline command reference to show",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
           "name": "completions",
           "invocation": "rstack completions",
           "about": "Generate shell completion script",
@@ -17250,7 +17291,7 @@
           "options": [
             {
               "display": "--format <FORMAT>",
-              "description": "Report encoding. Defaults to human even when stdout is piped",
+              "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
               "always_required": false,
               "repeatable": true,
               "default_values": [

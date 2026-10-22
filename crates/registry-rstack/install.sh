@@ -43,6 +43,7 @@ install_root=""
 asset_dir=""
 selected=()
 select_all=0
+component_delimiter=0
 seen_release=0
 seen_bin_dir=0
 seen_install_root=0
@@ -104,6 +105,7 @@ while [[ "$#" -gt 0 ]]; do
 		exit 0
 		;;
 	--)
+		component_delimiter=1
 		shift
 		selected+=("$@")
 		break
@@ -370,6 +372,9 @@ fi
 if [[ "${select_all}" -eq 1 ]]; then
 	arguments+=(--all)
 elif [[ "${#selected[@]}" -gt 0 ]]; then
+	if [[ "${component_delimiter}" -eq 1 ]]; then
+		arguments+=(--)
+	fi
 	arguments+=("${selected[@]}")
 fi
 "${launcher}" "${arguments[@]}"

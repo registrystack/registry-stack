@@ -101,10 +101,9 @@ pub enum Command {
         /// either way.
         #[arg(long)]
         locale: Option<String>,
-        /// Machine-readable result on stdout (failures: problem+json on
-        /// stderr, typed exit code).
-        #[arg(long)]
-        json: bool,
+        /// Emit the selected command's finite report in this format.
+        #[arg(long, value_enum, default_value_t = crate::check::OutputFormat::Human)]
+        format: crate::check::OutputFormat,
     },
     /// Build a new deployment package with the shared checksum envelope.
     Package {
@@ -166,10 +165,10 @@ pub enum Command {
         watch: bool,
         /// Output PDF path.
         #[arg(long)]
-        out: PathBuf,
-        /// Machine-readable result on stdout.
-        #[arg(long)]
-        json: bool,
+        output: PathBuf,
+        /// Emit the selected command's finite report in this format.
+        #[arg(long, value_enum, default_value_t = crate::check::OutputFormat::Human)]
+        format: crate::check::OutputFormat,
         /// Write the exact canonical envelope bytes injected into the
         /// template to this path (merge-gate and debugging aid).
         #[arg(long)]
@@ -211,41 +210,58 @@ fn parse_asset_arg(spec: &str) -> Result<(String, PathBuf), String> {
 }
 
 /// Run the CLI. Returns the process exit code.
-pub fn run(cli: Cli) -> i32 {
+pub fn run(cli: Cli, format_supplied: bool) -> i32 {
     let json = wants_json(&cli);
-    match run_inner(cli) {
+    let invocation_error =
+        if format_supplied && matches!(&cli.command, Command::Compile { watch: true, .. }) {
+            Some("`--format` does not apply to `compile --watch`; remove it and retry")
+        } else {
+            None
+        };
+    let result = match invocation_error {
+        Some(message) => Err(RenderProblem::new(
+            crate::problem::ProblemKind::InvalidArgument,
+            message,
+        )),
+        None => run_inner(cli),
+    };
+    match result {
         Ok(code) => code,
-        Err(problem) => {
-            if json {
-                // The same RFC 9457 document HTTP callers get, on stderr;
-                // stdout stays for successful output. Scripts branch on the
-                // typed exit code and read the detail here.
-                let document = serde_json::json!({
-                    "type": format!("{}/{}", crate::problem::PROBLEM_TYPE_BASE, problem.kind.slug()),
-                    "title": problem.kind.slug(),
-                    "detail": problem.detail,
-                    "pointers": problem.pointers,
-                    "locations": problem.locations,
-                    "diagnostics": problem.diagnostics,
-                });
-                eprintln!(
-                    "{}",
-                    serde_json::to_string(&document).expect("problem json")
-                );
-            } else {
-                eprint!("{}", problem.render_human());
-            }
-            problem.exit_code()
-        }
+        Err(problem) => report_problem(problem, json),
     }
+}
+
+/// Emit a refusal in the caller's selected report format and return its typed
+/// process exit code.
+pub fn report_problem(problem: RenderProblem, json: bool) -> i32 {
+    if json {
+        // The same RFC 9457 document HTTP callers get. Finite JSON reports use
+        // stdout for both success and refusal, with no progress text on stderr.
+        let document = serde_json::json!({
+            "type": format!("{}/{}", crate::problem::PROBLEM_TYPE_BASE, problem.kind.slug()),
+            "title": problem.kind.slug(),
+            "detail": problem.detail,
+            "pointers": problem.pointers,
+            "locations": problem.locations,
+            "diagnostics": problem.diagnostics,
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&document).expect("problem json")
+        );
+    } else {
+        eprint!("{}", problem.render_human());
+    }
+    problem.exit_code()
 }
 
 /// Whether the invoked command asked for JSON output (its failures then
 /// print as problem documents instead of prose).
 fn wants_json(cli: &Cli) -> bool {
     match &cli.command {
-        Command::Compile { json, .. } => *json,
-        Command::Validate { json, .. } => *json,
+        Command::Compile { format, .. } | Command::Validate { format, .. } => {
+            matches!(format, crate::check::OutputFormat::Json)
+        }
         _ => false,
     }
 }
@@ -322,7 +338,7 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             document,
             data,
             locale,
-            json,
+            format,
         } => {
             let bundle = Bundle::load_for_preview(&bundle)?;
             let document = bundle.document(&document)?;
@@ -330,7 +346,7 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             // renders nothing.
             let request = read_request_without_time(&data, &locale)?;
             validate_data(document, &request)?;
-            if json {
+            if matches!(format, crate::check::OutputFormat::Json) {
                 println!("{}", serde_json::json!({"valid": true}));
             } else {
                 println!("ok");
@@ -348,15 +364,15 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             strict,
             timeout,
             watch,
-            out,
-            json,
+            output,
+            format,
             emit_envelope,
         } => {
+            let out = output;
             let issued = parse_issued_at(issued_at, now)?;
-            if now && !json {
+            if now && !matches!(format, crate::check::OutputFormat::Json) {
                 // The loud opt-in the flag's help promises (suppressed under
-                // --json, where stderr carries exactly one problem document
-                // on failure).
+                // --format json, where one finite report is the only output).
                 eprintln!(
                     "note: --now resolves issuedAt to {} (wall clock; output is NOT byte-stable)",
                     issued.to_rfc3339()
@@ -415,7 +431,7 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
                     format!("cannot write {}: {err}", out.display()),
                 )
             })?;
-            if json {
+            if matches!(format, crate::check::OutputFormat::Json) {
                 let summary = serde_json::json!({
                     "pdfPath": out.display().to_string(),
                     "pdfSha256": rendered.pdf_sha256,
