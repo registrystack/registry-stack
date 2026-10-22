@@ -50,11 +50,11 @@ arrives.
 | `listener.tlsTermination` | `operator-controlled-upstream` behind a TLS proxy, or `development-loopback` for local work only. |
 | `listener.networkExposure` | The shared network exposure declaration for the listener. |
 | `secretProviders` | The declared secret providers, such as `file.root`. A reference to an undeclared provider is refused. |
-| `database.runtimeUrlRef` | Secret reference to the PostgreSQL URL the runtime connects with. |
-| `database.migrationUrlRef` | Secret reference to the PostgreSQL URL `documentsctl apply` connects with to apply the schema, record the package in the activation ledger, and grant the runtime role. The runtime never uses it. |
-| `database.trustedRootCertificateRef` | Optional secret reference to the CA that signs the database certificate. |
-| `database.testOnlyPlaintext` | Accepted only by builds with the `postgres-test` feature; an operator build refuses it. |
-| `authentication.oidc` | The shared OIDC issuer block (`issuer`, `audience`, `jwksSource`), `allowedClients`, and `scopeClaim` (default `scope`). `allowedClients` must list clients; `unrestricted` is refused. |
+| `database.runtimeUrlRef` | Secret reference to the PostgreSQL URL the runtime connects with. The connection always uses TLS and verifies the server certificate and its host name; an `sslmode` in the URL does not change that. |
+| `database.migrationUrlRef` | Secret reference to the PostgreSQL URL `documentsctl apply` connects with to apply the schema, record the package in the activation ledger, and grant the runtime role. The runtime never uses it. It requires TLS like the runtime URL. |
+| `database.trustedRootCertificateRef` | Optional secret reference to a PEM bundle of the CA certificates that sign the database certificate, for a private CA. When set, these are the only roots trusted; when omitted, the system's trusted roots are used. |
+| `database.testOnlyPlaintext` | Accepted only by builds with the `postgres-test` feature, for the PostgreSQL test suites; an operator build refuses it with `documents.runtime.plaintext-database`, so a local run needs a database that serves TLS too. |
+| `authentication.oidc` | The shared OIDC issuer block (`issuer`, `audience`, `jwksSource`), `allowedClients`, and `scopeClaim` (default `scope`). `allowedClients` must list clients; `unrestricted` is refused. `jwksSource` defaults to the key set the issuer's discovery document names; see [Signing keys](#signing-keys) for the other sources. [Access tokens](#access-tokens) states what a token must carry. |
 | `audit` | `destination` (`file`, the default, or `stdout`), `path` for a file journal, and `hashKeyRef`. |
 | `storage` | `type: database`, or `type: s3` with the shared object storage keys (`url`, `bucket`, `region`, `pathStyle`, `accessKeyIdRef`, `secretAccessKeyRef`, `caBundleRef`, `attemptTimeoutMilliseconds`). `maximumDocumentBytes` is the deployment ceiling on one document version: 16 MiB when omitted, at most 16 MiB for `database` and 64 MiB for `s3`. Startup refuses a package whose policy asks for more. The storage binding is pinned at the first upload, and a later start under another backend, bucket, or scope is refused. |
 | `contentVerification` | `type: http` with `url`, `authorizationRef`, `policyId`, and `attemptTimeoutMilliseconds` (100 to 60000). `type: disabled` is accepted only beside `tlsTermination: development-loopback`. |
@@ -108,6 +108,85 @@ Every document route verifies a bearer access token against
 `authentication.oidc` before it reads a request body. A token the verifier
 refuses answers `authentication.refused` with a `Bearer` challenge; a
 verifier that cannot be reached answers `service.unavailable`.
+
+## Access tokens
+
+Every route but `GET /health` takes `Authorization: Bearer <token>`
+holding an RFC 9068 access token. The runtime verifies:
+
+- the header: `typ` is `at+jwt` or `application/at+jwt`, in any case; `alg`
+  is `RS256` or `ES256`; and `kid` names a key of that algorithm in the
+  issuer's key set;
+- the signature, and the claims `iss`, equal to `authentication.oidc.issuer`;
+  `aud`, holding `authentication.oidc.audience`; and `exp`, in the future.
+  `nbf` is checked when present;
+- the client: `azp` must be listed in `allowedClients`, or, when the token
+  has no `azp`, `client_id` must be. A listed `client_id` does not rescue an
+  unlisted `azp`;
+- an exchanged token, one carrying `registry_assertion_issuer`, is refused
+  unless `assertionIssuers` names that authority for its client.
+
+The verified client then selects the one access profile in `documents.yaml`
+whose `requesterClients` lists it, and the token must satisfy that profile:
+
+- the claim `scopeClaim` names (`scope` by default), a space-separated string
+  or an array of strings, carries every scope in the profile's
+  `requiredScopes`;
+- `registry_actor_kind` is the profile's `actorKind`, `service` or `human`.
+  No profile admits `agent`;
+- the claim the profile's `principalClaim` names, usually `sub`, is a
+  non-empty string. It is the caller's identity: the subject a custody
+  record holds and a grant names.
+
+A token that fails verification, a `registry_actor_kind` that is not a
+string, and a missing or empty principal answer `401 authentication.refused`
+with a `Bearer` challenge. A verified token that matches no profile, through
+its client, a missing scope, or an absent or different actor kind, answers
+`403 profile.not-authorized`. A missing scope is the one refusal the runtime
+logs, at `info`, naming the configured claim, the scope, and the profile,
+never a value from the token.
+
+## Signing keys
+
+`authentication.oidc.jwksSource` selects where the runtime finds the issuer's
+signing keys:
+
+- `type: discovery`, the default, fetches the key set the issuer's discovery
+  document names, and fetches it again as its cache ages or when a token
+  names a `kid` it does not hold, so it follows the issuer's key rotation.
+- `type: uri` with `uri` fetches the key set from that fixed address instead,
+  in the same way.
+- `type: static` with `documentRef`, a secret reference, reads a pinned key
+  set once at startup and fetches nothing. Use it when the runtime cannot or
+  should not reach the issuer, such as an isolated host or a local test
+  issuer that publishes no discovery document. It never rotates on its own:
+  to change keys, replace the secret and restart `serve`. The document is a
+  JSON Web Key Set of at least one RSA or EC public key, and every key needs a
+  non-empty `kid` no other key in the set repeats; startup refuses a
+  symmetric key, a key without a `kid`, and a repeated `kid`.
+
+## Operational logs
+
+`documents` writes its operational log as JSON lines on standard error,
+whatever `audit.destination` is, and only from the Document Store's own
+crates: a dependency's log lines never reach it. `DOCUMENTS_LOG` selects the
+level, one of `error`, `warn`, or `info`, and defaults to `info` when unset.
+Any other value, including an empty one or a `RUST_LOG`-style directive,
+stops `documents` before it reads its arguments, with
+`documents: DOCUMENTS_LOG must be one of error, warn, or info` and exit
+status 2. There is no `debug` level.
+
+The log records startup, the background workers, and failures. It holds no
+access log: a request writes no log line at any level unless something fails
+behind it (the database, the content storage, or the token verifier cannot
+answer, stored content fails its integrity check, the transfer budget is
+full, a transfer runs out of time, or a stored document names a policy the
+active package does not declare) or its token lacks a required scope. A
+refused request is explained by its problem response, whose `code` names the
+refusal. Who did what is recorded in the audit journal: each audited
+operation, such as a reservation, an upload, a download, a grant issued or
+revoked, and a removal request, writes a request entry before it acts and a
+response entry with its outcome. `RUST_LOG` has no effect.
 
 ## Transfer memory
 

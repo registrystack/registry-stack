@@ -43,6 +43,11 @@ policy that uses it. The check also refuses:
   when the check is given both `--project` and `--runtime-config`. The runtime refuses to start
   with the same code.
 
+A profile's `requesterClients`, `requiredScopes`, `actorKind`, and `principalClaim` are what an
+access token must match, beside the runtime's `authentication.oidc` block.
+[Access tokens](../../operate/documents/#access-tokens) lists every header and claim a token
+must carry.
+
 {/* Evidence: docs/site/scripts/generate-documents-configuration.mjs, CONTRACTS;
     crates/registry-documents-core/src/project.rs, DocumentsProject and reference_findings;
     crates/registry-documents/src/config.rs, DOCUMENTS_RUNTIME_KIND and project_findings;

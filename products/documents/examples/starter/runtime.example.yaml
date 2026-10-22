@@ -24,6 +24,8 @@ secretProviders:
 database:
   runtimeUrlRef: secret:file/runtime-database-url
   migrationUrlRef: secret:file/migration-database-url
+  # Both connections require TLS and verify the server's host name. A
+  # private CA's PEM bundle replaces the system roots:
   # trustedRootCertificateRef: secret:file/postgres-ca.pem
 authentication:
   oidc:
@@ -32,6 +34,11 @@ authentication:
     scopeClaim: scope
     # Required; `unrestricted` is a startup refusal.
     allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]
+    # Signing keys come from the issuer's discovery document by default. A
+    # static key set suits a host that cannot reach the issuer, or a local
+    # test issuer: it is read once at startup and never rotates, so replace
+    # the secret and restart to change keys. It holds RSA or EC public keys,
+    # each with a distinct non-empty `kid`.
     # jwksSource:
     #   type: static
     #   documentRef: secret:file/jwks.json

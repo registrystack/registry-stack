@@ -19,8 +19,12 @@ are delivered to after-commit URL observers.
 Every route but `GET /health` takes a bearer access token the configured
 issuer signed. The token's client, scopes, and actor kind select one access
 profile in `documents.yaml`; the profile and the document policy decide what
-the caller may do. `generated/registry-documents.openapi.json` is the full
-contract.
+the caller may do. The token is an RFC 9068 `at+jwt` access token signed with
+`RS256` or `ES256`, whose `azp` or `client_id` is in a profile's
+`requesterClients`, whose scopes include the profile's `requiredScopes`, and
+whose `registry_actor_kind` is the profile's `actorKind`; `RUNTIME-CONFIG.md`
+states every rule under "Access tokens".
+`generated/registry-documents.openapi.json` is the full contract.
 
 | Route | Does |
 |---|---|
