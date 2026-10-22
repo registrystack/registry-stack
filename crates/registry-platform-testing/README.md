@@ -17,6 +17,10 @@ This crate is test-only. It fails to compile unless callers enable the
 - `assert_json_absent_strings` for focused audit non-leak checks over JSON
   records.
 - `oidc_verifier_config` for a standard EdDSA test verifier configuration.
+- `assert_migration_pins` (feature `migration-pins`), which holds every file in
+  a product's migration directory to its pinned sha256 and fails on an edited,
+  unpinned, or missing file. Migration ledgers record versions only, so a
+  released file is never edited: a schema change is the next version.
 
 ## Typical Use
 
@@ -130,6 +134,7 @@ response with:
 ```sh
 cargo test -p registry-platform-testing --features test-utils
 cargo test -p registry-platform-testing --all-features
+cargo test -p registry-platform-testing --features migration-pins --lib migration_pins
 ```
 
 The crate also owns a cross-crate integration test that exercises middleware,

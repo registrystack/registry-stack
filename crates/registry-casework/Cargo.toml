@@ -78,7 +78,7 @@ registry-casework-client.workspace = true
 registry-breg-client.workspace = true
 registry-review-client.workspace = true
 registry-bregctl.workspace = true
-registry-platform-testing = { workspace = true, features = ["test-utils"] }
+registry-platform-testing = { workspace = true, features = ["test-utils", "migration-pins"] }
 tempfile.workspace = true
 tower.workspace = true
 wiremock.workspace = true

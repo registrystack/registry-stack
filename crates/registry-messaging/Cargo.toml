@@ -112,7 +112,7 @@ hex.workspace = true
 jsonschema.workspace = true
 rcgen.workspace = true
 registry-messaging-client.workspace = true
-registry-platform-testing.workspace = true
+registry-platform-testing = { workspace = true, features = ["migration-pins"] }
 reqwest.workspace = true
 serde_norway.workspace = true
 tempfile.workspace = true
