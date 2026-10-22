@@ -75,6 +75,8 @@ entries:
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: a_stale_fence_cannot_finish_a_requeued_message}
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: two_workers_never_send_one_message_twice}
       - {path: crates/registry-messaging/tests/postgres_messages.rs, name: a_cancellation_racing_a_claim_has_one_winner}
+      - {path: crates/registry-messaging/tests/postgres_migrate.rs, name: the_dispatch_job_shape_refuses_a_lease_without_an_expiry}
+      - {path: crates/registry-platform-dispatch/tests/postgres_dispatch.rs, name: the_shape_check_refuses_a_lease_without_an_expiry}
   - id: MESSAGING-SEC-06
     tests:
       - {path: crates/registry-messaging/src/http_provider/aws_tests.rs, name: the_aws_example_classifies_recorded_shape_answers_without_exposing_error_text}
