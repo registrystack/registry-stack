@@ -17,6 +17,20 @@
           "description": "The absolute path of the active audit file, for `destination: file`.",
           "pattern": "^/",
           "type": "string"
+        },
+        "retentionDays": {
+          "description": "How many days a sealed audit file is kept, for `destination: file`;\n90 when omitted.",
+          "format": "uint32",
+          "maximum": 36500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "rotateBytes": {
+          "description": "The size at which the active file is sealed and a new one begun,\nfor `destination: file`; 100 MiB when omitted.",
+          "format": "uint64",
+          "maximum": 4294967295,
+          "minimum": 1048576,
+          "type": "integer"
         }
       },
       "required": [

@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use clap::{Arg, Command};
 use registry_documents_core::AccessProfiles;
-use registry_platform_audit::{AuditDestination, AuditProfile, AuditWriter};
+use registry_platform_audit::{AuditProfile, AuditWriter};
 use registry_platform_dispatch::postgres::{DispatchWorker, Dispatcher, WorkerConfig};
 use registry_platform_yaml::Report;
 use thiserror::Error;
@@ -695,13 +695,10 @@ async fn open_audit(
         secret.expose_secret().to_vec(),
     ))
     .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
-    let mut destination = AuditDestination::from_settings(
-        config.audit.destination,
-        config.audit.path.clone(),
-        None,
-        None,
-    )
-    .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
+    let mut destination = config
+        .audit
+        .destination()
+        .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
     if let Some(process) = process {
         destination = destination
             .for_process(process)

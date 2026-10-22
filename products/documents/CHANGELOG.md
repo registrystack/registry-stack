@@ -11,6 +11,10 @@ The Document Store is held out of releases.
   this release's schema, the activation ledger names the served package
   active, and the audit journal accepts writes, and `503
   service.unavailable` otherwise. `GET /health` stays liveness only.
+- `audit.rotateBytes` and `audit.retentionDays` set when a file journal is
+  sealed and how long sealed files are kept, with the same names, bounds,
+  and defaults as Messaging. The runtime previously always used the
+  platform defaults, 100 MiB and 90 days.
 - `documents_verification_jobs` and `documents_erasure_jobs` refuse a
   `leased` row without a `lease_expires_at`, through the corrected shared
   dispatch job shape.

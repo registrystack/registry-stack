@@ -95,6 +95,7 @@ matter most:
 | `destinations.hooks` | One entry per destination id the project's hooks name: the receiver's `url` and its `hmacSha256KeyRef`. See [Events](#events). |
 | `retention.receiptRetentionDays` | How long a retry with the same `Idempotency-Key` gets the same answer. Seven days is a placeholder for your retention schedule to approve. |
 | `retention.hookPayloadRetentionDays` | How long an event waits to be delivered, from 1 to 30 days and 7 by default. |
+| `audit.rotateBytes` and `audit.retentionDays` | For a file journal: the size at which the active file is sealed, 100 MiB by default, and how many days a sealed file is kept, 90 by default. Ship the records you must keep off the host before `retentionDays` deletes them. |
 
 Uploads, downloads, and verification attempts each hold a whole version in memory, and share one
 transfer budget: the larger of 256 MiB and `storage.maximumDocumentBytes`, which is 256 MiB at
@@ -107,7 +108,10 @@ The [configuration reference](../../reference/documents-configuration/) lists ev
 
 {/* Evidence: products/documents/RUNTIME-CONFIG.md, Keys and Transfer memory;
     crates/registry-documents/src/config.rs, DATABASE_MAXIMUM_DOCUMENT_BYTES,
-    S3_MAXIMUM_DOCUMENT_BYTES, MAXIMUM_HOOK_PAYLOAD_RETENTION_DAYS, and ContentVerificationConfig;
+    S3_MAXIMUM_DOCUMENT_BYTES, MAXIMUM_HOOK_PAYLOAD_RETENTION_DAYS, AuditConfig, and
+    ContentVerificationConfig;
+    crates/registry-platform-audit/src/writer.rs, DEFAULT_AUDIT_ROTATE_BYTES and
+    DEFAULT_AUDIT_RETAIN_DAYS;
     crates/registry-documents/src/transfer.rs, TRANSFER_BUFFER_BYTES and TransferBudget::new;
     crates/registry-documents/src/verification.rs, VerificationTransport. */}
 

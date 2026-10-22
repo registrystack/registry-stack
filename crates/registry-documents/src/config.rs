@@ -15,7 +15,10 @@ use jsonwebtoken::Algorithm;
 use registry_documents_core::{
     DocumentsProject, HookHandler, DOCUMENTS_RUNTIME_API_VERSION, DOCUMENTS_RUNTIME_KIND,
 };
-use registry_platform_audit::{AuditDestination, AuditDestinationKind};
+use registry_platform_audit::{
+    AuditDestination, AuditDestinationError, AuditDestinationKind, MAX_AUDIT_RETAIN_DAYS,
+    MIN_AUDIT_ROTATE_BYTES,
+};
 use registry_platform_config::JwksSource;
 pub use registry_platform_config::{
     AttachmentVerifierConfig, AuditKeyConfig, DatabaseConfig, ObjectStorageConfig,
@@ -65,6 +68,9 @@ pub const MAXIMUM_RECEIPT_RETENTION_DAYS: u32 = 365;
 
 /// The longest a hook payload may be retained, in days.
 pub const MAXIMUM_HOOK_PAYLOAD_RETENTION_DAYS: u32 = 30;
+
+/// The largest `audit.rotateBytes`.
+pub const MAXIMUM_AUDIT_ROTATE_BYTES: u64 = u32::MAX as u64;
 
 /// The code of the refusal a runtime document earns when `destinations.hooks`
 /// leaves unbound a destination the project's hooks name. `documentsctl
@@ -163,6 +169,67 @@ pub struct AuditConfig {
     /// The absolute path of the active audit file, for `destination: file`.
     #[serde(default)]
     pub path: Option<std::path::PathBuf>,
+    /// The size at which the active file is sealed and a new one begun,
+    /// for `destination: file`; 100 MiB when omitted.
+    #[serde(default)]
+    pub rotate_bytes: Option<BoundedU64<MIN_AUDIT_ROTATE_BYTES, MAXIMUM_AUDIT_ROTATE_BYTES>>,
+    /// How many days a sealed audit file is kept, for `destination: file`;
+    /// 90 when omitted.
+    #[serde(default)]
+    pub retention_days: Option<BoundedU32<1, MAX_AUDIT_RETAIN_DAYS>>,
+}
+
+impl AuditConfig {
+    /// The destination this block names, with its rotation and retention.
+    pub fn destination(&self) -> Result<AuditDestination, AuditDestinationError> {
+        AuditDestination::from_settings(
+            self.destination,
+            self.path.clone(),
+            self.rotate_bytes.map(u64::from),
+            self.retention_days.map(u32::from),
+        )
+    }
+}
+
+/// The member an audit destination refusal concerns, as a JSON pointer.
+fn audit_pointer(error: &AuditDestinationError) -> &'static str {
+    match error {
+        AuditDestinationError::FileOnlyField {
+            field: "rotateBytes",
+        }
+        | AuditDestinationError::RotateBytesOutOfRange { .. } => "/audit/rotateBytes",
+        AuditDestinationError::FileOnlyField {
+            field: "retainDays",
+        }
+        | AuditDestinationError::RetainDaysOutOfRange { .. } => "/audit/retentionDays",
+        _ => "/audit",
+    }
+}
+
+/// An audit destination refusal in the runtime document's own spelling.
+fn audit_message(error: &AuditDestinationError) -> String {
+    match error {
+        AuditDestinationError::FileOnlyField {
+            field: "retainDays",
+        } => "audit.retentionDays applies only when audit.destination is file".to_owned(),
+        AuditDestinationError::RetainDaysOutOfRange { maximum } => {
+            format!("audit.retentionDays must be between 1 and {maximum}")
+        }
+        error => error.to_string(),
+    }
+}
+
+fn audit_action(error: &AuditDestinationError) -> &'static str {
+    match error {
+        AuditDestinationError::FileOnlyField { .. } => {
+            "Remove the member, or set audit.destination: file."
+        }
+        AuditDestinationError::RotateBytesOutOfRange { .. }
+        | AuditDestinationError::RetainDaysOutOfRange { .. } => {
+            "Write a value within the range the message names, or remove the member to use its default."
+        }
+        _ => "Write audit.path as an absolute file path for destination file, or choose destination stdout.",
+    }
 }
 
 /// The largest document version held in PostgreSQL, and the default
@@ -670,17 +737,12 @@ impl RuntimeConfig {
     }
 
     fn check_audit(&self, findings: &mut Vec<Finding>) {
-        if let Err(error) = AuditDestination::from_settings(
-            self.audit.destination,
-            self.audit.path.clone(),
-            None,
-            None,
-        ) {
+        if let Err(error) = self.audit.destination() {
             findings.push(Finding::new(
                 "documents.runtime.invalid-audit",
-                "/audit",
-                error.to_string(),
-                "Write audit.path as an absolute file path for destination file, or choose destination stdout.",
+                audit_pointer(&error),
+                audit_message(&error),
+                audit_action(&error),
             ));
         }
     }
@@ -912,6 +974,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use registry_platform_audit::{DEFAULT_AUDIT_RETAIN_DAYS, DEFAULT_AUDIT_ROTATE_BYTES};
 
     pub(crate) const STARTER_RUNTIME: &str =
         include_str!("../../../products/documents/examples/starter/runtime.example.yaml");
@@ -1207,6 +1270,122 @@ pub(crate) mod tests {
             assert_eq!(
                 codes(result.unwrap_err()),
                 ["documents.runtime.plaintext-database"]
+            );
+        }
+    }
+
+    /// The starter document with its audit block replaced by one writing to
+    /// `destination` with `members`, and no rotation or retention else.
+    fn with_audit(destination: &str, members: &str) -> String {
+        let start = STARTER_RUNTIME
+            .find("audit:\n")
+            .expect("the starter audit block");
+        let hash_key = "  hashKeyRef: secret:file/documents-audit-key\n";
+        let end = STARTER_RUNTIME[start..]
+            .find(hash_key)
+            .expect("the audit hash key")
+            + start;
+        let path = if destination == "file" {
+            "  path: /var/lib/registry-documents/audit.ndjson\n"
+        } else {
+            ""
+        };
+        format!(
+            "{}audit:\n  destination: {destination}\n{path}{members}{}",
+            &STARTER_RUNTIME[..start],
+            &STARTER_RUNTIME[end..]
+        )
+    }
+
+    /// The JSON pointers a refusal names.
+    fn pointers(error: RuntimeConfigError) -> Vec<String> {
+        match error {
+            RuntimeConfigError::Refused(findings) => findings
+                .into_iter()
+                .map(|finding| finding.pointer)
+                .collect(),
+            RuntimeConfigError::Load(error) => error
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| diagnostic.path.clone())
+                .collect(),
+            error => panic!("a refusal naming a member, not {error}"),
+        }
+    }
+
+    #[test]
+    fn the_audit_file_rotates_and_is_kept_as_configured() {
+        let text = with_audit("file", "  rotateBytes: 2097152\n  retentionDays: 30\n");
+        let config = parse(&text).expect("the audit rotation and retention");
+        let AuditDestination::File(file) = config.audit.destination().unwrap() else {
+            panic!("a file destination");
+        };
+        assert_eq!(file.rotate_bytes(), 2_097_152);
+        assert_eq!(file.retain_days(), 30);
+    }
+
+    #[test]
+    fn an_audit_file_without_rotation_or_retention_takes_the_platform_defaults() {
+        let config = parse(&with_audit("file", "")).unwrap();
+        let AuditDestination::File(file) = config.audit.destination().unwrap() else {
+            panic!("a file destination");
+        };
+        assert_eq!(file.rotate_bytes(), DEFAULT_AUDIT_ROTATE_BYTES);
+        assert_eq!(file.retain_days(), DEFAULT_AUDIT_RETAIN_DAYS);
+    }
+
+    #[test]
+    fn audit_rotation_and_retention_outside_their_bounds_are_refused() {
+        for (member, pointer) in [
+            ("  rotateBytes: 1048575\n", "/audit/rotateBytes"),
+            ("  rotateBytes: 4294967296\n", "/audit/rotateBytes"),
+            ("  retentionDays: 0\n", "/audit/retentionDays"),
+            ("  retentionDays: 36501\n", "/audit/retentionDays"),
+        ] {
+            let text = with_audit("file", member);
+            assert_eq!(
+                codes(parse(&text).unwrap_err()),
+                ["config.out-of-range"],
+                "{member}"
+            );
+            assert_eq!(pointers(parse(&text).unwrap_err()), [pointer], "{member}");
+        }
+        for member in [
+            "  rotateBytes: 1048576\n",
+            "  rotateBytes: 4294967295\n",
+            "  retentionDays: 1\n",
+            "  retentionDays: 36500\n",
+        ] {
+            parse(&with_audit("file", member)).expect(member);
+        }
+    }
+
+    #[test]
+    fn the_audit_retention_takes_the_shared_name() {
+        let text = with_audit("file", "  retainDays: 30\n");
+        assert_eq!(codes(parse(&text).unwrap_err()), ["config.unknown-key"]);
+    }
+
+    #[test]
+    fn audit_rotation_and_retention_apply_only_to_a_file() {
+        for (member, field) in [
+            ("  rotateBytes: 2097152\n", "rotateBytes"),
+            ("  retentionDays: 30\n", "retentionDays"),
+        ] {
+            let text = with_audit("stdout", member);
+            let RuntimeConfigError::Refused(findings) = parse(&text).unwrap_err() else {
+                panic!("a runtime refusal for {field}");
+            };
+            assert_eq!(findings.len(), 1, "{findings:?}");
+            assert_eq!(findings[0].code, "documents.runtime.invalid-audit");
+            assert_eq!(findings[0].pointer, format!("/audit/{field}"));
+            assert_eq!(
+                findings[0].message,
+                format!("audit.{field} applies only when audit.destination is file")
+            );
+            assert_eq!(
+                findings[0].suggested_action,
+                "Remove the member, or set audit.destination: file."
             );
         }
     }

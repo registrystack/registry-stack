@@ -45,6 +45,11 @@ authentication:
 audit:
   destination: file
   path: /var/lib/registry-documents/audit.ndjson
+  # The active file is sealed at rotateBytes, and sealed files older than
+  # retentionDays are deleted: ship the records your retention schedule
+  # requires off the host first.
+  rotateBytes: 104857600
+  retentionDays: 90
   hashKeyRef: secret:file/documents-audit-key
 storage:
   # Document version bytes held in PostgreSQL. maximumDocumentBytes is the
