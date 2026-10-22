@@ -123,3 +123,7 @@ The Document Store is held out of releases.
   refused. A removal from custody captures one revoked
   `document-grant.changed` event for each grant it revokes. Each family
   publishes a generated data schema under `generated/events/`.
+- A verification, hook delivery, or erasure worker, or the cleanup pass,
+  that ends while the runtime serves is logged at error and stops the
+  process with a non-zero exit, rather than leaving it serving without that
+  work.
