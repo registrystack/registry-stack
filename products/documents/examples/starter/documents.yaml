@@ -2,8 +2,8 @@
 # A complete Document Store project: three DocumentPolicies, the access profiles
 # they reference, and the after-commit URL observers for document events.
 # Startup configuration: `documentsctl check --project` checks it, and the
-# runtime reads it from its package at start. A document grant snapshots the
-# policy terms it was issued under.
+# runtime reads it from its package at start. A document grant keeps its
+# expiry; who may hold it follows the active package.
 apiVersion: id.registrystack.org/formats/documents/project/v1alpha1
 kind: DocumentsProject
 project:
