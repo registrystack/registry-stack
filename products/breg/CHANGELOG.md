@@ -9,7 +9,14 @@
   `registry_internal.registry_attachment_verification_jobs` table), with
   `startup.database.pre-1-0-schema`, before the role and catalog checks that
   reported it as missing grants or as catalog drift to restore from a backup
-  carrying the same shape. Migration: create a fresh database and run
+  carrying the same shape. `bregctl plan` and `bregctl apply` refuse it with
+  `apply.database.pre-1-0-schema` before any other database outcome, where
+  they reported an active package as ready or already active, and the
+  commands that bind the active registry refuse it as
+  `<command>.active-registry.pre-1-0-schema`. Migration: create a fresh
+  database, rebuild the package with the v0.44.0 `bregctl test` and
+  `bregctl package`, because a package an earlier release built records
+  that release's schema fingerprint, and run
   `bregctl apply --package DIR --initial`.
 
 - `registry_internal.registry_attachment_verification_jobs` and the hook

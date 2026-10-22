@@ -994,7 +994,7 @@ relevant product pages on this site rather than duplicating release notes.
 
 {/* Evidence: crates/registry-scheduling-core/src/wire.rs, ExternalReference;
     crates/registry-scheduling/src/http.rs, list_appointments and bounded_external_reference;
-    crates/registry-scheduling/migrations/0100_scheduling.sql. */}
+    crates/registry-scheduling/migrations/0200_scheduling.sql. */}
 
 - BREAKING: an Evidence requirement's `subjectRoles[].role` is limited to 64 bytes instead of 128,
   in the bundle schema and at startup. Shorten a longer role and every input that names it before

@@ -825,10 +825,12 @@ workflow.
 `v0.44.0` starts Casework and Scheduling at a fresh baseline: each installs
 schema version 200 and refuses a ledger below 200 as a pre-1.0 schema at plan,
 apply, and startup. BReg in `v0.44.0` likewise refuses the `v0.43.0`
-attachment verification schema at startup and in `bregctl doctor`
-(`startup.database.pre-1-0-schema`). For each, keep the old release and its
+attachment verification schema at startup, in `bregctl doctor`
+(`startup.database.pre-1-0-schema`), and in `bregctl plan` and `apply`
+(`apply.database.pre-1-0-schema`). For each, keep the old release and its
 database, provision a fresh database, and activate the current package on it;
-for BReg, run `bregctl apply --package DIR --initial`. The rehearsal omits
+for BReg, rebuild the package with the current `bregctl test` and
+`bregctl package`, then run `bregctl apply --package DIR --initial`. The rehearsal omits
 their legs and says why, and a named `--product scheduling` request refuses
 with this guidance as `--product casework` does. Messaging keeps its
 version 100 baseline and migrates a `v0.43.0` ledger forward through
