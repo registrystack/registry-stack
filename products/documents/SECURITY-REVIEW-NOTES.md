@@ -210,7 +210,8 @@ DOCUMENTS-SEC-10, DOCUMENTS-SEC-19, and DOCUMENTS-SEC-21 to DOCUMENTS-SEC-33:
   `Idempotency-Key`, scoped to issuer, subject, operation, and key, with the
   request body's digest. Another body answers 409 `idempotency.key-reused`;
   a key older than `retention.receiptRetentionDays` answers 410
-  `idempotency.expired`; neither reserves anything. A replay re-runs
+  `idempotency.expired` and stays spent, since its row holds only digests
+  and the resource id and is never pruned; neither reserves anything. A replay re-runs
   authorization first, so a caller who lost authority gets the refusal, not
   the cached success. A finalized upload answers a repeat of the same bytes
   with the same view and other bytes with 409 `upload.finalized`.

@@ -377,8 +377,10 @@ invariants:
     enforcementPoint: >-
       An Idempotency-Key is scoped to the caller's issuer and subject, the
       operation, and the key, and stores the request body's digest. A replay re-
-      runs authorization before it answers, and a key is held for
-      retention.receiptRetentionDays.
+      runs authorization before it answers. A replay is answered for
+      retention.receiptRetentionDays; after that the key stays spent and a
+      replay under it answers idempotency.expired. The row holds only the key
+      and request digests and the resource id, so it is never pruned.
     refusal: >-
       Answer 409 idempotency.key-reused for another body under a held key and
       410 idempotency.expired after the key lapses, reserving nothing in either
