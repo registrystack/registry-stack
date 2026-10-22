@@ -14,7 +14,7 @@
         },
         "principalClaim": {
           "$ref": "#/$defs/ExternalId",
-          "description": "`sub`, or the name of another string claim identifying the principal."
+          "description": "`sub`, or the name of another string claim identifying the principal.\nEvery profile of one actor kind names the same claim."
         },
         "requesterClients": {
           "description": "The OAuth clients whose tokens resolve to this profile; at least one.",

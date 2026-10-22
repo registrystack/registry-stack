@@ -47,7 +47,10 @@ The Document Store is held out of releases.
   S3 storage is activated once at startup, and an empty reservation is
   refused as `request.unprocessable`.
 - Every document route is served behind bearer access-token verification
-  through `registry-platform-oidc` and access-profile resolution. Access
+  through `registry-platform-oidc` and access-profile resolution. Project
+  check refuses two access profiles of one actor kind that read the
+  subject from different principal claims
+  (`documents.project.mixed-principal-claim`). Access
   profiles gain an optional `institution`, recorded as the issuing
   institution of every document reserved under the profile.
 - Custody placement follows the policy's `custodyProfiles`: a service may
