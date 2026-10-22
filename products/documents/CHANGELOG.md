@@ -92,6 +92,8 @@ The Document Store is held out of releases.
 - `documentsctl erasure status`, `erasure list`, and `erasure replay` report
   the erasure state and counts and return a dead-lettered erasure job to
   pending, audited the same way.
+- A `documentsctl` human report whose diagnostics it cannot read exits as
+  an operational failure with `report.unreadable`, never as a clean check.
 - Removal from custody: `POST /documents/{documentId}/erasure`, custodian
   only, suspends release, revokes the document's active grants, cancels
   pending verification, and schedules erasure after the policy's
@@ -127,3 +129,7 @@ The Document Store is held out of releases.
   refused. A removal from custody captures one revoked
   `document-grant.changed` event for each grant it revokes. Each family
   publishes a generated data schema under `generated/events/`.
+- A verification, hook delivery, or erasure worker, or the cleanup pass,
+  that ends while the runtime serves is logged at error and stops the
+  process with a non-zero exit, rather than leaving it serving without that
+  work.

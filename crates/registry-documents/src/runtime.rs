@@ -785,8 +785,9 @@ impl Prepared {
     }
 
     /// Serve until `shutdown` resolves, then finish the requests in flight
-    /// and stop the verification worker, the erasure worker, and the
-    /// cleanup pass.
+    /// and stop the verification worker, the hook delivery worker, the
+    /// erasure worker, and the cleanup pass. A background task that ends
+    /// while serving stops the runtime with [`RuntimeError::Stopped`].
     pub async fn serve_until(
         self,
         shutdown: impl std::future::Future<Output = ()> + Send + 'static,
@@ -795,43 +796,94 @@ impl Prepared {
             tracing::info!(address = %address, "the Document Store is serving");
         }
         let (stop, stopped) = watch::channel(false);
-        let worker = tokio::spawn(self.worker().run(stopped.clone()));
-        let hook_worker = tokio::spawn(self.hook_delivery.worker().run(stopped.clone()));
-        let erasure_worker = match self.cleanup.worker_if_active() {
-            Some(erasure) => Some(tokio::spawn(erasure.run(stopped.clone()))),
+        let mut tasks = vec![
+            (
+                "content verification worker",
+                tokio::spawn(self.worker().run(stopped.clone())),
+            ),
+            (
+                "hook delivery worker",
+                tokio::spawn(self.hook_delivery.worker().run(stopped.clone())),
+            ),
+        ];
+        match self.cleanup.worker_if_active() {
+            Some(erasure) => {
+                tasks.push(("erasure worker", tokio::spawn(erasure.run(stopped.clone()))))
+            }
             None => {
                 tracing::warn!(
                     "cleanup.erasure is paused: no erasure runs and no orphaned object is erased until it is active again"
                 );
-                None
             }
+        }
+        tasks.push((
+            "cleanup pass",
+            tokio::spawn(Arc::new(self.cleanup).run(stopped.clone())),
+        ));
+        let (listener, routes) = (self.listener, self.routes);
+        let served = async move {
+            axum::serve(listener, router(routes))
+                .with_graceful_shutdown(stop_requested(stopped))
+                .await
+                .map_err(RuntimeError::Listen)
         };
-        let cleanup = tokio::spawn(Arc::new(self.cleanup).run(stopped));
-        let served = axum::serve(self.listener, router(self.routes))
-            .with_graceful_shutdown(shutdown)
-            .await
-            .map_err(RuntimeError::Listen);
-        if stop.send(true).is_err() {
-            tracing::warn!(
-                "the content verification and hook delivery workers had already stopped"
-            );
+        supervise(served, shutdown, stop, tasks).await
+    }
+}
+
+/// Resolve once `stopped` turns true. The sender outlives every listener,
+/// so the channel closing is not a stop request.
+async fn stop_requested(mut stopped: watch::Receiver<bool>) {
+    if stopped.wait_for(|stop| *stop).await.is_err() {
+        std::future::pending::<()>().await;
+    }
+}
+
+/// Run `served` beside the background `tasks` until `shutdown` resolves,
+/// the listener ends, or a task ends, then ask everything to stop through
+/// `stop` and wait for it. Every task runs until it is asked to stop, so a
+/// task that ends first, by returning or by panicking, has left the
+/// runtime without work it promises: it is logged and the runtime stops
+/// with [`RuntimeError::Stopped`] rather than serve without it.
+async fn supervise(
+    served: impl std::future::Future<Output = Result<(), RuntimeError>>,
+    shutdown: impl std::future::Future<Output = ()>,
+    stop: watch::Sender<bool>,
+    tasks: Vec<(&'static str, tokio::task::JoinHandle<()>)>,
+) -> Result<(), RuntimeError> {
+    use futures::StreamExt as _;
+
+    let mut tasks = tasks
+        .into_iter()
+        .map(|(task, handle)| async move { (task, handle.await) })
+        .collect::<futures::stream::FuturesUnordered<_>>();
+    tokio::pin!(served, shutdown);
+    let mut listener = None;
+    let mut stopped = None;
+    tokio::select! {
+        result = &mut served => listener = Some(result),
+        () = &mut shutdown => {}
+        Some((task, joined)) = tasks.next() => {
+            match joined {
+                Ok(()) => tracing::error!(task, "a Document Store background task ended while serving; stopping"),
+                Err(error) => tracing::error!(task, error = %error, "a Document Store background task failed while serving; stopping"),
+            }
+            stopped = Some(task);
         }
-        if let Err(error) = worker.await {
-            tracing::error!(error = %error, "the content verification worker failed");
+    }
+    stop.send_replace(true);
+    let served = match listener {
+        Some(result) => result,
+        None => served.await,
+    };
+    while let Some((task, joined)) = tasks.next().await {
+        if let Err(error) = joined {
+            tracing::error!(task, error = %error, "a Document Store background task failed");
         }
-        if let Some(Err(error)) = match erasure_worker {
-            Some(handle) => Some(handle.await),
-            None => None,
-        } {
-            tracing::error!(error = %error, "the erasure worker failed");
-        }
-        if let Err(error) = cleanup.await {
-            tracing::error!(error = %error, "the cleanup pass failed");
-        }
-        if let Err(error) = hook_worker.await {
-            tracing::error!(error = %error, "the hook delivery worker failed");
-        }
-        served
+    }
+    match stopped {
+        Some(task) => Err(RuntimeError::Stopped { task }),
+        None => served,
     }
 }
 
@@ -883,6 +935,9 @@ pub enum RuntimeError {
     Package(#[from] PackageLoadError),
     #[error("the Document Store listener could not bind or serve: {0}")]
     Listen(#[source] std::io::Error),
+    /// A background task ended while the runtime was serving.
+    #[error("the Document Store {task} stopped while serving")]
+    Stopped { task: &'static str },
     #[error("the Document Store shutdown signal handler could not be installed: {0}")]
     Signal(#[source] std::io::Error),
     #[error("the Document Store audit key could not be read: {0}")]
@@ -907,6 +962,75 @@ pub enum RuntimeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A background task that runs until the runtime asks it to stop.
+    fn until_stopped(mut stopped: watch::Receiver<bool>) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let _ = stopped.wait_for(|stop| *stop).await;
+        })
+    }
+
+    /// A background task that ends while the runtime is serving stops the
+    /// listener and the other tasks and ends the process with an error,
+    /// rather than leaving it serving without the task.
+    #[tokio::test]
+    async fn a_background_task_that_ends_while_serving_stops_the_runtime() {
+        let (stop, stopped) = watch::channel(false);
+        let served = {
+            let stopped = stopped.clone();
+            async move {
+                stop_requested(stopped).await;
+                Ok(())
+            }
+        };
+        let survivor = until_stopped(stopped.clone());
+        let survivor_done = survivor.abort_handle();
+        let result = supervise(
+            served,
+            std::future::pending(),
+            stop,
+            vec![
+                ("content verification worker", survivor),
+                ("erasure worker", tokio::spawn(async {})),
+            ],
+        )
+        .await;
+        assert!(
+            matches!(
+                result,
+                Err(RuntimeError::Stopped {
+                    task: "erasure worker"
+                })
+            ),
+            "{result:?}"
+        );
+        assert!(survivor_done.is_finished());
+    }
+
+    /// Shutdown stops every background task and answers the listener's
+    /// own outcome.
+    #[tokio::test]
+    async fn shutdown_stops_every_background_task() {
+        let (stop, stopped) = watch::channel(false);
+        let served = {
+            let stopped = stopped.clone();
+            async move {
+                stop_requested(stopped).await;
+                Ok(())
+            }
+        };
+        let worker = until_stopped(stopped.clone());
+        let worker_done = worker.abort_handle();
+        let result = supervise(
+            served,
+            std::future::ready(()),
+            stop,
+            vec![("content verification worker", worker)],
+        )
+        .await;
+        assert!(result.is_ok(), "{result:?}");
+        assert!(worker_done.is_finished());
+    }
 
     #[test]
     fn the_log_level_is_one_of_three_words() {
