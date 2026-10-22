@@ -100,6 +100,30 @@ document projections use their declared review-context grants and current
 applicable checks. A review-status service grant is restricted to its named
 authority and returns no display values.
 
+A Proposal grant may name `writableInputs`, the Action inputs that profile may
+set. Without it, every declared input stays writable. With it, Start refuses a
+value for any other input, and Edit, Revise and Rebase must restate every other
+input exactly as the current draft or submitted version holds it. An absent
+input and `null` count as the same value. A refusal answers
+`400 request.invalid` with `fieldPath` naming the first such input, for example
+`/input/licenceNumber`; the draft stays unchanged and the refusal is audited
+without the value. The list must name declared inputs and needs Start, Edit,
+Revise or Rebase authority. When the grant holds Edit, Revise or Rebase, every
+input outside the list must be in `readableInputs`, so the equality check never
+reveals a value the caller cannot read. Attachments keep their own
+`writableAttachments` grant. For an Action whose inputs are `holder`,
+`statement` and `licence-number`, an applicant may write the first two while an
+officer, under a grant without the list, records the licence number:
+
+```yaml
+proposals:
+  - action: apply-for-licence
+    operations: [get, list, edit, submit, revise, cancel]
+    ownership: caller
+    readableInputs: [holder, statement, licence-number]
+    writableInputs: [holder, statement]
+```
+
 Ownership alone does not preserve access after a target leaves the caller's
 current row boundary. Proposal Get then returns a concealed 404, List omits the
 Proposal, and transitions such as Cancel return the generic precondition refusal.

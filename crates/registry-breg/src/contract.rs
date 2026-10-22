@@ -606,6 +606,9 @@ pub struct ProposalPermissionSource {
     pub readable_attachments: UniqueSet<String>,
     #[serde(default)]
     pub writable_attachments: UniqueSet<String>,
+    /// Action inputs this grant may set. Absent leaves every declared input writable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writable_inputs: Option<UniqueSet<String>>,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -78,6 +78,8 @@ enum Scope {
     Patch,
     /// Relative to a batch body: `/items...` or `/changeContext`.
     Batch,
+    /// Relative to an Action or Proposal body: `/input...`.
+    Input,
 }
 
 /// A validated location inside a record write body.
@@ -124,6 +126,24 @@ impl RequestLocation {
         }
     }
 
+    /// One declared input of an Action or Proposal body. The caller passes
+    /// only a compiled input API name; an over-long name falls back to
+    /// `/input`.
+    #[must_use]
+    pub fn action_input(api_name: &str) -> Self {
+        let pointer = format!("/input/{}", escape_segment(api_name));
+        if pointer.chars().count() > MAX_FIELD_PATH_CHARS {
+            return Self {
+                pointer: "/input".to_owned(),
+                scope: Scope::Input,
+            };
+        }
+        Self {
+            pointer,
+            scope: Scope::Input,
+        }
+    }
+
     /// The `items` member of a batch body.
     #[must_use]
     pub fn batch_items() -> Self {
@@ -162,7 +182,7 @@ impl RequestLocation {
         let pointer = match self.scope {
             Scope::Record => format!("/items/{index}{}", self.pointer),
             Scope::Patch => format!("/items/{index}/patch{}", self.pointer),
-            Scope::Batch => return self,
+            Scope::Batch | Scope::Input => return self,
         };
         if pointer.chars().count() > MAX_FIELD_PATH_CHARS {
             return Self::batch_item(index, None);
@@ -273,6 +293,14 @@ mod tests {
                 .in_batch_item(1)
                 .as_str(),
             "/items/1/data/householdCode"
+        );
+        assert_eq!(
+            RequestLocation::action_input("licenceNumber").as_str(),
+            "/input/licenceNumber"
+        );
+        assert_eq!(
+            RequestLocation::action_input(&"x".repeat(300)).as_str(),
+            "/input"
         );
         assert_eq!(
             RequestLocation::batch_item(4, Some(BatchItemMember::IfMatch))

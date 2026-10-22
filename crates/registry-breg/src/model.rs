@@ -490,6 +490,8 @@ pub struct CompiledProposalPermission {
     pub readable_inputs: BTreeSet<String>,
     pub readable_attachments: BTreeSet<String>,
     pub writable_attachments: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writable_inputs: Option<BTreeSet<String>>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

@@ -4105,6 +4105,14 @@
           },
           "type": "array",
           "uniqueItems": true
+        },
+        "writableInputs": {
+          "description": "Action inputs this grant may set. Absent leaves every declared input writable.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
         }
       },
       "required": [

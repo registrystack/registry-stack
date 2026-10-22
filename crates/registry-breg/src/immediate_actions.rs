@@ -2534,6 +2534,7 @@ fn compile_execution(
                     || !grant.readable_inputs.is_empty()
                     || !grant.readable_attachments.is_empty()
                     || !grant.writable_attachments.is_empty()
+                    || grant.writable_inputs.is_some()
                 {
                     errors.push(Diagnostic::error(
                         "breg.proposal.review-status-authority-invalid",
@@ -2650,6 +2651,38 @@ fn compile_execution(
                     "input disclosure grants must name declared Action inputs and require Get",
                 ));
             }
+            if let Some(writable) = &grant.writable_inputs {
+                let writes_inputs = grant.operations.iter().any(|operation| {
+                    matches!(
+                        operation,
+                        ProposalOperation::Edit
+                            | ProposalOperation::Revise
+                            | ProposalOperation::Rebase
+                    )
+                });
+                let starts = profile.permissions.actions.iter().any(|permission| {
+                    permission.action == action.id
+                        && permission.operations.contains(&Operation::Start)
+                });
+                // An edit must restate every fixed input unchanged, so a fixed input the
+                // grant cannot read would turn the equality refusal into a value oracle.
+                // Readable inputs already require Get.
+                let fixed_inputs_readable = !writes_inputs
+                    || input_ids
+                        .iter()
+                        .filter(|id| !writable.contains(*id))
+                        .all(|id| grant.readable_inputs.contains(id));
+                if !writable.is_subset(&input_ids)
+                    || !(writes_inputs || starts)
+                    || !fixed_inputs_readable
+                {
+                    errors.push(Diagnostic::error(
+                        "breg.proposal.input-grant-invalid",
+                        "accessProfiles[].permissions.proposals[].writableInputs",
+                        "input write grants must name declared Action inputs, accompany Start, Edit, Revise, or Rebase authority, and leave every other input readable when Edit, Revise, or Rebase is granted",
+                    ));
+                }
+            }
             let attachment_ids = attachments.keys().cloned().collect::<BTreeSet<_>>();
             if !grant.readable_attachments.is_subset(&attachment_ids)
                 || !grant.writable_attachments.is_subset(&attachment_ids)
@@ -2681,6 +2714,10 @@ fn compile_execution(
                 readable_inputs: grant.readable_inputs.as_set().clone(),
                 readable_attachments: grant.readable_attachments.as_set().clone(),
                 writable_attachments: grant.writable_attachments.as_set().clone(),
+                writable_inputs: grant
+                    .writable_inputs
+                    .as_ref()
+                    .map(|inputs| inputs.as_set().clone()),
             });
         }
     }

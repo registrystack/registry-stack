@@ -666,6 +666,92 @@ fn proposal_source(operations: &[&str], readable_inputs: &[&str]) -> Value {
     value
 }
 
+fn compile_diagnostics(value: &Value) -> String {
+    let project = parse_project_json(&serde_json::to_vec(value).unwrap()).unwrap();
+    format!(
+        "{:?}",
+        compile_project(&project, &[], CompileProfile::Authoring).unwrap_err()
+    )
+}
+
+fn proposal_permission(registry: &CompiledRegistry) -> crate::model::CompiledProposalPermission {
+    let crate::model::CompiledActionExecution::Proposal { proposal } =
+        &registry.actions().actions[0].execution
+    else {
+        panic!("proposal action");
+    };
+    proposal.permissions[0].clone()
+}
+
+#[test]
+fn proposal_writable_inputs_compile_to_the_named_input_ids() {
+    let mut value = proposal_source(&["get", "edit", "submit"], &["item", "label"]);
+    value["accessProfiles"][0]["permissions"]["proposals"][0]["writableInputs"] = json!(["label"]);
+    let permission = proposal_permission(&compile(&value));
+    assert_eq!(
+        permission.writable_inputs,
+        Some(std::collections::BTreeSet::from(["label".to_owned()]))
+    );
+    let compiled = serde_json::to_value(&permission).unwrap();
+    assert_eq!(compiled["writableInputs"], json!(["label"]));
+}
+
+#[test]
+fn proposal_grant_without_writable_inputs_compiles_without_the_field() {
+    let value = proposal_source(&["get", "edit", "submit"], &["item", "label"]);
+    let permission = proposal_permission(&compile(&value));
+    assert_eq!(permission.writable_inputs, None);
+    let compiled = serde_json::to_value(&permission).unwrap();
+    assert!(compiled.get("writableInputs").is_none());
+}
+
+#[test]
+fn proposal_writable_inputs_refuse_invalid_grants() {
+    let unknown = {
+        let mut value = proposal_source(&["get", "edit"], &["item", "label"]);
+        value["accessProfiles"][0]["permissions"]["proposals"][0]["writableInputs"] =
+            json!(["missing"]);
+        value
+    };
+    let no_write_authority = {
+        let mut value = proposal_source(&["get", "submit"], &["item", "label"]);
+        value["accessProfiles"][0]["permissions"]["actions"] = json!([]);
+        value["accessProfiles"][0]["permissions"]["proposals"][0]["writableInputs"] =
+            json!(["label"]);
+        value
+    };
+    let unreadable_fixed_input = {
+        let mut value = proposal_source(&["get", "edit"], &["label"]);
+        value["accessProfiles"][0]["permissions"]["proposals"][0]["writableInputs"] =
+            json!(["label"]);
+        value
+    };
+    for value in [unknown, no_write_authority, unreadable_fixed_input] {
+        let diagnostics = compile_diagnostics(&value);
+        assert!(
+            diagnostics.contains("breg.proposal.input-grant-invalid")
+                && diagnostics.contains("writableInputs"),
+            "{diagnostics}"
+        );
+    }
+}
+
+#[test]
+fn proposal_writable_inputs_accept_start_only_or_fully_writable_grants() {
+    let mut start_only = proposal_source(&["get", "submit"], &[]);
+    start_only["accessProfiles"][0]["permissions"]["proposals"][0]["writableInputs"] =
+        json!(["item", "label"]);
+    assert!(proposal_permission(&compile(&start_only))
+        .writable_inputs
+        .is_some());
+    let mut edit_without_get = proposal_source(&["edit", "submit"], &[]);
+    edit_without_get["accessProfiles"][0]["permissions"]["proposals"][0]["writableInputs"] =
+        json!(["item", "label"]);
+    assert!(proposal_permission(&compile(&edit_without_get))
+        .writable_inputs
+        .is_some());
+}
+
 fn evidence_contract_asset() -> ModuleAssetSource {
     ModuleAssetSource {
         module: None,

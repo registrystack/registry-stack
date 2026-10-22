@@ -1301,6 +1301,7 @@ fn named_review_authority_status_is_a_service_only_target_free_interface() {
     for (field, value) in [
         ("reviewAuthority", json!("other")),
         ("operations", json!(["get-review-context"])),
+        ("writableInputs", json!(["city"])),
     ] {
         let mut value_source: serde_json::Value = project_source();
         let profile = value_source["accessProfiles"]
@@ -1314,7 +1315,10 @@ fn named_review_authority_status_is_a_service_only_target_free_interface() {
             &serde_json::to_vec(&value_source).unwrap(),
         )
         .unwrap();
-        assert!(compile(&project).is_err());
+        let error = compile(&project).unwrap_err();
+        if field == "writableInputs" {
+            assert!(format!("{error:?}").contains("breg.proposal.review-status-authority-invalid"));
+        }
     }
 }
 

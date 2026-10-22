@@ -86,6 +86,57 @@ fn validate_attachment_authority(
     }
 }
 
+/// Refuse a value for an input outside the grant's `writableInputs`. Start
+/// has no base, so any value is refused; Edit, Revise and Rebase must restate
+/// each fixed input exactly as `base` holds it, with an absent input equal to
+/// null. A grant without `writableInputs` leaves every input writable.
+fn validate_input_write_authority(
+    action: &CompiledAction,
+    authority: &ProposalAuthority,
+    values: &Map<String, Value>,
+    base: Option<&Map<String, Value>>,
+) -> Result<(), MutationError> {
+    let CompiledActionExecution::Proposal { proposal } = &action.execution else {
+        return Err(MutationError::InvalidRequest);
+    };
+    let Some(writable) = proposal
+        .permissions
+        .iter()
+        .find(|grant| grant.profile_id == authority.common.access_profile())
+        .and_then(|grant| grant.writable_inputs.as_ref())
+    else {
+        return Ok(());
+    };
+    match fixed_input_changed(action, writable, values, base) {
+        Some(api_name) => Err(MutationError::InvalidRequestAt(
+            crate::problem_location::RequestLocation::action_input(api_name),
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The API name of the first declared input outside `writable` whose value
+/// differs from `base`, treating an absent input and null as the same.
+fn fixed_input_changed<'a>(
+    action: &'a CompiledAction,
+    writable: &BTreeSet<String>,
+    values: &Map<String, Value>,
+    base: Option<&Map<String, Value>>,
+) -> Option<&'a str> {
+    let present = |input: Option<&Map<String, Value>>, id: &str| {
+        input
+            .and_then(|input| input.get(id))
+            .filter(|value| !value.is_null())
+            .cloned()
+    };
+    action
+        .inputs
+        .iter()
+        .filter(|declared| !writable.contains(&declared.id))
+        .find(|declared| present(Some(values), &declared.id) != present(base, &declared.id))
+        .map(|declared| declared.api_name.as_str())
+}
+
 pub(crate) fn proposal_operation_name(operation: ProposalAuthorityOperation) -> &'static str {
     match operation {
         ProposalAuthorityOperation::Start => "start",
@@ -496,8 +547,15 @@ impl MutationTransaction {
         };
         let response_contract=policy.permissions.iter().find(|permission|
             permission.profile_id==input.authority.common.access_profile())
-            .map(|permission|json!({"operations":permission.operations,
-                "readableAttachments":permission.readable_attachments,"writableAttachments":permission.writable_attachments}));
+            .map(|permission|{
+                let mut contract=json!({"operations":permission.operations,
+                    "readableAttachments":permission.readable_attachments,"writableAttachments":permission.writable_attachments});
+                // Bound only when declared, so existing grants keep their request digests.
+                if let Some(writable_inputs)=&permission.writable_inputs {
+                    contract["writableInputs"]=json!(writable_inputs);
+                }
+                contract
+            });
         let digest=Sha256::digest(canonicalize_json(&json!({
             "proposalId":input.proposal_id,"operation":proposal_operation_name(input.operation),
             "ifMatch":input.expected_etag,"input":input.input,"submissionVersion":input.submission_version,
@@ -1027,6 +1085,7 @@ impl MutationTransaction {
                     action,
                     input.input.as_ref().ok_or(MutationError::InvalidRequest)?,
                 )?;
+                validate_input_write_authority(action, input.authority, &values, None)?;
                 let id = Uuid::new_v4();
                 proposal_store::initialize_draft(
                     tx,
@@ -1264,6 +1323,12 @@ impl MutationTransaction {
                                 .as_ref()
                                 .or(document.input.as_ref())
                                 .ok_or(MutationError::InvalidRequest)?,
+                        )?;
+                        validate_input_write_authority(
+                            action,
+                            input.authority,
+                            &values,
+                            document.input.as_ref(),
                         )?;
                         let workflow = match operation {
                             ProposalOperation::Edit => workflow.edit_draft(context),
@@ -3904,6 +3969,72 @@ mod turn_tests {
             ),
             "nobody",
             "an unknown stored state keeps the established closed fallback"
+        );
+    }
+}
+#[cfg(test)]
+mod input_write_tests {
+    use super::*;
+    fn action() -> CompiledAction {
+        let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
+            "project":{"id":"input-write-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://proposal.example.test"},
+            "datasets":[{"id":"directory"}],
+            "recordTypes":[{"id":"target","primaryDataset":"directory","route":"targets","mutationMode":"mutable",
+                "mutationPolicy":{"patch":"proposal-required"},
+                "fields":[{"id":"name","type":"string","required":true,"maximumLength":64,"classification":"internal"}]}],
+            "actions":[{"id":"correct-name","execution":{"mode":"proposal","proposal":{
+                "review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"retain"}}},
+                "inputs":[{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"},
+                    {"id":"value","type":"string","required":true,"maximumLength":64,"classification":"internal"},
+                    {"id":"licence-number","type":"string","required":false,"maximumLength":64,"classification":"internal"}],
+                "plan":{"type":"fixed","effects":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","set":{"name":{"fromInput":"value"}}}]}}],
+            "accessProfiles":[{"id":"clerk","default":true,"principalClaim":"sub","requiredScopes":"unrestricted","permissions":{
+                "actions":[{"action":"correct-name","operations":["start"],"targets":[{"recordType":"target","rowBoundaries":"unrestricted"}]}]}}]});
+        let project =
+            crate::contract::parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+        let registry =
+            crate::compile_project(&project, &[], crate::CompileProfile::Authoring).unwrap();
+        registry.actions().actions[0].clone()
+    }
+    fn input(value: Value) -> Map<String, Value> {
+        value.as_object().unwrap().clone()
+    }
+    #[test]
+    fn fixed_inputs_compare_absent_and_null_as_equal_and_name_the_api_name() {
+        let action = action();
+        let writable = BTreeSet::from(["target".to_owned(), "value".to_owned()]);
+        let base = input(json!({"target":"t","value":"before"}));
+        for values in [
+            json!({"target":"t","value":"after"}),
+            json!({"target":"t","value":"after","licence-number":null}),
+        ] {
+            assert_eq!(
+                fixed_input_changed(&action, &writable, &input(values), Some(&base)),
+                None
+            );
+        }
+        let with_null = input(json!({"target":"t","value":"before","licence-number":null}));
+        assert_eq!(
+            fixed_input_changed(&action, &writable, &base, Some(&with_null)),
+            None
+        );
+        let changed = input(json!({"target":"t","value":"before","licence-number":"L-1"}));
+        assert_eq!(
+            fixed_input_changed(&action, &writable, &changed, Some(&base)),
+            Some("licenceNumber")
+        );
+        assert_eq!(
+            fixed_input_changed(&action, &writable, &base, Some(&changed)),
+            Some("licenceNumber")
+        );
+        assert_eq!(
+            fixed_input_changed(&action, &writable, &changed, None),
+            Some("licenceNumber")
+        );
+        assert_eq!(fixed_input_changed(&action, &writable, &base, None), None);
+        assert_eq!(
+            fixed_input_changed(&action, &BTreeSet::new(), &base, None),
+            Some("target")
         );
     }
 }

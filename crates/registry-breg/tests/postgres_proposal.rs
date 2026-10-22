@@ -6152,3 +6152,267 @@ async fn exact_application_status_exposes_bounded_block_and_human_recovery() {
 
 #[path = "support/review_apply_412.rs"]
 mod review_apply_412;
+
+fn writable_inputs_source() -> Value {
+    let mut source = registry_source(false);
+    source["actions"][0]["inputs"].as_array_mut().unwrap().push(
+        json!({"id":"note","type":"string","required":false,"maximumLength":64,
+            "classification":"internal"}),
+    );
+    let clerk = &mut source["accessProfiles"][0]["permissions"]["proposals"][0];
+    clerk["readableInputs"] = json!(["target", "value", "note"]);
+    let mut officer = source["accessProfiles"][0].clone();
+    officer["id"] = json!("officer");
+    officer["default"] = json!(false);
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["writableInputs"] =
+        json!(["target", "value"]);
+    source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(officer);
+    source
+}
+
+/// One refused input write: a located `request.invalid` with no value echoed,
+/// and exactly one audited refusal that names no value either.
+async fn assert_input_write_refused(
+    fixture: &client_http::ClientFixture,
+    result: Result<
+        registry_breg_client::BRegComplete<registry_breg_client::BRegProposal>,
+        registry_breg_client::BaseRegistryClientError,
+    >,
+    before: usize,
+    operation: &str,
+) {
+    let error = result.expect_err("a fixed input write is refused");
+    assert_eq!(error.status(), Some(400), "{operation}");
+    assert_eq!(
+        error.problem_code(),
+        Some(BRegProblemCode::RequestInvalid),
+        "{operation}"
+    );
+    assert_eq!(
+        error.field_path().map(|path| path.as_str()),
+        Some("/input/note"),
+        "{operation}"
+    );
+    let entries = fixture.audit_capture.entries();
+    let refusals = entries[before..]
+        .iter()
+        .filter(|entry| entry["record"]["phase"] == "refusal")
+        .collect::<Vec<_>>();
+    assert_eq!(refusals.len(), 1, "{operation}: {:?}", &entries[before..]);
+    assert_eq!(
+        refusals[0]["record"]["operationId"],
+        format!("proposals.correct-name.{operation}")
+    );
+    let audited = serde_json::to_string(&entries[before..]).unwrap();
+    for canary in ["writable-input-canary", "officer-note-canary"] {
+        assert!(
+            !audited.contains(canary),
+            "{operation}: audit disclosed {canary}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn writable_inputs_bound_start_edit_revise_and_rebase_to_the_named_inputs() {
+    let fixture = client_http::ClientFixture::start(
+        compile(writable_inputs_source()),
+        claims("author", "zone-a"),
+    )
+    .await;
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let BRegDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.target.create", "clerk")
+        .unwrap()
+    else {
+        panic!("create");
+    };
+    let target = client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(map(json!({"name":"Before","jurisdiction":"zone-a"}))).unwrap(),
+            &key("writable-record"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap()
+        .value
+        .data
+        .record_identifier;
+    let action = metadata
+        .value
+        .select_action("correct-name", "clerk")
+        .unwrap();
+    let collection = metadata.value.select_proposals("clerk").unwrap();
+
+    // Start: a value for an input outside the grant is refused before any draft exists.
+    let before = fixture.audit_capture.entries().len();
+    let refused = client
+        .start_proposal(
+            &action,
+            &BRegActionInvocationRequest::new(
+                &action,
+                map(json!({"target":target,"value":"Started","note":"writable-input-canary"})),
+                None,
+            )
+            .unwrap(),
+            &key("writable-start-refused"),
+        )
+        .await;
+    assert_input_write_refused(&fixture, refused, before, "start").await;
+    let page = client
+        .list_proposals(&collection, &BRegProposalQuery::default())
+        .await
+        .unwrap();
+    assert!(
+        page.value.items.is_empty(),
+        "a refused Start leaves no draft"
+    );
+    let draft = client
+        .start_proposal(
+            &action,
+            &BRegActionInvocationRequest::new(
+                &action,
+                map(json!({"target":target,"value":"Started"})),
+                None,
+            )
+            .unwrap(),
+            &key("writable-start"),
+        )
+        .await
+        .unwrap()
+        .value;
+
+    // A grant without writableInputs keeps every input writable.
+    let officer_metadata = client.registry_contract(Some("officer")).await.unwrap();
+    let officer_collection = officer_metadata.value.select_proposals("officer").unwrap();
+    let officer_page = client
+        .list_proposals(&officer_collection, &BRegProposalQuery::default())
+        .await
+        .unwrap()
+        .value;
+    let officer_view = client
+        .read_proposal(&officer_page.items[0])
+        .await
+        .unwrap()
+        .value;
+    let mut officer_input = officer_view.input().unwrap().clone();
+    officer_input.insert("note".into(), json!("officer-note-canary"));
+    let edit = client
+        .prepare_proposal(
+            &officer_view,
+            "edit",
+            json!({"input":officer_input}),
+            &key("officer-edit"),
+        )
+        .unwrap();
+    client.execute_proposal(&edit).await.unwrap();
+
+    // Edit: changing or dropping a fixed input is refused and leaves the draft unchanged.
+    let current = client.read_proposal(&draft).await.unwrap().value;
+    assert_eq!(
+        current.input().unwrap()["note"],
+        json!("officer-note-canary")
+    );
+    let mut changed = current.input().unwrap().clone();
+    changed.insert("note".into(), json!("writable-input-canary"));
+    let mut dropped = current.input().unwrap().clone();
+    dropped.remove("note");
+    for (input, name) in [
+        (changed, "writable-edit-changed"),
+        (dropped, "writable-edit-dropped"),
+    ] {
+        let before = fixture.audit_capture.entries().len();
+        let edit = client
+            .prepare_proposal(&current, "edit", json!({"input":input}), &key(name))
+            .unwrap();
+        let result = client.execute_proposal(&edit).await;
+        assert_input_write_refused(&fixture, result, before, "edit").await;
+        let unchanged = client.read_proposal(&draft).await.unwrap().value;
+        assert_eq!(
+            serde_json::to_value(&unchanged).unwrap(),
+            serde_json::to_value(&current).unwrap(),
+            "{name}: a refused Edit leaves the draft unchanged"
+        );
+    }
+
+    // Edit: restating the fixed input unchanged while changing a writable one is accepted.
+    let mut same = current.input().unwrap().clone();
+    same.insert("value".into(), json!("Edited"));
+    let edit = client
+        .prepare_proposal(
+            &current,
+            "edit",
+            json!({"input":same}),
+            &key("writable-edit"),
+        )
+        .unwrap();
+    let edited = client.execute_proposal(&edit).await.unwrap().value;
+    let edited = client.read_proposal(&edited).await.unwrap().value;
+    assert_eq!(edited.input().unwrap()["value"], json!("Edited"));
+    assert_eq!(
+        edited.input().unwrap()["note"],
+        json!("officer-note-canary")
+    );
+
+    // Revise from a submitted version compares with that version's input.
+    let submit = client
+        .prepare_proposal(&edited, "submit", json!({}), &key("writable-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let mut revised_input = edited.input().unwrap().clone();
+    revised_input.insert("note".into(), json!("writable-input-canary"));
+    let before = fixture.audit_capture.entries().len();
+    let revise = client
+        .prepare_proposal(
+            &submitted,
+            "revise",
+            json!({"input":revised_input}),
+            &key("writable-revise-refused"),
+        )
+        .unwrap();
+    let result = client.execute_proposal(&revise).await;
+    assert_input_write_refused(&fixture, result, before, "revise").await;
+    let mut revised_input = edited.input().unwrap().clone();
+    revised_input.insert("value".into(), json!("Revised"));
+    let revise = client
+        .prepare_proposal(
+            &submitted,
+            "revise",
+            json!({"input":revised_input}),
+            &key("writable-revise"),
+        )
+        .unwrap();
+    let revised = client.execute_proposal(&revise).await.unwrap().value;
+    let revised = client.read_proposal(&revised).await.unwrap().value;
+    assert_eq!(revised.input().unwrap()["value"], json!("Revised"));
+
+    // Rebase is an input write too.
+    let mut rebased_input = revised.input().unwrap().clone();
+    rebased_input.insert("note".into(), json!("writable-input-canary"));
+    let before = fixture.audit_capture.entries().len();
+    let rebase = client
+        .prepare_proposal(
+            &revised,
+            "rebase",
+            json!({"input":rebased_input}),
+            &key("writable-rebase-refused"),
+        )
+        .unwrap();
+    let result = client.execute_proposal(&rebase).await;
+    assert_input_write_refused(&fixture, result, before, "rebase").await;
+    let rebase = client
+        .prepare_proposal(
+            &revised,
+            "rebase",
+            json!({"input":revised.input().unwrap()}),
+            &key("writable-rebase"),
+        )
+        .unwrap();
+    client.execute_proposal(&rebase).await.unwrap();
+    fixture.finish().await;
+}

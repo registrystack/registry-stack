@@ -4172,3 +4172,51 @@ without source reads. Its HTTP proof also refuses another producer and retains
 reviewer and supervisor concealment. Remote cancellation is asynchronous, so
 in-flight work and dependency outages are settled through retained exact
 recovery; the change does not claim a cross-service atomic transaction.
+
+## Proposal input write grants
+
+A Proposal grant may name `writableInputs`. Without the field every declared
+Action input stays writable, as before, and the compiled grant omits the field.
+
+### Threat
+
+- An applicant who may edit a draft overwrites a value another role recorded,
+  such as a licence number an officer added, and submits it for review.
+- A caller who must restate fixed inputs on Edit probes the equality check to
+  learn a fixed value the grant cannot read.
+
+### Enforcement and defaults
+
+- The compiler refuses a list that names an undeclared input, a grant with
+  neither Start nor Edit, Revise or Rebase authority, a review-status grant
+  that carries the list, and a grant with Edit, Revise or Rebase that leaves a
+  fixed input outside `readableInputs`
+  (`breg.proposal.input-grant-invalid` and
+  `breg.proposal.review-status-authority-invalid`).
+- Start refuses a value for a fixed input. Edit, Revise and Rebase compare each
+  fixed input with the draft or submitted version input inside the mutation
+  transaction; an absent input equals `null`. The refusal is
+  `400 request.invalid` at `/input/<apiName>`, rolls back, and is audited by
+  the existing Proposal refusal path without the value.
+- The idempotency binding adds the list to the response contract only when it
+  is declared, so existing request digests do not change.
+
+### Tests
+
+`writable_inputs_bound_start_edit_revise_and_rebase_to_the_named_inputs` in
+`crates/registry-breg/tests/postgres_proposal.rs` covers Start, changed and
+dropped Edit values, an unchanged restatement, Revise, Rebase, a grant without
+the list, the unchanged draft and the value-free audit.
+`proposal_writable_inputs_refuse_invalid_grants` and its neighbours in
+`crates/registry-breg/src/package/tests/immediate_actions.rs` cover the compile
+rules, and `fixed_inputs_compare_absent_and_null_as_equal_and_name_the_api_name`
+in `crates/registry-breg/src/mutation/proposal.rs` covers the comparison.
+
+### Accepted residuals
+
+- The refusal names the first fixed input's API name. The caller can already
+  read that input and its name is in the Action contract.
+- Proposal Get does not list `writableInputs`: the Rust and Node clients
+  decode the Proposal document strictly. Explain output shows the compiled
+  grant.
+- Attachments keep their separate `writableAttachments` grant.
