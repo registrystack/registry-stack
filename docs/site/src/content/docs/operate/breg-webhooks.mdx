@@ -185,7 +185,7 @@ execution-only Wasm runtime or field-encryption service.
 Run the bounded drain:
 
 ```sh test-skip="needs the active package runtime file and database"
-bregctl --format json webhook drain \
+bregctl --format json hook drain \
   --runtime-config /etc/breg/runtime.yaml \
   --max-attempts 100 --timeout-seconds 30
 ```
@@ -257,7 +257,7 @@ Inspect the recovered delivery before deciding whether to replay or discard it.
 `hook list` shows deliveries that are pending, leased, dead-lettered, or expired:
 
 ```sh test-skip="needs a deployed registry's runtime file and database"
-bregctl --format json webhook list --runtime-config /etc/breg/runtime.yaml --limit 50
+bregctl --format json hook list --runtime-config /etc/breg/runtime.yaml --limit 50
 ```
 
 ```json
@@ -265,7 +265,7 @@ bregctl --format json webhook list --runtime-config /etc/breg/runtime.yaml --lim
   "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
   "kind": "BRegCtlReport",
   "ok": true,
-  "command": "webhook list",
+  "command": "hook list",
   "deliveries": [
     {
       "eventId": "<event-id>",
