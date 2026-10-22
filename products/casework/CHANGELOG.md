@@ -14,6 +14,16 @@
   sessions can exercise independent reviewers without changing the policy.
 - Correct the peer version-mismatch remedy to name `--bregctl-bin`.
 
+- BREAKING: Casework installs its schema as a new baseline numbered version
+  200, and later migrations take 201, 202, and onward. A database whose
+  ledger holds any version below 200, including the version 100 that
+  v0.42.0 and v0.43.0 recorded, is refused by name as a pre-1.0 schema:
+  `caseworkctl plan` and `apply` report `casework.activation.beta-schema`,
+  and readiness and startup refuse with the same message. Recovery: keep the
+  old database with the release that wrote it, create a fresh database, and
+  apply the package. Queued completion deliveries in the old database are not
+  carried forward.
+
 - `casework_review_completion_outbox` refuses a `leased` row without a
   `lease_expires_at`, through the corrected shared dispatch job shape. Apply
   this release to a fresh database.

@@ -12,14 +12,16 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio_postgres::Config as PgConfig;
 use uuid::Uuid;
-/// Every schema version, in the order it is applied. The 1.0 baseline is
-/// version [`BASELINE_SCHEMA_VERSION`], above every version a pre-1.0 release
-/// applied; each later migration takes the next number.
+/// Every schema version, in the order it is applied. The baseline is
+/// version [`BASELINE_SCHEMA_VERSION`], above every version an earlier
+/// release applied; each later migration takes the next number.
 pub(crate) const MIGRATIONS: [(i64, &str); 1] =
-    [(100, include_str!("../migrations/0100_reviews.sql"))];
-/// The 1.0 baseline schema version. A ledger holding any version below it
-/// was left by a pre-1.0 release, which this release refuses by name.
-pub(crate) const BASELINE_SCHEMA_VERSION: i64 = 100;
+    [(200, include_str!("../migrations/0200_reviews.sql"))];
+/// The baseline schema version. A ledger holding any version below it was
+/// left by an earlier pre-1.0 release, which this release refuses by name:
+/// version 100 is the v0.42.0 and v0.43.0 baseline, whose completion outbox
+/// is not the shared dispatch shape this release reads.
+pub(crate) const BASELINE_SCHEMA_VERSION: i64 = 200;
 /// The newest schema version this release applies.
 pub(crate) const SUPPORTED_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
 const _: () = assert!(
@@ -836,24 +838,26 @@ mod schema_version_tests {
     use super::*;
 
     #[test]
-    fn the_baseline_is_version_100_and_later_versions_increase() {
-        assert_eq!(BASELINE_SCHEMA_VERSION, 100);
+    fn the_baseline_is_version_200_and_later_versions_increase() {
+        assert_eq!(BASELINE_SCHEMA_VERSION, 200);
         assert!(versions_start_at_baseline_and_increase(&MIGRATIONS));
         assert!(versions_start_at_baseline_and_increase(&[
-            (100, ""),
-            (101, "")
+            (200, ""),
+            (201, "")
         ]));
         assert!(!versions_start_at_baseline_and_increase(&[]));
         assert!(!versions_start_at_baseline_and_increase(&[(1, "")]));
+        assert!(!versions_start_at_baseline_and_increase(&[(100, "")]));
         assert!(!versions_start_at_baseline_and_increase(&[
-            (100, ""),
-            (100, "")
+            (200, ""),
+            (200, "")
         ]));
     }
 
     #[test]
     fn every_ledger_below_the_baseline_is_a_named_pre_1_0_refusal() {
-        let beta_ledgers: [Vec<i64>; 4] = [vec![1], vec![1, 2], (1..=13).collect(), vec![19]];
+        let beta_ledgers: [Vec<i64>; 5] =
+            [vec![1], vec![1, 2], (1..=13).collect(), vec![19], vec![100]];
         for applied in beta_ledgers {
             match refuse_unsupported_schema(&applied) {
                 Err(refusal @ StoreError::Pre1_0Schema { .. }) => {
@@ -870,12 +874,12 @@ mod schema_version_tests {
             }
         }
         assert!(refuse_unsupported_schema(&[]).is_ok());
-        assert!(refuse_unsupported_schema(&[100]).is_ok());
+        assert!(refuse_unsupported_schema(&[200]).is_ok());
         assert!(matches!(
-            refuse_unsupported_schema(&[100, 101]),
+            refuse_unsupported_schema(&[200, 201]),
             Err(StoreError::SchemaNewer {
-                found: 101,
-                supported: 100
+                found: 201,
+                supported: 200
             })
         ));
     }
