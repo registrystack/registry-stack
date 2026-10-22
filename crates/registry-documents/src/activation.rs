@@ -36,6 +36,8 @@ pub(crate) fn layout() -> Layout {
 /// The platform hook delivery objects the schema carries beside the
 /// `documents_*` relations. The runtime role is granted, and its grants are
 /// observed, over these exactly as over the Document Store's own tables.
+/// A connection that resolves no schema is refused by name: the objects
+/// live in the schema apply ran in, and there is none to name them in.
 async fn delivery_objects(
     client: &impl tokio_postgres::GenericClient,
 ) -> Result<Vec<String>, StoreError> {
@@ -43,10 +45,30 @@ async fn delivery_objects(
         .query_one("SELECT current_schema()", &[])
         .await?
         .try_get(0)?;
-    let schema = schema.ok_or(StoreError::Configuration)?;
+    let schema = schema.ok_or(StoreError::SchemaUnresolved)?;
     Ok(registry_platform_hooks::delivery_schema::object_names(
         &schema,
     ))
+}
+
+/// Observe the connection's own role, or `role`, over the activation
+/// boundary and every delivery object. `None` before the first apply: there
+/// is no ledger and no delivery object to observe yet, and a runtime role
+/// provisioned with nothing but `CONNECT` resolves no schema until apply
+/// grants it one.
+async fn observe(
+    client: &impl tokio_postgres::GenericClient,
+    role: Option<&str>,
+) -> Result<Option<platform::RoleObservation>, StoreError> {
+    if !platform::relation_exists(client, layout().ledger_relation())
+        .await
+        .map_err(platform_error)?
+    {
+        return Ok(None);
+    }
+    platform::observe_role(client, &layout(), role, &delivery_objects(client).await?)
+        .await
+        .map_err(platform_error)
 }
 
 fn platform_error(error: platform::Error) -> StoreError {
@@ -207,9 +229,7 @@ pub async fn plan(
     let active = platform::active_activation(&*tx, &layout())
         .await
         .map_err(platform_error)?;
-    let observation = platform::observe_role(&*tx, &layout(), None, &delivery_objects(&*tx).await?)
-        .await
-        .map_err(platform_error)?;
+    let observation = observe(&*tx, None).await?;
     let database_id_check = platform::database_id_check(active.as_ref(), database_id);
     let mut refusals = Vec::new();
     if database_id_check == DatabaseIdCheck::Differs {
@@ -287,9 +307,7 @@ pub async fn status(store: &PostgresStore) -> Result<ActivationStatus, Activatio
         .await
         .map_err(platform_error)?;
     let active = history.last().cloned();
-    let observation = platform::observe_role(&*tx, &layout(), None, &delivery_objects(&*tx).await?)
-        .await
-        .map_err(platform_error)?;
+    let observation = observe(&*tx, None).await?;
     let result = ActivationStatus {
         active,
         history,
@@ -595,15 +613,9 @@ pub async fn check_runtime(
             }
         })?;
     crate::store::schema_ready(&client).await?;
-    let role = platform::observe_role(
-        &**client,
-        &layout(),
-        None,
-        &delivery_objects(&**client).await?,
-    )
-    .await
-    .map_err(platform_error)?
-    .ok_or(ActivationError::GrantsStale)?;
+    let role = observe(&**client, None)
+        .await?
+        .ok_or(ActivationError::GrantsStale)?;
     if active.role_mode == RoleMode::Split && role.mode != RoleMode::Split {
         return Err(ActivationError::RoleModeWeakened);
     }

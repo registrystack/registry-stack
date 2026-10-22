@@ -138,6 +138,13 @@ destinations:
         digest
     }
 
+    /// Replace the secret file `name` with `value`.
+    fn secret(&self, name: &str, value: &str) {
+        let path = self.path("secrets").join(name);
+        std::fs::write(&path, value).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
     async fn relations(&self) -> i64 {
         self.admin
             .query_one(
@@ -344,4 +351,200 @@ async fn apply_refuses_a_package_that_is_not_the_pinned_one() {
     );
     assert_eq!(report["diagnostics"][0]["path"], "/package/expectedDigest");
     assert_eq!(deployment.relations().await, 0, "nothing was applied");
+}
+
+/// A database provisioned as the Document Store operate page provisions
+/// one: split migration and runtime login roles, `PUBLIC` stripped of every
+/// privilege on the database and on the `public` schema, and the schema
+/// handed to the migration role. The runtime role holds only `CONNECT`, so
+/// before the first apply it has no usage on any schema and its
+/// `current_schema()` is null. Roles are cluster-wide, so each is named
+/// after the suite's own database, which makes a leftover from a failed run
+/// attributable, and [`ProvisionedDatabase::drop`] removes them with the
+/// database.
+struct ProvisionedDatabase {
+    name: String,
+    migration_role: String,
+    runtime_role: String,
+}
+
+impl ProvisionedDatabase {
+    const PASSWORD: &'static str = "documents-test";
+
+    async fn new(admin: &tokio_postgres::Client) -> Self {
+        let suite = base_config()
+            .get_dbname()
+            .expect("DOCUMENTS_TEST_DATABASE_URL names a database")
+            .to_owned();
+        // The longest name, `<suite>_migration_<suffix>`, stays within
+        // PostgreSQL's 63-byte identifier limit.
+        let suite = &suite[..suite.len().min(44)];
+        let suffix = &Uuid::new_v4().simple().to_string()[..8];
+        let provisioned = Self {
+            name: format!("{suite}_database_{suffix}"),
+            migration_role: format!("{suite}_migration_{suffix}"),
+            runtime_role: format!("{suite}_runtime_{suffix}"),
+        };
+        let Self {
+            name,
+            migration_role,
+            runtime_role,
+        } = &provisioned;
+        let password = Self::PASSWORD;
+        for role in [migration_role, runtime_role] {
+            admin
+                .batch_execute(&format!(
+                    "CREATE ROLE {role} LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB \
+                     NOCREATEROLE NOINHERIT NOBYPASSRLS"
+                ))
+                .await
+                .unwrap();
+        }
+        admin
+            .batch_execute(&format!("CREATE DATABASE {name}"))
+            .await
+            .unwrap();
+        let (database, connection) =
+            tokio_postgres::connect(&provisioned.url("postgres", None), tokio_postgres::NoTls)
+                .await
+                .expect("connect the provisioned database");
+        let connection = tokio::spawn(connection);
+        database
+            .batch_execute(&format!(
+                "REVOKE ALL ON DATABASE {name} FROM PUBLIC;
+                 GRANT CONNECT ON DATABASE {name} TO {migration_role}, {runtime_role};
+                 ALTER SCHEMA public OWNER TO {migration_role};
+                 REVOKE ALL ON SCHEMA public FROM PUBLIC;"
+            ))
+            .await
+            .unwrap();
+        drop(database);
+        connection.await.unwrap().unwrap();
+        provisioned
+    }
+
+    /// A connection string reaching this database as `user`, with the
+    /// suite's own password when `password` is `None`.
+    fn url(&self, user: &str, password: Option<&str>) -> String {
+        let base = base_config();
+        let tokio_postgres::config::Host::Tcp(host) = &base.get_hosts()[0] else {
+            panic!("the test server is reached over TCP");
+        };
+        let port = base.get_ports().first().copied().unwrap_or(5432);
+        let password = match password {
+            Some(password) => password.to_owned(),
+            None => String::from_utf8(base.get_password().unwrap_or_default().to_vec()).unwrap(),
+        }
+        .replace('\\', "\\\\")
+        .replace('\'', "\\'");
+        format!(
+            "host={host} port={port} user={user} password='{password}' dbname={}",
+            self.name
+        )
+    }
+
+    async fn drop(self, admin: &tokio_postgres::Client) {
+        // DROP DATABASE runs outside a transaction, so alone.
+        for statement in [
+            format!("DROP DATABASE {} WITH (FORCE)", self.name),
+            format!("DROP ROLE {}", self.runtime_role),
+            format!("DROP ROLE {}", self.migration_role),
+        ] {
+            admin.batch_execute(&statement).await.unwrap();
+        }
+    }
+}
+
+/// The suite's own connection settings.
+fn base_config() -> tokio_postgres::Config {
+    std::env::var("DOCUMENTS_TEST_DATABASE_URL")
+        .expect("DOCUMENTS_TEST_DATABASE_URL names a disposable PostgreSQL test server")
+        .parse()
+        .expect("DOCUMENTS_TEST_DATABASE_URL is a PostgreSQL connection string")
+}
+
+/// The operate page's journey on a database provisioned as it says: `plan`
+/// over the runtime credential, which holds nothing but `CONNECT` before
+/// the first apply, reports the initial activation; `apply` over the
+/// migration credential splits the roles; and `plan` then reports nothing
+/// to change.
+#[tokio::test]
+async fn plan_reports_the_initial_activation_on_a_database_provisioned_as_the_operate_page_says() {
+    let deployment = Deployment::new().await;
+    let digest = deployment.deploy();
+    let runtime = deployment.runtime();
+    let provisioned = ProvisionedDatabase::new(&deployment.admin).await;
+    deployment.secret(
+        "runtime-database-url",
+        &provisioned.url(
+            &provisioned.runtime_role,
+            Some(ProvisionedDatabase::PASSWORD),
+        ),
+    );
+    deployment.secret(
+        "migration-database-url",
+        &provisioned.url(
+            &provisioned.migration_role,
+            Some(ProvisionedDatabase::PASSWORD),
+        ),
+    );
+
+    let (code, plan) = ctl(&["plan", "--runtime-config", &runtime]);
+    assert_eq!(code, 0, "{plan:#}");
+    assert_eq!(plan["packageDigest"], digest);
+    assert_eq!(plan["change"], "activate");
+    assert_eq!(plan["planKind"], "initial");
+    assert_eq!(plan["activeDigest"], Value::Null);
+    assert_eq!(plan["pendingSchemaVersions"], serde_json::json!([100]));
+    assert_eq!(plan["runtimeRoleMode"], Value::Null);
+    assert_eq!(plan["refusals"], serde_json::json!([]));
+    let output = Command::new(env!("CARGO_BIN_EXE_documentsctl"))
+        .args(["plan", "--runtime-config", &runtime])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("package digest: {digest}\nchange: activate\n")
+    );
+
+    let (code, status) = ctl(&["status", "--runtime-config", &runtime]);
+    assert_eq!(code, 0, "{status:#}");
+    assert_eq!(status["active"], Value::Null);
+
+    let (code, applied) = ctl(&["apply", "--runtime-config", &runtime]);
+    assert_eq!(code, 0, "{applied:#}");
+    assert_eq!(applied["activation"]["roleMode"], "split");
+
+    let (code, plan) = ctl(&["plan", "--runtime-config", &runtime]);
+    assert_eq!(code, 0, "{plan:#}");
+    assert_eq!(plan["change"], "none");
+    assert_eq!(plan["runtimeRoleMode"], "split");
+    assert_eq!(plan["grantsCurrent"], true);
+
+    // After apply, a runtime role that lost its schema usage resolves no
+    // schema again. That is a misconfiguration, refused by name rather
+    // than read as a database nobody applied a package to.
+    let (database, connection) =
+        tokio_postgres::connect(&provisioned.url("postgres", None), tokio_postgres::NoTls)
+            .await
+            .expect("connect the provisioned database");
+    let connection = tokio::spawn(connection);
+    database
+        .batch_execute(&format!(
+            "REVOKE USAGE ON SCHEMA public FROM {}",
+            provisioned.runtime_role
+        ))
+        .await
+        .unwrap();
+    drop(database);
+    connection.await.unwrap().unwrap();
+    let (code, plan) = ctl(&["plan", "--runtime-config", &runtime]);
+    assert_eq!(code, 1, "{plan:#}");
+    assert_eq!(
+        plan["diagnostics"][0]["code"],
+        "documentsctl.activation.ledger-unreadable"
+    );
+
+    provisioned.drop(&deployment.admin).await;
 }
