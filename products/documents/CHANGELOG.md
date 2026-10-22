@@ -15,8 +15,8 @@ The Document Store is held out of releases.
 - `documentsctl check`, given both a project and a runtime configuration,
   refuses a hook whose `handler.destinationId` `destinations.hooks` does not
   bind, as `documents.runtime.unbound-hook-destination` at
-  `/destinations/hooks`. The runtime's startup refusal leads with the same
-  code.
+  `/destinations/hooks`. `documents serve` refuses the same files with the
+  same diagnostic, positioned on its line of the runtime configuration.
 - `documents serve` and the operator commands that need an activated
   database refuse a runtime role that lost `USAGE` on the schema, or read
   access to the activation ledger, as `documentsctl.activation.ledger-unreadable`

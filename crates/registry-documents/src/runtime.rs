@@ -34,7 +34,8 @@ use crate::activation::{self, ActivationError, ApplyRequest};
 use crate::audit::DocumentsAudit;
 use crate::auth::DocumentsAuthenticator;
 use crate::config::{
-    describe_secret_failure, startup_report, Erasure, RuntimeConfig, RuntimeConfigError,
+    check_runtime_file, describe_secret_failure, startup_report, Erasure, RuntimeConfig,
+    RuntimeConfigError,
 };
 use crate::content::{pinned_storage, ContentStorage, StorageError};
 use crate::erasure::{
@@ -138,6 +139,27 @@ fn load_config(path: &Path) -> Result<RuntimeConfig, RuntimeError> {
     RuntimeConfig::load(path).map_err(|error| match startup_report(path, &error) {
         Some(report) => RuntimeError::ConfigurationRefused(report),
         None => RuntimeError::Config(error),
+    })
+}
+
+/// Refuse a runtime document at `path` that breaks a rule against the
+/// project its package carries, such as a hook destination
+/// `destinations.hooks` does not bind, with the report `documentsctl check
+/// --project` gives for the same files: each finding at its position.
+fn check_against_project(
+    path: &Path,
+    config: &RuntimeConfig,
+    package: &LoadedPackage,
+) -> Result<(), RuntimeError> {
+    let findings = config.project_findings(&package.project);
+    if findings.is_empty() {
+        return Ok(());
+    }
+    let report = check_runtime_file(path, true, Some(&package.project)).report;
+    Err(if report.is_empty() {
+        RuntimeError::Config(RuntimeConfigError::Refused(findings))
+    } else {
+        RuntimeError::ConfigurationRefused(report)
     })
 }
 
@@ -258,6 +280,7 @@ async fn prepare_with(
     let config = load_config(path)?;
     let secrets = Arc::new(config.secret_resolver()?);
     let package = load_package(&config)?;
+    check_against_project(path, &config, &package)?;
     let store = PostgresStore::connect_runtime(&config.database, &secrets).map_err(|source| {
         RuntimeError::Database {
             stage: "runtime database configuration",

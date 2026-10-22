@@ -12,7 +12,7 @@ mod support;
 
 use std::sync::Arc;
 
-use registry_documents::runtime::{prepare_with_verifier, Prepared};
+use registry_documents::runtime::{prepare_with_verifier, Prepared, RuntimeError};
 use registry_documents_core::{
     DOCUMENT_GRANT_CHANGED_EVENT_SCHEMA_ID, DOCUMENT_VERSION_READY_EVENT_SCHEMA_ID,
     DOCUMENT_VERSION_REJECTED_EVENT_SCHEMA_ID,
@@ -843,10 +843,33 @@ async fn startup_refuses_a_project_hook_whose_destination_is_not_bound() {
         .expect_err("an unbound hook destination refuses startup");
     let message = error.to_string();
     assert!(
-        message.starts_with("documents.runtime.unbound-hook-destination: "),
+        message.contains("documents.runtime.unbound-hook-destination"),
         "{message}"
     );
-    assert!(message.contains("destinations.hooks"), "{message}");
+    // The refusal is the positioned report `documentsctl check --project`
+    // gives for the same files: one diagnostic at `/destinations/hooks`, on
+    // its line of the runtime document.
+    let RuntimeError::ConfigurationRefused(report) = &error else {
+        panic!("a positioned configuration refusal, not {message}");
+    };
+    let found: Vec<(&str, &str)> = report
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect();
+    assert_eq!(
+        found,
+        [(
+            "documents.runtime.unbound-hook-destination",
+            "/destinations/hooks"
+        )]
+    );
+    let source = report.diagnostics()[0]
+        .source
+        .as_ref()
+        .expect("the diagnostic names its file");
+    assert_eq!(source.file, deployment.runtime.display().to_string());
+    assert!(source.line.is_some(), "{message}");
 }
 
 #[tokio::test]

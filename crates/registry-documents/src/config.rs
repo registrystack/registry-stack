@@ -69,7 +69,7 @@ pub const MAXIMUM_HOOK_PAYLOAD_RETENTION_DAYS: u32 = 30;
 /// The code of the refusal a runtime document earns when `destinations.hooks`
 /// leaves unbound a destination the project's hooks name. `documentsctl
 /// check` reports it at `/destinations/hooks`, and the runtime's startup
-/// refusal leads with it.
+/// refusal reports it at the same position.
 pub const UNBOUND_HOOK_DESTINATION_CODE: &str = "documents.runtime.unbound-hook-destination";
 
 /// What the unbound hook destination refusal says, wherever it is reported.
