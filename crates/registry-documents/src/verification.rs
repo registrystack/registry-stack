@@ -1008,6 +1008,12 @@ pub async fn sweep_bindings(store: &PostgresStore, binding: &str) -> Result<u64,
         let version_id: Uuid = row.try_get(0)?;
         let part = job_part(version_id, binding);
         arm_job(&transaction, version_id, &part).await?;
+        // This is the dispatch cancel transition
+        // (`registry_platform_dispatch::postgres::cancel_unattempted`)
+        // applied to every pending part except the one just armed, inside
+        // the re-arm transaction. Unlike that call it also cancels a pending
+        // job that was already attempted: a verification attempt only reads
+        // stored content, so no receiver outside this runtime saw it.
         transaction
             .execute(
                 "UPDATE documents_verification_jobs

@@ -144,6 +144,12 @@ impl DocumentService {
                 self.capture_grant_event(&transaction, caller, grant_id, GrantChange::Revoked)
                     .await?;
             }
+            // This is the dispatch cancel transition
+            // (`registry_platform_dispatch::postgres::cancel_unattempted`)
+            // applied to every pending part of the version inside the removal
+            // transaction. Unlike that call it also cancels a pending job
+            // that was already attempted: a verification attempt only reads
+            // stored content, so no receiver outside this runtime saw it.
             transaction
                 .execute(
                     "UPDATE documents_verification_jobs
