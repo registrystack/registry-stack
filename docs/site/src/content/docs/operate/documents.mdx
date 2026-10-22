@@ -82,17 +82,24 @@ matter most:
 | `storage.type` | `database` or `s3`. The first upload pins the choice: a later start under another backend or bucket is refused. |
 | `storage.maximumDocumentBytes` | The largest version the deployment takes: 16 MiB by default on both backends. On `s3` you may raise it up to 64 MiB. |
 | `contentVerification` | `type: http` with the verifier's `url`, `authorizationRef`, and `policyId`. `type: disabled` approves everything and is accepted only on a development loopback listener. |
+| `destinations.hooks` | One entry per destination id the project's hooks name: the receiver's `url` and its `hmacSha256KeyRef`. See [Events](#events). |
 | `retention.receiptRetentionDays` | How long a retry with the same `Idempotency-Key` gets the same answer. Seven days is a placeholder for your retention schedule to approve. |
+| `retention.hookPayloadRetentionDays` | How long an event waits to be delivered, from 1 to 30 days and 7 by default. |
 
-Size the host for about 512 MiB of document memory on top of the process's own needs. Uploads,
-downloads, and verification attempts share one transfer budget of at least 256 MiB; a transfer
-that finds no room is refused with `service.unavailable` and `Retry-After`, and is never queued.
+Uploads, downloads, and verification attempts each hold a whole version in memory, and share one
+transfer budget: the larger of 256 MiB and `storage.maximumDocumentBytes`, which is 256 MiB at
+every ceiling the runtime accepts. Copies made while hashing, storing, and sending come on top of
+it, so give the host headroom beyond the budget and the process's own needs. An upload or download
+that finds no room is refused at once with `service.unavailable` and `Retry-After`, and never
+waits. A verification attempt waits for room within its attempt timeout, then is retried later.
 
 The [configuration reference](../../reference/documents-configuration/) lists every key.
 
 {/* Evidence: products/documents/RUNTIME-CONFIG.md, Keys and Transfer memory;
     crates/registry-documents/src/config.rs, DATABASE_MAXIMUM_DOCUMENT_BYTES,
-    S3_MAXIMUM_DOCUMENT_BYTES, and ContentVerificationConfig. */}
+    S3_MAXIMUM_DOCUMENT_BYTES, MAXIMUM_HOOK_PAYLOAD_RETENTION_DAYS, and ContentVerificationConfig;
+    crates/registry-documents/src/transfer.rs, TRANSFER_BUFFER_BYTES and TransferBudget::new;
+    crates/registry-documents/src/verification.rs, VerificationTransport. */}
 
 ## Create the secret files
 
@@ -111,16 +118,18 @@ unset value
 ```
 
 Write the other files the runtime file names the same way: `migration-database-url` for
-`documents_migration`, `content-verifier-authorization`, and each key a hook destination or the
-S3 storage names. The verifier file holds the token alone; the runtime sends it as
-`Bearer <token>`. Each file must be a regular file owned by the runtime user, mode `0400` or
-`0600`, with one link.
+`documents_migration`, `content-verifier-authorization`, each key the S3 storage names, and the
+signing key of each hook destination. The verifier file holds the token alone; the runtime sends it
+as `Bearer <token>`. Generate a hook key like the audit key, at least 32 bytes, and give the
+receiver the same bytes through its own secret store. Each file must be a regular file owned by the
+runtime user, mode `0400` or `0600`, with one link.
 
 `serve` never reads the migration credential; only `apply` connects with it. Write
 `migration-database-url` only on the host that runs `apply`.
 
 {/* Evidence: crates/registry-platform-config/src/secrets.rs, file provider checks;
     crates/registry-platform-objectstore/src/verifier.rs, HttpVerifier authorization;
+    crates/registry-platform-crypto/src/delivery_signature.rs, MIN_HMAC_SHA256_KEY_BYTES;
     crates/registry-documents/src/runtime.rs, connect_migration only in apply. */}
 
 ## Check, apply, and start
@@ -144,7 +153,7 @@ documentsctl plan --runtime-config /etc/registry-documents/runtime.yaml
 ```
 
 ```text
-package digest: sha256:568967a5183bff1a1cfaaa3f4bf872cc7213d75f0fd74401ad0755ea58644db1
+package digest: sha256:ec47e52f55cd2071a8ba59ac0796816356caa521b6823e2fd54a1bc8a4e7971c
 change: activate
 ```
 
@@ -154,7 +163,7 @@ documentsctl apply --runtime-config /etc/registry-documents/runtime.yaml \
 ```
 
 ```text
-package digest: sha256:568967a5183bff1a1cfaaa3f4bf872cc7213d75f0fd74401ad0755ea58644db1
+package digest: sha256:ec47e52f55cd2071a8ba59ac0796816356caa521b6823e2fd54a1bc8a4e7971c
 change: activate
 restart documents serve to load the activated package
 ```
@@ -167,7 +176,7 @@ documentsctl status --runtime-config /etc/registry-documents/runtime.yaml
 ```
 
 ```text
-active: sha256:568967a5183bff1a1cfaaa3f4bf872cc7213d75f0fd74401ad0755ea58644db1
+active: sha256:ec47e52f55cd2071a8ba59ac0796816356caa521b6823e2fd54a1bc8a4e7971c
 schema version: 100
 runtime role mode: split
 ```
@@ -181,7 +190,9 @@ documents --runtime-config /etc/registry-documents/runtime.yaml serve
 It logs JSON lines on standard error, starting with `the Document Store is serving` and the
 address. `serve` never applies the schema. It refuses to start on a database with no active
 package, an active package other than the configured one, or a schema from another release, and
-names every finding before it binds the socket. Check that it answers:
+names every finding before it binds the socket. If its verification, event delivery, or erasure
+worker, or its cleanup pass, ends while it serves, it logs the error and exits with status 1, so
+run it under a supervisor that restarts it. Check that it answers:
 
 ```sh
 curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8116/health
@@ -203,12 +214,13 @@ commands write their own audit journal beside the service's.
 
 A grant keeps its expiry; who may hold it follows the active package, so a change to a policy's
 recipients applies to grants already issued. To change a policy, a profile, or a hook, edit
-`documents.yaml`, check it, and run `package`, `plan`, and `apply` again, then restart `serve`.
-Changing only the runtime file needs only a restart, with one exception: a delivery not yet sent
-keeps the destination binding it was captured under, and `serve` refuses to start while one waits on
-a binding the file no longer holds. To move a hook to a new URL or key, add a destination under a new
-id, point the hook at it, apply, and restart; remove the old entry once its deliveries have been sent,
-dead-lettered, or expired.
+`documents.yaml` and check it. `package` writes only into a directory that does not exist yet, so
+package into a new directory, set `package.root` to it and `package.expectedDigest` to the digest
+it prints, run `plan` and `apply`, then restart `serve`.
+
+Changing only the runtime file needs only a restart, with one exception: a hook destination still
+holding undelivered events cannot be changed in place. [Move a hook](#move-a-hook) gives the
+procedure.
 
 Changing the verifier's `url` or `policyId` changes its binding. At the next start, every version
 verified under the old binding is suspended and verified again under the new one, so plan the
@@ -216,7 +228,9 @@ change for a quiet period.
 
 {/* Evidence: crates/registry-documents/src/verification.rs, module documentation and
     sweep_bindings; crates/registry-documents/src/service.rs, release by grant reads the active
-    policy; crates/registry-documents/src/service/grants.rs, a grant stores only its expiry. */}
+    policy; crates/registry-documents/src/service/grants.rs, a grant stores only its expiry;
+    crates/registry-platform-config/src/package.rs, an existing output directory is refused; observed
+    with documentsctl 0.43.0-dev on 2026-10-22. */}
 
 ## Replay a stuck verification
 
@@ -323,26 +337,118 @@ wait until you set it back to `active` and restart, and a replayed job waits wit
 
 ## Events
 
-A project's `hooks` send after-commit events to a URL destination the runtime file binds under
-`destinations.hooks`, with its HMAC key. Each hook lists the `policies` whose documents it hears
-about, and hears nothing about a document under any other policy. Three triggers exist:
+A project's `hooks` tell another system that something changed. Each hook is an after-commit
+observer: once a change commits, it sends one signed event to a URL. In `documents.yaml` a hook
+names its `trigger`, the `policies` whose documents it covers, the `projection` fields it sends,
+and a `handler.destinationId`. The runtime file binds that id under `destinations.hooks` to the
+receiver's `url` and `hmacSha256KeyRef`, in the same URL hook destination block Registry
+Scheduling reads, so the project carries no endpoint and no secret. The starter sends all three
+triggers for its three policies to one destination, `owning-system-events`.
 
-| Trigger | Sent when |
-| ------- | --------- |
-| `document-version.ready` | A verdict makes a version releasable |
-| `document-version.rejected` | A verdict rejects a version |
-| `document-grant.changed` | A grant is issued or revoked, including each grant a removal revokes |
+`policies` is required and lists at least one policy the project declares. A hook hears nothing
+about a document held under a policy it does not list, so when policies serve different owning
+systems, give each system its own hooks and destination. The list is the only scope a hook has: it
+is reviewed with the package, and a hook cannot be routed by custodian.
 
-An event carries identifiers, the version digest, and the policy, never content, a label, a media
-type, a name, or a subject. A grant event also carries the kind of actor and the grant's `expiresAt`.
-A grant reaching its expiry sends nothing; the receiver reads the lapse from `expiresAt`. A failed
-delivery is retried with backoff up to the destination's `maximumAttempts` and never delays or
-undoes the change it reports. An observer cannot answer with a change of its own: the Store refuses
-it and records the refusal.
+| Trigger | Sent when | Fields a hook may project |
+| ------- | --------- | ------------------------- |
+| `document-version.ready` | A verdict makes a version ready that was not, including a version approved again after a change of verifier binding suspended it | `documentId`, `versionId`, `versionDigest`, `policyId`, `policyVersion` |
+| `document-version.rejected` | A verdict rejects a version | The same five |
+| `document-grant.changed` | A grant is issued or revoked, including each grant a removal revokes | The same five, plus `grantId`, `change` (`issued` or `revoked`), `actorKind`, and `expiresAt` |
 
-{/* Evidence: products/documents/examples/starter/documents.yaml, hooks;
-    products/documents/README.md, Events and observers;
-    products/documents/RUNTIME-CONFIG.md, Keys. */}
+The body of an event is a Version 1 hook envelope. This is the starter's grant hook reporting an
+issued grant, as observed, with identifiers and times replaced:
+
+```json
+{
+  "causation": { "hop": 0, "root": "<event-id>" },
+  "data": {
+    "actorKind": "service",
+    "change": "issued",
+    "documentId": "<document-id>",
+    "expiresAt": "<grant-expiry>",
+    "grantId": "<grant-id>",
+    "versionId": "<version-id>"
+  },
+  "dataschema": "https://id.registrystack.org/schemas/documents/events/document-grant-changed.v1alpha1.schema.json",
+  "id": "<event-id>",
+  "source": "urn:registrystack:documents:civil-registry-documents",
+  "subject": { "recordReference": "/document-grants/<grant-id>", "recordRevision": 1 },
+  "time": "<capture-time>",
+  "type": "document-grant-changed"
+}
+```
+
+- `type` is the hook's id and `dataschema` names its trigger's data schema, so two hooks on one
+  trigger send events with different types and the same schema. `source` ends with the project id.
+- `data` holds exactly the fields the hook projects. No event carries content, a label, a media
+  type, a name, a subject, or anything else about the person a document describes.
+- `subject.recordRevision` is the version's or grant's own revision. Every recorded change of the
+  record raises it by one, so events about one record arrive with increasing revisions, and a
+  receiver can drop one older than what it holds.
+- `actorKind` is `service` or `human`: the kind of caller that issued or revoked the grant, or
+  that requested the removal which revoked it. A version event has none, because its verdict is
+  the verifier's.
+- `expiresAt` is the expiry fixed at issue. Reaching it sends nothing; a receiver that tracks
+  grants reads the lapse from the `issued` event.
+- A removal sends one `revoked` event for each grant it revokes, and the erasure that follows
+  sends nothing. A repeated verdict, an issue replayed under its `Idempotency-Key`, a repeated
+  revocation, and a repeated removal send nothing.
+
+An event is captured in the same database transaction as the change it reports. A change that
+rolls back reports nothing, and if the event cannot be written, the verdict or grant change fails
+with it rather than commit unreported. Delivery runs after commit and never delays or undoes the
+change. A failed attempt is retried with a backoff that starts at 30 seconds and doubles up to an
+hour, until the destination's `maximumAttempts` (8 by default, at most 20) are spent; the event is
+then dead-lettered. Each attempt is recorded in the audit journal as `documents.hook-delivery`. No
+`documentsctl` command lists, replays, or discards a delivery.
+
+A receiver verifies the signature with its copy of the key, then reads what it needs through the
+API under its own token. An event grants nothing: it carries identifiers, and receiving one gives
+the receiver no standing in the Document Store. An observer cannot answer with a change of its
+own; the Document Store refuses every proposal, records it as
+`documents.hook.proposal-unsupported`, and changes nothing.
+
+{/* Evidence: crates/registry-documents/src/hooks.rs, DocumentEvent::subject, projected,
+    proposal_refusal, INITIAL_BACKOFF_MS, MAXIMUM_BACKOFF_MS, and record_audit;
+    crates/registry-documents-core/src/project.rs, HookTrigger::fields;
+    crates/registry-platform-config/src/blocks.rs, UrlHookDestinationConfig;
+    products/documents/generated/events/;
+    products/documents/contracts/recorded-decisions.yaml, DOCUMENTS-DEC-27 to DOCUMENTS-DEC-33;
+    observed with documents 0.43.0-dev on 2026-10-22: a ready event, an issued grant event, and the
+    revoked event of a removal. */}
+
+### Move a hook
+
+Hooks are part of the package: adding, removing, or changing one is a project change, applied with
+a new package as [Change the project](#change-the-project) describes.
+
+Where a hook sends is the runtime file's, but an event waiting to be delivered keeps the destination
+binding it was captured under: the id, URL, key reference, timeout, and attempt budget. While any
+such event remains, `documents serve` refuses to start on a runtime file that changed or removed
+its destination, and exits with status 1:
+
+```text
+documents: a retained hook delivery no longer matches its destination binding in destinations.hooks, or the hook delivery tables are unavailable
+```
+
+To move a hook to a new URL or key:
+
+1. Add a destination under a new id in `destinations.hooks`, and leave the old entry exactly as it
+   is.
+2. Point the hook's `handler.destinationId` at the new id, package and apply the project, and
+   restart. New events go to the new destination; events already captured keep the old one.
+3. Remove the old entry once nothing waits on it: every event captured for it has been delivered,
+   has been dead-lettered, or has outlived `retention.hookPayloadRetentionDays`.
+
+No command abandons pending deliveries, so a receiver that will never answer again still holds the
+old entry until its events are dead-lettered or expire.
+
+{/* Evidence: products/documents/contracts/recorded-decisions.yaml, DOCUMENTS-DEC-31;
+    crates/registry-platform-hooks/src/delivery/service.rs, verify_retained_bindings;
+    crates/registry-documents/tests/postgres_hooks.rs,
+    a_destination_changed_under_a_pending_delivery_refuses_startup_until_it_drains; observed with
+    documents 0.43.0-dev on 2026-10-22. */}
 
 ## Restore from a backup
 
@@ -353,7 +459,9 @@ before you serve traffic again, and only their original callers can repeat them.
 
 1. Set `cleanup.erasure: paused` and stop traffic at your edge.
 2. Restore the database, and the audit file from the same point if you have it.
-3. Start the service. It erases nothing while paused.
+3. Start the service. It erases nothing while paused. Events the backup still records as
+   undelivered are sent again, so a receiver may get an event it already holds; it recognises the
+   repeat by its `Idempotency-Key`.
 4. Compare the restored state with the audit file to find every revocation and removal newer than
    the backup. An operator holds no custodian or granting token, and no `documentsctl` command
    revokes a grant or removes a document, so ask each original caller to repeat its revocations

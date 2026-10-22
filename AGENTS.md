@@ -629,13 +629,22 @@ Document Store product and gates:
 products/documents/scripts/check-checkpoint.sh
 products/documents/scripts/check-contracts.sh
 DOCUMENTS_TEST_DATABASE_URL=<disposable database> cargo test --locked \
-  -p registry-documents --features postgres-test --test postgres_startup
+  -p registry-documents --features postgres-test \
+  --test postgres_startup --test postgres_operator --test postgres_documents \
+  --test postgres_s3 --test postgres_hooks
+DOCUMENTS_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-documentsctl --features postgres-test --test postgres_cli
+cargo build --locked -p registry-render
+DOCUMENTS_TEST_DATABASE_URL=<disposable database> \
+  REGISTRY_RENDER_BIN="$PWD/target/debug/registry-render" cargo test --locked \
+  -p registry-documents --features postgres-test --test postgres_journey
 ```
 
 The checkpoint runs the dependency-direction and database-isolation gates,
 the drift test for the committed schemas and OpenAPI document, and the
-offline `documentsctl check` journeys. The PostgreSQL suite fails, rather than
-skips, without `DOCUMENTS_TEST_DATABASE_URL`.
+offline `documentsctl check` journeys. The PostgreSQL suites fail, rather than
+skip, without `DOCUMENTS_TEST_DATABASE_URL`, and `postgres_journey` also fails
+without `REGISTRY_RENDER_BIN`.
 
 The unified Node.js and Python packages are generated from the maintained product
 bindings. After changing a binding or facade, run:

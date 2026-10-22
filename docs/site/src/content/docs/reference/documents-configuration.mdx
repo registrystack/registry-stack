@@ -25,16 +25,22 @@ profiles, document policies, and hooks, and the `runtime.yaml` an operator deplo
 
 | File | Kind | Status | Source |
 | ---- | ---- | ------ | ------ |
-| `documents.yaml` | `DocumentsProject` | Pre-1.0, may change | [`project.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/documents/generated/project/project.schema.json) |
-| `runtime.yaml` | `DocumentsRuntimeConfig` | Pre-1.0, may change | [`runtime.schema.json`](https://github.com/registrystack/registry-stack/blob/main/products/documents/generated/runtime/runtime.schema.json) |
+| `documents.yaml` | `DocumentsProject` | Pre-1.0, may change | `products/documents/generated/project/project.schema.json` |
+| `runtime.yaml` | `DocumentsRuntimeConfig` | Pre-1.0, may change | `products/documents/generated/runtime/runtime.schema.json` |
 
 Every mapping is closed: an unknown key is refused with its path. JSON Schema is not the
 acceptance path: a document these schemas accept still has to pass `documentsctl check`, which
 resolves the access profiles each policy names and checks each profile's role against the
-policy that uses it.
+policy that uses it. The check also refuses:
+
+- an OAuth client listed in `requesterClients` of two profiles
+  (`documents.project.shared-requester-client`);
+- a profile whose `principalClaim` differs from another profile's with the same `actorKind`
+  (`documents.project.mixed-principal-claim`): every profile of one actor kind reads the subject
+  from one claim.
 
 {/* Evidence: docs/site/scripts/generate-documents-configuration.mjs, CONTRACTS;
-    crates/registry-documents-core/src/project.rs, DocumentsProject;
+    crates/registry-documents-core/src/project.rs, DocumentsProject and reference_findings;
     crates/registry-documents/src/config.rs, DOCUMENTS_RUNTIME_KIND;
     products/documents/RUNTIME-CONFIG.md. */}
 
