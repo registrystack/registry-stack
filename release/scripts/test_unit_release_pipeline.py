@@ -7,8 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import unittest
-from unittest import mock
+import unittest.mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import unit_release_pipeline as pipeline
@@ -141,6 +140,11 @@ class UnitPreparationTest(unittest.TestCase):
                 "esac\n"
             )
             uname.chmod(0o755)
+            getconf = fake_bin / "getconf"
+            getconf.write_text(
+                "#!/bin/bash\nset -euo pipefail\nprintf 'glibc 2.34\\n'\n"
+            )
+            getconf.chmod(0o755)
             output = root / "out"
             installer_output = []
             run = subprocess.run
@@ -151,14 +155,17 @@ class UnitPreparationTest(unittest.TestCase):
                 result = run(*args, **kwargs)
                 if args[0][0] == "bash":
                     installer_output.append(result.stdout)
+                    self.assertNotIn("floor is unchecked", result.stderr)
                 return result
 
             with (
-                mock.patch.dict(
+                unittest.mock.patch.dict(
                     os.environ,
                     {"PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"},
                 ),
-                mock.patch.object(pipeline.subprocess, "run", side_effect=quiet_run),
+                unittest.mock.patch.object(
+                    pipeline.subprocess, "run", side_effect=quiet_run
+                ),
             ):
                 pipeline.stage_payload(root, "discovery", "1.2.3", binaries, output)
 

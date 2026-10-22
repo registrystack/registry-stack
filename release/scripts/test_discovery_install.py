@@ -215,6 +215,22 @@ class DiscoveryInstallerTests(unittest.TestCase):
             self.assertIn("Linux amd64", result.stderr)
             self.assertEqual([], fixture.requests())
 
+    def test_old_glibc_refuses_before_download_and_preserves_existing_pair(self) -> None:
+        with InstallerFixture() as fixture:
+            fixture.write_existing_commands()
+            fixture.write_libc(
+                getconf="printf 'glibc 2.28\\n'",
+                ldd="printf 'ldd (GNU libc) 2.28\\n'",
+            )
+
+            result = fixture.run(use_local_assets=False)
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("This system has GNU libc 2.28", result.stderr)
+            self.assertIn("Nothing was installed", result.stderr)
+            self.assertEqual([], fixture.requests())
+            fixture.assert_existing_commands()
+
 
 class InstallerFixture:
     def __init__(
@@ -381,6 +397,15 @@ class InstallerFixture:
             encoding="utf-8",
         )
         path.chmod(0o755)
+
+    def write_libc(self, *, getconf: str, ldd: str) -> None:
+        for name, body in (("getconf", getconf), ("ldd", ldd)):
+            path = self.fake_bin / name
+            path.write_text(
+                f"#!/bin/sh\nset -eu\n{body}\n",
+                encoding="utf-8",
+            )
+            path.chmod(0o755)
 
     def _write_mv(self) -> None:
         path = self.fake_bin / "mv"

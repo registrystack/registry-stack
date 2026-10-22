@@ -255,7 +255,7 @@ class GlibcFloorGateTests(unittest.TestCase):
 
 
 class InstallerPreflightTests(unittest.TestCase):
-    """The generated block the three published installers carry."""
+    """The generated block every published installer carries."""
 
     @staticmethod
     def renderer(*arguments: str) -> int:
@@ -275,6 +275,24 @@ class InstallerPreflightTests(unittest.TestCase):
             for path in ROOT.glob("crates/*/install.sh")
         }
         self.assertEqual(covered, published)
+
+    def test_discovery_installer_carries_the_shared_preflight(self) -> None:
+        installer = next(
+            installer
+            for installer in RENDERER.INSTALLERS
+            if installer.path == Path("crates/registry-discovery/install.sh")
+        )
+        text = (ROOT / installer.path).read_text(encoding="utf-8")
+        begin = text.index(RENDERER.BEGIN)
+        end = text.index(RENDERER.END) + len(RENDERER.END) + 1
+        self.assertEqual(
+            RENDERER.render(installer, repository_floor()),
+            text[begin:end],
+        )
+        self.assertEqual(
+            end,
+            text.index(installer.anchor),
+        )
 
     def test_check_reports_a_stale_installer_and_write_repairs_it(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -310,7 +328,7 @@ class InstallerPreflightTests(unittest.TestCase):
                 )
                 self.assertIn("Nothing was installed", block)
                 self.assertIn('if [ "$os_label" = "linux" ]; then', block)
-                self.assertLess(text.index(RENDERER.END), text.index(RENDERER.ANCHOR))
+                self.assertLess(text.index(RENDERER.END), text.index(installer.anchor))
 
     def test_generated_block_trusts_the_active_libc(self) -> None:
         """The libc the system runs on decides, read from glibc's getconf. A musl
