@@ -5861,7 +5861,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
                         "test.database.setup-refused",
                         "database",
                         &format!(
-                            "the schema-test database setup was refused: {invariant}; correct that prerequisite (see Provision PostgreSQL for the roles, grants, and extensions), then recreate the disposable database before retrying"
+                            "the schema-test database setup was refused: {invariant}; correct that prerequisite (see Provision PostgreSQL for the roles, grants, and extensions), then retry; recreate the disposable database if it is no longer clean"
                         ),
                     ),
                     DiagnosticArtifact::SchemaTestDatabase,

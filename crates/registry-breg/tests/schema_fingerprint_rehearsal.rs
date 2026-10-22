@@ -445,6 +445,10 @@ async fn prepare_refuses_a_single_role_runtime_connection_naming_the_role_invari
             "schema-test runtime connection uses unexpected authority"
         ))
     );
+    assert!(
+        managed_schemas_empty_by_restrict(&database).await,
+        "a single-role setup is refused before any managed schema is written"
+    );
     database.cleanup().await;
 }
 
