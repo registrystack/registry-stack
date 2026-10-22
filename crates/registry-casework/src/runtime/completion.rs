@@ -514,7 +514,7 @@ mod tests {
 
     #[test]
     fn the_completion_outbox_migration_is_exactly_the_dispatch_core_shape() {
-        let migration = include_str!("../../migrations/0100_reviews.sql");
+        let migration = include_str!("../../migrations/0200_reviews.sql");
         let table = JobTable::new("public", COMPLETION_TABLE, "event_id", "destination_id")
             .expect("the completion outbox table names");
         let declared = normalized(&table.create_statements().join("\n").replace("public.", ""));

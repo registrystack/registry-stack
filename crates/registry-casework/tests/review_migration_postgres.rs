@@ -368,7 +368,7 @@ async fn initial_apply_records_the_package_and_a_previous_package_reapplies_as_a
         .expect("initial apply");
     assert_eq!(applied.activation.plan_kind, PlanKind::Initial);
     assert_eq!(applied.activation.role_mode, RoleMode::Single);
-    assert_eq!(applied.schema_versions_applied, vec![100]);
+    assert_eq!(applied.schema_versions_applied, vec![200]);
     fixture
         .apply(&candidate(&project, &second, &[]))
         .await
@@ -1846,16 +1846,28 @@ async fn readiness_refuses_a_retired_schema_before_its_ledger_version() {
 
 #[tokio::test]
 async fn a_pre_1_0_schema_is_refused_by_name_at_plan_apply_and_startup() {
-    let fixture = Fixture::single("pre_1_0").await;
+    refuses_a_pre_1_0_ledger_by_name_at_plan_apply_and_startup("pre_1_0", 19).await;
+}
+
+/// v0.42.0 and v0.43.0 recorded their baseline as version 100. Its outbox
+/// is not the shape this release's completion worker reads, and a ledger
+/// records versions only, so the version itself is what is refused.
+#[tokio::test]
+async fn a_v0_43_0_baseline_ledger_is_refused_by_name_at_plan_apply_and_startup() {
+    refuses_a_pre_1_0_ledger_by_name_at_plan_apply_and_startup("baseline_100", 100).await;
+}
+
+async fn refuses_a_pre_1_0_ledger_by_name_at_plan_apply_and_startup(prefix: &str, version: i64) {
+    let fixture = Fixture::single(prefix).await;
     fixture
         .client
-        .batch_execute(
+        .batch_execute(&format!(
             "CREATE TABLE casework_schema_migrations(version bigint PRIMARY KEY, applied_at timestamptz NOT NULL);
-             INSERT INTO casework_schema_migrations VALUES(19, now());",
-        )
+             INSERT INTO casework_schema_migrations VALUES({version}, now());"
+        ))
         .await
         .unwrap();
-    let message = "the Casework database uses a pre-1.0 schema (versions 19); this release supports fresh installs only. Create a fresh database and apply the package";
+    let message = format!("the Casework database uses a pre-1.0 schema (versions {version}); this release supports fresh installs only. Create a fresh database and apply the package");
     match fixture.migration.migrate().await {
         Err(refusal @ StoreError::Pre1_0Schema { .. }) => {
             assert_eq!(refusal.to_string(), message)
@@ -1899,6 +1911,6 @@ async fn a_pre_1_0_schema_is_refused_by_name_at_plan_apply_and_startup() {
             .iter()
             .map(|row| row.get::<_, i64>(0))
             .collect::<Vec<_>>(),
-        vec![19]
+        vec![version]
     );
 }

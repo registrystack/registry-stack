@@ -1031,7 +1031,7 @@ retrying past the result window, send to a destination the runtime no longer
 configures, or finish a row another worker has since re-leased.
 
 Enforcement: `casework_review_completion_outbox` in
-`crates/registry-casework/migrations/0100_reviews.sql` is the
+`crates/registry-casework/migrations/0200_reviews.sql` is the
 `registry-platform-dispatch` job table shape keyed by `event_id` and
 `destination_id`, with Casework's own columns and constraints added after it.
 `CompletionStore` and `completion_policy()` in
