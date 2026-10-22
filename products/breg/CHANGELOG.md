@@ -141,10 +141,11 @@
   information and a scheme other than `http` or `https` are refused when the
   file is decoded, with `config.invalid-value` at the member and the shared
   URL sentence. The S3 adapter and the verifier transport now
-  come from `registry-platform-objectstore`; the object keys, the storage and
-  verification binding digests a registry has pinned, the requests, the
-  timeouts, and the refusals are unchanged, so no package is rebuilt and no
-  migration runs.
+  come from `registry-platform-objectstore`; moving them changes no object
+  key, no storage or verification binding digest a registry has pinned, and
+  no request. The attempt timeouts, the attempt budget refusal, and the fresh
+  database the attachment verification jobs need are the separate entries
+  above.
 
 ## 0.43.0 - 2026-10-21
 
