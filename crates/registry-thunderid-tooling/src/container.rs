@@ -27,7 +27,11 @@ pub const SESSION_ID_LABEL: &str = "registry.stack.thunderid.session-id";
 /// (worktrees, retained copies); each owns only the container serving its own
 /// retained database.
 pub const SESSION_STATE_LABEL: &str = "registry.stack.thunderid.state-root";
-const BRANDING_ASSETS_MOUNT_POINT: &str = "/opt/thunderid/apps/gate/assets/registry-stack";
+/// Where the pinned release serves `/gate/` from: `apps/gate` under its
+/// server home, so the public asset path declared in `branding.json` fixes
+/// this mount point.
+pub(crate) const BRANDING_ASSETS_MOUNT_POINT: &str =
+    "/opt/thunderid/apps/gate/assets/registry-stack";
 
 const IMAGE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 
