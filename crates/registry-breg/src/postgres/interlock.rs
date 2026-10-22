@@ -34,8 +34,8 @@ use crate::package::CompiledRegistryMigrationBaseline;
 
 use super::{
     catalog::{
-        install_registry_state_schema, registry_state_shape, verify_managed_catalog,
-        ExpectedManagedCatalog, RegistryStateShape,
+        install_registry_state_schema, pre_1_0_attachment_verification_present,
+        registry_state_shape, verify_managed_catalog, ExpectedManagedCatalog, RegistryStateShape,
     },
     config::ConnectionTls,
     migration_ledger::{
@@ -1613,6 +1613,13 @@ impl DedicatedApplyConnection {
     pub(crate) async fn registry_state_shape(&mut self) -> Result<RegistryStateShape> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         Ok(registry_state_shape(&self.client).await?)
+    }
+
+    /// Whether the database carries the attachment verification shape a
+    /// pre-1.0 release installed.
+    pub(crate) async fn pre_1_0_attachment_verification_present(&mut self) -> Result<bool> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        Ok(pre_1_0_attachment_verification_present(&self.client).await?)
     }
 
     /// The first way the split-role runtime role could write the activation

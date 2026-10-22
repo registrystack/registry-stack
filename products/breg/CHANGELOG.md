@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- BREAKING: `breg` and `bregctl doctor` refuse a database that still carries
+  the attachment verification shape v0.43.0 and earlier installed (a
+  `registry_internal.registry_attachment_verification` table with a
+  `lease_id` column, or without the
+  `registry_internal.registry_attachment_verification_jobs` table), with
+  `startup.database.pre-1-0-schema`, before the role and catalog checks that
+  reported it as missing grants or as catalog drift to restore from a backup
+  carrying the same shape. Migration: create a fresh database and run
+  `bregctl apply --package DIR --initial`.
+
 - `registry_internal.registry_attachment_verification_jobs` and the hook
   delivery state refuse a `leased` row without a `lease_expires_at`, through
   the corrected shared dispatch job and delivery state shapes, and the managed

@@ -236,6 +236,11 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "database",
             "the database holds registry state this release does not recognise: a release reads only the state its predecessor wrote, so upgrade the database one release at a time",
         ),
+        StartupError::Pre1_0Schema => (
+            "startup.database.pre-1-0-schema",
+            "database",
+            crate::PRE_1_0_SCHEMA_RECOVERY,
+        ),
         StartupError::DatabaseIdentityMismatch => (
             "startup.database.identity-mismatch",
             "database",
@@ -403,6 +408,7 @@ mod tests {
             },
             StartupError::DatabaseUninitialized,
             StartupError::UnrecognizedDatabase,
+            StartupError::Pre1_0Schema,
             StartupError::InstanceClaimMismatch,
             StartupError::RuntimeWriteAuthority,
             StartupError::RuntimeGrantsMissing,
@@ -618,6 +624,11 @@ mod tests {
             (
                 StartupError::UnrecognizedDatabase,
                 "startup.database.unrecognized",
+                "database",
+            ),
+            (
+                StartupError::Pre1_0Schema,
+                "startup.database.pre-1-0-schema",
                 "database",
             ),
             (

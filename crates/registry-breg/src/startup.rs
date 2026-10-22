@@ -76,6 +76,15 @@ pub enum StartupError {
          reads only the state its predecessor wrote, so upgrade the database one release at a time"
     )]
     UnrecognizedDatabase,
+    /// The database carries the attachment verification shape a pre-1.0
+    /// release installed, which this release cannot upgrade in place.
+    #[error(
+        "the Registry database uses the attachment verification schema of a pre-1.0 release; \
+         this release supports fresh installs only. Create a fresh database, rebuild the \
+         package with this release's `bregctl test` and `bregctl package`, and run `bregctl \
+         apply --package DIR --initial`"
+    )]
+    Pre1_0Schema,
     /// The database records a database id other than the runtime file's
     /// `identity.databaseId`.
     #[error(
@@ -626,6 +635,9 @@ impl StartupError {
             }
             Self::UnrecognizedDatabase => {
                 "the Registry database holds registry state this release does not recognise; a release reads only the state its predecessor wrote, so upgrade the database one release at a time"
+            }
+            Self::Pre1_0Schema => {
+                "the Registry database uses the attachment verification schema of a pre-1.0 release; this release supports fresh installs only. Create a fresh database, rebuild the package with this release's `bregctl test` and `bregctl package`, and run `bregctl apply --package DIR --initial`"
             }
             Self::DatabaseIdentityMismatch => {
                 "the Registry database records a different database id than identity.databaseId; point the runtime file at the database it names or correct identity.databaseId"
@@ -2307,6 +2319,15 @@ async fn verify_opened_startup(
             return Err(StartupError::UnrecognizedDatabase);
         }
         crate::postgres::RegistryStateShape::Ledger => {}
+    }
+    // A pre-1.0 attachment verification shape is named before the role and
+    // catalog checks, which would otherwise report it as missing grants or
+    // drift whose recovery a backup of the same database cannot provide.
+    if crate::postgres::pre_1_0_attachment_verification_present(&transaction)
+        .await
+        .map_err(|_| StartupError::DatabaseUnready)?
+    {
+        return Err(StartupError::Pre1_0Schema);
     }
     verify_configured_runtime_role(&transaction, migration_role, runtime_role).await?;
     // A separate runtime role missing its grants may not even read the state

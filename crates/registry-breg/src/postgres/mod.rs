@@ -33,7 +33,10 @@ pub use catalog::{
     initialize_compiled_registry_state_for_test, initialize_registry_state_for_catalog_test,
     test_activation_id, test_package_digest, RegistryStateTestIdentity,
 };
-pub(crate) use catalog::{registry_state_shape, runtime_grants_missing, RegistryStateShape};
+pub(crate) use catalog::{
+    pre_1_0_attachment_verification_present, registry_state_shape, runtime_grants_missing,
+    RegistryStateShape,
+};
 pub(crate) use config::MAX_POOL_TIMEOUT;
 pub use config::{
     set_application_name, ConnectionConfig, DatabaseConnectionCause, PoolBounds, RuntimePool,

@@ -496,7 +496,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 36] {
+fn startup_errors() -> [StartupError; 37] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -527,6 +527,7 @@ fn startup_errors() -> [StartupError; 36] {
         },
         StartupError::DatabaseUninitialized,
         StartupError::UnrecognizedDatabase,
+        StartupError::Pre1_0Schema,
         StartupError::InstanceClaimMismatch,
         StartupError::RuntimeWriteAuthority,
         StartupError::RuntimeGrantsMissing,
@@ -748,6 +749,9 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         }
         StartupError::UnrecognizedDatabase => {
             "the Registry database holds registry state this release does not recognise; a release reads only the state its predecessor wrote, so upgrade the database one release at a time"
+        }
+        StartupError::Pre1_0Schema => {
+            "the Registry database uses the attachment verification schema of a pre-1.0 release; this release supports fresh installs only. Create a fresh database, rebuild the package with this release's `bregctl test` and `bregctl package`, and run `bregctl apply --package DIR --initial`"
         }
         StartupError::DatabaseIdentityMismatch => {
             "the Registry database records a different database id than identity.databaseId; point the runtime file at the database it names or correct identity.databaseId"

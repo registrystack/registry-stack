@@ -135,6 +135,12 @@ pub enum MigrationError {
     /// changed.
     #[error("the database holds registry state this release does not recognise")]
     UnrecognizedDatabase,
+    /// The database carries the attachment verification shape a pre-1.0
+    /// release installed, which this release cannot upgrade in place: only a
+    /// fresh database recovers, and a backup carries the same shape. Nothing
+    /// was changed.
+    #[error("the database uses the attachment verification schema of a pre-1.0 release")]
+    Pre1_0Schema,
     /// The split-role runtime role could write the activation ledger or the
     /// registry state; the finding names the statement that removes it.
     #[error("{0}")]
@@ -491,6 +497,19 @@ pub async fn read_recorded_registry_state(
             .await
             .map_err(refusal_before_maintenance)?;
         return Err(MigrationError::UnrecognizedDatabase);
+    }
+    if matches!(shape, Ok(crate::postgres::RegistryStateShape::Ledger)) {
+        let pre_1_0 = connection.pre_1_0_attachment_verification_present().await;
+        if !matches!(pre_1_0, Ok(false)) {
+            connection
+                .release()
+                .await
+                .map_err(refusal_before_maintenance)?;
+            return match pre_1_0 {
+                Ok(_) => Err(MigrationError::Pre1_0Schema),
+                Err(error) => Err(refusal_before_maintenance(error)),
+            };
+        }
     }
     let snapshot = match shape {
         Ok(_) => match connection.maintenance_snapshot().await {
@@ -1127,14 +1146,28 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     )
     .await
     .map_err(refusal_before_maintenance)?;
-    // Registry state this release does not recognise is refused before any
-    // check reads it as the ledger's.
+    // Registry state this release does not recognise, and the attachment
+    // verification shape a pre-1.0 release installed, are refused before any
+    // check reads them as the ledger's.
     match connection.registry_state_shape().await {
         Ok(crate::postgres::RegistryStateShape::Unrecognized) => {
             let _ = connection.release().await;
             return Err(MigrationError::UnrecognizedDatabase);
         }
-        Ok(_) => {}
+        Ok(crate::postgres::RegistryStateShape::Ledger) => {
+            match connection.pre_1_0_attachment_verification_present().await {
+                Ok(false) => {}
+                Ok(true) => {
+                    let _ = connection.release().await;
+                    return Err(MigrationError::Pre1_0Schema);
+                }
+                Err(error) => {
+                    let _ = connection.release().await;
+                    return Err(refusal_before_maintenance(error));
+                }
+            }
+        }
+        Ok(crate::postgres::RegistryStateShape::Absent) => {}
         Err(error) => {
             let _ = connection.release().await;
             return Err(refusal_before_maintenance(error));
