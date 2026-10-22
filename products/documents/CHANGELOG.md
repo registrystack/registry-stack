@@ -12,6 +12,11 @@ The Document Store is held out of releases.
   runtime role holds only `CONNECT` until the first apply. A credential whose
   role resolves no schema once the ledger exists refuses as
   `documentsctl.activation.schema-unresolved`.
+- `documentsctl check`, given both a project and a runtime configuration,
+  refuses a hook whose `handler.destinationId` `destinations.hooks` does not
+  bind, as `documents.runtime.unbound-hook-destination` at
+  `/destinations/hooks`. The runtime's startup refusal leads with the same
+  code.
 
 - The product skeleton: `registry-documents-core`, the `registry-documents`
   runtime and `documents` binary, `registry-documentsctl` and the

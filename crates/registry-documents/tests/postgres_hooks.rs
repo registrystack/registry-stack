@@ -841,7 +841,12 @@ async fn startup_refuses_a_project_hook_whose_destination_is_not_bound() {
     let error = prepare_with_verifier(&deployment.runtime, verifier)
         .await
         .expect_err("an unbound hook destination refuses startup");
-    assert!(error.to_string().contains("destinations.hooks"), "{error}");
+    let message = error.to_string();
+    assert!(
+        message.starts_with("documents.runtime.unbound-hook-destination: "),
+        "{message}"
+    );
+    assert!(message.contains("destinations.hooks"), "{message}");
 }
 
 #[tokio::test]

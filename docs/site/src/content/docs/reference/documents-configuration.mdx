@@ -37,11 +37,15 @@ policy that uses it. The check also refuses:
   (`documents.project.shared-requester-client`);
 - a profile whose `principalClaim` differs from another profile's with the same `actorKind`
   (`documents.project.mixed-principal-claim`): every profile of one actor kind reads the subject
-  from one claim.
+  from one claim;
+- a hook whose `handler.destinationId` the runtime configuration does not bind under
+  `destinations.hooks` (`documents.runtime.unbound-hook-destination`, at `/destinations/hooks`),
+  when the check is given both `--project` and `--runtime-config`. The runtime refuses to start
+  with the same code.
 
 {/* Evidence: docs/site/scripts/generate-documents-configuration.mjs, CONTRACTS;
     crates/registry-documents-core/src/project.rs, DocumentsProject and reference_findings;
-    crates/registry-documents/src/config.rs, DOCUMENTS_RUNTIME_KIND;
+    crates/registry-documents/src/config.rs, DOCUMENTS_RUNTIME_KIND and project_findings;
     products/documents/RUNTIME-CONFIG.md. */}
 
 ## Key paths

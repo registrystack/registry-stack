@@ -499,6 +499,16 @@ fn activation_refuses_a_hook_whose_destination_is_not_bound() {
     )
     .expect_err("an unbound destination is refused");
     assert_eq!(error, HookActivationError::DestinationInventoryMismatch);
+    assert_eq!(
+        error.code(),
+        Some("documents.runtime.unbound-hook-destination")
+    );
+    assert!(
+        error
+            .to_string()
+            .starts_with("documents.runtime.unbound-hook-destination: "),
+        "{error}"
+    );
 }
 
 #[test]

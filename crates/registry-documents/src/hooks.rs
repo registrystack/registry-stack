@@ -53,6 +53,7 @@ use uuid::Uuid;
 
 use crate::activation;
 use crate::audit::{DocumentsAudit, DOCUMENTS_AUDIT_SCHEMA, HOOK_DELIVERY_EVENT};
+use crate::config::{UNBOUND_HOOK_DESTINATION_CODE, UNBOUND_HOOK_DESTINATION_MESSAGE};
 use crate::store::PostgresStore;
 
 const DESTINATION_BINDING_SCHEMA: &str = "registry.documents-hook-destinations/v1";
@@ -91,7 +92,10 @@ pub enum HookActivationError {
         index: usize,
         capability: HookCapability,
     },
-    #[error("destinations.hooks does not bind every destination documents.yaml hooks name")]
+    /// `destinations.hooks` leaves unbound a destination a project hook
+    /// names. The message leads with the code `documentsctl check` reports
+    /// for the same runtime document.
+    #[error("{UNBOUND_HOOK_DESTINATION_CODE}: {UNBOUND_HOOK_DESTINATION_MESSAGE}")]
     DestinationInventoryMismatch,
     #[error("a Document Store hook destination binding is invalid")]
     InvalidDestination,
@@ -104,11 +108,12 @@ pub enum HookActivationError {
 }
 
 impl HookActivationError {
-    /// The shared diagnostic code a refusal carries, when it has one.
+    /// The diagnostic code a refusal carries, when it has one.
     #[must_use]
     pub const fn code(&self) -> Option<&'static str> {
         match self {
             Self::UnsupportedCapability { .. } => Some(HookCapabilityError::CODE),
+            Self::DestinationInventoryMismatch => Some(UNBOUND_HOOK_DESTINATION_CODE),
             _ => None,
         }
     }
