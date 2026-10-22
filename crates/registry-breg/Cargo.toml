@@ -558,7 +558,7 @@ required-features = ["postgres-test"]
 [[test]]
 name = "postgres_startup"
 path = "tests/postgres_startup.rs"
-required-features = ["postgres-test"]
+required-features = ["postgres-test", "tooling"]
 
 [[test]]
 name = "postgres_statistics_byte_limits"
