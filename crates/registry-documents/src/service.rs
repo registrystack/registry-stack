@@ -1597,7 +1597,7 @@ mod tests {
         let id = Uuid::nil();
         assert_eq!(
             upload_path(id),
-            "/uploads/00000000-0000-0000-0000-000000000000/content"
+            "/v1/uploads/00000000-0000-0000-0000-000000000000/content"
         );
     }
 

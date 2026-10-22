@@ -635,7 +635,7 @@ impl Api {
         self.send_json(
             principal,
             axum::http::Method::POST,
-            "/documents",
+            "/v1/documents",
             Some(key),
             body,
         )
@@ -660,13 +660,14 @@ impl Api {
     }
 
     pub async fn read(&self, principal: Principal, document: &str) -> Answer {
-        self.get(principal, &format!("/documents/{document}")).await
+        self.get(principal, &format!("/v1/documents/{document}"))
+            .await
     }
 
     pub async fn download(&self, principal: Principal, document: &str, version: &str) -> Answer {
         self.get(
             principal,
-            &format!("/documents/{document}/versions/{version}/content"),
+            &format!("/v1/documents/{document}/versions/{version}/content"),
         )
         .await
     }
@@ -734,7 +735,7 @@ impl Api {
         self.send_json(
             principal,
             axum::http::Method::POST,
-            &format!("/documents/{document}/grants"),
+            &format!("/v1/documents/{document}/grants"),
             Some(key),
             &body,
         )
@@ -747,7 +748,7 @@ impl Api {
             request(
                 principal,
                 axum::http::Method::POST,
-                &format!("/documents/{document}/erasure"),
+                &format!("/v1/documents/{document}/erasure"),
             )
             .body(axum::body::Body::empty())
             .unwrap(),
@@ -760,7 +761,7 @@ impl Api {
             request(
                 principal,
                 axum::http::Method::DELETE,
-                &format!("/document-grants/{grant}"),
+                &format!("/v1/document-grants/{grant}"),
             )
             .body(axum::body::Body::empty())
             .unwrap(),

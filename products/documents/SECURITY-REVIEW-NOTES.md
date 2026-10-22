@@ -97,12 +97,12 @@ deployment pinned.
 `verification.rs` enforce, with the invariant rows DOCUMENTS-SEC-09 and
 DOCUMENTS-SEC-14 to DOCUMENTS-SEC-20:
 
-- Reservation (`POST /documents`) refuses an unknown policy, an empty
+- Reservation (`POST /v1/documents`) refuses an unknown policy, an empty
   document, a length above the policy or deployment ceiling, a media type outside the policy list by
   exact match, and a custodian over its per-policy byte quota. The quota sum
   runs under a transaction advisory lock per custodian and policy, so
   concurrent reservations cannot overrun it.
-- Upload (`PUT /uploads/{id}/content`) has no body-limit layer of its own
+- Upload (`PUT /v1/uploads/{id}/content`) has no body-limit layer of its own
   and a transfer deadline of `transfers.minimumDeadlineSeconds` plus
   `transfers.mebibyteAllowanceSeconds` per started mebibyte. It requires `Content-Type` to equal
   the reserved type, never inspects the bytes for a type, refuses a declared
@@ -221,7 +221,7 @@ DOCUMENTS-SEC-54:
   and kind. The issuing institution is
   the profile's `institution`; a body that names another is refused with
   `custody.not-permitted`.
-- Idempotency: `POST /documents` and grant issue require an
+- Idempotency: `POST /v1/documents` and grant issue require an
   `Idempotency-Key`, scoped to issuer, subject, operation, and key, with the
   request body's digest. Another body answers 409 `idempotency.key-reused`;
   a key older than `retention.receiptRetentionDays` answers 410
@@ -276,7 +276,7 @@ DOCUMENTS-SEC-54:
 - The journal records a caller-supplied identifier (policy id, media type,
   version id) only once it parses under its bounded grammar, and the marker
   `unparsed` otherwise.
-- `GET /document-policies` lists only the policies the caller's profile may
+- `GET /v1/document-policies` lists only the policies the caller's profile may
   reserve under, with their size, media type, and grant expiry bounds.
 
 ### Review calls
@@ -446,7 +446,7 @@ DOCUMENTS-SEC-37 to DOCUMENTS-SEC-46 and the decisions DOCUMENTS-DEC-19 to
 DOCUMENTS-DEC-26:
 
 - Only the custodian may remove a document, through
-  `POST /documents/{documentId}/erasure`; every other caller with standing
+  `POST /v1/documents/{documentId}/erasure`; every other caller with standing
   gets 403 and every caller without it 404. A repeat answers the same view
   and moves nothing.
 - The removal request is one transaction: the version becomes erasure

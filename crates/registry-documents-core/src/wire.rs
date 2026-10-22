@@ -21,7 +21,7 @@ pub const DEFAULT_PAGE_SIZE: u32 = 50;
 /// The most items one list page may carry, whatever the caller asks.
 pub const MAXIMUM_PAGE_SIZE: u32 = 100;
 
-/// The body of `POST /documents`: reserve one document and the upload of
+/// The body of `POST /v1/documents`: reserve one document and the upload of
 /// its single version. Size and media type are refused here, before any
 /// byte moves.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -172,7 +172,7 @@ pub struct DocumentPage {
     pub next_cursor: Option<String>,
 }
 
-/// The body of `POST /documents/{documentId}/grants`: name one recipient
+/// The body of `POST /v1/documents/{documentId}/grants`: name one recipient
 /// for one exact version.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

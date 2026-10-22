@@ -150,7 +150,7 @@ async fn a_verdict_captures_one_delivery_per_matching_observer_with_the_closed_p
     assert_eq!(
         ready["subject"],
         json!({
-            "recordReference": format!("/documents/{document}/versions/{version}"),
+            "recordReference": format!("/v1/documents/{document}/versions/{version}"),
             // Reserved, finalized, then approved.
             "recordRevision": 3,
         })
@@ -384,7 +384,7 @@ async fn grant_issue_and_revoke_each_capture_one_event_and_repeats_capture_none(
         assert_eq!(
             envelope["subject"],
             json!({
-                "recordReference": format!("/document-grants/{grant}"),
+                "recordReference": format!("/v1/document-grants/{grant}"),
                 "recordRevision": revision,
             })
         );
@@ -480,7 +480,7 @@ async fn a_removal_captures_one_revoked_event_per_grant_it_revokes_and_a_repeat_
             assert_eq!(
                 envelope["subject"],
                 json!({
-                    "recordReference": format!("/document-grants/{grant}"),
+                    "recordReference": format!("/v1/document-grants/{grant}"),
                     "recordRevision": 2,
                 })
             );

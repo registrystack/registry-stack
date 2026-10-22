@@ -787,7 +787,7 @@ enum RouteSegment<'a> {
     Placeholder,
 }
 
-/// The segments of a route template such as `/documents/{documentId}`.
+/// The segments of a route template such as `/v1/documents/{documentId}`.
 fn route_segments(route: &str) -> impl Iterator<Item = RouteSegment<'_>> {
     route.trim_start_matches('/').split('/').map(|segment| {
         if segment.starts_with('{') && segment.ends_with('}') {
@@ -948,13 +948,17 @@ mod tests {
     #[test]
     fn only_a_reserved_upload_path_names_an_upload() {
         let id = "8b3c4d5e-6f7a-4b2c-9d3e-4f5a6b7c8d9e";
-        assert_eq!(upload_id(&format!("/uploads/{id}/content")).ok(), Some(id));
+        assert_eq!(
+            upload_id(&format!("/v1/uploads/{id}/content")).ok(),
+            Some(id)
+        );
         for path in [
             String::new(),
             format!("uploads/{id}/content"),
-            format!("/uploads/{id}/content/"),
-            format!("/uploads/{id}/../content"),
-            format!("/uploads/{}/content", id.to_ascii_uppercase()),
+            format!("/uploads/{id}/content"),
+            format!("/v1/uploads/{id}/content/"),
+            format!("/v1/uploads/{id}/../content"),
+            format!("/v1/uploads/{}/content", id.to_ascii_uppercase()),
             format!("//elsewhere.example/uploads/{id}/content"),
         ] {
             assert!(upload_id(&path).is_err(), "{path}");
@@ -972,7 +976,7 @@ mod tests {
             .expect("route URL");
         assert_eq!(
             url.as_str(),
-            "https://documents.example.invalid/store/documents/d-1/versions/v-2/content"
+            "https://documents.example.invalid/store/v1/documents/d-1/versions/v-2/content"
         );
         assert!(client.url(DOCUMENT_CONTENT_PATH, &["d-1"]).is_err());
         assert!(client.url(DOCUMENTS_PATH, &["d-1"]).is_err());

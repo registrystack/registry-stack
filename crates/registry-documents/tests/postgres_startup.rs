@@ -50,6 +50,7 @@ async fn a_prepared_runtime_serves_documents_only_to_a_verified_caller() {
         problem["type"].as_str().unwrap().to_owned()
     };
     let http = reqwest::Client::new();
+    let versioned = base.join("v1/").unwrap();
     for (method, path) in [
         (reqwest::Method::GET, "documents"),
         (reqwest::Method::POST, "documents"),
@@ -61,7 +62,7 @@ async fn a_prepared_runtime_serves_documents_only_to_a_verified_caller() {
         ),
     ] {
         let response = http
-            .request(method.clone(), base.join(path).unwrap())
+            .request(method.clone(), versioned.join(path).unwrap())
             .send()
             .await
             .unwrap();
@@ -77,7 +78,7 @@ async fn a_prepared_runtime_serves_documents_only_to_a_verified_caller() {
         );
         // A token from no issuer this deployment trusts is the same refusal.
         let response = http
-            .request(method, base.join(path).unwrap())
+            .request(method, versioned.join(path).unwrap())
             .bearer_auth("not.a.token")
             .send()
             .await
@@ -89,7 +90,7 @@ async fn a_prepared_runtime_serves_documents_only_to_a_verified_caller() {
         );
     }
     let response = http
-        .get(base.join("no-such-route").unwrap())
+        .get(versioned.join("no-such-route").unwrap())
         .send()
         .await
         .unwrap();
@@ -102,7 +103,7 @@ async fn a_prepared_runtime_serves_documents_only_to_a_verified_caller() {
     // A verified caller reaches the document routes over the socket.
     let content = pdf(1024, 3);
     let reserved = http
-        .post(base.join("documents").unwrap())
+        .post(versioned.join("documents").unwrap())
         .bearer_auth(token(APP))
         .header("idempotency-key", "startup-reservation")
         .json(&reservation_body(
@@ -117,7 +118,7 @@ async fn a_prepared_runtime_serves_documents_only_to_a_verified_caller() {
         .unwrap();
     assert_eq!(reserved.status(), reqwest::StatusCode::CREATED);
     let policies = http
-        .get(base.join("document-policies").unwrap())
+        .get(versioned.join("document-policies").unwrap())
         .bearer_auth(token(CITIZEN))
         .send()
         .await

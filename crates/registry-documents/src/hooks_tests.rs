@@ -379,11 +379,14 @@ fn event_subjects_name_the_record_and_its_revision() {
         .unwrap();
     assert_eq!(
         version.record_reference,
-        format!("/documents/{DOCUMENT}/versions/{VERSION}")
+        format!("/v1/documents/{DOCUMENT}/versions/{VERSION}")
     );
     assert_eq!(version.record_revision, 3, "the revision the change left");
     let issued = grant_event(GrantChange::Issued).subject().unwrap();
-    assert_eq!(issued.record_reference, format!("/document-grants/{GRANT}"));
+    assert_eq!(
+        issued.record_reference,
+        format!("/v1/document-grants/{GRANT}")
+    );
     assert_eq!(issued.record_revision, 1);
     assert_eq!(
         grant_event(GrantChange::Revoked)

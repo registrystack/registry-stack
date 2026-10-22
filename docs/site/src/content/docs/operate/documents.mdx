@@ -348,7 +348,7 @@ replays a job.
 
 ## Removal and erasure
 
-The custodian removes a document with `POST /documents/{documentId}/erasure`. In one transaction
+The custodian removes a document with `POST /v1/documents/{documentId}/erasure`. In one transaction
 the Document Store stops release, revokes every active grant, and marks the version
 `erasure-pending`, due after the policy's `cleanupGraceHours`. That grace period is at least one
 hour, so you can still restore from a backup after a mistaken request. A sweep every minute erases
@@ -451,7 +451,7 @@ issued grant, as observed, with identifiers and times replaced:
   "dataschema": "https://id.registrystack.org/schemas/documents/events/document-grant-changed.v1alpha1.schema.json",
   "id": "<event-id>",
   "source": "urn:registrystack:documents:civil-registry-documents",
-  "subject": { "recordReference": "/document-grants/<grant-id>", "recordRevision": 1 },
+  "subject": { "recordReference": "/v1/document-grants/<grant-id>", "recordRevision": 1 },
   "time": "<capture-time>",
   "type": "document-grant-changed"
 }

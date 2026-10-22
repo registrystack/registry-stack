@@ -680,15 +680,17 @@ mod tests {
 
     #[test]
     fn a_page_query_names_only_a_cursor_and_a_limit() {
-        assert!(page(&"/documents".parse().unwrap()).is_ok());
+        assert!(page(&"/v1/documents".parse().unwrap()).is_ok());
         assert_eq!(
-            page(&"/documents?limit=10".parse().unwrap()).unwrap().limit,
+            page(&"/v1/documents?limit=10".parse().unwrap())
+                .unwrap()
+                .limit,
             10
         );
         for refused in [
-            "/documents?limit=0",
-            "/documents?other=1",
-            "/documents?cursor=zz",
+            "/v1/documents?limit=0",
+            "/v1/documents?other=1",
+            "/v1/documents?cursor=zz",
         ] {
             assert_eq!(
                 page(&refused.parse().unwrap()).unwrap_err(),

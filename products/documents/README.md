@@ -16,7 +16,8 @@ are delivered to after-commit URL observers.
 
 ## Routes
 
-Every route but `GET /health` takes a bearer access token the configured
+Every document route carries the API's major version, `/v1/`, in its path;
+`GET /health` is unversioned. Every route but `GET /health` takes a bearer access token the configured
 issuer signed. The token's client, scopes, and actor kind select one access
 profile in `documents.yaml`; the profile and the document policy decide what
 the caller may do. The token is an RFC 9068 `at+jwt` access token signed with
@@ -28,24 +29,24 @@ states every rule under "Access tokens".
 
 | Route | Does |
 |---|---|
-| `POST /documents` | Reserve a document under a policy; needs an `Idempotency-Key` |
-| `PUT /uploads/{uploadId}/content` | Send the reserved bytes once; the same bytes again answer the same view |
-| `GET /documents` | List the documents the caller holds in custody or reserved |
-| `GET /documents/{documentId}` | Read metadata and the actions the caller may take |
-| `GET /documents/{documentId}/versions/{versionId}/content` | Download a releasable version, as its custodian or a grant holder |
-| `POST /documents/{documentId}/grants` | Grant one named recipient one exact version until a fixed expiry; needs an `Idempotency-Key` |
-| `GET /documents/{documentId}/grants` | List every grant on a document |
-| `GET /document-grants` | List the active grants naming the caller |
-| `DELETE /document-grants/{grantId}` | Revoke a grant |
-| `POST /documents/{documentId}/erasure` | Remove a document from custody; only its custodian may. Takes no `Idempotency-Key`: a repeat moves nothing and answers the same view |
-| `GET /document-policies` | List the policies the caller may reserve under, with their bounds |
+| `POST /v1/documents` | Reserve a document under a policy; needs an `Idempotency-Key` |
+| `PUT /v1/uploads/{uploadId}/content` | Send the reserved bytes once; the same bytes again answer the same view |
+| `GET /v1/documents` | List the documents the caller holds in custody or reserved |
+| `GET /v1/documents/{documentId}` | Read metadata and the actions the caller may take |
+| `GET /v1/documents/{documentId}/versions/{versionId}/content` | Download a releasable version, as its custodian or a grant holder |
+| `POST /v1/documents/{documentId}/grants` | Grant one named recipient one exact version until a fixed expiry; needs an `Idempotency-Key` |
+| `GET /v1/documents/{documentId}/grants` | List every grant on a document |
+| `GET /v1/document-grants` | List the active grants naming the caller |
+| `DELETE /v1/document-grants/{grantId}` | Revoke a grant |
+| `POST /v1/documents/{documentId}/erasure` | Remove a document from custody; only its custodian may. Takes no `Idempotency-Key`: a repeat moves nothing and answers the same view |
+| `GET /v1/document-policies` | List the policies the caller may reserve under, with their bounds |
 
 A grant names its recipient by subject and actor kind, not by access
 profile, so issuing one does not check where the recipient's token will
 resolve. Release is decided when the recipient reads: the token must then
 resolve to one of the policy's `recipientProfiles`. A grant to someone whose
 token resolves to another profile is issued (201) but releases nothing:
-`GET /document-grants` does not list it to them, and their download answers
+`GET /v1/document-grants` does not list it to them, and their download answers
 `resource.not-found` (404).
 
 A document the caller may not see answers `resource.not-found`, the same as
@@ -59,7 +60,7 @@ it. Nothing expires on a timer: a grant that expires or is revoked erases
 nothing held in custody, and there is no sliding expiry. A citizen-held
 document is kept until the citizen removes it.
 
-`POST /documents/{documentId}/erasure` starts the custody clock. In one
+`POST /v1/documents/{documentId}/erasure` starts the custody clock. In one
 transaction it suspends release, revokes every active grant on the document,
 cancels any pending verification, and marks the version `erasure-pending` with
 a due time of now plus the policy's `cleanupGraceHours`, which is at least one

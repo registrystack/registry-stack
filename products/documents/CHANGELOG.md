@@ -4,6 +4,9 @@
 
 The Document Store is held out of releases.
 
+- Every document route is served under `/v1/`, as in the other products;
+  `GET /health` stays unversioned. An event's `recordReference` names the
+  record by the same versioned path.
 - `documents_verification_jobs` and `documents_erasure_jobs` refuse a
   `leased` row without a `lease_expires_at`, through the corrected shared
   dispatch job shape.
@@ -74,7 +77,7 @@ The Document Store is held out of releases.
   institution of every document reserved under the profile.
 - Custody placement follows the policy's `custodyProfiles`: a service may
   name any custodian, a human only itself (`custody.not-permitted`).
-- `POST /documents` and grant issue take a required `Idempotency-Key`,
+- `POST /v1/documents` and grant issue take a required `Idempotency-Key`,
   answering `idempotency.key-reused` for another body and
   `idempotency.expired` after `retention.receiptRetentionDays`. A repeated
   upload of the same content answers the finalized view.
@@ -82,7 +85,7 @@ The Document Store is held out of releases.
   exact version, one recipient, and an expiry fixed at issue. Download
   releases only to the custodian or an active grant holder, and every other
   caller gets a uniform `resource.not-found`.
-- `GET /document-policies` lists the policies a caller may reserve under,
+- `GET /v1/document-policies` lists the policies a caller may reserve under,
   with their bounds. Lists page by cursor in a stable order, at most 100
   items a page. Documents carry an optional, untrusted `label`.
 - Document policies carry a required `custodian` rule: `institution`
@@ -113,7 +116,7 @@ The Document Store is held out of releases.
   pending, audited the same way.
 - A `documentsctl` human report whose diagnostics it cannot read exits as
   an operational failure with `report.unreadable`, never as a clean check.
-- Removal from custody: `POST /documents/{documentId}/erasure`, custodian
+- Removal from custody: `POST /v1/documents/{documentId}/erasure`, custodian
   only, suspends release, revokes the document's active grants, cancels
   pending verification, and schedules erasure after the policy's
   `cleanupGraceHours`. Removing a rejected document still revokes its

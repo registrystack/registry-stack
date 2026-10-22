@@ -201,7 +201,7 @@ pub fn document_json() -> serde_json::Value {
 pub fn reservation_json() -> serde_json::Value {
     serde_json::json!({
         "document": document_json(),
-        "uploadPath": format!("/uploads/{UPLOAD_ID}/content"),
+        "uploadPath": format!("/v1/uploads/{UPLOAD_ID}/content"),
         "uploadExpiresAt": "2026-10-22T09:00:00Z",
     })
 }

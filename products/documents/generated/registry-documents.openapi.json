@@ -342,7 +342,7 @@
       },
       "IssueGrantRequest": {
         "additionalProperties": false,
-        "description": "The body of `POST /documents/{documentId}/grants`: name one recipient\nfor one exact version.",
+        "description": "The body of `POST /v1/documents/{documentId}/grants`: name one recipient\nfor one exact version.",
         "properties": {
           "expiryHours": {
             "description": "Hours until the grant expires; the policy default when absent, and at\nmost the policy maximum. The expiry is fixed at issue.",
@@ -498,7 +498,7 @@
       },
       "ReserveDocumentRequest": {
         "additionalProperties": false,
-        "description": "The body of `POST /documents`: reserve one document and the upload of\nits single version. Size and media type are refused here, before any\nbyte moves.",
+        "description": "The body of `POST /v1/documents`: reserve one document and the upload of\nits single version. Size and media type are refused here, before any\nbyte moves.",
         "properties": {
           "custodian": {
             "$ref": "#/components/schemas/CustodianRef",
@@ -560,7 +560,42 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/document-grants": {
+    "/health": {
+      "get": {
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "The operation succeeded. The body is empty."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          }
+        },
+        "security": [],
+        "summary": "Report that the process is serving."
+      }
+    },
+    "/v1/document-grants": {
       "get": {
         "operationId": "listReceivedGrants",
         "parameters": [
@@ -742,7 +777,7 @@
         "summary": "List the active grants that name the caller."
       }
     },
-    "/document-grants/{grantId}": {
+    "/v1/document-grants/{grantId}": {
       "delete": {
         "operationId": "revokeDocumentGrant",
         "parameters": [
@@ -911,7 +946,7 @@
         "summary": "Revoke one grant; revoking a revoked grant answers the same view."
       }
     },
-    "/document-policies": {
+    "/v1/document-policies": {
       "get": {
         "operationId": "listDocumentPolicies",
         "responses": {
@@ -1046,7 +1081,7 @@
         "summary": "List the policies the caller may place documents under, with their bounds."
       }
     },
-    "/documents": {
+    "/v1/documents": {
       "get": {
         "operationId": "listDocuments",
         "parameters": [
@@ -1537,7 +1572,7 @@
         "summary": "Reserve a document under a policy and receive its upload path."
       }
     },
-    "/documents/{documentId}": {
+    "/v1/documents/{documentId}": {
       "get": {
         "operationId": "readDocument",
         "parameters": [
@@ -1706,7 +1741,7 @@
         "summary": "Read one document's metadata and the actions the caller may take."
       }
     },
-    "/documents/{documentId}/erasure": {
+    "/v1/documents/{documentId}/erasure": {
       "post": {
         "description": "Takes no `Idempotency-Key`: the request is repeat-safe by construction. The first request moves the version to erasure; a repeat moves nothing, revokes nothing, keeps the first due time, and answers the document as it stands, so a client that lost the answer may simply send it again.",
         "operationId": "requestDocumentErasure",
@@ -1876,7 +1911,7 @@
         "summary": "Ask, as the custodian, for a document's erasure; release stops at once."
       }
     },
-    "/documents/{documentId}/grants": {
+    "/v1/documents/{documentId}/grants": {
       "get": {
         "operationId": "listDocumentGrants",
         "parameters": [
@@ -2404,7 +2439,7 @@
         "summary": "Grant one named recipient one exact document version until a fixed expiry."
       }
     },
-    "/documents/{documentId}/versions/{versionId}/content": {
+    "/v1/documents/{documentId}/versions/{versionId}/content": {
       "get": {
         "operationId": "downloadDocumentVersion",
         "parameters": [
@@ -2606,42 +2641,7 @@
         "summary": "Download one releasable document version, as the custodian or a grant holder."
       }
     },
-    "/health": {
-      "get": {
-        "operationId": "health",
-        "responses": {
-          "200": {
-            "description": "The operation succeeded. The body is empty."
-          },
-          "405": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "allOf": [
-                    {
-                      "$ref": "#/components/schemas/Problem"
-                    },
-                    {
-                      "properties": {
-                        "code": {
-                          "enum": [
-                            "request.method-not-allowed"
-                          ]
-                        }
-                      }
-                    }
-                  ]
-                }
-              }
-            },
-            "description": "A problem: request.method-not-allowed."
-          }
-        },
-        "security": [],
-        "summary": "Report that the process is serving."
-      }
-    },
-    "/uploads/{uploadId}/content": {
+    "/v1/uploads/{uploadId}/content": {
       "put": {
         "operationId": "uploadDocumentContent",
         "parameters": [

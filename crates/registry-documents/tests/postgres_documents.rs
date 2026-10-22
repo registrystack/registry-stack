@@ -86,7 +86,7 @@ async fn an_uploaded_document_is_released_only_after_it_is_verified() {
     );
     assert_eq!(
         reserved.headers["location"],
-        format!("/documents/{document}")
+        format!("/v1/documents/{document}")
     );
 
     let put = api.put(APP, &path, PDF, Body::from(content.clone())).await;
@@ -134,7 +134,7 @@ async fn an_uploaded_document_is_released_only_after_it_is_verified() {
         .assert_problem(ProblemCode::ResourceNotFound);
     let anonymous = api
         .call(
-            axum::http::Request::get(format!("/documents/{document}"))
+            axum::http::Request::get(format!("/v1/documents/{document}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1368,7 +1368,7 @@ async fn an_expired_or_unknown_upload_is_refused() {
         .assert_problem(ProblemCode::ResourceNotFound);
     api.put(
         APP,
-        "/uploads/00000000-0000-4000-8000-000000000000/content",
+        "/v1/uploads/00000000-0000-4000-8000-000000000000/content",
         PDF,
         Body::from(content.clone()),
     )
@@ -1501,12 +1501,12 @@ async fn under_institutional_custody_the_named_person_has_no_standing_without_a_
         api.download(person, &document, &version)
             .await
             .assert_problem(ProblemCode::ResourceNotFound);
-        api.get(person, &format!("/documents/{document}/grants"))
+        api.get(person, &format!("/v1/documents/{document}/grants"))
             .await
             .assert_problem(ProblemCode::ResourceNotFound);
     }
     assert_eq!(
-        api.get(CITIZEN, "/documents").await.json()["items"],
+        api.get(CITIZEN, "/v1/documents").await.json()["items"],
         json!([])
     );
     // The institution holds it and releases it to itself.
@@ -1593,7 +1593,7 @@ async fn a_grant_releases_only_to_a_caller_of_the_actor_kind_it_names() {
         .await
         .assert_problem(ProblemCode::ResourceNotFound);
     assert_eq!(
-        api.get(PARTNER_SERVICE, "/document-grants").await.json()["items"],
+        api.get(PARTNER_SERVICE, "/v1/document-grants").await.json()["items"],
         json!([])
     );
 
@@ -1615,7 +1615,7 @@ async fn a_grant_releases_only_to_a_caller_of_the_actor_kind_it_names() {
             .body,
         content
     );
-    let received = api.get(PARTNER_SERVICE, "/document-grants").await.json();
+    let received = api.get(PARTNER_SERVICE, "/v1/document-grants").await.json();
     assert_eq!(received["items"].as_array().unwrap().len(), 1);
     assert_eq!(received["items"][0]["id"], service_grant.as_str());
     let kinds: String = deployment
@@ -1933,7 +1933,7 @@ async fn grant_authority_and_unknown_ids_answer_without_disclosing_a_document() 
     api.revoke(STRANGER, &grant)
         .await
         .assert_problem(ProblemCode::ResourceNotFound);
-    api.get(STRANGER, &format!("/documents/{document}/grants"))
+    api.get(STRANGER, &format!("/v1/documents/{document}/grants"))
         .await
         .assert_problem(ProblemCode::ResourceNotFound);
     for seeing in [READER, CITIZEN] {
@@ -1941,7 +1941,7 @@ async fn grant_authority_and_unknown_ids_answer_without_disclosing_a_document() 
             .await
             .assert_problem(ProblemCode::ProfileNotAuthorized);
     }
-    api.get(READER, &format!("/documents/{document}/grants"))
+    api.get(READER, &format!("/v1/documents/{document}/grants"))
         .await
         .assert_problem(ProblemCode::ProfileNotAuthorized);
     api.revoke(APP, &unknown)
@@ -1963,7 +1963,7 @@ async fn grant_authority_and_unknown_ids_answer_without_disclosing_a_document() 
         api.download(principal, &document, &unknown)
             .await
             .assert_problem(ProblemCode::ResourceNotFound);
-        api.get(principal, &format!("/documents/{unknown}/grants"))
+        api.get(principal, &format!("/v1/documents/{unknown}/grants"))
             .await
             .assert_problem(ProblemCode::ResourceNotFound);
     }
@@ -2015,7 +2015,7 @@ async fn an_idempotent_grant_retry_after_revocation_releases_nothing() {
     api.send_json(
         APP,
         axum::http::Method::POST,
-        &format!("/documents/{document}/grants"),
+        &format!("/v1/documents/{document}/grants"),
         Some("share-1"),
         &other,
     )
@@ -2042,7 +2042,7 @@ async fn a_transfer_admitted_before_a_revocation_completes() {
             support::request(
                 READER,
                 axum::http::Method::GET,
-                &format!("/documents/{document}/versions/{version}/content"),
+                &format!("/v1/documents/{document}/versions/{version}/content"),
             )
             .body(Body::empty())
             .unwrap(),
@@ -2076,7 +2076,7 @@ async fn grant_and_document_lists_page_in_a_stable_order() {
     }
     api.revoke(APP, &issued[0]).await;
 
-    let path = format!("/documents/{document}/grants");
+    let path = format!("/v1/documents/{document}/grants");
     let first = api.get(APP, &format!("{path}?limit=2")).await;
     assert_eq!(
         first.status,
@@ -2106,13 +2106,13 @@ async fn grant_and_document_lists_page_in_a_stable_order() {
     assert_eq!(api.get(CITIZEN, &path).await.status, 200);
 
     // The recipient's own list shows its active grants only.
-    let received = api.get(READER, "/document-grants").await;
+    let received = api.get(READER, "/v1/document-grants").await;
     assert_eq!(received.status, 200);
     let received = received.json()["items"].as_array().unwrap().clone();
     assert_eq!(received.len(), 2);
     assert!(received.iter().all(|grant| grant["state"] == "active"));
     assert_eq!(
-        api.get(STRANGER, "/document-grants").await.json()["items"],
+        api.get(STRANGER, "/v1/document-grants").await.json()["items"],
         json!([])
     );
 
@@ -2130,12 +2130,12 @@ async fn grant_and_document_lists_page_in_a_stable_order() {
     // Documents: the custodian and the reserving system see it; a stranger
     // sees an empty page.
     for principal in [CITIZEN, APP] {
-        let page = api.get(principal, "/documents").await;
+        let page = api.get(principal, "/v1/documents").await;
         assert_eq!(page.status, 200);
         assert_eq!(page.json()["items"][0]["id"], document.as_str());
     }
     assert_eq!(
-        api.get(STRANGER, "/documents").await.json()["items"],
+        api.get(STRANGER, "/v1/documents").await.json()["items"],
         json!([])
     );
 }
@@ -2187,7 +2187,7 @@ async fn a_recipient_s_grant_list_pages_only_grants_it_may_redeem() {
             .await,
     );
 
-    let page = api.get(STAFF, "/document-grants?limit=1").await;
+    let page = api.get(STAFF, "/v1/document-grants?limit=1").await;
     assert_eq!(page.status, 200, "{}", String::from_utf8_lossy(&page.body));
     let page = page.json();
     assert_eq!(page["items"].as_array().unwrap().len(), 1, "{page}");
@@ -2203,7 +2203,7 @@ async fn the_policies_a_caller_may_place_are_read_with_their_bounds() {
     let verifier = FakeVerifier::new("binding-a", APPROVE);
     let (_prepared, api) = start(&deployment, &verifier).await;
 
-    let app = api.get(APP, "/document-policies").await;
+    let app = api.get(APP, "/v1/document-policies").await;
     assert_eq!(app.status, 200);
     let ids = app.json()["items"]
         .as_array()
@@ -2221,11 +2221,11 @@ async fn the_policies_a_caller_may_place_are_read_with_their_bounds() {
     assert_eq!(delivery["grantExpiryHours"], 24);
     assert_eq!(delivery["maximumGrantExpiryHours"], 24);
 
-    let citizen = api.get(CITIZEN, "/document-policies").await;
+    let citizen = api.get(CITIZEN, "/v1/document-policies").await;
     assert_eq!(citizen.json()["items"][0]["id"], "named-share");
     assert_eq!(citizen.json()["items"].as_array().unwrap().len(), 1);
     assert_eq!(
-        api.get(READER, "/document-policies").await.json()["items"],
+        api.get(READER, "/v1/document-policies").await.json()["items"],
         json!([])
     );
 }
@@ -2342,7 +2342,7 @@ async fn a_download_not_read_before_its_deadline_ends_in_an_error() {
             support::request(
                 CITIZEN,
                 axum::http::Method::GET,
-                &format!("/documents/{document}/versions/{version}/content"),
+                &format!("/v1/documents/{document}/versions/{version}/content"),
             )
             .body(Body::empty())
             .unwrap(),
@@ -2420,8 +2420,8 @@ async fn a_json_body_is_not_read_before_the_caller_is_authenticated() {
     let (_prepared, api) = start(&deployment, &verifier).await;
     let document = Uuid::new_v4();
     for path in [
-        "/documents".to_owned(),
-        format!("/documents/{document}/grants"),
+        "/v1/documents".to_owned(),
+        format!("/v1/documents/{document}/grants"),
     ] {
         for authorization in [None, Some("Bearer not-a-token")] {
             let polled = Arc::new(AtomicBool::new(false));
@@ -2454,7 +2454,7 @@ async fn an_authenticated_json_body_over_the_limit_is_refused_as_too_large() {
     ));
     let answer = api
         .call(
-            support::request(APP, axum::http::Method::POST, "/documents")
+            support::request(APP, axum::http::Method::POST, "/v1/documents")
                 .header("content-type", "application/json")
                 .header("idempotency-key", "oversized-body")
                 .body(body)
@@ -2480,7 +2480,7 @@ async fn an_upload_to_an_unknown_or_another_caller_s_reservation_is_journalled()
         .assert_problem(ProblemCode::ResourceNotFound);
     api.put(
         APP,
-        &format!("/uploads/{unknown}/content"),
+        &format!("/v1/uploads/{unknown}/content"),
         PDF,
         Body::from(content),
     )
@@ -2494,7 +2494,7 @@ async fn an_upload_to_an_unknown_or_another_caller_s_reservation_is_journalled()
         .collect::<Vec<_>>();
     assert_eq!(content_entries.len(), 4, "{content_entries:#?}");
     let reserved = path
-        .trim_start_matches("/uploads/")
+        .trim_start_matches("/v1/uploads/")
         .trim_end_matches("/content");
     assert_eq!(content_entries[0]["record"]["uploadId"], reserved);
     assert_eq!(content_entries[2]["record"]["uploadId"], unknown);
@@ -2535,7 +2535,7 @@ async fn the_journal_records_no_unchecked_text_from_a_request() {
     api.send_json(
         APP,
         axum::http::Method::POST,
-        &format!("/documents/{document}/grants"),
+        &format!("/v1/documents/{document}/grants"),
         Some("oversized-version"),
         &json!({"versionId": oversized, "grantee": {"subject": READER.subject, "kind": "human"}}),
     )
@@ -2888,7 +2888,9 @@ async fn a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_byte
     // Asking again changes nothing.
     assert_eq!(api.erase(CITIZEN, &document).await.json(), requested.json());
 
-    let revoked = api.get(APP, &format!("/documents/{document}/grants")).await;
+    let revoked = api
+        .get(APP, &format!("/v1/documents/{document}/grants"))
+        .await;
     assert_eq!(revoked.json()["items"][0]["id"], grant.as_str());
     assert_eq!(revoked.json()["items"][0]["state"], "revoked");
     api.download(READER, &document, &version)
@@ -2973,15 +2975,19 @@ async fn removing_a_rejected_document_revokes_its_grants() {
         .await;
     restarted.verify_due().await;
     assert_eq!(status(&api.read(CITIZEN, &document).await), "rejected");
-    let listed = api.get(APP, &format!("/documents/{document}/grants")).await;
+    let listed = api
+        .get(APP, &format!("/v1/documents/{document}/grants"))
+        .await;
     assert_eq!(listed.json()["items"][0]["state"], "active");
 
     assert_eq!(api.erase(CITIZEN, &document).await.status, 200);
-    let listed = api.get(APP, &format!("/documents/{document}/grants")).await;
+    let listed = api
+        .get(APP, &format!("/v1/documents/{document}/grants"))
+        .await;
     assert_eq!(listed.json()["items"][0]["id"], grant.as_str());
     assert_eq!(listed.json()["items"][0]["state"], "revoked");
     assert_eq!(
-        api.get(READER, "/documents").await.json()["items"],
+        api.get(READER, "/v1/documents").await.json()["items"],
         json!([])
     );
     let entries = deployment.audit_entries();

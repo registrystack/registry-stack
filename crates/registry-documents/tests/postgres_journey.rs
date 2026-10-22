@@ -107,7 +107,7 @@ async fn a_rendered_document_reaches_a_named_recipient_and_outlives_its_share() 
     let prepared = prepare_with_verifier(&deployment.runtime, verifier.clone())
         .await
         .expect("the runtime prepares");
-    let base = url::Url::parse(&format!("http://{}/", prepared.local_addr().unwrap())).unwrap();
+    let base = url::Url::parse(&format!("http://{}/v1/", prepared.local_addr().unwrap())).unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(prepared.serve_until(async {
         stopped.await.ok();
@@ -139,14 +139,7 @@ async fn a_rendered_document_reaches_a_named_recipient_and_outlives_its_share() 
         .unwrap()
         .to_owned();
     assert_eq!(reserved["document"]["version"]["expectedDigest"], digest);
-    let upload = base
-        .join(
-            reserved["uploadPath"]
-                .as_str()
-                .unwrap()
-                .trim_start_matches('/'),
-        )
-        .unwrap();
+    let upload = base.join(reserved["uploadPath"].as_str().unwrap()).unwrap();
 
     // Bytes other than the rendered ones are refused and nothing is kept.
     let mut altered = content.clone();
@@ -274,7 +267,7 @@ async fn a_rendered_document_reaches_a_named_recipient_and_outlives_its_share() 
     api.read(READER, &document)
         .await
         .assert_problem(ProblemCode::ResourceNotFound);
-    let naming = api.get(READER, "/document-grants").await;
+    let naming = api.get(READER, "/v1/document-grants").await;
     assert_eq!(naming.status, 200);
     assert!(naming.json()["items"].as_array().unwrap().is_empty());
 
@@ -293,7 +286,7 @@ async fn a_rendered_document_reaches_a_named_recipient_and_outlives_its_share() 
     assert_eq!(kept.status, 200);
     assert_eq!(kept.body, content);
     let grants = api
-        .get(CITIZEN, &format!("/documents/{document}/grants"))
+        .get(CITIZEN, &format!("/v1/documents/{document}/grants"))
         .await;
     assert_eq!(
         grants.status,

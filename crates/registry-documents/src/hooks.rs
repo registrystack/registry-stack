@@ -21,8 +21,8 @@ use std::time::{Duration, SystemTime};
 use chrono::{DateTime, SecondsFormat, Utc};
 
 use registry_documents_core::{
-    ActorKind, DocumentsProject, HookTrigger, DOCUMENTS_EVENT_SOURCE_PREFIX,
-    DOCUMENT_GRANT_EVENT_FIELDS,
+    ActorKind, DocumentsProject, HookTrigger, DOCUMENTS_EVENT_SOURCE_PREFIX, DOCUMENTS_PATH,
+    DOCUMENT_GRANT_EVENT_FIELDS, GRANTS_PATH,
 };
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::{
@@ -294,11 +294,11 @@ impl DocumentEvent {
     fn subject(&self) -> Result<EventSubject, HookCaptureError> {
         let record_reference = match (self.trigger, &self.grant) {
             (HookTrigger::DocumentGrantChanged, Some(grant)) => {
-                format!("/document-grants/{}", grant.grant_id)
+                format!("{GRANTS_PATH}/{}", grant.grant_id)
             }
             (HookTrigger::DocumentVersionReady | HookTrigger::DocumentVersionRejected, None) => {
                 format!(
-                    "/documents/{}/versions/{}",
+                    "{DOCUMENTS_PATH}/{}/versions/{}",
                     self.document_id, self.version_id
                 )
             }

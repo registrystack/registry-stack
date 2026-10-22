@@ -92,7 +92,7 @@ async fn reserve_posts_the_reservation_under_the_deployment_prefix_with_its_key(
     assert_eq!(observations.len(), 1);
     let sent = &observations[0];
     assert_eq!(sent.method, Method::POST);
-    assert_eq!(sent.uri.path(), format!("{PREFIX}/documents"));
+    assert_eq!(sent.uri.path(), format!("{PREFIX}/v1/documents"));
     assert_eq!(sent.uri.query(), None);
     assert_bearer_json(sent);
     assert_eq!(sent.headers["content-type"], "application/json");
@@ -218,7 +218,7 @@ async fn list_documents_sends_the_cursor_as_given_and_reads_one_page() {
     assert_eq!(observations.len(), 2);
     for sent in &observations {
         assert_eq!(sent.method, Method::GET);
-        assert_eq!(sent.uri.path(), format!("{PREFIX}/documents"));
+        assert_eq!(sent.uri.path(), format!("{PREFIX}/v1/documents"));
         assert_bearer_json(sent);
         assert!(sent.headers.get("idempotency-key").is_none());
     }
@@ -278,7 +278,10 @@ async fn document_reads_one_document_by_its_identifier() {
     assert_eq!(complete.value.version.id, VERSION_ID);
     let sent = &script.observations()[0];
     assert_eq!(sent.method, Method::GET);
-    assert_eq!(sent.uri.path(), format!("{PREFIX}/documents/{DOCUMENT_ID}"));
+    assert_eq!(
+        sent.uri.path(),
+        format!("{PREFIX}/v1/documents/{DOCUMENT_ID}")
+    );
     assert_bearer_json(sent);
     server.abort();
 }
@@ -350,7 +353,7 @@ async fn upload_streams_the_reserved_content_with_the_reserved_type_and_length()
     assert_eq!(sent.method, Method::PUT);
     assert_eq!(
         sent.uri.path(),
-        format!("{PREFIX}/uploads/{UPLOAD_ID}/content")
+        format!("{PREFIX}/v1/uploads/{UPLOAD_ID}/content")
     );
     assert_bearer_json(sent);
     assert_eq!(sent.headers["content-type"], MEDIA_TYPE);
@@ -376,9 +379,9 @@ async fn an_upload_that_cannot_match_its_reservation_is_refused_before_any_reque
     );
 
     for path in [
-        "/uploads/not-a-uuid/content".to_owned(),
-        format!("/uploads/{UPLOAD_ID}"),
-        format!("/documents/{UPLOAD_ID}/content"),
+        "/v1/uploads/not-a-uuid/content".to_owned(),
+        format!("/v1/uploads/{UPLOAD_ID}"),
+        format!("/v1/documents/{UPLOAD_ID}/content"),
         format!("https://elsewhere.example/uploads/{UPLOAD_ID}/content"),
     ] {
         let mut elsewhere = reservation();
@@ -448,7 +451,7 @@ async fn download_returns_content_only_after_its_digest_matches() {
     assert_eq!(sent.method, Method::GET);
     assert_eq!(
         sent.uri.path(),
-        format!("{PREFIX}/documents/{DOCUMENT_ID}/versions/{VERSION_ID}/content")
+        format!("{PREFIX}/v1/documents/{DOCUMENT_ID}/versions/{VERSION_ID}/content")
     );
     assert_eq!(sent.headers["authorization"], format!("Bearer {TOKEN}"));
     server.abort();
@@ -570,7 +573,7 @@ async fn issue_grant_posts_the_grant_with_its_key() {
     assert_eq!(sent.method, Method::POST);
     assert_eq!(
         sent.uri.path(),
-        format!("{PREFIX}/documents/{DOCUMENT_ID}/grants")
+        format!("{PREFIX}/v1/documents/{DOCUMENT_ID}/grants")
     );
     assert_bearer_json(sent);
     assert_eq!(sent.headers["content-type"], "application/json");
@@ -620,12 +623,12 @@ async fn grant_lists_read_one_page_from_their_routes() {
     assert_eq!(observations.len(), 2);
     assert_eq!(
         observations[0].uri.path(),
-        format!("{PREFIX}/documents/{DOCUMENT_ID}/grants")
+        format!("{PREFIX}/v1/documents/{DOCUMENT_ID}/grants")
     );
     assert_eq!(observations[0].uri.query(), None);
     assert_eq!(
         observations[1].uri.path(),
-        format!("{PREFIX}/document-grants")
+        format!("{PREFIX}/v1/document-grants")
     );
     assert_eq!(observations[1].uri.query(), Some("limit=100"));
     for sent in &observations {
@@ -652,7 +655,7 @@ async fn revoke_grant_deletes_the_grant_without_a_key() {
     assert_eq!(sent.method, Method::DELETE);
     assert_eq!(
         sent.uri.path(),
-        format!("{PREFIX}/document-grants/{GRANT_ID}")
+        format!("{PREFIX}/v1/document-grants/{GRANT_ID}")
     );
     assert_bearer_json(sent);
     assert!(sent.headers.get("idempotency-key").is_none());
@@ -689,7 +692,7 @@ async fn request_erasure_posts_an_empty_request_without_a_key() {
     assert_eq!(sent.method, Method::POST);
     assert_eq!(
         sent.uri.path(),
-        format!("{PREFIX}/documents/{DOCUMENT_ID}/erasure")
+        format!("{PREFIX}/v1/documents/{DOCUMENT_ID}/erasure")
     );
     assert_bearer_json(sent);
     assert!(sent.headers.get("idempotency-key").is_none());
@@ -722,7 +725,7 @@ async fn a_repeated_erasure_request_sends_the_same_request_and_reads_the_same_vi
         assert_eq!(sent.method, Method::POST);
         assert_eq!(
             sent.uri.path(),
-            format!("{PREFIX}/documents/{DOCUMENT_ID}/erasure")
+            format!("{PREFIX}/v1/documents/{DOCUMENT_ID}/erasure")
         );
         assert!(sent.headers.get("idempotency-key").is_none());
         assert!(sent.body.is_empty());
@@ -817,7 +820,7 @@ async fn policies_reads_the_policy_list() {
 
     let sent = &script.observations()[0];
     assert_eq!(sent.method, Method::GET);
-    assert_eq!(sent.uri.path(), format!("{PREFIX}/document-policies"));
+    assert_eq!(sent.uri.path(), format!("{PREFIX}/v1/document-policies"));
     assert_eq!(sent.uri.query(), None);
     assert_bearer_json(sent);
     server.abort();
