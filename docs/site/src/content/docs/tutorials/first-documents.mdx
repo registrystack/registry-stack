@@ -63,8 +63,9 @@ next: Run documentsctl check --project my-documents --runtime-config my-document
 next: Run documentsctl package my-documents --output my-documents-package, point runtime.yaml at my-documents-package and pin its digest, run documentsctl plan, then documentsctl apply, then documents serve.
 ```
 
-`documents.yaml` is the project: access profiles and three document policies, each commented.
-`runtime.example.yaml` is a starting runtime configuration for the operator. `init` never
+`documents.yaml` is the project: access profiles, three document policies, and three hooks that
+send events to the owning system, each commented. `runtime.example.yaml` is a starting runtime
+configuration for the operator, including the destination those hooks send to. `init` never
 overwrites a directory that already exists.
 
 {/* Evidence: crates/registry-documentsctl/src/lib.rs, init;
@@ -136,11 +137,11 @@ A deployment runs a package, not your working directory. `package` checks the pr
 writes it with a digest:
 
 ```sh
-documentsctl package my-documents --output package
+documentsctl package my-documents --output my-documents-package
 ```
 
 ```text test-expect
-created: package
+created: my-documents-package
 package digest: sha256:<digest>
 ```
 
@@ -156,7 +157,7 @@ Nothing ran in the background, and nothing was written outside the directory you
 project if you will deploy it; otherwise remove the two directories:
 
 ```sh
-rm -r my-documents package
+rm -r my-documents my-documents-package
 ```
 
 ## Next
