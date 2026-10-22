@@ -29,6 +29,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         for relative in (
             "release/scripts/release_candidate.py",
             "release/scripts/release_roster.py",
+            "release/scripts/rstack_components.py",
             "release/scripts/build-release-binaries.sh",
             "release/scripts/build-release-image.sh",
             "release/scripts/cleanup-release-candidates.py",

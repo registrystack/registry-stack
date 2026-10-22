@@ -5,8 +5,7 @@ from __future__ import annotations
 
 import unittest
 
-import release_candidate
-import rstack_components
+from release.scripts import release_candidate, rstack_components
 
 
 def payloads(version: str) -> list[dict[str, object]]:
