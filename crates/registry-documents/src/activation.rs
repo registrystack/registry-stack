@@ -204,6 +204,28 @@ pub enum ActivationError {
     Audit(String),
 }
 
+impl ActivationError {
+    /// The code of a refusal that names the database's activation state, the
+    /// same `documentsctl` reports for it; `None` for an activation step that
+    /// failed rather than was refused.
+    #[must_use]
+    pub fn code(&self) -> Option<&'static str> {
+        match self {
+            Self::NotActivated => Some("documentsctl.activation.not-activated"),
+            Self::DatabaseIdMismatch => Some("documentsctl.activation.database-id-mismatch"),
+            Self::PackageNotActive => Some("documentsctl.activation.package-not-active"),
+            Self::RoleModeWeakened => Some("documentsctl.activation.role-mode-weakened"),
+            Self::GrantsStale => Some("documentsctl.activation.grants-stale"),
+            Self::LedgerUnreadable => Some("documentsctl.activation.ledger-unreadable"),
+            Self::Refused(_)
+            | Self::AppliedUnaudited { .. }
+            | Self::OutcomeUnknown { .. }
+            | Self::Store(_)
+            | Self::Audit(_) => None,
+        }
+    }
+}
+
 impl From<tokio_postgres::Error> for ActivationError {
     fn from(error: tokio_postgres::Error) -> Self {
         Self::Store(StoreError::Query(error))

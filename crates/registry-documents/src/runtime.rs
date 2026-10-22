@@ -971,8 +971,9 @@ async fn supervise(
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     /// The database is not activated for this package and deployment, or
-    /// an activation step was refused.
-    #[error(transparent)]
+    /// an activation step was refused. A refusal of the activation state
+    /// names its code, as a refused package does.
+    #[error("{}", activation_message(.0))]
     Activation(#[from] ActivationError),
     /// A project hook or its deployment destination binding was refused.
     #[error(transparent)]
@@ -1040,9 +1041,53 @@ pub enum RuntimeError {
     Dispatch(String),
 }
 
+fn activation_message(error: &ActivationError) -> String {
+    match error.code() {
+        Some(code) => format!("the Document Store database was refused ({code}): {error}"),
+        None => error.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_startup_activation_refusal_names_its_code() {
+        for (error, code) in [
+            (
+                ActivationError::NotActivated,
+                "documentsctl.activation.not-activated",
+            ),
+            (
+                ActivationError::DatabaseIdMismatch,
+                "documentsctl.activation.database-id-mismatch",
+            ),
+            (
+                ActivationError::PackageNotActive,
+                "documentsctl.activation.package-not-active",
+            ),
+            (
+                ActivationError::RoleModeWeakened,
+                "documentsctl.activation.role-mode-weakened",
+            ),
+            (
+                ActivationError::GrantsStale,
+                "documentsctl.activation.grants-stale",
+            ),
+            (
+                ActivationError::LedgerUnreadable,
+                "documentsctl.activation.ledger-unreadable",
+            ),
+        ] {
+            let detail = error.to_string();
+            let message = RuntimeError::Activation(error).to_string();
+            assert_eq!(
+                message,
+                format!("the Document Store database was refused ({code}): {detail}")
+            );
+        }
+    }
 
     /// A background task that runs until the runtime asks it to stop.
     fn until_stopped(mut stopped: watch::Receiver<bool>) -> tokio::task::JoinHandle<()> {

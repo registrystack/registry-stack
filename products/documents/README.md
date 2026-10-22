@@ -237,9 +237,9 @@ nothing. `status` reports the active package and the activation history.
 `serve` refuses a database with no active package, one recorded for another
 `identity.databaseId`, and one whose active package is not the configured
 one; apply the package first. It also refuses a runtime role that lost
-`USAGE` on the schema or read access to the activation ledger, which the
-operator commands report as `documentsctl.activation.ledger-unreadable` at
-`database.runtimeUrlRef`; `apply` with the migration credential restores the
+`USAGE` on the schema or read access to the activation ledger, which it
+names as `documentsctl.activation.ledger-unreadable` and the operator
+commands report with that code at `database.runtimeUrlRef`; `apply` with the migration credential restores the
 role's grants. The runtime listens on `127.0.0.1:8116` in the
 starter.
 

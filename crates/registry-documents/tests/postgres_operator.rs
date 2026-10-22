@@ -518,6 +518,10 @@ async fn serve_refuses_a_runtime_role_that_lost_usage_on_the_schema_as_a_grant_p
         message.contains("restore the runtime role's grants"),
         "{message}"
     );
+    assert!(
+        message.contains("(documentsctl.activation.ledger-unreadable)"),
+        "{message}"
+    );
     drop_role(&deployment, &role).await;
 }
 
