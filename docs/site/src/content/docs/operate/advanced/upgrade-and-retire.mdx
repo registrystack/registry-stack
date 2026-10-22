@@ -107,7 +107,7 @@ so a binary that cannot run leaves the installed toolset selected.
    3. Finish, cancel, or record each draft, submitted, or review-pending change request. One that
       must continue is re-entered as a v0.42.0 Proposal after the cutover.
    4. Let the running v0.41.0 `breg` deliver pending webhooks, and replay eligible dead letters
-      with `bregctl hook replay`. Continue when `bregctl hook list` shows no pending
+      with `bregctl webhook replay`. Continue when `bregctl webhook list` shows no pending
       delivery, or record the deliveries you accept losing, since they stop with the runtime.
    5. While v0.41.0 still serves, export every Record type the fresh registry needs with
       `bregctl data export`, naming with `--field` every field the reload needs, since it exports
@@ -210,10 +210,9 @@ so a binary that cannot run leaves the installed toolset selected.
    seconds remaining without checking revocation, including the final 900 seconds of a deferred
    grant. Use it only when the deployment accepts that stale-authority window.
    Run `schedulingctl check PROJECT --runtime-config FILE`. Keep the previous runtime serving
-   long enough for its reminder and observer deliveries to run. No command lists the deliveries
-   still waiting (`schedulingctl intents` lists only the ones the dispatcher set aside as local or
-   failed), and shutdown abandons the rest, so record the deliveries you accept losing before you
-   stop it.
+   long enough for its reminder and observer deliveries to run; no command shows pending
+   deliveries (`schedulingctl intents` lists only the ones the sweep stopped carrying), and
+   shutdown abandons the rest, so record the deliveries you accept losing before you stop it.
    Point the runtime file at a fresh database,
    then run `schedulingctl plan --runtime-config FILE` and `schedulingctl apply --runtime-config
    FILE`. Apply the environment records with `schedulingctl records apply --runtime-config FILE
@@ -291,7 +290,7 @@ so a binary that cannot run leaves the installed toolset selected.
     Review results name an outcome;
     crates/registry-breg/src/migration.rs, "uninitialized-database" (initial activation check);
     crates/registry-bregctl/src/lib.rs, ImportAuthorityCommand, HookCommand (Replay and List,
-    also in v0.41.0), and DataCommand::Export (needs a serving registry, export-enabled profile);
+    the `bregctl webhook` command in v0.41.0 and v0.42.0), and DataCommand::Export (needs a serving registry, export-enabled profile);
     crates/registry-breg/src/data.rs, DataImportOperation::Create (only operation and data, so a
     reloaded record gets a new ID);
     crates/registry-bregctl/src/data_lifecycle.rs, DataImportOutcome (counts only, no ID map);
@@ -301,7 +300,7 @@ so a binary that cannot run leaves the installed toolset selected.
     directory command); crates/registry-casework-core/src/model.rs, TeamRecord; /v1/directory/absences and
     /v1/directory/holidays/{id}/revisions/{revision} (no holiday list route);
     crates/registry-bregctl/src/lib.rs, data export --field (required, repeat per field) and
-    HookCommand in v0.42.0; configure/evidence-oid4vci.mdx, offers held in process memory;
+    HookCommand (`bregctl webhook` in v0.42.0); configure/evidence-oid4vci.mdx, offers held in process memory;
     products/casework/CHANGELOG.md, WorkItems replaced; crates/registry-casework/src/http.rs,
     /v1/review-policies and /v1/review-tasks/holdings (v0.41.0: /v1/work-items, /v1/review-kinds,
     /v1/holdings);
@@ -367,7 +366,7 @@ runtime and a v0.42.0 client calls routes the previous release does not serve.
   (`listProposals` and `readProposalSubmission`) under a grant that may read them. When no grant
   can read a Proposal, it cannot be carried back, so either accept losing it or roll forward
   instead. Let its pending webhooks deliver, replaying eligible dead letters with
-  `bregctl hook replay` until `bregctl hook list` shows none, or record the deliveries you
+  `bregctl webhook replay` until `bregctl webhook list` shows none, or record the deliveries you
   accept losing. Stop every v0.42.0 `breg` and keep its database. Start the previous
   `breg` with the previous package and runtime file against the retained database; the v0.42.0
   tools cannot read the earlier package or runtime file. Re-enter the recorded changes through the
