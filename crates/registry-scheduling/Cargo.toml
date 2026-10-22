@@ -66,6 +66,7 @@ uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 jsonschema.workspace = true
+registry-platform-testing = { workspace = true, features = ["migration-pins"] }
 reqwest.workspace = true
 serde_norway.workspace = true
 tempfile.workspace = true

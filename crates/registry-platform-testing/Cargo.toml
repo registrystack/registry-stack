@@ -15,6 +15,8 @@ default = ["test-utils"]
 test-utils = []
 # An in-process OAuth authorization server for tests; see `TestAuthorizationServer`.
 test-authorization-server = ["test-utils", "dep:sha2", "dep:url", "dep:uuid"]
+# The sha256 pins every released migration file is held to; see `assert_migration_pins`.
+migration-pins = ["test-utils", "dep:sha2"]
 
 [[test]]
 name = "test_authorization_server"
