@@ -2920,9 +2920,12 @@ name = "registry-platform-hooks"
 version = "0.44.0"
 dependencies = [
  "registry-platform-canonical-json",
+ "registry-platform-script",
  "registry-platform-yaml",
+ "rhai",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
  "time",
  "uuid",
