@@ -520,6 +520,7 @@ def _write_runtime_config(path: Path, package: Path, port: int) -> None:
 
 def _wait_until_ready(base_url: str, process: subprocess.Popen[bytes]) -> None:
     deadline = time.monotonic() + 15
+    last_failure: Exception | None = None
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise SmokeError(
@@ -532,10 +533,12 @@ def _wait_until_ready(base_url: str, process: subprocess.Popen[bytes]) -> None:
                     and response.read(1024) == b'{"status":"ready"}'
                 ):
                     return
-        except (urllib.error.URLError, TimeoutError):
-            pass
+        except (urllib.error.URLError, TimeoutError) as error:
+            last_failure = error
         time.sleep(0.05)
-    raise SmokeError("discovery did not become ready within 15 seconds")
+    raise SmokeError(
+        "discovery did not become ready within 15 seconds"
+    ) from last_failure
 
 
 def _stop_process(process: subprocess.Popen[bytes]) -> None:

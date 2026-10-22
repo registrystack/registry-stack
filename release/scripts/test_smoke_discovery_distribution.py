@@ -10,7 +10,7 @@ from pathlib import Path
 import stat
 import tarfile
 import tempfile
-import unittest
+import unittest.mock
 from contextlib import redirect_stderr
 
 
@@ -30,6 +30,23 @@ def load_smoke():
 
 
 class DiscoveryDistributionSmokeTests(unittest.TestCase):
+    def test_readiness_timeout_retains_last_connection_failure(self) -> None:
+        failure = self.smoke.urllib.error.URLError("connection refused")
+        process = unittest.mock.Mock()
+        process.poll.return_value = None
+        with (
+            unittest.mock.patch.object(
+                self.smoke.time, "monotonic", side_effect=[0, 0, 16]
+            ),
+            unittest.mock.patch.object(self.smoke.time, "sleep"),
+            unittest.mock.patch.object(
+                self.smoke.urllib.request, "urlopen", side_effect=failure
+            ),
+        ):
+            with self.assertRaises(self.smoke.SmokeError) as caught:
+                self.smoke._wait_until_ready("http://127.0.0.1:1/", process)
+        self.assertIs(caught.exception.__cause__, failure)
+
     def setUp(self) -> None:
         self.smoke = load_smoke()
         self.temporary = tempfile.TemporaryDirectory()

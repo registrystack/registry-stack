@@ -30,9 +30,10 @@ ANCHOR = 'base_url="https://github.com/${repo}/releases/download/${version}"'
 
 
 class Installer:
-    def __init__(self, path: str, product: str) -> None:
+    def __init__(self, path: str, product: str, anchor: str = ANCHOR) -> None:
         self.path = Path(path)
         self.product = product
+        self.anchor = anchor
 
 
 INSTALLERS = (
@@ -41,6 +42,11 @@ INSTALLERS = (
     Installer("crates/registry-scheduling/install.sh", "Registry Scheduling"),
     Installer("crates/registry-evidencectl/install.sh", "the Evidence toolset"),
     Installer("crates/registry-rstack/install.sh", "Registry Stack"),
+    Installer(
+        "crates/registry-discovery/install.sh",
+        "Registry Discovery",
+        'base_url="https://github.com/${repo}/releases/download/${release_tag}"',
+    ),
 )
 
 TEMPLATE = """\
@@ -148,7 +154,7 @@ def render(installer: Installer, floor: str, indent: str = "\t") -> str:
     )
 
 
-def apply(text: str, block: str, relative: Path) -> str:
+def apply(text: str, block: str, relative: Path, anchor_text: str = ANCHOR) -> str:
     """Return the installer text with exactly one current preflight block."""
     begin = text.find(BEGIN)
     end = text.find(END)
@@ -158,9 +164,11 @@ def apply(text: str, block: str, relative: Path) -> str:
         if end < begin:
             raise SystemExit(f"{relative}: the generated preflight markers are inverted")
         text = text[:begin] + text[end + len(END) + 1 :]
-    anchor = text.find(ANCHOR)
+    anchor = text.find(anchor_text)
     if anchor < 0:
-        raise SystemExit(f"{relative}: no {ANCHOR!r} line to place the preflight before")
+        raise SystemExit(
+            f"{relative}: no {anchor_text!r} line to place the preflight before"
+        )
     return text[:anchor] + block + text[anchor:]
 
 
@@ -179,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         path = root / installer.path
         text = path.read_text(encoding="utf-8")
         block = render(installer, floor, detect_indent(text))
-        wanted = apply(text, block, installer.path)
+        wanted = apply(text, block, installer.path, installer.anchor)
         if wanted == text:
             continue
         stale.append(installer.path)
