@@ -1283,4 +1283,25 @@ mod tests {
             .exists());
         fs::remove_dir_all(&description.state_root).unwrap();
     }
+
+    #[test]
+    fn the_stylesheet_and_the_asset_mount_follow_the_declared_asset_path() {
+        let metadata = branding_metadata().unwrap();
+        assert!(
+            BRANDING_STYLESHEET.contains(&format!(
+                "url(\"{}/fonts/public-sans-latin-wght-normal.woff2\")",
+                metadata.asset_base_path
+            )),
+            "registry-stack.css loads its font from a path branding.json does not declare"
+        );
+        assert!(
+            metadata.asset_base_path.starts_with("/gate/"),
+            "only Gate's static tree is mounted: {}",
+            metadata.asset_base_path
+        );
+        assert_eq!(
+            crate::container::BRANDING_ASSETS_MOUNT_POINT,
+            format!("/opt/thunderid/apps{}", metadata.asset_base_path)
+        );
+    }
 }
