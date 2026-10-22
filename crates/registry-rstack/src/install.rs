@@ -8,13 +8,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
-use std::io::Read;
+use std::io::{self, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
+const EXECUTABLE_BUSY_RETRIES: usize = 5;
+const EXECUTABLE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(20);
 
 pub struct BootstrapOptions {
     pub release_manifest: PathBuf,
@@ -1099,13 +1103,64 @@ fn extract_macos_archive(archive: &Path, destination: &Path, binary: &str) -> Re
 }
 
 fn smoke_binary(path: &Path, binary: &str, expected_version: &str) -> Result<(), String> {
-    let output = Command::new(path)
-        .arg("--version")
-        .output()
+    let output = retry_executable_busy(|| Command::new(path).arg("--version").output())
         .map_err(|error| format!("cannot start staged {binary}: {error}"))?;
     let expected = format!("{binary} {expected_version}\n");
     if !output.status.success() || output.stdout != expected.as_bytes() {
         return Err(format!("staged {binary} reports an unexpected version"));
     }
     Ok(())
+}
+
+fn retry_executable_busy<T>(mut operation: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    let mut retries = 0;
+    loop {
+        match operation() {
+            Err(error)
+                if error.kind() == io::ErrorKind::ExecutableFileBusy
+                    && retries < EXECUTABLE_BUSY_RETRIES =>
+            {
+                retries += 1;
+                thread::sleep(EXECUTABLE_BUSY_RETRY_DELAY);
+            }
+            result => return result,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{retry_executable_busy, EXECUTABLE_BUSY_RETRIES};
+    use std::io;
+
+    #[test]
+    fn staged_binary_smoke_recovers_from_transient_executable_busy() {
+        let mut attempts = 0;
+        let result = retry_executable_busy(|| {
+            attempts += 1;
+            if attempts < 3 {
+                Err(io::ErrorKind::ExecutableFileBusy.into())
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(attempts, 3);
+    }
+
+    #[test]
+    fn staged_binary_smoke_stops_retrying_permanent_executable_busy() {
+        let mut attempts = 0;
+        let result: io::Result<()> = retry_executable_busy(|| {
+            attempts += 1;
+            Err(io::ErrorKind::ExecutableFileBusy.into())
+        });
+
+        assert_eq!(attempts, EXECUTABLE_BUSY_RETRIES + 1);
+        assert_eq!(
+            result.unwrap_err().kind(),
+            io::ErrorKind::ExecutableFileBusy
+        );
+    }
 }
