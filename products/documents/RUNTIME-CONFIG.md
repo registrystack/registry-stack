@@ -103,7 +103,8 @@ before it opens a connection or binds a socket. It then, in order:
    one pinned at the first upload;
 6. activates the content verifier, then suspends and re-queues every
    finalized version verified or queued under another verifier binding;
-7. binds the listener, serves `GET /health` and the document routes, and
+7. binds the listener, serves `GET /health`, `GET /ready`, and the document
+   routes, and
    runs the content verification worker until shutdown.
 
 An upload that finalizes a version wakes the verification worker of its own
@@ -128,7 +129,8 @@ verifier that cannot be reached answers `service.unavailable`.
 
 ## Access tokens
 
-Every route but `GET /health` takes `Authorization: Bearer <token>`
+Every route but `GET /health` and `GET /ready` takes
+`Authorization: Bearer <token>`
 holding an RFC 9068 access token. The runtime verifies:
 
 - the header: `typ` is `at+jwt` or `application/at+jwt`, in any case; `alg`

@@ -7,6 +7,10 @@ The Document Store is held out of releases.
 - Every document route is served under `/v1/`, as in the other products;
   `GET /health` stays unversioned. An event's `recordReference` names the
   record by the same versioned path.
+- `GET /ready` answers `200` without a credential while the database carries
+  this release's schema, the activation ledger names the served package
+  active, and the audit journal accepts writes, and `503
+  service.unavailable` otherwise. `GET /health` stays liveness only.
 - `documents_verification_jobs` and `documents_erasure_jobs` refuse a
   `leased` row without a `lease_expires_at`, through the corrected shared
   dispatch job shape.

@@ -10,9 +10,9 @@ decisions:
   - id: DOCUMENTS-DEC-01
     subject: Every document route is served, and only behind access-token verification
     decision: >-
-      The documents binary serves GET /health without a credential and every
-      document route behind bearer-token verification through platform-oidc
-      and access-profile resolution. No route is compiled only into test
+      The documents binary serves GET /health and GET /ready without a
+      credential and every document route behind bearer-token verification
+      through platform-oidc and access-profile resolution. No route is compiled only into test
       builds, and the PostgreSQL suites call the served router with tokens a
       test issuer signs.
     reasoning: >-

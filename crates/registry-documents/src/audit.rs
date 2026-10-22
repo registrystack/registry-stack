@@ -95,6 +95,12 @@ impl DocumentsAudit {
             .await
     }
 
+    /// Whether the destination can take an entry now: the file is still the
+    /// one this process opened, or the stream has not failed or stalled.
+    pub async fn ready(&self) -> bool {
+        self.writer.ready().await
+    }
+
     /// Write one entry another component built whole, such as a hook
     /// delivery attempt's entry from the shared delivery worker.
     pub async fn append(&self, entry: AuditEntry) -> Result<(), AuditUnavailable> {

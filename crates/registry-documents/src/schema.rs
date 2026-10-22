@@ -27,7 +27,7 @@ use registry_documents_core::{
     type_uri, DocumentsProject, HookTrigger, ProblemCode, DOCUMENTS_PROJECT_API_VERSION,
     DOCUMENTS_PROJECT_KIND, DOCUMENTS_PROJECT_SCHEMA_ID, DOCUMENTS_RUNTIME_API_VERSION,
     DOCUMENTS_RUNTIME_KIND, DOCUMENTS_RUNTIME_SCHEMA_ID, HEALTH_PATH, PROJECT_SCHEMA_FILE,
-    RUNTIME_SCHEMA_FILE,
+    READY_PATH, RUNTIME_SCHEMA_FILE,
 };
 use serde_json::{json, Map, Value};
 
@@ -184,6 +184,27 @@ pub const OPERATIONS: &[Operation] = &[
         success: 200,
         response: Payload::Empty,
         problems: &[ProblemCode::RequestMethodNotAllowed],
+    },
+    Operation {
+        method: "get",
+        path: READY_PATH,
+        operation_id: "ready",
+        summary: "Report that the process can serve document routes.",
+        description: Some(
+            "Answers 200 while the database is reachable, the activation ledger names \
+             this process's package active, and the audit journal accepts writes; \
+             otherwise `service.unavailable`.",
+        ),
+        authenticated: false,
+        idempotent: false,
+        paged: false,
+        request: Payload::Empty,
+        success: 200,
+        response: Payload::Empty,
+        problems: &[
+            ProblemCode::RequestMethodNotAllowed,
+            ProblemCode::ServiceUnavailable,
+        ],
     },
     Operation {
         method: "post",
@@ -1051,6 +1072,7 @@ mod tests {
             .iter()
             .map(|operation| match operation.path {
                 HEALTH_PATH => "HEALTH_PATH",
+                READY_PATH => "READY_PATH",
                 DOCUMENTS_PATH => "DOCUMENTS_PATH",
                 DOCUMENT_PATH => "DOCUMENT_PATH",
                 DOCUMENT_CONTENT_PATH => "DOCUMENT_CONTENT_PATH",

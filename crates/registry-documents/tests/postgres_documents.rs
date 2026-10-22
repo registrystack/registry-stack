@@ -3716,3 +3716,86 @@ async fn under_institutional_custody_only_the_institution_may_remove() {
     );
     assert_eq!(status(&api.read(APP, &document).await), "erasure-pending");
 }
+
+/// An unauthenticated probe of `path`.
+async fn probe(api: &Api, path: &str) -> support::Answer {
+    api.call(axum::http::Request::get(path).body(Body::empty()).unwrap())
+        .await
+}
+
+/// `/ready` answers only while the ledger names the package this runtime
+/// serves active; once an operator applies another one it answers
+/// unavailable until the runtime restarts onto it. `/health` is liveness
+/// and keeps answering.
+#[tokio::test]
+async fn the_runtime_is_ready_only_while_the_ledger_names_its_package_active() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    let ready = probe(&api, "/ready").await;
+    assert_eq!(
+        ready.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&ready.body)
+    );
+    assert!(ready.body.is_empty());
+
+    deployment
+        .execute(&format!(
+            "INSERT INTO documents_activations \
+               (activation_id, apply_order, package_digest, predecessor_package_digest, \
+                database_id, plan_kind, applied_at, role_mode) \
+             SELECT gen_random_uuid(), apply_order + 1, 'sha256:{}', package_digest, \
+                    database_id, 'successor', now(), role_mode \
+               FROM documents_activations ORDER BY apply_order DESC LIMIT 1",
+            "0".repeat(64)
+        ))
+        .await;
+    probe(&api, "/ready")
+        .await
+        .assert_problem(ProblemCode::ServiceUnavailable);
+    assert_eq!(probe(&api, "/health").await.status, 200);
+}
+
+/// A database that lost the deployment's schema is not ready, and the
+/// answer is the closed vocabulary's problem with nothing about the cause.
+#[tokio::test]
+async fn the_runtime_is_not_ready_once_its_database_schema_is_gone() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    assert_eq!(probe(&api, "/ready").await.status, 200);
+
+    deployment
+        .execute(&format!("DROP SCHEMA {} CASCADE", deployment.schema))
+        .await;
+    let refused = probe(&api, "/ready").await;
+    refused.assert_problem(ProblemCode::ServiceUnavailable);
+    let body = String::from_utf8_lossy(&refused.body);
+    for leaked in [
+        deployment.schema.as_str(),
+        "documents_activations",
+        "SELECT",
+    ] {
+        assert!(!body.contains(leaked), "{leaked} in {body}");
+    }
+    assert_eq!(probe(&api, "/health").await.status, 200);
+}
+
+/// An audit file that is no longer the one the runtime opened cannot take
+/// the journal, so the runtime is not ready.
+#[tokio::test]
+async fn the_runtime_is_not_ready_while_its_audit_file_is_unwritable() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    assert_eq!(probe(&api, "/ready").await.status, 200);
+
+    std::fs::remove_file(deployment.audit_path()).unwrap();
+    let refused = probe(&api, "/ready").await;
+    refused.assert_problem(ProblemCode::ServiceUnavailable);
+    let body = String::from_utf8_lossy(&refused.body);
+    assert!(!body.contains("audit.ndjson"), "{body}");
+    assert_eq!(probe(&api, "/health").await.status, 200);
+}

@@ -17,8 +17,8 @@ are delivered to after-commit URL observers.
 ## Routes
 
 Every document route carries the API's major version, `/v1/`, in its path;
-`GET /health` is unversioned. Every route but `GET /health` takes a bearer access token the configured
-issuer signed. The token's client, scopes, and actor kind select one access
+the probes `GET /health` and `GET /ready` are unversioned. Every route but
+the probes takes a bearer access token the configured issuer signed. The token's client, scopes, and actor kind select one access
 profile in `documents.yaml`; the profile and the document policy decide what
 the caller may do. The token is an RFC 9068 `at+jwt` access token signed with
 `RS256` or `ES256`, whose `azp` or `client_id` is in a profile's
@@ -40,6 +40,8 @@ states every rule under "Access tokens".
 | `DELETE /v1/document-grants/{grantId}` | Revoke a grant |
 | `POST /v1/documents/{documentId}/erasure` | Remove a document from custody; only its custodian may. Takes no `Idempotency-Key`: a repeat moves nothing and answers the same view |
 | `GET /v1/document-policies` | List the policies the caller may reserve under, with their bounds |
+| `GET /health` | No token; `200` while the process serves |
+| `GET /ready` | No token; `200` while the database carries this release's schema, its activation ledger names the served package active for the configured database identity under the current runtime role, and the audit journal accepts writes; `503 service.unavailable` otherwise |
 
 A grant names its recipient by subject and actor kind, not by access
 profile, so issuing one does not check where the recipient's token will

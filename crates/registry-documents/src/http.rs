@@ -2,11 +2,11 @@
 
 //! The HTTP surface.
 //!
-//! The runtime answers `/health` without a credential and the document
-//! routes only after it verifies the caller's bearer token and resolves it
-//! to one access profile. Every other request is refused with a problem
-//! from the closed vocabulary. Every response carries the request's trace
-//! and `Cache-Control: no-store`; a credential refusal carries
+//! The runtime answers `/health` and `/ready` without a credential and the
+//! document routes only after it verifies the caller's bearer token and
+//! resolves it to one access profile. Every other request is refused with a
+//! problem from the closed vocabulary. Every response carries the request's
+//! trace and `Cache-Control: no-store`; a credential refusal carries
 //! `WWW-Authenticate: Bearer`.
 
 use std::sync::Arc;
@@ -24,6 +24,7 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use registry_documents_core::{
     type_uri, Caller, IssueGrantRequest, ProblemCode, ReserveDocumentRequest, HEALTH_PATH,
+    READY_PATH,
 };
 use registry_platform_authcommon::parse_bearer_token;
 use registry_platform_httpsec::{
@@ -34,8 +35,10 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::audit::DocumentsAudit;
 use crate::auth::{AuthenticationError, DocumentsAuthenticator};
 use crate::service::{DocumentService, PageRequest};
+use crate::store::PostgresStore;
 
 tokio::task_local! {
     static REQUEST_TRACE: TraceContext;
@@ -114,6 +117,79 @@ async fn health() -> StatusCode {
     StatusCode::OK
 }
 
+/// What `/ready` asks before it answers.
+#[derive(Clone, Debug)]
+pub enum Readiness {
+    /// The audit destination can take an entry, and the store answers with
+    /// the expected schema, its ledger naming active the package this
+    /// runtime serves for its database id, and the runtime role's grants
+    /// current. Once an operator applies another package, the runtime
+    /// answers not ready until it is restarted onto it.
+    Store {
+        store: PostgresStore,
+        database_id: String,
+        package_digest: String,
+        audit: DocumentsAudit,
+    },
+    /// A fixed answer, for tests of the HTTP surface without a database.
+    #[cfg(test)]
+    Fixed(bool),
+}
+
+impl Readiness {
+    /// Ask `audit` instead, for a runtime whose routes write to it.
+    #[cfg(feature = "postgres-test")]
+    pub(crate) fn watch_audit(&mut self, audit: DocumentsAudit) {
+        match self {
+            Self::Store { audit: watched, .. } => *watched = audit,
+            #[cfg(test)]
+            Self::Fixed(_) => {}
+        }
+    }
+
+    async fn is_ready(&self) -> bool {
+        match self {
+            Self::Store {
+                store,
+                database_id,
+                package_digest,
+                audit,
+            } => {
+                if !audit.ready().await {
+                    tracing::warn!("the Document Store audit destination is not ready");
+                    return false;
+                }
+                match crate::activation::check_runtime(store, database_id, package_digest).await {
+                    Ok(_) => true,
+                    Err(error) => {
+                        tracing::warn!(error = %error, "the Document Store database is not ready");
+                        false
+                    }
+                }
+            }
+            #[cfg(test)]
+            Self::Fixed(ready) => *ready,
+        }
+    }
+}
+
+/// `200` with no body while ready; `service.unavailable` otherwise, which
+/// names no cause. The log carries the cause.
+async fn ready(State(readiness): State<Readiness>) -> Response {
+    if readiness.is_ready().await {
+        StatusCode::OK.into_response()
+    } else {
+        problem_response(ProblemCode::ServiceUnavailable)
+    }
+}
+
+/// The readiness probe, over its own state.
+fn readiness_router(readiness: Readiness) -> Router {
+    Router::new()
+        .route(READY_PATH, get(ready))
+        .with_state(readiness)
+}
+
 fn current_trace() -> TraceContext {
     REQUEST_TRACE
         .try_with(Clone::clone)
@@ -165,6 +241,7 @@ pub(crate) fn problem_response(problem: ProblemCode) -> Response {
 pub struct DocumentRoutes {
     pub service: Arc<DocumentService>,
     pub authenticator: Arc<DocumentsAuthenticator>,
+    pub readiness: Readiness,
 }
 
 impl DocumentRoutes {
@@ -193,10 +270,12 @@ impl DocumentRoutes {
     }
 }
 
-/// The served surface: `/health` and the document routes.
+/// The served surface: `/health`, `/ready`, and the document routes.
 pub fn router(routes: DocumentRoutes) -> Router {
-    let limited = Router::new()
+    let probes = Router::new()
         .route(HEALTH_PATH, get(health))
+        .merge(readiness_router(routes.readiness.clone()));
+    let limited = Router::new()
         .route(DOCUMENTS_PATH, post(reserve).get(list_documents))
         .route(DOCUMENT_PATH, get(read))
         .route(DOCUMENT_CONTENT_PATH, get(download))
@@ -205,7 +284,8 @@ pub fn router(routes: DocumentRoutes) -> Router {
         .route(GRANT_PATH, delete(revoke_grant))
         .route(DOCUMENT_ERASURE_PATH, post(request_erasure))
         .route(POLICIES_PATH, get(policies))
-        .with_state(routes.clone());
+        .with_state(routes.clone())
+        .merge(probes);
     let unlimited = Router::new()
         .route(UPLOAD_CONTENT_PATH, put(upload))
         .with_state(routes);
@@ -509,10 +589,19 @@ mod tests {
     use registry_documents_core::ProblemDocument;
     use tower::ServiceExt as _;
 
-    /// The boundary layers over `/health` alone: what every route shares,
+    /// The boundary layers over the probes alone: what every route shares,
     /// without a database behind it.
     fn shell() -> Router {
-        finish(Router::new().route(HEALTH_PATH, get(health)), Router::new())
+        shell_answering_ready(true)
+    }
+
+    fn shell_answering_ready(ready: bool) -> Router {
+        finish(
+            Router::new()
+                .route(HEALTH_PATH, get(health))
+                .merge(readiness_router(Readiness::Fixed(ready))),
+            Router::new(),
+        )
     }
 
     async fn call(method: &str, uri: &str, body: Body) -> Response {
@@ -553,8 +642,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ready_answers_without_a_credential_when_the_store_and_audit_are_ready() {
+        let response = call("GET", READY_PATH, Body::empty()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get(CACHE_CONTROL).unwrap(), "no-store");
+        let bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        assert!(bytes.is_empty(), "the ready answer carries no body");
+    }
+
+    #[tokio::test]
+    async fn ready_answers_unavailable_while_the_store_or_audit_is_not_ready() {
+        let response = shell_answering_ready(false)
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(READY_PATH)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let headers = expect_problem(response, ProblemCode::ServiceUnavailable).await;
+        assert_eq!(headers.get(RETRY_AFTER).unwrap(), "5");
+    }
+
+    #[tokio::test]
+    async fn another_method_on_ready_is_refused() {
+        expect_problem(
+            call("POST", READY_PATH, Body::empty()).await,
+            ProblemCode::RequestMethodNotAllowed,
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn every_other_route_is_not_found() {
-        for path in ["/", "/ready", "/metrics", "/health/extra"] {
+        for path in ["/", "/ready/extra", "/metrics", "/health/extra"] {
             expect_problem(
                 call("GET", path, Body::empty()).await,
                 ProblemCode::RequestNotFound,

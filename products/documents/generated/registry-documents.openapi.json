@@ -595,6 +595,75 @@
         "summary": "Report that the process is serving."
       }
     },
+    "/ready": {
+      "get": {
+        "description": "Answers 200 while the database is reachable, the activation ledger names this process's package active, and the audit journal accepts writes; otherwise `service.unavailable`.",
+        "operationId": "ready",
+        "responses": {
+          "200": {
+            "description": "The operation succeeded. The body is empty."
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "request.method-not-allowed"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: request.method-not-allowed."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "service.unavailable"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "A problem: service.unavailable.",
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "summary": "Report that the process can serve document routes."
+      }
+    },
     "/v1/document-grants": {
       "get": {
         "operationId": "listReceivedGrants",

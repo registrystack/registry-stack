@@ -45,7 +45,7 @@ use crate::erasure::{
 use crate::hooks::{
     ActivatedHooks, HookActivationError, HookDeliveryService, HookRuntimeIdentity, ScopedHook,
 };
-use crate::http::{router, DocumentRoutes};
+use crate::http::{router, DocumentRoutes, Readiness};
 use crate::package::{load_package, LoadedPackage, PackageLoadError};
 use crate::service::{DocumentService, ServiceSettings};
 use crate::store::{PostgresStore, StoreError};
@@ -370,6 +370,12 @@ async fn prepare_with(
         Arc::clone(&verifier),
         budget.clone(),
     ));
+    let readiness = Readiness::Store {
+        store: store.clone(),
+        database_id,
+        package_digest: package.digest.clone(),
+        audit: audit.clone(),
+    };
     let project = Arc::new(package.project);
     let keys = config.jwks_fetcher(&secrets).await?;
     let authenticator = Arc::new(DocumentsAuthenticator::new(
@@ -401,6 +407,7 @@ async fn prepare_with(
         routes: DocumentRoutes {
             service,
             authenticator,
+            readiness,
         },
         dispatcher,
         transport,
@@ -748,6 +755,7 @@ impl Prepared {
     #[cfg(feature = "postgres-test")]
     #[must_use]
     pub fn with_audit(mut self, audit: crate::audit::DocumentsAudit) -> Self {
+        self.routes.readiness.watch_audit(audit.clone());
         self.routes.service = Arc::new(self.routes.service.with_audit(audit));
         self
     }

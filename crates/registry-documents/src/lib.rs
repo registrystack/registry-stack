@@ -3,8 +3,8 @@
 //! Registry Stack Document Store runtime: the operator configuration, the
 //! HTTP surface, and the PostgreSQL store.
 //!
-//! The runtime serves `/health` and the document routes, behind bearer
-//! token verification, and refuses every other request with a problem from
+//! The runtime serves `/health`, `/ready`, and the document routes, behind
+//! bearer token verification, and refuses every other request with a problem from
 //! the closed vocabulary in `registry-documents-core`.
 
 pub mod activation;

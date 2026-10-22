@@ -23,8 +23,8 @@ checkout, as the [overview](../../start/documents/#status) explains.
   and grants the second what serving needs. Both connections verify the server certificate and its
   host name, so a local database needs a certificate too; an operator build refuses
   `database.testOnlyPlaintext`.
-- **Your OpenID Connect issuer.** Every route except `GET /health` takes a bearer access token it
-  signed; the token's client, scopes, and actor kind select one access profile in the project.
+- **Your OpenID Connect issuer.** Every route except `GET /health` and `GET /ready` takes a
+  bearer access token it signed; the token's client, scopes, and actor kind select one access profile in the project.
   [Access tokens](#access-tokens) lists what each token must carry.
 - **A content verifier**: an HTTP endpoint that receives each stored version's bytes and answers
   approved or rejected. It speaks the same protocol as the Base Registry Engine (BReg)
@@ -267,11 +267,21 @@ Check that it answers:
 
 ```sh
 curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8116/health
+curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8116/ready
 ```
 
 ```text
 200
+200
 ```
+
+`GET /health` is liveness: it answers `200` while the process serves. `GET /ready` is readiness:
+it answers `200` while the database carries this release's schema, its activation ledger names
+the served package active under the current runtime role, and the audit journal accepts writes,
+and `503 service.unavailable` otherwise, with the cause in the operational log. Point a load
+balancer's health check at `/ready`. Once `documentsctl apply` activates another package, a
+process still serving the previous one answers `/ready` with `503` until it restarts onto the
+new package.
 
 Every other route answers `401 authentication.refused` without a valid token. The operator
 commands write their own audit journal beside the service's.
@@ -285,6 +295,8 @@ commands write their own audit journal beside the service's.
     crates/registry-documents/src/runtime.rs, prepare_with, check_against_project,
     drain_until_stopped, and WORKER_IDLE_POLL;
     crates/registry-documents/src/service.rs, finalize and verification_wake;
+    crates/registry-documents/src/http.rs, Readiness and ready, proven by the
+    readiness tests in crates/registry-documents/tests/postgres_documents.rs;
     observed with documentsctl and documents
     0.43.0-dev on 2026-10-22, paths and references replaced. */}
 

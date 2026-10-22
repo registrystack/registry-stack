@@ -17,13 +17,18 @@ rule governs.
 
 ### Enforcement and defaults
 
-The runtime serves `GET /health` without a credential and the document
-routes behind access-token verification (see "Access profiles, document
-grants, and release" below), and nothing else. Every other path answers
-404 `request.not-found` and another method on health answers 405
+The runtime serves `GET /health` and `GET /ready` without a credential and
+the document routes behind access-token verification (see "Access profiles,
+document grants, and release" below), and nothing else. Every other path
+answers 404 `request.not-found` and another method on a probe answers 405
 `request.method-not-allowed`, both as `application/problem+json` with the
 caller's trace echoed (`crates/registry-documents/src/http.rs`). Health needs
 no credential and reveals nothing beyond the fact the process is serving.
+Readiness needs none either and answers only `200` or `503
+service.unavailable`; the problem names no cause, and the cause (an
+unreachable database, a missing schema, a successor package in the
+activation ledger, or an audit journal that stopped accepting writes) goes
+to the operational log only.
 
 ### Residual risk
 

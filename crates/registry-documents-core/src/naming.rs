@@ -77,6 +77,9 @@ pub const DOCUMENTS_PROBLEM_TYPE_BASE: &str =
 
 /// Unauthenticated liveness route on the listener.
 pub const HEALTH_PATH: &str = "/health";
+/// Unauthenticated readiness route on the listener: the database and the
+/// audit destination answer.
+pub const READY_PATH: &str = "/ready";
 /// The route that reserves and lists documents.
 pub const DOCUMENTS_PATH: &str = "/v1/documents";
 /// The route that reads one document.
@@ -176,6 +179,7 @@ mod tests {
     #[test]
     fn http_wire_names_are_pinned() {
         assert_eq!(HEALTH_PATH, "/health");
+        assert_eq!(READY_PATH, "/ready");
         assert_eq!(DOCUMENTS_PATH, "/v1/documents");
         assert_eq!(DOCUMENT_PATH, "/v1/documents/{documentId}");
         assert_eq!(
