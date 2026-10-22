@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGET = ROOT / "crates" / "registry-stack-client-node"
+COMPATIBILITY = ROOT / "crates" / "registry-stack-client" / "compatibility.json"
 PRODUCTS = {
     "discovery": ROOT / "crates" / "registry-discovery-client-node",
     "evidence": ROOT / "crates" / "registry-evidence-client-node",
@@ -51,6 +53,21 @@ def unified_index_declaration(source: Path) -> bytes:
             f"could not remove the generated loader-only declaration from {source}"
         )
     return declaration
+
+
+def compatibility_metadata(version: str) -> bytes:
+    metadata = json.loads(COMPATIBILITY.read_text(encoding="utf-8"))
+    package = metadata.get("sdkPackage")
+    if (
+        metadata.get("schemaVersion") != "registry-stack.sdk-compatibility.v1"
+        or not isinstance(package, dict)
+        or package.get("name") != "registry-stack-client"
+        or not isinstance(package.get("version"), str)
+        or not isinstance(metadata.get("namespaces"), dict)
+    ):
+        raise ValueError(f"malformed SDK compatibility metadata: {COMPATIBILITY}")
+    package["version"] = version
+    return (json.dumps(metadata, indent=2, ensure_ascii=False) + "\n").encode()
 
 
 def expected_files() -> dict[Path, bytes]:
@@ -95,6 +112,11 @@ def expected_files() -> dict[Path, bytes]:
             "'use strict';\n\n"
             f"module.exports = require('../native').load('{product}');\n"
         ).encode()
+    package = json.loads((TARGET / "package.json").read_text(encoding="utf-8"))
+    version = package.get("version")
+    if not isinstance(version, str):
+        raise ValueError(f"missing package version: {TARGET / 'package.json'}")
+    files[TARGET / "compatibility.json"] = compatibility_metadata(version)
     return files
 
 

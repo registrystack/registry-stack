@@ -20,11 +20,12 @@ function isCanonicalReleaseSourceProduct(docset, product) {
 }
 
 function isDiscoveryReleaseSourceProduct(docset, repoId, product) {
-  const isPrePublicationRecord =
-    (docset.status === 'archived' && docset.availability === 'candidate') ||
+  const isReleaseRecord =
+    (docset.status === 'archived' &&
+      ['candidate', 'released'].includes(docset.availability)) ||
     (docset.status === 'draft' && docset.availability === 'failed');
   return (
-    isPrePublicationRecord &&
+    isReleaseRecord &&
     repoId === 'registry-discovery' &&
     releaseTagPattern.test(product?.version ?? '') &&
     product.ref === `discovery/${product.version}`

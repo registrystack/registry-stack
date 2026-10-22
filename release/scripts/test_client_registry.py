@@ -785,6 +785,53 @@ class BindOptionalDependenciesTest(unittest.TestCase):
         )
 
 
+class BindStackCompatibilityMetadataTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.module = load_module()
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary_directory.cleanup)
+        self.directory = Path(self.temporary_directory.name)
+        self.version = "0.44.0-nightly.20261023.fixture"
+        self.package_json = self.directory / "package.json"
+        self.package_json.write_text(
+            json.dumps(
+                {"name": "@registrystack/client", "version": self.version},
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.compatibility = self.directory / "compatibility.json"
+        metadata = json.loads(
+            (
+                Path(__file__).resolve().parents[2]
+                / "crates/registry-stack-client/compatibility.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.original_baseline = metadata["namespaces"]
+        self.compatibility.write_text(
+            json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
+        )
+
+    def test_binds_stack_compatibility_to_the_staged_package_version(self) -> None:
+        self.module.bind_optional_dependencies(
+            self.package_json, self.version, "stack"
+        )
+
+        metadata = json.loads(self.compatibility.read_text(encoding="utf-8"))
+        self.assertEqual(metadata["sdkPackage"]["version"], self.version)
+        self.assertEqual(metadata["namespaces"], self.original_baseline)
+
+    def test_refuses_missing_stack_compatibility_metadata(self) -> None:
+        self.compatibility.unlink()
+        with self.assertRaisesRegex(
+            self.module.ClientRegistryError, "compatibility metadata"
+        ):
+            self.module.bind_optional_dependencies(
+                self.package_json, self.version, "stack"
+            )
+
+
 class CheckedInClientManifestTest(unittest.TestCase):
     def test_no_client_manifest_binds_platform_versions(self) -> None:
         # The regression the binding exists to prevent: a manifest naming its

@@ -37,8 +37,20 @@ Existing standalone client packages remain available for earlier versions, but
 later releases use this unified entry point.
 
 Wheels cover macOS arm64, Linux arm64 with glibc, and Linux x64 with glibc,
-and require glibc 2.17 or newer on Linux. Install the exact client version that
-matches the deployment.
+and require glibc 2.17 or newer on Linux. Install the client version selected by
+your Registry Stack distribution; Discovery may have a different version.
+
+The installed wheel includes the tested server baseline and compatible patch
+line for Discovery in `registry_client/compatibility.json`:
+
+```python
+import json
+from importlib.resources import files
+
+compatibility = json.loads(
+    files("registry_client").joinpath("compatibility.json").read_text(encoding="utf-8")
+)
+```
 
 The Casework client uses compiled review policies, producer requests/results,
 and human review tasks. Pass a bearer token and a Casework profile on producer,

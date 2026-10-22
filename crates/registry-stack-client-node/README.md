@@ -51,6 +51,16 @@ const appointments = new scheduling.SchedulingClient({
 Each product remains in its own namespace because its routing,
 authentication, errors, and verification rules are different.
 
+## Compatibility metadata
+
+The package includes the tested server baseline and compatible patch line for
+the Discovery namespace. Read the version-matched record through the exported
+JSON path:
+
+```js
+const compatibility = require('@registrystack/client/compatibility.json');
+```
+
 ## TypeScript
 
 A TypeScript consumer also needs the Node type definitions, and must name

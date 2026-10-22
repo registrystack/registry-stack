@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import subprocess
 import sys
+import tarfile
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -16,6 +21,7 @@ PLATFORM_TRIPLES = {
     "linux-x64-gnu": "x86_64-unknown-linux-gnu",
 }
 PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling")
+COMPATIBILITY = ROOT / "crates" / "registry-stack-client" / "compatibility.json"
 
 
 def load_module():
@@ -83,6 +89,57 @@ class SyncRegistryClientNodeDeclarationTest(unittest.TestCase):
                 self.assertNotIn(
                     b"export declare const __napiBindingTarget:", declaration
                 )
+
+
+class SyncRegistryClientNodeCompatibilityTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.module = load_module()
+        self.files = self.module.expected_files()
+        self.path = TARGET / "compatibility.json"
+
+    def test_generates_the_common_compatibility_record_at_the_package_version(self) -> None:
+        expected = json.loads(COMPATIBILITY.read_text(encoding="utf-8"))
+        package = json.loads((TARGET / "package.json").read_text(encoding="utf-8"))
+        expected["sdkPackage"]["version"] = package["version"]
+
+        self.assertEqual(json.loads(self.files[self.path]), expected)
+
+    def test_root_manifest_exports_and_packs_the_compatibility_record(self) -> None:
+        package = json.loads((TARGET / "package.json").read_text(encoding="utf-8"))
+        self.assertIn("compatibility.json", package["files"])
+        self.assertEqual(
+            package["exports"]["./compatibility.json"], "./compatibility.json"
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            environment = os.environ.copy()
+            environment["NPM_CONFIG_CACHE"] = str(
+                Path(temporary_directory) / "npm-cache"
+            )
+            result = subprocess.run(
+                [
+                    "npm",
+                    "pack",
+                    "--ignore-scripts",
+                    "--json",
+                    "--pack-destination",
+                    temporary_directory,
+                ],
+                cwd=TARGET,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            packed = json.loads(result.stdout)
+            self.assertEqual(len(packed), 1)
+            tarball = Path(temporary_directory) / packed[0]["filename"]
+            with tarfile.open(tarball, mode="r:gz") as archive:
+                packaged = archive.extractfile("package/compatibility.json")
+                self.assertIsNotNone(packaged)
+                assert packaged is not None
+                self.assertEqual(packaged.read(), self.files[self.path])
 
 
 CASEWORK_PYTHON_LICENCE = "crates/registry-casework-client-py/LICENSE"

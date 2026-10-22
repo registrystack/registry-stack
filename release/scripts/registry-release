@@ -2317,16 +2317,35 @@ def prepare_selected_context(repo: Path, version: str, release_id: str, unit: st
 
 def validate_stack_component_selection(repo: Path, version: str) -> None:
     selected = component_artifact_versions(repo, version)
+    declared_versions: dict[str, str] = {}
     for artifact in ("discovery", "discoveryctl"):
         package = repo / "crates" / f"registry-{artifact}" / "Cargo.toml"
         if not package.is_file():
             continue
         declared = required_toml(package).get("package", {}).get("version")
+        if isinstance(declared, str):
+            declared_versions[artifact] = declared
         if isinstance(declared, str) and declared != version and artifact not in selected:
             raise ReleasePlanError(
                 f"{artifact} version {declared} differs from Stack {version}; "
                 f"commit a distribution selection in release/distributions/v{version}.json"
             )
+    if (
+        not declared_versions
+        or all(artifact in selected for artifact in declared_versions)
+        or not any(declared == version for declared in declared_versions.values())
+    ):
+        return
+    try:
+        tag = release_units.release_tag("discovery", version)
+    except release_units.UnitRegistryError as exc:
+        raise ReleasePlanError(str(exc)) from exc
+    if local_tag_target(repo, tag) is not None or remote_candidate_tag(repo, tag) is not None:
+        raise ReleasePlanError(
+            f"independent Discovery release tag {tag} already exists; "
+            f"commit a distribution selection in release/distributions/v{version}.json "
+            "instead of republishing its artifacts in the Stack release"
+        )
 
 
 def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[str, Any]:
