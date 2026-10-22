@@ -4,10 +4,12 @@
 
 - `messaging_dispatch_jobs` refuses a `leased` row without a
   `lease_expires_at`, through the corrected shared dispatch job shape. A
-  database created by an earlier release keeps its earlier check: the
-  migration ledger records versions only, so startup does not refuse it, and
-  the dispatcher writes an expiry on every claim in either case. Recreate the
-  database to take the stricter check.
+  v0.42.0 or v0.43.0 database migrates forward in place: `messagingctl apply`
+  runs schema version 101, which replaces the job shape check in one
+  transaction and keeps every message, job, and spent idempotency key.
+  Startup refuses a database at version 100 as not current until `apply` has
+  run. The dispatcher writes an expiry on every claim, so no row it wrote
+  fails the stricter check.
 
 ## 0.43.0 - 2026-10-21
 

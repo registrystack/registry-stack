@@ -23,12 +23,17 @@ use tokio_postgres::Config as PgConfig;
 use crate::config::{describe_secret_failure, DatabaseConfig};
 
 const MESSAGING_MIGRATION: &str = include_str!("../migrations/0100_messaging.sql");
+const DISPATCH_LEASE_EXPIRY_MIGRATION: &str =
+    include_str!("../migrations/0101_dispatch_lease_expiry.sql");
 
 /// Every schema version, in the order it is applied. Readiness requires the
 /// applied set to be exactly this list. The 1.0 baseline is version
 /// [`BASELINE_SCHEMA_VERSION`], above every version a pre-1.0 release
 /// applied; each later migration takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 1] = [(100, MESSAGING_MIGRATION)];
+pub(crate) const MIGRATIONS: [(i64, &str); 2] = [
+    (100, MESSAGING_MIGRATION),
+    (101, DISPATCH_LEASE_EXPIRY_MIGRATION),
+];
 /// The 1.0 baseline schema version. A ledger holding any version below it
 /// was left by a pre-1.0 release, which this release refuses by name.
 const BASELINE_SCHEMA_VERSION: i64 = 100;
@@ -452,8 +457,12 @@ mod tests {
         sql.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
+    /// The released baseline's job table is the dispatch core shape except
+    /// for the one leased-arm clause version 101 adds, and version 101's
+    /// shape is exactly the core's. `postgres_migrate` compares the migrated
+    /// catalog with a fresh core table.
     #[test]
-    fn the_job_table_migration_is_exactly_the_dispatch_core_shape() {
+    fn the_migrated_job_table_is_exactly_the_dispatch_core_shape() {
         let table =
             JobTable::new("public", crate::dispatch::JOB_TABLE, "message_id", "part").unwrap();
         let declared = normalized(&table.create_statements().join("\n").replace("public.", ""));
@@ -463,12 +472,26 @@ mod tests {
         let end = MESSAGING_MIGRATION
             .find("ALTER TABLE messaging_dispatch_jobs")
             .expect("the job table's own constraints");
-        assert_eq!(normalized(&MESSAGING_MIGRATION[start..end]), declared);
+        let expiry = "AND lease_expires_at IS NOT NULL ";
+        assert_eq!(declared.matches(expiry).count(), 1);
+        assert_eq!(
+            normalized(&MESSAGING_MIGRATION[start..end]),
+            declared.replace(expiry, "")
+        );
+        assert!(
+            normalized(DISPATCH_LEASE_EXPIRY_MIGRATION).ends_with(&normalized(&format!(
+                "ALTER TABLE messaging_dispatch_jobs \
+             DROP CONSTRAINT messaging_dispatch_jobs_shape, \
+             ADD CONSTRAINT messaging_dispatch_jobs_shape CHECK ( {} );",
+                JobTable::shape_predicate()
+            )))
+        );
     }
 
     #[test]
     fn the_baseline_is_version_100_and_later_versions_increase() {
         assert_eq!(MIGRATIONS[0].0, 100);
+        assert_eq!(MIGRATIONS[1].0, 101);
         assert!(versions_start_at_baseline_and_increase(&MIGRATIONS));
         assert!(versions_start_at_baseline_and_increase(&[
             (100, ""),
