@@ -161,6 +161,9 @@ const AUTHORED_SOURCE_REDERIVATION_MAX_BYTES: u64 = 1024 * 1024;
 const MAX_DERIVED_SQL_ASSET_BYTES: u64 = 256 * 1024;
 const MAX_PLANNER_TEST_REQUEST_BYTES: u64 = 64 * 1024;
 const PLANNER_TEST_DEADLINE: Duration = Duration::from_secs(1);
+/// The recovery `doctor` names for a database a pre-1.0 release installed,
+/// which `plan`, `apply`, and the maintenance commands name too.
+pub(crate) const PRE_1_0_SCHEMA_RECOVERY: &str = "the database uses the attachment verification schema of a pre-1.0 release, which this release cannot upgrade in place: keep the registry stopped, create a fresh database, rebuild the package with this release's bregctl test and bregctl package, and run bregctl apply --package DIR --initial against it; a backup of this database carries the same schema";
 const UNRECOGNIZED_DATABASE_RECOVERY: &str = "the database does not match this BReg release's catalog and activation ledger; verify the binary, package and database pairing, or restore a verified backup. Retired registry models require a new database. Nothing was changed";
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -6350,6 +6353,18 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 DiagnosticArtifact::PackageActivation,
                 SuggestedAction::CorrectRuntimeConfiguration,
             ),
+            registry_breg::migration::MigrationError::Pre1_0Schema => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.database.pre-1-0-schema",
+                        "database",
+                        &format!("{PRE_1_0_SCHEMA_RECOVERY}. Nothing was changed"),
+                    ),
+                    DiagnosticArtifact::PackageActivation,
+                    SuggestedAction::CorrectRuntimeConfiguration,
+                );
+            }
             registry_breg::migration::MigrationError::RuntimeWriteAuthority(finding) => {
                 return source_failure(
                     command,
@@ -6854,6 +6869,13 @@ fn active_registry_failure(
             "unrecognized",
             "database",
             UNRECOGNIZED_DATABASE_RECOVERY,
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+        ActiveRegistryError::Pre1_0Schema => (
+            "pre-1-0-schema",
+            "database",
+            PRE_1_0_SCHEMA_RECOVERY,
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
@@ -15578,6 +15600,12 @@ fn apply_chain_refusals_name_the_operators_next_command() {
             "apply.database.unrecognized",
             "database",
             "verify the binary, package and database pairing",
+        ),
+        (
+            ApplyLifecycleError::Apply(MigrationError::Pre1_0Schema),
+            "apply.database.pre-1-0-schema",
+            "database",
+            "create a fresh database, rebuild the package with this release's bregctl test and bregctl package, and run bregctl apply --package DIR --initial against it; a backup of this database carries the same schema",
         ),
         (
             ApplyLifecycleError::Apply(MigrationError::RuntimeWriteAuthority(

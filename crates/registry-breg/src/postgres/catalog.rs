@@ -962,6 +962,43 @@ pub(crate) async fn registry_state_shape(
     )
 }
 
+/// Whether the database carries the attachment verification shape a pre-1.0
+/// release installed: the verdict table still holds its own `lease_id`
+/// column, or it exists without the verification job table. Installing from
+/// code never revisits an existing table, so this shape is refused by name
+/// rather than reported as catalog drift a backup would carry too.
+pub(crate) async fn pre_1_0_attachment_verification_present(
+    client: &impl GenericClient,
+) -> std::result::Result<bool, tokio_postgres::Error> {
+    let row = client
+        .query_one(
+            "WITH internal AS (
+                 SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'registry_internal'
+             )
+             SELECT verdict.oid IS NOT NULL
+                    AND (
+                        EXISTS (
+                            SELECT 1 FROM pg_catalog.pg_attribute attribute
+                             WHERE attribute.attrelid = verdict.oid
+                               AND attribute.attname = 'lease_id'
+                               AND NOT attribute.attisdropped
+                        )
+                        OR NOT EXISTS (
+                            SELECT 1 FROM pg_catalog.pg_class jobs
+                             WHERE jobs.relname = 'registry_attachment_verification_jobs'
+                               AND jobs.relnamespace = (SELECT oid FROM internal)
+                        )
+                    )
+               FROM (SELECT NULL) AS one
+               LEFT JOIN pg_catalog.pg_class verdict
+                 ON verdict.relname = 'registry_attachment_verification'
+                AND verdict.relnamespace = (SELECT oid FROM internal)",
+            &[],
+        )
+        .await?;
+    row.try_get(0)
+}
+
 pub(crate) async fn install_registry_state_schema(
     migration: &impl GenericClient,
     runtime_role: &SqlIdentifier,

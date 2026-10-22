@@ -8,6 +8,9 @@ mod postgres_harness;
 #[path = "postgres_package/fingerprint.rs"]
 mod fingerprint_tests;
 
+#[path = "postgres_package/pre_1_0_schema.rs"]
+mod pre_1_0_schema_tests;
+
 #[cfg(feature = "tooling")]
 #[path = "postgres_package/policy_upgrade.rs"]
 mod policy_upgrade_tests;

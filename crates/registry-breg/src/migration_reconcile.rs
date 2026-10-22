@@ -246,7 +246,8 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::ActivationAuditIncomplete
             | MigrationError::ActivationRefusalAuditIncomplete
             | MigrationError::ActivationAuditUnavailable
-            | MigrationError::UnrecognizedDatabase => Self::Unavailable,
+            | MigrationError::UnrecognizedDatabase
+            | MigrationError::Pre1_0Schema => Self::Unavailable,
             MigrationError::OperatorReference => Self::InvalidInput,
             MigrationError::RuntimeWriteAuthority(_)
             | MigrationError::ResumeRolesDiffer { .. }
