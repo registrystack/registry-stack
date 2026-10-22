@@ -108,6 +108,12 @@ const BREG_REFERENCES: &[N] = &[
         "action",
     ),
     N::scoped(
+        "accessProfiles/*/permissions/proposals/*/writableInputs/*",
+        "BReg action input",
+        0,
+        "action",
+    ),
+    N::scoped(
         "accessProfiles/*/permissions/proposals/*/readableContextFields/*",
         "BReg review context field",
         0,

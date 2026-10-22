@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add optional `writableInputs` to Proposal grants. When present, Start refuses
+  a value for any other Action input, and Edit, Revise and Rebase refuse a
+  change to one, with `400 request.invalid` located at `/input/<apiName>`.
+  Grants without the field behave as before and compile to the same output.
+
 ## 0.43.0 - 2026-10-21
 
 - BREAKING: authored display fields reject prohibited Unicode controls and
