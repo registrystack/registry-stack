@@ -18,7 +18,11 @@ import {
   resolveDocsetProductRegions,
   selectedDocset,
 } from '../src/lib/docset-products.mjs';
-import { releaseLabelErrors, UNRELEASED_PRODUCT_VERSION } from './docset-release-products.mjs';
+import {
+  releaseLabelErrors,
+  releaseProductVersion,
+  UNRELEASED_PRODUCT_VERSION,
+} from './docset-release-products.mjs';
 
 const siteRoot = resolve(import.meta.dirname, '..');
 const docsRoot = resolve(siteRoot, 'src/content/docs');
@@ -120,6 +124,16 @@ test('the release label check refuses a release version for an unshipped product
   assert.deepEqual(releaseLabelErrors({ docsets: unmapped, manifests, releaseArtifacts }), [
     'docset v9.0.0 product registry-unknown names no release artifact in docset-release-artifacts.yaml',
   ]);
+});
+
+test('a shipped product label comes from its manifest artifact version', () => {
+  const artifacts = { products: { 'registry-discovery': 'discovery' } };
+  const manifest = { artifacts: { discovery: '1.4.2' } };
+
+  assert.equal(
+    releaseProductVersion('registry-discovery', 'v2.0.0', manifest, artifacts),
+    'v1.4.2',
+  );
 });
 
 test('the release label check leaves docsets before applies_from as published', () => {

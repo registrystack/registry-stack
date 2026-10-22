@@ -19,6 +19,18 @@ function isCanonicalReleaseSourceProduct(docset, product) {
   );
 }
 
+function isDiscoveryReleaseSourceProduct(docset, repoId, product) {
+  const isPrePublicationRecord =
+    (docset.status === 'archived' && docset.availability === 'candidate') ||
+    (docset.status === 'draft' && docset.availability === 'failed');
+  return (
+    isPrePublicationRecord &&
+    repoId === 'registry-discovery' &&
+    releaseTagPattern.test(product?.version ?? '') &&
+    product.ref === `discovery/${product.version}`
+  );
+}
+
 export function isCandidateSourceProduct(docset, product) {
   return (
     docset.status === 'archived' &&
@@ -122,7 +134,8 @@ export function validateDocsets(manifest) {
       }
       const isCurrent = docset.id === manifest.current;
       const isReleaseSourceTag =
-        isCandidateSourceProduct(docset, product) || isFailedTrainProduct(docset, product);
+        isCandidateSourceProduct(docset, product) || isFailedTrainProduct(docset, product) ||
+        isDiscoveryReleaseSourceProduct(docset, repoId, product);
       if (isCurrent && product.ref !== 'HEAD') {
         throw new Error(`${prefix}.products.${repoId}.ref must be HEAD for the current docset`);
       }

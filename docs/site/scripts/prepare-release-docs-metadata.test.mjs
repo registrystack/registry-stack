@@ -55,6 +55,7 @@ products:
 
 async function fixture(t, {
   external = {}, manifestVersion = '0.29.0', releaseId = 'beta-41', sourceRef,
+  artifacts = { 'registry-docs': '0.29.0', evidence: '0.29.0' }, distribution,
 } = {}) {
   const root = await mkdtemp(resolve(tmpdir(), 'prepare-docs-metadata-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -66,8 +67,15 @@ async function fixture(t, {
       release: releaseId, version: manifestVersion, source_tag: 'v0.29.0',
       ...(sourceRef ? { source_ref: sourceRef } : {}),
     },
-    artifacts: { 'registry-docs': '0.29.0', evidence: '0.29.0' }, external,
+    artifacts, external,
   }));
+  if (distribution) {
+    await mkdir(resolve(root, 'release/distributions'), { recursive: true });
+    await writeFile(
+      resolve(root, 'release/distributions/v0.29.0.json'),
+      JSON.stringify(distribution),
+    );
+  }
   await writeFile(resolve(siteRoot, 'src/data/docset-release-artifacts.yaml'), releaseArtifactsSource);
   await writeFile(resolve(siteRoot, 'src/data/docsets.yaml'), docsetsSource);
   await writeFile(resolve(siteRoot, 'src/data/repo-docs.yaml'), repoDocsSource);
@@ -122,6 +130,46 @@ test('pins an unshipped product to the manifest source ref when one is recorded'
     version: 'main source (unreleased)', ref: sourceRef,
   });
   assert.deepEqual(candidate.products['registry-evidence'], { version: 'v0.29.0', ref: sourceRef });
+});
+
+test('pins selected Discovery docs to the original independent release tag and version', async (t) => {
+  const distribution = {
+    schema_version: 'registry-stack.distribution-selection.v1',
+    stack_version: '0.29.0',
+    components: [{ unit: 'discovery', version: '1.4.2', policy: 'compatible-patch' }],
+  };
+  const { prepare, read, write } = await fixture(t, {
+    artifacts: { 'registry-docs': '0.29.0', evidence: '0.29.0', discovery: '1.4.2', discoveryctl: '1.4.2' },
+    distribution,
+  });
+  await write('docsets', docsetsSource.replace(
+    '      registry-coordinator: { version: main source (unreleased), ref: HEAD }',
+    '      registry-coordinator: { version: main source (unreleased), ref: HEAD }\n' +
+      '      registry-discovery: { version: main source (unreleased), ref: HEAD }',
+  ));
+  await write('docset-release-artifacts', `${releaseArtifactsSource}  registry-discovery: discovery\n`);
+
+  await prepare();
+
+  const candidate = YAML.parse(await read('docsets')).docsets.find((entry) => entry.id === 'v0.29.0');
+  assert.deepEqual(candidate.products['registry-discovery'], {
+    version: 'v1.4.2',
+    ref: 'discovery/v1.4.2',
+  });
+  assert.deepEqual(candidate.products['registry-evidence'], {
+    version: 'v0.29.0',
+    ref: 'v0.29.0',
+  });
+});
+
+test('refuses a distribution selection for a different Stack version', async (t) => {
+  const selection = {
+    schema_version: 'registry-stack.distribution-selection.v1',
+    stack_version: '0.28.0',
+    components: [{ unit: 'discovery', version: '1.4.2', policy: 'exact' }],
+  };
+  const { prepare } = await fixture(t, { distribution: selection });
+  await assert.rejects(prepare(), /distribution selection stack_version must match/);
 });
 
 test('refuses a current product that names no release artifact', async (t) => {

@@ -12,6 +12,7 @@ import { docsetPublishesBregOpenApi, docsetPublishesEvidenceOid4vciOpenApi } fro
 const run = promisify(execFile);
 const fetchOpenapi = resolve(import.meta.dirname, 'fetch-openapi.mjs');
 const caseworkPath = 'products/casework/generated/registry-casework.openapi.json';
+const discoveryPath = 'crates/registry-discovery/openapi.json';
 const evidencePath = 'products/evidence/generated/registry-evidence.openapi.json';
 const oid4vciPath = 'products/evidence/generated/registry-evidence-oid4vci.openapi.json';
 const bregPath = 'products/breg/generated/facility/generated/openapi.json';
@@ -36,6 +37,78 @@ function docset(id, availability, evidenceRef, caseworkRef) {
     products,
   };
 }
+
+test('Discovery OpenAPI comes from the independently selected unit tag', async () => {
+  const source = await mkdtemp(join(tmpdir(), 'discovery-openapi-source-'));
+  const root = join(source, 'docs/site');
+  const data = join(root, 'src/data');
+  const output = join(root, 'openapi/registry-discovery.openapi.json');
+  try {
+    await mkdir(join(source, 'crates/registry-discovery'), { recursive: true });
+    await mkdir(join(source, 'products/evidence/generated'), { recursive: true });
+    await mkdir(join(source, 'products/breg/generated/facility/generated'), { recursive: true });
+    await mkdir(data, { recursive: true });
+    await run('git', ['init', '--quiet', source]);
+    await writeFile(join(source, discoveryPath), '{"info":{"version":"selected"}}\n');
+    await writeFile(join(source, evidencePath), '{"info":{"version":"evidence"}}\n');
+    await writeFile(join(source, oid4vciPath), '{"info":{"version":"oid4vci"}}\n');
+    await writeFile(join(source, bregPath), '{"info":{"version":"breg"}}\n');
+    await run('git', ['-C', source, 'add', '.']);
+    await run('git', ['-C', source, '-c', 'user.name=Docs Test',
+      '-c', 'user.email=docs-test@example.invalid', 'commit', '--quiet', '-m', 'discovery release']);
+    await run('git', ['-C', source, 'tag', 'discovery/v1.4.2']);
+    const { stdout } = await run('git', ['-C', source, 'rev-parse', 'HEAD']);
+    const releasedRef = stdout.trim();
+    await writeFile(join(source, discoveryPath), '{"info":{"version":"ambient-stack"}}\n');
+
+    await writeFile(join(data, 'repo-docs.yaml'), YAML.stringify({ repos: {
+      'registry-discovery': {
+        ref: 'HEAD', local: '../..', remote: source, openapi: discoveryPath,
+      },
+      'registry-evidence': {
+        ref: 'HEAD', local: '../..', remote: source, openapi: evidencePath,
+        docs: [{ src: 'README.md' }],
+      },
+    } }));
+    const latest = docset('latest', 'unreleased', 'HEAD');
+    const stackProduct = (version, ref) => ({ version, ref });
+    await writeFile(join(data, 'docsets.yaml'), YAML.stringify({
+      current: 'latest',
+      released: 'v1.0.0',
+      published_archive_limit: 3,
+      docsets: [
+        { ...latest, products: { ...latest.products,
+          'registry-stack': stackProduct('main source', 'HEAD'),
+          'registry-discovery': stackProduct('main source', 'HEAD') } },
+        { ...docset('v1.0.0', 'released', releasedRef), products: {
+          ...docset('v1.0.0', 'released', releasedRef).products,
+          'registry-stack': stackProduct('v1.0.0', releasedRef) } },
+        { ...docset('v2.0.0', 'candidate', 'v2.0.0'), repo_docs_source: 'monorepo',
+          products: {
+            ...docset('v2.0.0', 'candidate', 'v2.0.0').products,
+            'registry-stack': stackProduct('v2.0.0', 'v2.0.0'),
+            'registry-discovery': stackProduct('v1.4.2', 'discovery/v1.4.2') } },
+      ],
+    }));
+
+    const { stdout: log } = await run(process.execPath, [fetchOpenapi], {
+      cwd: root,
+      env: { ...process.env, DOCS_DOCSET: 'v2.0.0' },
+    });
+
+    assert.equal(JSON.parse(await readFile(output, 'utf8')).info.version, 'selected');
+    assert.equal(
+      JSON.parse(await readFile(
+        join(root, 'openapi/registry-discovery.render.openapi.json'),
+        'utf8',
+      )).info.version,
+      'selected',
+    );
+    assert.match(log, /Fetched registry-discovery OpenAPI spec at discovery\/v1 \(clone\)/);
+  } finally {
+    await rm(source, { recursive: true, force: true });
+  }
+});
 
 test('Casework OpenAPI follows current HEAD, excludes v0.29, and pins v0.30 archives', async () => {
   const root = await mkdtemp(join(tmpdir(), 'casework-openapi-refs-'));

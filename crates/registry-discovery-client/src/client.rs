@@ -21,6 +21,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+use crate::wire::{EvidenceTypeResolveWire, ServiceSearchWire};
 use crate::{DiscoveryClientError, DiscoveryProblem};
 
 const JSON: &str = "application/json";
@@ -186,13 +187,14 @@ impl DiscoveryClient {
     ) -> Result<EvidenceTypeResolveResponse, DiscoveryClientError> {
         validate_resolve_request(&request)?;
         let response: EvidenceTypeResolveResponse = self
-            .exchange(
+            .exchange::<EvidenceTypeResolveWire, _>(
                 Method::POST,
                 "v1/evidence-types/resolve",
                 None,
                 Some(&request),
             )
-            .await?;
+            .await?
+            .into();
         validate_resolve_response(&request, &response)?;
         Ok(response)
     }
@@ -204,13 +206,14 @@ impl DiscoveryClient {
         validate_service_filters(&filters).map_err(|_| DiscoveryClientError::Query)?;
         let query = service_query(&filters)?;
         let response: ServiceSearchResponse = self
-            .exchange(
+            .exchange::<ServiceSearchWire, _>(
                 Method::GET,
                 "v1/services",
                 Some(&query),
                 Option::<&()>::None,
             )
-            .await?;
+            .await?
+            .into();
         validate_search_response(&filters, &response)?;
         Ok(response)
     }
@@ -370,7 +373,6 @@ fn strict_decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, DiscoveryClient
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ProblemBody {
     #[serde(rename = "type")]
     type_uri: String,
@@ -405,12 +407,53 @@ fn problem_from_response(
         {
             DiscoveryProblem::Unavailable
         }
+        _ if known_problem_type(&body.type_uri) => return Err(DiscoveryClientError::Protocol),
+        _ if valid_unrecognized_problem(&body, status) => {
+            return Ok(DiscoveryClientError::UnrecognizedProblem {
+                status: status.as_u16(),
+            })
+        }
         _ => return Err(DiscoveryClientError::Protocol),
     };
     Ok(DiscoveryClientError::Problem {
         status: status.as_u16(),
         problem,
     })
+}
+
+fn known_problem_type(type_uri: &str) -> bool {
+    matches!(
+        type_uri,
+        "https://id.registrystack.org/problems/registry-discovery/invalid-request"
+            | "https://id.registrystack.org/problems/registry-discovery/not-found"
+            | "https://id.registrystack.org/problems/registry-discovery/result-bound-exceeded"
+            | "https://id.registrystack.org/problems/registry-discovery/unavailable"
+    )
+}
+
+fn valid_unrecognized_problem(body: &ProblemBody, status: StatusCode) -> bool {
+    const TYPE_BASE: &str = "https://id.registrystack.org/problems/registry-discovery/";
+    let Some(code) = body.type_uri.strip_prefix(TYPE_BASE) else {
+        return false;
+    };
+    (status.is_client_error() || status.is_server_error())
+        && valid_problem_code(code)
+        && !body.title.is_empty()
+        && body.title.chars().count() <= 128
+        && !body.title.chars().any(char::is_control)
+        && body.type_uri.chars().count() <= 256
+        && url::Url::parse(&body.type_uri).is_ok_and(|uri| uri.as_str() == body.type_uri)
+}
+
+fn valid_problem_code(code: &str) -> bool {
+    !code.is_empty()
+        && code.len() <= 128
+        && code.split('-').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        })
 }
 
 fn validate_resolve_request(
@@ -571,6 +614,13 @@ mod tests {
         UppercaseProblemMediaType,
         UnexpectedSuccessStatus,
         WrongProblemTitle,
+        AdditiveResponses,
+        AdditiveProblem,
+        UnknownProblem,
+        UnknownServiceKind,
+        InvalidKnownFieldType,
+        DuplicateResponseMember,
+        DuplicateNestedResponseMember,
         WrongMediaType,
         DuplicateMediaType,
     }
@@ -675,6 +725,16 @@ mod tests {
                 PROBLEM_JSON,
                 br#"{"type":"https://id.registrystack.org/problems/registry-discovery/invalid-request","title":"Another title","status":400}"#.to_vec(),
             ),
+            Mode::AdditiveProblem => response_with_media_type(
+                StatusCode::BAD_REQUEST,
+                PROBLEM_JSON,
+                br#"{"type":"https://id.registrystack.org/problems/registry-discovery/invalid-request","title":"Invalid request","status":400,"futureRecovery":{"retry":false}}"#.to_vec(),
+            ),
+            Mode::UnknownProblem => response_with_media_type(
+                StatusCode::CONFLICT,
+                PROBLEM_JSON,
+                br#"{"type":"https://id.registrystack.org/problems/registry-discovery/future-conflict","title":"Future conflict","status":409,"code":"future-conflict","futureRecovery":{"retry":false}}"#.to_vec(),
+            ),
             Mode::WrongMediaType => search_response("text/plain"),
             Mode::DuplicateMediaType => {
                 let mut response = search_response(JSON);
@@ -683,6 +743,59 @@ mod tests {
                     reqwest::header::HeaderValue::from_static(JSON),
                 );
                 response
+            }
+            Mode::DuplicateResponseMember => response_with_media_type(
+                StatusCode::OK,
+                JSON,
+                br#"{"catalogRevision":"sha256:1111111111111111111111111111111111111111111111111111111111111111","catalogRevision":"sha256:1111111111111111111111111111111111111111111111111111111111111111","items":[]}"#.to_vec(),
+            ),
+            Mode::DuplicateNestedResponseMember => response_with_media_type(
+                StatusCode::OK,
+                JSON,
+                br#"{"requirementId":"urn:requirement","mappingRevision":"sha256:2222222222222222222222222222222222222222222222222222222222222222","alternatives":[{"evidenceTypeListId":"urn:list","evidenceTypeListId":"urn:list","evidenceTypeIds":["urn:evidence"],"mappingId":"urn:mapping","mappingAuthorityId":"urn:authority"}]}"#.to_vec(),
+            ),
+            Mode::UnknownServiceKind => {
+                let service = service();
+                let mut value = serde_json::to_value(service).unwrap();
+                value["serviceKind"] = json!("future-service");
+                json_response(json!({
+                    "catalogRevision": format!("sha256:{}", "1".repeat(64)),
+                    "items": [value]
+                }))
+            }
+            Mode::InvalidKnownFieldType => {
+                let service = service();
+                json_response(json!({
+                    "catalogRevision": false,
+                    "items": [service]
+                }))
+            }
+            Mode::AdditiveResponses
+                if request.uri().path().ends_with("evidence-types/resolve") =>
+            {
+                json_response(json!({
+                    "requirementId": "urn:requirement",
+                    "mappingRevision": format!("sha256:{}", "2".repeat(64)),
+                    "alternatives": [{
+                        "evidenceTypeListId": "urn:list",
+                        "evidenceTypeIds": ["urn:evidence"],
+                        "mappingId": "urn:mapping",
+                        "mappingAuthorityId": "urn:authority",
+                        "futureAlternativeMetadata": {"label": "ignored"}
+                    }],
+                    "futureResolutionMetadata": {"label": "ignored"}
+                }))
+            }
+            Mode::AdditiveResponses => {
+                let service = service();
+                let revision = catalog_revision(std::slice::from_ref(&service)).unwrap();
+                let mut value = serde_json::to_value(service).unwrap();
+                value["futureServiceMetadata"] = json!({"label": "ignored"});
+                json_response(json!({
+                    "catalogRevision": revision,
+                    "items": [value],
+                    "futureSearchMetadata": {"label": "ignored"}
+                }))
             }
             Mode::Valid if request.uri().path().ends_with("evidence-types/resolve") => {
                 json_response(json!({
@@ -920,6 +1033,95 @@ mod tests {
         let (client, _) = client(Mode::WrongProblemTitle, 1024 * 1024).await;
         assert_eq!(
             client.search_services(ServiceFilters::default()).await,
+            Err(DiscoveryClientError::Protocol)
+        );
+    }
+
+    #[tokio::test]
+    async fn real_client_ignores_additive_response_members_at_every_response_level() {
+        let (client, _) = client(Mode::AdditiveResponses, 1024 * 1024).await;
+
+        let searched = client
+            .search_services(ServiceFilters::default())
+            .await
+            .expect("an older client accepts additive search response members");
+        assert_eq!(searched.items[0].record_id, "record-a");
+
+        let resolved = client
+            .resolve_evidence_types(EvidenceTypeResolveRequest {
+                requirement_id: "urn:requirement".into(),
+                jurisdiction: None,
+            })
+            .await
+            .expect("an older client accepts additive resolution response members");
+        assert_eq!(resolved.alternatives[0].evidence_type_list_id, "urn:list");
+    }
+
+    #[tokio::test]
+    async fn problem_extensions_are_ignored_for_a_known_problem() {
+        let (client, _) = client(Mode::AdditiveProblem, 1024 * 1024).await;
+        assert_eq!(
+            client.search_services(ServiceFilters::default()).await,
+            Err(DiscoveryClientError::Problem {
+                status: 400,
+                problem: DiscoveryProblem::InvalidRequest,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn unrecognized_problem_types_fall_back_to_http_status_without_service_values() {
+        let (client, _) = client(Mode::UnknownProblem, 1024 * 1024).await;
+        let error = client
+            .search_services(ServiceFilters::default())
+            .await
+            .expect_err("an unrecognized problem remains an HTTP error");
+        assert_eq!(
+            error,
+            DiscoveryClientError::UnrecognizedProblem { status: 409 }
+        );
+        let rendered = format!("{error:?} {error}");
+        assert!(!rendered.contains("future-conflict"));
+        assert!(!rendered.contains("Future conflict"));
+        assert!(!rendered.contains("futureRecovery"));
+    }
+
+    #[tokio::test]
+    async fn unknown_known_field_meaning_is_refused() {
+        let (client, _) = client(Mode::UnknownServiceKind, 1024 * 1024).await;
+        assert_eq!(
+            client.search_services(ServiceFilters::default()).await,
+            Err(DiscoveryClientError::Protocol)
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_known_response_fields_are_refused() {
+        let (client, _) = client(Mode::InvalidKnownFieldType, 1024 * 1024).await;
+        assert_eq!(
+            client.search_services(ServiceFilters::default()).await,
+            Err(DiscoveryClientError::Protocol)
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_response_members_are_still_refused_at_every_level() {
+        let (search_client, _) = client(Mode::DuplicateResponseMember, 1024 * 1024).await;
+        assert_eq!(
+            search_client
+                .search_services(ServiceFilters::default())
+                .await,
+            Err(DiscoveryClientError::Protocol)
+        );
+
+        let (resolve_client, _) = client(Mode::DuplicateNestedResponseMember, 1024 * 1024).await;
+        assert_eq!(
+            resolve_client
+                .resolve_evidence_types(EvidenceTypeResolveRequest {
+                    requirement_id: "urn:requirement".into(),
+                    jurisdiction: None,
+                })
+                .await,
             Err(DiscoveryClientError::Protocol)
         );
     }

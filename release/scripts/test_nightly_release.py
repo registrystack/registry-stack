@@ -176,7 +176,9 @@ class NightlyTest(unittest.TestCase):
             )
             binary = name.split(f"-v{base}-", 1)[0]
             asset = directory / name.replace(f"v{base}", tag)
-            version = f"{binary} {tag[1:]}"
+            version = (
+                f"{binary} {nightly.expected_binary_version(binary, tag[1:])}"
+            )
             if binary == "registry-render":
                 source = (nightly.ROOT / "crates/registry-render/src/lib.rs").read_text()
                 typst = re.search(r'pub const TYPST_PIN: &str = "([^"]+)";', source)[1]
@@ -259,6 +261,47 @@ class NightlyTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), f"{BASE} {SHA}")
+
+    def test_discovery_nightly_uses_its_selected_source_package_version(self):
+        source = self.root / "source"
+        for crate in ("registry-discovery", "registry-discoveryctl"):
+            manifest = source / "crates" / crate / "Cargo.toml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text('[package]\nversion = "1.7.2"\n')
+
+        nightly_version = TAG.removeprefix("v")
+        self.assertEqual(
+            f"1.7.2-nightly.20261002.{SHA}",
+            nightly.expected_binary_version(
+                "discovery",
+                nightly_version,
+                root=source,
+            ),
+        )
+        self.assertEqual(
+            f"1.7.2-nightly.20261002.{SHA}",
+            nightly.expected_binary_version(
+                "discoveryctl",
+                nightly_version,
+                root=source,
+            ),
+        )
+        self.assertEqual(
+            nightly_version,
+            nightly.expected_binary_version("breg", nightly_version, root=source),
+        )
+
+        with (
+            patch.object(nightly, "ROOT", source),
+            patch.object(
+                sys,
+                "argv",
+                ["nightly_release.py", "expected-version", "discovery", nightly_version],
+            ),
+            contextlib.redirect_stdout(output := io.StringIO()),
+        ):
+            self.assertEqual(0, nightly.main())
+        self.assertEqual(f"1.7.2-nightly.20261002.{SHA}", output.getvalue().strip())
 
     def test_old_v1_0_39_manifest_with_relay_remains_readable(self):
         path = self.root / "old-nightly.json"

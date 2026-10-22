@@ -57,7 +57,7 @@ def validate_nightly_tag(
 
 
 def rosters(
-    version: str, nightly_tag: str | None = None
+    version: str, nightly_tag: str | None = None, *, exclude_discovery: bool = False
 ) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
     match = VERSION.fullmatch(version)
     if match is None:
@@ -66,11 +66,11 @@ def rosters(
     tag = nightly_tag or f"v{version}"
     core: list[str] = []
     image_bins: list[tuple[str, str]] = []
-    if parsed >= (0, 24, 0):
+    if parsed >= (0, 24, 0) and not exclude_discovery:
         discovery = f"discovery-{tag}-linux-amd64"
         core.append(discovery)
         image_bins.append(("discovery", discovery))
-    if release_roster.discoveryctl_in_release(parsed):
+    if release_roster.discoveryctl_in_release(parsed) and not exclude_discovery:
         core.append(f"discoveryctl-{tag}-linux-amd64")
     breg: list[str] = []
     if parsed >= (0, 26, 0):
@@ -280,9 +280,10 @@ def merge(
     output: Path,
     builder_image: str,
     nightly_tag: str | None = None,
+    exclude_discovery: bool = False,
 ) -> None:
     validate_nightly_tag(version, source_sha, nightly_tag)
-    shard_rosters, image_roster = rosters(version, nightly_tag)
+    shard_rosters, image_roster = rosters(version, nightly_tag, exclude_discovery=exclude_discovery)
     if not builder_image or "\n" in builder_image:
         raise ShardError("pinned builder image must be one nonempty line")
     if SOURCE_SHA.fullmatch(source_sha) is None:
@@ -403,6 +404,7 @@ def main() -> int:
     parser.add_argument("--version", required=True)
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--nightly-tag")
+    parser.add_argument("--exclude-unit", choices=["discovery"])
     parser.add_argument("--core", required=True, type=Path)
     parser.add_argument("--breg", required=True, type=Path)
     parser.add_argument("--casework", type=Path)
@@ -423,6 +425,7 @@ def main() -> int:
             output=args.output,
             builder_image=args.builder_image,
             nightly_tag=args.nightly_tag,
+            exclude_discovery=args.exclude_unit == "discovery",
         )
     except (OSError, UnicodeError, ShardError) as error:
         parser.error(str(error))

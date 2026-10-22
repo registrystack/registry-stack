@@ -324,7 +324,7 @@ jobs:
               "ghcr.io/registrystack/${name}-candidate:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             test "$(crane digest "${reference}")" = "${digest}"
             observed="$(docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges "${reference}" --version)"
-            expected="${name} ${NIGHTLY_VERSION}"
+            expected="${name} $(python3 release/scripts/nightly_release.py expected-version "${name}" "${NIGHTLY_VERSION}")"
             if [[ "${name}" == registry-render ]]; then
               typst_pin="$(sed -n 's/^pub const TYPST_PIN: &str = "\([^" ]*\)";$/\1/p' crates/registry-render/src/lib.rs)"
               test -n "${typst_pin}"

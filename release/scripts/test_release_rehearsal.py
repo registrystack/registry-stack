@@ -20,16 +20,105 @@ SETUP_GO_ACTION = "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e"
 
 
 class ReleaseRehearsalTest(unittest.TestCase):
+    def test_discovery_unit_reuses_only_the_canonical_discovery_path(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        document = yaml.safe_load(text)
+        triggers = document.get("on", document.get(True))
+        unit_input = triggers["workflow_dispatch"]["inputs"]["unit"]
+        self.assertEqual(
+            {
+                "description": "Release unit to rehearse",
+                "required": True,
+                "default": "stack",
+                "type": "choice",
+                "options": ["stack", "discovery"],
+            },
+            unit_input,
+        )
+
+        validate = document["jobs"]["validate"]
+        onboarding = next(
+            step
+            for step in validate["steps"]
+            if step.get("name") == "Check complete release image onboarding"
+        )
+        self.assertEqual("${{ inputs.unit }}", onboarding["env"]["REHEARSAL_UNIT"])
+        self.assertIn('--unit "${REHEARSAL_UNIT}"', onboarding["run"])
+
+        rehearse = document["jobs"]["rehearse"]
+        rehearsal = rehearse["steps"][-1]
+        self.assertEqual("${{ inputs.unit }}", rehearsal["env"]["REHEARSAL_UNIT"])
+        self.assertIn('--unit "${REHEARSAL_UNIT}"', rehearsal["run"])
+        for step in rehearse["steps"]:
+            if step.get("name") in {
+                "Setup Node",
+                "Install exact docs dependencies",
+            }:
+                self.assertEqual("${{ inputs.unit == 'stack' }}", step.get("if"))
+
+        binary_job = document["jobs"]["canonical-linux-binaries"]
+        self.assertEqual(
+            "${{ inputs.unit == 'discovery' && fromJSON('[\"discovery\"]') || fromJSON('[\"core\",\"breg\",\"casework\",\"scheduling\",\"messaging\"]') }}",
+            binary_job["strategy"]["matrix"]["group"],
+        )
+
+        canonical = document["jobs"]["canonical-linux"]
+        steps = canonical["steps"]
+        discovery_download = next(
+            step
+            for step in steps
+            if step.get("name") == "Download canonical Discovery binary shard"
+        )
+        self.assertEqual("${{ inputs.unit == 'discovery' }}", discovery_download["if"])
+        discovery_merge = next(
+            step
+            for step in steps
+            if step.get("name") == "Merge and smoke the Discovery payload"
+        )
+        self.assertEqual("${{ inputs.unit == 'discovery' }}", discovery_merge["if"])
+        self.assertIn("unit_release_pipeline.py merge-shard", discovery_merge["run"])
+        self.assertIn("--shard binary-shards/discovery", discovery_merge["run"])
+        self.assertIn("--builder-image", discovery_merge["run"])
+        discovery_image = next(
+            step
+            for step in steps
+            if step.get("name") == "Build the canonical Discovery image"
+        )
+        self.assertEqual("${{ inputs.unit == 'discovery' }}", discovery_image["if"])
+        self.assertIn("build-release-image.sh", discovery_image["run"])
+        self.assertIn('RELEASE_IMAGE_OCI_LAYOUT="${layout}"', discovery_image["run"])
+        discovery_stage = next(
+            step
+            for step in steps
+            if step.get("name") == "Stage and smoke the Discovery installer pair"
+        )
+        self.assertEqual("${{ inputs.unit == 'discovery' }}", discovery_stage["if"])
+        self.assertIn("unit_release_pipeline.py stage-payload", discovery_stage["run"])
+        self.assertIn("--binaries dist/bin", discovery_stage["run"])
+        self.assertEqual(
+            "${{ inputs.unit == 'stack' }}",
+            document["jobs"]["node-clients"]["if"],
+        )
+
+        script = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("--unit stack|discovery", script)
+        self.assertIn('tag="discovery/v${VERSION}"', script)
+        self.assertIn("--unit discovery", script)
+        discovery_branch = script.split('if [[ "${UNIT}" == discovery ]]; then', 1)[1]
+        self.assertNotIn("npm run", discovery_branch.split("else", 1)[0])
+
     def test_advisory_bootstrap_cannot_qualify_as_normal_rehearsal(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         for directory in ("release/docker", "release/security"):
             shutil.copytree(ROOT / directory, root / directory)
+        shutil.copy2(ROOT / "release/units.yaml", root / "release/units.yaml")
         for relative in (
             "release/scripts/release_candidate.py",
             "release/scripts/release_roster.py",
             "release/scripts/rstack_components.py",
+            "release/scripts/release_units.py",
             "release/scripts/build-release-binaries.sh",
             "release/scripts/build-release-image.sh",
             "release/scripts/cleanup-release-candidates.py",
@@ -56,7 +145,11 @@ class ReleaseRehearsalTest(unittest.TestCase):
             if step.get("name") == "Setup Node"
         ))
         # Exercise the current post-retirement inventory.
-        env = {**os.environ, "REHEARSAL_VERSION": "0.39.0"}
+        env = {
+            **os.environ,
+            "REHEARSAL_UNIT": "stack",
+            "REHEARSAL_VERSION": "0.39.0",
+        }
         for advisory, code in (("false", 1), ("true", 0), ("invalid", 2)):
             with self.subTest(advisory=advisory):
                 result = subprocess.run(
@@ -172,10 +265,19 @@ class ReleaseRehearsalTest(unittest.TestCase):
             if "advisory" in step.get("name", "").lower()
         ]
         self.assertEqual(4, len(advisory_steps))
+        advisory_buildx = next(
+            step for step in advisory_steps if step.get("id") == "advisory-buildx"
+        )
+        self.assertEqual(
+            "${{ inputs.unit == 'discovery' || inputs.advisory_evidence }}",
+            advisory_buildx["if"],
+        )
         self.assertTrue(
             all(
-                step.get("if") == "${{ inputs.advisory_evidence }}"
+                step.get("if")
+                == "${{ inputs.unit == 'stack' && inputs.advisory_evidence }}"
                 for step in advisory_steps
+                if step is not advisory_buildx
             )
         )
         candidate = yaml.safe_load(
@@ -222,8 +324,8 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertNotIn("ghcr.io", canonical_without_mirror)
         binary_job = document["jobs"]["canonical-linux-binaries"]
         self.assertFalse(binary_job["strategy"]["fail-fast"])
-        self.assertEqual(
-            ["core", "breg", "casework", "scheduling", "messaging"],
+        self.assertIn(
+            'fromJSON(\'["core","breg","casework","scheduling","messaging"]\')',
             binary_job["strategy"]["matrix"]["group"],
         )
         self.assertEqual(

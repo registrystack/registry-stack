@@ -52,6 +52,10 @@ pub enum DiscoveryClientError {
         status: u16,
         problem: DiscoveryProblem,
     },
+    /// A valid Problem whose type is newer than this client. Only its HTTP
+    /// status carries semantics; service-authored text and extensions are discarded.
+    #[error("Discovery refused or failed the request: status {status}, unrecognized problem type")]
+    UnrecognizedProblem { status: u16 },
     #[error("the Discovery response did not satisfy its closed wire contract")]
     Protocol,
 }
@@ -86,6 +90,7 @@ mod tests {
                 status: 503,
                 problem: DiscoveryProblem::Unavailable,
             },
+            DiscoveryClientError::UnrecognizedProblem { status: 409 },
         ];
         for error in errors {
             let rendered = format!("{error:?} {error}");

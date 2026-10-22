@@ -151,7 +151,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not self.path.startswith("/v1/services"):
             self.send_error(404)
             return
-        self._json({"catalogRevision": DIGEST, "items": [SERVICE]})
+        self._json({
+            "catalogRevision": DIGEST,
+            "items": [{
+                **SERVICE,
+                "futureServiceMetadata": {"label": "ignored"},
+            }],
+            "futureSearchMetadata": {"label": "ignored"},
+        })
 
     def do_POST(self) -> None:
         if self.path != "/v1/evidence-types/resolve":
@@ -165,7 +172,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "evidenceTypeIds": ["urn:example:evidence-type"],
                 "mappingId": "urn:example:mapping",
                 "mappingAuthorityId": "urn:example:mapping-authority",
+                "futureAlternativeMetadata": {"label": "ignored"},
             }],
+            "futureResolutionMetadata": {"label": "ignored"},
         })
 
     def _json(self, value: object) -> None:
@@ -190,6 +199,28 @@ class ProblemHandler(http.server.BaseHTTPRequestHandler):
             "status": status,
         }).encode()
         self.send_response(status)
+        self.send_header("Content-Type", "application/problem+json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+class UnknownProblemHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        body = json.dumps({
+            "type": (
+                "https://id.registrystack.org/problems/registry-discovery/"
+                "future-conflict"
+            ),
+            "title": "Future conflict",
+            "status": 409,
+            "code": "future-conflict",
+            "futureRecovery": {"retry": False},
+        }).encode()
+        self.send_response(409)
         self.send_header("Content-Type", "application/problem+json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -240,6 +271,13 @@ class DiscoveryClientTests(unittest.TestCase):
             resolved = client.resolve_evidence_types({
                 "requirementId": "urn:example:requirement",
             })
+            self.assertNotIn("futureSearchMetadata", found)
+            self.assertNotIn("futureServiceMetadata", found["items"][0])
+            self.assertNotIn("futureResolutionMetadata", resolved)
+            self.assertNotIn(
+                "futureAlternativeMetadata",
+                resolved["alternatives"][0],
+            )
             resolution = select_evidence_alternative(resolved)
             request = {
                 "recordId": "record-a",
@@ -263,6 +301,29 @@ class DiscoveryClientTests(unittest.TestCase):
             thread.join()
 
         self.assertEqual(json.loads(json.dumps(selection))["recordId"], "record-a")
+
+    def test_an_unrecognized_problem_uses_only_http_status_semantics(self) -> None:
+        server = http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            UnknownProblemHandler,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = DiscoveryClient(f"http://127.0.0.1:{server.server_port}/")
+            with self.assertRaises(DiscoveryClientError) as caught:
+                client.search_evidence_services({
+                    "evidenceTypeId": "urn:example:evidence-type",
+                })
+            self.assertEqual(caught.exception.kind, "problem")
+            self.assertEqual(caught.exception.status, 409)
+            self.assertIsNone(caught.exception.problem)
+            self.assertNotIn("future-conflict", str(caught.exception))
+            self.assertNotIn("Future conflict", str(caught.exception))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
 
     def test_exact_local_acceptance_precedes_credentials_and_native_io(self) -> None:
         selection = evidence_selection()

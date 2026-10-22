@@ -613,7 +613,7 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertIn("candidate/release-candidate-manifest.json", upload)
         self.assertIn(
-            "candidate/registry-stack-${{ needs.validate.outputs.tag }}-candidate.tar.gz",
+            "candidate/${{ needs.validate.outputs.prefix }}-${{ needs.validate.outputs.asset_tag }}-candidate.tar.gz",
             upload,
         )
         self.assertNotIn("candidate-receipt", upload)

@@ -694,7 +694,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertEqual("validate", shards["needs"])
         self.assertFalse(shards["strategy"]["fail-fast"])
         self.assertEqual(
-            ["core", "breg", "casework", "scheduling", "messaging"],
+            "${{ fromJSON(needs.validate.outputs.binary_groups) }}",
             shards["strategy"]["matrix"]["group"],
         )
         checkout = shards["steps"][0]
@@ -721,7 +721,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         downloads = [
             step for step in consumer["steps"] if "download-artifact@" in str(step)
         ]
-        self.assertEqual(5, len(downloads))
+        self.assertEqual(6, len(downloads))
         self.assertEqual(
             {
                 "binary-shards/core",
@@ -729,6 +729,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                 "binary-shards/casework",
                 "binary-shards/scheduling",
                 "binary-shards/messaging",
+                "binary-shards/discovery",
             },
             {step["with"]["path"] for step in downloads},
         )
@@ -1807,6 +1808,53 @@ class MacOSFipsWorkflowStructureTest(unittest.TestCase):
             self.assertIn('trap \'mv -- "${hidden_build_root}" "${build_root}"\' EXIT', smoke)
 
 
+class IndependentUnitWorkflowTest(unittest.TestCase):
+    def test_distribution_installs_original_bytes_and_exercises_packaged_sdk(self):
+        _, document = workflow("release-candidate.yml")
+        steps = document["jobs"]["assemble"]["steps"]
+        smoke = next(step for step in steps if step.get("name") ==
+                     "Install carried-forward Discovery and smoke the current unified SDK")
+        self.assertEqual(smoke["if"], "needs.validate.outputs.exclude_discovery == 'true'")
+        self.assertIn("release_distribution.py install", smoke["run"])
+        self.assertIn("smoke_discovery_distribution.py", smoke["run"])
+        self.assertIn('--client-tarball "candidate/bundle-root/registrystack-client-', smoke["run"])
+        setup = next(step for step in steps if step.get("name") == "Install Node for the distribution SDK smoke")
+        self.assertEqual(setup["with"]["node-version"], "24.11.0")
+
+    def test_publication_binds_both_verifiers_to_selected_unit(self):
+        _, document = workflow("release.yml")
+        step = next(step for step in document["jobs"]["verify"]["steps"]
+                    if step.get("name") == "Verify binding, candidate, and attestations")
+        for command in ("verify-tag-binding", "verify-candidate"):
+            invocation = step["run"].split(f"release_candidate.py {command}", 1)[1].split("\n          ", 1)[0]
+            self.assertIn('--unit "${{ steps.identity.outputs.unit }}"', invocation)
+
+    def test_discovery_uses_shared_candidate_with_no_unrelated_build_jobs(self):
+        text, document = workflow("release-candidate.yml")
+        jobs = document["jobs"]
+        for name in ("clients", "build-docs", "build-platforms", "build-macos-platforms"):
+            self.assertEqual(jobs[name]["if"], "needs.validate.outputs.unit == 'stack'")
+        self.assertIn("needs.build-canonical.result == 'success'", jobs["assemble"]["if"])
+        self.assertIn("needs.validate.outputs.unit == 'discovery'", jobs["assemble"]["if"])
+        self.assertIn("binary_groups='[\"discovery\"]'", text)
+        self.assertIn("unsupported release unit", text)
+        self.assertIn("'$tag | @uri'", text)
+        self.assertIn('releases/tags/${encoded_tag}', text)
+        self.assertIn("REGISTRY_PRODUCT_RELEASE_TAG", (ROOT / "release/scripts/build-release-binaries.sh").read_text())
+        for step in jobs["build-canonical"]["steps"]:
+            if "download-artifact@" in str(step):
+                expected = "discovery" if step["with"]["path"].endswith("/discovery") else "stack"
+                self.assertEqual(step["if"], f"needs.validate.outputs.unit == '{expected}'")
+
+    def test_scoped_publication_never_replaces_recommended_latest(self):
+        text, document = workflow("release.yml")
+        self.assertIn("latest_args+=(-f make_latest=false)", text)
+        self.assertIn("latest_args+=(--latest=false)", text)
+        self.assertIn("needs.verify.outputs.unit == 'stack'", document["jobs"]["publish-identifiers"]["if"])
+        self.assertIn("client_registries=false", text)
+        self.assertIn(".release.unit", text)
+
+
 class PublicationWorkflowStructureTest(unittest.TestCase):
     def test_is_a_manual_main_workflow_with_recoverable_jobs(self) -> None:
         text, document = workflow("release.yml")
@@ -1881,7 +1929,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         )
         self.assertEqual(identity["env"]["RELEASE_TAG"], "${{ inputs.tag }}")
         self.assertNotIn("${{ inputs.tag }}", identity["run"])
-        self.assertIn('"${tag%%.*}" != v0', identity["run"])
+        self.assertIn('"${unit}" == stack && "${asset_tag%%.*}" != v0', identity["run"])
         self.assertIn('git cat-file -t "refs/tags/${tag}"', text)
         self.assertIn("git merge-base --is-ancestor", text)
         self.assertIn("promotion_revision", text)
@@ -2019,8 +2067,8 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         )
         current_retryable_names = (
             "SHA256SUMS",
-            '"registry-stack-${tag}-SHA256SUMS.sigstore.json"',
-            '"registry-stack-${tag}-SHA256SUMS.intoto.jsonl"',
+            '"${{ needs.verify.outputs.asset_prefix }}-SHA256SUMS.sigstore.json"',
+            '"${{ needs.verify.outputs.asset_prefix }}-SHA256SUMS.intoto.jsonl"',
         )
         retryable_roster = stage[
             stage.index("printf '%s\\n'") : stage.index(
@@ -2146,7 +2194,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertIn("cosign sign-blob --yes", steps[sign]["run"])
         self.assertNotIn("gh release upload", steps[sign]["run"])
         provenance_asset = (
-            'release-assets/registry-stack-${tag}-SHA256SUMS.intoto.jsonl'
+            'release-assets/${{ needs.verify.outputs.asset_prefix }}-SHA256SUMS.intoto.jsonl'
         )
         self.assertEqual(
             steps[upload]["env"]["PROVENANCE_BUNDLE"],
@@ -2170,7 +2218,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             recheck,
         )
         self.assertIn(
-            '"draft/registry-stack-${tag}-SHA256SUMS.intoto.jsonl"',
+            '"draft/${{ needs.verify.outputs.asset_prefix }}-SHA256SUMS.intoto.jsonl"',
             recheck,
         )
         self.assertIn(

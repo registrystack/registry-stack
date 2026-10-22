@@ -135,7 +135,11 @@ test('search, resolve, and inert exact selection use the Rust client', async () 
   const server = http.createServer((request, response) => {
     response.setHeader('content-type', 'application/json');
     if (request.method === 'GET' && request.url.startsWith('/v1/services')) {
-      response.end(JSON.stringify({ catalogRevision: digest, items: [service] }));
+      response.end(JSON.stringify({
+        catalogRevision: digest,
+        items: [{ ...service, futureServiceMetadata: { label: 'ignored' } }],
+        futureSearchMetadata: { label: 'ignored' },
+      }));
       return;
     }
     if (request.method === 'POST' && request.url === '/v1/evidence-types/resolve') {
@@ -147,7 +151,9 @@ test('search, resolve, and inert exact selection use the Rust client', async () 
           evidenceTypeIds: ['urn:example:evidence-type'],
           mappingId: 'urn:example:mapping',
           mappingAuthorityId: 'urn:example:mapping-authority',
+          futureAlternativeMetadata: { label: 'ignored' },
         }],
+        futureResolutionMetadata: { label: 'ignored' },
       }));
       return;
     }
@@ -173,6 +179,10 @@ test('search, resolve, and inert exact selection use the Rust client', async () 
   assert.equal(selection.endpointUrl, service.endpointUrl);
   assert.equal(selection.originContentDigest, digest);
   assert.equal(selection.evidenceResolution.requirementId, 'urn:example:requirement');
+  assert.equal(Object.hasOwn(found, 'futureSearchMetadata'), false);
+  assert.equal(Object.hasOwn(found.items[0], 'futureServiceMetadata'), false);
+  assert.equal(Object.hasOwn(resolved, 'futureResolutionMetadata'), false);
+  assert.equal(Object.hasOwn(resolved.alternatives[0], 'futureAlternativeMetadata'), false);
   assert.deepEqual(
     selectEvidenceService(found, {
       recordId: 'record-a',
@@ -214,6 +224,32 @@ test('a Discovery problem names its kind in kebab-case', async () => {
     );
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test('an unrecognized problem uses only HTTP status semantics', async () => {
+  const server = http.createServer((_request, response) => {
+    response.statusCode = 409;
+    response.setHeader('content-type', 'application/problem+json');
+    response.end(JSON.stringify({
+      type: 'https://id.registrystack.org/problems/registry-discovery/future-conflict',
+      title: 'Future conflict',
+      status: 409,
+      code: 'future-conflict',
+      futureRecovery: { retry: false },
+    }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const client = new DiscoveryClient(`http://127.0.0.1:${server.address().port}/`);
+  await assert.rejects(
+    client.searchEvidenceServices({ evidenceTypeId: 'urn:example:evidence-type' }),
+    (error) => error instanceof DiscoveryClientError
+      && error.kind === 'problem'
+      && error.status === 409
+      && error.problem === undefined
+      && !error.message.includes('future-conflict')
+      && !error.message.includes('Future conflict'),
+  );
+  await new Promise((resolve) => server.close(resolve));
 });
 
 test('adopter acceptance is explicit and precedes credentials or native traffic', () => {

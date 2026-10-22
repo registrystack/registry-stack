@@ -15,6 +15,7 @@
 applies_from: v0.43.0
 products:
   registry-stack: registry-docs
+  registry-discovery: discovery
   registry-manifest: registry-manifest
   registry-evidence: evidence
   registry-casework: casework

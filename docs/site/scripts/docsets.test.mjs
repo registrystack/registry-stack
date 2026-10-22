@@ -207,6 +207,25 @@ test('validateDocsets rejects arbitrary tags for archived candidate products', (
   }
 });
 
+test('validateDocsets accepts only Registry Discovery at its canonical independent tag', () => {
+  const manifest = validDocsets();
+  manifest.docsets.push({
+    ...manifest.docsets[1],
+    id: 'v2.0.0',
+    availability: 'candidate',
+    products: {
+      'registry-discovery': { version: 'v1.4.2', ref: 'discovery/v1.4.2' },
+    },
+  });
+
+  assert.doesNotThrow(() => validateDocsets(manifest));
+  manifest.docsets[2].products['registry-relay'] = {
+    version: 'v1.4.2',
+    ref: 'discovery/v1.4.2',
+  };
+  assert.throws(() => validateDocsets(manifest), /products\.registry-relay\.ref must be a full 40-character SHA/);
+});
+
 test('validateDocsets requires SHA refs for external candidate products', () => {
   const manifest = validDocsets();
   manifest.docsets[1].availability = 'candidate';
@@ -321,6 +340,37 @@ test('an unshipped candidate product uses the checked-out candidate source', () 
   assert.equal(
     usesCheckedOutCandidate(candidate, { version: 'main source (unreleased)', ref: 'v1.2.3' }),
     true,
+  );
+});
+
+test('selected Discovery uses its original tag instead of the checked-out Stack candidate', () => {
+  const repos = repoManifest();
+  repos.repos['registry-discovery'] = {
+    ref: 'HEAD',
+    version: 'main source (unreleased)',
+    remote: 'https://github.com/registrystack/registry-stack',
+    local: '../..',
+    docs: [{ src: 'products/discovery/README.md' }],
+  };
+  repos.repos['registry-relay'].docs = [];
+  const candidate = {
+    ...validDocsets().docsets[1],
+    id: 'v2.0.0',
+    status: 'archived',
+    availability: 'candidate',
+    repo_docs_source: 'monorepo',
+    products: {
+      'registry-discovery': { version: 'v1.4.2', ref: 'discovery/v1.4.2' },
+    },
+  };
+
+  applyDocsetRefs(repos, candidate);
+
+  assert.equal(repos.repos['registry-discovery'].ref, 'discovery/v1.4.2');
+  assert.equal(repos.repos['registry-discovery'].local, undefined);
+  assert.equal(
+    usesCheckedOutCandidate(candidate, candidate.products['registry-discovery']),
+    false,
   );
 });
 

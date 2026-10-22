@@ -44,6 +44,10 @@ INSTALLERS = {
     "casework": ("registry-casework", "CASEWORK", ("casework", "caseworkctl")),
     "scheduling": ("registry-scheduling", "SCHEDULING", ("schedulingctl",)),
 }
+PRODUCT_VERSION_MANIFESTS = {
+    "discovery": "crates/registry-discovery/Cargo.toml",
+    "discoveryctl": "crates/registry-discoveryctl/Cargo.toml",
+}
 HISTORICAL_INSTALLERS = INSTALLERS | {
     "relay": ("registry-relay-v2", "RELAY", ("relay", "relayctl")),
 }
@@ -169,6 +173,50 @@ def identity(tag: str) -> tuple[str, str]:
     except ValueError as error:
         raise NightlyError("nightly tag has an invalid calendar date") from error
     return match[1], match[3]
+
+
+def expected_binary_version(
+    binary: str,
+    nightly_version: str,
+    *,
+    root: Path | None = None,
+) -> str:
+    """Render one binary's version from the selected nightly source tree."""
+
+    base_version, _ = identity(f"v{nightly_version}")
+    manifest_name = PRODUCT_VERSION_MANIFESTS.get(binary)
+    if manifest_name is None:
+        return nightly_version
+
+    # Keep this import local so native builders can load identity() on older
+    # Python runtimes that do not provide tomllib.
+    import tomllib
+
+    manifest_path = (root or ROOT) / manifest_name
+    try:
+        with manifest_path.open("rb") as handle:
+            document = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise NightlyError(
+            f"cannot read explicit {binary} package version from {manifest_path}"
+        ) from error
+    package = document.get("package")
+    package_version = package.get("version") if isinstance(package, dict) else None
+    if (
+        not isinstance(package_version, str)
+        or re.fullmatch(
+            r"(?:0|[1-9][0-9]*)\."
+            r"(?:0|[1-9][0-9]*)\."
+            r"(?:0|[1-9][0-9]*)",
+            package_version,
+        )
+        is None
+    ):
+        raise NightlyError(
+            f"{binary} package must declare an explicit canonical SemVer version"
+        )
+    suffix = nightly_version.removeprefix(base_version)
+    return f"{package_version}{suffix}"
 
 
 def digest(path: Path) -> str:
@@ -591,7 +639,7 @@ def smoke(directory: Path) -> None:
         if not name.endswith(f"-{manifest['tag']}-linux-amd64"):
             continue
         binary = name.removesuffix(f"-{manifest['tag']}-linux-amd64")
-        expected = f"{binary} {manifest['version']}"
+        expected = f"{binary} {expected_binary_version(binary, manifest['version'])}"
         if binary == "registry-render":
             source = (ROOT / "crates/registry-render/src/lib.rs").read_text()
             match = re.search(
@@ -624,7 +672,7 @@ def smoke(directory: Path) -> None:
             ):
                 if (
                     run(str(destination / binary), "--version")
-                    != f"{binary} {manifest['version']}"
+                    != f"{binary} {expected_binary_version(binary, manifest['version'])}"
                 ):
                     raise NightlyError(f"installed {binary} reports another version")
 
@@ -857,6 +905,9 @@ def main() -> int:
     assemble_parser.add_argument("--images", required=True, type=Path)
     assemble_parser.add_argument("--output", required=True, type=Path)
     subparsers.add_parser("smoke").add_argument("directory", type=Path)
+    expected_version_parser = subparsers.add_parser("expected-version")
+    expected_version_parser.add_argument("binary")
+    expected_version_parser.add_argument("nightly_version")
     publish_parser = subparsers.add_parser("publish")
     publish_parser.add_argument("directory", type=Path)
     publish_parser.add_argument("--layouts", required=True, type=Path)
@@ -870,6 +921,8 @@ def main() -> int:
             assemble(args.plan, args.binaries, args.images, args.output)
         elif args.command == "smoke":
             smoke(args.directory)
+        elif args.command == "expected-version":
+            print(expected_binary_version(args.binary, args.nightly_version))
         else:
             publish(args.directory, args.layouts)
     except (NightlyError, KeyError, ValueError, subprocess.CalledProcessError) as error:

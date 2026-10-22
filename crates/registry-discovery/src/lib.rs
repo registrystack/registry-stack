@@ -12,6 +12,11 @@ pub const MAXIMUM_PACKAGE_BYTES: u64 = MAXIMUM_INDEX_BYTES + 257;
 /// Discovery package files live directly under the package root.
 pub const MAXIMUM_PACKAGE_DEPTH: usize = 1;
 
+/// Build identity for the independently versioned Discovery product.
+pub mod build_info {
+    include!(concat!(env!("OUT_DIR"), "/product_build_info.rs"));
+}
+
 pub mod model;
 pub mod openapi;
 #[cfg(feature = "server")]

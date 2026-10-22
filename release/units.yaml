@@ -1,0 +1,136 @@
+{
+  "schema_version": "registry-stack.release-units.v1",
+  "distribution": {
+    "members": ["docs", "editors/vscode", "editors/zed"],
+    "artifact_patterns": [
+      "THIRD_PARTY_NOTICES",
+      "registry-docs-v*.tar.gz",
+      "registry-stack-v*.sbom.spdx.json",
+      "registry-stack-v*-security-evidence.tar.gz",
+      "registry-stack-v*-distribution.json"
+    ]
+  },
+  "units": {
+    "breg-casework-evidence": {
+      "display_name": "Base Registry, Casework, and Evidence",
+      "status": "held",
+      "tag_prefix": "breg-casework-evidence/",
+      "asset_prefix": "registry-breg-casework-evidence",
+      "members": ["breg", "bregctl", "casework", "caseworkctl", "evidence", "evidencectl"],
+      "artifact_patterns": ["breg-v*-*", "breg-install.sh", "bregctl-v*-*", "casework-v*-*", "casework-install.sh", "caseworkctl-v*-*", "evidence-v*-*", "evidencectl-v*-*", "evidencectl-install.sh"],
+      "dependencies": [],
+      "candidate": null
+    },
+    "breg-mcp": {
+      "display_name": "Base Registry MCP",
+      "status": "held",
+      "tag_prefix": "breg-mcp/",
+      "asset_prefix": "registry-breg-mcp",
+      "members": ["breg-mcp"],
+      "artifact_patterns": ["breg-mcp-v*-*"],
+      "dependencies": ["breg-casework-evidence"],
+      "candidate": null
+    },
+    "breg-review": {
+      "display_name": "Base Registry Review",
+      "status": "held",
+      "tag_prefix": "breg-review/",
+      "asset_prefix": "registry-breg-review",
+      "members": ["breg-review"],
+      "artifact_patterns": ["breg-review-v*-*"],
+      "dependencies": ["breg-casework-evidence"],
+      "candidate": null
+    },
+    "clients": {
+      "display_name": "Registry Stack Clients",
+      "status": "held",
+      "tag_prefix": "clients/",
+      "asset_prefix": "registry-clients",
+      "members": ["registrystack-client", "registry_stack_client"],
+      "artifact_patterns": ["registrystack-client-*.tgz", "registry_stack_client-*.whl"],
+      "dependencies": [],
+      "candidate": null
+    },
+    "coordinator": {
+      "display_name": "Registry Coordinator",
+      "status": "held",
+      "tag_prefix": "coordinator/",
+      "asset_prefix": "registry-coordinator",
+      "members": ["coordinator", "coordinatorctl"],
+      "artifact_patterns": ["coordinator-v*-*", "coordinatorctl-v*-*"],
+      "dependencies": [],
+      "candidate": null
+    },
+    "discovery": {
+      "display_name": "Registry Discovery",
+      "status": "pilot",
+      "tag_prefix": "discovery/",
+      "asset_prefix": "registry-discovery",
+      "members": ["discovery", "discoveryctl"],
+      "artifact_patterns": ["discovery-v*-linux-amd64", "discoveryctl-v*-linux-amd64", "discovery-v*-install.sh", "discovery-install.sh", "registry-discovery-v*.sbom.spdx.json", "registry-discovery-v*-security-evidence.tar.gz"],
+      "dependencies": [],
+      "candidate": {
+        "payloads": [
+          {"template": "discovery-{asset_tag}-linux-amd64", "kind": "binary"},
+          {"template": "discoveryctl-{asset_tag}-linux-amd64", "kind": "binary"},
+          {"template": "discovery-{asset_tag}-install.sh", "kind": "installer"},
+          {"template": "discovery-install.sh", "kind": "installer"},
+          {"template": "THIRD_PARTY_NOTICES", "kind": "notice"},
+          {"template": "{asset_prefix}-{asset_tag}.sbom.spdx.json", "kind": "sbom"},
+          {"template": "{asset_prefix}-{asset_tag}-security-evidence.tar.gz", "kind": "security-evidence"}
+        ],
+        "images": ["discovery"]
+      }
+    },
+    "evidence-oid4vci": {
+      "display_name": "Registry Evidence OID4VCI",
+      "status": "held",
+      "tag_prefix": "evidence-oid4vci/",
+      "asset_prefix": "registry-evidence-oid4vci",
+      "members": ["evidence-oid4vci"],
+      "artifact_patterns": ["evidence-oid4vci-v*-*"],
+      "dependencies": ["breg-casework-evidence"],
+      "candidate": null
+    },
+    "manifest": {
+      "display_name": "Registry Manifest",
+      "status": "held",
+      "tag_prefix": "manifest/",
+      "asset_prefix": "registry-manifest",
+      "members": ["registry-manifest"],
+      "artifact_patterns": ["registry-manifest-v*-*"],
+      "dependencies": [],
+      "candidate": null
+    },
+    "messaging": {
+      "display_name": "Registry Messaging",
+      "status": "held",
+      "tag_prefix": "messaging/",
+      "asset_prefix": "registry-messaging",
+      "members": ["messaging", "messagingctl"],
+      "artifact_patterns": ["messaging-v*-*", "messagingctl-v*-*"],
+      "dependencies": [],
+      "candidate": null
+    },
+    "render": {
+      "display_name": "Registry Render",
+      "status": "held",
+      "tag_prefix": "render/",
+      "asset_prefix": "registry-render",
+      "members": ["registry-render"],
+      "artifact_patterns": ["registry-render-v*-*"],
+      "dependencies": [],
+      "candidate": null
+    },
+    "scheduling": {
+      "display_name": "Registry Scheduling",
+      "status": "held",
+      "tag_prefix": "scheduling/",
+      "asset_prefix": "registry-scheduling",
+      "members": ["scheduling", "schedulingctl"],
+      "artifact_patterns": ["scheduling-v*-*", "scheduling-install.sh", "schedulingctl-v*-*"],
+      "dependencies": [],
+      "candidate": null
+    }
+  }
+}

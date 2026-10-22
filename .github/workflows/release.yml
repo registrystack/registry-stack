@@ -41,6 +41,9 @@ jobs:
     outputs:
       tag: ${{ steps.identity.outputs.tag }}
       version: ${{ steps.identity.outputs.version }}
+      unit: ${{ steps.identity.outputs.unit }}
+      asset_prefix: ${{ steps.identity.outputs.asset_prefix }}
+      bundle_name: ${{ steps.identity.outputs.bundle_name }}
       release_id: ${{ steps.candidate.outputs.release_id }}
       source_sha: ${{ steps.identity.outputs.source_sha }}
       promotion_revision: ${{ steps.identity.outputs.promotion_revision }}
@@ -81,17 +84,25 @@ jobs:
             exit 1
           fi
           tag="${RELEASE_TAG}"
-          if [[ ! "${tag}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+          unit=stack
+          asset_tag="${tag}"
+          prefix=registry-stack
+          if [[ "${tag}" == discovery/* ]]; then
+            unit=discovery
+            asset_tag="${tag#discovery/}"
+            prefix=registry-discovery
+          fi
+          if [[ ! "${asset_tag}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "Release tag must be canonical vMAJOR.MINOR.PATCH" >&2
             exit 1
           fi
-          if [[ "${tag%%.*}" != v0 ]]; then
+          if [[ "${unit}" == stack && "${asset_tag%%.*}" != v0 ]]; then
             echo "Beta publication accepts only v0.x.y release tags" >&2
             exit 1
           fi
-          version="${tag#v}"
+          version="${asset_tag#v}"
           IFS=. read -r version_major version_minor _ <<< "${version}"
-          if (( version_major == 0 && version_minor < 19 )); then
+          if [[ "${unit}" == stack ]] && (( version_major == 0 && version_minor < 19 )); then
             echo "pre-v0.19 releases are immutable historical evidence; use the corresponding ${tag} Git tag and archived assets" >&2
             exit 1
           fi
@@ -110,7 +121,10 @@ jobs:
             "${promotion_revision}" refs/remotes/origin/main
           {
             echo "tag=${tag}"
-            echo "version=${tag#v}"
+            echo "version=${version}"
+            echo "unit=${unit}"
+            echo "asset_prefix=${prefix}-${asset_tag}"
+            echo "bundle_name=${prefix}-${asset_tag}-candidate.tar.gz"
             echo "source_sha=${source_sha}"
             echo "promotion_revision=${promotion_revision}"
           } >> "${GITHUB_OUTPUT}"
@@ -176,7 +190,7 @@ jobs:
           expected="$(
             printf '%s\n' \
               release-candidate-manifest.json \
-              "registry-stack-${{ steps.identity.outputs.tag }}-candidate.tar.gz" \
+              "${{ steps.identity.outputs.asset_prefix }}-candidate.tar.gz" \
               | sort
           )"
           actual="$(
@@ -193,7 +207,7 @@ jobs:
         run: |
           set -euo pipefail
           manifest=promotion/candidate/release-candidate-manifest.json
-          bundle="promotion/candidate/registry-stack-${{ steps.identity.outputs.tag }}-candidate.tar.gz"
+          bundle="promotion/candidate/${{ steps.identity.outputs.asset_prefix }}-candidate.tar.gz"
           test "$(sha256sum "${manifest}" | awk '{print $1}')" = \
             "${{ steps.binding.outputs.manifest_sha256 }}"
           mkdir -p promotion/extracted
@@ -201,6 +215,7 @@ jobs:
           release_id="$(jq -er .release.release_id "${manifest}")"
           workflow_revision="$(jq -er .workflow.revision "${manifest}")"
           python3 release/scripts/release_candidate.py verify-tag-binding \
+            --unit "${{ steps.identity.outputs.unit }}" \
             --message "${RUNNER_TEMP}/tag-message" \
             --manifest "${manifest}" \
             --bundle "${bundle}" \
@@ -210,8 +225,11 @@ jobs:
             --workflow-revision "${workflow_revision}" \
             --version "${{ steps.identity.outputs.version }}" \
             --release-id "${release_id}"
+          test "$(jq -r .release.tag "${manifest}")" = "${{ steps.identity.outputs.tag }}"
+          test "$(jq -r '.release.unit // "stack"' "${manifest}")" = "${{ steps.identity.outputs.unit }}"
           test "${workflow_revision}" = "${{ steps.identity.outputs.source_sha }}"
           python3 release/scripts/release_candidate.py verify-candidate \
+            --unit "${{ steps.identity.outputs.unit }}" \
             --manifest "${manifest}" \
             --bundle "${bundle}" \
             --bundle-root promotion/extracted \
@@ -234,6 +252,8 @@ jobs:
               --deny-self-hosted-runners
           done
           docs_sha256=
+          identifier_catalog_sha256=
+          if [[ "${{ steps.identity.outputs.unit }}" == stack ]]; then
           identifier_catalog_sha256="$(
             git show \
               "${{ steps.identity.outputs.source_sha }}:products/identifiers/generated/catalog.v1.json" \
@@ -305,6 +325,11 @@ jobs:
           print(json.dumps({"include": clients}, separators=(",", ":")))
           PY
           )"
+          else
+            client_registries=false
+            client_registry_matrix='{"client":["stack"]}'
+            client_registry_pypi_matrix='{"include":[{"client":"stack","environment":"pypi"}]}'
+          fi
           {
             echo "release_id=${release_id}"
             echo "workflow_revision=${workflow_revision}"
@@ -400,7 +425,7 @@ jobs:
         run: |
           set -euo pipefail
           manifest=promotion/release-candidate-manifest.json
-          bundle="promotion/registry-stack-${{ needs.verify.outputs.tag }}-candidate.tar.gz"
+          bundle="promotion/${{ needs.verify.outputs.asset_prefix }}-candidate.tar.gz"
           test "$(sha256sum "${manifest}" | awk '{print $1}')" = \
             "${{ needs.verify.outputs.manifest_sha256 }}"
           mkdir -p extracted release-assets contract
@@ -420,7 +445,7 @@ jobs:
           while IFS= read -r name; do
             cp "extracted/${name}" "release-assets/${name}"
           done < <(jq -r '.payloads[].name' "${manifest}")
-          public_manifest="registry-stack-${{ needs.verify.outputs.tag }}-release-manifest.json"
+          public_manifest="${{ needs.verify.outputs.asset_prefix }}-release-manifest.json"
           cp "${manifest}" "release-assets/${public_manifest}"
 
       - name: Reconcile bound draft and upload exact staged inventory
@@ -468,7 +493,9 @@ jobs:
               '\n<!-- registry-stack-release-candidate-v2 manifest_sha256:%s -->\n' \
               "${{ needs.verify.outputs.manifest_sha256 }}" \
               >> contract/draft-notes.md
-            gh release create "${tag}" \
+            latest_args=()
+            if [[ "${{ needs.verify.outputs.unit }}" != stack ]]; then latest_args+=(--latest=false); fi
+            gh release create "${tag}" "${latest_args[@]}" \
               --verify-tag \
               --draft \
               --title "RegistryStack ${tag}" \
@@ -501,8 +528,8 @@ jobs:
           {
             printf '%s\n' \
               SHA256SUMS \
-              "registry-stack-${tag}-SHA256SUMS.sigstore.json" \
-              "registry-stack-${tag}-SHA256SUMS.intoto.jsonl"
+              "${{ needs.verify.outputs.asset_prefix }}-SHA256SUMS.sigstore.json" \
+              "${{ needs.verify.outputs.asset_prefix }}-SHA256SUMS.intoto.jsonl"
           } | sort -u > contract/retryable-final-assets
           jq -r '.[].name' contract/staged-assets.json \
             | sort -u > contract/expected-staged-assets
@@ -890,7 +917,7 @@ jobs:
             find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
               | sort -z | xargs -0 sha256sum | sed 's#  \./#  #'
           ) > release-assets/SHA256SUMS
-          checksum_bundle="release-assets/registry-stack-${{ needs.verify.outputs.tag }}-SHA256SUMS.sigstore.json"
+          checksum_bundle="release-assets/${{ needs.verify.outputs.asset_prefix }}-SHA256SUMS.sigstore.json"
           cosign sign-blob --yes \
             --bundle "${checksum_bundle}" \
             release-assets/SHA256SUMS
@@ -914,7 +941,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ needs.verify.outputs.tag }}"
-          provenance_asset="release-assets/registry-stack-${tag}-SHA256SUMS.intoto.jsonl"
+          provenance_asset="release-assets/${{ needs.verify.outputs.asset_prefix }}-SHA256SUMS.intoto.jsonl"
           test -s "${PROVENANCE_BUNDLE}"
           jq -e '.dsseEnvelope.payloadType == "application/vnd.in-toto+json"' \
             "${PROVENANCE_BUNDLE}" >/dev/null
@@ -1136,12 +1163,12 @@ jobs:
           identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/heads/main"
           cosign verify-blob draft/SHA256SUMS \
             --bundle \
-              "draft/registry-stack-${tag}-SHA256SUMS.sigstore.json" \
+              "draft/${{ needs.verify.outputs.asset_prefix }}-SHA256SUMS.sigstore.json" \
             --certificate-identity "${identity}" \
             --certificate-oidc-issuer \
               https://token.actions.githubusercontent.com
           gh attestation verify draft/SHA256SUMS \
-            --bundle "draft/registry-stack-${tag}-SHA256SUMS.intoto.jsonl" \
+            --bundle "draft/${{ needs.verify.outputs.asset_prefix }}-SHA256SUMS.intoto.jsonl" \
             --repo "${GITHUB_REPOSITORY}" \
             --signer-workflow \
               "${GITHUB_REPOSITORY}/.github/workflows/release.yml" \
@@ -1152,8 +1179,8 @@ jobs:
           done < <(jq -r '.images[] | [.digest,.final_ref] | @tsv' "${manifest}")
           required=(
             SHA256SUMS
-            "registry-stack-${tag}-SHA256SUMS.sigstore.json"
-            "registry-stack-${tag}-SHA256SUMS.intoto.jsonl"
+            "${{ needs.verify.outputs.asset_prefix }}-SHA256SUMS.sigstore.json"
+            "${{ needs.verify.outputs.asset_prefix }}-SHA256SUMS.intoto.jsonl"
           )
           for name in "${required[@]}"; do
             jq -e --arg name "${name}" \
@@ -1193,8 +1220,10 @@ jobs:
              ((.body // "") | contains($marker))' \
             publish-state.json >/dev/null
           if [[ "${EXPECTED_RELEASE_STATE}" == draft ]]; then
+            latest_args=()
+            if [[ "${{ needs.verify.outputs.unit }}" != stack ]]; then latest_args+=(-f make_latest=false); fi
             gh api --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              "repos/${GITHUB_REPOSITORY}/releases/${release_id}" "${latest_args[@]}" \
               -F draft=false \
               -F prerelease=false >/dev/null
           fi
@@ -1326,7 +1355,7 @@ jobs:
           if version < (11, 5, 1):
               raise SystemExit("trusted publishing requires npm >= 11.5.1")
           PY
-          bundle="promotion/registry-stack-${{ needs.verify.outputs.tag }}-candidate.tar.gz"
+          bundle="promotion/${{ needs.verify.outputs.asset_prefix }}-candidate.tar.gz"
           mkdir -p dist
           tar -xzf "${bundle}" -C dist
           python3 release/scripts/client_registry.py validate-dist \
@@ -1480,7 +1509,7 @@ jobs:
           set -euo pipefail
           version="${{ needs.verify.outputs.version }}"
           client="${{ matrix.client }}"
-          bundle="promotion/registry-stack-${{ needs.verify.outputs.tag }}-candidate.tar.gz"
+          bundle="promotion/${{ needs.verify.outputs.asset_prefix }}-candidate.tar.gz"
           mkdir -p extracted dist
           tar -xzf "${bundle}" -C extracted
           for platform in manylinux_2_17_x86_64.manylinux2014_x86_64 manylinux_2_17_aarch64.manylinux2014_aarch64 macosx_11_0_arm64; do
@@ -1564,7 +1593,7 @@ jobs:
   publish-identifiers:
     name: Publish exact identifier catalog
     if: >-
-      always() &&
+      always() && needs.verify.outputs.unit == 'stack' &&
       (needs.publish.result == 'success' ||
        needs.closeout-published.result == 'success')
     needs:

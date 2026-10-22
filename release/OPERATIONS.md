@@ -16,6 +16,61 @@ candidate-promotion path. Follow [`release/NIGHTLY.md`](NIGHTLY.md) to publish,
 verify, install, or recover a nightly build. A numbered release rebuilds from
 its source because the nightly version marker makes the bytes distinct.
 
+## Independent Discovery pilot
+
+Use the same candidate and publication transaction with `--unit discovery` to
+publish a finished Discovery change before the next Stack release. Discovery
+and discoveryctl share an explicit Cargo package version; internal crates and
+the unified SDK retain their existing lifecycle. `release/units.yaml` owns the
+unit and artifact map. Other units remain on the Stack train during the pilot.
+
+Prepare both Discovery package versions, their workspace dependency/lock entries,
+and `release/notes/discovery/vX.Y.Z.md`. Do not bump the Stack or SDK merely to
+publish Discovery. Run:
+
+```sh
+release/scripts/registry-release prepare --unit discovery --version X.Y.Z --release-id discovery-X.Y.Z
+```
+
+After the release preparation PR merges, use `request-candidate` and
+`verify-candidate` with the same `--unit discovery`, version, and release ID.
+Their source, CI wait, candidate run, and plan-output options are unchanged.
+`publish --plan ... --wait` consumes that verified plan. The annotated Git tag
+is `discovery/vX.Y.Z`; filenames and the Discovery image use `vX.Y.Z`.
+
+The shared workflow builds only the two Linux amd64 binaries and Discovery
+image, smokes the pair installer, scans the exact image, and seals and attests
+the complete unit candidate. Publication promotes those bytes without rebuilding
+and leaves GitHub's latest Stack release unchanged. Recovery still requires the
+same source, manifest, checksums, and image digest. Never move a tag or replace
+published bytes.
+
+To include an already published Discovery release in a Stack distribution,
+commit `release/distributions/v<stack-version>.json` with this shape:
+
+```json
+{
+  "schema_version": "registry-stack.distribution-selection.v1",
+  "stack_version": "0.45.0",
+  "components": [{"unit": "discovery", "version": "0.44.2", "policy": "exact"}]
+}
+```
+
+Use actual published versions. Set the Stack manifest's `discovery` and
+`discoveryctl` artifact versions to that selected version. The candidate
+authenticates the original release, excludes its binaries and image from builds,
+and seals an exact distribution lock retaining the original source, tag, asset
+checksums, and image digest. It installs those original bytes and exercises them
+over HTTP with the current packaged unified SDK. Docs retain the original
+Discovery source tag. A diverged product version requires this selection.
+`compatible-patch` permits a separately selected later patch in the same minor
+line; resolution still uses the committed version, never a floating latest tag.
+
+Measure merge-to-publication time, including queues, retries, and operator wait,
+alongside build time. Scoped builds are a mechanism, not evidence that the
+latency goal has been met. A real candidate and publication run provide that
+measurement; unit tests and a rehearsal do not.
+
 ## Prerequisites
 
 Start release preparation when:

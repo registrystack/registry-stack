@@ -30,11 +30,28 @@ Relay origins and rebuild a mixed pre-retirement index before starting a current
 runtime.
 Starting with Registry Stack v0.26.1, install the Node.js package as
 `@registrystack/client@<version>` or the Python package as
-`registry-stack-client==<version>`, using the exact version that matches the
-deployment. The Python distribution imports as `registry_client`.
+`registry-stack-client==<version>`, using the SDK version selected by the recommended Stack distribution.
+Discovery and discoveryctl can also ship together under an independent
+`discovery/vX.Y.Z` release. A newer compatible Discovery patch does not require
+republishing the SDK; use a combination named in the distribution or release notes. The Python distribution imports as `registry_client`.
 
 Run `scripts/check-contracts.sh` to validate the resources and their
 traceability. The normal operator flow, owned by `discoveryctl`, is offline
 `check`, one explicit `package`, deployment of the immutable package directory,
 then restart. The runtime verifies `SHA256SUMS` and an optional
 `package.expectedDigest` pin before consuming the exact packaged index bytes.
+
+## Independent release installation
+
+For a published Discovery unit release, download its `discovery-vX.Y.Z-install.sh`
+from the `discovery/vX.Y.Z` GitHub Release, authenticate its checksum chain as
+explained in [release verification](../../release/VERIFY.md), then run it. The
+installer installs both `discovery` and `discoveryctl` on Linux amd64. Set
+`DISCOVERY_INSTALL_DIR` to choose the destination and `DISCOVERY_ASSET_DIR` to
+use already verified offline assets. It requires an explicit version or the
+version embedded in a release installer, because GitHub's latest release names
+the recommended Stack distribution.
+
+The client accepts additive HTTP response members while rejecting duplicate
+members, invalid known values, and unsupported service kinds. Persisted
+selections, provider descriptions, and server configuration remain strict.

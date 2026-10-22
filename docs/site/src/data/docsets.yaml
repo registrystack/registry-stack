@@ -14,6 +14,9 @@ docsets:
       registry-stack:
         version: main source (unreleased)
         ref: HEAD
+      registry-discovery:
+        version: main source (unreleased)
+        ref: HEAD
       registry-manifest:
         version: main source (unreleased)
         ref: HEAD

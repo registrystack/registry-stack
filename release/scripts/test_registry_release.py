@@ -599,6 +599,75 @@ class RegistryReleaseTest(TestCase):
             run.call_args.args[0],
         )
 
+    def test_distribution_artifact_versions_preserve_original_unit_identity(self) -> None:
+        tool = load_registry_release()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selections = root / "release/distributions"
+            selections.mkdir(parents=True)
+            (selections / "v0.45.0.json").write_text(json.dumps({
+                "schema_version": "registry-stack.distribution-selection.v1",
+                "stack_version": "0.45.0",
+                "components": [{"unit": "discovery", "version": "0.44.2", "policy": "exact"}],
+            }))
+            self.assertEqual(tool.component_artifact_versions(root, "0.45.0"),
+                             {"discovery": "0.44.2", "discoveryctl": "0.44.2"})
+            self.assertEqual(tool.component_artifact_versions(root, "0.44.0"), {})
+
+    def test_workspace_validation_checks_independent_discovery_identity(self) -> None:
+        tool = load_registry_release()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Cargo.toml").write_text(
+                '[workspace.package]\nversion = "0.44.0"\n[workspace.dependencies]\n'
+                'registry-discovery = { path = "crates/registry-discovery", version = "1.2.3" }\n'
+            )
+            product = root / "crates/registry-discovery/Cargo.toml"
+            product.parent.mkdir(parents=True)
+            product.write_text('[package]\nversion = "1.2.3"\n')
+            (root / "Cargo.lock").write_text(
+                '[[package]]\nname = "registry-discovery"\nversion = "1.2.3"\n'
+            )
+            tool.validate_workspace_versions(root, "0.44.0")
+            product.write_text('[package]\nversion = "1.2.4"\n')
+            with self.assertRaisesRegex(tool.ReleasePlanError, "version"):
+                tool.validate_workspace_versions(root, "0.44.0")
+
+    def test_stack_requires_distribution_selection_after_discovery_diverges(self) -> None:
+        tool = load_registry_release()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("registry-discovery", "registry-discoveryctl"):
+                path = root / "crates" / name / "Cargo.toml"
+                path.parent.mkdir(parents=True)
+                path.write_text('[package]\nversion = "1.2.3"\n')
+            with self.assertRaisesRegex(tool.ReleasePlanError, "distribution selection"):
+                tool.validate_stack_component_selection(root, "0.44.0")
+            with mock.patch.object(tool, "component_artifact_versions", return_value={
+                "discovery": "1.2.2", "discoveryctl": "1.2.2",
+            }):
+                tool.validate_stack_component_selection(root, "0.44.0")
+            tool.validate_stack_component_selection(root, "1.2.3")
+
+    def test_discovery_plan_uses_independent_version_and_no_docs(self) -> None:
+        tool = load_registry_release()
+        plan = candidate_verification_plan(tool)
+        plan["schema_version"] = "registry-release.candidate-verification.v4"
+        old_tag = plan["release"]["tag"]
+        plan["release"].update(unit="discovery", version="1.2.3", tag="discovery/v1.2.3")
+        plan["candidate"]["docs_sha256"] = None
+        for key in ("tag_command", "release_command"):
+            plan[key] = plan[key].replace(old_tag, "discovery/v1.2.3")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan))
+            self.assertEqual(tool.load_candidate_verification_plan(path), plan)
+            plan["release"]["tag"] = "v1.2.3"
+            path.write_text(json.dumps(plan))
+            with self.assertRaisesRegex(tool.ReleasePlanError, "tag does not match"):
+                tool.load_candidate_verification_plan(path)
+        self.assertIsNone(tool.candidate_docs_sha256({"release": {"unit": "discovery"}}, "1.2.3"))
+
     def test_candidate_plan_rejects_inconsistent_operator_commands(self) -> None:
         registry_release = load_registry_release()
         plan = candidate_verification_plan(registry_release)

@@ -133,6 +133,22 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             builder_image=BUILDER,
         )
 
+    def test_distribution_omits_carried_discovery_from_local_build(self) -> None:
+        rosters, images = MODULE.rosters(VERSION, exclude_discovery=True)
+        self.assertEqual(rosters["core"], CORE[2:])
+        self.assertNotIn("discovery", dict(images))
+        replacement = self.write_shard("core", CORE[2:], version="0.39.1")
+        # The shard identity must still bind the actual distribution version.
+        metadata = replacement / "RELEASE_BINARY_SHARD"
+        metadata.write_text(metadata.read_text().replace("0.39.1", VERSION))
+        MODULE.merge(version=VERSION, source_sha=SOURCE_SHA, core=replacement,
+                     breg=self.breg, casework=self.casework, scheduling=self.scheduling,
+                     messaging=self.messaging, output=self.output, builder_image=BUILDER,
+                     exclude_discovery=True)
+        self.assertFalse(any(p.name.startswith(("discovery-", "discoveryctl-"))
+                             for p in (self.output / "bin").iterdir()))
+        self.assertFalse((self.output / "image-bin/discovery").exists())
+
     def test_reconstructs_the_exact_full_layout_from_download_binary_bytes(self) -> None:
         self.merge()
         bin_dir = self.output / "bin"

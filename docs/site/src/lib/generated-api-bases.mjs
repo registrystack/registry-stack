@@ -20,6 +20,7 @@ export const GENERATED_API_BASES = [
   'reference/apis/scheduling',
   'reference/apis/messaging',
   'reference/apis/coordinator',
+  'reference/apis/discovery',
   'reference/apis/breg',
 ];
 

@@ -12,7 +12,7 @@ use tracing_subscriber::prelude::*;
 #[command(
     name = "discovery",
     about = "Serve one immutable Registry Discovery index",
-    version = registry_platform_buildinfo::DISPLAY_VERSION
+    version = registry_discovery::build_info::DISPLAY_VERSION
 )]
 struct Arguments {
     /// Runtime configuration file.

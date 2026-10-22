@@ -32,6 +32,27 @@ class PublicReleaseVerifierTest(TestCase):
     def setUp(self) -> None:
         self.module = load_module()
 
+    def test_discovery_release_identity_accepts_any_canonical_version(self) -> None:
+        for version in ("0.1.0", "1.2.3"):
+            identity = self.module.release_identity(f"discovery/v{version}")
+            self.assertEqual("discovery", identity.unit)
+            self.assertEqual(version, identity.version)
+            self.assertEqual(f"v{version}", identity.asset_tag)
+            self.assertEqual(
+                f"registry-discovery-v{version}-release-manifest.json",
+                identity.manifest_name,
+            )
+
+        for tag in ("discovery/v01.2.3", "evidence/v1.2.3"):
+            with (
+                self.subTest(tag=tag),
+                self.assertRaisesRegex(
+                    self.module.PublicReleaseError,
+                    "canonical release tag|release pilot",
+                ),
+            ):
+                self.module.release_identity(tag)
+
     def test_client_registry_verification_begins_with_v0_21_1(self) -> None:
         self.assertFalse(self.module.version_uses_client_registries("0.21.0"))
         self.assertTrue(self.module.version_uses_client_registries("0.21.1"))
@@ -304,6 +325,27 @@ class PublicReleaseVerifierTest(TestCase):
                 tag="v1.2.3",
             )
 
+    def test_discovery_release_metadata_does_not_claim_global_latest(self) -> None:
+        release = {
+            "tag_name": "discovery/v1.2.3",
+            "draft": False,
+            "prerelease": False,
+            "published_at": "2026-10-23T00:00:00Z",
+            "assets": [
+                {
+                    "name": "payload",
+                    "digest": f"sha256:{'a' * 64}",
+                    "size": 1,
+                }
+            ],
+        }
+        assets = self.module.validate_release_metadata(
+            release,
+            None,
+            tag="discovery/v1.2.3",
+        )
+        self.assertEqual({"payload"}, set(assets))
+
     def test_downloaded_asset_verification_closes_checksums_and_api_digests(
         self,
     ) -> None:
@@ -352,6 +394,54 @@ class PublicReleaseVerifierTest(TestCase):
             with self.assertRaisesRegex(
                 self.module.PublicReleaseError,
                 "wrong downloaded size|digest does not match",
+            ):
+                self.module.verify_downloaded_assets(root, assets, tag=tag)
+
+    def test_discovery_assets_use_unit_names_and_require_provenance(self) -> None:
+        tag = "discovery/v1.2.3"
+        payloads = {
+            "discovery-v1.2.3-linux-amd64": b"binary\n",
+            "registry-discovery-v1.2.3-release-manifest.json": b"{}\n",
+        }
+        sums = "".join(
+            f"{digest(body)}  {name}\n" for name, body in sorted(payloads.items())
+        ).encode()
+        provenance_name = "registry-discovery-v1.2.3-SHA256SUMS.intoto.jsonl"
+        files = {
+            **payloads,
+            "SHA256SUMS": sums,
+            "registry-discovery-v1.2.3-SHA256SUMS.sigstore.json": b"{}\n",
+            provenance_name: b"{}\n",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, body in files.items():
+                (root / name).write_bytes(body)
+            assets = {
+                name: {
+                    "name": name,
+                    "digest": f"sha256:{digest(body)}",
+                    "size": len(body),
+                }
+                for name, body in files.items()
+            }
+            checksums, bundle, provenance = self.module.verify_downloaded_assets(
+                root,
+                assets,
+                tag=tag,
+            )
+            self.assertEqual(set(payloads), set(checksums))
+            self.assertEqual(
+                "registry-discovery-v1.2.3-SHA256SUMS.sigstore.json",
+                bundle,
+            )
+            self.assertEqual(provenance_name, provenance)
+
+            (root / provenance_name).unlink()
+            del assets[provenance_name]
+            with self.assertRaisesRegex(
+                self.module.PublicReleaseError,
+                f"missing {provenance_name}",
             ):
                 self.module.verify_downloaded_assets(root, assets, tag=tag)
 
@@ -468,6 +558,412 @@ class PublicReleaseVerifierTest(TestCase):
                 checksums=checksums,
                 assets=assets,
             )
+
+    def test_discovery_manifest_binds_unit_source_payloads_and_image(self) -> None:
+        source = "a" * 40
+        payload_sha256 = "d" * 64
+        tag = "discovery/v1.2.3"
+        document = {
+            "schema_version": "registry-stack.release-candidate.v3",
+            "repository": "registrystack/registry-stack",
+            "release": {
+                "unit": "discovery",
+                "tag": tag,
+                "version": "1.2.3",
+                "release_id": "discovery-beta-1",
+                "source_sha": source,
+            },
+            "workflow": {
+                "path": ".github/workflows/release-candidate.yml",
+                "revision": source,
+                "run_id": 42,
+                "run_attempt": 1,
+            },
+            "validity": {
+                "created_at": "2026-10-23T00:00:00Z",
+                "expires_at": "2026-10-24T00:00:00Z",
+            },
+            "payloads": [
+                {
+                    "name": "discovery-v1.2.3-linux-amd64",
+                    "kind": "binary",
+                    "sha256": payload_sha256,
+                    "size": 7,
+                }
+            ],
+            "images": [
+                {
+                    "name": "discovery",
+                    "candidate_ref": f"ghcr.io/registrystack/discovery-candidate@sha256:{'c' * 64}",
+                    "digest": f"sha256:{'c' * 64}",
+                    "final_ref": "ghcr.io/registrystack/discovery:v1.2.3",
+                }
+            ],
+        }
+        checksums = {
+            "discovery-v1.2.3-linux-amd64": payload_sha256,
+            "registry-discovery-v1.2.3-release-manifest.json": "e" * 64,
+        }
+        assets = {"discovery-v1.2.3-linux-amd64": {"size": 7}}
+        with mock.patch.object(
+            self.module.release_candidate,
+            "validate_candidate_manifest",
+            return_value=document,
+        ) as validate:
+            images = self.module.validate_release_manifest(
+                document,
+                repository="registrystack/registry-stack",
+                tag=tag,
+                source_sha=source,
+                checksums=checksums,
+                assets=assets,
+            )
+
+        self.assertEqual(
+            [
+                {
+                    "digest": f"sha256:{'c' * 64}",
+                    "final_ref": "ghcr.io/registrystack/discovery:v1.2.3",
+                }
+            ],
+            images,
+        )
+        self.assertEqual("discovery", validate.call_args.kwargs["expected_unit"])
+        self.assertEqual("1.2.3", validate.call_args.kwargs["expected_version"])
+
+    def test_discovery_public_verification_skips_latest_and_client_registries(
+        self,
+    ) -> None:
+        repository = "registrystack/registry-stack"
+        tag = "discovery/v1.2.3"
+        source = "a" * 40
+        manifest_name = "registry-discovery-v1.2.3-release-manifest.json"
+        smoke_name = "discovery-v1.2.3-linux-amd64"
+        bundle_name = "registry-discovery-v1.2.3-SHA256SUMS.sigstore.json"
+        provenance_name = "registry-discovery-v1.2.3-SHA256SUMS.intoto.jsonl"
+        image = {
+            "digest": f"sha256:{'c' * 64}",
+            "final_ref": "ghcr.io/registrystack/discovery:v1.2.3",
+        }
+        manifest_body = b"{}\n"
+        smoke_body = b"binary\n"
+        release = {
+            "tag_name": tag,
+            "draft": False,
+            "prerelease": False,
+            "published_at": "2026-10-23T00:00:00Z",
+            "html_url": "https://example.invalid/discovery/v1.2.3",
+            "body": (
+                "registry-stack-release-candidate-v2 "
+                f"manifest_sha256:{digest(manifest_body)}"
+            ),
+            "assets": [
+                {
+                    "name": manifest_name,
+                    "digest": f"sha256:{digest(manifest_body)}",
+                    "size": len(manifest_body),
+                },
+                {
+                    "name": smoke_name,
+                    "digest": f"sha256:{digest(smoke_body)}",
+                    "size": len(smoke_body),
+                },
+            ],
+        }
+        commands: list[list[str]] = []
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / manifest_name).write_bytes(manifest_body)
+            (root / smoke_name).write_bytes(smoke_body)
+
+            def run_text(command: list[str], *, cwd: Path | None = None) -> str:
+                del cwd
+                commands.append(command)
+                if command == [
+                    "gh",
+                    "api",
+                    f"repos/{repository}/releases/tags/discovery%2Fv1.2.3",
+                ]:
+                    return json.dumps(release)
+                if command == ["gh", "api", f"repos/{repository}/releases/latest"]:
+                    raise AssertionError(
+                        "unit verification must not read global latest"
+                    )
+                if command[:3] == ["gh", "release", "download"]:
+                    return ""
+                if command[:2] == ["cosign", "verify-blob"]:
+                    return ""
+                if command[:3] == ["gh", "attestation", "verify"]:
+                    return ""
+                if command[:4] == ["docker", "buildx", "imagetools", "inspect"]:
+                    return json.dumps({"digest": image["digest"]})
+                raise AssertionError(f"unexpected command: {command}")
+
+            temporary_directory = mock.MagicMock()
+            temporary_directory.__enter__.return_value = str(root)
+            temporary_directory.__exit__.return_value = False
+            checksums = {
+                manifest_name: digest(manifest_body),
+                smoke_name: digest(smoke_body),
+            }
+            with (
+                mock.patch.object(self.module.shutil, "which", return_value="/tool"),
+                mock.patch.object(
+                    self.module, "resolve_annotated_tag", return_value=source
+                ),
+                mock.patch.object(self.module, "run_text", side_effect=run_text),
+                mock.patch.object(
+                    self.module.tempfile,
+                    "TemporaryDirectory",
+                    return_value=temporary_directory,
+                ),
+                mock.patch.object(
+                    self.module,
+                    "verify_downloaded_assets",
+                    return_value=(checksums, bundle_name, provenance_name),
+                ),
+                mock.patch.object(
+                    self.module,
+                    "validate_release_manifest",
+                    return_value=[image],
+                ),
+                mock.patch.object(
+                    self.module,
+                    "smoke_downloaded_binary",
+                    return_value="discovery 1.2.3",
+                ),
+                mock.patch.object(
+                    self.module, "verify_client_registries"
+                ) as registries,
+            ):
+                result = self.module.verify(repo=root, repository=repository, tag=tag)
+                closure = self.module.verify_component_closure(
+                    repo=root,
+                    repository=repository,
+                    tag=tag,
+                )
+
+            self.assertEqual("discovery", result["release_unit"])
+            self.assertEqual(smoke_name, result["smoke_asset"])
+            self.assertEqual(
+                {
+                    "manifest_bytes": manifest_body,
+                    "manifest_sha256": digest(manifest_body),
+                    "checksums": checksums,
+                },
+                closure,
+            )
+            registries.assert_not_called()
+            self.assertFalse(
+                any(
+                    command == ["gh", "api", f"repos/{repository}/releases/latest"]
+                    for command in commands
+                )
+            )
+
+    def test_stack_manifest_includes_component_images_in_live_verification(self) -> None:
+        source = "a" * 40
+        payload_sha256 = "b" * 64
+        stack_digest = f"sha256:{'c' * 64}"
+        discovery_digest = f"sha256:{'d' * 64}"
+        document = {
+            "schema_version": "registry-stack.release-candidate.v3",
+            "repository": "registrystack/registry-stack",
+            "release": {
+                "version": "0.45.0",
+                "release_id": "beta-45",
+                "tag": "v0.45.0",
+                "source_sha": source,
+            },
+            "workflow": {
+                "path": ".github/workflows/release-candidate.yml",
+                "revision": source,
+                "run_id": 123,
+                "run_attempt": 1,
+            },
+            "validity": {
+                "created_at": "2026-10-23T00:00:00Z",
+                "expires_at": "2026-10-24T00:00:00Z",
+            },
+            "payloads": [
+                {
+                    "name": "payload.bin",
+                    "kind": "binary",
+                    "size": 7,
+                    "sha256": payload_sha256,
+                }
+            ],
+            "images": [
+                {
+                    "name": "evidence",
+                    "candidate_ref": f"ghcr.io/registrystack/evidence-candidate@{stack_digest}",
+                    "digest": stack_digest,
+                    "final_ref": "ghcr.io/registrystack/evidence:v0.45.0",
+                }
+            ],
+            "components": [
+                {
+                    "unit": "discovery",
+                    "version": "1.2.3",
+                    "release_tag": "discovery/v1.2.3",
+                    "source_sha": "e" * 40,
+                    "manifest": {
+                        "name": "registry-discovery-v1.2.3-release-manifest.json",
+                        "sha256": "f" * 64,
+                    },
+                    "payloads": [],
+                    "images": [
+                        {
+                            "name": "discovery",
+                            "final_ref": "ghcr.io/registrystack/discovery:v1.2.3",
+                            "digest": discovery_digest,
+                        }
+                    ],
+                }
+            ],
+        }
+        checksums = {
+            "payload.bin": payload_sha256,
+            "registry-stack-v0.45.0-release-manifest.json": "1" * 64,
+        }
+        assets = {"payload.bin": {"size": 7}}
+        with mock.patch.object(
+            self.module.release_candidate,
+            "validate_candidate_manifest",
+            return_value=document,
+        ):
+            images = self.module.validate_release_manifest(
+                document,
+                repository="registrystack/registry-stack",
+                tag="v0.45.0",
+                source_sha=source,
+                checksums=checksums,
+                assets=assets,
+            )
+
+        self.assertEqual(
+            [
+                {
+                    "digest": stack_digest,
+                    "final_ref": "ghcr.io/registrystack/evidence:v0.45.0",
+                },
+                {
+                    "digest": discovery_digest,
+                    "final_ref": "ghcr.io/registrystack/discovery:v1.2.3",
+                },
+            ],
+            images,
+        )
+
+    def test_stack_verification_rejects_carried_component_image_tag_drift(self) -> None:
+        repository = "registrystack/registry-stack"
+        tag = "v0.45.0"
+        source = "a" * 40
+        manifest_name = "registry-stack-v0.45.0-release-manifest.json"
+        smoke_name = "evidence-v0.45.0-linux-amd64"
+        manifest_body = b"{}\n"
+        smoke_body = b"binary\n"
+        stack_image = {
+            "digest": f"sha256:{'c' * 64}",
+            "final_ref": "ghcr.io/registrystack/evidence:v0.45.0",
+        }
+        component_image = {
+            "digest": f"sha256:{'d' * 64}",
+            "final_ref": "ghcr.io/registrystack/discovery:v1.2.3",
+        }
+        release = {
+            "tag_name": tag,
+            "draft": False,
+            "prerelease": False,
+            "published_at": "2026-10-23T00:00:00Z",
+            "html_url": "https://example.invalid/v0.45.0",
+            "body": (
+                "registry-stack-release-candidate-v2 "
+                f"manifest_sha256:{digest(manifest_body)}"
+            ),
+            "assets": [
+                {
+                    "name": manifest_name,
+                    "digest": f"sha256:{digest(manifest_body)}",
+                    "size": len(manifest_body),
+                },
+                {
+                    "name": smoke_name,
+                    "digest": f"sha256:{digest(smoke_body)}",
+                    "size": len(smoke_body),
+                },
+            ],
+        }
+        checksums = {
+            manifest_name: digest(manifest_body),
+            smoke_name: digest(smoke_body),
+        }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / manifest_name).write_bytes(manifest_body)
+            (root / smoke_name).write_bytes(smoke_body)
+
+            def run_text(command: list[str], *, cwd: Path | None = None) -> str:
+                del cwd
+                if command == [
+                    "gh",
+                    "api",
+                    f"repos/{repository}/releases/tags/{tag}",
+                ]:
+                    return json.dumps(release)
+                if command == ["gh", "api", f"repos/{repository}/releases/latest"]:
+                    return json.dumps({"tag_name": tag})
+                if command[:3] == ["gh", "release", "download"]:
+                    return ""
+                if command[:2] == ["cosign", "verify-blob"]:
+                    return ""
+                if command[:3] == ["gh", "attestation", "verify"]:
+                    return ""
+                if command[:4] == ["docker", "buildx", "imagetools", "inspect"]:
+                    resolved = (
+                        stack_image["digest"]
+                        if command[4] == stack_image["final_ref"]
+                        else f"sha256:{'e' * 64}"
+                    )
+                    return json.dumps({"digest": resolved})
+                raise AssertionError(f"unexpected command: {command}")
+
+            temporary_directory = mock.MagicMock()
+            temporary_directory.__enter__.return_value = str(root)
+            temporary_directory.__exit__.return_value = False
+            with (
+                mock.patch.object(self.module.shutil, "which", return_value="/tool"),
+                mock.patch.object(
+                    self.module, "resolve_annotated_tag", return_value=source
+                ),
+                mock.patch.object(self.module, "run_text", side_effect=run_text),
+                mock.patch.object(
+                    self.module.tempfile,
+                    "TemporaryDirectory",
+                    return_value=temporary_directory,
+                ),
+                mock.patch.object(
+                    self.module,
+                    "verify_downloaded_assets",
+                    return_value=(
+                        checksums,
+                        "registry-stack-v0.45.0-SHA256SUMS.sigstore.json",
+                        "registry-stack-v0.45.0-SHA256SUMS.intoto.jsonl",
+                    ),
+                ),
+                mock.patch.object(
+                    self.module,
+                    "validate_release_manifest",
+                    return_value=[stack_image, component_image],
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    self.module.PublicReleaseError,
+                    "discovery:v1.2.3.*resolves.*not",
+                ):
+                    self.module.verify(repo=root, repository=repository, tag=tag)
 
     def test_binary_smoke_does_not_inherit_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -1,10 +1,13 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { lstat, readFile, writeFile } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import YAML from 'yaml';
 import { docEntryAppliesToDocset } from './docsets.mjs';
 import { loadReleaseArtifacts, releaseProductVersion } from './docset-release-products.mjs';
+
+const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const distributionSchema = 'registry-stack.distribution-selection.v1';
 
 function parse(source, name) {
   const document = YAML.parseDocument(source);
@@ -34,12 +37,63 @@ function insertions(source, edits) {
   );
 }
 
+function exactObject(value, fields, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).sort().join('\0') !== [...fields].sort().join('\0')) {
+    throw new Error(`${label} must contain exactly ${[...fields].sort().join(', ')}`);
+  }
+  return value;
+}
+
+async function selectedDiscoveryVersion(repoRoot, stackVersion) {
+  const path = resolve(repoRoot, `release/distributions/v${stackVersion}.json`);
+  let stats;
+  try {
+    stats = await lstat(path);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+  if (!stats.isFile() || stats.isSymbolicLink()) {
+    throw new Error(`distribution selection must be a regular file: ${path}`);
+  }
+  let document;
+  try {
+    document = JSON.parse(await readFile(path, 'utf8'));
+  } catch (error) {
+    throw new Error(`cannot read distribution selection ${path}: ${error.message}`);
+  }
+  exactObject(document, ['schema_version', 'stack_version', 'components'], 'distribution selection');
+  if (document.schema_version !== distributionSchema) {
+    throw new Error(`distribution selection schema must be ${distributionSchema}`);
+  }
+  if (document.stack_version !== stackVersion) {
+    throw new Error('distribution selection stack_version must match its filename');
+  }
+  if (!Array.isArray(document.components) || document.components.length !== 1) {
+    throw new Error('Discovery pilot distribution selection must contain exactly one component');
+  }
+  const component = exactObject(
+    document.components[0], ['unit', 'version', 'policy'], 'distribution selection component',
+  );
+  if (component.unit !== 'discovery') {
+    throw new Error('Discovery pilot distribution selection component must be discovery');
+  }
+  if (!stableVersionPattern.test(component.version ?? '')) {
+    throw new Error('distribution selection Discovery version must be a stable semantic version');
+  }
+  if (!['exact', 'compatible-patch'].includes(component.policy)) {
+    throw new Error('distribution selection Discovery policy must be exact or compatible-patch');
+  }
+  return component.version;
+}
+
 // Insert fragments at YAML node boundaries. Existing comments, scalar styles,
 // flow lists and historical records remain byte-for-byte unchanged.
 export async function prepareReleaseDocsMetadata({
   siteRoot = process.cwd(), version, releaseId, date, write = true,
 }) {
-  if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version ?? '')) {
+  if (!stableVersionPattern.test(version ?? '')) {
     throw new Error('version must be an unprefixed stable semantic version');
   }
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(releaseId ?? '')) {
@@ -72,14 +126,28 @@ export async function prepareReleaseDocsMetadata({
   const docsets = docsetsDocument.toJS();
   const current = docsets.docsets.find((entry) => entry.id === docsets.current);
   if (!current?.products || current.status !== 'current') throw new Error('current docset must declare its products');
+  const discoveryVersion = await selectedDiscoveryVersion(repoRoot, version);
+  if (discoveryVersion) {
+    if (!Object.hasOwn(current.products, 'registry-discovery')) {
+      throw new Error('distribution selection requires registry-discovery in the current docset');
+    }
+    if (manifest.artifacts?.discovery !== discoveryVersion ||
+        manifest.artifacts?.discoveryctl !== discoveryVersion) {
+      throw new Error('selected Discovery version must match manifest discovery and discoveryctl artifacts');
+    }
+  }
   const products = {};
   const sourceRef = manifest.stack.source_ref ?? docsetId;
   // A product the manifest does not ship keeps the latest docset's
   // unreleased label, pinned to this docset's ref.
   for (const productId of Object.keys(current.products)) {
     if (Object.hasOwn(manifest.external, productId)) continue;
+    const productVersion = releaseProductVersion(productId, docsetId, manifest, releaseArtifacts);
     products[productId] = {
-      version: releaseProductVersion(productId, docsetId, manifest, releaseArtifacts), ref: sourceRef,
+      version: productVersion,
+      ref: discoveryVersion && productId === 'registry-discovery'
+        ? `discovery/v${discoveryVersion}`
+        : sourceRef,
     };
   }
   for (const [productId, external] of Object.entries(manifest.external)) {

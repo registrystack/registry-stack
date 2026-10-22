@@ -1083,7 +1083,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         (
             "build-canonical-binaries:\n    name: Build canonical Linux ${{ matrix.group }} binary shard",
             "fail-fast: false",
-            "group: [core, breg, casework, scheduling, messaging]",
+            "group: ${{ fromJSON(needs.validate.outputs.binary_groups) }}",
             "build-canonical:\n    name: Build Linux payload and private images once",
             "name: Restore reusable Cargo cache",
             "restore-keys:",
@@ -1124,7 +1124,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "name: Upload one candidate manifest and bundle",
             "registry-stack-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}",
             "candidate/release-candidate-manifest.json",
-            "candidate/registry-stack-${{ needs.validate.outputs.tag }}-candidate.tar.gz",
+            "candidate/${{ needs.validate.outputs.prefix }}-${{ needs.validate.outputs.asset_tag }}-candidate.tar.gz",
             "retention-days: 8",
         ),
     ),
@@ -1713,7 +1713,7 @@ def candidate_build_isolation_violations(workflow: str | None) -> list[str]:
     if (
         "needs: validate" not in shards
         or "actions/cache@" not in shards
-        or "group: [core, breg, casework, scheduling, messaging]" not in shards
+        or "group: ${{ fromJSON(needs.validate.outputs.binary_groups) }}" not in shards
         or "fail-fast: false" not in shards
         or shards.count("name: Build canonical Linux binary shard") != 1
         or shards.count("actions/upload-artifact@") != 1
@@ -1722,7 +1722,7 @@ def candidate_build_isolation_violations(workflow: str | None) -> list[str]:
         or "      - build-canonical-binaries" not in build_a
         or "actions/cache@" in build_a
         or "release/scripts/build-release-binaries.sh" in build_a
-        or build_a.count("actions/download-artifact@") != 5
+        or build_a.count("actions/download-artifact@") != 6
         or build_a.count("name: Merge and smoke the canonical Linux payload") != 1
         or build_a.count("name: Build private candidate image layouts once") != 1
     ):

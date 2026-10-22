@@ -24,9 +24,11 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import release_roster  # noqa: E402
 import rstack_components  # noqa: E402
+import release_units  # noqa: E402
 
 
 V2_SCHEMA_VERSION = "registry-stack.release-candidate.v2"
+V3_SCHEMA_VERSION = "registry-stack.release-candidate.v3"
 TAG_BINDING_HEADER = "registry-stack-release-candidate-v2"
 REPOSITORY = "registrystack/registry-stack"
 WORKFLOW_PATH = ".github/workflows/release-candidate.yml"
@@ -107,6 +109,7 @@ V2_TOP_LEVEL_FIELDS = {
     "bundle",
 }
 DOCS_V2_TOP_LEVEL_FIELDS = V2_TOP_LEVEL_FIELDS | {"docs"}
+V3_DISTRIBUTION_TOP_LEVEL_FIELDS = DOCS_V2_TOP_LEVEL_FIELDS | {"components"}
 PAYLOAD_KINDS = {
     "binary",
     "client-package",
@@ -116,6 +119,7 @@ PAYLOAD_KINDS = {
     "security-evidence",
 }
 DOCS_V2_PAYLOAD_KINDS = PAYLOAD_KINDS | {"docs"}
+V3_DISTRIBUTION_PAYLOAD_KINDS = DOCS_V2_PAYLOAD_KINDS | {"distribution"}
 SECURITY_EVIDENCE_MAX_ARCHIVE_SIZE = 128 * 1024 * 1024
 SECURITY_EVIDENCE_MAX_ENTRY_SIZE = 64 * 1024 * 1024
 SECURITY_EVIDENCE_MAX_TOTAL_SIZE = 256 * 1024 * 1024
@@ -278,6 +282,7 @@ def check_image_onboarding(
     root: Path,
     version: str,
     *,
+    unit: str | None = None,
     allow_missing_baseline: bool = False,
 ) -> set[str]:
     """Require every version-selected image to have complete release source state."""
@@ -286,7 +291,14 @@ def check_image_onboarding(
         raise CandidateError("version must be canonical semantic version text")
     if not root.is_dir():
         raise CandidateError(f"repository root does not exist: {root}")
-    image_names = _candidate_image_names(version)
+    try:
+        image_names = (
+            release_units.image_names(unit)
+            if unit not in {None, "stack"}
+            else _candidate_image_names(version)
+        )
+    except release_units.UnitRegistryError as exc:
+        raise CandidateError(str(exc)) from exc
     binary_recipe_path = root / "release/scripts/build-release-binaries.sh"
     image_recipe_path = root / "release/scripts/build-release-image.sh"
     cleanup_path = root / "release/scripts/cleanup-release-candidates.py"
@@ -524,6 +536,37 @@ def _release_payload_inventory(version: str) -> dict[str, str]:
                 del inventory[name]
                 inventory[f"{name}.tar.gz"] = kind
     return inventory
+
+
+def distribution_lock_name(version: str) -> str:
+    if VERSION.fullmatch(version) is None:
+        raise CandidateError("version must be canonical semantic version text")
+    return f"registry-stack-v{version}-distribution.json"
+
+
+def stack_payload_inventory(
+    version: str, components: Any
+) -> dict[str, str]:
+    """Return Stack-owned payloads after selected units move to immutable inputs."""
+
+    validated = validate_release_components(components)
+    inventory = _release_payload_inventory(version)
+    component_units = {component["unit"] for component in validated}
+    if "discovery" in component_units:
+        inventory.pop(f"discovery-v{version}-linux-amd64", None)
+        inventory.pop(f"discoveryctl-v{version}-linux-amd64", None)
+    inventory[distribution_lock_name(version)] = "distribution"
+    return inventory
+
+
+def stack_image_names(version: str, components: Any) -> set[str]:
+    """Return Stack-owned images after selected unit images are carried forward."""
+
+    validated = validate_release_components(components)
+    names = _candidate_image_names(version)
+    for component in validated:
+        names -= {image["name"] for image in component["images"]}
+    return names
 
 
 def _security_evidence_required_files(
@@ -1228,6 +1271,7 @@ def validate_candidate_manifest(
     expected_source_sha: str | None = None,
     expected_workflow_revision: str | None = None,
     expected_version: str | None = None,
+    expected_unit: str | None = None,
     expected_release_id: str | None = None,
     expected_run_id: int | None = None,
     expected_run_attempt: int | None = None,
@@ -1236,7 +1280,10 @@ def validate_candidate_manifest(
     workflow_run_metadata: dict[str, Any] | None = None,
     allow_current_run_in_progress: bool = False,
 ) -> dict[str, Any]:
-    """Validate the closed v2 candidate manifest and its workflow binding."""
+    """Validate a closed Stack v2 or independent-unit v3 candidate."""
+
+    if expected_unit == "stack":
+        expected_unit = None
 
     if allow_current_run_in_progress and promotion:
         raise CandidateError(
@@ -1247,7 +1294,21 @@ def validate_candidate_manifest(
             "current in-progress run verification requires trusted workflow-run metadata"
         )
 
+    schema_version = (
+        document.get("schema_version") if isinstance(document, dict) else None
+    )
+    if schema_version not in {V2_SCHEMA_VERSION, V3_SCHEMA_VERSION}:
+        raise CandidateError(
+            "manifest.schema_version must be a supported release candidate schema"
+        )
     release_hint = document.get("release") if isinstance(document, dict) else None
+    is_v3_candidate = schema_version == V3_SCHEMA_VERSION
+    is_unit_candidate = (
+        is_v3_candidate
+        and isinstance(release_hint, dict)
+        and "unit" in release_hint
+    )
+    is_distribution_candidate = is_v3_candidate and not is_unit_candidate
     version_hint = (
         release_hint.get("version") if isinstance(release_hint, dict) else None
     )
@@ -1257,39 +1318,49 @@ def validate_candidate_manifest(
         else None
     )
     if (
-        parsed_version_hint is not None
+        not is_unit_candidate
+        and parsed_version_hint is not None
         and parsed_version_hint < RELAY_V2_RELEASE_MINIMUM_VERSION
     ):
         raise CandidateError(
             "pre-v0.19 candidates are immutable historical evidence; verify them "
             "with the corresponding release tag"
         )
-    uses_release_docs = parsed_version_hint is not None and _version_uses_release_docs(
-        parsed_version_hint
+    uses_release_docs = (
+        not is_unit_candidate
+        and parsed_version_hint is not None
+        and _version_uses_release_docs(parsed_version_hint)
     )
     manifest = require_object(
         document,
         "manifest",
-        (DOCS_V2_TOP_LEVEL_FIELDS if uses_release_docs else V2_TOP_LEVEL_FIELDS)
-        | ({"components"} if parsed_version_hint is not None and release_roster.RSTACK_FIRST_RELEASE is not None and parsed_version_hint >= release_roster.RSTACK_FIRST_RELEASE else set()),
-    )
-    if manifest["schema_version"] != V2_SCHEMA_VERSION:
-        raise CandidateError(
-            f"manifest.schema_version must be {V2_SCHEMA_VERSION}"
+        (
+            V3_DISTRIBUTION_TOP_LEVEL_FIELDS
+            if is_distribution_candidate
+            else DOCS_V2_TOP_LEVEL_FIELDS
+            if uses_release_docs
+            else V2_TOP_LEVEL_FIELDS
         )
+        | ({"components"} if not is_unit_candidate and parsed_version_hint is not None and release_roster.RSTACK_FIRST_RELEASE is not None and parsed_version_hint >= release_roster.RSTACK_FIRST_RELEASE else set()),
+    )
+    if manifest["schema_version"] != schema_version:
+        raise CandidateError("manifest.schema_version changed during validation")
     if manifest["repository"] != REPOSITORY:
         raise CandidateError(f"manifest.repository must be {REPOSITORY}")
 
+    release_fields = {"version", "release_id", "tag", "source_sha"}
+    if is_unit_candidate:
+        release_fields.add("unit")
     release = require_object(
         manifest["release"],
         "release",
-        {"version", "release_id", "tag", "source_sha"},
+        release_fields,
     )
     version = require_nonempty_string(release["version"], "release.version")
     if VERSION.fullmatch(version) is None:
         raise CandidateError("release.version must be canonical semantic version text")
     release_version = tuple(int(part) for part in version.split("."))
-    if release_version < RELAY_V2_RELEASE_MINIMUM_VERSION:
+    if not is_unit_candidate and release_version < RELAY_V2_RELEASE_MINIMUM_VERSION:
         raise CandidateError(
             "pre-v0.19 candidates are immutable historical evidence; verify them "
             "with the corresponding release tag"
@@ -1298,8 +1369,28 @@ def validate_candidate_manifest(
     if RELEASE_ID.fullmatch(release_id) is None:
         raise CandidateError("release.release_id is invalid")
     source_sha = require_sha(release["source_sha"], "release.source_sha")
-    if release["tag"] != f"v{version}":
-        raise CandidateError("release.tag must exactly match release.version")
+    unit: str | None = None
+    if is_unit_candidate:
+        unit = require_nonempty_string(release["unit"], "release.unit")
+        try:
+            release_units.load_registry().require_pilot(unit)
+            expected_tag = release_units.release_tag(unit, version)
+        except release_units.UnitRegistryError as exc:
+            raise CandidateError(str(exc)) from exc
+    else:
+        expected_tag = f"v{version}"
+        if expected_unit is not None:
+            raise CandidateError("Stack candidates do not have a release unit")
+    if release["tag"] != expected_tag:
+        raise CandidateError(
+            f"release.tag must exactly match release identity {expected_tag}"
+        )
+
+    components = (
+        validate_release_components(manifest["components"])
+        if is_distribution_candidate
+        else None
+    )
 
     workflow = require_object(
         manifest["workflow"],
@@ -1397,7 +1488,11 @@ def validate_candidate_manifest(
         if Path(name).name != name:
             raise CandidateError(f"{label}.name must be a public asset basename")
         allowed_payload_kinds = (
-            DOCS_V2_PAYLOAD_KINDS if uses_release_docs else PAYLOAD_KINDS
+            release_units.PAYLOAD_KINDS
+            if is_unit_candidate
+            else V3_DISTRIBUTION_PAYLOAD_KINDS
+            if is_distribution_candidate
+            else DOCS_V2_PAYLOAD_KINDS if uses_release_docs else PAYLOAD_KINDS
         )
         if record["kind"] not in allowed_payload_kinds:
             raise CandidateError(f"{label}.kind is unsupported")
@@ -1406,7 +1501,9 @@ def validate_candidate_manifest(
         files[name] = (digest, record["size"])
         payload_by_name[name] = record
     singleton_kinds = (
-        ("docs", "sbom", "security-evidence")
+        ("docs", "sbom", "security-evidence", "distribution")
+        if is_distribution_candidate
+        else ("docs", "sbom", "security-evidence")
         if uses_release_docs
         else ("sbom", "security-evidence")
     )
@@ -1419,7 +1516,9 @@ def validate_candidate_manifest(
                 f"payloads must contain exactly one {singleton_kind} payload"
             )
     expected_evidence_name = (
-        f"registry-stack-v{version}-security-evidence.tar.gz"
+        release_units.security_evidence_name(unit, version)
+        if unit is not None
+        else f"registry-stack-v{version}-security-evidence.tar.gz"
     )
     evidence_payload = next(
         record
@@ -1431,7 +1530,13 @@ def validate_candidate_manifest(
             "security-evidence payload name must be "
             f"{expected_evidence_name}"
         )
-    expected_payloads = _release_payload_inventory(version)
+    expected_payloads = (
+        release_units.payload_inventory(unit, version)
+        if unit is not None
+        else stack_payload_inventory(version, components)
+        if components is not None
+        else _release_payload_inventory(version)
+    )
     actual_payloads = {record["name"]: record["kind"] for record in payloads}
     if actual_payloads != expected_payloads:
         missing = sorted(set(expected_payloads) - set(actual_payloads))
@@ -1453,7 +1558,8 @@ def validate_candidate_manifest(
             f"{'; '.join(details)}"
         )
     if (
-        release_roster.RSTACK_FIRST_RELEASE is not None
+        not is_unit_candidate
+        and release_roster.RSTACK_FIRST_RELEASE is not None
         and release_version >= release_roster.RSTACK_FIRST_RELEASE
     ):
         try:
@@ -1499,7 +1605,13 @@ def validate_candidate_manifest(
         candidate_refs.add(candidate_ref)
         final_refs.add(final_ref)
         product_image_refs[name] = candidate_ref
-    expected_image_names = _candidate_image_names(version)
+    expected_image_names = (
+        release_units.image_names(unit)
+        if unit is not None
+        else stack_image_names(version, components)
+        if components is not None
+        else _candidate_image_names(version)
+    )
     if image_names != expected_image_names:
         raise CandidateError(
             f"image inventory must be exactly {sorted(expected_image_names)!r}"
@@ -1560,7 +1672,11 @@ def validate_candidate_manifest(
     )
     if Path(bundle["name"]).name != bundle["name"]:
         raise CandidateError("bundle.name must be a basename")
-    expected_bundle_name = f"registry-stack-v{version}-candidate.tar.gz"
+    expected_bundle_name = (
+        release_units.candidate_bundle_name(unit, version)
+        if unit is not None
+        else f"registry-stack-v{version}-candidate.tar.gz"
+    )
     if bundle["name"] != expected_bundle_name:
         raise CandidateError(f"bundle.name must be {expected_bundle_name}")
     if bundle_path is not None:
@@ -1576,6 +1692,30 @@ def validate_candidate_manifest(
             "promotion requires an extracted candidate bundle root"
         )
     if bundle_root is not None:
+        if components is not None:
+            lock_name = distribution_lock_name(version)
+            try:
+                lock = json.loads(
+                    (bundle_root / lock_name).read_text(encoding="utf-8")
+                )
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise CandidateError(f"distribution lock is unreadable: {exc}") from exc
+            lock = require_object(
+                lock,
+                "distribution lock",
+                {"schema_version", "stack_version", "components"},
+            )
+            if lock["schema_version"] != "registry-stack.distribution-lock.v1":
+                raise CandidateError("distribution lock schema is unsupported")
+            if lock["stack_version"] != version:
+                raise CandidateError(
+                    "distribution lock stack_version must match release.version"
+                )
+            locked_components = validate_release_components(lock["components"])
+            if locked_components != components:
+                raise CandidateError(
+                    "distribution lock components must exactly match candidate components"
+                )
         validate_security_evidence_archive(
             bundle_root / expected_evidence_name,
             product_image_refs=product_image_refs,
@@ -1584,6 +1724,7 @@ def validate_candidate_manifest(
         )
 
     expectations = (
+        ("unit", expected_unit, unit),
         ("source SHA", expected_source_sha, source_sha),
         ("workflow revision", expected_workflow_revision, workflow_revision),
         ("version", expected_version, version),
@@ -1597,6 +1738,112 @@ def validate_candidate_manifest(
                 f"candidate {label} mismatch: expected {expected!r}, got {actual!r}"
             )
     return manifest
+
+
+def validate_release_components(document: Any) -> list[dict[str, Any]]:
+    """Validate immutable unit-release provenance embedded by a Stack release."""
+
+    components = require_list(document, "components")
+    if not components:
+        raise CandidateError("components must not be empty")
+    seen_units: set[str] = set()
+    for index, value in enumerate(components):
+        label = f"components[{index}]"
+        component = require_object(
+            value,
+            label,
+            {
+                "unit",
+                "version",
+                "release_tag",
+                "source_sha",
+                "manifest",
+                "payloads",
+                "images",
+            },
+        )
+        unit = require_nonempty_string(component["unit"], f"{label}.unit")
+        if unit in seen_units:
+            raise CandidateError(f"duplicate component unit {unit!r}")
+        seen_units.add(unit)
+        version = require_nonempty_string(component["version"], f"{label}.version")
+        try:
+            release_units.load_registry().require_pilot(unit)
+            expected_release_tag = release_units.release_tag(unit, version)
+            expected_manifest_name = release_units.public_manifest_name(unit, version)
+            expected_payloads = release_units.payload_inventory(unit, version)
+            expected_images = release_units.image_names(unit)
+        except release_units.UnitRegistryError as exc:
+            raise CandidateError(str(exc)) from exc
+        release_tag = require_nonempty_string(
+            component["release_tag"], f"{label}.release_tag"
+        )
+        if release_tag != expected_release_tag:
+            raise CandidateError(
+                f"{label}.release_tag must be {expected_release_tag}"
+            )
+        require_sha(component["source_sha"], f"{label}.source_sha")
+        manifest, manifest_name, _ = _validate_file_record(
+            component["manifest"],
+            f"{label}.manifest",
+            fields={"name", "sha256"},
+        )
+        if manifest_name != expected_manifest_name:
+            raise CandidateError(
+                f"{label}.manifest.name must be {expected_manifest_name}"
+            )
+
+        actual_payloads: dict[str, str] = {}
+        for payload_index, payload_value in enumerate(
+            require_list(component["payloads"], f"{label}.payloads")
+        ):
+            payload_label = f"{label}.payloads[{payload_index}]"
+            payload, name, _ = _validate_file_record(
+                payload_value,
+                payload_label,
+                fields={"name", "kind", "size", "sha256"},
+            )
+            if Path(name).name != name:
+                raise CandidateError(
+                    f"{payload_label}.name must be a public asset basename"
+                )
+            if name in actual_payloads:
+                raise CandidateError(f"{label}.payloads contains duplicate {name!r}")
+            actual_payloads[name] = require_nonempty_string(
+                payload["kind"], f"{payload_label}.kind"
+            )
+        if actual_payloads != expected_payloads:
+            raise CandidateError(
+                f"{label}.payload inventory must exactly match unit release {unit!r}"
+            )
+
+        actual_images: set[str] = set()
+        for image_index, image_value in enumerate(
+            require_list(component["images"], f"{label}.images")
+        ):
+            image_label = f"{label}.images[{image_index}]"
+            image = require_object(
+                image_value,
+                image_label,
+                {"name", "final_ref", "digest"},
+            )
+            name = require_nonempty_string(image["name"], f"{image_label}.name")
+            if name in actual_images:
+                raise CandidateError(f"{label}.images contains duplicate {name!r}")
+            actual_images.add(name)
+            require_digest(image["digest"], f"{image_label}.digest")
+            expected_final_ref = (
+                f"ghcr.io/registrystack/{name}:{release_units.asset_tag(version)}"
+            )
+            if image["final_ref"] != expected_final_ref:
+                raise CandidateError(
+                    f"{image_label}.final_ref must be {expected_final_ref}"
+                )
+        if actual_images != expected_images:
+            raise CandidateError(
+                f"{label}.image inventory must exactly match unit release {unit!r}"
+            )
+    return components
 
 
 def canary_run_from_json(document: Any) -> dict[str, Any]:
@@ -1749,7 +1996,11 @@ def write_candidate_manifest(draft_path: Path, output_path: Path) -> None:
     output_path.write_bytes(canonical_json(document))
 
 
-def render_tag_binding(run_id: int, run_attempt: int, manifest_sha256: str) -> str:
+def render_tag_binding(
+    run_id: int,
+    run_attempt: int,
+    manifest_sha256: str,
+) -> str:
     require_positive_integer(run_id, "run_id")
     require_positive_integer(run_attempt, "run_attempt")
     require_sha256(manifest_sha256, "manifest_sha256")
@@ -1816,12 +2067,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     image_names = subparsers.add_parser("image-names")
     image_names.add_argument("--version", required=True)
+    image_names.add_argument("--unit")
 
     operator_tools = subparsers.add_parser("image-operator-tools")
     operator_tools.add_argument("--version", required=True)
 
     check_onboarding = subparsers.add_parser("check-image-onboarding")
     check_onboarding.add_argument("--version", required=True)
+    check_onboarding.add_argument("--unit")
     check_onboarding.add_argument("--root", type=Path, required=True)
     check_onboarding.add_argument("--allow-missing-baseline", action="store_true")
 
@@ -1832,6 +2085,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     verify_candidate.add_argument("--source-sha")
     verify_candidate.add_argument("--workflow-revision")
     verify_candidate.add_argument("--version")
+    verify_candidate.add_argument("--unit")
     verify_candidate.add_argument("--release-id")
     verify_candidate.add_argument("--run-id", type=int)
     verify_candidate.add_argument("--run-attempt", type=int)
@@ -1878,6 +2132,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     verify_binding.add_argument("--tag-target")
     verify_binding.add_argument("--workflow-revision")
     verify_binding.add_argument("--version")
+    verify_binding.add_argument("--unit")
     verify_binding.add_argument("--release-id")
     verify_binding.add_argument(
         "--trusted-run-metadata",
@@ -1897,7 +2152,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
         if args.command == "image-names":
-            print(" ".join(sorted(_candidate_image_names(args.version))))
+            if VERSION.fullmatch(args.version) is None:
+                raise CandidateError(
+                    "version must be canonical semantic version text"
+                )
+            try:
+                names = (
+                    release_units.image_names(args.unit)
+                    if args.unit not in {None, "stack"}
+                    else _candidate_image_names(args.version)
+                )
+            except release_units.UnitRegistryError as exc:
+                raise CandidateError(str(exc)) from exc
+            print(" ".join(sorted(names)))
             return 0
         if args.command == "image-operator-tools":
             if VERSION.fullmatch(args.version) is None:
@@ -1912,6 +2179,7 @@ def main(argv: list[str] | None = None) -> int:
             image_names = check_image_onboarding(
                 args.root,
                 args.version,
+                unit=args.unit,
                 allow_missing_baseline=args.allow_missing_baseline,
             )
             print(f"checked image onboarding for {' '.join(sorted(image_names))}")
@@ -1932,6 +2200,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_source_sha=args.source_sha,
                 expected_workflow_revision=args.workflow_revision,
                 expected_version=args.version,
+                expected_unit=args.unit,
                 expected_release_id=args.release_id,
                 expected_run_id=args.run_id,
                 expected_run_attempt=args.run_attempt,
@@ -1986,7 +2255,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "render-tag-binding":
             print(
-                render_tag_binding(args.run_id, args.run_attempt, args.manifest_sha256),
+                render_tag_binding(
+                    args.run_id,
+                    args.run_attempt,
+                    args.manifest_sha256,
+                ),
                 end="",
             )
             return 0
@@ -2004,7 +2277,7 @@ def main(argv: list[str] | None = None) -> int:
             run_metadata = workflow_run_from_json(
                 read_json(args.workflow_run_metadata)
             )
-            required_v2 = {
+            required_binding = {
                 "--bundle": args.bundle,
                 "--bundle-root": args.bundle_root,
                 "--tag-target": args.tag_target,
@@ -2013,11 +2286,27 @@ def main(argv: list[str] | None = None) -> int:
                 "--release-id": args.release_id,
             }
             missing = [
-                option for option, value in required_v2.items() if value is None
+                option for option, value in required_binding.items() if value is None
             ]
+            if args.unit not in {None, "stack", "discovery"}:
+                raise CandidateError("only the discovery unit release pilot is enabled")
+            manifest_document = read_json(args.manifest)
+            manifest_release = (
+                manifest_document.get("release")
+                if isinstance(manifest_document, dict)
+                else None
+            )
+            is_unit_manifest = (
+                isinstance(manifest_document, dict)
+                and manifest_document.get("schema_version") == V3_SCHEMA_VERSION
+                and isinstance(manifest_release, dict)
+                and "unit" in manifest_release
+            )
+            if is_unit_manifest and args.unit is None:
+                missing.append("--unit")
             if missing:
                 raise CandidateError(
-                    "v2 tag verification requires " + ", ".join(missing)
+                    "tag verification requires " + ", ".join(missing)
                 )
             if args.tag_target != args.workflow_revision:
                 raise CandidateError(
@@ -2029,12 +2318,13 @@ def main(argv: list[str] | None = None) -> int:
                     "annotated tag manifest_sha256 does not match manifest bytes"
                 )
             manifest = validate_candidate_manifest(
-                read_json(args.manifest),
+                manifest_document,
                 bundle_path=args.bundle,
                 bundle_root=args.bundle_root,
                 expected_source_sha=args.workflow_revision,
                 expected_workflow_revision=args.workflow_revision,
                 expected_version=args.version,
+                expected_unit=args.unit,
                 expected_release_id=args.release_id,
                 expected_run_id=binding["run_id"],
                 expected_run_attempt=binding["run_attempt"],

@@ -7,6 +7,37 @@ workflow verifies those attestations before promotion, then keyless-signs one
 manifest, consolidated SPDX SBOM, and security-evidence archive, and publishes
 SLSA build provenance for that checksum file.
 
+## Independent Discovery releases
+
+For a `discovery/vX.Y.Z` release, run the same public verifier:
+
+```sh
+release/scripts/registry-release verify-public --tag discovery/vX.Y.Z
+```
+
+Its signed inventory names `registry-discovery-vX.Y.Z-release-manifest.json`,
+`registry-discovery-vX.Y.Z-SHA256SUMS.sigstore.json`, and
+`registry-discovery-vX.Y.Z-SHA256SUMS.intoto.jsonl`. The Git tag includes the
+product prefix; asset filenames and image tags do not. Verification checks
+the original source, exact artifact closure, signing workflow, provenance,
+and Discovery image digest. It does not require this product release to be
+GitHub's latest Stack release or require unrelated SDK packages. Binary smoke
+verification runs on the unit's supported Linux amd64 platform.
+
+For a Stack release carrying Discovery forward, first authenticate the Stack
+checksum chain and its `registry-stack-vX.Y.Z-distribution.json` payload. The
+lock records the original Discovery release source, tag, assets, and image
+digest. Install that exact pair on Linux amd64 with:
+
+```sh
+python3 release/scripts/release_distribution.py install \
+  --lock registry-stack-vX.Y.Z-distribution.json --install-dir ./bin
+```
+
+The installer checks every downloaded byte against the authenticated lock.
+Do not pass an unauthenticated lock: this command consumes the checksum trust
+established above; it does not establish the Stack signature itself.
+
 ## Install tools
 
 The commands require GitHub CLI, Cosign, `jq`, `crane`, GNU `sha256sum`,

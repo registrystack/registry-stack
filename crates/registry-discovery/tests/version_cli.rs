@@ -23,7 +23,7 @@ fn version_output_uses_user_facing_command_name() {
             version_output(flag),
             format!(
                 "discovery {}\n",
-                registry_platform_buildinfo::DISPLAY_VERSION
+                registry_discovery::build_info::DISPLAY_VERSION
             )
         );
     }
@@ -31,10 +31,10 @@ fn version_output_uses_user_facing_command_name() {
 
 #[test]
 fn version_output_distinguishes_the_build_identity() {
-    let expected = if registry_platform_buildinfo::IS_RELEASE_BUILD {
+    let expected = if registry_discovery::build_info::IS_RELEASE_BUILD {
         env!("CARGO_PKG_VERSION").to_owned()
-    } else if registry_platform_buildinfo::IS_NIGHTLY_BUILD {
-        registry_platform_buildinfo::DISPLAY_VERSION.to_owned()
+    } else if registry_discovery::build_info::IS_NIGHTLY_BUILD {
+        registry_discovery::build_info::DISPLAY_VERSION.to_owned()
     } else {
         format!("{}-dev", env!("CARGO_PKG_VERSION"))
     };

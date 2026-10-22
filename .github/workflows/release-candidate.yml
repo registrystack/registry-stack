@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: registry-stack-release-candidate
+  group: registry-stack-release-candidate-${{ github.event.client_payload.release_unit || 'stack' }}
   cancel-in-progress: false
 
 env:
@@ -23,6 +23,8 @@ env:
   SYFT_LINUX_AMD64_SHA256: 20c84195e24927f50a3b2269946be51f4c4abc9d2f145fee7388b4199149f716
   GRYPE_VERSION: v0.114.0
   GRYPE_LINUX_AMD64_SHA256: edda0968d8827daab01d32b3cd7de192ae0915005e7bbfcfef9e68e79bc43343
+  COSIGN_VERSION: v3.0.4
+  COSIGN_LINUX_AMD64_SHA256: 10dab2fd2170b5aa0d5c0673a9a2793304960220b314f6a873bf39c2f08287aa
   CRANE_VERSION: v0.21.2
   CRANE_LINUX_AMD64_SHA256: 897e7c342db072ba76531246fc18fbf3e8e298688b6ecf98916770984b263866
   ORAS_VERSION: v1.3.2
@@ -32,7 +34,7 @@ jobs:
   validate:
     name: Validate request and all build-independent controls
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     permissions:
       actions: read
       contents: read
@@ -43,6 +45,12 @@ jobs:
       version: ${{ steps.request.outputs.version }}
       release_id: ${{ steps.request.outputs.release_id }}
       tag: ${{ steps.request.outputs.tag }}
+      unit: ${{ steps.request.outputs.unit }}
+      asset_tag: ${{ steps.request.outputs.asset_tag }}
+      prefix: ${{ steps.request.outputs.prefix }}
+      bundle_name: ${{ steps.request.outputs.bundle_name }}
+      binary_groups: ${{ steps.request.outputs.binary_groups }}
+      exclude_discovery: ${{ steps.request.outputs.exclude_discovery }}
       manifest: ${{ steps.request.outputs.manifest }}
       image_names: ${{ steps.request.outputs.image_names }}
     steps:
@@ -64,6 +72,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUEST_EVENT_ACTION: ${{ github.event.action }}
+          REQUEST_UNIT: ${{ github.event.client_payload.release_unit || 'stack' }}
           REQUEST_VERSION: ${{ github.event.client_payload.version }}
           REQUEST_RELEASE_ID: ${{ github.event.client_payload.release_id }}
           REQUEST_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
@@ -80,15 +89,37 @@ jobs:
             echo "version must be canonical semantic version text" >&2
             exit 1
           fi
+          case "${REQUEST_UNIT}" in
+            stack) prefix=registry-stack; binary_groups='["core","breg","casework","scheduling","messaging"]' ;;
+            discovery) prefix=registry-discovery; binary_groups='["discovery"]' ;;
+            *) echo "unsupported release unit" >&2; exit 1 ;;
+          esac
           IFS=. read -r request_major request_minor _ <<< "${REQUEST_VERSION}"
-          if (( request_major == 0 && request_minor < 19 )); then
+          if [[ "${REQUEST_UNIT}" == stack ]] && (( request_major == 0 && request_minor < 19 )); then
             echo "pre-v0.19 releases are immutable historical evidence; use the corresponding v${REQUEST_VERSION} Git tag and archived assets" >&2
             exit 1
           fi
           release_image_names="$(
             python3 release/scripts/release_candidate.py image-names \
-              --version "${REQUEST_VERSION}"
+              --version "${REQUEST_VERSION}" --unit "${REQUEST_UNIT}"
           )"
+          exclude_discovery=false
+          if [[ "${REQUEST_UNIT}" == stack ]]; then
+            exclude_discovery="$(PYTHONPATH=release/scripts python3 - "${REQUEST_VERSION}" <<'PYUNIT'
+          import sys
+          from pathlib import Path
+          from release_distribution import load_components
+          print("true" if load_components(Path.cwd(), sys.argv[1]) else "false")
+          PYUNIT
+            )"
+            if [[ "${exclude_discovery}" == true ]]; then
+              selected_images=
+              for image in ${release_image_names}; do
+                if [[ "${image}" != discovery ]]; then selected_images+="${image} "; fi
+              done
+              release_image_names="${selected_images% }"
+            fi
+          fi
           if [[ ! "${REQUEST_RELEASE_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
             echo "release_id is invalid" >&2
             exit 1
@@ -114,7 +145,9 @@ jobs:
             "${workflow_revision}" refs/remotes/origin/main
           uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release validate-source-commit \
             --source-sha "${REQUEST_SOURCE_SHA}"
-          tag="v${REQUEST_VERSION}"
+          asset_tag="v${REQUEST_VERSION}"
+          tag="${asset_tag}"
+          if [[ "${REQUEST_UNIT}" != stack ]]; then tag="${REQUEST_UNIT}/${asset_tag}"; fi
           if git ls-remote --exit-code --tags origin "refs/tags/${tag}" \
               >/dev/null 2>&1; then
             echo "tag ${tag} already exists" >&2
@@ -127,8 +160,9 @@ jobs:
             fi
           fi
           release_response="${RUNNER_TEMP}/release-response"
+          encoded_tag="$(jq -rn --arg tag "${tag}" '$tag | @uri')"
           if gh api --include --silent \
-              "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/${encoded_tag}" \
               >"${release_response}" 2>&1; then
             release_status=200
           else
@@ -174,8 +208,10 @@ jobs:
             python3 release/scripts/release_workflow_guard.py \
               require-image-tag-absent \
               --metadata "${versions}" \
-              --tag "${tag}"
+              --tag "${asset_tag}"
           done
+          manifest=
+          if [[ "${REQUEST_UNIT}" == stack ]]; then
           manifest="$(
             uv run --no-project --with PyYAML==6.0.2 python3 - "${REQUEST_VERSION}" "${REQUEST_RELEASE_ID}" <<'PY'
           import glob
@@ -197,7 +233,18 @@ jobs:
           print(path)
           PY
           )"
+          else
+            python3 release/scripts/unit_release_pipeline.py prepare \
+              --unit "${REQUEST_UNIT}" --version "${REQUEST_VERSION}" \
+              --release-id "${REQUEST_RELEASE_ID}"
+          fi
           {
+            echo "unit=${REQUEST_UNIT}"
+            echo "asset_tag=${asset_tag}"
+            echo "prefix=${prefix}"
+            echo "bundle_name=${prefix}-${asset_tag}-candidate.tar.gz"
+            echo "binary_groups=${binary_groups}"
+            echo "exclude_discovery=${exclude_discovery}"
             echo "source_sha=${REQUEST_SOURCE_SHA}"
             echo "workflow_revision=${workflow_revision}"
             echo "version=${REQUEST_VERSION}"
@@ -213,14 +260,48 @@ jobs:
           git checkout --detach "${{ steps.request.outputs.source_sha }}"
           python3 release/scripts/release_candidate.py check-image-onboarding \
             --version "${{ steps.request.outputs.version }}" \
-            --root . \
+            --root . --unit "${{ steps.request.outputs.unit }}" \
             --allow-missing-baseline
+          if [[ "${{ steps.request.outputs.unit }}" == stack ]]; then
           uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release validate \
             "${{ steps.request.outputs.manifest }}"
           uv run --no-project --with PyYAML==6.0.2 python3 release/scripts/registry-release validate-docsets
+          fi
           cargo metadata --locked --format-version 1 >/dev/null
           uv run --no-project --with PyYAML==6.0.2 release/scripts/check-release-source-model.sh
           release/scripts/check-debian13-images.py
+
+      - name: Install checksum signature verifier for selected components
+        if: steps.request.outputs.exclude_discovery == 'true'
+        run: |
+          set -euo pipefail
+          curl -sSfL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" \
+            -o "${RUNNER_TEMP}/cosign"
+          printf '%s  %s\n' "${COSIGN_LINUX_AMD64_SHA256}" "${RUNNER_TEMP}/cosign" | sha256sum --check --strict
+          mkdir -p "${HOME}/.local/bin"
+          install -m 0755 "${RUNNER_TEMP}/cosign" "${HOME}/.local/bin/cosign"
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
+      - name: Authenticate exact previously published components
+        if: steps.request.outputs.exclude_discovery == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir distribution
+          python3 release/scripts/release_distribution.py resolve \
+            --repo . --repository "${GITHUB_REPOSITORY}" \
+            --stack-version "${{ steps.request.outputs.version }}" \
+            --output "distribution/registry-stack-${{ steps.request.outputs.asset_tag }}-distribution.json"
+
+      - name: Retain authenticated component lock
+        if: steps.request.outputs.exclude_discovery == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-distribution-${{ github.run_id }}-${{ github.run_attempt }}
+          path: distribution/*.json
+          if-no-files-found: error
+          retention-days: 2
 
   protected-ci:
     name: Require exact protected-main CI before candidate attestation
@@ -259,7 +340,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [core, breg, casework, scheduling, messaging]
+        group: ${{ fromJSON(needs.validate.outputs.binary_groups) }}
     steps:
       - name: Checkout exact candidate source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -285,7 +366,9 @@ jobs:
           RELEASE_SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
         run: |
           set -euo pipefail
-          release/scripts/build-release-binaries.sh \
+          component_args=()
+          if [[ "${{ needs.validate.outputs.exclude_discovery }}" == true ]]; then component_args+=(--exclude-unit discovery); fi
+          release/scripts/build-release-binaries.sh "${component_args[@]}" \
             --group "${{ matrix.group }}" \
             "${{ needs.validate.outputs.version }}"
 
@@ -327,39 +410,68 @@ jobs:
           submodules: false
 
       - name: Download canonical Linux core binary shard
+        if: needs.validate.outputs.unit == 'stack'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: canonical-linux-binaries-core-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: binary-shards/core
 
       - name: Download canonical Linux breg binary shard
+        if: needs.validate.outputs.unit == 'stack'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: canonical-linux-binaries-breg-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: binary-shards/breg
 
       - name: Download canonical Linux Casework binary shard
+        if: needs.validate.outputs.unit == 'stack'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: canonical-linux-binaries-casework-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: binary-shards/casework
 
       - name: Download canonical Linux Scheduling binary shard
+        if: needs.validate.outputs.unit == 'stack'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: canonical-linux-binaries-scheduling-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: binary-shards/scheduling
 
       - name: Download canonical Linux Messaging binary shard
+        if: needs.validate.outputs.unit == 'stack'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: canonical-linux-binaries-messaging-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: binary-shards/messaging
 
-      - name: Merge and smoke the canonical Linux payload
+      - name: Download canonical Discovery binary shard
+        if: needs.validate.outputs.unit == 'discovery'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: canonical-linux-binaries-discovery-${{ needs.validate.outputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: binary-shards/discovery
+
+      - name: Merge and smoke the Discovery payload
+        if: needs.validate.outputs.unit == 'discovery'
         run: |
           set -euo pipefail
-          release/scripts/merge-release-binary-shards.py \
+          python3 release/scripts/unit_release_pipeline.py merge-shard \
+            --unit discovery --version "${{ needs.validate.outputs.version }}" \
+            --source-sha "${{ needs.validate.outputs.source_sha }}" \
+            --shard binary-shards/discovery --output dist \
+            --builder-image "${RELEASE_BUILDER_IMAGE}"
+          for binary in discovery discoveryctl; do
+            test "$("dist/bin/${binary}-${{ needs.validate.outputs.asset_tag }}-linux-amd64" --version)" = \
+              "${binary} ${{ needs.validate.outputs.version }}"
+          done
+
+      - name: Merge and smoke the canonical Linux payload
+        if: needs.validate.outputs.unit == 'stack'
+        run: |
+          set -euo pipefail
+          component_args=()
+          if [[ "${{ needs.validate.outputs.exclude_discovery }}" == true ]]; then component_args+=(--exclude-unit discovery); fi
+          release/scripts/merge-release-binary-shards.py "${component_args[@]}" \
             --version "${{ needs.validate.outputs.version }}" \
             --source-sha "${{ needs.validate.outputs.source_sha }}" \
             --core binary-shards/core \
@@ -379,7 +491,7 @@ jobs:
           fi
           discoveryctl_in_release="$(python3 release/scripts/release_roster.py \
             discoveryctl-in-release "${{ needs.validate.outputs.version }}")"
-          if [[ "${discoveryctl_in_release}" == true ]]; then
+          if [[ "${discoveryctl_in_release}" == true && "${{ needs.validate.outputs.exclude_discovery }}" != true ]]; then
             test "$("dist/bin/discoveryctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
               "discoveryctl ${{ needs.validate.outputs.version }}"
           fi
@@ -521,6 +633,7 @@ jobs:
           retention-days: 2
 
   build-docs:
+    if: needs.validate.outputs.unit == 'stack'
     name: Build exact release docs archive once
     needs: validate
     runs-on: ubuntu-24.04
@@ -570,6 +683,7 @@ jobs:
           retention-days: 2
 
   build-platforms:
+    if: needs.validate.outputs.unit == 'stack'
     name: Build native ${{ matrix.asset }} payload once
     needs: validate
     runs-on: ${{ matrix.runner }}
@@ -744,6 +858,7 @@ jobs:
           retention-days: 2
 
   build-macos-platforms:
+    if: needs.validate.outputs.unit == 'stack'
     name: Build native macOS ${{ matrix.group }} payload once
     needs: validate
     runs-on: macos-26
@@ -821,6 +936,7 @@ jobs:
           retention-days: 2
 
   clients:
+    if: needs.validate.outputs.unit == 'stack'
     name: Build native client packages for ${{ matrix.asset }}
     needs: validate
     runs-on: ${{ matrix.runner }}
@@ -1421,6 +1537,12 @@ jobs:
           compression-level: 0
 
   assemble:
+    if: >-
+      always() && !cancelled() && needs.validate.result == 'success' &&
+      needs.build-canonical.result == 'success' &&
+      (needs.validate.outputs.unit == 'discovery' ||
+       (needs.build-docs.result == 'success' && needs.build-platforms.result == 'success' &&
+        needs.build-macos-platforms.result == 'success' && needs.clients.result == 'success'))
     name: Smoke, scan, and assemble one candidate bundle
     needs:
       - validate
@@ -1453,6 +1575,7 @@ jobs:
           path: inputs
 
       - name: Merge exact native macOS release shards
+        if: needs.validate.outputs.unit == 'stack'
         shell: bash
         run: |
           set -euo pipefail
@@ -1740,6 +1863,7 @@ jobs:
           }' > candidate/security/advisory-verdict.json
 
       - name: Assemble public payload and validate version-appropriate install inputs
+        if: needs.validate.outputs.unit == 'stack'
         shell: bash
         run: |
           set -euo pipefail
@@ -1753,6 +1877,9 @@ jobs:
           rm -f candidate/bundle-root/SHA256SUMS
           cp "${macos}"/platform/* candidate/bundle-root/
           cp "${linux_arm}"/platform/* candidate/bundle-root/
+          if [[ "${{ needs.validate.outputs.exclude_discovery }}" == true ]]; then
+            cp "inputs/candidate-distribution-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/registry-stack-${{ needs.validate.outputs.asset_tag }}-distribution.json" candidate/bundle-root/
+          fi
           version="${{ needs.validate.outputs.version }}"
           IFS=. read -r client_major client_minor client_patch <<<"${version}"
           if (( client_major > 0 || client_minor >= 33 )); then
@@ -2074,6 +2201,39 @@ jobs:
               candidate/bundle-root/rstack-install.sh
             chmod 0755 candidate/bundle-root/rstack-install.sh
           fi
+      - name: Install Node for the distribution SDK smoke
+        if: needs.validate.outputs.exclude_discovery == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.11.0
+
+      - name: Install carried-forward Discovery and smoke the current unified SDK
+        if: needs.validate.outputs.exclude_discovery == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/distribution-discovery/bin"
+          python3 release/scripts/release_distribution.py install \
+            --lock "candidate/bundle-root/registry-stack-${{ needs.validate.outputs.asset_tag }}-distribution.json" \
+            --install-dir "${install_dir}"
+          python3 release/scripts/smoke_discovery_distribution.py \
+            --bin-dir "${install_dir}" \
+            --client-tarball "candidate/bundle-root/registrystack-client-${{ needs.validate.outputs.version }}.tgz"
+
+      - name: Assemble and smoke Discovery install inputs
+        if: needs.validate.outputs.unit == 'discovery'
+        run: |
+          set -euo pipefail
+          python3 release/scripts/unit_release_pipeline.py stage-payload \
+            --unit discovery --version "${{ needs.validate.outputs.version }}" \
+            --binaries "inputs/candidate-canonical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/dist/bin" \
+            --output candidate/bundle-root
+
+      - name: Package exact security evidence and SBOM
+        run: |
+          set -euo pipefail
+          canonical="inputs/candidate-canonical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           for name in ${RELEASE_IMAGE_NAMES}; do
             candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
             digest="${candidate_ref##*@}"
@@ -2081,10 +2241,10 @@ jobs:
               > "${RUNNER_TEMP}/${name}.release.digest"
           done
           syft dir:candidate/bundle-root \
-            -o "spdx-json=candidate/bundle-root/registry-stack-${{ needs.validate.outputs.tag }}.sbom.spdx.json"
+            -o "spdx-json=candidate/bundle-root/${{ needs.validate.outputs.prefix }}-${{ needs.validate.outputs.asset_tag }}.sbom.spdx.json"
           tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 \
             --numeric-owner -czf \
-            "candidate/bundle-root/registry-stack-${{ needs.validate.outputs.tag }}-security-evidence.tar.gz" \
+            "candidate/bundle-root/${{ needs.validate.outputs.prefix }}-${{ needs.validate.outputs.asset_tag }}-security-evidence.tar.gz" \
             -C candidate/security \
               image-sbom syft grype advisory-verdict.json
           for name in ${RELEASE_IMAGE_NAMES}; do
@@ -2098,9 +2258,10 @@ jobs:
         run: |
           set -euo pipefail
           canonical="inputs/candidate-canonical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          tag="${{ needs.validate.outputs.tag }}"
+          tag="${{ needs.validate.outputs.asset_tag }}"
+          prefix="${{ needs.validate.outputs.prefix }}"
           version="${{ needs.validate.outputs.version }}"
-          bundle="candidate/registry-stack-${tag}-candidate.tar.gz"
+          bundle="candidate/${{ needs.validate.outputs.bundle_name }}"
           created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           expires_at="$(date -u -d "${created_at} + 7 days" +%Y-%m-%dT%H:%M:%SZ)"
           tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 \
@@ -2115,6 +2276,7 @@ jobs:
                   name="$(basename "${file}")"
                   case "${name}" in
                     registry-docs-*.tar.gz) kind=docs ;;
+                    *-distribution.json) kind=distribution ;;
                     *.sbom.spdx.json) kind=sbom ;;
                     *-security-evidence.tar.gz) kind=security-evidence ;;
                     *-install.sh) kind=installer ;;
@@ -2130,10 +2292,11 @@ jobs:
                     '{name:$name,kind:$kind,size:$size,sha256:$sha256}'
                 done | jq -s .
           )"
-          components=null
-          if [[ "$(python3 release/scripts/release_roster.py \
+          rstack_components=null
+          if [[ "${{ needs.validate.outputs.unit }}" == stack &&
+            "$(python3 release/scripts/release_roster.py \
               rstack-in-release "${version}")" == true ]]; then
-            components="$(printf '%s' "${payloads}" \
+            rstack_components="$(printf '%s' "${payloads}" \
               | python3 release/scripts/rstack_components.py --version "${version}")"
           fi
           images="$(
@@ -2159,24 +2322,34 @@ jobs:
             done | jq -s .
           )"
           docs_name="registry-docs-${tag}.tar.gz"
-          sbom_name="registry-stack-${tag}.sbom.spdx.json"
+          sbom_name="${prefix}-${tag}.sbom.spdx.json"
+          docs_sha=
+          if [[ "${{ needs.validate.outputs.unit }}" == stack ]]; then
+            docs_sha="$(sha256sum "candidate/bundle-root/${docs_name}" | awk '{print $1}')"
+          fi
+          distribution_components='[]'
+          if [[ "${{ needs.validate.outputs.exclude_discovery }}" == true ]]; then
+            distribution_components="$(jq -ce .components "candidate/bundle-root/registry-stack-${tag}-distribution.json")"
+          fi
           advisory_name=advisory-verdict.json
           jq -n \
             --arg repository "${GITHUB_REPOSITORY}" \
             --arg version "${{ needs.validate.outputs.version }}" \
             --arg release_id "${{ needs.validate.outputs.release_id }}" \
-            --arg tag "${tag}" \
+            --arg tag "${{ needs.validate.outputs.tag }}" \
+            --arg unit "${{ needs.validate.outputs.unit }}" \
             --arg source_sha "${{ needs.validate.outputs.source_sha }}" \
             --arg workflow_revision "${{ needs.validate.outputs.workflow_revision }}" \
             --argjson run_id "${GITHUB_RUN_ID}" \
             --argjson run_attempt "${GITHUB_RUN_ATTEMPT}" \
             --arg created_at "${created_at}" \
             --arg expires_at "${expires_at}" \
+            --argjson rstack_components "${rstack_components}" \
             --argjson payloads "${payloads}" \
-            --argjson components "${components}" \
+            --argjson distribution_components "${distribution_components}" \
             --argjson images "${images}" \
             --arg docs_name "${docs_name}" \
-            --arg docs_sha "$(sha256sum "candidate/bundle-root/${docs_name}" | awk '{print $1}')" \
+            --arg docs_sha "${docs_sha}" \
             --arg sbom_name "${sbom_name}" \
             --arg sbom_sha "$(sha256sum "candidate/bundle-root/${sbom_name}" | awk '{print $1}')" \
             --argjson scans "${scans}" \
@@ -2219,14 +2392,21 @@ jobs:
                 size: $bundle_size,
                 sha256: $bundle_sha
               }
-            } + (if $components == null then {} else {components:$components} end)' \
-            > candidate/candidate-manifest.draft.json
+            } + (if $rstack_components == null then {} else {components:$rstack_components} end)
+            | if $unit == "stack" then
+              if ($distribution_components | length) > 0 then
+                .schema_version = "registry-stack.release-candidate.v3" |
+                .components = $distribution_components
+              else . end
+            else
+              .schema_version = "registry-stack.release-candidate.v3" |
+              .release.unit = $unit | del(.docs) end' > candidate/candidate-manifest.draft.json
           python3 release/scripts/release_candidate.py seal-candidate \
             --draft candidate/candidate-manifest.draft.json \
             --output candidate/release-candidate-manifest.json
 
       - name: Smoke release-pinned rstack installation from verified local assets
-        if: ${{ needs.validate.outputs.version != '' }}
+        if: ${{ needs.validate.outputs.unit == 'stack' && needs.validate.outputs.version != '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2267,7 +2447,7 @@ jobs:
           name: registry-stack-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             candidate/release-candidate-manifest.json
-            candidate/registry-stack-${{ needs.validate.outputs.tag }}-candidate.tar.gz
+            candidate/${{ needs.validate.outputs.prefix }}-${{ needs.validate.outputs.asset_tag }}-candidate.tar.gz
           if-no-files-found: error
           retention-days: 8
 
@@ -2307,14 +2487,14 @@ jobs:
           set -euo pipefail
           mkdir -p candidate/extracted
           tar -xzf \
-            "candidate/registry-stack-${{ needs.validate.outputs.tag }}-candidate.tar.gz" \
+            "candidate/${{ needs.validate.outputs.prefix }}-${{ needs.validate.outputs.asset_tag }}-candidate.tar.gz" \
             -C candidate/extracted
           gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             > candidate/trusted-run.json
           python3 release/scripts/release_candidate.py verify-candidate \
             --manifest candidate/release-candidate-manifest.json \
             --bundle \
-              "candidate/registry-stack-${{ needs.validate.outputs.tag }}-candidate.tar.gz" \
+              "candidate/${{ needs.validate.outputs.prefix }}-${{ needs.validate.outputs.asset_tag }}-candidate.tar.gz" \
             --bundle-root candidate/extracted \
             --source-sha "${{ needs.validate.outputs.source_sha }}" \
             --workflow-revision "${{ needs.validate.outputs.workflow_revision }}" \
@@ -2330,4 +2510,4 @@ jobs:
         with:
           subject-path: |
             candidate/release-candidate-manifest.json
-            candidate/registry-stack-${{ needs.validate.outputs.tag }}-candidate.tar.gz
+            candidate/${{ needs.validate.outputs.prefix }}-${{ needs.validate.outputs.asset_tag }}-candidate.tar.gz

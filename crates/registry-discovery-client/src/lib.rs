@@ -4,6 +4,7 @@
 mod client;
 mod error;
 mod selection;
+mod wire;
 
 pub use client::{DiscoveryClient, DiscoveryClientConfig, EvidenceServiceQuery};
 pub use error::{DiscoveryClientError, DiscoveryProblem};

@@ -46,7 +46,9 @@ fn kind(error: &DiscoveryClientError) -> &'static str {
         DiscoveryClientError::LocalAcceptanceRefused => "local-acceptance-refused",
         DiscoveryClientError::SelectionChanged => "selection-changed",
         DiscoveryClientError::Transport { .. } => "transport",
-        DiscoveryClientError::Problem { .. } => "problem",
+        DiscoveryClientError::Problem { .. } | DiscoveryClientError::UnrecognizedProblem { .. } => {
+            "problem"
+        }
         DiscoveryClientError::Protocol => "protocol",
         _ => "client",
     }
@@ -72,6 +74,7 @@ fn client_error(py: Python<'_>, error: DiscoveryClientError) -> PyErr {
         DiscoveryClientError::Problem { status, problem } => {
             (Some(status), Some(problem_name(problem)), None)
         }
+        DiscoveryClientError::UnrecognizedProblem { status } => (Some(status), None, None),
         DiscoveryClientError::Transport { kind } => (None, None, Some(kind.kind())),
         _ => (None, None, None),
     };
