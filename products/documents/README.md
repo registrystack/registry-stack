@@ -328,6 +328,14 @@ verifier's, not a caller's. `expiresAt` is the grant's expiry, as the API
 reports it. No event carries content, a label, a media type, a name, a
 subject, or anything else about the person a document describes.
 
+Every grant event, an issue or a revocation, uses the one trigger
+`document-grant.changed`, and `change` says which. A receiver that acts on
+revocations only filters on `change: revoked`. A grant outcome the Store
+records later, such as a recorded expiry, arrives as another `change` value
+under the same trigger rather than as a new trigger, so a receiver reads the
+grant's current state through the API on every event and does not treat an
+unfamiliar `change` as an error.
+
 The envelope's subject names the version or grant and its revision. Every
 recorded change of a version or a grant, a verdict, a suspension, a
 revocation, a removal, raises its revision by one, so two events about one

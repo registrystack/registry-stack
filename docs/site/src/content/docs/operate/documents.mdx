@@ -483,6 +483,11 @@ issued grant, as observed, with identifiers and times replaced:
 - `actorKind` is `service` or `human`: the kind of caller that issued or revoked the grant, or
   that requested the removal which revoked it. A version event has none, because its verdict is
   the verifier's.
+- Every grant event uses the one trigger `document-grant.changed`, and `change` says what
+  happened: `issued` or `revoked`. To act on revocations only, filter on `change: revoked`. A grant
+  outcome recorded later, such as an expiry, arrives as another `change` value on the same trigger,
+  so a receiver reads the grant's current state through the API on every event and does not
+  treat an unfamiliar `change` as an error.
 - `expiresAt` is the expiry fixed at issue. Reaching it sends nothing; a receiver that tracks
   grants reads the lapse from the `issued` event.
 - A removal sends one `revoked` event for each grant it revokes, and the erasure that follows
