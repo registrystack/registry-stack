@@ -34,7 +34,11 @@ The Document Store is held out of releases.
   the current verifier binding; a verifier change at restart suspends and
   re-verifies.
 - Download checks stored content against its digest before the first byte
-  and refuses a mismatch.
+  and refuses a mismatch. The journal records a digest or binding mismatch,
+  or content gone from a version not under removal, as `storage-integrity`,
+  and a database or object storage outage as `storage-unavailable`; both
+  answer `service.unavailable`. Content removed while a download reads it
+  is answered as removed content.
 - Audit entries for reservation, upload, verification, and download.
 - Verification under mixed verifier bindings: a worker under another binding
   retries a job rather than ending it, a restart cancels the jobs it

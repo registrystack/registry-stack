@@ -141,9 +141,16 @@ DOCUMENTS-SEC-14 to DOCUMENTS-SEC-20:
   three. It reads the whole
   content and checks digest and length before the first byte; a mismatch
   answers 503, sends no byte, and writes a `storage-integrity` audit entry.
+  So does content gone from a version that is not under removal. A database
+  or object storage outage answers the same 503 but writes
+  `storage-unavailable`, logged at warn, so the integrity outcome stays a
+  signal worth alarming on. Content removed between the record read and the
+  content read is re-read and answered as a version under removal.
 - Reservation, upload, verification, and download each write an audit
   request entry before they act and a response entry with outcome and byte
-  count after. The journal names a caller only by a keyed reference. A
+  count after. A download's `released` entry is written before the body
+  streams: it means the content was admitted for transfer, not that the
+  caller received every byte. The journal names a caller only by a keyed reference. A
   request whose audit entry cannot be written is refused with 503. A
   verification attempt whose leasing entry cannot be written is refused
   before the verifier is asked and records no verdict; a result entry that
@@ -210,7 +217,8 @@ DOCUMENTS-SEC-10, DOCUMENTS-SEC-19, and DOCUMENTS-SEC-21 to DOCUMENTS-SEC-33:
   `Idempotency-Key`, scoped to issuer, subject, operation, and key, with the
   request body's digest. Another body answers 409 `idempotency.key-reused`;
   a key older than `retention.receiptRetentionDays` answers 410
-  `idempotency.expired`; neither reserves anything. A replay re-runs
+  `idempotency.expired` and stays spent, since its row holds only digests
+  and the resource id and is never pruned; neither reserves anything. A replay re-runs
   authorization first, so a caller who lost authority gets the refusal, not
   the cached success. A finalized upload answers a repeat of the same bytes
   with the same view and other bytes with 409 `upload.finalized`.
