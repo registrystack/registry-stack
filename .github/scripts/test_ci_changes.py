@@ -1203,6 +1203,12 @@ class CiChangesTest(unittest.TestCase):
         self.assertFalse(unrelated["documents_contracts"])
         self.assertFalse(unrelated["documents_postgres"])
 
+    def test_registry_render_selects_the_document_store_postgres_journey(self) -> None:
+        """The journey suite drives the real registry-render binary."""
+        outputs = classify(self.workspace, ("crates/registry-render/src/main.rs",))
+        self.assertTrue(outputs["documents_postgres"])
+        self.assertFalse(outputs["documents_contracts"])
+
     def test_coordinator_selects_its_runtime_cli_reference_and_postgres_proof(self) -> None:
         for path in (
             "crates/registry-coordinator/src/worker.rs",

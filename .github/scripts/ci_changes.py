@@ -125,6 +125,8 @@ CASEWORK_PACKAGES = frozenset(SHARDS["casework"])
 SCHEDULING_PACKAGES = frozenset(SHARDS["scheduling"])
 MESSAGING_PACKAGES = frozenset(SHARDS["messaging"])
 DOCUMENTS_PACKAGES = frozenset(SHARDS["documents"])
+# The Document Store PostgreSQL journey drives the real registry-render binary.
+DOCUMENTS_POSTGRES_PACKAGES = DOCUMENTS_PACKAGES | {"registry-render"}
 STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 
 # The runtime configuration conformance gate reads the sources of the runtimes
@@ -626,6 +628,7 @@ DOCS_ARCHIVE_INPUTS = frozenset(
         "docs/site/scripts/generate-casework-configuration.mjs",
         "docs/site/scripts/generate-configuration-formats.mjs",
         "docs/site/scripts/generate-coordinator-configuration.mjs",
+        "docs/site/scripts/generate-documents-configuration.mjs",
         "docs/site/scripts/generate-evidence-configuration.mjs",
         "docs/site/scripts/generate-messaging-configuration.mjs",
         "docs/site/scripts/generate-render-configuration.mjs",
@@ -1312,11 +1315,13 @@ def classify(
             "products/scheduling/generated/records/*",
             "products/scheduling/generated/fixture/*",
             "products/scheduling/generated/runtime/*",
-            # The Messaging, Coordinator, and Render configuration reference
-            # pages are generated from these schemas, and the Coordinator one
-            # from its operation catalogue as well.
+            # The Messaging, Document Store, Coordinator, and Render
+            # configuration reference pages are generated from these schemas,
+            # and the Coordinator one from its operation catalogue as well.
             "products/messaging/generated/authoring/*",
             "products/messaging/generated/runtime/*",
+            "products/documents/generated/project/*",
+            "products/documents/generated/runtime/*",
             "products/coordinator/generated/project/*",
             "products/coordinator/generated/scenarios/*",
             "products/coordinator/generated/runtime/*",
@@ -1336,6 +1341,7 @@ def classify(
             # as the Evidence one is from its own above.
             "products/casework/generated/registry-casework.openapi.json",
             "products/messaging/generated/registry-messaging.openapi.json",
+            "products/documents/generated/registry-documents.openapi.json",
             "products/scheduling/generated/registry-scheduling.openapi.json",
             "products/coordinator/generated/openapi/coordinator.openapi.json",
             # The client capabilities page imports this inventory at build.
@@ -1544,7 +1550,7 @@ def classify(
         "messaging_contracts": bool(affected & MESSAGING_PACKAGES),
         "messaging_postgres": bool(affected & MESSAGING_PACKAGES),
         "documents_contracts": bool(affected & DOCUMENTS_PACKAGES),
-        "documents_postgres": bool(affected & DOCUMENTS_PACKAGES),
+        "documents_postgres": bool(affected & DOCUMENTS_POSTGRES_PACKAGES),
         "coordinator": "registry-coordinator" in affected,
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
