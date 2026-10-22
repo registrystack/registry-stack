@@ -682,10 +682,12 @@ fn check(args: &CheckArgs) -> Outcome {
     combined.set_files_checked(0);
     let mut unavailable = false;
     let mut report = json!({});
+    let mut project = None;
     if let Some(root) = &args.project {
-        let (project, project_unavailable) = check_project(root);
+        let (checked, project_unavailable, decoded) = check_project(root);
         unavailable |= project_unavailable;
-        combined.extend(project);
+        combined.extend(checked);
+        project = decoded;
         report["project"] = json!(root);
     }
     if let Some(path) = &args.runtime_config {
@@ -700,7 +702,9 @@ fn check(args: &CheckArgs) -> Outcome {
                     .to_owned(),
             );
         };
-        let runtime = check_runtime_file(&absolute, args.environment);
+        // With a project beside it, the runtime document is also checked
+        // against the project it serves.
+        let runtime = check_runtime_file(&absolute, args.environment, project.as_ref());
         unavailable |= runtime.unavailable;
         combined.extend(runtime.report);
         report["runtimeConfig"] = json!(path);
@@ -728,19 +732,20 @@ fn check_exit(report: &Report, deny_warnings: bool, unavailable: bool) -> u8 {
 }
 
 /// Read and decode one project's `documents.yaml`. The flag is set when the
-/// file could not be read at all, as opposed to read and refused.
-fn check_project(root: &Path) -> (Report, bool) {
+/// file could not be read at all, as opposed to read and refused; the project
+/// is present when it decoded.
+fn check_project(root: &Path) -> (Report, bool, Option<DocumentsProject>) {
     let file = root.join(PROJECT_FILE).display().to_string();
     let bytes = match read_project(root) {
         Ok(bytes) => bytes,
-        Err(report) => return (report, true),
+        Err(report) => return (report, true, None),
     };
-    let mut report = match DocumentsProject::decode(&file, &bytes) {
-        Ok(decoded) => decoded.document.warnings(),
-        Err(report) => report,
+    let (mut report, project) = match DocumentsProject::decode(&file, &bytes) {
+        Ok(decoded) => (decoded.document.warnings(), Some(decoded.value)),
+        Err(report) => (report, None),
     };
     report.set_files_checked(1);
-    (report, false)
+    (report, false, project)
 }
 
 /// The bytes of the project's `documents.yaml`, or the one diagnostic that
@@ -1049,6 +1054,65 @@ mod tests {
         assert_eq!(report["status"], "complete");
         assert_eq!(report["kind"], "DocumentsCtlReport");
         assert_eq!(report["filesChecked"], 2);
+        assert_eq!(report["diagnostics"], json!([]));
+    }
+
+    /// The starter project and runtime copied into a scratch directory, with
+    /// every hook pointed at `unbound-events`, a destination the runtime
+    /// configuration does not bind.
+    fn unbound_hook_destination() -> (tempfile::TempDir, String, String) {
+        let directory = scratch();
+        let starter = PathBuf::from(starter());
+        let project = std::fs::read_to_string(starter.join(PROJECT_FILE))
+            .unwrap()
+            .replace(
+                "destinationId: owning-system-events",
+                "destinationId: unbound-events",
+            );
+        std::fs::write(directory.path().join(PROJECT_FILE), project).unwrap();
+        let runtime = directory.path().join("runtime.example.yaml");
+        std::fs::copy(starter.join("runtime.example.yaml"), &runtime).unwrap();
+        let root = directory.path().display().to_string();
+        let runtime = runtime.display().to_string();
+        (directory, root, runtime)
+    }
+
+    #[test]
+    fn check_refuses_a_hook_destination_the_runtime_does_not_bind() {
+        let (_directory, project, runtime) = unbound_hook_destination();
+        let (code, report) =
+            json_report(&["check", "--project", &project, "--runtime-config", &runtime]);
+        assert_eq!(code, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report:#}");
+        assert_eq!(report["status"], "domain-refusal");
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 1, "{report:#}");
+        assert_eq!(
+            diagnostics[0]["code"],
+            "documents.runtime.unbound-hook-destination"
+        );
+        assert_eq!(diagnostics[0]["path"], "/destinations/hooks");
+        assert_eq!(diagnostics[0]["source"]["file"], runtime);
+
+        // Each file alone holds no such rule: the project names a
+        // destination, and the runtime binds one, but neither knows the other.
+        let (code, report) = json_report(&["check", "--project", &project]);
+        assert_eq!(code, ExitCode::SUCCESS, "{report:#}");
+        let (code, report) = json_report(&["check", "--runtime-config", &runtime]);
+        assert_eq!(code, ExitCode::SUCCESS, "{report:#}");
+    }
+
+    #[test]
+    fn check_accepts_a_hook_destination_once_the_runtime_binds_it() {
+        let (_directory, project, runtime) = unbound_hook_destination();
+        let bound = std::fs::read_to_string(&runtime).unwrap().replacen(
+            "  hooks:\n",
+            "  hooks:\n    unbound-events:\n      url: https://civil-registry.example.test/unbound-events\n      hmacSha256KeyRef: secret:file/unbound-events-hmac\n",
+            1,
+        );
+        std::fs::write(&runtime, bound).unwrap();
+        let (code, report) =
+            json_report(&["check", "--project", &project, "--runtime-config", &runtime]);
+        assert_eq!(code, ExitCode::SUCCESS, "{report:#}");
         assert_eq!(report["diagnostics"], json!([]));
     }
 

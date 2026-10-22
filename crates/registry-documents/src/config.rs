@@ -12,7 +12,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use jsonwebtoken::Algorithm;
-use registry_documents_core::{DOCUMENTS_RUNTIME_API_VERSION, DOCUMENTS_RUNTIME_KIND};
+use registry_documents_core::{
+    DocumentsProject, HookHandler, DOCUMENTS_RUNTIME_API_VERSION, DOCUMENTS_RUNTIME_KIND,
+};
 use registry_platform_audit::{AuditDestination, AuditDestinationKind};
 use registry_platform_config::JwksSource;
 pub use registry_platform_config::{
@@ -63,6 +65,20 @@ pub const MAXIMUM_RECEIPT_RETENTION_DAYS: u32 = 365;
 
 /// The longest a hook payload may be retained, in days.
 pub const MAXIMUM_HOOK_PAYLOAD_RETENTION_DAYS: u32 = 30;
+
+/// The code of the refusal a runtime document earns when `destinations.hooks`
+/// leaves unbound a destination the project's hooks name. `documentsctl
+/// check` reports it at `/destinations/hooks`, and the runtime's startup
+/// refusal leads with it.
+pub const UNBOUND_HOOK_DESTINATION_CODE: &str = "documents.runtime.unbound-hook-destination";
+
+/// What the unbound hook destination refusal says, wherever it is reported.
+pub const UNBOUND_HOOK_DESTINATION_MESSAGE: &str =
+    "destinations.hooks must bind every destination documents.yaml hooks[].handler.destinationId names";
+
+/// What an operator does about the unbound hook destination refusal.
+pub const UNBOUND_HOOK_DESTINATION_ACTION: &str =
+    "Add a destinations.hooks entry for each destination documents.yaml hooks[].handler.destinationId names.";
 
 /// The operator runtime configuration document.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -741,6 +757,32 @@ impl RuntimeConfig {
     }
 }
 
+impl RuntimeConfig {
+    /// Every rule this runtime document breaks against the project it serves:
+    /// each destination the project's hooks name must be bound under
+    /// `destinations.hooks`.
+    #[must_use]
+    pub fn project_findings(&self, project: &DocumentsProject) -> Vec<Finding> {
+        let unbound = project.hooks.iter().any(|hook| {
+            let HookHandler::Url { destination_id } = &hook.handler;
+            !self
+                .destinations
+                .hooks
+                .contains_key(destination_id.as_str())
+        });
+        if unbound {
+            vec![Finding::new(
+                UNBOUND_HOOK_DESTINATION_CODE,
+                "/destinations/hooks",
+                UNBOUND_HOOK_DESTINATION_MESSAGE,
+                UNBOUND_HOOK_DESTINATION_ACTION,
+            )]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
 fn escape(segment: &str) -> String {
     registry_platform_yaml::escape_pointer_segment(segment)
 }
@@ -770,18 +812,29 @@ pub struct RuntimeCheck {
 /// environment and every value is checked. Without it, each expression is
 /// checked by syntax and position only, and a rule about its value is left
 /// out.
+///
+/// With `project` given, the document is also checked against the project it
+/// serves, as `documents serve` checks it against the package it loads.
 #[must_use]
-pub fn check_runtime_file(path: &Path, substitute: bool) -> RuntimeCheck {
+pub fn check_runtime_file(
+    path: &Path,
+    substitute: bool,
+    project: Option<&DocumentsProject>,
+) -> RuntimeCheck {
     let check =
         RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, substitute, stand_in_for);
     let diagnostics: Vec<Diagnostic> = match &check.loaded {
-        Some(loaded) => loaded
-            .config
-            .findings()
-            .iter()
-            .filter(|finding| !check.defers_within(&finding.pointer))
-            .map(|finding| positioned(&check, finding))
-            .collect(),
+        Some(loaded) => {
+            let mut findings = loaded.config.findings();
+            if let Some(project) = project {
+                findings.extend(loaded.config.project_findings(project));
+            }
+            findings
+                .iter()
+                .filter(|finding| !check.defers_within(&finding.pointer))
+                .map(|finding| positioned(&check, finding))
+                .collect()
+        }
         None => Vec::new(),
     };
     RuntimeCheck {
@@ -798,7 +851,7 @@ pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report>
     match error {
         RuntimeConfigError::Load(error) => Some(Report::new(error.diagnostics().to_vec())),
         RuntimeConfigError::Refused(_) => {
-            let report = check_runtime_file(path, true).report;
+            let report = check_runtime_file(path, true, None).report;
             (!report.is_empty()).then_some(report)
         }
         RuntimeConfigError::SecretProviders(_)
