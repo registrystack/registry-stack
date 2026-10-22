@@ -95,7 +95,21 @@ impl DocumentsProject {
     fn reference_findings(&self, document: &Document) -> Vec<Diagnostic> {
         let mut findings = Vec::new();
         let mut clients: BTreeMap<&str, &LocalId> = BTreeMap::new();
+        // Custody and grants compare a caller by issuer, subject, and actor
+        // kind, and every profile accepts the deployment's one issuer, so
+        // profiles of one actor kind must read the subject from one claim.
+        let mut claims: BTreeMap<&str, &str> = BTreeMap::new();
         for (id, profile) in &self.access_profiles {
+            let claim = profile.principal_claim.as_str();
+            if *claims.entry(profile.actor_kind.as_str()).or_insert(claim) != claim {
+                findings.push(document.diagnostic_at_value(
+                    Severity::Error,
+                    "documents.project.mixed-principal-claim",
+                    &format!("/accessProfiles/{id}/principalClaim"),
+                    "another access profile for this actor kind reads the caller's subject from a different claim",
+                    "Name one principalClaim for every access profile of the same actorKind, so a claim value under one profile can never be taken for another profile's subject.",
+                ));
+            }
             for (index, client) in profile.requester_clients.as_slice().iter().enumerate() {
                 if clients.insert(client.as_str(), id).is_some() {
                     findings.push(document.diagnostic_at_value(
@@ -234,6 +248,7 @@ const RECIPIENT_ROLES: &[AccessRole] = &[AccessRole::Recipient];
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccessProfile {
     /// `sub`, or the name of another string claim identifying the principal.
+    /// Every profile of one actor kind names the same claim.
     pub principal_claim: ExternalId,
     /// The scopes a token must carry; at least one.
     pub required_scopes: ListedIds,
@@ -849,6 +864,33 @@ mod tests {
                 "/accessProfiles/custodian-app/requesterClients/0".to_owned()
             )]
         );
+    }
+
+    #[test]
+    fn profiles_of_one_actor_kind_reading_different_principal_claims_are_refused() {
+        let text = STARTER.replacen(
+            "  staff:\n    principalClaim: sub",
+            "  staff:\n    principalClaim: employee_id",
+            1,
+        );
+        assert_eq!(
+            refusals(&text),
+            [(
+                "documents.project.mixed-principal-claim".to_owned(),
+                "/accessProfiles/staff/principalClaim".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn profiles_of_different_actor_kinds_may_read_different_principal_claims() {
+        let text = STARTER.replacen(
+            "  custodian-app:\n    principalClaim: sub",
+            "  custodian-app:\n    principalClaim: client_id",
+            1,
+        );
+        DocumentsProject::decode("documents.yaml", text.as_bytes())
+            .expect("a service profile may read another claim than a human profile");
     }
 
     #[test]

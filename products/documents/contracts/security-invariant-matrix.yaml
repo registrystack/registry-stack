@@ -921,3 +921,21 @@ invariants:
     negativeTest:
       path: crates/registry-documents/tests/postgres_hooks.rs
       name: startup_refuses_a_project_hook_whose_destination_is_not_bound
+  - id: DOCUMENTS-SEC-54
+    state: enforced
+    threat: >-
+      Two access profiles for the same actor kind read the caller's subject
+      from different claims, so a token under one profile whose claim value
+      equals another profile's subject inherits that caller's custody,
+      ownership, and grants, which are matched by issuer, subject, and kind
+      alone.
+    enforcementPoint: >-
+      Project check. Every profile accepts the deployment's one issuer, so
+      the project is refused when two profiles of one actorKind name
+      different principalClaim values.
+    refusal: >-
+      Refuse the project with documents.project.mixed-principal-claim at the
+      later profile's principalClaim.
+    negativeTest:
+      path: crates/registry-documents-core/src/project.rs
+      name: profiles_of_one_actor_kind_reading_different_principal_claims_are_refused

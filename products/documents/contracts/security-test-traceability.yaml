@@ -300,3 +300,7 @@ entries:
       - {path: crates/registry-documents/src/hooks_tests.rs, name: activation_refuses_a_hook_whose_destination_is_not_bound}
       - {path: crates/registry-documents/src/hooks_tests.rs, name: activation_refuses_a_signing_secret_it_cannot_resolve}
       - {path: crates/registry-documents/src/hooks_tests.rs, name: hook_destination_binding_digests_are_pinned}
+  - id: DOCUMENTS-SEC-54
+    tests:
+      - {path: crates/registry-documents-core/src/project.rs, name: profiles_of_one_actor_kind_reading_different_principal_claims_are_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: profiles_of_different_actor_kinds_may_read_different_principal_claims}
