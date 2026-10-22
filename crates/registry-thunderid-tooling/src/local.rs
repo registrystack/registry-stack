@@ -1,6 +1,6 @@
 //! Common construction for local adopter sessions. Product CLIs own the
 //! declared clients and scopes, credential files, and interpretation of claims.
-pub use crate::local_session::{snapshot, start, stop};
+pub use crate::local_session::{snapshot, start, start_with_logs, stop};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;

@@ -1,5 +1,6 @@
 //! Bounded local issuer startup shared by adopter CLIs. Only public discovery
-//! and verification keys leave this module; captured command output does not.
+//! and verification keys leave this module; captured command output does not,
+//! except a first-run one-shot's, kept redacted in an owner-only log file.
 use std::collections::BTreeSet;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
@@ -9,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::bootstrap::{Bootstrap, CommandOutcome, CommandRunner, SCHEMA_MOUNT_POINT};
+use crate::bootstrap::{
+    Bootstrap, CommandOutcome, CommandRunner, OneShotOutcome, SCHEMA_MOUNT_POINT,
+};
 use crate::container::{random_urlsafe, write_owner_only, Session};
 use crate::ToolingError;
 
@@ -25,21 +28,120 @@ fn cancelled_error() -> ToolingError {
     }
 }
 
-/// Identify the failed upstream setup phase without accepting any command
-/// output or secret value that could be relayed into the caller's log.
-fn setup_failure_status(is_setup: bool, status: ExitStatus) -> Option<String> {
-    if status.success() || !is_setup {
-        return None;
+/// The most output kept from one stream of a first-run one-shot. A longer
+/// stream keeps its tail, which is where a failure is reported.
+const MAX_KEPT_STREAM: usize = 256 * 1024;
+/// What replaces a secret value, or a whole line carrying a credential the
+/// pinned release generated itself, before kept output reaches disk.
+const REDACTED: &str = "[redacted]";
+/// Fragments of the lines the pinned release's `setup.sh` prints beside a
+/// credential it generated: the administrator notice (printed only when no
+/// password is supplied, so this guards a changed invocation) and the Direct
+/// API secret it generates on a fresh state.
+const GENERATED_CREDENTIAL_LINES: &[&str] = &["Password:", "Direct Auth Secret"];
+
+#[derive(Default)]
+struct Captured {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+struct Executed {
+    status: ExitStatus,
+    stdout: Captured,
+    stderr: Captured,
+    /// The injected secret values, so kept output can be redacted.
+    secrets: Vec<zeroize::Zeroizing<String>>,
+}
+
+/// Read a stream to its end, keeping at most `limit` trailing bytes.
+fn drain_tail(mut stream: impl Read, limit: usize) -> Captured {
+    let mut captured = Captured::default();
+    let mut buffer = [0u8; 8192];
+    while let Ok(n) = stream.read(&mut buffer) {
+        if n == 0 {
+            break;
+        }
+        captured.bytes.extend_from_slice(&buffer[..n]);
+        if captured.bytes.len() > limit {
+            captured.bytes.drain(..captured.bytes.len() - limit);
+            captured.truncated = true;
+        }
     }
-    Some(match status.code() {
-        Some(code) => format!("ThunderID setup one-shot exited with status {code}"),
-        None => "ThunderID setup one-shot terminated without a numeric exit status".to_owned(),
-    })
+    captured
+}
+
+/// Prepare one first-run one-shot's captured output for its owner-only log:
+/// every occurrence of each injected secret value becomes [`REDACTED`], and
+/// so does every whole line naming a credential the release generated. A
+/// truncated capture first drops its partial leading line, which could hold
+/// a fragment of a secret the value search cannot recognise.
+fn redact_one_shot_output(captured: &[u8], truncated: bool, secrets: &[&str]) -> String {
+    let mut text = String::from_utf8_lossy(captured).into_owned();
+    if truncated {
+        text = text
+            .find('\n')
+            .map(|end| text[end + 1..].to_owned())
+            .unwrap_or_default();
+    }
+    for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
+        text = text.replace(secret, REDACTED);
+    }
+    text.split_inclusive('\n')
+        .map(|line| {
+            if GENERATED_CREDENTIAL_LINES
+                .iter()
+                .any(|fragment| line.contains(fragment))
+            {
+                if line.ends_with('\n') {
+                    "[redacted]\n"
+                } else {
+                    REDACTED
+                }
+            } else {
+                line
+            }
+        })
+        .collect()
+}
+
+/// Write one first-run one-shot's already redacted output to a new
+/// owner-only file in an owner-only directory, and return its path.
+fn keep_one_shot_log(
+    log_dir: &Path,
+    one_shot: &str,
+    redacted: &[u8],
+) -> Result<PathBuf, ToolingError> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    crate::container::ensure_owner_only_dir(log_dir)?;
+    let suffix = random_urlsafe(12).map_err(|_| ToolingError::Filesystem {
+        reason: "a one-shot log name could not be generated",
+    })?;
+    let path = log_dir.join(format!(
+        "thunderid-{}.{suffix}.log",
+        one_shot.replace(' ', "-")
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|_| ToolingError::Filesystem {
+            reason: "a one-shot log could not be created",
+        })?;
+    file.write_all(redacted)
+        .map_err(|_| ToolingError::Filesystem {
+            reason: "a one-shot log could not be written",
+        })?;
+    Ok(path)
 }
 
 struct DockerRunner<'a> {
     docker: &'a Path,
     cancelled: &'a mut dyn FnMut() -> bool,
+    /// Where first-run one-shot output is kept, redacted and owner-only.
+    log_dir: Option<&'a Path>,
 }
 impl CommandRunner for DockerRunner<'_> {
     fn run(
@@ -58,11 +160,79 @@ impl CommandRunner for DockerRunner<'_> {
         secret_environment: &[(String, PathBuf)],
         timeout: Duration,
     ) -> Result<CommandOutcome, ToolingError> {
+        let executed = self.execute(args, secret_environment, timeout, false)?;
+        Ok(CommandOutcome {
+            success: executed.status.success(),
+            container_ids: String::from_utf8(executed.stdout.bytes).unwrap_or_default(),
+        })
+    }
+
+    /// Keep both streams, redacted, in a new owner-only file under the log
+    /// directory. `REGISTRY_THUNDERID_TOOLING_DIAGNOSTICS` keeps its meaning
+    /// here: it adds a stderr tail only for a command without a secret.
+    fn run_one_shot(
+        &mut self,
+        one_shot: &'static str,
+        _: &str,
+        args: &[String],
+        secret_environment: &[(String, PathBuf)],
+    ) -> Result<OneShotOutcome, ToolingError> {
+        let Some(log_dir) = self.log_dir else {
+            let executed = self.execute(args, secret_environment, COMMAND_TIMEOUT, false)?;
+            return Ok(OneShotOutcome {
+                success: executed.status.success(),
+                exit_code: executed.status.code(),
+                log_file: None,
+            });
+        };
+        let executed = self.execute(args, secret_environment, COMMAND_TIMEOUT, true)?;
+        let secrets: Vec<&str> = executed
+            .secrets
+            .iter()
+            .map(|value| value.as_str())
+            .collect();
+        let mut kept = format!(
+            "{}\n\n-- stdout --\n",
+            crate::container::one_shot_report(one_shot, executed.status.code(), None)
+        );
+        kept.push_str(&redact_one_shot_output(
+            &executed.stdout.bytes,
+            executed.stdout.truncated,
+            &secrets,
+        ));
+        kept.push_str("\n-- stderr --\n");
+        kept.push_str(&redact_one_shot_output(
+            &executed.stderr.bytes,
+            executed.stderr.truncated,
+            &secrets,
+        ));
+        let log_file = keep_one_shot_log(log_dir, one_shot, kept.as_bytes())?;
+        Ok(OneShotOutcome {
+            success: executed.status.success(),
+            exit_code: executed.status.code(),
+            log_file: Some(log_file),
+        })
+    }
+}
+
+impl DockerRunner<'_> {
+    /// Run one engine command. `keep` captures both streams (a bounded tail
+    /// of each) for a kept one-shot; otherwise only `docker ps` output is
+    /// captured. A stderr tail is printed only when diagnostics are requested
+    /// for a failed command without a secret.
+    fn execute(
+        &mut self,
+        args: &[String],
+        secret_environment: &[(String, PathBuf)],
+        timeout: Duration,
+        keep: bool,
+    ) -> Result<Executed, ToolingError> {
         if (self.cancelled)() {
             return Err(cancelled_error());
         }
         let mut command = Command::new(self.docker);
         let mut flags = Vec::new();
+        let mut secrets = Vec::new();
         for (name, file) in secret_environment {
             let metadata =
                 std::fs::symlink_metadata(file).map_err(|_| ToolingError::Filesystem {
@@ -79,7 +249,9 @@ impl CommandRunner for DockerRunner<'_> {
             let value = std::fs::read_to_string(file).map_err(|_| ToolingError::Filesystem {
                 reason: "an issuer secret file cannot be read",
             })?;
-            command.env(name, value.trim_end_matches('\n'));
+            let value = zeroize::Zeroizing::new(value.trim_end_matches('\n').to_owned());
+            command.env(name, value.as_str());
+            secrets.push(value);
             flags.extend(["-e".to_owned(), name.clone()]);
         }
         let one_shot =
@@ -107,7 +279,7 @@ impl CommandRunner for DockerRunner<'_> {
         let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(if diagnostics {
+            .stderr(if diagnostics || keep {
                 Stdio::piped()
             } else {
                 Stdio::null()
@@ -119,6 +291,9 @@ impl CommandRunner for DockerRunner<'_> {
         let mut stdout = child.stdout.take().expect("stdout is piped");
         let stderr = child.stderr.take();
         let drain = std::thread::spawn(move || {
+            if keep {
+                return drain_tail(stdout, MAX_KEPT_STREAM);
+            }
             let mut captured = Vec::new();
             let mut buffer = [0u8; 8192];
             while let Ok(n) = stdout.read(&mut buffer) {
@@ -129,27 +304,17 @@ impl CommandRunner for DockerRunner<'_> {
                     captured.extend_from_slice(&buffer[..n]);
                 } else if ids_only {
                     captured.clear();
-                    return Vec::new();
+                    return Captured::default();
                 }
             }
-            captured
+            Captured {
+                bytes: captured,
+                truncated: false,
+            }
         });
-        let diagnostic_drain = stderr.map(|mut stderr| {
-            std::thread::spawn(move || {
-                let mut captured = Vec::new();
-                let mut buffer = [0u8; 2048];
-                while let Ok(n) = stderr.read(&mut buffer) {
-                    if n == 0 {
-                        break;
-                    }
-                    captured.extend_from_slice(&buffer[..n]);
-                    if captured.len() > 4096 {
-                        captured.drain(..captured.len() - 4096);
-                    }
-                }
-                captured
-            })
-        });
+        let stderr_limit = if keep { MAX_KEPT_STREAM } else { 4096 };
+        let diagnostic_drain =
+            stderr.map(|stderr| std::thread::spawn(move || drain_tail(stderr, stderr_limit)));
         let deadline = Instant::now() + timeout;
         let result = loop {
             match child.try_wait() {
@@ -180,22 +345,17 @@ impl CommandRunner for DockerRunner<'_> {
                 let mut cleanup = DockerRunner {
                     docker: self.docker,
                     cancelled: &mut || false,
+                    log_dir: None,
                 };
                 let _ = cleanup.run("docker", &["rm".into(), "-f".into(), name], &[]);
             }
         }
-        let bytes = drain.join().unwrap_or_default();
-        if let Ok(status) = result.as_ref() {
-            let is_setup = args.last().is_some_and(|arg| arg == "./setup.sh");
-            if let Some(diagnostic) = setup_failure_status(is_setup, *status) {
-                eprintln!("{diagnostic}");
-            }
-        }
+        let stdout = drain.join().unwrap_or_default();
+        let stderr = diagnostic_drain
+            .and_then(|drain| drain.join().ok())
+            .unwrap_or_default();
         if diagnostics && !result.as_ref().is_ok_and(|status| status.success()) {
-            let diagnostic = diagnostic_drain
-                .and_then(|drain| drain.join().ok())
-                .unwrap_or_default();
-            let bounded: String = String::from_utf8_lossy(&diagnostic)
+            let bounded: String = String::from_utf8_lossy(&stderr.bytes)
                 .chars()
                 .rev()
                 .take(600)
@@ -204,13 +364,12 @@ impl CommandRunner for DockerRunner<'_> {
                 .rev()
                 .collect();
             eprintln!("issuer diagnostics: {bounded}");
-        } else if let Some(drain) = diagnostic_drain {
-            let _ = drain.join();
         }
-        let success = result?.success();
-        Ok(CommandOutcome {
-            success,
-            container_ids: String::from_utf8(bytes).unwrap_or_default(),
+        Ok(Executed {
+            status: result?,
+            stdout,
+            stderr,
+            secrets,
         })
     }
 }
@@ -219,12 +378,25 @@ impl CommandRunner for DockerRunner<'_> {
 /// snapshot. Every restart reprovisions the authored registrations, preserves
 /// retained databases/keys, and reads discovery from the exact numeric loopback
 /// origin. A true cancellation callback aborts and cleans up only this session.
+/// First-run one-shot output is kept, redacted, under the session state's
+/// `logs` directory.
 pub fn start(
     session: &Session<'_>,
     docker: &Path,
     cancelled: &mut dyn FnMut() -> bool,
 ) -> Result<Value, ToolingError> {
-    let result = start_inner(session, docker, cancelled);
+    start_with_logs(session, docker, cancelled, &session.state_root.join("logs"))
+}
+
+/// [`start`], keeping each first-run one-shot's redacted output in a new
+/// owner-only file under `log_dir`, a private directory the caller chooses.
+pub fn start_with_logs(
+    session: &Session<'_>,
+    docker: &Path,
+    cancelled: &mut dyn FnMut() -> bool,
+    log_dir: &Path,
+) -> Result<Value, ToolingError> {
+    let result = start_inner(session, docker, cancelled, log_dir);
     if result.is_err() {
         let _ = stop(session, docker);
     }
@@ -235,8 +407,13 @@ fn start_inner(
     session: &Session<'_>,
     docker: &Path,
     cancelled: &mut dyn FnMut() -> bool,
+    log_dir: &Path,
 ) -> Result<Value, ToolingError> {
-    let mut runner = DockerRunner { docker, cancelled };
+    let mut runner = DockerRunner {
+        docker,
+        cancelled,
+        log_dir: Some(log_dir),
+    };
     session.prepare(&mut runner)?;
     let password = session
         .state_root
@@ -308,6 +485,7 @@ pub fn stop(session: &Session<'_>, docker: &Path) -> Result<(), ToolingError> {
     session.stop(&mut DockerRunner {
         docker,
         cancelled: &mut || false,
+        log_dir: None,
     })
 }
 
@@ -507,6 +685,7 @@ mod tests {
         let mut runner = DockerRunner {
             docker: Path::new("/does-not-exist"),
             cancelled: &mut || true,
+            log_dir: None,
         };
         assert!(matches!(
             runner.run("docker", &["ps".into()], &[]),
@@ -526,6 +705,7 @@ mod tests {
         let mut runner = DockerRunner {
             docker: Path::new("/does-not-exist"),
             cancelled: &mut || false,
+            log_dir: None,
         };
         assert!(matches!(
             runner.run(
@@ -539,35 +719,100 @@ mod tests {
     }
 
     #[test]
-    fn setup_failure_reports_only_its_numeric_status() {
-        let status = Command::new("sh")
-            .args(["-c", "exit 37"])
-            .status()
-            .expect("the test shell runs");
-        let secret = "synthetic-admin-password-never-reported";
+    fn one_shot_output_redacts_every_secret_value_and_generated_credential_line() {
+        let secret = "synthetic-admin-value-never-kept";
+        let output = format!(
+            "start {secret} middle{secret}\n\
+             Direct Auth Secret (Direct API): 0123synthetic\n  \
+             Password: generated-synthetic\n\
+             plain diagnostic line\n"
+        );
 
-        // The formatter accepts only the phase bit and process status. It has
-        // no channel for command output, arguments, environment or values.
-        let diagnostic = setup_failure_status(true, status).expect("setup failure is diagnosed");
+        let kept = redact_one_shot_output(output.as_bytes(), false, &[secret]);
 
-        assert_eq!(diagnostic, "ThunderID setup one-shot exited with status 37");
-        assert!(!diagnostic.contains(secret));
+        for value in [secret, "0123synthetic", "generated-synthetic"] {
+            assert!(!kept.contains(value), "{kept}");
+        }
+        assert_eq!(kept.matches("[redacted]").count(), 4, "{kept}");
+        assert!(kept.contains("plain diagnostic line"), "{kept}");
+
+        // A bounded tail can start inside a secret. Its first, partial line
+        // is dropped, so no fragment the value search cannot match survives.
+        let fragment = &secret[7..];
+        let tail = format!("{fragment} rest\nnext line\n");
+        let kept = redact_one_shot_output(tail.as_bytes(), true, &[secret]);
+        assert!(!kept.contains(fragment), "{kept}");
+        assert!(kept.contains("next line"), "{kept}");
     }
 
     #[test]
-    fn setup_status_diagnostic_is_limited_to_failed_setup_one_shots() {
-        let failed = Command::new("sh")
-            .args(["-c", "exit 1"])
-            .status()
-            .expect("the test shell runs");
-        let succeeded = Command::new("sh")
-            .args(["-c", "exit 0"])
-            .status()
-            .expect("the test shell runs");
+    fn a_kept_one_shot_never_writes_a_secret_to_its_owner_only_log() {
+        let root = std::env::temp_dir().join(format!(
+            "issuer-one-shot-log-{}",
+            random_urlsafe(12).unwrap()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let secret = "synthetic-admin-value-never-kept";
+        let secret_file = root.join("admin-password");
+        std::fs::write(&secret_file, format!("{secret}\n")).unwrap();
+        std::fs::set_permissions(&secret_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        // A stand-in engine that prints the injected value on both streams,
+        // and a generated credential the way the pinned setup.sh does.
+        let engine = root.join("engine");
+        std::fs::write(
+            &engine,
+            "#!/bin/sh\n\
+             printf 'stdout before %s after\\n' \"$ADMIN_PASSWORD\"\n\
+             printf 'Direct Auth Secret (Direct API): %s\\n' generated-synthetic-secret\n\
+             printf 'stderr %s tail\\n' \"$ADMIN_PASSWORD\" >&2\n\
+             exit 3\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let logs = root.join("logs");
+        let mut runner = DockerRunner {
+            docker: &engine,
+            cancelled: &mut || false,
+            log_dir: Some(&logs),
+        };
 
-        assert!(setup_failure_status(false, failed).is_none());
-        assert!(setup_failure_status(true, succeeded).is_none());
+        let outcome = runner
+            .run_one_shot(
+                "setup",
+                "docker",
+                &[
+                    "run".into(),
+                    "--rm".into(),
+                    "pinned-test-image".into(),
+                    "./setup.sh".into(),
+                ],
+                &[("ADMIN_PASSWORD".into(), secret_file.clone())],
+            )
+            .unwrap();
+
+        assert!(!outcome.success);
+        assert_eq!(outcome.exit_code, Some(3));
+        let log = outcome.log_file.expect("the output is kept");
+        assert_eq!(log.parent(), Some(logs.as_path()));
+        // A separator the URL-safe suffix never contains keeps the name
+        // readable whichever character the suffix starts with.
+        let name = log.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with("thunderid-setup.") && name.ends_with(".log"),
+            "{name}"
+        );
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&log), 0o600);
+        assert_eq!(mode(&logs), 0o700);
+        let kept = std::fs::read_to_string(&log).unwrap();
+        assert!(!kept.contains(secret), "{kept}");
+        assert!(!kept.contains("generated-synthetic-secret"), "{kept}");
+        for fact in ["stdout before [redacted] after", "stderr [redacted] tail"] {
+            assert!(kept.contains(fact), "{fact}: {kept}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
+
     #[test]
     fn jwks_without_the_pinned_signing_algorithm_is_refused() {
         assert!(public_rsa_keys(&json!({"keys":[]})).is_err());

@@ -133,7 +133,13 @@ bound to that origin and its `/oauth2/jwks` endpoint, and performs no start,
 stop, reset, or other lifecycle operation.
 The shared runner bounds commands and HTTP responses, reads owner-only secret
 files into the child environment, and discards command output other than owned
-container IDs. Product CLIs retain their own policy, status UI, and cancellation
+container IDs and the first-run one-shots' output (the database seed copy and
+`./setup.sh`). That output is kept for diagnosis in a new owner-only file under
+the session state's `logs` directory (`local::start_with_logs` takes another
+private directory), with every injected secret value and every line naming a
+credential the release generated replaced by `[redacted]`. A failed first-run
+one-shot names its exit status and that file, and on a fresh session state each
+is retried once. Product CLIs retain their own policy, status UI, and cancellation
 flag. Neither operation removes retained files.
 
 ## Acquire an approved task

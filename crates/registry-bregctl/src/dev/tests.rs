@@ -3042,6 +3042,40 @@ fn a_failed_issuer_setup_names_the_phase_logs_and_both_recoveries() {
 }
 
 #[test]
+fn a_failed_issuer_one_shot_reaches_the_terminal_with_its_status_and_kept_log() {
+    // A deep project directory: the kept log's path must survive the bound
+    // the supervisor applies to a recorded cause, or the reader loses it.
+    let root = PathBuf::from("/")
+        .join("p".repeat(160))
+        .join("project/.breg/dev");
+    let log = root.join("logs/thunderid-setup.AbCdEfGhIjKlMnOp.log");
+    let error = anyhow::Error::from(registry_thunderid_tooling::ToolingError::OneShotFailed {
+        step: "the local ThunderID issuer's one-time upstream setup (its ./setup.sh bootstrap) did not complete; the partial state is retained for recovery",
+        one_shot: "setup",
+        exit_code: Some(1),
+        log_file: Some(log.clone()),
+    });
+    // The supervisor records the cause exactly this way.
+    let cause: String = format!("{error:#}").chars().take(MAX_REFUSAL).collect();
+
+    let reported = format!("{:#}", start_failure(Some(&cause), &root));
+
+    for fact in [
+        "./setup.sh",
+        "retained for recovery",
+        "exited with status 1",
+        &log.display().to_string(),
+        "Retry the same command",
+    ] {
+        assert!(reported.contains(fact), "{fact}: {reported}");
+    }
+    // The cause already names a file in the logs directory, so the
+    // directory is not named a second time.
+    let logs = root.join("logs").display().to_string();
+    assert_eq!(reported.matches(&logs).count(), 1, "{reported}");
+}
+
+#[test]
 fn the_changed_inputs_refusal_and_stop_help_name_the_same_two_options() {
     // The refusal for edited inputs on a retained session offers both record
     // outcomes, and `dev stop --help` documents the same pair, so neither

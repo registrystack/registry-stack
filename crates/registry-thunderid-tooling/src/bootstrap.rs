@@ -36,13 +36,43 @@ pub trait CommandRunner {
     ) -> Result<CommandOutcome, ToolingError> {
         self.run(program, args, secret_environment)
     }
+
+    /// Run one first-run one-shot (`one_shot` names it, such as `setup`)
+    /// whose output a runner may keep for diagnosis. A runner that keeps it
+    /// writes only redacted output, to an owner-only file it names in the
+    /// outcome. Runners that keep nothing report success alone.
+    fn run_one_shot(
+        &mut self,
+        _one_shot: &'static str,
+        program: &str,
+        args: &[String],
+        secret_environment: &[(String, PathBuf)],
+    ) -> Result<OneShotOutcome, ToolingError> {
+        let outcome = self.run(program, args, secret_environment)?;
+        Ok(OneShotOutcome {
+            success: outcome.success,
+            exit_code: None,
+            log_file: None,
+        })
+    }
+}
+
+/// What a first-run one-shot reports: its result, its numeric exit status
+/// when the process had one, and the owner-only file holding its redacted
+/// output when the runner kept it. Never the output itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OneShotOutcome {
+    pub success: bool,
+    pub exit_code: Option<i32>,
+    pub log_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandOutcome {
     pub success: bool,
     /// Docker `ps` container IDs only. All other stdout, including setup's
-    /// administrator credential, is discarded by every real runner.
+    /// administrator credential, stays out of this outcome in every real
+    /// runner.
     pub container_ids: String,
 }
 

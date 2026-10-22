@@ -2084,8 +2084,9 @@ fn output(
 }
 /// Longest refusal carried out of a native child or out of the supervisor.
 /// One named check is a sentence; a report that runs longer stays in the
-/// retained log rather than filling the owner's terminal.
-const MAX_REFUSAL: usize = 400;
+/// retained log rather than filling the owner's terminal. The bound leaves
+/// room for a cause that also names one kept log file by its full path.
+const MAX_REFUSAL: usize = 1024;
 
 /// Name the first failing check from the machine-readable report a native
 /// command writes to stdout. The first diagnostic is the check an author
@@ -2713,7 +2714,14 @@ fn issuer(docker: &Path, state: &State, _clients: &Clients) -> Result<()> {
         state_root: &state_root,
         image,
     };
-    let jwks = registry_thunderid_tooling::local::start(&session, docker, &mut || false)?;
+    // The issuer's first-run one-shots keep their redacted output beside
+    // the supervisor log, so a failed start names a file the owner can read.
+    let jwks = registry_thunderid_tooling::local::start_with_logs(
+        &session,
+        docker,
+        &mut || false,
+        &root.join("logs"),
+    )?;
     private::replace(
         &root.join("secrets/issuer-jwks"),
         &serde_json::to_vec(&jwks)?,
