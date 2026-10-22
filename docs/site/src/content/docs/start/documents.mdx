@@ -13,100 +13,66 @@ standards_referenced: []
 
 The [Registry Document Store](../../reference/glossary/#registry-documents) holds document bytes
 in custody for the system that owns them, and releases one exact, verified version to each
-recipient the custodian names. Use it when an issued certificate, an uploaded supporting
-document, or a scanned record has to be kept and handed to a named person later, without that
-system serving files itself.
+recipient a grant names. Use it when an issued certificate, an uploaded supporting document, or a
+scanned record has to be kept and handed to a named person later, without that system serving
+files itself.
 
 {/* Evidence: products/documents/README.md, introduction and Routes. */}
 
-## What you write, and what runs
+## What you work with
 
 You write a `documents.yaml` project: the access profiles callers resolve to, and one or more
-**document policies**. A policy says who may place a document in custody, who holds it, which media
-types and sizes it admits, who may be granted it, and for how long. The operator packages that
-project, pins it by digest, and runs the `documents` service over its own PostgreSQL database,
-with the bytes in PostgreSQL or in an S3-compatible bucket.
+document policies. A policy says who may place a document in custody, who holds it, which media
+types and sizes it admits, who may be granted it, and for how long.
 
-An owning system reserves a **[document](../../reference/glossary/#document)** under a policy and
-then sends its bytes. Each upload is one immutable
-**[document version](../../reference/glossary/#document-version)**, checked against the digest
-and length the reservation declared.
+An owning system reserves a [document](../../reference/glossary/#document) under a policy, then
+sends its bytes once, checked against the digest and length it declared. Its policy fixes the
+[custodian](../../reference/glossary/#document-custody): the person it was placed for, or the
+institution whose system reserved it. Only the custodian may remove it.
 
-{/* Evidence: crates/registry-documents-core/src/project.rs, DocumentPolicy;
-    products/documents/RUNTIME-CONFIG.md, Keys. */}
+Every stored version goes to a [content verifier](../../reference/glossary/#content-verification)
+the operator configured, and only an approval releases it. A
+[document grant](../../reference/glossary/#document-grant) then releases that version to one
+named recipient until a fixed expiry. A caller under one of the policy's granting profiles issues
+and revokes grants, as the custodian or as the system that reserved the document; the person it
+was placed for may too, when the policy permits it. The
+[document version](../../reference/glossary/#document-version) entry lists every status a version
+moves through.
 
-## Who holds a document
+Nothing is erased on a timer. A document stays until its custodian removes it or the verifier
+rejects it, and a grant that expires or is revoked erases nothing.
+[Removal and erasure](../../operate/documents/#removal-and-erasure) says when the bytes go and
+what erasure reaches.
 
-Every document has one custodian, fixed by its policy's `custodian` setting.
-
-| Setting | Custodian |
-| ------- | --------- |
-| `represented-principal` | The person the document was placed for, such as a citizen |
-| `institution` | The institution whose system reserved it |
-
-The custodian is the only caller who may remove the document. Under `institution`, the person the
-document concerns has no standing on it until a grant names them. Under `represented-principal`,
-the reserving system keeps the document's record but is not released its content. A policy may
-also let the represented person place documents or issue grants. This is
-**[document custody](../../reference/glossary/#document-custody)**.
-
-{/* Evidence: crates/registry-documents-core/src/project.rs, CustodianRule and
-    RepresentedPrincipalGrants. */}
-
-## What gets released
-
-A version is released only after **[content verification](../../reference/glossary/#content-verification)**:
-the Store sends the stored bytes to a verifier the operator configured, and only an approval
-bound to that version's digest, media type, and the current verifier releases it. A rejection
-keeps it from ever being released. A verifier that cannot answer is retried for about seven
-days; the version then waits for an operator, neither approved nor rejected.
-
-| Status | Means |
-| ------ | ----- |
-| `awaiting-content` | Reserved, with no bytes stored yet |
-| `pending` | Bytes stored, waiting for an approval |
-| `ready` | Approved and releasable; the only status that is |
-| `suspended` | Approved once, not releasable now |
-| `rejected` | The verifier rejected it; it stays rejected until its bytes are erased |
-| `erasure-pending` | The custodian asked for removal |
-| `erased` | Bytes erased; the record remains |
-
-A **[document grant](../../reference/glossary/#document-grant)** releases a `ready` version to
-someone else: it names one recipient, one exact version, and an expiry within the policy's
-bounds. The custodian can revoke it at any time.
-
-{/* Evidence: crates/registry-documents-core/src/custody.rs, DocumentStatus;
-    crates/registry-documents/src/verification.rs, module documentation;
-    crates/registry-documents-core/src/wire.rs, GrantState. */}
-
-## Removal and erasure
-
-Nothing expires on a timer. A document stays in custody until its custodian removes it or the
-verifier rejects it, and a grant that expires or is revoked erases nothing. Removal stops
-release at once and revokes every grant; the bytes are erased after the policy's grace period,
-at least one hour, so an operator can still restore from a mistaken request. Erasure reaches
-what the Store serves, not backups, replicas, or archived database logs.
-
-{/* Evidence: products/documents/README.md, Retention and erasure. */}
+{/* Evidence: crates/registry-documents-core/src/project.rs, DocumentPolicy and CustodianRule;
+    crates/registry-documents-core/src/access.rs, standing (may_grant, may_request_erasure);
+    crates/registry-documents/src/service/grants.rs, revoke_inner. */}
 
 ## What stays with the owning system
 
 The Document Store owns custody records, grants, stored bytes, verification state, and its audit
-journal. Why a document exists, who it concerns, and whether a recipient is entitled to it stay
-with the system that reserved it. Other products reach the Store over its public HTTP API like
-any caller, and inherit none of its authority. A Base Registry Engine (BReg)
-[Proposal attachment](../../reference/glossary/#proposal-attachment) is held by BReg itself,
-not by the Store.
+journal. Why a document exists, who it concerns, which case it belongs to and who is assigned to
+that case, and whether a recipient is entitled to it stay with the system that reserved it.
+
+The Document Store calls no other Registry Stack product, Registry Casework included: its only
+outbound calls go to the issuer's keys, the content verifier, and the event destinations the
+operator configured. An event never grants access; it carries identifiers, and a receiver reads
+current state through the API under its own token. A caller gains no standing for being another
+product. A Base Registry Engine (BReg) or Casework deployment reaches the Document Store over its
+public HTTP API like any other client, and its access profile and the document's policy decide
+what it may do. A BReg [Proposal attachment](../../reference/glossary/#proposal-attachment) is
+held by BReg itself, not by the Document Store.
 
 {/* Evidence: products/documents/AGENTS.md, ownership and dependency rules;
+    products/documents/scripts/check_dependency_direction.py;
     crates/registry-breg/src/api/attachments.rs. */}
 
-## When to look elsewhere
+## Status
 
-The Store does not render documents, which is
-[Registry Render](../../reference/glossary/#registry-render)'s job, and it holds no wallet
-credential. It is pre-1.0 and held out of releases: build it from a source checkout, and use the
-binaries and documentation of one source version together.
+The Document Store is pre-1.0 and held out of releases: build `documents` and `documentsctl` from
+one source checkout, and use them with the documentation of that same version. It does not render
+documents, which is [Registry Render](../../reference/glossary/#registry-render)'s job, and it
+holds no wallet credential.
 
 ## Next
 
