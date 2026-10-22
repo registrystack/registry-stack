@@ -90,6 +90,32 @@ pub enum MigrationError {
     /// the same apply may be retried once that session releases the lock.
     #[error("another session held the migration lock before maintenance began")]
     MigrationLockHeld,
+    /// Refused before maintenance began: the package id derives no migration
+    /// lock key. Nothing was changed.
+    #[error("the package id derives no migration lock key")]
+    LockKeyRefused,
+    /// Refused before maintenance began: the migration connection is not the
+    /// configured migration role, the role holds database-level
+    /// administrative authority, or it does not own every managed schema.
+    /// Only the kernel's fixed reason crosses this boundary. Nothing was
+    /// changed.
+    #[error("the migration role was refused before maintenance began: {0}")]
+    MigrationRoleRefused(&'static str),
+    /// Refused before maintenance began: the migration database configuration
+    /// or the activation request is outside what the kernel accepts. Only the
+    /// kernel's fixed reason crosses this boundary. Nothing was changed.
+    #[error("the migration database configuration was refused before maintenance began: {0}")]
+    DatabaseConfigurationRefused(&'static str),
+    /// Refused before maintenance began: an administrator-owned prerequisite
+    /// the package requires, such as an extension or the spatial role, is
+    /// missing or does not match. Nothing was changed.
+    #[error("a database prerequisite is missing: {0}")]
+    PrerequisiteMissing(&'static str),
+    /// Refused before maintenance began: the managed catalog or registry state
+    /// does not admit the activation. Only the kernel's fixed reason crosses
+    /// this boundary. Nothing was changed.
+    #[error("the database catalog was refused before maintenance began: {0}")]
+    CatalogRefused(&'static str),
     #[error("a persisted field pattern has invalid PostgreSQL syntax")]
     FieldPatternSyntax { entity_id: String, field_id: String },
     #[error("existing rows do not conform to a persisted field pattern")]
@@ -650,8 +676,9 @@ pub fn bind_active_package(
 /// Maps a failure to reach the migration database or to take the apply lock,
 /// before maintenance begins, to the refusal it is: nothing was changed, so a
 /// lost connection or an apply lock held past the lock timeout may simply be
-/// retried. A held lock stays distinct from an unreachable database. Every
-/// other failure keeps its exact-target reconciliation path.
+/// retried. A held lock stays distinct from an unreachable database. A
+/// refused migration role, configuration, or catalog keeps its own named
+/// refusal. Every other failure keeps its exact-target reconciliation path.
 fn refusal_before_maintenance(error: crate::postgres::PostgresKernelError) -> MigrationError {
     match error {
         crate::postgres::PostgresKernelError::Connection
@@ -661,7 +688,38 @@ fn refusal_before_maintenance(error: crate::postgres::PostgresKernelError) -> Mi
         crate::postgres::PostgresKernelError::MigrationLockHeld => {
             MigrationError::MigrationLockHeld
         }
-        _ => MigrationError::ApplyFailed,
+        error => named_refusal(error).unwrap_or(MigrationError::ApplyFailed),
+    }
+}
+
+/// The named refusal of a kernel invariant raised before maintenance began,
+/// or inside a begin transaction that rolled back: nothing was changed, so
+/// the refusal names its fixed reason instead of a failed migration.
+fn named_refusal(error: crate::postgres::PostgresKernelError) -> Option<MigrationError> {
+    match error {
+        crate::postgres::PostgresKernelError::RoleInvariant(reason) => {
+            Some(MigrationError::MigrationRoleRefused(reason))
+        }
+        crate::postgres::PostgresKernelError::Configuration(reason) => {
+            Some(MigrationError::DatabaseConfigurationRefused(reason))
+        }
+        crate::postgres::PostgresKernelError::CatalogInvariant(reason) => {
+            Some(MigrationError::CatalogRefused(reason))
+        }
+        _ => None,
+    }
+}
+
+/// The refusal of a compiled prerequisite check: a missing or mismatched
+/// administrator-owned prerequisite is named as such, and any other failure
+/// is refused as [`refusal_before_maintenance`] refuses it.
+fn prerequisite_refusal(error: crate::postgres::PostgresKernelError) -> MigrationError {
+    match error {
+        crate::postgres::PostgresKernelError::CatalogInvariant(reason)
+        | crate::postgres::PostgresKernelError::RoleInvariant(reason) => {
+            MigrationError::PrerequisiteMissing(reason)
+        }
+        error => refusal_before_maintenance(error),
     }
 }
 
@@ -1135,8 +1193,8 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         }
     }
 
-    let lock_key =
-        RegistryLockKey::derive(&manifest.package_id).map_err(|_| MigrationError::ApplyFailed)?;
+    let lock_key = RegistryLockKey::derive(&manifest.package_id)
+        .map_err(|_| MigrationError::LockKeyRefused)?;
     let mut connection = VerifiedPackageApplyConnection::acquire_for_verified_package(
         request.config,
         lock_key,
@@ -1179,13 +1237,12 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     }
     // Prerequisites are administrator-owned. Refuse a missing extension or
     // spatial role before the existing registry enters maintenance.
-    if connection
+    if let Err(error) = connection
         .verify_compiled_prerequisites(request.package.registry(), request.roles.runtime)
         .await
-        .is_err()
     {
         let _ = connection.release().await;
-        return Err(MigrationError::ApplyFailed);
+        return Err(prerequisite_refusal(error));
     }
     // A retry of the same target resumes the activation its first attempt
     // recorded, with the roles that attempt started with; any other apply is
@@ -1266,9 +1323,16 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
                     .ok()
                     .filter(|retired| retired != request.roles.runtime)
             }
-            Ok(None) | Err(_) => {
+            // The database records an active package with no applied
+            // activation: its state is not one this release reads as the
+            // ledger's.
+            Ok(None) => {
                 let _ = connection.release().await;
-                return Err(MigrationError::ApplyFailed);
+                return Err(MigrationError::UnrecognizedDatabase);
+            }
+            Err(error) => {
+                let _ = connection.release().await;
+                return Err(refusal_before_maintenance(error));
             }
         }
     } else if current.is_some() {
@@ -1289,9 +1353,16 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
                     runtime_role,
                 });
             }
-            Ok(None) | Err(_) => {
+            // The database records an active package with no applied
+            // activation: its state is not one this release reads as the
+            // ledger's.
+            Ok(None) => {
                 let _ = connection.release().await;
-                return Err(MigrationError::ApplyFailed);
+                return Err(MigrationError::UnrecognizedDatabase);
+            }
+            Err(error) => {
+                let _ = connection.release().await;
+                return Err(refusal_before_maintenance(error));
             }
         }
     } else {
@@ -1378,6 +1449,9 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     if let Err(error) = began {
         // The coverage check runs inside the begin transaction before its
         // first write, so a coverage refusal leaves maintenance state as it was.
+        // A begin that refuses rolls its transaction back, so a refused role,
+        // configuration, or catalog is named rather than reported as a
+        // failed migration.
         let refused = match error {
             crate::postgres::PostgresKernelError::HistoryCoverageIncomplete => {
                 MigrationError::HistoryCoverage
@@ -1385,7 +1459,7 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
             crate::postgres::PostgresKernelError::RetainedLocalHooks(retained) => {
                 MigrationError::RetainedLocalHooks(retained)
             }
-            _ => MigrationError::ApplyFailed,
+            error => named_refusal(error).unwrap_or(MigrationError::ApplyFailed),
         };
         if matches!(&refused, MigrationError::RetainedLocalHooks(_)) {
             // This guard read only and rolled its transaction back. No
@@ -1651,7 +1725,7 @@ async fn rehearse_begin(
         return connection
             .rehearse_initial_package(target, ledger, request.roles.runtime)
             .await
-            .map_err(|_| MigrationError::ApplyFailed);
+            .map_err(|error| named_refusal(error).unwrap_or(MigrationError::ApplyFailed));
     };
     // The guard reads current Proposal state before successor maintenance.
     if !role_change {
@@ -1682,7 +1756,7 @@ async fn rehearse_begin(
             crate::postgres::PostgresKernelError::RetainedLocalHooks(retained) => {
                 MigrationError::RetainedLocalHooks(retained)
             }
-            _ => MigrationError::ApplyFailed,
+            error => named_refusal(error).unwrap_or(MigrationError::ApplyFailed),
         })
 }
 

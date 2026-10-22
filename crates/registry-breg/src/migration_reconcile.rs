@@ -247,9 +247,14 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::ActivationRefusalAuditIncomplete
             | MigrationError::ActivationAuditUnavailable
             | MigrationError::UnrecognizedDatabase
-            | MigrationError::Pre1_0Schema => Self::Unavailable,
-            MigrationError::OperatorReference => Self::InvalidInput,
-            MigrationError::RuntimeWriteAuthority(_)
+            | MigrationError::Pre1_0Schema
+            | MigrationError::PrerequisiteMissing(_)
+            | MigrationError::CatalogRefused(_) => Self::Unavailable,
+            MigrationError::OperatorReference
+            | MigrationError::LockKeyRefused
+            | MigrationError::DatabaseConfigurationRefused(_) => Self::InvalidInput,
+            MigrationError::MigrationRoleRefused(_)
+            | MigrationError::RuntimeWriteAuthority(_)
             | MigrationError::ResumeRolesDiffer { .. }
             | MigrationError::SuccessorRolesDiffer { .. } => Self::MigrationAuthority,
         }

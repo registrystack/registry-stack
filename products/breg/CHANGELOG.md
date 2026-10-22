@@ -164,6 +164,15 @@
   database the attachment verification jobs need are the separate entries
   above.
 
+- `bregctl plan` and `bregctl apply` name a refusal that happens before
+  maintenance begins instead of reporting `apply.migration.failed` with advice
+  to reconcile a migration that never started. A wrong migration role reports
+  `apply.database.migration-role-refused`, a missing administrator-installed
+  prerequisite `apply.database.prerequisite-missing` naming it, a refused
+  catalog `apply.database.catalog-refused`, a refused database setting
+  `apply.database-configuration.refused`, and a package id that derives no
+  lock key `apply.package.lock-key-refused`. Each says nothing was changed.
+
 ## 0.43.0 - 2026-10-21
 
 - BREAKING: authored display fields reject prohibited Unicode controls and

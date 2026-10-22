@@ -3068,6 +3068,47 @@ async fn real_postgres_a_plan_refuses_what_apply_refuses_and_changes_nothing() {
     database.cleanup().await;
 }
 
+/// A connection that is not the configured migration role is refused by
+/// plan and apply alike, naming the role check, before maintenance: no
+/// registry state is created and no activation is audited.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_refused_migration_role_is_named_before_maintenance() {
+    let (database, package) = initial_package_database().await;
+    let refused = MigrationError::MigrationRoleRefused("migration connection uses the wrong role");
+    let roles = ApplyRoles::new(&database.runtime_role, &database.runtime_role);
+
+    assert_value_free(
+        plan_verified_package(ApplyVerifiedPackageRequest::plan(
+            &database.migration_config,
+            &package,
+            deployment(),
+            ApplyPrecondition::InitialActivation,
+            roles,
+            timeouts(),
+        ))
+        .await
+        .err(),
+        refused.clone(),
+    );
+    assert_value_free(
+        apply_verified_package(ApplyVerifiedPackageRequest::new(
+            &database.migration_config,
+            &package,
+            deployment(),
+            ApplyPrecondition::InitialActivation,
+            roles,
+            timeouts(),
+            database.activation_audit(),
+        ))
+        .await
+        .err(),
+        refused,
+    );
+    assert_eq!(registry_state_table(&database).await, None);
+    assert!(database.activation_audit_entries().is_empty());
+    database.cleanup().await;
+}
+
 /// Status reads the active identity and every ledger entry in apply order as
 /// the migration role, and answers while another session holds the apply
 /// lock.

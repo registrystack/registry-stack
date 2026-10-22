@@ -242,6 +242,10 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `startup.database.configuration-refused` | The runtime file's `database` settings were refused. | Correct them. |
 | `startup.database.secret-refused` | A connection secret could not be resolved. | Check `database.runtimeUrlRef`, `database.migrationUrlRef`, and `database.trustedRootCertificateRef`, and enable the secret provider that owns them. |
 | `apply.database.unavailable` | The migration database could not be reached before an apply changed anything. | Check the migration URL secret, the role, and `database.trustedRootCertificateRef`, then retry. |
+| `apply.database.migration-role-refused` | Before an apply changed anything, the migration connection was not `database.roles.migration`, or that role holds superuser, `CREATEDB`, `CREATEROLE`, or `BYPASSRLS`, or does not own every registry schema; the message names which. | Correct the role, then rerun. |
+| `apply.database.prerequisite-missing` | Before an apply changed anything, an administrator-installed prerequisite the package requires (`btree_gist`, PostGIS, or the spatial bbox role) was missing or did not match; the message names it. | Install it as an administrator, then rerun. |
+| `apply.database.catalog-refused` | Before an apply changed anything, the registry catalog or state did not admit the activation; the message names why. | Fix what the message names, then rerun. |
+| `apply.database-configuration.refused` | The migration database settings or timeouts were refused before an apply changed anything. | Correct them in the runtime file, then rerun. |
 | `startup.database.uninitialized` | No package was ever activated. | Run `plan`, then `apply --initial`. |
 | `startup.database.unrecognized` | The database holds state this release does not recognize. | Apply the package to a fresh database. |
 | `startup.database.pre-1-0-schema` | The database holds the attachment verification tables of a pre-1.0 release, which this release cannot upgrade in place; a backup carries the same tables. | Keep the registry stopped, rebuild the package with this release's `bregctl test` and `bregctl package`, and run `apply --initial` against a fresh database. |
@@ -272,6 +276,7 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `apply.package.digest-mismatch` | The package is not the one `--expected-digest` names. | Pass the digest `plan` reports. |
 | `apply.package.already-active` | This package already serves. | Nothing to do. |
 | `apply.package.empty-plan` | The successor changes nothing. | Keep the active package. |
+| `apply.package.lock-key-refused` | The package's Registry id derives no migration lock key. Nothing changed. | Correct the project id and rebuild the package. |
 | `apply.package.deployment-identity-refused` | The package's `canonicalBaseIri` is in the reserved `.invalid` namespace, which only a database initialized for `local` accepts. | Point `canonicalBaseIri` at a hostname you control, rerun `schema-test`, and rebuild the package. |
 | `apply.backup-evidence.refused` | The backup binding is missing, stale, or for another database. | Take a fresh backup; pass it with `--backup`. |
 | `apply.history.coverage-incomplete` | An erasure left history uncovered. | Run [`history rebaseline`](../breg-retention/#restore-snapshot-coverage-after-an-erasure). |

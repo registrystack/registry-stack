@@ -1613,7 +1613,12 @@ async fn wrong_migration_role_is_refused_before_initial_control_plane_or_ddl() {
         database.activation_audit(),
     ))
     .await;
-    assert_eq!(refused.err(), Some(MigrationError::ApplyFailed));
+    assert_eq!(
+        refused.err(),
+        Some(MigrationError::MigrationRoleRefused(
+            "migration connection uses the wrong role"
+        ))
+    );
     let state_table: Option<String> = database
         .admin
         .query_one(
@@ -1624,6 +1629,59 @@ async fn wrong_migration_role_is_refused_before_initial_control_plane_or_ddl() {
         .expect("the administrator can inspect control-plane absence")
         .get(0);
     assert_eq!(state_table, None);
+    database.cleanup().await;
+}
+
+/// A database without an administrator-installed prerequisite is refused by
+/// plan and apply alike, naming the prerequisite, before maintenance: no
+/// registry state is created and no activation is audited.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_missing_prerequisite_is_named_by_plan_and_apply_before_maintenance() {
+    let database = TestDatabase::create(1).await;
+    let root = publish_temporal_policy_package(
+        None,
+        fingerprint(1),
+        temporal_policy_module_bytes(false),
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    );
+    let package = load_package(root.path(), &local_context())
+        .expect("initial temporal package verifies before prerequisite enforcement");
+    assert!(package.registry().ddl().requires_btree_gist);
+    let missing =
+        MigrationError::PrerequisiteMissing("administrator-installed btree_gist is required");
+    let timeouts = ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(1))
+        .expect("test apply timeouts are bounded");
+
+    let planned = plan_verified_package(ApplyVerifiedPackageRequest::plan(
+        &database.migration_config,
+        &package,
+        ActivationDeployment::new("local", INSTANCE, DATABASE),
+        ApplyPrecondition::InitialActivation,
+        ApplyRoles::new(&database.migration_role, &database.runtime_role),
+        timeouts,
+    ))
+    .await;
+    assert_eq!(planned.err(), Some(missing.clone()));
+    let refused = apply_package(
+        &database,
+        &package,
+        ApplyPrecondition::InitialActivation,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await;
+    assert_eq!(refused.err(), Some(missing));
+    let state_table: Option<String> = database
+        .admin
+        .query_one(
+            "SELECT to_regclass('registry_internal.registry_state')::text",
+            &[],
+        )
+        .await
+        .expect("the administrator can inspect control-plane absence")
+        .get(0);
+    assert_eq!(state_table, None);
+    assert!(database.activation_audit_entries().is_empty());
     database.cleanup().await;
 }
 
@@ -1823,7 +1881,9 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     .await;
     assert_eq!(
         wrong_migration_role.err(),
-        Some(MigrationError::ApplyFailed),
+        Some(MigrationError::MigrationRoleRefused(
+            "migration connection uses the wrong role"
+        )),
         "the exact configured migration role is verified before control-plane DDL"
     );
     let state_table: Option<String> = database

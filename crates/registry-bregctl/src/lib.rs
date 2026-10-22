@@ -6333,6 +6333,69 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                     SuggestedAction::ReconcileFailedMigration,
                 );
             }
+            registry_breg::migration::MigrationError::LockKeyRefused => (
+                "apply.package.lock-key-refused",
+                "package",
+                "the package id derives no migration lock key: the Registry id is missing or outside its bound. Nothing was changed. Correct the project id and rebuild the package with `bregctl package`",
+                DiagnosticArtifact::PackageActivation,
+                SuggestedAction::CorrectPackageBuild,
+            ),
+            registry_breg::migration::MigrationError::MigrationRoleRefused(reason) => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.database.migration-role-refused",
+                        "database.roles.migration",
+                        &format!(
+                            "{reason}: the connection must use database.roles.migration, which must own the registry schemas and hold no superuser, CREATEDB, CREATEROLE, or BYPASSRLS authority. Nothing was changed. Correct the role, then run the same command again"
+                        ),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::VerifyMigrationAuthority,
+                );
+            }
+            registry_breg::migration::MigrationError::DatabaseConfigurationRefused(reason) => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.database-configuration.refused",
+                        "database",
+                        &format!(
+                            "the migration database configuration was refused: {reason}. Nothing was changed"
+                        ),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::VerifyMigrationAuthority,
+                );
+            }
+            registry_breg::migration::MigrationError::PrerequisiteMissing(reason) => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.database.prerequisite-missing",
+                        "database",
+                        &format!(
+                            "{reason}: an administrator installs the prerequisites this package requires in the target database. Nothing was changed. Run the same command again once they are in place"
+                        ),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::VerifyMigrationAuthority,
+                );
+            }
+            registry_breg::migration::MigrationError::CatalogRefused(reason) => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.database.catalog-refused",
+                        "database",
+                        &format!(
+                            "the database catalog was refused before maintenance began: {reason}. Nothing was changed"
+                        ),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::VerifyMigrationAuthority,
+                );
+            }
             registry_breg::migration::MigrationError::ApplyFailed => (
                 "apply.migration.failed",
                 "database",
@@ -15768,6 +15831,88 @@ fn apply_reports_an_unavailable_database_before_maintenance_as_retryable() {
         "{}",
         diagnostic.message
     );
+}
+
+/// A refusal before maintenance began has its own code for `apply` and
+/// `plan` alike: it keeps the kernel's value-free reason, says nothing was
+/// changed, and never sends the operator to reconcile a migration that
+/// never started.
+#[cfg(test)]
+#[test]
+fn apply_names_each_refusal_before_maintenance() {
+    use registry_breg::migration::MigrationError;
+
+    let cases = [
+        (
+            MigrationError::LockKeyRefused,
+            "apply.package.lock-key-refused",
+            "package",
+            DiagnosticArtifact::PackageActivation,
+            SuggestedAction::CorrectPackageBuild,
+            "migration lock key",
+        ),
+        (
+            MigrationError::MigrationRoleRefused("migration connection uses the wrong role"),
+            "apply.database.migration-role-refused",
+            "database.roles.migration",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+            "migration connection uses the wrong role",
+        ),
+        (
+            MigrationError::DatabaseConfigurationRefused(
+                "PostgreSQL identifier is outside the governed identifier grammar",
+            ),
+            "apply.database-configuration.refused",
+            "database",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+            "PostgreSQL identifier is outside the governed identifier grammar",
+        ),
+        (
+            MigrationError::PrerequisiteMissing("administrator-installed btree_gist is required"),
+            "apply.database.prerequisite-missing",
+            "database",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+            "administrator-installed btree_gist is required",
+        ),
+        (
+            MigrationError::CatalogRefused(
+                "a managed NOT NULL constraint is not validated; validate it before applying the package",
+            ),
+            "apply.database.catalog-refused",
+            "database",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+            "a managed NOT NULL constraint is not validated",
+        ),
+    ];
+    for (error, code, path, artifact, action, reason) in cases {
+        for command in ["apply", "plan"] {
+            let report = lifecycle_failure(command, ApplyLifecycleError::Apply(error.clone()));
+            assert_eq!(report.command, command);
+            let diagnostic = &report.diagnostics[0];
+            assert_eq!(diagnostic.code, code, "{error:?}");
+            assert_eq!(diagnostic.path, path, "{error:?}");
+            assert_eq!(diagnostic.artifact, artifact, "{error:?}");
+            assert_eq!(diagnostic.suggested_action, action, "{error:?}");
+            for fragment in [reason, "Nothing was changed"] {
+                assert!(
+                    diagnostic.message.contains(fragment),
+                    "{fragment}: {}",
+                    diagnostic.message
+                );
+            }
+            for fragment in ["reconcil", "requires exact-target"] {
+                assert!(
+                    !diagnostic.message.contains(fragment),
+                    "{fragment}: {}",
+                    diagnostic.message
+                );
+            }
+        }
+    }
 }
 
 /// A held migration lock has its own `apply.database.in_progress` code for
