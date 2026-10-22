@@ -176,7 +176,8 @@ pub struct ServiceSettings {
     /// The in-flight byte budget shared with content verification.
     pub budget: TransferBudget,
     pub deadline: TransferDeadline,
-    /// How long an idempotency key is held, `retention.receiptRetentionDays`.
+    /// How long a replay of an idempotency key is answered,
+    /// `retention.receiptRetentionDays`. After it the key stays spent.
     pub idempotency_days: u32,
 }
 
@@ -501,7 +502,9 @@ async fn replay(
     Ok(Replay::Repeat(resource))
 }
 
-/// Record that `key` created `resource`, for the retention period.
+/// Record that `key` created `resource`. A replay is answered for the
+/// retention period; after it the row stays, holding only digests and the
+/// resource id, so the key stays spent and answers `idempotency.expired`.
 async fn record_key(
     transaction: &tokio_postgres::Transaction<'_>,
     key: &str,
