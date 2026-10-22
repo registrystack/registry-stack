@@ -244,6 +244,8 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `apply.database.unavailable` | The migration database could not be reached before an apply changed anything. | Check the migration URL secret, the role, and `database.trustedRootCertificateRef`, then retry. |
 | `startup.database.uninitialized` | No package was ever activated. | Run `plan`, then `apply --initial`. |
 | `startup.database.unrecognized` | The database holds state this release does not recognize. | Apply the package to a fresh database. |
+| `startup.database.pre-1-0-schema` | The database holds the attachment verification tables of a pre-1.0 release, which this release cannot upgrade in place; a backup carries the same tables. | Keep the registry stopped, rebuild the package with this release's `bregctl test` and `bregctl package`, and run `apply --initial` against a fresh database. |
+| `apply.database.pre-1-0-schema` | The same, from `plan` or `apply`, before anything changed. | As above. |
 | `startup.database.catalog-drift` | Managed schemas, tables, views, sequences, functions, or indexes differ from the active package, or a unique constraint, a required column, or its `NOT NULL` marker was removed; the message names up to 64 affected identifiers. | Keep the registry stopped. Restore the database from a backup taken under the active package by following [Back up, restore, and drill recovery](../advanced/back-up-and-restore/#restore-base-registry-engine). The identifiers locate drift but do not establish that deleting or reconstructing an object preserves its data. Applying the active package again is refused with `apply.package.already-active` and does not repair the catalog. After the restore, rerun `doctor`. If `doctor` reports more catalog drift, recover from a suitable backup and rerun the command until clean. Other shape changes report `startup.database.unready`. |
 | `startup.database.identity-mismatch` | The database id differs from `identity.databaseId`. | Fix the database URLs or the id. |
 | `apply.database.identity-mismatch` | The same, from `plan` or `apply`. | As above. |
@@ -308,6 +310,8 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
     crates/registry-breg/src/package.rs, PackageFileRole::GeneratedDdl;
     crates/registry-breg/src/migration.rs, verify_successor_package_binding(), MigrationError::AlreadyActive;
     crates/registry-bregctl/src/lib.rs, apply.package.already-active;
+    crates/registry-breg/src/postgres/catalog.rs, pre_1_0_attachment_verification_present();
+    crates/registry-bregctl/src/lib.rs, PRE_1_0_SCHEMA_RECOVERY and apply.database.pre-1-0-schema;
     crates/registry-breg/src/package.rs, validate_deployment_identity();
     crates/registry-bregctl/src/lib.rs, apply.package.deployment-identity-refused;
     crates/registry-breg/src/postgres/config.rs, DatabaseConnectionCause;
