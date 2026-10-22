@@ -23,7 +23,9 @@ files itself.
 
 You write a `documents.yaml` project: the access profiles callers resolve to, and one or more
 document policies. A policy says who may place a document in custody, who holds it, which media
-types and sizes it admits, who may be granted it, and for how long.
+types and sizes it admits, who may be granted it, and for how long. The project may also declare
+[hooks](../../operate/documents/#events) that tell the owning system when a version becomes ready
+or is rejected, or when a grant is issued or revoked.
 
 An owning system reserves a [document](../../reference/glossary/#document) under a policy, then
 sends its bytes once, checked against the digest and length it declared. Its policy fixes the
@@ -39,14 +41,17 @@ was placed for may too, when the policy permits it. The
 [document version](../../reference/glossary/#document-version) entry lists every status a version
 moves through.
 
-Nothing is erased on a timer. A document stays until its custodian removes it or the verifier
-rejects it, and a grant that expires or is revoked erases nothing.
+A stored document stays until its custodian removes it or the verifier rejects it, and a grant
+that expires or is revoked erases nothing. Only what never became a stored version goes on its
+own: a reservation whose bytes never arrive expires when its upload window lapses, and on S3 the
+bytes of an upload that never completed are deleted.
 [Removal and erasure](../../operate/documents/#removal-and-erasure) says when the bytes go and
 what erasure reaches.
 
 {/* Evidence: crates/registry-documents-core/src/project.rs, DocumentPolicy and CustodianRule;
     crates/registry-documents-core/src/access.rs, standing (may_grant, may_request_erasure);
-    crates/registry-documents/src/service/grants.rs, revoke_inner. */}
+    crates/registry-documents/src/service/grants.rs, revoke_inner;
+    crates/registry-documents/src/erasure.rs, cleanup_once, expire_uploads, and erase_orphans. */}
 
 ## What stays with the owning system
 

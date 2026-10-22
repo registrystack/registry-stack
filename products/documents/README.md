@@ -392,7 +392,7 @@ products/documents/scripts/check-contracts.sh
 DOCUMENTS_TEST_DATABASE_URL=<disposable database> cargo test --locked \
   -p registry-documents --features postgres-test \
   --test postgres_startup --test postgres_operator --test postgres_documents \
-  --test postgres_s3
+  --test postgres_s3 --test postgres_hooks
 DOCUMENTS_TEST_DATABASE_URL=<disposable database> cargo test --locked \
   -p registry-documentsctl --features postgres-test --test postgres_cli
 cargo build --locked -p registry-render
