@@ -800,7 +800,12 @@ fn finish(
         OutputFormat::Json => {
             report::write(&completed(&outcome.report, command, outcome.exit), stdout)
         }
-        OutputFormat::Human => render_human(outcome, command, stdout, stderr),
+        OutputFormat::Human => match shared_report(&outcome.report) {
+            Ok(shared) => render_human(outcome, &shared, command, stdout, stderr),
+            Err(error) => {
+                return unreadable_report(&error, command, stderr);
+            }
+        },
     };
     match written {
         Ok(()) => ExitCode::from(outcome.exit),
@@ -813,6 +818,33 @@ fn finish(
     }
 }
 
+/// The command's diagnostics did not have the shape the shared human
+/// report reads, so a human report could print clean for a failing check.
+/// The failure is reported in their place and the exit code says so.
+fn unreadable_report(
+    error: &serde_json::Error,
+    command: &str,
+    stderr: &mut dyn io::Write,
+) -> ExitCode {
+    let failure = Outcome::refused(
+        OPERATIONAL_FAILURE_EXIT,
+        "report.unreadable",
+        "/diagnostics",
+        format!("the command's diagnostics could not be read for the human report: {error}"),
+    );
+    let written = writeln!(
+        stderr,
+        "documentsctl {command} could not report its result."
+    )
+    .and_then(|()| write_diagnostics(&failure.report, stderr));
+    if written.is_err() {
+        // The exit code carries the failure even when this line cannot be
+        // written.
+        let _ = writeln!(stderr, "documentsctl: output could not be written");
+    }
+    ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+}
+
 fn text(value: &Value) -> &str {
     value.as_str().unwrap_or("")
 }
@@ -821,31 +853,18 @@ fn text(value: &Value) -> &str {
 /// when they carry positions, and the command's result on standard output.
 fn render_human(
     outcome: &Outcome,
+    shared: &Report,
     command: &str,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) -> io::Result<()> {
     let report = &outcome.report;
-    let shared = shared_report(report);
     if outcome.exit != 0 {
         writeln!(stderr, "documentsctl {command} refused the input.")?;
         if matches!(outcome.view, View::Diagnostics) || command == "check" {
             return write!(stderr, "{}", shared.render_human());
         }
-        for diagnostic in report["diagnostics"].as_array().into_iter().flatten() {
-            writeln!(
-                stderr,
-                "{}[{}] {}: {}",
-                diagnostic["severity"].as_str().unwrap_or("error"),
-                text(&diagnostic["code"]),
-                diagnostic["path"].as_str().unwrap_or("/"),
-                text(&diagnostic["message"]),
-            )?;
-            if let Some(action) = diagnostic["suggestedAction"].as_str() {
-                writeln!(stderr, "  next: {action}")?;
-            }
-        }
-        return Ok(());
+        return write_diagnostics(report, stderr);
     }
     if !shared.is_empty() {
         write!(stderr, "{}", shared.render_human())?;
@@ -944,15 +963,37 @@ fn render_activation(report: &Value, stdout: &mut dyn io::Write) -> io::Result<(
     Ok(())
 }
 
-/// The diagnostics of a report as the shared human report prints them.
-fn shared_report(report: &Value) -> Report {
-    let diagnostics: Vec<Diagnostic> =
-        serde_json::from_value(report["diagnostics"].clone()).unwrap_or_default();
+/// Each diagnostic of a report on one line, with its next step.
+fn write_diagnostics(report: &Value, stderr: &mut dyn io::Write) -> io::Result<()> {
+    for diagnostic in report["diagnostics"].as_array().into_iter().flatten() {
+        writeln!(
+            stderr,
+            "{}[{}] {}: {}",
+            diagnostic["severity"].as_str().unwrap_or("error"),
+            text(&diagnostic["code"]),
+            diagnostic["path"].as_str().unwrap_or("/"),
+            text(&diagnostic["message"]),
+        )?;
+        if let Some(action) = diagnostic["suggestedAction"].as_str() {
+            writeln!(stderr, "  next: {action}")?;
+        }
+    }
+    Ok(())
+}
+
+/// The diagnostics of a report as the shared human report prints them. A
+/// report without diagnostics has none; diagnostics of another shape are an
+/// error, never an empty list.
+fn shared_report(report: &Value) -> Result<Report, serde_json::Error> {
+    let diagnostics: Vec<Diagnostic> = match report.get("diagnostics") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(diagnostics) => serde_json::from_value(diagnostics.clone())?,
+    };
     let mut shared = Report::new(diagnostics);
     if let Some(files) = report["filesChecked"].as_u64() {
         shared.set_files_checked(usize::try_from(files).unwrap_or(usize::MAX));
     }
-    shared
+    Ok(shared)
 }
 
 #[cfg(test)]
@@ -1063,6 +1104,29 @@ mod tests {
         let text = report.to_string();
         assert!(!text.contains("scanner.example.test"), "{text}");
         assert_eq!(report["diagnostics"][0]["path"], "/contentVerification/url");
+    }
+
+    #[test]
+    fn diagnostics_the_human_report_cannot_read_are_an_operational_failure() {
+        let outcome = Outcome::new(
+            json!({"diagnostics": [{"severity": 7}], "filesChecked": 1}),
+            View::Check,
+        );
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        let code = finish(
+            &outcome,
+            "check",
+            OutputFormat::Human,
+            &mut stdout,
+            &mut stderr,
+        );
+        let (stdout, stderr) = (
+            String::from_utf8(stdout).unwrap(),
+            String::from_utf8(stderr).unwrap(),
+        );
+        assert_eq!(code, ExitCode::from(OPERATIONAL_FAILURE_EXIT), "{stdout}");
+        assert!(stdout.is_empty(), "{stdout}");
+        assert!(stderr.contains("[report.unreadable]"), "{stderr}");
     }
 
     #[test]
