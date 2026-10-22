@@ -229,6 +229,16 @@ pub fn main_entry_from(
     stderr: &mut impl Write,
 ) -> ExitCode {
     let args: Vec<_> = args.into_iter().collect();
+    let format_supplied = args
+        .iter()
+        .skip(1)
+        .take_while(|arg| arg.as_os_str() != "--")
+        .any(|arg| {
+            arg.as_os_str() == "--format"
+                || arg
+                    .to_str()
+                    .is_some_and(|value| value.starts_with("--format="))
+        });
     let json_output = args.iter().enumerate().any(|(index, arg)| {
         arg == "--format=json"
             || (arg == "--format" && args.get(index + 1).is_some_and(|value| value == "json"))
@@ -262,7 +272,7 @@ pub fn main_entry_from(
     };
     let Cli { format, command } = cli;
     let command = match command {
-        Command::Serve(args) => return serve(args, format, stdout, stderr),
+        Command::Serve(args) => return serve(args, format, format_supplied, stdout, stderr),
         command => command,
     };
     let kind = command_kind(&command);
@@ -589,20 +599,27 @@ fn run(command: Command) -> Result<Value> {
 fn serve(
     args: ServeArgs,
     format: OutputFormat,
+    format_supplied: bool,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    if matches!(format, OutputFormat::Json) {
+    if format_supplied {
         let diagnostic = registry_platform_yaml::Diagnostic::error(
             "casework.usage.invalid",
             "format",
             "--format does not apply to the serve command because service logs keep the Casework runtime contract.",
             "Remove --format and retry the serve command.",
         );
-        let result =
-            report::CliReport::failure("usage", report::ReportStatus::UsageError, vec![diagnostic])
-                .and_then(|report| serde_json::to_value(report).map_err(Into::into))
-                .and_then(|value| report::write(&value, stdout).map_err(Into::into));
+        let result: Result<()> = match format {
+            OutputFormat::Human => writeln!(stderr, "{}", diagnostic.message).map_err(Into::into),
+            OutputFormat::Json => report::CliReport::failure(
+                "usage",
+                report::ReportStatus::UsageError,
+                vec![diagnostic],
+            )
+            .and_then(|report| serde_json::to_value(report).map_err(Into::into))
+            .and_then(|value| report::write(&value, stdout).map_err(Into::into)),
+        };
         if result.is_err() {
             let _ = writeln!(stderr, "caseworkctl: output could not be written");
             return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
@@ -773,6 +790,39 @@ pub(crate) fn canonical_tempdir() -> tempfile::TempDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn serve_refuses_explicit_human_format_before_starting_the_runtime() {
+        for arguments in [
+            vec![
+                OsString::from("caseworkctl"),
+                OsString::from("--format"),
+                OsString::from("human"),
+                OsString::from("serve"),
+                OsString::from("--runtime-config"),
+                OsString::from("/tmp/runtime.yaml"),
+                OsString::from("--casework-bin"),
+                OsString::from("/definitely/missing-casework"),
+            ],
+            vec![
+                OsString::from("caseworkctl"),
+                OsString::from("serve"),
+                OsString::from("--runtime-config"),
+                OsString::from("/tmp/runtime.yaml"),
+                OsString::from("--casework-bin"),
+                OsString::from("/definitely/missing-casework"),
+                OsString::from("--format"),
+                OsString::from("human"),
+            ],
+        ] {
+            let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+            let result = main_entry_from(arguments, &mut stdout, &mut stderr);
+
+            assert_eq!(result, ExitCode::from(report::USAGE_EXIT));
+            assert!(stdout.is_empty());
+            let refusal = String::from_utf8(stderr).unwrap();
+            assert!(refusal.contains("--format does not apply to the serve command"));
+        }
+    }
     #[test]
     fn removed_commands_are_not_exposed() {
         for name in ["source", "attempt", "retention", "simulate"] {

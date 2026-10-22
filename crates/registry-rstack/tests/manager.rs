@@ -678,6 +678,35 @@ fn update_preview_reports_dependency_changes_without_mutation() {
 }
 
 #[test]
+fn update_preview_of_the_selected_release_reports_no_download() {
+    let fixture = Fixture::new();
+    fixture.bootstrap(&["evidence"]);
+    let before = fixture.store().acquire_current().unwrap();
+    let before_name = before.generation().name().to_owned();
+    drop(before);
+
+    let report = update(&fixture.manager_options(), "v0.44.0", true).unwrap();
+
+    assert_eq!(report.current_release, "v0.44.0");
+    assert_eq!(report.target_release, "v0.44.0");
+    assert_eq!(report.components, vec!["evidence"]);
+    assert!(report.added_components.is_empty());
+    assert_eq!(report.download_bytes, 0);
+    assert!(report.preview);
+    assert!(!report.activated);
+    assert_eq!(report.generation, None);
+    assert_eq!(
+        fixture
+            .store()
+            .acquire_current()
+            .unwrap()
+            .generation()
+            .name(),
+        before_name
+    );
+}
+
+#[test]
 fn update_activates_complete_target_release_with_installed_set_and_new_dependencies() {
     let fixture = Fixture::new();
     fixture.bootstrap(&["evidence"]);
@@ -753,6 +782,45 @@ fn update_refuses_downgrade_and_unavailable_installed_component() {
             .unwrap()
             .release,
         "v0.44.0"
+    );
+}
+
+#[test]
+fn bootstrap_refuses_to_replace_a_newer_selected_release() {
+    let fixture = Fixture::new();
+    fixture.bootstrap(&["evidence"]);
+    let original_checksums = fs::read(&fixture.checksums).unwrap();
+    fixture.write_release("v0.45.0", false, true);
+    update(&fixture.manager_options(), "v0.45.0", false).unwrap();
+    let before = fixture.store().acquire_current().unwrap();
+    let before_name = before.generation().name().to_owned();
+    drop(before);
+    let generation_count = fs::read_dir(fixture.store().generations_dir())
+        .unwrap()
+        .count();
+    fs::write(&fixture.checksums, original_checksums).unwrap();
+
+    let error = bootstrap(BootstrapOptions {
+        release_manifest: fixture.manifest.clone(),
+        checksum_file: fixture.checksums.clone(),
+        launcher_asset: fixture.launcher.clone(),
+        asset_dir: Some(fixture.assets.clone()),
+        install_root: fixture.install_root.clone(),
+        bin_dir: fixture.bin_dir.clone(),
+        components: vec!["evidence".to_owned()],
+        all: false,
+    })
+    .unwrap_err();
+
+    assert!(error.contains("downgrade"), "unexpected error: {error}");
+    let current = fixture.store().acquire_current().unwrap();
+    assert_eq!(current.generation().name(), before_name);
+    assert_eq!(read_selection(current.path()).unwrap().release, "v0.45.0");
+    assert_eq!(
+        fs::read_dir(fixture.store().generations_dir())
+            .unwrap()
+            .count(),
+        generation_count
     );
 }
 
