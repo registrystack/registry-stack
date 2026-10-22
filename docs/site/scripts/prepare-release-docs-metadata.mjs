@@ -1,4 +1,5 @@
-import { lstat, readFile, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open, readFile, writeFile } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
@@ -47,19 +48,36 @@ function exactObject(value, fields, label) {
 
 async function selectedDiscoveryVersion(repoRoot, stackVersion) {
   const path = resolve(repoRoot, `release/distributions/v${stackVersion}.json`);
-  let stats;
+  let file;
   try {
-    stats = await lstat(path);
+    file = await open(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
   } catch (error) {
     if (error.code === 'ENOENT') return null;
+    if (['ELOOP', 'EMLINK', 'EFTYPE'].includes(error.code)) {
+      throw new Error(`distribution selection must be a regular file: ${path}`);
+    }
     throw error;
   }
-  if (!stats.isFile() || stats.isSymbolicLink()) {
-    throw new Error(`distribution selection must be a regular file: ${path}`);
+  let source;
+  try {
+    const stats = await file.stat();
+    if (!stats.isFile()) {
+      throw new Error(`distribution selection must be a regular file: ${path}`);
+    }
+    try {
+      source = await file.readFile('utf8');
+    } catch (error) {
+      throw new Error(`cannot read distribution selection ${path}: ${error.message}`);
+    }
+  } finally {
+    await file.close();
   }
   let document;
   try {
-    document = JSON.parse(await readFile(path, 'utf8'));
+    document = JSON.parse(source);
   } catch (error) {
     throw new Error(`cannot read distribution selection ${path}: ${error.message}`);
   }
