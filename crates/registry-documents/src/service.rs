@@ -1188,9 +1188,9 @@ impl DocumentService {
     }
 
     /// Write the content to its own fresh object, after committing the
-    /// staged row that names it, so an object a failed attempt leaves
-    /// behind stays findable. The bytes are moved into the store, never
-    /// copied.
+    /// storage pin and the staged row that names it, so an object a failed
+    /// attempt leaves behind stays findable under the storage it was written
+    /// to. The bytes are moved into the store, never copied.
     async fn stage_object(
         &self,
         record: &Record,
@@ -1215,6 +1215,18 @@ impl DocumentService {
                 .fence(&transaction)
                 .await
                 .map_err(|error| unavailable("upload package admission", &error))?;
+            // The pin commits with the staged row, before any byte reaches
+            // the bucket, so an object a failed first write leaves behind
+            // keeps a restart on other storage refused.
+            if !pin_storage(&*transaction, &self.storage)
+                .await
+                .map_err(|error| unavailable("storage pin", &error))?
+            {
+                return Err(unavailable(
+                    "storage pin",
+                    &"the pinned storage binding is not this deployment's",
+                ));
+            }
             transaction
                 .execute(
                     "INSERT INTO documents_staged_objects

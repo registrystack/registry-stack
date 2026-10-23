@@ -773,17 +773,22 @@ invariants:
     threat: >-
       The orphan sweep deletes the object of an upload still being
       written, leaving an object no row names, or deletes a committed
-      object outside an erasure.
+      object outside an erasure; or a restart on other storage leaves an
+      object a failed first write stored where no sweep looks.
     enforcementPoint: >-
       The sweep reads only uncommitted staged rows older than the longest
       transfer deadline plus ten minutes, locks each row while it deletes
       the object, and deletes the row only after the delete is confirmed;
       a commit that arrives after the row is deleted finds none and is
       refused. An object whose delete fails is skipped for the rest of the
-      pass, so it holds back no other.
+      pass, so it holds back no other. Each attempt pins the deployment's
+      storage binding in the transaction that commits its staged row,
+      before the object is sent.
     refusal: >-
-      Leave a younger or committed object and its row in place, and refuse
-      a commit whose staged row the sweep deleted.
+      Leave a younger or committed object and its row in place, refuse a
+      commit whose staged row the sweep deleted, and refuse a start under
+      another backend, bucket, or scope once any attempt has staged an
+      object.
     negativeTest:
       path: crates/registry-documents/tests/postgres_s3.rs
       name: the_orphan_sweep_erases_only_old_uncommitted_objects
