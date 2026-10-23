@@ -589,15 +589,7 @@ pub(crate) mod tests {
         use registry_platform_testing::{malformed_access_token_fixtures, CapturedDiagnosticLogs};
         use tracing::instrument::WithSubscriber;
         let captured = CapturedDiagnosticLogs::default();
-        let writer = captured.clone();
-        let subscriber = tracing::Dispatch::new(
-            tracing_subscriber::fmt()
-                .json()
-                .without_time()
-                .with_ansi(false)
-                .with_writer(move || writer.clone())
-                .finish(),
-        );
+        let subscriber = captured.subscriber();
         let tokens = malformed_access_token_fixtures();
         let auth = authenticator();
         for _ in 0..3 {
@@ -610,20 +602,7 @@ pub(crate) mod tests {
                 ));
             }
         }
-        let rendered = captured.text();
-        assert_eq!(
-            rendered.lines().count(),
-            1,
-            "one bounded diagnostic per header stage"
-        );
-        assert!(rendered.contains(r#""stage":"header""#));
-        assert!(!rendered.contains("canary"));
-        for token in tokens.iter().filter(|token| !token.is_empty()) {
-            assert!(
-                !rendered.contains(token),
-                "diagnostics must not contain credentials"
-            );
-        }
+        captured.assert_one_value_free_header_diagnostic(&tokens);
     }
 
     #[tokio::test]
@@ -658,34 +637,16 @@ pub(crate) mod tests {
                     claims,
                 )
             };
-            let good = sign(claims.clone(), "at+jwt");
-            assert!(auth.authenticate(&good).await.is_ok());
-            let mut multiple = claims.clone();
-            multiple["aud"] = json!([AUDIENCE, "urn:canary:additional-resource"]);
-            let multi = sign(multiple, "at+jwt");
-            assert!(
-                auth.authenticate(&multi).await.is_ok(),
-                "audience membership remains sufficient on this ordinary resource profile"
-            );
-            for resource in [
-                "urn:canary:breg",
-                "urn:canary:casework",
-                "urn:canary:scheduling",
-                "urn:canary:messaging",
-            ] {
-                let mut other = claims.clone();
-                other["aud"] = json!(resource);
-                let token = sign(other, "at+jwt");
-                assert!(matches!(
-                    auth.authenticate(&token).await,
-                    Err(AuthenticationError::Refused)
-                ));
-            }
-            let token = sign(claims.clone(), "JWT");
-            assert!(matches!(
-                auth.authenticate(&token).await,
-                Err(AuthenticationError::Refused)
-            ));
+            registry_platform_testing::assert_resource_audience_and_token_type_rules(
+                &key,
+                claims.clone(),
+                |token: String| {
+                    let auth = &auth;
+                    async move { auth.authenticate(&token).await }
+                },
+                |error| matches!(error, AuthenticationError::Refused),
+            )
+            .await;
             // A valid symmetric JWT is outside the asymmetric production baseline.
             let token = self::token(sender_claims());
             assert!(matches!(

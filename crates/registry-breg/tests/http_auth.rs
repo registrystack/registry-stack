@@ -51,15 +51,7 @@ async fn compact_token_admission_logs_one_value_free_header_diagnostic() {
     use registry_platform_testing::{malformed_access_token_fixtures, CapturedDiagnosticLogs};
     use tracing::instrument::WithSubscriber;
     let captured = CapturedDiagnosticLogs::default();
-    let writer = captured.clone();
-    let subscriber = tracing::Dispatch::new(
-        tracing_subscriber::fmt()
-            .json()
-            .without_time()
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish(),
-    );
+    let subscriber = captured.subscriber();
     let tokens = malformed_access_token_fixtures();
     let registry = compile_project(
         &parse_project_yaml(PROJECT.as_bytes()).unwrap(),
@@ -79,25 +71,14 @@ async fn compact_token_admission_logs_one_value_free_header_diagnostic() {
             ));
         }
     }
-    let rendered = captured.text();
-    assert_eq!(
-        rendered.lines().count(),
-        1,
-        "one bounded diagnostic per header stage"
-    );
-    assert!(rendered.contains(r#""stage":"header""#));
-    assert!(!rendered.contains("canary"));
-    for token in tokens.iter().filter(|token| !token.is_empty()) {
-        assert!(
-            !rendered.contains(token),
-            "diagnostics must not contain credentials"
-        );
-    }
+    captured.assert_one_value_free_header_diagnostic(&tokens);
 }
 
 #[tokio::test]
 async fn separate_resource_rs256_and_es256_profiles_refuse_cross_resource_reuse() {
-    use registry_platform_testing::{access_token_test_key, sign_compact_jwt_with_key};
+    use registry_platform_testing::{
+        access_token_test_key, assert_resource_audience_and_token_type_rules,
+    };
     let registry = compile_project(
         &parse_project_yaml(PROJECT.as_bytes()).unwrap(),
         &[],
@@ -126,32 +107,16 @@ async fn separate_resource_rs256_and_es256_profiles_refuse_cross_resource_reuse(
         claims["iss"] = json!("https://canary-issuer.test");
         claims["iat"] = json!(now);
         claims["exp"] = json!(now + 300);
-        let sign = |claims: Value, typ: &str| {
-            sign_compact_jwt_with_key(&key, typ, "canary-resource-key", claims)
-        };
-        assert!(auth
-            .authenticate(&sign(claims.clone(), "at+jwt"))
-            .await
-            .is_ok());
-        let mut multiple = claims.clone();
-        multiple["aud"] = json!([AUDIENCE, "urn:canary:additional-resource"]);
-        assert!(auth.authenticate(&sign(multiple, "at+jwt")).await.is_ok());
-        for resource in [
-            "urn:canary:casework",
-            "urn:canary:scheduling",
-            "urn:canary:messaging",
-        ] {
-            let mut other = claims.clone();
-            other["aud"] = json!(resource);
-            assert!(matches!(
-                auth.authenticate(&sign(other, "at+jwt")).await,
-                Err(AuthenticationError::VerificationRefused)
-            ));
-        }
-        assert!(matches!(
-            auth.authenticate(&sign(claims, "JWT")).await,
-            Err(AuthenticationError::VerificationRefused)
-        ));
+        assert_resource_audience_and_token_type_rules(
+            &key,
+            claims,
+            |token: String| {
+                let auth = &auth;
+                async move { auth.authenticate(&token).await }
+            },
+            |error| matches!(error, AuthenticationError::VerificationRefused),
+        )
+        .await;
     }
 }
 const PRINCIPAL: &str = "principal-value-never-rendered";

@@ -7,7 +7,10 @@ compile_error!(
 );
 
 mod diagnostic_capture;
-pub use diagnostic_capture::{malformed_access_token_fixtures, CapturedDiagnosticLogs};
+pub use diagnostic_capture::{
+    assert_resource_audience_and_token_type_rules, malformed_access_token_fixtures,
+    CapturedDiagnosticLogs,
+};
 
 #[cfg(feature = "test-authorization-server")]
 mod authorization_server;
