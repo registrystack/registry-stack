@@ -3564,6 +3564,236 @@
               ],
               "constraints": [],
               "subcommands": []
+            },
+            {
+              "name": "runs",
+              "invocation": "bregctl data runs",
+              "about": "List or cancel retained ingestion runs through their authenticated runtime routes",
+              "long_about": null,
+              "usage": "bregctl data runs [OPTIONS] <COMMAND>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": [
+                {
+                  "name": "list",
+                  "invocation": "bregctl data runs list",
+                  "about": "List the caller's runs for one Record type API route and access profile",
+                  "long_about": null,
+                  "usage": "bregctl data runs list [OPTIONS] --breg-url <URL> --access-token-file <ABSOLUTE_FILE> --record-route <API_ROUTE> --profile <ID>",
+                  "arguments": [],
+                  "options": [
+                    {
+                      "display": "--breg-url <URL>",
+                      "description": "Base Registry Engine base URL. HTTP is accepted only for loopback hosts",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--access-token-file <ABSOLUTE_FILE>",
+                      "description": "Absolute file containing one bearer access token and no other credential material. A symbolic link at any component of this path is refused.",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--record-route <API_ROUTE>",
+                      "description": "Authored API route of the Record type, for example `households`",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--profile <ID>",
+                      "description": "Access profile that owns the run context",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--status <STATUS>",
+                      "description": "Return only runs in this lifecycle state",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [
+                        "open",
+                        "complete",
+                        "cancelled",
+                        "blocked"
+                      ],
+                      "environment": null
+                    },
+                    {
+                      "display": "--input-digest <SHA256>",
+                      "description": "Return only runs announced with this whole-input SHA-256 digest",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--cursor <UUID>",
+                      "description": "Canonical run UUID returned as the previous page's next cursor",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--limit <COUNT>",
+                      "description": "Maximum runs to return, from 1 to 100",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [
+                        "25"
+                      ],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--format <FORMAT>",
+                      "description": "Emit the selected command's report in this format",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [
+                        "human"
+                      ],
+                      "possible_values": [
+                        "human",
+                        "json"
+                      ],
+                      "environment": null
+                    },
+                    {
+                      "display": "-h, --help",
+                      "description": "Print help",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "constraints": [],
+                  "subcommands": []
+                },
+                {
+                  "name": "cancel",
+                  "invocation": "bregctl data runs cancel",
+                  "about": "Cancel one caller-owned run while retaining its committed rows and receipts",
+                  "long_about": null,
+                  "usage": "bregctl data runs cancel [OPTIONS] --breg-url <URL> --access-token-file <ABSOLUTE_FILE> --record-route <API_ROUTE> --profile <ID> --run-id <UUID>",
+                  "arguments": [],
+                  "options": [
+                    {
+                      "display": "--breg-url <URL>",
+                      "description": "Base Registry Engine base URL. HTTP is accepted only for loopback hosts",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--access-token-file <ABSOLUTE_FILE>",
+                      "description": "Absolute file containing one bearer access token and no other credential material. A symbolic link at any component of this path is refused.",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--record-route <API_ROUTE>",
+                      "description": "Authored API route of the Record type, for example `households`",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--profile <ID>",
+                      "description": "Access profile that owns the run context",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--run-id <UUID>",
+                      "description": "Canonical run UUID shown by `bregctl data runs list`",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--format <FORMAT>",
+                      "description": "Emit the selected command's report in this format",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [
+                        "human"
+                      ],
+                      "possible_values": [
+                        "human",
+                        "json"
+                      ],
+                      "environment": null
+                    },
+                    {
+                      "display": "-h, --help",
+                      "description": "Print help",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "constraints": [],
+                  "subcommands": []
+                }
+              ]
             }
           ]
         },

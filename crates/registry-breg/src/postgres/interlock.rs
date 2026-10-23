@@ -2449,6 +2449,7 @@ async fn begin_successor_in(
         event_destination_compatibility_inventory,
     )
     .await?;
+    verify_import_run_admission_state(transaction).await?;
     let changed = transaction
         .execute(
             "UPDATE registry_internal.registry_state
@@ -2476,6 +2477,40 @@ async fn begin_successor_in(
     } else {
         verify_successor_resumable_state(transaction, current, target).await?;
         verify_resumable(transaction, ledger).await?;
+    }
+    Ok(())
+}
+
+/// Refuse a successor before maintenance when legacy data predates the
+/// one-run-per-authority admission rule. The existing runtime remains able to
+/// list and cancel each creator's runs while the registry stays ready.
+async fn verify_import_run_admission_state(transaction: &impl GenericClient) -> Result<()> {
+    let table_exists = transaction
+        .query_one(
+            "SELECT to_regclass('registry_internal.registry_ingestion_runs') IS NOT NULL",
+            &[],
+        )
+        .await?
+        .try_get::<_, bool>(0)?;
+    if !table_exists {
+        return Ok(());
+    }
+    let conflict = transaction
+        .query_one(
+            "SELECT EXISTS (
+                 SELECT import_authority_id
+                   FROM registry_internal.registry_ingestion_runs
+                  WHERE import_authority_id IS NOT NULL
+                    AND status IN ('open', 'blocked')
+                  GROUP BY import_authority_id
+                 HAVING count(*) > 1
+             )",
+            &[],
+        )
+        .await?
+        .try_get::<_, bool>(0)?;
+    if conflict {
+        return Err(PostgresKernelError::ConflictingImportRuns);
     }
     Ok(())
 }

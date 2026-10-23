@@ -157,7 +157,8 @@ configured domain or a compatible additive schema change.
    equal what the database's activation ledger records. Authorized
    bulk operations use `bregctl data validate`, `data import`, and
    `data export`, which reuse the packaged plans and normal authenticated API
-   paths.
+   paths. `bregctl data runs list` and `data runs cancel` expose the maintained
+   client's creator-scoped recovery operations for a Record type API route.
 
 One package is the unit an operator promotes: the same package directory, with
 the same package digest and `registryRevision`, is planned and applied in each

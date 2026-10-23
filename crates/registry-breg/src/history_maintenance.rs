@@ -75,7 +75,8 @@ impl From<PostgresKernelError> for HistoryMaintenanceError {
             | PostgresKernelError::CatalogInvariant(_)
             | PostgresKernelError::RegistryUnavailable
             | PostgresKernelError::HistoryCoverageIncomplete
-            | PostgresKernelError::RetainedLocalHooks(_) => Self::Unavailable,
+            | PostgresKernelError::RetainedLocalHooks(_)
+            | PostgresKernelError::ConflictingImportRuns => Self::Unavailable,
             PostgresKernelError::MigrationLockHeld => Self::MigrationLockHeld,
         }
     }

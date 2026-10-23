@@ -78,7 +78,9 @@ use apply_lifecycle::{
     ApplyLifecycleActivation, ApplyLifecycleError, ApplyLifecycleRequest, PlanLifecycleRequest,
 };
 use data_lifecycle::{
-    DataExportRequest, DataImportRequest, DataLifecycleError, DataValidateRequest, ExportPairState,
+    DataExportRequest, DataImportRequest, DataLifecycleError, DataRunCancelOutcome,
+    DataRunCancelRequest, DataRunListOutcome, DataRunListRequest, DataValidateRequest,
+    ExportPairState,
 };
 use field_encryption_lifecycle::{
     FieldEncryptionEraseHistoryLifecycleError, FieldEncryptionEraseHistoryLifecycleOutcome,
@@ -108,7 +110,9 @@ use reconcile_lifecycle::{
 };
 use registry_breg::data::DataError;
 use registry_breg::migration_reconcile::{ReconcileError, ReconcileOutcome};
-use registry_breg_client::{BRegIngestionBlockedReason, BRegReleaseStatus, BRegWithdrawalReason};
+use registry_breg_client::{
+    BRegIngestionBlockedReason, BRegIngestionRunStatus, BRegReleaseStatus, BRegWithdrawalReason,
+};
 use review_recovery::{ReviewRecoveryCliError, ReviewRecoveryOperation, ReviewRecoveryOutcome};
 use safe_path::{EntryStat, SafeDir, SafeEntry, SafePathError, MAX_REMOVE_TREE_DEPTH};
 use statistics_lifecycle::{
@@ -1143,6 +1147,88 @@ enum DataCommand {
     Import(DataImportArgs),
     /// Export records through the ordinary authenticated list API.
     Export(DataExportArgs),
+    /// List or cancel retained ingestion runs through their authenticated runtime routes.
+    Runs(DataRunsArgs),
+}
+
+#[derive(Debug, Args)]
+struct DataRunsArgs {
+    #[command(subcommand)]
+    command: DataRunsCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum DataRunsCommand {
+    /// List the caller's runs for one Record type API route and access profile.
+    List(DataRunListArgs),
+    /// Cancel one caller-owned run while retaining its committed rows and receipts.
+    Cancel(DataRunCancelArgs),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum DataRunStatusArg {
+    Open,
+    Complete,
+    Cancelled,
+    Blocked,
+}
+
+impl From<DataRunStatusArg> for BRegIngestionRunStatus {
+    fn from(value: DataRunStatusArg) -> Self {
+        match value {
+            DataRunStatusArg::Open => Self::Open,
+            DataRunStatusArg::Complete => Self::Complete,
+            DataRunStatusArg::Cancelled => Self::Cancelled,
+            DataRunStatusArg::Blocked => Self::Blocked,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct DataRunListArgs {
+    /// Base Registry Engine base URL. HTTP is accepted only for loopback hosts.
+    #[arg(long, value_name = "URL")]
+    breg_url: String,
+    /// Absolute file containing one bearer access token and no other credential material.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    access_token_file: PathBuf,
+    /// Authored API route of the Record type, for example `households`.
+    #[arg(long, value_name = "API_ROUTE")]
+    record_route: String,
+    /// Access profile that owns the run context.
+    #[arg(long, value_name = "ID")]
+    profile: String,
+    /// Return only runs in this lifecycle state.
+    #[arg(long, value_enum)]
+    status: Option<DataRunStatusArg>,
+    /// Return only runs announced with this whole-input SHA-256 digest.
+    #[arg(long, value_name = "SHA256")]
+    input_digest: Option<String>,
+    /// Canonical run UUID returned as the previous page's next cursor.
+    #[arg(long, value_name = "UUID")]
+    cursor: Option<String>,
+    /// Maximum runs to return, from 1 to 100.
+    #[arg(long, value_name = "COUNT", default_value_t = 25, value_parser = clap::value_parser!(u32).range(1..=100))]
+    limit: u32,
+}
+
+#[derive(Debug, Args)]
+struct DataRunCancelArgs {
+    /// Base Registry Engine base URL. HTTP is accepted only for loopback hosts.
+    #[arg(long, value_name = "URL")]
+    breg_url: String,
+    /// Absolute file containing one bearer access token and no other credential material.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    access_token_file: PathBuf,
+    /// Authored API route of the Record type, for example `households`.
+    #[arg(long, value_name = "API_ROUTE")]
+    record_route: String,
+    /// Access profile that owns the run context.
+    #[arg(long, value_name = "ID")]
+    profile: String,
+    /// Canonical run UUID shown by `bregctl data runs list`.
+    #[arg(long, value_name = "UUID")]
+    run_id: uuid::Uuid,
 }
 
 #[derive(Debug, Args)]
@@ -2170,6 +2256,24 @@ struct DataExportSuccessReport {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DataRunListSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: DataRunListOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DataRunCancelSuccessReport {
+    ok: bool,
+    command: &'static str,
+    #[serde(flatten)]
+    outcome: DataRunCancelOutcome,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct StatisticsMutationSuccessReport {
     ok: bool,
     command: &'static str,
@@ -2820,6 +2924,22 @@ where
                     Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
                 };
             }
+            DataCommand::Runs(args) => match args.command {
+                DataRunsCommand::List(args) => {
+                    return match data_runs_list(&args) {
+                        Ok(report) => write_data_run_list_success(&report, format, stdout, stderr),
+                        Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
+                    };
+                }
+                DataRunsCommand::Cancel(args) => {
+                    return match data_runs_cancel(&args) {
+                        Ok(report) => {
+                            write_data_run_cancel_success(&report, format, stdout, stderr)
+                        }
+                        Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
+                    };
+                }
+            },
         },
         Command::Statistics(args) => match args.command {
             StatisticsCommand::Publish(args) => {
@@ -4854,6 +4974,41 @@ fn data_export(args: &DataExportArgs) -> Result<DataExportSuccessReport, Refusal
     })
 }
 
+fn data_runs_list(args: &DataRunListArgs) -> Result<DataRunListSuccessReport, Refusal> {
+    let outcome = data_lifecycle::list_ingestion_runs(DataRunListRequest {
+        breg_url: &args.breg_url,
+        access_token_file: &args.access_token_file,
+        record_route: &args.record_route,
+        profile: &args.profile,
+        status: args.status.map(Into::into),
+        input_digest: args.input_digest.as_deref(),
+        cursor: args.cursor.as_deref(),
+        limit: args.limit,
+    })
+    .map_err(|error| data_lifecycle_refusal("data runs list", "data.runs.list", error))?;
+    Ok(DataRunListSuccessReport {
+        ok: true,
+        command: "data runs list",
+        outcome,
+    })
+}
+
+fn data_runs_cancel(args: &DataRunCancelArgs) -> Result<DataRunCancelSuccessReport, Refusal> {
+    let outcome = data_lifecycle::cancel_ingestion_run(DataRunCancelRequest {
+        breg_url: &args.breg_url,
+        access_token_file: &args.access_token_file,
+        record_route: &args.record_route,
+        profile: &args.profile,
+        run_id: args.run_id,
+    })
+    .map_err(|error| data_lifecycle_refusal("data runs cancel", "data.runs.cancel", error))?;
+    Ok(DataRunCancelSuccessReport {
+        ok: true,
+        command: "data runs cancel",
+        outcome,
+    })
+}
+
 fn statistics_publish(
     args: &StatisticsPublishArgs,
 ) -> Result<StatisticsMutationSuccessReport, FailureReport> {
@@ -5147,7 +5302,7 @@ fn data_lifecycle_failure(
         } => (
             format!("{prefix}.ingestion-run.import-authority-required"),
             "ingestionRun",
-            "the ingestion run was refused because no open import authority admits it: none is open for the entity, it names another profile, it expired, it has too little volume left, or it lists other input digests than the one the run announces; check bregctl import-authority list and open one that covers this input",
+            "the ingestion run was refused because no open import authority admits it: none is open for the entity, it names another profile, it expired, it has too little volume left, it lists other input digests than the one the run announces, or an existing open or blocked run occupies it; check bregctl import-authority list. If an authority still covers the input, have the run creator inspect it with `bregctl data runs list --record-route <API_ROUTE> --profile <ID>`, then resume an open run with its existing checkpoint or explicitly cancel the retained run before retrying; otherwise open an authority that covers this input",
             DiagnosticArtifact::DataOperation,
             SuggestedAction::CorrectDataBinding,
         ),
@@ -5166,6 +5321,27 @@ fn data_lifecycle_failure(
             "the ingestion run was cancelled and refuses new chunks; start a new import with a fresh checkpoint path",
             DiagnosticArtifact::DataOperation,
             SuggestedAction::VerifyDataCheckpoint,
+        ),
+        DataLifecycleError::IngestionRunNotFound => (
+            format!("{prefix}.ingestion-run.not-found"),
+            "ingestionRun",
+            "no ingestion run with that identifier is visible to this authenticated caller and bound access context; list runs with the same API route and profile",
+            DiagnosticArtifact::DataOperation,
+            SuggestedAction::CorrectDataBinding,
+        ),
+        DataLifecycleError::IngestionRunProfileMismatch => (
+            format!("{prefix}.ingestion-run.profile-mismatch"),
+            "profile",
+            "the selected access profile does not match the ingestion run; list runs with the Record type API route and the profile that created it",
+            DiagnosticArtifact::DataOperation,
+            SuggestedAction::CorrectDataBinding,
+        ),
+        DataLifecycleError::IngestionRunNotOpen => (
+            format!("{prefix}.ingestion-run.not-open"),
+            "ingestionRun",
+            "the ingestion run is already complete or cancelled and cannot be cancelled again",
+            DiagnosticArtifact::DataOperation,
+            SuggestedAction::CorrectDataBinding,
         ),
         DataLifecycleError::Output => (
             format!("{prefix}.output.refused"),
@@ -6668,6 +6844,13 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                     SuggestedAction::DrainLocalHooks,
                 );
             }
+            registry_breg::migration::MigrationError::ConflictingImportRuns => (
+                "apply.ingestion-runs.conflict",
+                "ingestionRun",
+                "multiple non-terminal ingestion runs share one import authority. Nothing was changed: the registry remains ready with no pinned target. Use `bregctl data runs list --record-route <API_ROUTE>` as each run creator, cancel the duplicate with `bregctl data runs cancel --record-route <API_ROUTE>`, then run plan or apply again",
+                DiagnosticArtifact::DataOperation,
+                SuggestedAction::CorrectDataBinding,
+            ),
             registry_breg::migration::MigrationError::ActiveProposalRecoveryUnavailable => (
                 "apply.proposals.recovery-required",
                 "proposal",
@@ -12526,6 +12709,91 @@ fn write_data_export_success(
     write_result(result, stderr)
 }
 
+fn write_data_run_list_success(
+    report: &DataRunListSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        write_ctl_report(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        let mut lines = report::Lines::new();
+        lines.lead(&format!(
+            "Listed {}.",
+            report::counted_total(
+                u64::try_from(report.outcome.runs.len())
+                    .expect("the maintained client bounds ingestion run pages"),
+                "ingestion run"
+            )
+        ));
+        lines.pairs(&[
+            ("Record type API route", report.outcome.record_route.clone()),
+            ("profile", report.outcome.profile_id.clone()),
+            ("has more", report.outcome.has_more.to_string()),
+            (
+                "next cursor",
+                report
+                    .outcome
+                    .next_cursor
+                    .clone()
+                    .unwrap_or_else(|| "none".to_owned()),
+            ),
+        ]);
+        for run in &report.outcome.runs {
+            lines.item(&run.run_id().to_string());
+            lines.pairs_at(
+                2,
+                &[
+                    ("status", run.status().as_str().to_owned()),
+                    ("Record type", run.record_type().to_owned()),
+                    ("profile", run.profile_id().to_owned()),
+                    ("committed items", run.committed_items().to_string()),
+                    (
+                        "blocked reason",
+                        run.blocked_reason()
+                            .map(|reason| reason.as_str().to_owned())
+                            .unwrap_or_else(|| "none".to_owned()),
+                    ),
+                ],
+            );
+        }
+        stdout.write_all(lines.finish().as_bytes())
+    };
+    write_result(result, stderr)
+}
+
+fn write_data_run_cancel_success(
+    report: &DataRunCancelSuccessReport,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format == OutputFormat::Json {
+        write_ctl_report(&mut *stdout, report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        render_report(
+            "Cancelled the ingestion run. Committed rows and retained receipts remain.",
+            &[
+                ("Record type API route", report.outcome.record_route.clone()),
+                ("profile", report.outcome.profile_id.clone()),
+                ("ingestion run", report.outcome.run.run_id().to_string()),
+                ("status", report.outcome.run.status().as_str().to_owned()),
+                (
+                    "committed items",
+                    report.outcome.run.committed_items().to_string(),
+                ),
+            ],
+            stdout,
+        )
+    };
+    write_result(result, stderr)
+}
+
 fn write_statistics_success(
     report: &StatisticsMutationSuccessReport,
     format: OutputFormat,
@@ -13870,6 +14138,80 @@ mod tests {
     }
 
     #[test]
+    fn data_run_recovery_commands_require_the_authorized_runtime_binding() {
+        assert!(Cli::try_parse_from([
+            "bregctl",
+            "data",
+            "runs",
+            "list",
+            "--breg-url",
+            "http://127.0.0.1:8080",
+            "--access-token-file",
+            "/tmp/token",
+            "--record-route",
+            "widgets",
+            "--profile",
+            "loader",
+            "--status",
+            "blocked",
+            "--limit",
+            "25",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "bregctl",
+            "data",
+            "runs",
+            "cancel",
+            "--breg-url",
+            "http://127.0.0.1:8080",
+            "--access-token-file",
+            "/tmp/token",
+            "--record-route",
+            "widgets",
+            "--profile",
+            "loader",
+            "--run-id",
+            "00000000-0000-4000-8000-000000000001",
+        ])
+        .is_ok());
+
+        for arguments in [
+            vec![
+                "bregctl",
+                "data",
+                "runs",
+                "list",
+                "--breg-url",
+                "http://127.0.0.1:8080",
+                "--record-route",
+                "widgets",
+                "--profile",
+                "loader",
+            ],
+            vec![
+                "bregctl",
+                "data",
+                "runs",
+                "cancel",
+                "--breg-url",
+                "http://127.0.0.1:8080",
+                "--access-token-file",
+                "/tmp/token",
+                "--record-route",
+                "widgets",
+                "--run-id",
+                "00000000-0000-4000-8000-000000000001",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&arguments).is_err(),
+                "missing caller authority must be refused: {arguments:?}"
+            );
+        }
+    }
+
+    #[test]
     fn init_template_conflicts_with_every_flag_that_shapes_a_derived_project() {
         assert!(Cli::try_parse_from([
             "bregctl",
@@ -14445,6 +14787,29 @@ mod tests {
                 .as_str()
                 .expect("the message renders");
             assert!(message.contains(hint), "{code}: {message}");
+        }
+    }
+
+    #[test]
+    fn an_import_authority_occupancy_refusal_names_creator_run_recovery() {
+        let report = serde_json::to_value(data_lifecycle_failure(
+            "data import",
+            "data.import",
+            DataLifecycleError::IngestionRunPrecondition {
+                through_import: true,
+            },
+        ))
+        .expect("the failure report serializes");
+        let message = report["diagnostics"][0]["message"]
+            .as_str()
+            .expect("the message renders");
+        for hint in [
+            "open or blocked run",
+            "bregctl data runs list",
+            "resume an open run with its existing checkpoint",
+            "explicitly cancel the retained run",
+        ] {
+            assert!(message.contains(hint), "missing {hint:?}: {message}");
         }
     }
 

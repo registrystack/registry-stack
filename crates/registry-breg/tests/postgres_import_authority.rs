@@ -30,11 +30,20 @@ use registry_breg::import_authority::{
     ImportAuthorityOperatorService, ImportAuthorityStatus, DEFAULT_IMPORT_AUTHORITY_WINDOW,
 };
 use registry_breg::instance_claim::{InstanceClaimError, InstanceClaimService};
+use registry_breg::migration::{
+    apply_verified_package, plan_verified_package, ActivationDeployment, ApplyPrecondition,
+    ApplyRoles, ApplyTimeouts, ApplyVerifiedPackageRequest,
+};
 use registry_breg::mutation::install_mutation_schema;
+use registry_breg::package::{
+    load_package, prepare_package, PackageBuildRequest, PackageLoadContext,
+    PackageMigrationPlanInput, PackageSourceFile, VerifiedPackage,
+};
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
-    RegistryLockKey, RegistryStateTestIdentity,
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    managed_schema_fingerprint, ExpectedManagedCatalog, ExpectedRegistryIdentity,
+    PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
+    RegistryStateTestIdentity,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
@@ -106,6 +115,139 @@ const FIXTURE: &str = r#"{
 fn compiled_registry() -> CompiledRegistry {
     let project = parse_project_json(FIXTURE.as_bytes()).expect("fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring).expect("fixture compiles")
+}
+
+async fn activation_packages() -> (VerifiedPackage, VerifiedPackage) {
+    let mut initial_source: Value = serde_json::from_str(FIXTURE).expect("fixture JSON parses");
+    initial_source["package"] = json!({"sourceRevision":"import-authority-fixture"});
+    let initial = activation_package(&initial_source, None).await;
+
+    let mut successor_source = initial_source;
+    successor_source["recordTypes"][0]["fields"]
+        .as_array_mut()
+        .expect("widget fields are an array")
+        .push(json!({
+            "id":"note", "type":"string", "maximumLength":64,
+            "classification":"public"
+        }));
+    let successor = activation_package(
+        &successor_source,
+        Some((initial.registry(), initial.package_digest())),
+    )
+    .await;
+    (initial, successor)
+}
+
+async fn activation_package(
+    source: &Value,
+    prior: Option<(&CompiledRegistry, &str)>,
+) -> VerifiedPackage {
+    let bytes = serde_json::to_vec(source).expect("activation fixture serializes");
+    let project = parse_project_json(&bytes).expect("activation fixture parses");
+    let registry = compile_project(&project, &[], CompileProfile::Production)
+        .expect("activation fixture compiles for production");
+    let fingerprint_database = TestDatabase::create(1).await;
+    let (mut migration, task) = fingerprint_database.connect_migration().await;
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("fingerprint transaction begins");
+    install_compiled_schema(&transaction, &registry, &fingerprint_database.runtime_role)
+        .await
+        .expect("fingerprint schema installs");
+    let fingerprint = managed_schema_fingerprint(
+        &transaction,
+        &fingerprint_database.runtime_role,
+        &ExpectedManagedCatalog::compiled(&registry),
+    )
+    .await
+    .expect("fingerprint derives");
+    transaction
+        .rollback()
+        .await
+        .expect("fingerprint transaction rolls back");
+    drop(migration);
+    task.abort();
+    fingerprint_database.cleanup().await;
+
+    let prepared = prepare_package(PackageBuildRequest {
+        from_package_digest: prior.map(|(_, digest)| digest.to_owned()),
+        compiler_source_revision: "import-authority-fixture".to_owned(),
+        schema_fingerprint: fingerprint,
+        project: PackageSourceFile {
+            path: "source/registry.yaml".to_owned(),
+            bytes,
+        },
+        modules: Vec::new(),
+        fixture_journeys: PackageSourceFile {
+            path: "tests/journeys.yaml".to_owned(),
+            bytes: br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys: []
+"#
+            .to_vec(),
+        },
+        migration_plan: prior.map_or(
+            PackageMigrationPlanInput::InitialCompiledDdl,
+            |(registry, _)| PackageMigrationPlanInput::Successor {
+                prior_registry: Box::new(registry.clone()),
+            },
+        ),
+    })
+    .expect("activation package prepares");
+    let root = tempfile::tempdir_in(
+        std::env::temp_dir()
+            .canonicalize()
+            .expect("temporary root canonicalizes"),
+    )
+    .expect("package root creates");
+    let package = root.path().join("package");
+    prepared
+        .publish_to_directory(&package)
+        .expect("activation package publishes");
+    load_package(
+        &package,
+        &PackageLoadContext {
+            database_initialization_environment: "local",
+        },
+    )
+    .expect("activation package loads")
+}
+
+fn activation_request<'a>(
+    database: &'a TestDatabase,
+    package: &'a VerifiedPackage,
+    precondition: ApplyPrecondition<'a>,
+    plan: bool,
+) -> ApplyVerifiedPackageRequest<'a> {
+    let deployment = ActivationDeployment::new(
+        "local",
+        "import-authority-instance",
+        "import-authority-database",
+    );
+    let roles = ApplyRoles::new(&database.migration_role, &database.runtime_role);
+    let timeouts = ApplyTimeouts::new(Duration::from_secs(2), Duration::from_secs(5))
+        .expect("activation timeouts are bounded");
+    if plan {
+        ApplyVerifiedPackageRequest::plan(
+            &database.migration_config,
+            package,
+            deployment,
+            precondition,
+            roles,
+            timeouts,
+        )
+    } else {
+        ApplyVerifiedPackageRequest::new(
+            &database.migration_config,
+            package,
+            deployment,
+            precondition,
+            roles,
+            timeouts,
+            database.activation_audit(),
+        )
+    }
 }
 
 struct Harness {
@@ -370,6 +512,24 @@ impl Harness {
         plan: &Plan,
         package_revision: &str,
     ) -> axum::response::Response {
+        self.create_run_for_package_digest(
+            app,
+            entity_route,
+            profile_id,
+            plan,
+            &registry_breg::postgres::test_package_digest(package_revision),
+        )
+        .await
+    }
+
+    async fn create_run_for_package_digest(
+        &self,
+        app: &axum::Router,
+        entity_route: &str,
+        profile_id: &str,
+        plan: &Plan,
+        package_digest: &str,
+    ) -> axum::response::Response {
         send(
             app,
             Method::POST,
@@ -377,7 +537,7 @@ impl Harness {
             json!({
                 "operation": "create",
                 "profileId": profile_id,
-                "packageRevision": registry_breg::postgres::test_package_digest(package_revision),
+                "packageRevision": package_digest,
                 "schemaFingerprint": self.identity.schema_fingerprint,
                 "inputDigest": plan.input_digest,
                 "inputLength": plan.input_length,
@@ -392,6 +552,28 @@ impl Harness {
     async fn created_run(&self, entity_route: &str, profile_id: &str, plan: &Plan) -> String {
         let response = self
             .create_run(&self.app, entity_route, profile_id, plan, PACKAGE_REVISION)
+            .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        body_json(response).await["run"]["runId"]
+            .as_str()
+            .expect("run id")
+            .to_owned()
+    }
+
+    async fn created_run_for_active_package(
+        &self,
+        entity_route: &str,
+        profile_id: &str,
+        plan: &Plan,
+    ) -> String {
+        let response = self
+            .create_run_for_package_digest(
+                &self.app,
+                entity_route,
+                profile_id,
+                plan,
+                &self.identity.package_digest,
+            )
             .await;
         assert_eq!(response.status(), StatusCode::CREATED);
         body_json(response).await["run"]["runId"]
@@ -422,6 +604,76 @@ impl Harness {
     async fn committed_chunk(&self, run_id: &str, plan: &Plan, index: usize) {
         let response = self.submit("widgets", "loader", run_id, plan, index).await;
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    async fn cancelled_run(&self, run_id: &str) {
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri(format!(
+                "/v1/records/widgets/ingestion-runs/{run_id}/cancel?accessProfile=loader"
+            ))
+            .body(Body::empty())
+            .expect("cancellation request");
+        request.extensions_mut().insert(claims());
+        let mut app = self.app.clone();
+        let response = app.call(request).await.expect("cancellation response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["run"]["status"], "cancelled");
+    }
+
+    /// Put an admitted run in a valid blocked state without changing its
+    /// authority. This isolates whether admission treats `blocked` itself as
+    /// occupying the authority, rather than relying on a closed, expired, or
+    /// exhausted authority to refuse the next run.
+    async fn block_run_while_authority_stays_open(&self, run_id: &str) {
+        let changed = self
+            .database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_ingestion_runs
+                    SET status = 'blocked', blocked_reason = 'active_package_changed',
+                        last_attempt_outcome = 'binding_changed', updated_at = now()
+                  WHERE run_id = $1 AND status = 'open'",
+                &[&Uuid::parse_str(run_id).expect("run id")],
+            )
+            .await
+            .expect("administrator creates the isolated blocked-run fixture");
+        assert_eq!(changed, 1);
+    }
+
+    /// Reproduce the state an upgrade from the earlier admission path may
+    /// encounter: two non-terminal runs already bound to one authority.
+    async fn duplicate_nonterminal_run(&self, run_id: &str) -> String {
+        let source = Uuid::parse_str(run_id).expect("run id");
+        let duplicate = Uuid::new_v4();
+        let changed = self
+            .database
+            .admin
+            .execute(
+                "INSERT INTO registry_internal.registry_ingestion_runs
+                     (run_id, created_issuer, created_subject, created_principal_reference,
+                      package_revision, schema_fingerprint, entity_id, operation, profile_id,
+                      bound_context_reference, input_digest, input_length, item_count,
+                      chunk_count, chunk_algorithm_version, maximum_items, maximum_bytes,
+                      import_authority_id, status, blocked_reason, next_chunk_index,
+                      committed_items, committed_prefix_digest, last_attempt_outcome,
+                      last_attempt_chunk_index, created_at, updated_at)
+                 SELECT $2, created_issuer, created_subject, created_principal_reference,
+                        package_revision, schema_fingerprint, entity_id, operation, profile_id,
+                        bound_context_reference, input_digest, input_length, item_count,
+                        chunk_count, chunk_algorithm_version, maximum_items, maximum_bytes,
+                        import_authority_id, status, blocked_reason, next_chunk_index,
+                        committed_items, committed_prefix_digest, last_attempt_outcome,
+                        last_attempt_chunk_index, created_at + interval '1 microsecond',
+                        updated_at + interval '1 microsecond'
+                   FROM registry_internal.registry_ingestion_runs
+                  WHERE run_id = $1",
+                &[&source, &duplicate],
+            )
+            .await
+            .expect("the earlier schema admits a second non-terminal run");
+        assert_eq!(changed, 1);
+        duplicate.to_string()
     }
 
     /// Submit the chunk and prove the run blocked on its authority: the
@@ -570,14 +822,18 @@ impl ReadinessProbe for AlwaysReady {
 }
 
 fn claims() -> VerifiedRequestClaims {
+    claims_for(PRINCIPAL, "zone-a")
+}
+
+fn claims_for(principal: &str, jurisdiction: &str) -> VerifiedRequestClaims {
     VerifiedRequestClaims::authenticated(
         "registry_principal",
-        PRINCIPAL,
+        principal,
         BTreeSet::new(),
         None,
         BTreeMap::from([(
             "jurisdiction".to_owned(),
-            VerifiedClaimValue::direct_string("zone-a").expect("direct claim"),
+            VerifiedClaimValue::direct_string(jurisdiction).expect("direct claim"),
         )]),
     )
     .expect("verified claims are bounded")
@@ -589,15 +845,40 @@ async fn send(
     uri: &str,
     body: Value,
 ) -> axum::response::Response {
+    send_with_claims(app, method, uri, body, claims()).await
+}
+
+async fn send_with_claims(
+    app: &axum::Router,
+    method: Method,
+    uri: &str,
+    body: Value,
+    claims: VerifiedRequestClaims,
+) -> axum::response::Response {
     let mut request = Request::builder()
         .method(method)
         .uri(uri)
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).expect("request JSON")))
         .expect("request");
-    request.extensions_mut().insert(claims());
+    request.extensions_mut().insert(claims);
     let mut app = app.clone();
     app.call(request).await.expect("response")
+}
+
+async fn cancel_with_claims(
+    app: &axum::Router,
+    uri: &str,
+    claims: VerifiedRequestClaims,
+) -> axum::response::Response {
+    let mut request = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .body(Body::empty())
+        .expect("cancellation request");
+    request.extensions_mut().insert(claims);
+    let mut app = app.clone();
+    app.call(request).await.expect("cancellation response")
 }
 
 async fn body_json(response: axum::response::Response) -> Value {
@@ -1266,22 +1547,317 @@ async fn expiry_between_two_chunks_blocks_the_run_and_records_the_expiry() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_second_run_cannot_spend_volume_the_first_already_committed() {
+async fn completion_releases_one_authority_for_the_next_import_run() {
     let harness = Harness::create().await;
     let authority = harness.open("widget", "loader", 6, &[]).await;
     let first = plan("first", 3);
-    let second = plan("second", 6);
+    let second = plan("second", 3);
     let first_run = harness.created_run("widgets", "loader", &first).await;
-    // Both runs are admitted while the whole volume is still free.
-    let second_run = harness.created_run("widgets", "loader", &second).await;
+    harness.refused_run("widgets", "loader", &second).await;
     harness.committed_chunk(&first_run, &first, 0).await;
+    let second_run = harness.created_run("widgets", "loader", &second).await;
     harness.committed_chunk(&second_run, &second, 0).await;
     assert_eq!(
         harness.authority(authority.authority_id).await,
         ("exhausted".to_owned(), 6)
     );
-    harness.blocked_chunk(&second_run, &second, 1).await;
     assert_eq!(harness.widget_count().await, 6);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancellation_releases_one_authority_and_competing_announcements_stay_refused() {
+    let harness = Harness::create().await;
+    let authority = harness.open("widget", "loader", 6, &[]).await;
+    let first = plan("cancel-first", 3);
+    let successor = plan("cancel-successor", 3);
+    let first_run = harness.created_run("widgets", "loader", &first).await;
+
+    // Creation has no replay. Repeating the same announcement is a competing
+    // creation and receives the same explicit precondition refusal as any
+    // other run while the authority is occupied.
+    harness.refused_run("widgets", "loader", &first).await;
+    assert_eq!(harness.run_count().await, 1);
+
+    harness.cancelled_run(&first_run).await;
+    let successor_run = harness.created_run("widgets", "loader", &successor).await;
+    harness.committed_chunk(&successor_run, &successor, 0).await;
+    assert_eq!(
+        harness.authority(authority.authority_id).await,
+        ("open".to_owned(), 3)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_blocked_run_keeps_an_otherwise_open_authority_occupied() {
+    let harness = Harness::create().await;
+    let authority = harness.open("widget", "loader", 6, &[]).await;
+    let blocked = plan("blocked-occupant", 3);
+    let competing = plan("blocked-competitor", 3);
+    let blocked_run = harness.created_run("widgets", "loader", &blocked).await;
+    harness
+        .block_run_while_authority_stays_open(&blocked_run)
+        .await;
+
+    assert_eq!(
+        harness.authority(authority.authority_id).await,
+        ("open".to_owned(), 0),
+        "the authority remains current, unexpired, and wholly unspent"
+    );
+    harness.refused_run("widgets", "loader", &competing).await;
+    assert_eq!(
+        harness.authority(authority.authority_id).await,
+        ("open".to_owned(), 0),
+        "the refusal is due to the blocked occupant, not authority settlement"
+    );
+
+    harness.cancelled_run(&blocked_run).await;
+    let admitted = harness.created_run("widgets", "loader", &competing).await;
+    harness.committed_chunk(&admitted, &competing, 0).await;
+    assert_eq!(
+        harness.authority(authority.authority_id).await,
+        ("open".to_owned(), 3),
+        "authorized cancellation releases the still-valid authority"
+    );
+    assert_eq!(harness.widget_count().await, 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_exact_chunk_replay_returns_its_receipt_without_spending_authority_twice() {
+    let harness = Harness::create().await;
+    let authority = harness.open("widget", "loader", 6, &[]).await;
+    let load = plan("chunk-replay", 3);
+    let run_id = harness.created_run("widgets", "loader", &load).await;
+
+    let committed = harness.submit("widgets", "loader", &run_id, &load, 0).await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let committed = body_json(committed).await;
+    assert_eq!(committed["receipt"]["replayed"], false);
+
+    let replayed = harness.submit("widgets", "loader", &run_id, &load, 0).await;
+    assert_eq!(replayed.status(), StatusCode::OK);
+    let replayed = body_json(replayed).await;
+    assert_eq!(replayed["receipt"]["replayed"], true);
+    assert_eq!(replayed["receipt"]["batch"], committed["receipt"]["batch"]);
+    assert_eq!(harness.widget_count().await, 3);
+    assert_eq!(
+        harness.authority(authority.authority_id).await,
+        ("open".to_owned(), 3),
+        "the retained receipt replay does not consume authority volume again"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_import_run_admissions_under_one_authority_admit_exactly_one() {
+    let harness = Harness::create().await;
+    harness.open("widget", "loader", 6, &[]).await;
+    let first = plan("concurrent-first", 3);
+    let second = plan("concurrent-second", 3);
+
+    let (first_response, second_response) = tokio::join!(
+        harness.create_run(&harness.app, "widgets", "loader", &first, PACKAGE_REVISION),
+        harness.create_run(&harness.app, "widgets", "loader", &second, PACKAGE_REVISION)
+    );
+    let mut responses = vec![first_response, second_response];
+    responses.sort_by_key(|response| response.status());
+    assert_eq!(responses[0].status(), StatusCode::CREATED);
+    assert_eq!(responses[1].status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(
+        body_json(responses.pop().expect("refusal")).await["code"],
+        "precondition.failed"
+    );
+    assert_eq!(harness.run_count().await, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plan_and_apply_refuse_legacy_run_conflicts_before_maintenance_until_owner_recovery() {
+    let (initial, successor) = activation_packages().await;
+    let database = TestDatabase::create(8).await;
+    let active = apply_verified_package(activation_request(
+        &database,
+        &initial,
+        ApplyPrecondition::InitialActivation,
+        false,
+    ))
+    .await
+    .expect("initial package activates");
+    let registry = Arc::new(initial.registry().clone());
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
+        .expect("test owns a keyed audit profile");
+    let app = build_router(
+        &database,
+        registry.clone(),
+        active.clone(),
+        lock_key,
+        audit_profile.clone(),
+    );
+    let harness = Harness {
+        database,
+        registry,
+        identity: active.clone(),
+        lock_key,
+        audit_profile,
+        app,
+    };
+    harness.open("widget", "loader", 9, &[]).await;
+    let load = plan("legacy-conflict", 6);
+    let retained = harness
+        .created_run_for_active_package("widgets", "loader", &load)
+        .await;
+    let duplicate = harness.duplicate_nonterminal_run(&retained).await;
+    harness.committed_chunk(&retained, &load, 0).await;
+
+    let audit_before = harness.database.activation_audit_entries().len();
+    let planned = plan_verified_package(activation_request(
+        &harness.database,
+        &successor,
+        ApplyPrecondition::Successor { current: &active },
+        true,
+    ))
+    .await
+    .expect_err("plan identifies the legacy non-terminal run conflict");
+    let diagnostic = format!("{planned:?} {planned}");
+    assert!(
+        diagnostic.contains("non-terminal import run"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("bregctl data runs list"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("bregctl data runs cancel"),
+        "{diagnostic}"
+    );
+    assert_eq!(
+        harness.database.activation_audit_entries().len(),
+        audit_before,
+        "plan is read-only and appends no activation audit"
+    );
+    assert_eq!(
+        activation_state(&harness.database).await,
+        ("ready".to_owned(), None, 1),
+        "plan leaves the prior runtime serving with no maintenance target"
+    );
+
+    let applied = apply_verified_package(activation_request(
+        &harness.database,
+        &successor,
+        ApplyPrecondition::Successor { current: &active },
+        false,
+    ))
+    .await
+    .expect_err("apply repeats the conflict check before maintenance");
+    assert_eq!(applied, planned, "plan and apply return the same refusal");
+    assert_eq!(
+        activation_state(&harness.database).await,
+        ("ready".to_owned(), None, 1),
+        "apply refuses before maintenance or a successor ledger row"
+    );
+    let activation_entries = harness.database.activation_audit_entries();
+    assert_eq!(activation_entries.len(), audit_before + 2);
+    assert_eq!(
+        activation_entries.last().unwrap()["record"]["outcome"],
+        "refused"
+    );
+
+    let owner_list = send(
+        &harness.app,
+        Method::GET,
+        "/v1/records/widgets/ingestion-runs?accessProfile=loader",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(owner_list.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(owner_list).await["runs"]
+            .as_array()
+            .expect("owner run listing")
+            .len(),
+        2
+    );
+    let concealed_list = send_with_claims(
+        &harness.app,
+        Method::GET,
+        "/v1/records/widgets/ingestion-runs?accessProfile=loader",
+        Value::Null,
+        claims_for("other-principal", "zone-a"),
+    )
+    .await;
+    assert_eq!(concealed_list.status(), StatusCode::OK);
+    assert!(body_json(concealed_list).await["runs"]
+        .as_array()
+        .expect("concealed run listing")
+        .is_empty());
+    let concealed_cancel = cancel_with_claims(
+        &harness.app,
+        &format!("/v1/records/widgets/ingestion-runs/{duplicate}/cancel?accessProfile=loader"),
+        claims_for("other-principal", "zone-a"),
+    )
+    .await;
+    assert_eq!(concealed_cancel.status(), StatusCode::NOT_FOUND);
+
+    harness.cancelled_run(&duplicate).await;
+    let retained_work = harness
+        .database
+        .admin
+        .query_one(
+            "SELECT status, committed_items
+               FROM registry_internal.registry_ingestion_runs
+              WHERE run_id = $1",
+            &[&Uuid::parse_str(&retained).expect("retained run id")],
+        )
+        .await
+        .expect("retained work reads");
+    assert_eq!(
+        (
+            retained_work.get::<_, String>(0),
+            retained_work.get::<_, i64>(1)
+        ),
+        ("open".to_owned(), 3)
+    );
+    assert_eq!(harness.run_count().await, 2, "recovery deletes no run");
+
+    plan_verified_package(activation_request(
+        &harness.database,
+        &successor,
+        ApplyPrecondition::Successor { current: &active },
+        true,
+    ))
+    .await
+    .expect("one remaining non-terminal run admits the successor plan");
+    let successor_identity = apply_verified_package(activation_request(
+        &harness.database,
+        &successor,
+        ApplyPrecondition::Successor { current: &active },
+        false,
+    ))
+    .await
+    .expect("authorized recovery admits the successor apply");
+    assert_eq!(
+        activation_state(&harness.database).await,
+        ("ready".to_owned(), None, 2)
+    );
+    assert_eq!(
+        successor_identity.package_digest,
+        successor.package_digest()
+    );
+    harness.database.cleanup().await;
+}
+
+async fn activation_state(database: &TestDatabase) -> (String, Option<String>, i64) {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT maintenance_status, maintenance_target_package_digest,
+                    (SELECT count(*) FROM registry_internal.registry_migrations)
+               FROM registry_internal.registry_state
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("activation state reads");
+    (row.get(0), row.get(1), row.get(2))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

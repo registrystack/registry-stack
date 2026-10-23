@@ -23,9 +23,10 @@ use registry_breg::data::{
 use registry_breg::package::{inspect_package_integrity, PackageEnvelope, PackageError};
 use registry_breg_client::{
     ingestion_prefix_digest, BRegBatchOperation, BRegIngestionBlockedReason, BRegIngestionChunk,
-    BRegIngestionChunkReceipt, BRegIngestionError, BRegIngestionRun, BRegIngestionRunRequest,
-    BRegIngestionRunStatus, BRegProblemCode, BaseRegistryClient, BaseRegistryClientConfig,
-    BaseRegistryClientError, BearerToken, BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
+    BRegIngestionChunkReceipt, BRegIngestionError, BRegIngestionRun, BRegIngestionRunListQuery,
+    BRegIngestionRunRequest, BRegIngestionRunStatus, BRegProblemCode, BaseRegistryClient,
+    BaseRegistryClientConfig, BaseRegistryClientError, BearerToken,
+    BREG_INGESTION_CHUNK_ALGORITHM_VERSION,
 };
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_httputil::client::{
@@ -88,6 +89,12 @@ pub(crate) enum DataLifecycleError {
     ImportRunBlocked(Option<BRegIngestionBlockedReason>),
     /// The ingestion run was cancelled and refuses new chunks.
     ImportRunCancelled,
+    /// No ingestion run visible to this caller has the requested identifier.
+    IngestionRunNotFound,
+    /// The selected access profile does not match the retained run.
+    IngestionRunProfileMismatch,
+    /// The retained run is already terminal and cannot be cancelled.
+    IngestionRunNotOpen,
     /// The service refused to create the run on a failed precondition. For a
     /// plan through an `import` grant that means no open import authority
     /// admits it; `through_import` says which hint the operator needs.
@@ -150,6 +157,45 @@ pub(crate) struct DataExportRequest<'a> {
     pub output: &'a Path,
     pub checkpoint: &'a Path,
     pub max_pages: Option<u64>,
+}
+
+pub(crate) struct DataRunListRequest<'a> {
+    pub breg_url: &'a str,
+    pub access_token_file: &'a Path,
+    /// The Record type's authored API route, for example `households`.
+    pub record_route: &'a str,
+    pub profile: &'a str,
+    pub status: Option<BRegIngestionRunStatus>,
+    pub input_digest: Option<&'a str>,
+    pub cursor: Option<&'a str>,
+    pub limit: u32,
+}
+
+pub(crate) struct DataRunCancelRequest<'a> {
+    pub breg_url: &'a str,
+    pub access_token_file: &'a Path,
+    /// The Record type's authored API route, for example `households`.
+    pub record_route: &'a str,
+    pub profile: &'a str,
+    pub run_id: Uuid,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DataRunListOutcome {
+    pub record_route: String,
+    pub profile_id: String,
+    pub runs: Vec<BRegIngestionRun>,
+    pub has_more: bool,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DataRunCancelOutcome {
+    pub record_route: String,
+    pub profile_id: String,
+    pub run: BRegIngestionRun,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -278,6 +324,72 @@ pub(crate) fn run_import(
     let destinations = ImportDestinations::resolve(request.checkpoint)?;
     let mut started = load_or_start_ingestion(&drive, destinations)?;
     submit_ingestion_chunks(&drive, &mut started, request.max_chunks)
+}
+
+/// List the ingestion runs visible to the authenticated creator and bound
+/// access context. The caller supplies the Record type API route directly;
+/// this recovery command does not resolve authoring ids or package metadata.
+pub(crate) fn list_ingestion_runs(
+    request: DataRunListRequest<'_>,
+) -> Result<DataRunListOutcome, DataLifecycleError> {
+    let base = parse_breg_url(request.breg_url)?;
+    let token = read_access_token(request.access_token_file)?;
+    let client = ingestion_client(&base, &token)?;
+    drop(token);
+    let mut query = BRegIngestionRunListQuery::default()
+        .access_profile(request.profile)
+        .map_err(|_| DataLifecycleError::Data(DataError::InvalidBinding))?
+        .limit(request.limit)
+        .map_err(|_| DataLifecycleError::Data(DataError::InvalidBinding))?;
+    if let Some(status) = request.status {
+        query = query.status(status);
+    }
+    if let Some(input_digest) = request.input_digest {
+        query = query
+            .input_digest(input_digest)
+            .map_err(|_| DataLifecycleError::Data(DataError::InvalidBinding))?;
+    }
+    if let Some(cursor) = request.cursor {
+        query = query
+            .cursor(cursor)
+            .map_err(|_| DataLifecycleError::Data(DataError::InvalidBinding))?;
+    }
+    let page = data_runtime()?
+        .block_on(client.list_ingestion_runs(request.record_route, &query))
+        .map_err(map_run_recovery_client_error)?
+        .value;
+    Ok(DataRunListOutcome {
+        record_route: request.record_route.to_owned(),
+        profile_id: request.profile.to_owned(),
+        runs: page.runs().to_vec(),
+        has_more: page.has_more(),
+        next_cursor: page.next_cursor().map(str::to_owned),
+    })
+}
+
+/// Cancel one creator-visible run through the maintained Rust client. The
+/// service retains committed rows and receipts and enforces the run's bound
+/// access context and task grant.
+pub(crate) fn cancel_ingestion_run(
+    request: DataRunCancelRequest<'_>,
+) -> Result<DataRunCancelOutcome, DataLifecycleError> {
+    let base = parse_breg_url(request.breg_url)?;
+    let token = read_access_token(request.access_token_file)?;
+    let client = ingestion_client(&base, &token)?;
+    drop(token);
+    let run = data_runtime()?
+        .block_on(client.cancel_ingestion_run(
+            request.record_route,
+            request.run_id,
+            Some(request.profile),
+        ))
+        .map_err(map_run_recovery_client_error)?
+        .value;
+    Ok(DataRunCancelOutcome {
+        record_route: request.record_route.to_owned(),
+        profile_id: request.profile.to_owned(),
+        run,
+    })
 }
 
 /// The fixed context every ingestion exchange of one import acts through: the
@@ -912,6 +1024,24 @@ fn map_ingestion_client_error(error: BaseRegistryClientError) -> DataLifecycleEr
             DataLifecycleError::Data(DataError::OperationRefused)
         }
         _ => DataLifecycleError::Data(DataError::OperationRefused),
+    }
+}
+
+fn map_run_recovery_client_error(error: BaseRegistryClientError) -> DataLifecycleError {
+    match error {
+        BaseRegistryClientError::Problem {
+            code: BRegProblemCode::ResourceNotFound,
+            ..
+        } => DataLifecycleError::IngestionRunNotFound,
+        BaseRegistryClientError::Problem {
+            code: BRegProblemCode::IngestionProfileMismatch,
+            ..
+        } => DataLifecycleError::IngestionRunProfileMismatch,
+        BaseRegistryClientError::Problem {
+            code: BRegProblemCode::IngestionRunNotOpen,
+            ..
+        } => DataLifecycleError::IngestionRunNotOpen,
+        error => map_ingestion_client_error(error),
     }
 }
 
@@ -2108,6 +2238,142 @@ mod tests {
             .find(|(candidate, _)| candidate == name)
             .map(|(_, value)| value.as_str())
             .unwrap()
+    }
+
+    #[test]
+    fn run_recovery_uses_the_supplied_api_route_profile_and_creator_token() {
+        let input = import_input();
+        let (plan, _) = import_plan_and_inspected(&input);
+        let list_body = canonicalize_json(&json!({
+            "runs": [ingestion_run_value(&plan, &input, 0, "blocked")],
+            "hasMore": false,
+            "nextCursor": Value::Null,
+        }))
+        .unwrap();
+        let (address, handle) = spawn_scripted_server(vec![
+            ScriptedExchange::Respond(ingestion_http_response(200, "OK", &list_body)),
+            ScriptedExchange::Respond(ingestion_run_response(
+                200,
+                "OK",
+                &plan,
+                &input,
+                0,
+                "cancelled",
+            )),
+        ]);
+        let directory = test_directory("run-recovery");
+        let token_file = directory.join("access-token");
+        fs::write(&token_file, b"TEST-TOKEN\n").unwrap();
+        let base = format!("http://{address}");
+
+        let mut list_stdout = Vec::new();
+        let mut list_stderr = Vec::new();
+        assert_eq!(
+            crate::run_from(
+                vec![
+                    OsString::from("bregctl"),
+                    OsString::from("--format"),
+                    OsString::from("json"),
+                    OsString::from("data"),
+                    OsString::from("runs"),
+                    OsString::from("list"),
+                    OsString::from("--breg-url"),
+                    OsString::from(&base),
+                    OsString::from("--access-token-file"),
+                    token_file.as_os_str().to_owned(),
+                    OsString::from("--record-route"),
+                    OsString::from("records"),
+                    OsString::from("--profile"),
+                    OsString::from(PROFILE),
+                    OsString::from("--status"),
+                    OsString::from("blocked"),
+                    OsString::from("--input-digest"),
+                    OsString::from(plan.input_digest()),
+                    OsString::from("--cursor"),
+                    OsString::from(RUN_ID),
+                    OsString::from("--limit"),
+                    OsString::from("25"),
+                ],
+                &mut list_stdout,
+                &mut list_stderr,
+            ),
+            std::process::ExitCode::SUCCESS
+        );
+        assert!(list_stderr.is_empty());
+        let listed = parse_json_strict(&list_stdout).unwrap();
+        assert_eq!(listed["ok"], true);
+        assert_eq!(listed["command"], "data runs list");
+        assert_eq!(listed["recordRoute"], "records");
+        assert_eq!(listed["profileId"], PROFILE);
+        assert_eq!(listed["runs"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["runs"][0]["status"], "blocked");
+
+        let mut cancel_stdout = Vec::new();
+        let mut cancel_stderr = Vec::new();
+        assert_eq!(
+            crate::run_from(
+                vec![
+                    OsString::from("bregctl"),
+                    OsString::from("--format"),
+                    OsString::from("json"),
+                    OsString::from("data"),
+                    OsString::from("runs"),
+                    OsString::from("cancel"),
+                    OsString::from("--breg-url"),
+                    OsString::from(&base),
+                    OsString::from("--access-token-file"),
+                    token_file.as_os_str().to_owned(),
+                    OsString::from("--record-route"),
+                    OsString::from("records"),
+                    OsString::from("--profile"),
+                    OsString::from(PROFILE),
+                    OsString::from("--run-id"),
+                    OsString::from(RUN_ID),
+                ],
+                &mut cancel_stdout,
+                &mut cancel_stderr,
+            ),
+            std::process::ExitCode::SUCCESS
+        );
+        assert!(cancel_stderr.is_empty());
+        let cancelled = parse_json_strict(&cancel_stdout).unwrap();
+        assert_eq!(cancelled["ok"], true);
+        assert_eq!(cancelled["command"], "data runs cancel");
+        assert_eq!(cancelled["recordRoute"], "records");
+        assert_eq!(cancelled["profileId"], PROFILE);
+        assert_eq!(cancelled["run"]["status"], "cancelled");
+
+        let requests = handle.join().unwrap();
+        let (list_line, list_headers, list_body) = request_parts(&requests[0]);
+        assert_eq!(
+            list_line,
+            format!(
+                "GET /v1/records/records/ingestion-runs?accessProfile=operator&limit=25&cursor={RUN_ID}&status=blocked&inputDigest={} HTTP/1.1",
+                plan.input_digest()
+            )
+        );
+        assert_eq!(
+            header_value(&list_headers, "authorization"),
+            "Bearer TEST-TOKEN"
+        );
+        assert_eq!(list_body, Value::Null);
+
+        let (cancel_line, cancel_headers, cancel_body) = request_parts(&requests[1]);
+        assert_eq!(
+            cancel_line,
+            format!(
+                "POST /v1/records/records/ingestion-runs/{RUN_ID}/cancel?accessProfile=operator HTTP/1.1"
+            )
+        );
+        assert_eq!(
+            header_value(&cancel_headers, "authorization"),
+            "Bearer TEST-TOKEN"
+        );
+        assert!(cancel_headers
+            .iter()
+            .all(|(name, _)| name != "content-type"));
+        assert_eq!(cancel_body, Value::Null);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

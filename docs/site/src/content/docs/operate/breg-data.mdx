@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-10-23"
 doc_type: how-to
 persona:
   - operator
@@ -187,7 +187,9 @@ Listed the newest import authorities. 1 authority.
   status                           exhausted
 ```
 
-A Record type holds at most one open window. A window also ends when you close it with
+A Record type holds at most one open window, and each window admits at most one `open` or
+`blocked` run. Completion or an authorized cancellation lets that still-valid window admit a
+later run. A window also ends when you close it with
 `bregctl import-authority close --authority-id <authority-id>`, when it expires, or when another
 package is activated (`superseded`). Run `bregctl import-authority close-expired` on a schedule to
 record the expiries no load has noticed yet. Every opening and ending appends one record to the
@@ -195,7 +197,9 @@ record the expiries no load has noticed yet. Every opening and ending appends on
 
 Each chunk rechecks the window. When the window ends mid-load, the committed chunks stay and the
 run is `blocked`. A blocked run cannot continue: open a new window and import only the lines the
-run did not commit, under a new checkpoint path.
+run did not commit, under a new checkpoint path. When the window itself remains valid, explicitly
+cancel the blocked run before starting its replacement. Cancellation preserves committed rows,
+receipts, counts, and audit.
 
 {/* Evidence: crates/registry-breg/src/contract.rs, MutationPolicySource;
     crates/registry-breg/src/mutation.rs, apply_current_row();
@@ -210,12 +214,17 @@ run did not commit, under a new checkpoint path.
 
 The checkpoint lives beside the client, but the run lives on the server. If the machine that
 started a load is gone, or you are not sure whether a file already loaded, ask the server before
-importing again. List the runs for the file's digest, with a header file holding the
-`Authorization: Bearer` line:
+importing again. List the runs for the file's digest with the same bearer token file that
+`data import` uses. `--record-route` takes the Record type's authored API
+route, `operators` here, rather than its Record type id:
 
 ```sh test-skip="needs an active registry and its package directory"
-curl -s -H @/srv/registry/private/import.header \
-  "https://registry.example.org/v1/records/operators/ingestion-runs?inputDigest=<input sha256>"
+bregctl data runs list \
+  --format json \
+  --breg-url https://registry.example.org \
+  --access-token-file /srv/registry/private/import-token \
+  --record-route operators --profile operator-editor \
+  --input-digest <input sha256>
 ```
 
 Each run in `runs` reports its `status`, `itemCount`, `committedItems`, and `nextChunkIndex`, but
@@ -229,13 +238,32 @@ never the rows themselves. The list also filters by `status`, and pages with `cu
 | `blocked` | Read `blockedReason`, then import the lines after `committedItems` under a new checkpoint. |
 | `cancelled` | Someone stopped the load on purpose. Its counts and audit are kept. |
 
+Only the creator under the run's bound profile, claim context, and task grant can list or cancel
+it. Another caller sees an empty list or the same concealed not-found response as an unknown run.
+Cancel a retained duplicate with the same route and profile:
+
+```sh test-skip="needs an active registry and its package directory"
+bregctl data runs cancel \
+  --breg-url https://registry.example.org \
+  --access-token-file /srv/registry/private/import-token \
+  --record-route operators --profile operator-editor \
+  --run-id <run id from data runs list>
+```
+
+During an upgrade, `bregctl plan` and `apply` refuse before maintenance if an older database has
+several non-terminal runs under one import authority. Keep the existing runtime serving, have
+each creator list and cancel its duplicate work, then run plan and apply again. No run or committed
+prefix is deleted automatically.
+
 A run is blocked with `activePackageChanged` when another package is activated, and with
 `importAuthorityClosed` when its window ends. To continue a run from another machine without its
 checkpoint, drive its routes directly, as the
 [ingestion-run reference](../../reference/breg-api/#ingestion-runs) describes.
 
 {/* Evidence: crates/registry-breg/src/api/ingestion.rs;
-    crates/registry-breg/src/ingestion_store.rs, IngestionRunStatus and IngestionBlockedReason. */}
+    crates/registry-breg/src/ingestion_store.rs, IngestionRunStatus and IngestionBlockedReason;
+    crates/registry-bregctl/src/data_lifecycle.rs, list_ingestion_runs() and cancel_ingestion_run();
+    crates/registry-breg/tests/postgres_import_authority.rs. */}
 
 ## Export with a checkpoint
 
