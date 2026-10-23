@@ -66,7 +66,7 @@ class AssembleRegistryClientWheelTest(TestCase):
             with zipfile.ZipFile(wheel, "w") as archive:
                 archive.writestr(
                     f"registry_{product}_client/__init__.py",
-                    f"PRODUCT = {product!r}\n",
+                    f"PRODUCT = {product!r}\n" + ("class PrivateKeyJwt: pass\n" if product == "breg" else ""),
                 )
                 archive.writestr(
                     f"registry_{product}_client/native.abi3.so",
@@ -228,7 +228,8 @@ class AssembleRegistryClientWheelTest(TestCase):
         # build. Native extension loading remains covered by the package smoke.
         import_script = (
             "import sys; sys.path.insert(0, sys.argv[1]); "
-            "from registry_client import discovery, evidence, breg, casework, messaging, scheduling; "
+            "from registry_client import auth, discovery, evidence, breg, casework, messaging, scheduling; "
+            "assert auth.PrivateKeyJwt is breg.PrivateKeyJwt; "
             "print(discovery.PRODUCT, evidence.PRODUCT, breg.PRODUCT, casework.PRODUCT, "
             "messaging.PRODUCT, scheduling.PRODUCT)"
         )
