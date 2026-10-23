@@ -40,6 +40,17 @@ opaque client binding. Every input requires the compiler-emitted JSON Schema;
 clients do not reconstruct a partial schema from a field type. The MCP gateway
 copies that schema exactly. The caller cannot change its execution mode.
 
+Request metadata for the intended `accessProfile`, select the Action from that
+caller-filtered document, and prepare from the resulting binding. Do not discover
+profiles by probing an Action route: an omitted profile when no default exists,
+an unknown profile, and a profile unusable by the caller all return the same
+concealed 404, with no list of alternatives.
+
+For an immediate Action, `required` means the value must be present at Invoke.
+For a Proposal Action, Start, Edit, Revise, and Rebase may retain an incomplete
+draft; Submit enforces required inputs before any plan runs. Supplied values are
+always typed and remain subject to the selected profile's input authority.
+
 Immediate Invoke commits one atomic plan. Proposal Start returns a durable
 Proposal with its own locator and revision. Generated TypeScript and Python
 project types come from the same compiled contract; generic metadata clients
@@ -114,9 +125,12 @@ to the review authority.
 Retain the original prepared command with its input, target conditions, selected
 binding, and idempotency key until its outcome is known. Replay of that exact
 command recovers a retained result without replanning or reacquiring Evidence.
-A changed command conflicts. Expired or erased receipts refuse execution and
-keep the key spent. An accepted-submission observation is not proof that an
-earlier uncertain command executed.
+A changed command returns `409 idempotency.key-reused`. This is the only wire
+code for a key bound to another request. The protocol accepts 1 to 256 visible
+ASCII bytes; keep portable keys at 128 bytes or fewer for intermediaries and
+client stores. Expired or erased receipts refuse execution and keep the key
+spent. An accepted-submission observation is not proof that an earlier uncertain
+command executed.
 
 `requiredCapabilities` is a must-understand execution gate. An unsupported
 capability disables its operation. Unknown optional object members remain
@@ -140,6 +154,7 @@ use `Cache-Control: no-store`. `/v1/registry` also carries
 publish no version hint.
 
 Owning implementation: `crates/registry-breg/src/api/mod.rs`,
+`crates/registry-breg/src/api/actions.rs`,
 `crates/registry-breg/src/api/proposals.rs`,
 `crates/registry-breg-client/src/metadata.rs`,
 `crates/registry-breg-client/src/actions.rs`, and

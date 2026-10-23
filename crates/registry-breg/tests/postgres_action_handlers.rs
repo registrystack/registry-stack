@@ -1050,6 +1050,137 @@ fn captured_handler_logs() -> &'static CapturedHandlerLogs {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn absent_optional_copy_has_the_same_safe_failure_at_invoke_and_submit() {
+    use registry_breg_client::{BRegActionInvocationRequest, BRegIdempotencyKey, BRegProblemCode};
+    let _guard = HANDLER_TEST_LOCK.lock().await;
+    let logs = captured_handler_logs();
+    let mut source: Value = serde_norway::from_str(include_str!(
+        "../../../products/breg/fixtures/action-plan-branches/registry.yaml"
+    ))
+    .unwrap();
+    source["actions"][1]["inputs"].as_array_mut().unwrap().push(
+        json!({"id":"private-data","type":"string","maximumLength":64,"classification":"internal"}),
+    );
+    source["actions"][1]["plan"]["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("private-data"));
+    let mut proposal = source["actions"][1].clone();
+    proposal["id"] = json!("invalid-proposal");
+    proposal["execution"] = json!({"mode":"proposal","proposal":{"review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"operator-erase"}}});
+    source["actions"].as_array_mut().unwrap().push(proposal);
+    source["accessProfiles"][0]["permissions"]["actions"].as_array_mut().unwrap().push(json!({"action":"invalid-proposal","operations":["start"],"targets":[{"recordType":"entry","rowBoundaries":"unrestricted"}]}));
+    source["accessProfiles"][0]["permissions"]["proposals"] = json!([{"action":"invalid-proposal","operations":["get","edit","submit","cancel"],"ownership":"caller","readableInputs":["note","private-data"],"writableInputs":["note","private-data"],"targets":[{"recordType":"entry","rowBoundaries":"unrestricted"}]}]);
+    let project =
+        registry_breg::contract::parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let assets = [
+        ModuleAssetSource {
+            module: None,
+            path: "plans/create.rhai".into(),
+            bytes: include_bytes!(
+                "../../../products/breg/fixtures/action-plan-branches/plans/create.rhai"
+            )
+            .to_vec(),
+        },
+        ModuleAssetSource {
+            module: None,
+            path: "plans/invalid-copy.rhai".into(),
+            bytes: include_bytes!(
+                "../../../products/breg/fixtures/action-plan-branches/plans/invalid-copy.rhai"
+            )
+            .to_vec(),
+        },
+    ];
+    let registry =
+        compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring).unwrap();
+    let claims = VerifiedRequestClaims::authenticated_with_actor_kind(
+        "sub",
+        "author",
+        BTreeSet::new(),
+        None,
+        BTreeMap::new(),
+        registry_platform_oidc::ActorKind::Human,
+    )
+    .unwrap();
+    let fixture = client_http::ClientFixture::start(registry, claims).await;
+    let client = &fixture.http.client;
+    let metadata = client
+        .registry_contract(Some("author"))
+        .await
+        .unwrap()
+        .value;
+    logs.0.lock().unwrap().clear();
+    for id in ["invalid-copy", "invalid-proposal"] {
+        let action = metadata.select_action(id, "author").unwrap();
+        let request = BRegActionInvocationRequest::new(
+            &action,
+            json!({"privateData":"private-planner-value-canary"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            None,
+        )
+        .unwrap();
+        let key = BRegIdempotencyKey::parse(id).unwrap();
+        let error = if id == "invalid-copy" {
+            client
+                .invoke_action(&action, &request, &key)
+                .await
+                .unwrap_err()
+        } else {
+            let draft = client
+                .start_proposal(&action, &request, &key)
+                .await
+                .unwrap()
+                .value;
+            let submit = client
+                .prepare_proposal(
+                    &draft,
+                    "submit",
+                    json!({}),
+                    &BRegIdempotencyKey::parse("invalid-submit").unwrap(),
+                )
+                .unwrap();
+            client.execute_proposal(&submit).await.unwrap_err()
+        };
+        assert_eq!(
+            error.problem_code(),
+            Some(BRegProblemCode::ActionHandlerFailed)
+        );
+        assert!(!format!("{error:?} {error}").contains("private-planner-value-canary"));
+    }
+    let captured = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(!captured.contains("private-planner-value-canary"));
+    let failures = captured
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|entry| entry["fields"]["message"] == "action handler produced no effects")
+        .collect::<Vec<_>>();
+    assert_eq!(failures.len(), 2);
+    for (entry, phase) in failures.iter().zip(["invoke", "submit"]) {
+        assert_eq!(entry["fields"]["phase"], phase);
+        assert_eq!(entry["fields"]["plan_id"], "invalid-copy-plan");
+        assert_eq!(entry["fields"]["slot_id"], "entry");
+        assert_eq!(entry["fields"]["field_id"], "label");
+    }
+    let count: i64 = fixture
+        .database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT count(*) FROM registry_data.\"{}\"",
+                fixture.registry.entities()["entry"].physical_table
+            ),
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 0);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn action_handler_faults_log_only_compiled_locations_and_static_causes() {
     let _test_guard = HANDLER_TEST_LOCK.lock().await;
     let logs = captured_handler_logs();

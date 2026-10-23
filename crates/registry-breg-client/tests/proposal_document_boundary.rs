@@ -1583,6 +1583,46 @@ async fn proposal_pages_require_progress_without_interpreting_opaque_cursors() {
 }
 
 #[tokio::test]
+async fn pending_manual_application_pages_fail_closed_on_unselected_rows() {
+    let fixture = Fixture::start().await;
+    let collection = fixture.metadata.select_proposals("writer").unwrap();
+    let query = BRegProposalQuery {
+        pending_manual_application: true,
+        ..Default::default()
+    };
+    let mut pending_manual = proposal("submitted");
+    pending_manual["applicationStatus"] = json!({"state":"pending","mode":"manual"});
+    fixture.answer(json!({"items":[pending_manual.clone()]}));
+    let selected = fixture
+        .client
+        .list_proposals(&collection, &query)
+        .await
+        .expect("a pending manual application matches the selected filter")
+        .value;
+    assert_eq!(selected.items.len(), 1);
+
+    let mut pending_automatic = pending_manual.clone();
+    pending_automatic["applicationStatus"] = json!({"state":"pending","mode":"automatic",
+        "automaticRetry":{"scheduled":true,"attempts":0,"maximumAttempts":3}});
+    let mut blocked_manual = pending_manual.clone();
+    blocked_manual["applicationStatus"] = json!({"state":"blocked","mode":"manual",
+        "reason":"dependency-outage","recovery":"retry"});
+    let mut absent = pending_manual;
+    absent.as_object_mut().unwrap().remove("applicationStatus");
+    for unselected in [pending_automatic, blocked_manual, absent] {
+        fixture.answer(json!({"items":[unselected]}));
+        let error = fixture
+            .client
+            .list_proposals(&collection, &query)
+            .await
+            .err()
+            .expect("a selected page may not contain an unselected row");
+        assert_eq!(error.kind(), "invalid-request");
+        assert!(!error.is_outcome_unknown());
+    }
+}
+
+#[tokio::test]
 async fn application_ids_require_canonical_non_nil_identity_and_preserve_exact_recovery() {
     let fixture = Fixture::start().await;
     let binding = fixture.metadata.select_proposal_get("writer").unwrap();

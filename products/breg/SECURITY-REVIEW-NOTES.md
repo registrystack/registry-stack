@@ -4195,7 +4195,8 @@ Action input stays writable, as before, and the compiled grant omits the field.
   `breg.proposal.review-status-authority-invalid`).
 - Start refuses a value for a fixed input. Edit, Revise and Rebase compare each
   fixed input with the draft or submitted version input inside the mutation
-  transaction; an absent input equals `null`. The refusal is
+  transaction, preserving the distinction between an absent input and explicit
+  `null` in the handler ABI. The refusal is
   `400 request.invalid` at `/input/<apiName>`, rolls back, and is audited by
   the existing Proposal refusal path without the value.
 - The idempotency binding adds the list to the response contract only when it
@@ -4209,7 +4210,7 @@ dropped Edit values, an unchanged restatement, Revise, Rebase, a grant without
 the list, the unchanged draft and the value-free audit.
 `proposal_writable_inputs_refuse_invalid_grants` and its neighbours in
 `crates/registry-breg/src/package/tests/immediate_actions.rs` cover the compile
-rules, and `fixed_inputs_compare_absent_and_null_as_equal_and_name_the_api_name`
+rules, and `fixed_inputs_distinguish_absent_and_null_and_name_the_api_name`
 in `crates/registry-breg/src/mutation/proposal.rs` covers the comparison.
 
 ### Accepted residuals
@@ -4220,3 +4221,33 @@ in `crates/registry-breg/src/mutation/proposal.rs` covers the comparison.
   decode the Proposal document strictly. Explain output shows the compiled
   grant.
 - Attachments keep their separate `writableAttachments` grant.
+
+## Proposal draft inputs, manual queues, and guard copy keys
+
+Draft completeness is independent of mutation authority. Start, Edit, Revise,
+and Rebase validate every supplied input against its type, nullability, and
+write grant; Submit checks required presence before evaluating the plan.
+Immediate Invoke retains its required-input boundary. Fixed mappings remain
+non-null when present. An excluded optional input preserves both its presence
+and its value, including the handler ABI's distinction between absent and null.
+
+The pending manual application predicate uses only the current retained local
+submission and Review result. A required approval must be unexpired and its
+submission must not be withdrawn. Collection authorization, ownership, target
+boundaries, and per-document disclosure still gate each projection. Private
+candidate scans share the request deadline; a successful continuation names
+only an authorized Proposal, and timeout returns failure without a partial
+page. Listing makes no per-Proposal Review request.
+
+An authored field-guard `reason` is a bounded copy key. `guardReason` is
+released only after all guard and row-boundary facts for the selected target
+are readable. Commit-time guard enforcement remains transactional; a failed
+attempt rolls back before re-observing disclosure. A missing or denied target
+and unreadable facts retain the existing concealed or generic result.
+
+The PostgreSQL regressions in `postgres_proposal.rs`,
+`postgres_immediate_action_requirements.rs`, and `postgres_action_handlers.rs`
+exercise those boundaries, including withdrawn results, hidden candidate
+prefixes, deadline cancellation, exact input grants, and value-free Invoke and
+Submit diagnostics. Client boundary and language-binding regressions retain
+typed, bounded extensions without rendering their values in errors.

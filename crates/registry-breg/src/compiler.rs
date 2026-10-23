@@ -3342,8 +3342,8 @@ fn validate_entities(
         match entity.batch.as_ref() {
             None if grants_batch => errors.push(Diagnostic::error(
                 "breg.record-type.batch-required",
-                "recordTypes[].batch",
-                "a record type with batch access must declare bounded batch configuration",
+                format!("recordTypes[id={}].batch", entity.id),
+                &format!("declare batch maximumItems from 1 to {MAX_BATCH_ITEMS} and maximumBytes from 1 to {MAX_BATCH_BYTES} for this record type's batch access"),
             )),
             Some(batch)
                 if batch.maximum_items == 0
@@ -3353,8 +3353,8 @@ fn validate_entities(
             {
                 errors.push(Diagnostic::error(
                     "breg.record-type.batch-bounds-invalid",
-                    "recordTypes[].batch",
-                    "batch maximumItems and maximumBytes must be within the supported bounds",
+                    format!("recordTypes[id={}].batch", entity.id),
+                    &format!("batch maximumItems must be from 1 to {MAX_BATCH_ITEMS} and maximumBytes from 1 to {MAX_BATCH_BYTES}"),
                 ));
             }
             _ => {}

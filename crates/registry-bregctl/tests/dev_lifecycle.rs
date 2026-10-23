@@ -66,6 +66,17 @@ impl Session {
     fn start(&self) -> Value {
         self.report(self.dev(&[]))
     }
+    fn retained_ports(&self) -> [u16; 3] {
+        let state: Value = serde_json::from_slice(
+            &fs::read(self.project.join(".breg/dev/state.json"))
+                .expect("the retained dev state is readable"),
+        )
+        .expect("the retained dev state is JSON");
+        ["bregPort", "issuerPort", "databasePort"].map(|member| {
+            u16::try_from(state[member].as_u64().expect("a retained port"))
+                .expect("a retained loopback port")
+        })
+    }
     #[track_caller]
     fn stop(&self) {
         self.report(self.dev(&["stop"]));
@@ -194,6 +205,120 @@ fn poll_report(mut read: impl FnMut() -> Value, ready: impl Fn(&Value) -> bool) 
         );
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
+}
+
+fn assert_initial_apply_evidence(session: &Session, report: &Value) {
+    let evidence = PathBuf::from(
+        report["initialApplyEvidence"]
+            .as_str()
+            .expect("a first start reports its expected initial apply evidence"),
+    );
+    let evidence_directory = session.project.join(".breg/dev/evidence");
+    assert_eq!(
+        evidence.parent(),
+        Some(evidence_directory.as_path()),
+        "expected startup evidence is kept outside failure logs"
+    );
+    let summary: Value =
+        serde_json::from_slice(&fs::read(&evidence).expect("initial apply evidence is readable"))
+            .expect("initial apply evidence is JSON");
+    assert_eq!(summary["phase"], "initial-apply");
+    assert_eq!(summary["expected"], true);
+    let doctor = evidence
+        .parent()
+        .unwrap()
+        .join(summary["doctorReport"].as_str().expect("a doctor report"));
+    let doctor: Value = serde_json::from_slice(
+        &fs::read(doctor).expect("the pre-apply doctor report is preserved"),
+    )
+    .expect("the pre-apply doctor report is JSON");
+    assert_eq!(doctor["ok"], false, "the expected pre-apply check refused");
+}
+
+#[test]
+#[ignore = "requires matching installed breg/bregctl binaries and Docker; runs two retained local databases"]
+fn installed_dev_allocates_ports_for_parallel_fresh_projects_and_retains_them() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
+    let first_workspace = tempfile::Builder::new()
+        .prefix("breg-native-ports-a-")
+        .tempdir_in(binary.parent().unwrap())
+        .expect("a first work directory");
+    let second_workspace = tempfile::Builder::new()
+        .prefix("breg-native-ports-b-")
+        .tempdir_in(binary.parent().unwrap())
+        .expect("a second work directory");
+    let path = std::env::join_paths([binary.parent().unwrap()]).unwrap();
+    let docker = installed("docker");
+    let first = Session {
+        project: fs::canonicalize(first_workspace.path())
+            .unwrap()
+            .join("registry"),
+        path: path.clone(),
+        docker: docker.clone(),
+    };
+    let second = Session {
+        project: fs::canonicalize(second_workspace.path())
+            .unwrap()
+            .join("registry"),
+        path,
+        docker,
+    };
+    operator_project(&first);
+    operator_project(&second);
+
+    let (first_report, second_report) = std::thread::scope(|scope| {
+        let first_start = scope.spawn(|| first.start());
+        let second_start = scope.spawn(|| second.start());
+        (
+            first_start.join().expect("the first start completes"),
+            second_start.join().expect("the second start completes"),
+        )
+    });
+    assert_eq!(first_report["status"], "ready");
+    assert_eq!(second_report["status"], "ready");
+    let first_ports = first.retained_ports();
+    let second_ports = second.retained_ports();
+    assert_eq!(
+        first_ports
+            .into_iter()
+            .chain(second_ports)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        6,
+        "parallel sessions must own six distinct ports: {first_ports:?} {second_ports:?}"
+    );
+    assert_ne!(first_report["bregUrl"], second_report["bregUrl"]);
+    assert_ne!(
+        first_report["tokenEndpoint"],
+        second_report["tokenEndpoint"]
+    );
+    assert_initial_apply_evidence(&first, &first_report);
+    assert_initial_apply_evidence(&second, &second_report);
+
+    first.stop();
+    second.stop();
+    let (first_restart, second_restart) = std::thread::scope(|scope| {
+        let first_start = scope.spawn(|| first.start());
+        let second_start = scope.spawn(|| second.start());
+        (
+            first_start.join().expect("the first restart completes"),
+            second_start.join().expect("the second restart completes"),
+        )
+    });
+    assert_eq!(first_restart["status"], "ready");
+    assert_eq!(second_restart["status"], "ready");
+    assert_eq!(first.retained_ports(), first_ports);
+    assert_eq!(second.retained_ports(), second_ports);
+    assert_eq!(first_restart["bregUrl"], first_report["bregUrl"]);
+    assert_eq!(second_restart["bregUrl"], second_report["bregUrl"]);
+    assert_eq!(
+        first_restart["tokenEndpoint"],
+        first_report["tokenEndpoint"]
+    );
+    assert_eq!(
+        second_restart["tokenEndpoint"],
+        second_report["tokenEndpoint"]
+    );
 }
 
 #[test]

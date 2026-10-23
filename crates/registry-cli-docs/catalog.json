@@ -971,6 +971,52 @@
           "constraints": [],
           "subcommands": [
             {
+              "name": "concepts",
+              "invocation": "bregctl project concepts",
+              "about": "List usable concepts from an embedded reference model, without network access",
+              "long_about": null,
+              "usage": "bregctl project concepts [OPTIONS] --from <FROM>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--from <FROM>",
+                  "description": "Embedded reference model whose usable concept names are listed",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [
+                    "publicschema"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
               "name": "lock",
               "invocation": "bregctl project lock",
               "about": "Compute and write module source digests in registry.yaml",
@@ -1413,7 +1459,7 @@
             },
             {
               "display": "--breg-port <BREG_PORT>",
-              "description": "Registry loopback port on first start (default 8090; retained for restarts)",
+              "description": "Registry loopback port on first start (prefers 8090 when available; retained for restarts)",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -1422,7 +1468,7 @@
             },
             {
               "display": "--issuer-port <ISSUER_PORT>",
-              "description": "Local issuer loopback port on first start (default 8091; retained for restarts)",
+              "description": "Local issuer loopback port on first start (prefers 8091 when available; retained for restarts)",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -1449,7 +1495,7 @@
             },
             {
               "display": "--database-port <DATABASE_PORT>",
-              "description": "PostgreSQL loopback port on first start (default 15432; retained for restarts)",
+              "description": "PostgreSQL loopback port on first start (prefers 15432 when available; retained for restarts)",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -1513,7 +1559,7 @@
                 },
                 {
                   "display": "--breg-port <BREG_PORT>",
-                  "description": "Registry loopback port on first start (default 8090; retained for restarts)",
+                  "description": "Registry loopback port on first start (prefers 8090 when available; retained for restarts)",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -1522,7 +1568,7 @@
                 },
                 {
                   "display": "--issuer-port <ISSUER_PORT>",
-                  "description": "Local issuer loopback port on first start (default 8091; retained for restarts)",
+                  "description": "Local issuer loopback port on first start (prefers 8091 when available; retained for restarts)",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -1549,7 +1595,7 @@
                 },
                 {
                   "display": "--database-port <DATABASE_PORT>",
-                  "description": "PostgreSQL loopback port on first start (default 15432; retained for restarts)",
+                  "description": "PostgreSQL loopback port on first start (prefers 15432 when available; retained for restarts)",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -6541,7 +6587,7 @@
             },
             {
               "display": "--casework-port <CASEWORK_PORT>",
-              "description": "Casework loopback port on first start (default 8092; retained for restarts)",
+              "description": "Casework loopback port on first start (prefers 8092 when available; retained for restarts)",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -6550,7 +6596,7 @@
             },
             {
               "display": "--issuer-port <ISSUER_PORT>",
-              "description": "Local issuer loopback port on first start (default 8093; retained for restarts)",
+              "description": "Local issuer loopback port on first start (prefers 8093 when available; retained for restarts)",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -6568,7 +6614,7 @@
             },
             {
               "display": "--database-port <DATABASE_PORT>",
-              "description": "PostgreSQL loopback port on first start (default 15433; retained for restarts)",
+              "description": "PostgreSQL loopback port on first start (prefers 15433 when available; retained for restarts)",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -6632,7 +6678,7 @@
                 },
                 {
                   "display": "--casework-port <CASEWORK_PORT>",
-                  "description": "Casework loopback port on first start (default 8092; retained for restarts)",
+                  "description": "Casework loopback port on first start (prefers 8092 when available; retained for restarts)",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -6641,7 +6687,7 @@
                 },
                 {
                   "display": "--issuer-port <ISSUER_PORT>",
-                  "description": "Local issuer loopback port on first start (default 8093; retained for restarts)",
+                  "description": "Local issuer loopback port on first start (prefers 8093 when available; retained for restarts)",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -6659,7 +6705,7 @@
                 },
                 {
                   "display": "--database-port <DATABASE_PORT>",
-                  "description": "PostgreSQL loopback port on first start (default 15433; retained for restarts)",
+                  "description": "PostgreSQL loopback port on first start (prefers 15433 when available; retained for restarts)",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],

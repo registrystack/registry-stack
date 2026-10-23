@@ -499,6 +499,10 @@ fn concept_options(model: &Model) -> Result<Vec<ConceptOption>, Diagnostic> {
     Ok(options)
 }
 
+pub(super) fn concept_names(model: &Model) -> Result<Vec<String>, Diagnostic> {
+    concept_options(model).map(|options| options.into_iter().map(|option| option.concept).collect())
+}
+
 /// What the property question offers for `concept` beside `concepts`, and
 /// what it leaves out because the resolver cannot carry it.
 fn property_offer(

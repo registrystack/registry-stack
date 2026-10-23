@@ -1413,6 +1413,79 @@ fn bregctl(arguments: &[&str]) -> Output {
         .expect("bregctl starts")
 }
 
+#[test]
+fn offline_concept_listing_and_missing_principal_claim_offer_precise_recovery() {
+    let listing = bregctl(&[
+        "--format",
+        "json",
+        "project",
+        "concepts",
+        "--from",
+        "publicschema",
+    ]);
+    assert!(listing.status.success(), "{listing:?}");
+    assert!(listing.stderr.is_empty());
+    let report: Value = serde_json::from_slice(&listing.stdout).unwrap();
+    assert_eq!(report["ok"], true);
+    assert!(report["concepts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|name| name == "Person"));
+    let project = TestProject::asset_fixture();
+    let scenario = project.path().join("missing-claim.json");
+    fs::write(&scenario, br#"{"recordType":"asset","accessProfile":"reader","operation":"get","claims":{"principal":"private-principal-canary","scopes":[]}}"#).unwrap();
+    for format in ["json", "human"] {
+        let output = bregctl(&[
+            "--format",
+            format,
+            "explain",
+            "access",
+            project.path().to_str().unwrap(),
+            "--scenario",
+            scenario.to_str().unwrap(),
+        ]);
+        assert_eq!(output.status.code(), Some(1));
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for expected in [
+            "access.scenario.invalid",
+            "scenario.claims.principalClaim",
+            "principalClaim",
+            "directClaims",
+        ] {
+            assert!(text.contains(expected), "{text}");
+        }
+        assert!(!text.contains("private-principal-canary"));
+    }
+}
+
+#[test]
+fn absent_example_catalogue_names_its_authored_path_and_preparation_command() {
+    let project = TestProject::asset_fixture();
+    for format in ["json", "human"] {
+        let output = bregctl(&[
+            "--format",
+            format,
+            "examples",
+            "list",
+            project.path().to_str().unwrap(),
+        ]);
+        assert_eq!(output.status.code(), Some(1));
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(text.contains("examples/scenarios.json"), "{text}");
+        assert!(text.contains("bregctl init"), "{text}");
+        assert!(!text.contains("os error"), "{text}");
+    }
+}
+
 fn package_candidate_command(
     project: &TestProject,
     schema_fingerprint: &str,

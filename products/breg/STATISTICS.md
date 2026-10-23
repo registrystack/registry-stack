@@ -239,7 +239,7 @@ like every BReg mutation key. An identical retry under the same current
 authority returns the retained status, headers, and body without creating
 another version, for `retention.receiptRetentionDays` after the first commit;
 after that it returns `410 idempotency.expired` and creates nothing. Binding
-the key to a different request returns `409 idempotency.conflict`.
+the key to a different request returns `409 idempotency.key-reused`.
 
 Withdraw using one of `computation-error`, `source-data-error`, or
 `disclosure-risk`. The database records the withdrawal and deletes content in

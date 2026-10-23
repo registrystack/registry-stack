@@ -222,16 +222,16 @@ struct StartArgs {
     /// dev-clients.yaml in the project; retained for restarts).
     #[arg(long, value_name = "FILE")]
     clients_file: Option<PathBuf>,
-    /// Casework loopback port on first start (default 8092; retained for restarts).
+    /// Casework loopback port on first start (prefers 8092 when available; retained for restarts).
     #[arg(long, env = "CASEWORKCTL_DEV_CASEWORK_PORT")]
     casework_port: Option<u16>,
-    /// Local issuer loopback port on first start (default 8093; retained for restarts).
+    /// Local issuer loopback port on first start (prefers 8093 when available; retained for restarts).
     #[arg(long, env = "CASEWORKCTL_DEV_ISSUER_PORT")]
     issuer_port: Option<u16>,
     /// Ready Base Registry Engine (BReg) dev project that owns the shared issuer registration.
     #[arg(long, value_name = "PROJECT")]
     issuer_project: Option<PathBuf>,
-    /// PostgreSQL loopback port on first start (default 15433; retained for restarts).
+    /// PostgreSQL loopback port on first start (prefers 15433 when available; retained for restarts).
     #[arg(long, env = "CASEWORKCTL_DEV_DATABASE_PORT")]
     database_port: Option<u16>,
     #[arg(long, hide = true, env = "CASEWORK_BIN")]
@@ -660,20 +660,130 @@ fn ports(casework: u16, issuer: u16, database: u16) -> Result<()> {
     Ok(())
 }
 
-fn probe(port: u16) -> Result<()> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PortRole {
+    Casework,
+    Issuer,
+    Database,
+}
+
+impl PortRole {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Casework => "Casework service",
+            Self::Issuer => "issuer",
+            Self::Database => "PostgreSQL database",
+        }
+    }
+
+    fn flag(self) -> &'static str {
+        match self {
+            Self::Casework => "--casework-port",
+            Self::Issuer => "--issuer-port",
+            Self::Database => "--database-port",
+        }
+    }
+}
+
+/// One complete first-start port assignment. The listeners keep every owned
+/// port reserved while the private session is prepared, so concurrent fresh
+/// projects cannot both select the same available defaults.
+#[derive(Debug)]
+struct SessionPorts {
+    ports: [u16; 3],
+    _reservations: Vec<TcpListener>,
+}
+
+impl SessionPorts {
+    fn ports(&self) -> [u16; 3] {
+        self.ports
+    }
+}
+
+fn probe(port: u16, role: PortRole) -> Result<()> {
     TcpListener::bind(("127.0.0.1", port))
         .map(drop)
-        .map_err(|source| bind_failure(port, source))
+        .map_err(|source| bind_failure(port, role, source))
 }
 
 /// Name a port as occupied only when another listener holds it; any other
 /// bind refusal keeps its I/O classification, since stopping a process
 /// would not resolve it.
-fn bind_failure(port: u16, source: std::io::Error) -> anyhow::Error {
+fn bind_failure(port: u16, role: PortRole, source: std::io::Error) -> anyhow::Error {
     if source.kind() == std::io::ErrorKind::AddrInUse {
-        DevFailure::PortOccupied { port, source }.into()
+        DevFailure::PortOccupied { port, role, source }.into()
     } else {
-        anyhow::Error::new(source).context(format!("cannot bind local port {port}"))
+        anyhow::Error::new(source).context(format!(
+            "cannot bind the local {} to 127.0.0.1:{port}",
+            role.name()
+        ))
+    }
+}
+
+/// Select and reserve one complete first-start assignment before creating
+/// owned services. Explicit and borrowed ports are fixed; only omitted owned
+/// ports may move away from an occupied default.
+fn select_session_ports(
+    requested: [Option<u16>; 3],
+    borrowed_issuer: bool,
+) -> Result<SessionPorts> {
+    let roles = [PortRole::Casework, PortRole::Issuer, PortRole::Database];
+    let defaults = [
+        DEFAULT_CASEWORK_PORT,
+        DEFAULT_ISSUER_PORT,
+        DEFAULT_DATABASE_PORT,
+    ];
+    let mut used = BTreeSet::new();
+    for port in requested.into_iter().flatten() {
+        if port == 0 || !used.insert(port) {
+            bail!(
+                "--casework-port, --issuer-port and --database-port require distinct nonzero ports"
+            );
+        }
+    }
+
+    let mut selected = [0; 3];
+    let mut reservations = Vec::with_capacity(if borrowed_issuer { 2 } else { 3 });
+    for index in 0..3 {
+        if index == 1 && borrowed_issuer {
+            selected[index] = requested[index].context("borrowed issuer has no configured port")?;
+            continue;
+        }
+        let (port, listener) = if let Some(port) = requested[index] {
+            let listener = TcpListener::bind(("127.0.0.1", port))
+                .map_err(|source| bind_failure(port, roles[index], source))?;
+            (port, listener)
+        } else {
+            match TcpListener::bind(("127.0.0.1", defaults[index])) {
+                Ok(listener) if !used.contains(&defaults[index]) => (defaults[index], listener),
+                Ok(listener) => {
+                    drop(listener);
+                    reserve_free_port(&used)?
+                }
+                Err(source) if source.kind() == std::io::ErrorKind::AddrInUse => {
+                    reserve_free_port(&used)?
+                }
+                Err(source) => return Err(bind_failure(defaults[index], roles[index], source)),
+            }
+        };
+        selected[index] = port;
+        used.insert(port);
+        reservations.push(listener);
+    }
+    Ok(SessionPorts {
+        ports: selected,
+        _reservations: reservations,
+    })
+}
+
+fn reserve_free_port(used: &BTreeSet<u16>) -> Result<(u16, TcpListener)> {
+    loop {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .context("cannot select a free development session port")?;
+        let port = listener.local_addr()?.port();
+        if !used.contains(&port) {
+            return Ok((port, listener));
+        }
     }
 }
 
@@ -865,6 +975,7 @@ fn start(args: StartArgs) -> Result<Value> {
         }
         existing => existing,
     };
+    let mut first_start_ports = None;
     let mut state = if let Some(mut state) = existing {
         private::validate_tree(&root.join("credentials"))?;
         private::validate_tree(&root.join("secrets"))?;
@@ -925,27 +1036,30 @@ fn start(args: StartArgs) -> Result<Value> {
         } else {
             None
         };
+        let selected_ports = select_session_ports(
+            [
+                args.casework_port
+                    .or(previous.map(|state| state.casework_port)),
+                args.issuer_port
+                    .or(issuer_owner.as_ref().map(|(_, port)| *port))
+                    .or(previous.map(|state| state.issuer_port)),
+                args.database_port
+                    .or(previous.map(|state| state.database_port)),
+            ],
+            issuer_owner.is_some(),
+        )?;
+        let [casework_port, issuer_port, database_port] = selected_ports.ports();
         let mut state = State {
             api_version: DEV_STATE_API_VERSION.to_owned(),
             kind: DEV_STATE_KIND.to_owned(),
             project: project.clone(),
             owner: uuid::Uuid::new_v4().to_string(),
             status: Status::Stopped,
-            casework_port: args
-                .casework_port
-                .or(previous.map(|s| s.casework_port))
-                .unwrap_or(DEFAULT_CASEWORK_PORT),
-            issuer_port: args
-                .issuer_port
-                .or(issuer_owner.as_ref().map(|(_, port)| *port))
-                .or(previous.map(|s| s.issuer_port))
-                .unwrap_or(DEFAULT_ISSUER_PORT),
+            casework_port,
+            issuer_port,
             issuer_project,
             issuer_owner: issuer_owner.map(|(owner, _)| owner),
-            database_port: args
-                .database_port
-                .or(previous.map(|s| s.database_port))
-                .unwrap_or(DEFAULT_DATABASE_PORT),
+            database_port,
             clients_file,
             source_digest: digest,
             resource: clients
@@ -976,12 +1090,6 @@ fn start(args: StartArgs) -> Result<Value> {
             }
         }
         ports(state.casework_port, state.issuer_port, state.database_port)?;
-        for port in std::iter::once(state.casework_port)
-            .chain(state.issuer_project.is_none().then_some(state.issuer_port))
-            .chain(std::iter::once(state.database_port))
-        {
-            probe(port)?;
-        }
         if let Some(integrations) = &clients.integrations {
             integrations
                 .validate_session(&state, &crate::project::load_and_check_policy(&project)?)?;
@@ -990,6 +1098,7 @@ fn start(args: StartArgs) -> Result<Value> {
             }
         }
         initialize(&root, &state, &clients)?;
+        first_start_ports = Some(selected_ports);
         read_state(&root)?
     };
     verify_borrowed_subjects(&state, &project)?;
@@ -1010,10 +1119,13 @@ fn start(args: StartArgs) -> Result<Value> {
         ("docker".into(), binary(&root, &docker)?),
     ]);
     matching_versions(&state.binaries)?;
-    for port in std::iter::once(state.casework_port)
-        .chain(state.issuer_project.is_none().then_some(state.issuer_port))
-    {
-        probe(port)?;
+    // The supervisor and Docker must take these ports themselves. Release the
+    // first-start reservations only after the private session and executable
+    // checks are complete, then re-probe so a bind race is a named refusal.
+    drop(first_start_ports);
+    probe(state.casework_port, PortRole::Casework)?;
+    if state.issuer_project.is_none() {
+        probe(state.issuer_port, PortRole::Issuer)?;
     }
     // Verify the container before accepting a retained database port.
     if let Some(container) = inspect(&docker, &state)? {
@@ -1034,7 +1146,7 @@ fn start(args: StartArgs) -> Result<Value> {
             )?;
         }
     }
-    probe(state.database_port)?;
+    probe(state.database_port, PortRole::Database)?;
     package_session(&root, &project)?;
     remove_socket(&root)?;
     state.status = Status::Starting;
@@ -1193,10 +1305,9 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
     // No PID-based recovery: unrelated reused PIDs must never be signalled.
     let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
     if service_ports_must_be_free(&state.status) {
-        for port in std::iter::once(state.casework_port)
-            .chain(state.issuer_project.is_none().then_some(state.issuer_port))
-        {
-            probe(port)?;
+        probe(state.casework_port, PortRole::Casework)?;
+        if state.issuer_project.is_none() {
+            probe(state.issuer_port, PortRole::Issuer)?;
         }
     }
     let docker = executable("docker", docker_bin)?;
@@ -3011,7 +3122,11 @@ pub(crate) enum DevFailure {
         source: Box<dyn std::error::Error + Send + Sync>,
     },
     /// A loopback port the session needs is bound by another process.
-    PortOccupied { port: u16, source: std::io::Error },
+    PortOccupied {
+        port: u16,
+        role: PortRole,
+        source: std::io::Error,
+    },
     /// The authored inputs changed while the session retains records or
     /// database resources.
     InputsChanged { holds_records: bool },
@@ -3105,11 +3220,17 @@ impl DevFailure {
                 "A declared context provider connection cannot construct its maintained provider.".to_owned(),
                 "Check the deploymentRef, imported provider contract, status profile and service credential references against casework.yaml and the provider runtime, then retry.".to_owned(),
             ),
-            Self::PortOccupied { port, .. } => (
+            Self::PortOccupied { port, role, .. } => (
                 "caseworkctl.dev.port-occupied",
                 format!("dev:/ports/{port}"),
-                format!("Local port {port} is already in use by another process."),
-                format!("Stop the process listening on port {port}, then retry. Before a session's first start, --casework-port, --issuer-port, and --database-port choose other ports; a retained session keeps the ports it started with."),
+                format!(
+                    "Local port {port} is already in use, and the local {} needs it.",
+                    role.name()
+                ),
+                format!(
+                    "Stop the process listening on 127.0.0.1:{port}, then retry. On a first start, {} <port> selects another port; a retained session keeps the port it started with.",
+                    role.flag()
+                ),
             ),
             Self::InputsChanged { holds_records } => (
                 "caseworkctl.dev.inputs-changed",

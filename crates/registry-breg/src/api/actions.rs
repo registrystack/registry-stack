@@ -391,8 +391,8 @@ pub(super) async fn dispatch(
                     )
                     .await
                     {
-                        Ok(availability::Availability::NotSatisfied { .. }) => {
-                            fixed_problem(ProblemCode::ActionGuardFailed)
+                        Ok(availability::Availability::NotSatisfied { guard_reason, .. }) => {
+                            crate::correlation::action_guard_failure_response(guard_reason)
                         }
                         // Visibility and the record may have changed since rollback.
                         // Never turn the private cause into an existence oracle.

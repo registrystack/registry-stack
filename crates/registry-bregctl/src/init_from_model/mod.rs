@@ -35,6 +35,19 @@ use crate::{
 pub(crate) use selection::selection_schema;
 pub(crate) use selection::{ModelName, SELECTION_FORMAT};
 
+pub(crate) fn concept_names(model: ModelName) -> Result<Vec<String>, Diagnostic> {
+    let model = match model {
+        ModelName::Publicschema => publicschema::model().map_err(|_| {
+            diagnostic(
+                "init.model.unreadable",
+                "from",
+                "Install a matching bregctl release with its embedded reference model.",
+            )
+        })?,
+    };
+    wizard::concept_names(&model)
+}
+
 /// Check a selection document `bregctl check --file` read: it resolves
 /// against the embedded model it names, as `init --from --selection` would
 /// resolve it. Each refusal is reported at the member it concerns.

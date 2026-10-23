@@ -13,13 +13,18 @@ const metadata = {
     get: {method: 'GET', path: '/v1/proposals/{proposal_id}', accessProfiles: ['author']}},
   actions: [{id: 'correct', apiName: 'correct', revision, display: {}, execution: {mode: 'proposal'},
     attachments: [{id: 'supporting-file', required: true, contentTypes: ['application/pdf'], maximumBytes: 1024}],
-    route: '/v1/actions/correct/proposals', inputMode: 'fixed', inputs: [], referenceInputs: [], requiredConditionKeys: [], resultEffects: [],
+    route: '/v1/actions/correct/proposals', inputMode: 'fixed', inputs: [
+      {id: 'address', apiName: 'address', required: true, nullable: false, classification: 'internal',
+        schema: {type: 'string', minLength: 1, maxLength: 100},
+        fieldType: {type: 'string', minimumLength: 1, maximumLength: 100}},
+    ], referenceInputs: [], requiredConditionKeys: [], resultEffects: [],
     access: {selectedProfile: 'author'}, routes: {start: {method: 'POST', path: '/v1/actions/correct/proposals', operationId: 'actions.correct.start',
       requiresIdempotencyKey: true, inputSchema: 'action-correct-invoke-input', responseSchema: 'action-correct-invoke-response'}},
     bounds: {maximumTargets: 16, maximumFieldMutations: 128, maximumSnapshotBytes: 2097152}}],
 };
 const proposal = {id, actionId: 'correct', actionRevision: revision, submissionVersion: 1, revision: 1, state: 'draft', links: {
   self: {method: 'GET', path: `/v1/proposals/${id}`, accessProfile: 'author', operation: 'get'},
+  edit: {method: 'POST', path: `/v1/proposals/${id}/edit`, accessProfile: 'author', operation: 'edit', ifMatch: '"draft-condition"'},
   submit: {method: 'POST', path: `/v1/proposals/${id}/submit`, accessProfile: 'author', operation: 'submit', ifMatch: '"draft-condition"'},
 }};
 
@@ -57,6 +62,15 @@ test('proposal handles preserve base path, selected profile and exact prepared e
     const draft = await client.startProposal(binding, '{}', 'start-once');
     assert.equal(draft.identifier, id);
     assert.equal(JSON.parse(draft.documentJson).submissionVersion, 1);
+    assert.ok(client.prepareProposal(draft, 'edit', '{"input":{}}', 'edit-empty'));
+    await client.startProposal(binding, '{}', 'k'.repeat(256));
+    assert.equal(requests.at(-1).headers['idempotency-key'], 'k'.repeat(256));
+    const startCount = requests.length;
+    for (const invalid of ['{"address":null}', '{"address":42}', '{"address":""}']) {
+      await assert.rejects(client.startProposal(binding, invalid, 'invalid-start'), error => error.kind === 'invalid-request');
+    }
+    await assert.rejects(client.startProposal(binding, '{}', 'k'.repeat(257)), error => error.kind === 'invalid-request');
+    assert.equal(requests.length, startCount, 'invalid supplied Proposal inputs fail before credential acquisition or I/O');
     const attempt = client.prepareProposal(draft, 'submit', '{}', 'submit-once');
     const saved = attempt.toBytes();
     const restored = BRegPreparedProposal.fromBytes(saved);
@@ -127,6 +141,26 @@ test('returned Proposal cursors are usable for explicit bounded continuation', a
   try {
     const client = new BaseRegistryClient({baseUrl: `http://127.0.0.1:${server.address().port}/tenant/`});
     const collection = (await client.registryContract('author')).selectProposals('author');
+    const pendingManual = {...proposal, state: 'submitted', effectDigest: revision,
+      applicationStatus: {state: 'pending', mode: 'manual'}};
+    value = {items: [pendingManual]};
+    const selected = await client.listProposals(collection, '{"pendingManualApplication":true}');
+    assert.equal(selected.items[0].identifier, id);
+    assert.equal(new URL(requests.at(-1), 'http://fixture.invalid').searchParams.get('pendingManualApplication'), 'true');
+    value = {items: [pendingManual]};
+    await client.listProposals(collection, '{"pendingManualApplication":false}');
+    assert.equal(new URL(requests.at(-1), 'http://fixture.invalid').searchParams.has('pendingManualApplication'), false);
+    for (const applicationStatus of [
+      undefined,
+      {state: 'pending', mode: 'automatic', automaticRetry: {scheduled: true, attempts: 0, maximumAttempts: 3}},
+      {state: 'blocked', mode: 'manual', reason: 'dependency-outage', recovery: 'retry'},
+    ]) {
+      value = {items: [{...pendingManual, applicationStatus}]};
+      await assert.rejects(
+        client.listProposals(collection, '{"pendingManualApplication":true}'),
+        error => error.kind === 'invalid-request',
+      );
+    }
     for (const cursor of ['', ' ', 'cursor\nvalue', 'cursor\tvalue', 'é', 'x'.repeat(513)]) {
       value = {items: [proposal], nextCursor: cursor};
       const count = requests.length;

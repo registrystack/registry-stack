@@ -231,6 +231,14 @@ install, follow [`release/VERIFY.md`](../../release/VERIFY.md) for the pinned
 tag, then rerun the installer with `EVIDENCECTL_ASSET_DIR` pointed at that
 verified directory.
 
+Outside an `rstack` managed generation, `evidencectl` selects its runtime in
+this order: an explicit `--evidence-bin` where the command accepts it,
+`EVIDENCE_BIN`, an executable `evidence` beside the running `evidencectl`, then
+`PATH`. Keeping the installed toolset together therefore takes precedence
+over an older runtime elsewhere on `PATH`. The selected runtime must still
+report exactly the same version as `evidencectl`; a mismatch names both
+versions and the override needed to select the matching runtime.
+
 Three environment variables configure the installer: `EVIDENCECTL_VERSION`
 names a `vMAJOR.MINOR.PATCH` release or workflow-produced development tag for
 a copy that carries none,

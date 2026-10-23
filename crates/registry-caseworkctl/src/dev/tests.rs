@@ -1198,6 +1198,39 @@ fn default_ports_lie_below_the_source_port_range() {
 }
 
 #[test]
+fn first_starts_reserve_distinct_free_ports_for_parallel_projects() {
+    let first = select_session_ports([None, None, None], false).unwrap();
+    let second = select_session_ports([None, None, None], false).unwrap();
+
+    let first_ports = first.ports();
+    let second_ports = second.ports();
+    assert_eq!(first_ports.into_iter().collect::<BTreeSet<_>>().len(), 3);
+    assert_eq!(second_ports.into_iter().collect::<BTreeSet<_>>().len(), 3);
+    assert!(
+        first_ports.into_iter().all(|port| !second_ports.contains(&port)),
+        "parallel first starts must not select an already reserved port: {first_ports:?} {second_ports:?}"
+    );
+}
+
+#[test]
+fn first_start_refuses_an_explicit_collision_and_keeps_a_borrowed_issuer() {
+    let occupied = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = occupied.local_addr().unwrap().port();
+
+    let error = select_session_ports([Some(port), None, None], false).unwrap_err();
+    let failure = error.downcast_ref::<DevFailure>().unwrap();
+    let (_, _, _, action) = failure.diagnostic();
+    assert!(action.contains("--casework-port"), "{action}");
+    assert!(!action.contains("--issuer-port"), "{action}");
+    assert!(!action.contains("--database-port"), "{action}");
+
+    let borrowed = select_session_ports([None, Some(port), None], true).unwrap();
+    assert_eq!(borrowed.ports()[1], port);
+    assert_ne!(borrowed.ports()[0], port);
+    assert_ne!(borrowed.ports()[2], port);
+}
+
+#[test]
 fn ports_must_be_three_distinct_loopback_ports() {
     ports(
         DEFAULT_CASEWORK_PORT,
@@ -4315,7 +4348,7 @@ fn a_start_on_an_occupied_port_names_the_port() {
     assert_eq!(diagnostic["path"], format!("dev:/ports/{port}"));
     assert_eq!(
         diagnostic["message"],
-        format!("Local port {port} is already in use by another process.")
+        format!("Local port {port} is already in use, and the local Casework service needs it.")
     );
     assert!(
         diagnostic["suggestedAction"]
@@ -4323,6 +4356,10 @@ fn a_start_on_an_occupied_port_names_the_port() {
             .unwrap()
             .contains("--casework-port"),
         "{report}"
+    );
+    assert!(
+        !project.join(".casework/dev").exists(),
+        "an explicit collision must refuse before retaining partial session state"
     );
     drop(occupied);
 }
@@ -4600,8 +4637,16 @@ fn an_interrupted_start_the_supervisor_did_not_record_is_reported_directly() {
 
 #[test]
 fn a_port_bind_refused_for_another_reason_is_not_reported_as_occupied() {
-    let refused = bind_failure(8092, std::io::ErrorKind::PermissionDenied.into());
-    let occupied = bind_failure(8092, std::io::ErrorKind::AddrInUse.into());
+    let refused = bind_failure(
+        8092,
+        PortRole::Casework,
+        std::io::ErrorKind::PermissionDenied.into(),
+    );
+    let occupied = bind_failure(
+        8092,
+        PortRole::Casework,
+        std::io::ErrorKind::AddrInUse.into(),
+    );
 
     let (exit, diagnostic) = crate::classify_failure(crate::CommandKind::Operational, &refused);
 

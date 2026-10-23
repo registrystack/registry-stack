@@ -91,6 +91,42 @@ pub(super) fn run(
             ));
         }
     }
+    if let Err(error) = &evaluation {
+        if error.kind != ActionHandlerError::Input
+            && expected
+                .as_ref()
+                .is_some_and(|value| value.get("failure").is_some())
+        {
+            let actual = json!({"failure": {"code": error.kind.code()}});
+            let mut expected = expected.take().expect("a failure expectation is present");
+            normalize(&mut expected);
+            if let Some(path) = mismatch_path(&actual, &expected, "expect") {
+                return Err(action_test_failure(
+                    "action-test.expect.mismatch",
+                    &path,
+                    "the computed handler failure differs from the expected failure",
+                ));
+            }
+            return Ok(ActionTestSuccessReport {
+                ok: true,
+                command: "project action-test",
+                compiled_revision: compiled.revision().to_owned(),
+                action_id: String::new(),
+                action: Some(action.id.clone()),
+                refusal: None,
+                failure: actual.get("failure").cloned(),
+                assertions_passed: Some(true),
+                planner: None,
+                handler: Some(identity),
+                effects: Vec::new(),
+                counts: ActionTestCountReport {
+                    effects: 0,
+                    field_mutations: 0,
+                    dependencies: 0,
+                },
+            });
+        }
+    }
     let outcome = evaluation.map_err(|error| {
         let input_error = error.kind == ActionHandlerError::Input;
         let mut path = format!("actions[{}]", action.id);
@@ -194,6 +230,7 @@ pub(super) fn run(
         action_id: String::new(),
         action: Some(action.id.clone()),
         refusal,
+        failure: None,
         assertions_passed,
         planner: None,
         handler: Some(identity),
@@ -428,6 +465,67 @@ mod tests {
             .join("../../products/breg/acceptance/person-registration-rhai")
             .canonicalize()
             .unwrap()
+    }
+
+    #[test]
+    fn branch_expectations_cover_success_refusal_and_handler_failure_without_values() {
+        let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/fixtures/action-plan-branches")
+            .canonicalize()
+            .unwrap();
+        let compiled = compile(&project, ProfileArg::Authoring, "project action-test")
+            .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+        for (branch, action) in [
+            ("success", "create-entry"),
+            ("refusal", "create-entry"),
+            ("handler-failure", "invalid-copy"),
+        ] {
+            let args = ProjectActionTestArgs {
+                project: project.clone(),
+                action: Some(action.into()),
+                input: Some(project.join(format!("examples/{branch}.input.json"))),
+                expect: Some(project.join(format!("examples/{branch}.expect.json"))),
+            };
+            let report = run(&args, &compiled)
+                .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+            assert_eq!(report.assertions_passed, Some(true));
+            assert!(!serde_json::to_string(&report)
+                .unwrap()
+                .contains("Example entry"));
+        }
+    }
+
+    #[test]
+    fn handler_failure_expectations_are_exact_and_do_not_accept_invalid_inputs() {
+        let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/fixtures/action-plan-branches")
+            .canonicalize()
+            .unwrap();
+        let compiled = compile(&project, ProfileArg::Authoring, "project action-test")
+            .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+        let directory = tempfile::tempdir().unwrap();
+        let expectation = directory.path().canonicalize().unwrap().join("expect.json");
+        fs::write(
+            &expectation,
+            br#"{"failure":{"code":"action.handler.execution"}}"#,
+        )
+        .unwrap();
+        let mut args = ProjectActionTestArgs {
+            project: project.clone(),
+            action: Some("invalid-copy".into()),
+            input: Some(project.join("examples/handler-failure.input.json")),
+            expect: Some(expectation.clone()),
+        };
+        let failure = run(&args, &compiled).unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "action-test.expect.mismatch");
+        fs::write(
+            &expectation,
+            br#"{"failure":{"code":"action.input.invalid"}}"#,
+        )
+        .unwrap();
+        args.action = Some("create-entry".into());
+        let failure = run(&args, &compiled).unwrap_err();
+        assert_eq!(failure.diagnostics[0].code, "action.input.invalid");
     }
 
     /// The minimal conforming guest ABI, mirroring the WASM admission suite's

@@ -125,6 +125,23 @@ pub(crate) fn validate_inputs(
     action: &CompiledAction,
     input: &Map<String, Value>,
 ) -> Result<(), MutationError> {
+    validate_draft_inputs(action, input)?;
+    for declared in &action.inputs {
+        if declared.required && !input.contains_key(&declared.id) {
+            return Err(MutationError::InvalidRequestAt(
+                crate::problem_location::RequestLocation::action_input(&declared.api_name),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A draft may be incomplete; every supplied value still obeys its declared
+/// type and nullability. Completeness is checked only before Submit plans work.
+pub(crate) fn validate_draft_inputs(
+    action: &CompiledAction,
+    input: &Map<String, Value>,
+) -> Result<(), MutationError> {
     if input
         .keys()
         .any(|key| !action.inputs.iter().any(|declared| declared.id == *key))
@@ -133,7 +150,7 @@ pub(crate) fn validate_inputs(
     }
     for declared in &action.inputs {
         match input.get(&declared.id) {
-            None if !declared.required => {}
+            None => {}
             Some(Value::Null) if !declared.required && action.handler.is_some() => {}
             Some(value)
                 if validate_field_value(DataFieldValue::Json(value), &declared.field_type) => {}

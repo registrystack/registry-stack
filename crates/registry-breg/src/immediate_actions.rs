@@ -853,6 +853,24 @@ fn compile_handler(
             ));
             return None;
         }
+        let declared_refusals = refusals.keys().map(String::as_str).collect();
+        let declared_effects = writes.iter().map(|slot| slot.id.as_str()).collect();
+        match crate::rhai_literal_lint::inspect(script, &function.entrypoint, &declared_refusals, &declared_effects) {
+            Ok(faults) => {
+                for fault in faults {
+                    let location = match (fault.position.line(), fault.position.position()) {
+                        (Some(line), Some(column)) => format!(" at line {line}, column {column}"),
+                        (Some(line), _) => format!(" at line {line}"),
+                        _ => String::new(),
+                    };
+                    errors.push(Diagnostic::error(fault.code, format!("{function_path}.source"), &format!("{}{location}", fault.message)));
+                }
+            }
+            Err(()) => errors.push(Diagnostic::error(
+                "breg.action.plan-literal-lint-unavailable", format!("{function_path}.source"),
+                "Direct literal inspection could not compile the validated source; use project action-test --expect for its executable branches.",
+            )),
+        }
     }
     let conditioned = target_uses
         .values()
@@ -993,6 +1011,9 @@ fn compile_requirements(
     let mut compiled = Vec::new();
     let mut seen = BTreeSet::new();
     for requirement in &action.commit_guards.targets {
+        if let Some(reason) = &requirement.reason {
+            validate_id(reason, "actions[].commitGuards.targets[].reason", errors);
+        }
         if !seen.insert((&requirement.input, &requirement.field)) {
             errors.push(Diagnostic::error(
                 "breg.action.commit_guards.targets-duplicate",
@@ -1036,6 +1057,7 @@ fn compile_requirements(
                     CompiledActionTargetUseSource::Input { input } if input == &requirement.input)
                 });
             if !revision_is_bound
+                || requirement.reason.is_some()
                 || !requirement.field.is_empty()
                 || requirement.equals.is_some()
                 || requirement.equals_input.is_some()
@@ -1052,6 +1074,7 @@ fn compile_requirements(
             } else {
                 compiled.push(CompiledCommitGuard {
                     input: requirement.input.clone(),
+                    reason: None,
                     entity_id: target.clone(),
                     field: String::new(),
                     equals: None,
@@ -1132,6 +1155,7 @@ fn compile_requirements(
         }
         compiled.push(CompiledCommitGuard {
             input: requirement.input.clone(),
+            reason: requirement.reason.clone(),
             entity_id: target.clone(),
             field: requirement.field.clone(),
             equals: literal,

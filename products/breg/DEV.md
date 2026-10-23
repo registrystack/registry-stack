@@ -31,10 +31,13 @@ The project path defaults to the current directory, as it does for every other
 `--clients-file` names another clients file instead. `dev` and `dev start` both
 detach a resident supervisor. They return only after
 PostgreSQL, ThunderID, schema-test rehearsal, package activation, BReg readiness and
-explicit seed creation succeed. Default loopback ports are BReg `8090`, issuer
-`8091` and PostgreSQL `15432`. Override them on the first start with
-`--breg-port`, `--issuer-port` and `--database-port`. A restart retains the
-original ports and clients-file location. Conflicting ports are refused.
+explicit seed creation succeed. The preferred loopback ports are BReg `8090`,
+issuer `8091`, and PostgreSQL `15432`. When an unassigned preferred port is
+occupied, the first start selects a free, distinct port. Override selection with
+`--breg-port`, `--issuer-port`, and `--database-port`; an explicit collision or
+duplicate assignment is refused with the responsible flag named. A restart
+retains the selected ports and clients-file location. Session and container
+ownership names remain UUID-based and do not depend on the selected ports.
 
 The database runs the pinned image
 `docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`,
@@ -773,6 +776,13 @@ as a support attachment. Schema-test setup failures identify destination
 inventory or activation, authentication, cursor, audit, or Evidence
 configuration. Correct that named configuration before retrying; recreating
 the database cannot fix a missing destination binding or invalid secret.
+
+On an initial start, the pre-apply doctor may report
+`startup.database.unready`, `startup.database.uninitialized`, or
+`startup.package.not-active`. Dev classifies these expected not-yet-activated
+results as the `initial-apply` phase, preserves the raw doctor report under
+private `evidence`, and does not copy it into failure logs. A standalone doctor
+run and the post-apply doctor keep their ordinary success or failure behavior.
 
 The rehearsal, the package build, activation and verification all run inside
 the detached supervisor, whose own streams go to a private log. A phase that

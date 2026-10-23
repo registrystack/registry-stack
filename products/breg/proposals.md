@@ -81,6 +81,13 @@ project-local function and its write ceiling. Effects use `fromInput`,
 computes effects within that ceiling; it cannot invent authority or a review
 result. The facility function uses `registry.action-plan/v1` and `ctx.inputs`.
 
+A Proposal draft may omit an input declared `required: true` during Start, Edit,
+Revise, or Rebase. Every value that is present must still match its declared
+type, nullability, and the caller's `writableInputs` authority. Submit requires
+every required input and only then runs the plan. Immediate Invoke remains
+complete and strict at invocation. Starting or editing an incomplete draft does
+not run the planner or disclose whether a target exists.
+
 `commitGuards` checks frozen input and current target requirements at commit.
 Submission freezes exact inputs, effects, target revisions, Action revision,
 review selection, and effect digest. Apply never reruns a changed planner to alter
@@ -103,8 +110,8 @@ authority and returns no display values.
 A Proposal grant may name `writableInputs`, the Action inputs that profile may
 set. Without it, every declared input stays writable. With it, Start refuses a
 value for any other input, and Edit, Revise and Rebase must restate every other
-input exactly as the current draft or submitted version holds it. An absent
-input and `null` count as the same value. A refusal answers
+input exactly as the current draft or submitted version holds it, including
+whether an optional input is absent or explicitly `null`. A refusal answers
 `400 request.invalid` with `fieldPath` naming the first such input, for example
 `/input/licenceNumber`; the draft stays unchanged and the refusal is audited
 without the value. The list must name declared inputs and needs Start, Edit,
@@ -123,6 +130,23 @@ proposals:
     readableInputs: [holder, statement, licence-number]
     writableInputs: [holder, statement]
 ```
+
+Treat a holder or applicant identifier as an ordinary typed input. A
+self-service application fills it from authenticated caller metadata and BReg
+rechecks the matching target boundary against verified claims at Submit. BReg
+does not provide a claim-copy expression for Action inputs. It records the
+Proposal owner and each submitter from the authenticated request, independently
+of the input value. An officer acting for another applicant uses a separate
+staff profile with its own row boundaries and no caller-ownership restriction.
+
+A standing human officer grant can hold Edit, Revise, Submit, and a bounded
+`writableInputs` list. Revise increments `submissionVersion`; a later Submit
+records that authenticated submitter and, when Review is required, creates a new
+exact Review round.
+Edit, Revise, and Rebase audit only the IDs in `changedInputs`, never their
+values. The earlier version remains available through
+`readProposalSubmission`, including its retained `decision` and `publicReason`,
+while its Review result or application receipt remains retained.
 
 Ownership alone does not preserve access after a target leaves the caller's
 current row boundary. Proposal Get then returns a concealed 404, List omits the
@@ -172,9 +196,13 @@ a renewable `privateKeyJwt` credential where supported by your issuer. The
 binding. No executor credential or self-HTTP binding is needed.
 
 With the binding absent, only operations requiring that authority are disabled.
-Restore it to resume retained work. Approval must be freshly authenticated and
-unexpired before any uncommitted manual or automatic application. Already
-committed receipt recovery follows the local retention contract.
+The runtime still starts, and unrelated CRUD, immediate Actions, no-review
+Proposals, and draft Start or Edit remain available. Submit for a Proposal that
+requires the unbound authority is unavailable. `bregctl doctor` reports the
+advisory `proposal.submit.review-authority-unbound`; restore the binding to
+resume retained work. Approval must be freshly authenticated and unexpired
+before any uncommitted manual or automatic application. Already committed
+receipt recovery follows the local retention contract.
 
 BReg submits every Proposal with `subjectType: proposal`. The Action identity
 comes from the Proposal's `actionId`, not from the subject type. Treat
@@ -251,6 +279,14 @@ it. It says whose move the work waits on, not who is authorized to make it:
 the links still decide what the current caller may do. List Proposals by turn
 with `GET /v1/proposals?turn=party` (or `official`, `nobody`). A page may hold
 fewer than `limit` items, so keep paging while `nextCursor` is present.
+
+Use `GET /v1/proposals?pendingManualApplication=true` for a work queue of
+submitted manual Proposals that the caller may see and whose local application
+status is pending. The filter includes review-free submissions and
+required-review submissions with a current, approved, unexpired, and
+non-withdrawn result. BReg filters its retained local Proposal and Review state
+before paging; listing makes no remote Review calls. Keep paging while
+`nextCursor` is present.
 
 ### After a Review result
 

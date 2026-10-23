@@ -403,6 +403,10 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
                 }
                 _ => None,
             },
+            "guardReason": match code {
+                BRegProblemCode::ActionGuardFailed => refusal_code.as_ref().map(|value| value.as_str()),
+                _ => None,
+            },
             "fieldPath": field_path.as_ref().map(|value| value.as_str()),
             "constraint": constraint,
             "traceId": trace_id.as_str(),

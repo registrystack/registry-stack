@@ -197,10 +197,10 @@ struct StartArgs {
     /// first start: dev-clients.yaml in the project; retained for restarts).
     #[arg(long, value_name = "FILE")]
     clients_file: Option<PathBuf>,
-    /// Registry loopback port on first start (default 8090; retained for restarts).
+    /// Registry loopback port on first start (prefers 8090 when available; retained for restarts).
     #[arg(long)]
     breg_port: Option<u16>,
-    /// Local issuer loopback port on first start (default 8091; retained for restarts).
+    /// Local issuer loopback port on first start (prefers 8091 when available; retained for restarts).
     #[arg(long)]
     issuer_port: Option<u16>,
     /// Ready Base Registry Engine (BReg) dev project that owns the shared local issuer and client registrations.
@@ -209,7 +209,7 @@ struct StartArgs {
     /// Immutable local candidate issuer image ID on first start; retained for restarts.
     #[arg(long, value_parser = candidate_issuer_image)]
     issuer_image: Option<String>,
-    /// PostgreSQL loopback port on first start (default 15432; retained for restarts).
+    /// PostgreSQL loopback port on first start (prefers 15432 when available; retained for restarts).
     #[arg(long)]
     database_port: Option<u16>,
     #[arg(long, hide = true)]
@@ -450,6 +450,7 @@ impl State {
             "webhookUrl":self.webhook_port.map(|port|format!("http://127.0.0.1:{port}/events")),
             "eventsFile":self.webhook_port.map(|_|self.root().join("events.jsonl")),
             "audience":self.audience(),"packageDigest":self.package_digest,"packageSequence":self.sequence,"activationPending":!self.activated,
+            "initialApplyEvidence": self.root().join("evidence/initial-apply.json").is_file().then(|| self.root().join("evidence/initial-apply.json")),
             "clients":clients.clients.iter().map(|client|json!({"id":client.id,"accessProfiles":client.access_profiles,"scopes":client.scopes,
                 "clientIdFile":self.root().join("credentials").join(&client.id).join("client-id"),
                 "assertionKeyFile":self.root().join("credentials").join(&client.id).join("assertion-key.jwk")})).collect::<Vec<_>>()}),
@@ -778,6 +779,84 @@ fn probe(port: u16, role: PortRole) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Select one complete first-start assignment before creating owned services.
+/// Explicit and retained ports are fixed; only omitted ports may move.
+#[derive(Debug)]
+struct SessionPorts {
+    ports: [u16; 3],
+    _reservations: Vec<TcpListener>,
+}
+
+fn select_session_ports(
+    requested: [Option<u16>; 3],
+    borrowed_issuer: bool,
+) -> Result<SessionPorts> {
+    let roles = [PortRole::Breg, PortRole::Issuer, PortRole::Database];
+    let defaults = [
+        DEFAULT_BREG_PORT,
+        DEFAULT_ISSUER_PORT,
+        DEFAULT_DATABASE_PORT,
+    ];
+    let mut used = BTreeSet::new();
+    for port in requested.into_iter().flatten() {
+        if port == 0 || !used.insert(port) {
+            bail!("--breg-port, --issuer-port and --database-port require distinct nonzero ports");
+        }
+    }
+    let mut selected = [0; 3];
+    let mut reservations = Vec::with_capacity(3);
+    for index in 0..3 {
+        if index == 1 && borrowed_issuer {
+            selected[index] = requested[index].context("borrowed issuer has no configured port")?;
+            continue;
+        }
+        let listener = if let Some(port) = requested[index] {
+            TcpListener::bind(("127.0.0.1", port)).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AddrInUse {
+                    anyhow::anyhow!(port_refusal(port, roles[index]))
+                } else {
+                    anyhow::Error::new(error).context(format!(
+                        "cannot reserve the local {} port",
+                        roles[index].name()
+                    ))
+                }
+            })?
+        } else {
+            match TcpListener::bind(("127.0.0.1", defaults[index])) {
+                Ok(listener) if !used.contains(&defaults[index]) => listener,
+                Ok(listener) => {
+                    drop(listener);
+                    reserve_free_port(&used)?
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    reserve_free_port(&used)?
+                }
+                Err(error) => {
+                    return Err(error)
+                        .context("cannot reserve a preferred development session port")
+                }
+            }
+        };
+        selected[index] = listener.local_addr()?.port();
+        used.insert(selected[index]);
+        reservations.push(listener);
+    }
+    Ok(SessionPorts {
+        ports: selected,
+        _reservations: reservations,
+    })
+}
+
+fn reserve_free_port(used: &BTreeSet<u16>) -> Result<TcpListener> {
+    loop {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .context("cannot select a free development session port")?;
+        if !used.contains(&listener.local_addr()?.port()) {
+            return Ok(listener);
+        }
+    }
 }
 
 fn receiver_port(state: &State) -> Result<u16> {
@@ -1139,6 +1218,7 @@ fn start(args: StartArgs) -> Result<Value> {
         }
         existing => existing,
     };
+    let mut first_start_ports = None;
     let mut state = if let Some(state) = existing {
         private::validate_tree(&root.join("credentials"))?;
         private::validate_tree(&root.join("secrets"))?;
@@ -1176,21 +1256,26 @@ fn start(args: StartArgs) -> Result<Value> {
         } else {
             None
         };
+        let selected_ports = select_session_ports(
+            [
+                args.breg_port.or(previous.map(|state| state.breg_port)),
+                args.issuer_port
+                    .or(issuer_owner.as_ref().map(|owner| owner.issuer_port))
+                    .or(previous.map(|state| state.issuer_port)),
+                args.database_port
+                    .or(previous.map(|state| state.database_port)),
+            ],
+            issuer_owner.is_some(),
+        )?;
+        let [breg_port, issuer_port, database_port] = selected_ports.ports;
         let mut state = State {
             api_version: state_api_version(),
             kind: state_kind(),
             project: project.clone(),
             owner: uuid::Uuid::new_v4().to_string(),
             status: Status::Stopped,
-            breg_port: args
-                .breg_port
-                .or(previous.map(|s| s.breg_port))
-                .unwrap_or(DEFAULT_BREG_PORT),
-            issuer_port: args
-                .issuer_port
-                .or(issuer_owner.as_ref().map(|owner| owner.issuer_port))
-                .or(previous.map(|s| s.issuer_port))
-                .unwrap_or(DEFAULT_ISSUER_PORT),
+            breg_port,
+            issuer_port,
             issuer_project,
             issuer_owner: issuer_owner.as_ref().map(|owner| owner.owner.clone()),
             issuer_image: args
@@ -1198,10 +1283,7 @@ fn start(args: StartArgs) -> Result<Value> {
                 .clone()
                 .or_else(|| previous.and_then(|s| s.issuer_image.clone())),
             purpose_port: None,
-            database_port: args
-                .database_port
-                .or(previous.map(|s| s.database_port))
-                .unwrap_or(DEFAULT_DATABASE_PORT),
+            database_port,
             requires_postgis: compiled.ddl().requires_postgis,
             webhook_port: None,
             clients_file,
@@ -1233,15 +1315,6 @@ fn start(args: StartArgs) -> Result<Value> {
                 .or(Some(receiver_port(&state)?));
         }
         ports(state.breg_port, state.issuer_port, state.database_port)?;
-        for (port, role) in [
-            (state.breg_port, PortRole::Breg),
-            (state.database_port, PortRole::Database),
-        ] {
-            probe(port, role)?;
-        }
-        if state.issuer_project.is_none() {
-            probe(state.issuer_port, PortRole::Issuer)?;
-        }
         if let Some(port) = state.purpose_port {
             probe(port, PortRole::Purpose)?;
         }
@@ -1251,6 +1324,7 @@ fn start(args: StartArgs) -> Result<Value> {
             state.webhook_port = Some(receiver_port(&state)?);
         }
         initialize(&root, &state, &clients, &files)?;
+        first_start_ports = Some(selected_ports);
         read_state(&root)?
     };
     if state.sequence > 1 && state.container_id.is_none() {
@@ -1273,6 +1347,9 @@ fn start(args: StartArgs) -> Result<Value> {
         ("docker".into(), binary(&root, &docker)?),
     ]);
     matching_versions(&state.binaries)?;
+    // The owned services take these ports themselves after preparation. A
+    // final probe below makes a subsequent bind race an explicit refusal.
+    drop(first_start_ports);
     // A prior supervisor may have exited without reaching cleanup. Reclaim
     // only this session's issuer before testing whether its port is free.
     stop_issuer(&docker, &state)?;
@@ -1615,7 +1692,7 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
                 .arg("--runtime-config")
                 .arg(root.join("runtime.yaml"));
             let (reported, report) = output(&mut doctor, &root, "doctor-before-apply", None)?;
-            if activation(reported, &report)? == Activation::NotActivated {
+            if record_activation_preflight(&root, reported, &report)? == Activation::NotActivated {
                 let mut apply = ctl(&state);
                 apply
                     .arg("apply")
@@ -2083,7 +2160,7 @@ fn output(
         let echoed = Zeroizing::new(std::mem::take(&mut bytes));
         bytes = redact(&echoed, secret);
     }
-    if !status.success() {
+    if !status.success() && name != "doctor-before-apply" {
         // Native bregctl reports errors on stdout in JSON mode. Preserve them
         // privately as well; selectors and credentials never enter the report.
         let mut log = log_file(root, &format!("{name}-report"))?;
@@ -2226,6 +2303,24 @@ fn activation(success: bool, report: &[u8]) -> Result<Activation> {
             .collect::<Vec<_>>()
             .join("; ")
     );
+}
+
+fn record_activation_preflight(root: &Path, success: bool, report: &[u8]) -> Result<Activation> {
+    let evidence = root.join("evidence");
+    private::directory(&evidence)?;
+    private::replace(&evidence.join("doctor-before-apply.json"), report)?;
+    let activation = activation(success, report)?;
+    if activation == Activation::NotActivated {
+        private::replace(
+            &evidence.join("initial-apply.json"),
+            &serde_json::to_vec(&json!({
+                "phase":"initial-apply", "expected":true,
+                "message":"The development database needs its initial package application.",
+                "doctorReport":"doctor-before-apply.json"
+            }))?,
+        )?;
+    }
+    Ok(activation)
 }
 
 fn ctl(state: &State) -> Command {

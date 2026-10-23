@@ -2818,6 +2818,7 @@ mod source_owned_review_tests {
         let preconditions = FrozenApplicationPreconditions {
             evidence: vec![],
             contract: vec![crate::model::CompiledCommitGuard {
+                reason: None,
                 input: "guard".to_owned(),
                 entity_id: "asset-placement".to_owned(),
                 field: "valid-through".to_owned(),

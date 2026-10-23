@@ -213,6 +213,14 @@ impl fmt::Display for LogicalReferenceRefusal {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FixtureError {
+    /// A value-free authoring rule with a stable machine class and the source
+    /// key an author can edit. The enclosing [`FixtureError::StepFailed`]
+    /// supplies the indexed journey and step location.
+    AuthoringRule {
+        code: &'static str,
+        key: &'static str,
+        message: &'static str,
+    },
     JourneyTooLarge,
     JourneyShapeRefused,
     JourneyBoundsRefused,
@@ -265,6 +273,9 @@ pub enum FixtureError {
 
 impl fmt::Display for FixtureError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Self::AuthoringRule { code, key, message } = self {
+            return write!(formatter, "{code} at {key}: {message}");
+        }
         if let Self::RuntimeSetup(error) = self {
             return fmt::Display::fmt(error, formatter);
         }
@@ -358,6 +369,7 @@ impl fmt::Display for FixtureError {
             | Self::JourneyRefused { .. } => {
                 unreachable!("handled above")
             }
+            Self::AuthoringRule { .. } => unreachable!("handled above"),
         })
     }
 }
@@ -1125,6 +1137,47 @@ fn read_journey_document(bytes: &[u8]) -> Result<JourneyDocument, FixtureError> 
                     .map(Node::to_json_value)
             };
             step.expect.fill_bodies(&expect);
+            if let Err(error) = validate_refusal_pair(&step.expect) {
+                let FixtureError::AuthoringRule { code, key, message } = error else {
+                    unreachable!("refusal-pair checks return an authoring rule")
+                };
+                let (member, suggested_action) = match key {
+                    "expect.problemCode" => (
+                        "problemCode",
+                        "Set expect.problemCode to action.refused beside expect.refusalCode.",
+                    ),
+                    "expect.refusalCode" => (
+                        "refusalCode",
+                        "Set expect.refusalCode to a refusal declared by the selected Action plan.",
+                    ),
+                    _ => unreachable!("refusal-pair checks name an expectation member"),
+                };
+                let member_pointer = format!("{step_pointer}/expect/{member}");
+                let expectation_pointer = format!("{step_pointer}/expect");
+                let missing = code.ends_with("-required");
+                let diagnostic_pointer = if missing {
+                    expectation_pointer.as_str()
+                } else {
+                    member_pointer.as_str()
+                };
+                let mut diagnostic = decoded.document.diagnostic_at_value(
+                    registry_platform_yaml::Severity::Error,
+                    if missing {
+                        "config.missing-key"
+                    } else {
+                        "config.invalid-value"
+                    },
+                    diagnostic_pointer,
+                    message,
+                    suggested_action,
+                );
+                if missing {
+                    diagnostic.path = member_pointer;
+                }
+                return Err(FixtureError::JourneyDocument(
+                    decoded.document.report_with(vec![diagnostic]),
+                ));
+            }
         }
     }
     Ok(document)
@@ -1260,6 +1313,7 @@ pub fn validate_fixture_journeys(
                     });
                 }
                 if let ActionSource::Proposal { .. } = &step.request {
+                    validate_proposal_expectation_rule(&step)?;
                     return proposals::validate_step(
                         step,
                         registry,
@@ -1728,10 +1782,19 @@ fn validate_claims(
         .map(|boundary| boundary.claim.as_str())
         .filter(|name| !crate::consent::is_reserved_claim(name))
         .collect::<BTreeSet<_>>();
-    if claims.direct_claims.iter().any(|(name, value)| {
+    let invalid_direct_claim = claims.direct_claims.iter().any(|(name, value)| {
         !boundary_claims.contains(name.as_str()) || value.verified_value().is_err()
-    }) {
-        return Err(FixtureError::AuthorityWideningRefused);
+    });
+    let missing_direct_claim = outcome == ExpectedOutcome::Success
+        && boundary_claims
+            .iter()
+            .any(|name| !claims.direct_claims.contains_key(*name));
+    if invalid_direct_claim || missing_direct_claim {
+        return Err(FixtureError::AuthoringRule {
+            code: "fixture.claims.direct-claims-invalid",
+            key: "claims.directClaims",
+            message: "successful steps require exactly the selected access profile's non-reserved row-boundary claims, with bounded string or string-set values",
+        });
     }
     if let Some(purpose) = claims.purpose.as_deref() {
         if purpose.len() > MAX_BINDING_BYTES || !profile.required_purposes.contains(purpose) {
@@ -1742,9 +1805,7 @@ fn validate_claims(
         && (claims.principal.is_none()
             || claims.scope_set() != *profile.required_scopes
             || (!profile.required_purposes.is_empty() && claims.purpose.is_none())
-            || boundary_claims
-                .iter()
-                .any(|name| !claims.direct_claims.contains_key(*name)))
+            || missing_direct_claim)
     {
         return Err(FixtureError::AuthorityWideningRefused);
     }
@@ -1894,6 +1955,7 @@ fn validate_action_input_map(
     }
     for declared in &action.inputs {
         if !expects_invalid_request
+            && !action.execution.is_proposal()
             && (declared.required || condition_inputs.contains(&declared.api_name))
             && accepted_names.is_none_or(|accepted| accepted.contains(&declared.api_name))
             && !input.contains_key(&declared.api_name)
@@ -2663,6 +2725,7 @@ fn validate_expectation(
     captures: bool,
     captures_results: bool,
 ) -> Result<(), FixtureError> {
+    validate_refusal_pair(expectation)?;
     let declared_refusal = expectation.problem_code.as_deref() == Some("action.refused");
     if declared_refusal != expectation.refusal_code.is_some()
         || (declared_refusal && (operation != Operation::Invoke || captures_results))
@@ -2763,7 +2826,7 @@ fn validate_expectation(
                         || !code.bytes().all(|byte| {
                             byte.is_ascii_lowercase()
                                 || byte.is_ascii_digit()
-                                || matches!(byte, b'.' | b'_')
+                                || matches!(byte, b'.' | b'_' | b'-')
                         })
                 })
                 || !expectation.fields.is_empty()
@@ -2777,6 +2840,49 @@ fn validate_expectation(
                 return Err(FixtureError::JourneyShapeRefused);
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_refusal_pair(expectation: &ExpectationSource) -> Result<(), FixtureError> {
+    if expectation.refusal_code.is_some()
+        && expectation.problem_code.as_deref() != Some("action.refused")
+    {
+        return Err(FixtureError::AuthoringRule {
+            code: if expectation.problem_code.is_none() {
+                "fixture.expectation.problem-code-required"
+            } else {
+                "fixture.expectation.problem-code-invalid"
+            },
+            key: "expect.problemCode",
+            message: "expect.refusalCode requires expect.problemCode: action.refused",
+        });
+    }
+    if expectation.problem_code.as_deref() == Some("action.refused")
+        && expectation.refusal_code.is_none()
+    {
+        return Err(FixtureError::AuthoringRule {
+            code: "fixture.expectation.refusal-code-required",
+            key: "expect.refusalCode",
+            message: "expect.problemCode: action.refused requires expect.refusalCode",
+        });
+    }
+    Ok(())
+}
+
+fn validate_proposal_expectation_rule(step: &StepSource) -> Result<(), FixtureError> {
+    let ActionSource::Proposal { operation, .. } = &step.request else {
+        return Ok(());
+    };
+    if *operation == proposals::ProposalJourneyOperation::Start
+        && step.expect.outcome == ExpectedOutcome::Success
+        && step.expect.status != 201
+    {
+        return Err(FixtureError::AuthoringRule {
+            code: "fixture.expectation.status-invalid",
+            key: "expect.status",
+            message: "Proposal Start success requires status: 201",
+        });
     }
     Ok(())
 }
@@ -2856,21 +2962,37 @@ fn compile_problem_bindings(
         expectation.problem_code.as_deref(),
         Some("action.refused" | "action.handler_failed" | "action.evidence_failed")
     ) {
-        let action = action.ok_or(FixtureError::LogicalReferenceRefused)?;
-        let handler = action
-            .handler
-            .as_ref()
-            .ok_or(FixtureError::LogicalReferenceRefused)?;
-        if !matches!(request, ActionSource::Invoke { .. }) {
-            return Err(FixtureError::LogicalReferenceRefused);
+        if !matches!(
+            request,
+            ActionSource::Invoke { .. }
+                | ActionSource::Proposal {
+                    operation: proposals::ProposalJourneyOperation::Submit,
+                    ..
+                }
+        ) {
+            return Err(FixtureError::AuthoringRule {
+                code: "fixture.expectation.phase-invalid",
+                key: "expect.problemCode",
+                message: "planner outcomes require immediate Invoke or Proposal Submit; Start and Edit do not run the plan",
+            });
         }
+        let action = action.ok_or(FixtureError::LogicalReferenceRefused)?;
+        let handler = action.handler.as_ref().ok_or(FixtureError::AuthoringRule {
+            code: "fixture.expectation.planner-outcome-unavailable",
+            key: "expect.problemCode",
+            message: "planner fault and refusal outcomes require an Action with a Function plan",
+        })?;
         if let Some(code) = &expectation.refusal_code {
             bindings.refusal_label = Some(
                 handler
                     .refusals
                     .get(code)
                     .cloned()
-                    .ok_or(FixtureError::LogicalReferenceRefused)?,
+                    .ok_or(FixtureError::AuthoringRule {
+                        code: "fixture.expectation.refusal-code-undeclared",
+                        key: "expect.refusalCode",
+                        message: "expect.refusalCode must name a refusal declared by the selected Action plan",
+                    })?,
             );
             bindings.refusal_field_paths = action
                 .inputs
@@ -5011,7 +5133,7 @@ fn problem_contract(
         (409, "mutation.conflict") => {
             Some(("Conflict", &["The mutation conflicts with current state."]))
         }
-        (409, "idempotency.conflict") => Some((
+        (409, "idempotency.key-reused") => Some((
             "Conflict",
             &["The idempotency key is bound to another request."],
         )),
@@ -8099,7 +8221,7 @@ journeys:
             (404, "resource.not_found"),
             (404, "lookup.unresolved"),
             (409, "mutation.conflict"),
-            (409, "idempotency.conflict"),
+            (409, "idempotency.key-reused"),
             (412, "action.guard_failed"),
             (412, "precondition.failed"),
             (415, "unsupported.media_type"),
@@ -8404,13 +8526,13 @@ journeys:
                 Err(FixtureError::ResponseShapeRefused)
             );
             let mut other_code = (*step).clone();
-            other_code.expect.problem_code = Some("idempotency.conflict".to_owned());
+            other_code.expect.problem_code = Some("idempotency.key-reused".to_owned());
             let mut idempotency = compare.clone();
             idempotency["type"] =
                 json!(crate::problem::ProblemCode::IdempotencyConflict.type_uri());
-            idempotency["code"] = json!("idempotency.conflict");
+            idempotency["code"] = json!("idempotency.key-reused");
             idempotency["detail"] = json!(
-                problem_contract(409, Some("idempotency.conflict"))
+                problem_contract(409, Some("idempotency.key-reused"))
                     .unwrap()
                     .1[0]
             );

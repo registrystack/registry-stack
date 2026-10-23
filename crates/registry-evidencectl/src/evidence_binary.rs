@@ -94,7 +94,8 @@ impl DelegatedRunBoundError {
 }
 
 /// Resolve the selected-generation Evidence runtime for an rstack invocation,
-/// or an explicit binary, `EVIDENCE_BIN`, or `PATH` outside rstack.
+/// or an explicit binary, `EVIDENCE_BIN`, a matching installed sibling, or
+/// `PATH` outside rstack. Every selected binary still has its version checked.
 pub(crate) fn resolve(explicit: Option<&Path>) -> Result<PathBuf> {
     resolve_with_environment(
         explicit,
@@ -153,6 +154,17 @@ fn resolve_unmanaged_helper(
     explicit_env: Option<&OsStr>,
     path: Option<&OsStr>,
 ) -> Result<PathBuf> {
+    let current = env::current_exe().context("cannot locate the running operator tool")?;
+    resolve_unmanaged_helper_at(spec, explicit, explicit_env, path, &current)
+}
+
+fn resolve_unmanaged_helper_at(
+    spec: HelperSpec,
+    explicit: Option<&Path>,
+    explicit_env: Option<&OsStr>,
+    path: Option<&OsStr>,
+    current: &Path,
+) -> Result<PathBuf> {
     if let Some(path) = explicit {
         require_file(path, spec.binary, None)?;
         return Ok(path.to_path_buf());
@@ -162,12 +174,21 @@ fn resolve_unmanaged_helper(
         require_file(&path, spec.binary, Some(spec.explicit_env))?;
         return Ok(path);
     }
+    if let Some(sibling) = sibling_binary(current, spec.binary) {
+        return Ok(sibling);
+    }
     find_on_path_value(spec.binary, path).ok_or_else(|| {
         operational_error(format!(
             "{} binary not found: pass {}, set {}, or add `{}` to PATH",
             spec.binary, spec.explicit_flag, spec.explicit_env, spec.binary
         ))
     })
+}
+
+/// Shared installed-component lookup for delegated runtime and development tools.
+pub(crate) fn sibling_binary(current: &Path, name: &str) -> Option<PathBuf> {
+    let sibling = current.parent()?.join(name);
+    is_candidate_executable(&sibling).then_some(sibling)
 }
 
 fn resolve_managed_helper(
@@ -516,6 +537,52 @@ mod tests {
             .open(path)
             .expect("stub");
         file.write_all(script.as_bytes()).expect("write stub");
+    }
+
+    #[test]
+    fn unmanaged_resolution_prefers_option_then_environment_then_sibling_then_path() {
+        let root = tempfile::tempdir().unwrap();
+        let install = root.path().join("installed");
+        let older = root.path().join("older");
+        fs::create_dir(&install).unwrap();
+        fs::create_dir(&older).unwrap();
+        let current = install.join("evidencectl");
+        let sibling = install.join("evidence");
+        let on_path = older.join("evidence");
+        let explicit = root.path().join("explicit");
+        let environment = root.path().join("environment");
+        for path in [&sibling, &on_path, &explicit, &environment] {
+            write_stub(path, "#!/bin/sh\nexit 0\n");
+        }
+        let path = env::join_paths([older]).unwrap();
+        let resolve = |option, environment| {
+            super::resolve_unmanaged_helper_at(
+                super::EVIDENCE_HELPER,
+                option,
+                environment,
+                Some(&path),
+                &current,
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            resolve(Some(explicit.as_path()), Some(environment.as_os_str())),
+            explicit
+        );
+        assert_eq!(resolve(None, Some(environment.as_os_str())), environment);
+        assert_eq!(resolve(None, None), sibling);
+        let without_sibling = root.path().join("elsewhere/evidencectl");
+        assert_eq!(
+            super::resolve_unmanaged_helper_at(
+                super::EVIDENCE_HELPER,
+                None,
+                None,
+                Some(&path),
+                &without_sibling
+            )
+            .unwrap(),
+            on_path
+        );
     }
 
     fn managed_evidence_paths(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {

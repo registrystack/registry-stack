@@ -141,7 +141,7 @@ impl ProblemCode {
             Self::ActionHandlerFailed => "action.handler_failed",
             Self::ActionRefused => "action.refused",
             Self::AuthenticationRefused => "authentication.refused",
-            Self::IdempotencyConflict => "idempotency.conflict",
+            Self::IdempotencyConflict => "idempotency.key-reused",
             Self::IdempotencyExpired => "idempotency.expired",
             Self::IngestionChunkMismatch => "ingestion.chunk_mismatch",
             Self::IngestionProfileMismatch => "ingestion.profile_mismatch",

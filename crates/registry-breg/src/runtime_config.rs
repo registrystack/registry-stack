@@ -1098,6 +1098,31 @@ impl RuntimeConfig {
             .map_err(|_| RuntimeConfigError::InvalidBinding)
     }
 
+    /// Missing optional bindings affect only Submit for the named authorities.
+    /// This inventory performs no provider I/O and adds no startup dependency.
+    pub fn unbound_review_authorities(&self, compiled: &CompiledRegistry) -> Vec<String> {
+        compiled
+            .actions()
+            .actions
+            .iter()
+            .filter_map(|action| {
+                let crate::model::CompiledActionExecution::Proposal { proposal } =
+                    &action.execution
+                else {
+                    return None;
+                };
+                let crate::model::CompiledProposalReview::Required { authority, .. } =
+                    &proposal.review
+                else {
+                    return None;
+                };
+                (!self.review_authorities.contains_key(authority)).then_some(authority.clone())
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     /// Resolve the selected content backend before accepting attachment requests.
     pub async fn activate_attachment_storage(
         &self,

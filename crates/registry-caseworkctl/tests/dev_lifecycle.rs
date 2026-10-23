@@ -398,6 +398,31 @@ impl Session {
         report
     }
 
+    /// Start without naming ports, as an installed tutorial reader does.
+    fn start_with_allocated_ports(&self) -> Value {
+        let project = self.project.to_str().expect("a UTF-8 project path");
+        let report = self.success(&[
+            "dev",
+            project,
+            "--casework-bin",
+            self.casework_bin.to_str().expect("a UTF-8 casework path"),
+        ]);
+        assert_eq!(report["state"], "ready", "{report:#}");
+        report
+    }
+
+    fn retained_ports(&self) -> [u16; 3] {
+        let state: Value = serde_json::from_slice(
+            &fs::read(self.project.join(".casework/dev/state.json"))
+                .expect("the retained dev state is readable"),
+        )
+        .expect("the retained dev state is JSON");
+        ["caseworkPort", "issuerPort", "databasePort"].map(|member| {
+            u16::try_from(state[member].as_u64().expect("a retained port"))
+                .expect("a retained loopback port")
+        })
+    }
+
     fn stop(&self, args: &[&str]) -> Value {
         let project = self.project.to_str().expect("a UTF-8 project path");
         let mut invocation = vec!["dev", "stop", project];
@@ -687,6 +712,74 @@ fn inbox(session: &Session, report: &Value) -> Vec<Value> {
         .as_array()
         .expect("a review task page")
         .clone()
+}
+
+#[test]
+#[ignore = "requires Docker and candidate Casework service and CLI binaries"]
+fn dev_allocates_ports_for_parallel_fresh_projects_and_retains_them() {
+    let first_workspace = tempfile::tempdir().expect("a work directory");
+    let second_workspace = tempfile::tempdir().expect("a work directory");
+    let casework_bin = prerequisite("casework");
+    let first = Session {
+        project: first_workspace.path().join("casework"),
+        casework_bin: casework_bin.clone(),
+        ports: free_ports(),
+        _workspace: first_workspace,
+    };
+    let second = Session {
+        project: second_workspace.path().join("casework"),
+        casework_bin,
+        ports: free_ports(),
+        _workspace: second_workspace,
+    };
+    for session in [&first, &second] {
+        session.success(&[
+            "init",
+            session.project.to_str().expect("a UTF-8 project path"),
+            "--template",
+            "standalone-decision",
+        ]);
+    }
+
+    let (first_report, second_report) = std::thread::scope(|scope| {
+        let first_start = scope.spawn(|| first.start_with_allocated_ports());
+        let second_start = scope.spawn(|| second.start_with_allocated_ports());
+        (
+            first_start.join().expect("the first start completes"),
+            second_start.join().expect("the second start completes"),
+        )
+    });
+    let first_ports = first.retained_ports();
+    let second_ports = second.retained_ports();
+    assert!(
+        first_ports
+            .into_iter()
+            .all(|port| !second_ports.contains(&port)),
+        "parallel sessions must own distinct ports: {first_ports:?} {second_ports:?}"
+    );
+    assert_ne!(first_report["caseworkUrl"], second_report["caseworkUrl"]);
+    assert_ne!(
+        first_report["tokenEndpoint"],
+        second_report["tokenEndpoint"]
+    );
+
+    assert_eq!(first.stop(&[])["state"], "stopped");
+    assert_eq!(second.stop(&[])["state"], "stopped");
+    let (first_restart, second_restart) = std::thread::scope(|scope| {
+        let first_start = scope.spawn(|| first.start_with_allocated_ports());
+        let second_start = scope.spawn(|| second.start_with_allocated_ports());
+        (
+            first_start.join().expect("the first restart completes"),
+            second_start.join().expect("the second restart completes"),
+        )
+    });
+    assert_eq!(first.retained_ports(), first_ports);
+    assert_eq!(second.retained_ports(), second_ports);
+    assert_eq!(first_restart["caseworkUrl"], first_report["caseworkUrl"]);
+    assert_eq!(second_restart["caseworkUrl"], second_report["caseworkUrl"]);
+
+    first.stop(&["--remove"]);
+    second.stop(&["--remove"]);
 }
 
 #[test]

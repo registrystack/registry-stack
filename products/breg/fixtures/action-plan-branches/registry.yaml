@@ -1,0 +1,50 @@
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: action-plan-branches
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://action-plans.example.test
+datasets: [{id: entries}]
+recordTypes:
+  - id: entry
+    primaryDataset: entries
+    route: entries
+    mutationMode: create-only
+    fields:
+      - {id: label, type: string, required: true, maximumLength: 64, classification: internal}
+functions:
+  - {id: create-entry-plan, runtime: rhai, source: plans/create.rhai, entrypoint: plan, abi: registry.action-plan/v1}
+  - {id: invalid-copy-plan, runtime: rhai, source: plans/invalid-copy.rhai, entrypoint: plan, abi: registry.action-plan/v1}
+actions:
+  - id: create-entry
+    execution: {mode: immediate}
+    inputs:
+      - {id: label, type: string, required: true, maximumLength: 64, classification: internal}
+    plan:
+      type: function
+      function: create-entry-plan
+      inputs: [label]
+      writes:
+        - {id: entry, target: {recordType: entry}, operation: create, fields: [label]}
+      refusals:
+        - {code: blank-label, label: Supply a nonblank label.}
+  - id: invalid-copy
+    execution: {mode: immediate}
+    inputs:
+      - {id: note, type: string, maximumLength: 64, classification: internal}
+    plan:
+      type: function
+      function: invalid-copy-plan
+      inputs: [note]
+      writes:
+        - {id: entry, target: {recordType: entry}, operation: create, fields: [label]}
+accessProfiles:
+  - id: author
+    default: true
+    principalClaim: sub
+    requiredScopes: unrestricted
+    permissions:
+      actions:
+        - {action: create-entry, operations: [invoke], targets: [{recordType: entry, rowBoundaries: unrestricted}], results: [entry]}
+        - {action: invalid-copy, operations: [invoke], targets: [{recordType: entry, rowBoundaries: unrestricted}], results: [entry]}

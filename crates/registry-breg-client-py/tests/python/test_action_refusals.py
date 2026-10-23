@@ -47,6 +47,20 @@ def refusal(**extra: Any) -> dict[str, Any]:
     return document
 
 
+def guard_failure(**extra: Any) -> dict[str, Any]:
+    document = {
+        "type": "https://id.registrystack.org/problems/registry-breg/action/guard_failed",
+        "title": "Precondition Failed",
+        "status": 412,
+        "detail": "The action guard was not satisfied.",
+        "code": "action.guard_failed",
+        "traceId": TRACE_ID,
+        "guardReason": "legal_name_unchanged",
+    }
+    document.update(extra)
+    return document
+
+
 class _ProblemHandler(BaseHTTPRequestHandler):
     document: dict[str, Any] = refusal()
 
@@ -98,6 +112,65 @@ class ActionRefusalTests(unittest.TestCase):
                 self.assertEqual(error.field_path, document.get("fieldPath"))
                 self.assertEqual(error.trace_id, TRACE_ID)
                 self.assertFalse(hasattr(error, "plan_refusal"))
+
+    def test_a_failed_guard_exposes_only_its_bounded_authored_copy_key(self) -> None:
+        for reason in ["a", "legal_name_unchanged", "a" + "b" * 63]:
+            with self.subTest(reason=reason):
+                error = self.answer(guard_failure(guardReason=reason))
+                self.assertEqual(error.kind, "problem")
+                self.assertEqual(error.status, 412)
+                self.assertEqual(error.code, "action.guard_failed")
+                self.assertEqual(error.guard_reason, reason)
+                self.assertIsNone(error.refusal_code)
+                self.assertIsNone(error.reason_code)
+                if len(reason) > 1:
+                    self.assertNotIn(reason, str(error))
+                    self.assertNotIn(reason, repr(error))
+        for document in [
+            guard_failure(guardReason=""),
+            guard_failure(guardReason="Uppercase"),
+            guard_failure(guardReason="has.dot"),
+            guard_failure(guardReason="a" + "b" * 64),
+            guard_failure(guardReason=None),
+            refusal(guardReason="misplaced"),
+            guard_failure(refusalCode=REFUSAL_CODE),
+            guard_failure(reasonCode="source-data-error"),
+        ]:
+            with self.subTest(document=document):
+                error = self.answer(document)
+                self.assertEqual(error.kind, "protocol")
+                self.assertIsNone(error.guard_reason)
+                self.assertIsNone(error.refusal_code)
+                self.assertIsNone(error.reason_code)
+
+    def test_the_typed_idempotency_key_reuse_problem_uses_the_current_wire_code(self) -> None:
+        current = self.answer(
+            {
+                "type": "https://id.registrystack.org/problems/registry-breg/idempotency/key-reused",
+                "title": "Conflict",
+                "status": 409,
+                "detail": "The idempotency key is bound to another request.",
+                "code": "idempotency.key-reused",
+                "traceId": TRACE_ID,
+            }
+        )
+        self.assertEqual(current.kind, "problem")
+        self.assertEqual(current.code, "idempotency.key-reused")
+        self.assertEqual(current.status, 409)
+        self.assertFalse(current.outcome_unknown)
+
+        retired = self.answer(
+            {
+                "type": "https://id.registrystack.org/problems/registry-breg/idempotency/conflict",
+                "title": "Conflict",
+                "status": 409,
+                "detail": "The idempotency key is bound to another request.",
+                "code": "idempotency.conflict",
+                "traceId": TRACE_ID,
+            }
+        )
+        self.assertEqual(retired.kind, "problem")
+        self.assertIsNone(retired.code)
 
     def test_a_refusal_outside_the_published_bounds_fails_closed(self) -> None:
         silent = refusal()

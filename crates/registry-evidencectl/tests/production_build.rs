@@ -221,6 +221,84 @@ fn a_mismatched_evidence_binary_is_refused_before_any_step() {
 }
 
 #[test]
+fn installed_evidencectl_prefers_its_sibling_before_path_and_preserves_overrides() {
+    for selection in ["sibling", "environment", "path", "mismatch"] {
+        let fixture = Fixture::new();
+        let installed = fixture.root.join("installed-bin");
+        let path_bin = fixture.root.join("path-bin");
+        fs::create_dir_all(&installed).unwrap();
+        fs::create_dir_all(&path_bin).unwrap();
+        let ctl = installed.join("evidencectl");
+        fs::copy(env!("CARGO_BIN_EXE_evidencectl"), &ctl).unwrap();
+        let marker = fixture.root.join("selected-runtime");
+        let write_runtime = |path: &Path, name: &str, matching: bool| {
+            let script = FAKE_EVIDENCE.replace(
+                "  printf 'evidence %s\\n' \"$FAKE_EVIDENCE_VERSION\"",
+                &format!(
+                    "  printf '%s\\n' '{name}' >> \"$RESOLVER_SELECTION_LOG\"\n  printf 'evidence %s\\n' {}",
+                    if matching { "\"$FAKE_EVIDENCE_VERSION\"" } else { "'0.0.0-other'" }
+                ),
+            );
+            fs::write(path, script).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        };
+        if selection != "path" {
+            write_runtime(
+                &installed.join("evidence"),
+                "sibling",
+                selection != "mismatch",
+            );
+        }
+        write_runtime(&path_bin.join("evidence"), "path", selection == "path");
+        let mut paths = vec![path_bin];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        let mut command = Command::new(ctl);
+        command
+            .args(["package"])
+            .arg(&fixture.project)
+            .arg("--target")
+            .arg(&fixture.target)
+            .arg("--output")
+            .arg(&fixture.output)
+            .env_remove("EVIDENCE_BIN")
+            .env("PATH", std::env::join_paths(paths).unwrap())
+            .env("RESOLVER_SELECTION_LOG", &marker)
+            .env("FAKE_EVIDENCE_LOG", &fixture.log)
+            .env(
+                "FAKE_EVIDENCE_VERSION",
+                registry_platform_buildinfo::DISPLAY_VERSION,
+            );
+        if selection == "environment" {
+            let override_binary = fixture.root.join("override-evidence");
+            write_runtime(&override_binary, "environment", true);
+            command.env("EVIDENCE_BIN", override_binary);
+        }
+        let output = command.output().expect("installed evidencectl starts");
+        if selection == "mismatch" {
+            assert_failed(&output, "a mismatched sibling is not bypassed for PATH");
+            let message = stderr(&output);
+            assert!(message.contains("EVIDENCE_BIN"));
+            assert!(message.contains("--evidence-bin"));
+            assert!(!fixture.output.exists());
+            assert!(fixture.invocations().is_empty());
+        } else {
+            assert!(output.status.success(), "{}", stderr(&output));
+            assert!(fixture.output.exists());
+            assert!(!fixture.invocations().is_empty());
+        }
+        let selected = fs::read_to_string(marker).unwrap();
+        let expected = if selection == "mismatch" {
+            "sibling"
+        } else {
+            selection
+        };
+        assert!(selected.lines().all(|line| line == expected), "{selected}");
+    }
+}
+
+#[test]
 fn an_evidence_binary_that_does_not_identify_itself_is_refused_before_any_step() {
     let fixture = Fixture::new();
 

@@ -106,6 +106,8 @@ pub struct BRegActionAvailability {
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    guard_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     recovery: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     missing_inputs: Option<Vec<String>>,
@@ -125,6 +127,11 @@ impl BRegActionAvailability {
     #[must_use]
     pub fn reason(&self) -> Option<&str> {
         self.reason.as_deref()
+    }
+
+    /// Authored copy key disclosed only with readable guard and boundary facts.
+    pub fn guard_reason(&self) -> Option<&str> {
+        self.guard_reason.as_deref()
     }
 
     #[must_use]
@@ -751,7 +758,9 @@ fn validate_inputs(
             .ok_or(BRegActionError::InvalidInput)?;
         let required = match use_for {
             ActionInputUse::TargetConditions => true,
-            ActionInputUse::Invoke => contract.required(),
+            ActionInputUse::Invoke => {
+                contract.required() && action.mode() == crate::BRegActionMode::Immediate
+            }
         };
         let Some(value) = inputs.get(&name) else {
             if required {
@@ -834,7 +843,12 @@ fn decode_availability(
     if availability.keys().any(|key| {
         !matches!(
             key.as_str(),
-            "available" | "observedRevision" | "reason" | "recovery" | "missingInputs"
+            "available"
+                | "observedRevision"
+                | "reason"
+                | "recovery"
+                | "missingInputs"
+                | "guardReason"
         )
     }) {
         return Err(BRegActionError::InvalidResponse);
@@ -860,6 +874,7 @@ fn decode_availability(
         Some(_) => Err(BRegActionError::InvalidResponse),
     };
     let reason = optional_string("reason")?;
+    let guard_reason = optional_string("guardReason")?;
     let recovery = optional_string("recovery")?;
     let missing_inputs = availability
         .get("missingInputs")
@@ -898,13 +913,18 @@ fn decode_availability(
         (None, None, Some("not-disclosed"), Some("none"), None) => true,
         _ => false,
     };
-    if !valid {
+    if !valid
+        || guard_reason.as_deref().is_some_and(|reason| {
+            available != Some(false) || !crate::error::valid_guard_reason(reason)
+        })
+    {
         return Err(BRegActionError::InvalidResponse);
     }
     Ok(BRegActionAvailability {
         available,
         observed_revision,
         reason,
+        guard_reason,
         recovery,
         missing_inputs,
     })

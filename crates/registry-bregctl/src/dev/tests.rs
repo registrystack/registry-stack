@@ -2496,6 +2496,56 @@ fn default_ports_lie_below_the_source_port_range() {
 }
 
 #[test]
+fn first_start_selects_free_distinct_ports_and_preserves_explicit_assignments() {
+    let held = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = held.local_addr().unwrap().port();
+    let selected = select_session_ports([None, None, None], false).unwrap();
+    assert_eq!(selected.ports.into_iter().collect::<BTreeSet<_>>().len(), 3);
+    for selected in selected.ports {
+        assert_ne!(selected, port);
+        assert!(
+            TcpListener::bind(("127.0.0.1", selected)).is_err(),
+            "first-start preparation keeps every owned port reserved"
+        );
+    }
+    let conflict = select_session_ports([Some(port), None, None], false)
+        .unwrap_err()
+        .to_string();
+    assert!(conflict.contains("--breg-port"), "{conflict}");
+    let duplicate = select_session_ports([Some(port), Some(port), None], false)
+        .unwrap_err()
+        .to_string();
+    assert!(duplicate.contains("distinct"), "{duplicate}");
+    // A borrowed issuer is already listening and is not owned by this session.
+    let borrowed = select_session_ports([None, Some(port), None], true).unwrap();
+    assert_eq!(borrowed.ports[1], port);
+}
+
+#[test]
+fn pre_apply_doctor_evidence_is_preserved_outside_failure_logs() {
+    let (_temp, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let report = doctor_refusal("startup.database.uninitialized", "not initialized");
+    assert_eq!(
+        record_activation_preflight(&state.root(), false, &report).unwrap(),
+        Activation::NotActivated
+    );
+    assert_eq!(
+        private::read(
+            &state.root().join("evidence/doctor-before-apply.json"),
+            MAX_BYTES
+        )
+        .unwrap(),
+        report
+    );
+    let summary =
+        private::read(&state.root().join("evidence/initial-apply.json"), MAX_BYTES).unwrap();
+    let summary: Value = serde_json::from_slice(&summary).unwrap();
+    assert_eq!(summary["phase"], "initial-apply");
+    assert_eq!(summary["expected"], true);
+}
+
+#[test]
 fn occupied_and_ambiguous_ports_are_refused() {
     assert!(ports(1, 1, 2).is_err());
     assert!(ports(0, 2, 3).is_err());

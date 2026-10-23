@@ -3256,10 +3256,8 @@ pub(crate) fn resolve_tool_binary(
         return Ok(path.to_path_buf());
     }
     let current = std::env::current_exe().context("failed to resolve evidencectl")?;
-    if let Some(sibling) = current.parent().map(|parent| parent.join(name)) {
-        if sibling.is_file() {
-            return Ok(sibling);
-        }
+    if let Some(sibling) = crate::evidence_binary::sibling_binary(&current, name) {
+        return Ok(sibling);
     }
     if let Some(path) = std::env::var_os(test_env) {
         return Ok(PathBuf::from(path));

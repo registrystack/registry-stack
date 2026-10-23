@@ -425,7 +425,7 @@ async fn wasm_handlers_execute_refuse_replay_and_apply_multi_effect_effects() {
     assert_eq!(after_accept, counts(&database, &registry).await);
     let rebound = call(simple, "wasm-refused", input("9999999999999")).await;
     assert_eq!(rebound.0, StatusCode::CONFLICT, "{}", rebound.1);
-    assert_eq!(rebound.1["code"], "idempotency.conflict");
+    assert_eq!(rebound.1["code"], "idempotency.key-reused");
     assert_eq!(after_accept, counts(&database, &registry).await);
 
     // A second commit with a fresh key collides with the guest's fixed

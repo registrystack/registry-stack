@@ -716,11 +716,14 @@ pub(crate) fn openapi_action_response_schema_id(action_id: &str) -> String {
 
 pub(crate) fn openapi_action_input_schema(action: &CompiledAction) -> Value {
     let condition_inputs = action_condition_inputs(action);
-    let input_schema = action_input_properties_schema(
+    let mut input_schema = action_input_properties_schema(
         action.inputs.iter(),
         &condition_inputs,
         action.handler.is_some(),
     );
+    if action.execution.is_proposal() {
+        input_schema["required"] = json!([]);
+    }
     let mut properties = Map::from_iter([("input".to_owned(), input_schema)]);
     if !condition_inputs.is_empty() {
         properties.insert(
@@ -870,6 +873,7 @@ pub(crate) fn openapi_action_availability_response_schema(action: &CompiledActio
                             "available": {"const": false},
                             "observedRevision": observed_revision,
                             "reason": {"const": "guard-not-satisfied"},
+                            "guardReason": {"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},
                             "recovery": {"const": "none"},
                         },
                     },
@@ -1758,7 +1762,7 @@ fn action_problem_responses(
                     detail: "The mutation conflicts with current state.",
                 },
                 ProblemExample {
-                    code: "idempotency.conflict",
+                    code: "idempotency.key-reused",
                     detail: "The idempotency key is bound to another request.",
                 },
             ],
@@ -3818,7 +3822,7 @@ fn problem_responses(
                     detail: "The mutation conflicts with current state.",
                 },
                 ProblemExample {
-                    code: "idempotency.conflict",
+                    code: "idempotency.key-reused",
                     detail: "The idempotency key is bound to another request.",
                 },
             ],
@@ -3879,6 +3883,7 @@ fn problem_schema() -> Value {
             "traceId": {"type": "string", "minLength": 32, "maxLength": 32, "pattern": "^[0-9a-f]{32}$"},
             "fieldPath": {"type": "string", "maxLength": 256},
             "refusalCode": {"type": "string", "minLength": 1, "maxLength": 128},
+            "guardReason": {"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$"},
             "reasonCode": {
                 "type": "string",
                 "enum": ["computation-error", "source-data-error", "disclosure-risk"]
@@ -3899,6 +3904,10 @@ fn problem_schema() -> Value {
             }
         },
         "allOf": [
+            {
+                "if":{"properties":{"code":{"not":{"const":"action.guard_failed"}}}},
+                "then":{"not":{"required":["guardReason"]}}
+            },
             {
                 "if": {"properties": {"code": {"const": "action.refused"}}},
                 "then": {"required": ["refusalCode"], "properties": {"status": {"const": 422}}}

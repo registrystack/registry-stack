@@ -56,6 +56,7 @@ struct MappedError {
     code: Option<String>,
     refusal_code: Option<String>,
     reason_code: Option<String>,
+    guard_reason: Option<String>,
     field_path: Option<String>,
     constraint: Option<Box<breg_client_sdk::BRegConstraintViolation>>,
     status: Option<u16>,
@@ -89,6 +90,9 @@ fn to_py_err(py: Python<'_>, mapped: MappedError) -> PyErr {
         .expect("fresh exception accepts attributes");
     instance
         .setattr("reason_code", mapped.reason_code)
+        .expect("fresh exception accepts attributes");
+    instance
+        .setattr("guard_reason", mapped.guard_reason)
         .expect("fresh exception accepts attributes");
     instance
         .setattr("field_path", mapped.field_path)
@@ -182,6 +186,8 @@ fn sdk_error(py: Python<'_>, error: RustClientError) -> PyErr {
             mapped.refusal_code = refusal_code.map(|value| value.as_str().to_owned());
             if code == BRegProblemCode::StatisticalDatasetVersionWithdrawn {
                 mapped.reason_code = mapped.refusal_code.take();
+            } else if code == BRegProblemCode::ActionGuardFailed {
+                mapped.guard_reason = mapped.refusal_code.take();
             }
             mapped.field_path = field_path.map(|value| value.as_str().to_owned());
             mapped.constraint = constraint;

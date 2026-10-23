@@ -181,7 +181,7 @@ after the request was sent. `BaseRegistryClientError::is_outcome_unknown()`
 reports those cases, and an oversized or unparseable answer, as true; it is
 false for a request or configuration defect, a token failure, a connection
 that was never established, every typed 4xx refusal such as
-`idempotency.conflict` (409) and `idempotency.expired` (410), and two typed
+`idempotency.key-reused` (409) and `idempotency.expired` (410), and two typed
 500 failures:
 `action.handler_failed` and `statistical_dataset.domain_violation`. The engine
 returns those two only with the attempt rolled back, and the same request

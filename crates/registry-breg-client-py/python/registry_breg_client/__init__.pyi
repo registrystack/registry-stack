@@ -99,6 +99,7 @@ class BaseRegistryClientError(Exception):
     code: str | None
     refusal_code: str | None
     reason_code: str | None
+    guard_reason: str | None
     field_path: str | None
     constraint: BRegConstraintViolation | None
     status: int | None
@@ -199,6 +200,7 @@ class BRegActionGuardUnavailable(TypedDict):
     available: Literal[False]
     observedRevision: int
     reason: Literal["guard-not-satisfied"]
+    guardReason: NotRequired[str]
     recovery: Literal["none"]
 
 class BRegActionInputRequired(TypedDict):

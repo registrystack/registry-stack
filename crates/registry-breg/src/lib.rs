@@ -152,6 +152,7 @@ pub mod review_recovery;
 pub mod review_store;
 #[cfg(feature = "runtime")]
 pub mod revision;
+mod rhai_literal_lint;
 pub mod rhai_planner;
 #[cfg(feature = "runtime")]
 pub mod runtime_config;

@@ -547,6 +547,12 @@ struct ProjectArgs {
 
 #[derive(Debug, Subcommand)]
 enum ProjectCommand {
+    /// List usable concepts from an embedded reference model, without network access.
+    Concepts {
+        /// Embedded reference model whose usable concept names are listed.
+        #[arg(long, value_enum)]
+        from: init_from_model::ModelName,
+    },
     /// Compute and write module source digests in registry.yaml.
     Lock(ProjectLockArgs),
     /// Test a named Action plan function with bounded synthetic JSON.
@@ -1585,6 +1591,8 @@ struct ActionTestSuccessReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     refusal: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    failure: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     assertions_passed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     planner: Option<ActionTestIdentityReport>,
@@ -1883,7 +1891,7 @@ const SINGLE_ROLE_MODE_NOTE: &str = "the runtime serves with the migration role;
 struct DoctorAdvisory<'a> {
     code: String,
     severity: &'static str,
-    message: &'static str,
+    message: &'a str,
     observed: ObservedNumbers<'a>,
 }
 
@@ -2596,6 +2604,32 @@ where
             },
         },
         Command::Project(args) => match args.command {
+            ProjectCommand::Concepts { from } => {
+                let names = match init_from_model::concept_names(from) {
+                    Ok(names) => names,
+                    Err(diagnostic) => {
+                        return write_failure(
+                            &source_failure(
+                                "project concepts",
+                                diagnostic,
+                                DiagnosticArtifact::ModelSelection,
+                                SuggestedAction::CorrectModelSelection,
+                            ),
+                            format,
+                            stdout,
+                            stderr,
+                        )
+                    }
+                };
+                return write_result(
+                    if format == OutputFormat::Json {
+                        write_ctl_report(stdout, &json!({"ok":true,"command":"project concepts","model":from,"concepts":names})).map_err(io::Error::other)
+                    } else {
+                        writeln!(stdout, "{}", names.join("\n"))
+                    },
+                    stderr,
+                );
+            }
             ProjectCommand::Lock(args) => project_lock(&args.project, args.check),
             ProjectCommand::ActionTest(args) => {
                 return match action_test(&args) {
@@ -2664,6 +2698,7 @@ where
                     &success.checked.postgres_advisories,
                     success.checked.role_mode,
                     success.insecure_http_warning,
+                    &success.checked.unbound_review_authorities,
                     format,
                     stdout,
                     stderr,
@@ -8056,6 +8091,11 @@ fn explain(
             read_bounded_source_file(path, "access.scenario.unavailable", "scenario", 65_536)
                 .map_err(explain_usage_error)?;
         let source = parse_json_strict(&bytes).map_err(|_| explain_usage_error(diagnostic("access.scenario.invalid", "scenario", "provide a strict JSON access scenario with synthetic claims; duplicate keys and malformed JSON are refused")))?;
+        if source.pointer("/claims/principal").is_some()
+            && source.pointer("/claims/principalClaim").is_none()
+        {
+            return Err(explain_usage_error(diagnostic("access.scenario.invalid", "scenario.claims.principalClaim", "claims.principalClaim is required with claims.principal; use claims: {principalClaim: <configured claim name>, principal: <synthetic subject>, scopes: [...], directClaims: {...}}" )).into());
+        }
         let scenario = serde_json::from_value(source).map_err(|_| explain_usage_error(diagnostic("access.scenario.invalid", "scenario", "use recordType, accessProfile, operation, optional readPath, and claims; claims accepts principalClaim, principal, scopes, purpose, directClaims, actorKind, requesterClient")))?;
         Some(
             registry_breg::access_preview::preview_access(&compiled, scenario).map_err(
@@ -10745,6 +10785,8 @@ fn write_action_test_success(
                         "Ran the planner. Produced {}.",
                         report::counted(report.effects.len(), "effect")
                     ));
+                } else if report.failure.is_some() {
+                    lines.lead("Ran the handler. Matched the expected handler failure.");
                 } else if report.refusal.is_some() {
                     lines.lead("Ran the handler. Returned a declared refusal.");
                 } else {
@@ -10765,6 +10807,12 @@ fn write_action_test_success(
                 ]);
                 if report.assertions_passed == Some(true) {
                     pairs.push(("exact assertions", "passed".to_owned()));
+                }
+                if let Some(failure) = &report.failure {
+                    pairs.push((
+                        "handler failure",
+                        failure["code"].as_str().unwrap_or("").to_owned(),
+                    ));
                 }
                 if let Some(refusal) = &report.refusal {
                     pairs.push((
@@ -11311,6 +11359,7 @@ fn write_dev_success(
                 ("runtime config", "runtimeConfig"),
                 ("webhook receiver", "webhookUrl"),
                 ("events file", "eventsFile"),
+                ("initial apply evidence", "initialApplyEvidence"),
             ]
             .into_iter()
             .filter_map(|(label, field)| {
@@ -11387,10 +11436,14 @@ fn write_doctor_success(
     advisories: &[registry_breg::postgres::BaselineAdvisory],
     role_mode: registry_breg::postgres::RoleMode,
     insecure_http_warning: Option<&'static str>,
+    unbound_review_authorities: &[String],
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
+    let review_messages = unbound_review_authorities.iter().map(|authority| format!(
+        "Submit is unavailable for Proposals using review authority `{authority}`; configure its reviewAuthorities binding. Unrelated operations and draft Start/Edit do not need this binding."
+    )).collect::<Vec<_>>();
     let mut doctor_advisories = advisories
         .iter()
         .map(|advisory| DoctorAdvisory {
@@ -11403,6 +11456,14 @@ fn write_doctor_success(
     if let Some(message) = insecure_http_warning {
         doctor_advisories.push(DoctorAdvisory {
             code: "authentication.insecure-http".to_owned(),
+            severity: "warning",
+            message,
+            observed: ObservedNumbers(&[]),
+        });
+    }
+    for message in &review_messages {
+        doctor_advisories.push(DoctorAdvisory {
+            code: "proposal.submit.review-authority-unbound".to_owned(),
             severity: "warning",
             message,
             observed: ObservedNumbers(&[]),
@@ -13456,7 +13517,7 @@ mod tests {
             (
                 Some(BRegProblemCode::IdempotencyConflict),
                 None,
-                "idempotency.conflict",
+                "idempotency.key-reused",
             ),
             (
                 Some(BRegProblemCode::IdempotencyExpired),
@@ -14731,7 +14792,7 @@ mod tests {
             let mut stderr = Vec::new();
 
             assert_eq!(
-                write_doctor_success(&[], RoleMode::Split, None, format, &mut stdout, &mut stderr),
+                write_doctor_success(&[], RoleMode::Split, None, &[], format, &mut stdout, &mut stderr),
                 ExitCode::SUCCESS
             );
             assert_eq!(plain(&stdout), expected);
@@ -14748,6 +14809,7 @@ mod tests {
                 &[],
                 RoleMode::Single,
                 None,
+                &[],
                 OutputFormat::Human,
                 &mut stdout,
                 &mut stderr
@@ -14771,6 +14833,7 @@ mod tests {
                 &[],
                 RoleMode::Single,
                 None,
+                &[],
                 OutputFormat::Json,
                 &mut stdout,
                 &mut stderr
@@ -14803,6 +14866,7 @@ mod tests {
                 &advisories,
                 RoleMode::Split,
                 None,
+                &[],
                 OutputFormat::Human,
                 &mut stdout,
                 &mut stderr
@@ -14841,6 +14905,7 @@ mod tests {
                 &advisories,
                 RoleMode::Split,
                 None,
+                &[],
                 OutputFormat::Json,
                 &mut stdout,
                 &mut stderr
@@ -14888,6 +14953,41 @@ mod tests {
     }
 
     #[test]
+    fn doctor_names_unbound_logical_review_authorities_as_submit_advisories() {
+        for format in [OutputFormat::Human, OutputFormat::Json] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            assert_eq!(
+                write_doctor_success(
+                    &[],
+                    RoleMode::Split,
+                    None,
+                    &["local-review".into()],
+                    format,
+                    &mut stdout,
+                    &mut stderr
+                ),
+                ExitCode::SUCCESS
+            );
+            assert!(stderr.is_empty());
+            let text = plain(&stdout);
+            for expected in [
+                "proposal.submit.review-authority-unbound",
+                "local-review",
+                "Submit",
+                "draft Start/Edit",
+            ] {
+                assert!(text.contains(expected), "{text}");
+            }
+            if format == OutputFormat::Json {
+                let report: Value = serde_json::from_slice(&stdout).unwrap();
+                assert_eq!(report["ok"], true);
+                assert_eq!(report["advisories"][0]["severity"], "warning");
+            }
+        }
+    }
+
+    #[test]
     fn doctor_reports_the_plain_http_issuer_opt_in_as_a_value_free_advisory() {
         const WARNING: &str =
             "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration";
@@ -14899,6 +14999,7 @@ mod tests {
                     &[],
                     RoleMode::Split,
                     Some(WARNING),
+                    &[],
                     format,
                     &mut stdout,
                     &mut stderr,
