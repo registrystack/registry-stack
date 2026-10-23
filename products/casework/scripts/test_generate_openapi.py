@@ -129,6 +129,9 @@ class GeneratedContractTests(unittest.TestCase):
             if op["path"]=="/v1/review-requests/{request_id}/result":op["successStatuses"]=[200,202,404,410]
         responses=GEN.document(changed,self.wire)["paths"]["/v1/review-requests/{request_id}/result"]["get"]["responses"]
         for status in ["202","404","410"]:self.assertNotIn("content",responses[status])
+        self.assertEqual(responses["202"]["description"],"The review result is pending.")
+        self.assertEqual(responses["404"]["description"],"The review request is concealed or unknown.")
+        self.assertEqual(responses["410"]["description"],"The review result has expired.")
         self.assertEqual(responses["200"]["content"]["application/json"]["schema"],GEN.ref("ReviewResult"))
 
     def test_runtime_inventory_extraction_and_problem_drift_are_refused(self):
@@ -153,6 +156,8 @@ class GeneratedContractTests(unittest.TestCase):
         sample={"policy":{"id":"notice-review","version":"1","digest":"sha256:"+"a"*64},"subject":{"source":"notice","type":"notice","id":"1","version":"1","digest":"sha256:"+"b"*64},"requesterReference":"notice-1","context":{"mode":"submitted","snapshot":{"title":"Notice"}}}
         GEN.validate_wire_examples(GEN.ROOT,self.document,{"ReviewCreateRequest":[sample]})
         sample["kind"]="retired-kind"
-        with self.assertRaises(__import__("subprocess").CalledProcessError):GEN.validate_wire_examples(GEN.ROOT,self.document,{"ReviewCreateRequest":[sample]})
+        with self.assertRaises(__import__("subprocess").CalledProcessError) as failure:
+            GEN.validate_wire_examples(GEN.ROOT,self.document,{"ReviewCreateRequest":[sample]},capture_output=True)
+        self.assertIn("Rust wire example disagrees with generated schema",failure.exception.stderr)
 
 if __name__=="__main__":unittest.main()

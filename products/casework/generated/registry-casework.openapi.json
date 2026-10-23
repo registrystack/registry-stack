@@ -13917,7 +13917,7 @@
             }
           },
           "202": {
-            "description": "Success",
+            "description": "The review result is pending.",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14001,7 +14001,7 @@
             }
           },
           "404": {
-            "description": "Success",
+            "description": "The review request is concealed or unknown.",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14009,7 +14009,7 @@
             }
           },
           "410": {
-            "description": "Success",
+            "description": "The review result has expired.",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"

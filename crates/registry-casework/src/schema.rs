@@ -99,7 +99,7 @@ fn install_runtime_constraints(schema: &mut Value) {
         "pattern",
         Value::String(registry_platform_audit::ABSOLUTE_AUDIT_PATH_PATTERN.to_owned()),
     );
-    set_jwks_document_provider_requirement(schema);
+    set_secret_provider_requirements(schema);
     set_review_completion_auth_constraints(schema);
     set_audit_destination_constraints(schema);
 }
@@ -156,15 +156,80 @@ fn set_review_completion_auth_constraints(schema: &mut Value) {
     );
 }
 
-/// A static JWKS document reference names its provider by its prefix, so a
-/// configuration carrying one must enable that provider.
-fn set_jwks_document_provider_requirement(schema: &mut Value) {
+/// Every secret reference names its provider by its prefix. When a provider
+/// is absent, prohibit that prefix at every fixed and keyed binding location.
+/// Expressing the rule from the absent-provider side makes
+/// `additionalProperties` cover every entry in the two keyed maps.
+fn set_secret_provider_requirements(schema: &mut Value) {
     if let Some(root) = schema.as_object_mut() {
         root.insert(
             "allOf".to_owned(),
-            registry_platform_config::schema::jwks_document_provider_requirements(),
+            serde_json::json!([
+                absent_secret_provider_requirement("environment", "^secret:env/"),
+                absent_secret_provider_requirement("file", "^secret:file/")
+            ]),
         );
     }
+}
+
+fn absent_secret_provider_requirement(provider: &str, reference_pattern: &str) -> Value {
+    let forbidden = serde_json::json!({"not": {"pattern": reference_pattern}});
+    serde_json::json!({
+        "if": {
+            "properties": {
+                "secretProviders": {
+                    "not": {"required": [provider]}
+                }
+            },
+            "required": ["secretProviders"]
+        },
+        "then": {
+            "properties": {
+                "database": {
+                    "properties": {
+                        "runtimeUrlRef": forbidden,
+                        "migrationUrlRef": forbidden,
+                        "trustedRootCertificateRef": forbidden
+                    }
+                },
+                "authentication": {
+                    "properties": {
+                        "oidc": {
+                            "properties": {
+                                "jwksSource": {
+                                    "properties": {"documentRef": forbidden}
+                                }
+                            }
+                        }
+                    }
+                },
+                "audit": {
+                    "properties": {"hashKeyRef": forbidden}
+                },
+                "taskAuthority": {
+                    "properties": {"signingKeyRef": forbidden}
+                },
+                "contextProviders": {
+                    "additionalProperties": {
+                        "properties": {
+                            "clientIdRef": forbidden,
+                            "clientAssertionKeyRef": forbidden
+                        }
+                    }
+                },
+                "reviewCompletionDestinations": {
+                    "additionalProperties": {
+                        "properties": {
+                            "bearerTokenRef": forbidden,
+                            "auth": {
+                                "properties": {"secretRef": forbidden}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    })
 }
 
 fn set_definition_property(
@@ -654,6 +719,181 @@ mod tests {
 
         assert!(schema.is_valid(&runtime_instance("secret:env/CASEWORK_JWKS", "environment")));
         assert!(schema.is_valid(&runtime_instance("secret:file/jwks.json", "file")));
+    }
+
+    fn runtime_instance_with_every_secret_reference() -> Value {
+        let mut instance = runtime_instance("secret:env/CASEWORK_JWKS", "both");
+        instance["database"]["trustedRootCertificateRef"] =
+            Value::String("secret:file/database-ca.pem".to_owned());
+        instance["audit"]["hashKeyRef"] = Value::String("secret:env/CASEWORK_AUDIT_KEY".to_owned());
+        instance["contextProviders"] = serde_json::json!({
+            "facility-registry": {
+                "baseUrl": "https://registry.example.test",
+                "statusProfile": "casework-review-status",
+                "tokenEndpoint": "https://identity.example.test/oauth2/token",
+                "clientIdRef": "secret:file/breg-client-id",
+                "clientAssertionKeyRef": "secret:env/BREG_CLIENT_ASSERTION_KEY"
+            }
+        });
+        instance["reviewCompletionDestinations"] = serde_json::json!({
+            "bearer": {
+                "url": "https://producer.example.test/completions",
+                "bearerTokenRef": "secret:file/completion-token"
+            },
+            "header": {
+                "url": "https://another-producer.example.test/completions",
+                "auth": {
+                    "header": "x-api-key",
+                    "secretRef": "secret:env/COMPLETION_API_KEY"
+                }
+            }
+        });
+        instance["taskAuthority"] = serde_json::json!({
+            "issuer": "https://casework.example.test",
+            "exchangeAudience": "urn:example:casework:task-grants",
+            "signingKeyRef": "secret:file/task-authority-key",
+            "statusClients": {"scheduling": "urn:example:scheduling"}
+        });
+        instance
+    }
+
+    #[test]
+    fn every_secret_reference_has_schema_and_runtime_provider_parity() {
+        let schema = runtime_schema();
+        let mixed = runtime_instance_with_every_secret_reference();
+        assert!(
+            schema.is_valid(&mixed),
+            "valid mixed providers were refused"
+        );
+        let mixed_config = read(&mixed).expect("the mixed-provider runtime shape parses");
+        let findings = mixed_config.findings(None);
+        assert!(findings.is_empty(), "{findings:#?}");
+
+        let mut optional_references_absent = mixed.clone();
+        optional_references_absent["database"]
+            .as_object_mut()
+            .unwrap()
+            .remove("trustedRootCertificateRef");
+        optional_references_absent
+            .as_object_mut()
+            .unwrap()
+            .remove("taskAuthority");
+        optional_references_absent
+            .as_object_mut()
+            .unwrap()
+            .remove("contextProviders");
+        optional_references_absent
+            .as_object_mut()
+            .unwrap()
+            .remove("reviewCompletionDestinations");
+        assert!(schema.is_valid(&optional_references_absent));
+        assert!(read(&optional_references_absent).is_ok());
+
+        let pointers = [
+            "/database/runtimeUrlRef",
+            "/database/migrationUrlRef",
+            "/database/trustedRootCertificateRef",
+            "/authentication/oidc/jwksSource/documentRef",
+            "/audit/hashKeyRef",
+            "/contextProviders/facility-registry/clientIdRef",
+            "/contextProviders/facility-registry/clientAssertionKeyRef",
+            "/reviewCompletionDestinations/bearer/bearerTokenRef",
+            "/reviewCompletionDestinations/header/auth/secretRef",
+            "/taskAuthority/signingKeyRef",
+        ];
+        for &pointer in &pointers {
+            let mut invalid = mixed.clone();
+            *invalid.pointer_mut(pointer).expect("test pointer exists") =
+                Value::String("plain-secret-value".to_owned());
+            let runtime_refused = match read(&invalid) {
+                Err(_) => true,
+                Ok(config) => config.findings(None).iter().any(|finding| {
+                    finding.pointer() == pointer
+                        && matches!(
+                            finding,
+                            RuntimeConfigError::Block(error)
+                                | RuntimeConfigError::BindingSecret { error, .. }
+                                if error.kind() == ConfigBlockErrorKind::InvalidSecretReference
+                        )
+                }),
+            };
+            assert!(runtime_refused, "runtime accepted {pointer}");
+            assert!(
+                !schema.is_valid(&invalid),
+                "schema accepted invalid grammar at {pointer}"
+            );
+
+            let mut nulled = mixed.clone();
+            *nulled.pointer_mut(pointer).expect("test pointer exists") = Value::Null;
+            assert!(read(&nulled).is_err(), "runtime read null at {pointer}");
+            assert!(
+                !schema.is_valid(&nulled),
+                "schema accepted null at {pointer}"
+            );
+        }
+
+        for (disabled_provider, disabled_reference, enabled_provider, enabled_reference) in [
+            (
+                "environment",
+                "secret:env/DISABLED_REFERENCE",
+                "file",
+                "secret:file/enabled-reference",
+            ),
+            (
+                "file",
+                "secret:file/disabled-reference",
+                "environment",
+                "secret:env/ENABLED_REFERENCE",
+            ),
+        ] {
+            for &pointer in &pointers {
+                let mut disabled = mixed.clone();
+                for &reference_pointer in &pointers {
+                    *disabled
+                        .pointer_mut(reference_pointer)
+                        .expect("test pointer exists") =
+                        Value::String(enabled_reference.to_owned());
+                }
+                *disabled.pointer_mut(pointer).expect("test pointer exists") =
+                    Value::String(disabled_reference.to_owned());
+                disabled["secretProviders"] = if enabled_provider == "file" {
+                    serde_json::json!({"file": {"root": "/run/casework/secrets"}})
+                } else {
+                    serde_json::json!({"environment": {}})
+                };
+                let config = read(&disabled).expect("disabled providers remain a readable shape");
+                let findings = config.findings(None);
+                assert!(
+                    findings.iter().any(|finding| {
+                        finding.pointer() == pointer
+                            && matches!(
+                                finding,
+                                RuntimeConfigError::Block(error)
+                                    | RuntimeConfigError::BindingSecret { error, .. }
+                                    if error.kind() == ConfigBlockErrorKind::SecretProviderDisabled
+                            )
+                    }),
+                    "runtime did not refuse {disabled_reference} at {pointer} with {disabled_provider} disabled"
+                );
+                assert!(
+                    !schema.is_valid(&disabled),
+                    "schema accepted {disabled_reference} at {pointer} with {disabled_provider} disabled"
+                );
+            }
+        }
+
+        for provider in ["environment", "file"] {
+            let mut nulled = mixed.clone();
+            nulled["secretProviders"][provider] = Value::Null;
+            assert!(
+                read(&nulled).is_err(),
+                "runtime read a null {provider} provider"
+            );
+            assert!(
+                !schema.is_valid(&nulled),
+                "schema accepted a null {provider} provider"
+            );
+        }
     }
 
     #[test]
