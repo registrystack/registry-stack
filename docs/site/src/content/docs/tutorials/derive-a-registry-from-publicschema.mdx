@@ -170,7 +170,7 @@ bregctl dev start household-registry
 
 ```text test-excerpt
 bregctl dev succeeded.
-  status                  ready
+  status          ready
 ```
 
 The first start downloads PostgreSQL and the local token issuer, so allow a few minutes. Before it
@@ -328,7 +328,7 @@ bregctl dev stop household-registry --remove
 
 ```text test-excerpt
 bregctl dev succeeded.
-  status                  stopped
+  status          stopped
 ```
 
 {/* Evidence: crates/registry-bregctl/src/dev/mod.rs, stop() and reclaim(). */}
