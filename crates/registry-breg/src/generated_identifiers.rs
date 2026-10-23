@@ -64,7 +64,7 @@ fn unavailable(operation: &'static str, error: &tokio_postgres::Error) -> Genera
         target: "registry_breg::generated_identifiers",
         operation,
         failure = %PostgresFailure::from_error(error),
-        "generated identifier state is unavailable"
+        "generated identifier database operation failed"
     );
     classify_database_error(error.code())
 }
