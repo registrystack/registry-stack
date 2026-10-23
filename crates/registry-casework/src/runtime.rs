@@ -823,7 +823,7 @@ mod tests {
             let server = tokio::spawn(async move {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let mut buffer = [0; 8192];
-                stream.read(&mut buffer).await.unwrap();
+                assert!(stream.read(&mut buffer).await.unwrap() > 0);
                 stream
                     .write_all(
                         format!("HTTP/1.1 {status} Accepted\r\nContent-Length: 99999999\r\n\r\n")
