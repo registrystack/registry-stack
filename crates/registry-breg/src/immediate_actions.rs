@@ -855,21 +855,22 @@ fn compile_handler(
         }
         let declared_refusals = refusals.keys().map(String::as_str).collect();
         let declared_effects = writes.iter().map(|slot| slot.id.as_str()).collect();
-        match crate::rhai_literal_lint::inspect(script, &function.entrypoint, &declared_refusals, &declared_effects) {
-            Ok(faults) => {
-                for fault in faults {
-                    let location = match (fault.position.line(), fault.position.position()) {
-                        (Some(line), Some(column)) => format!(" at line {line}, column {column}"),
-                        (Some(line), _) => format!(" at line {line}"),
-                        _ => String::new(),
-                    };
-                    errors.push(Diagnostic::error(fault.code, format!("{function_path}.source"), &format!("{}{location}", fault.message)));
-                }
-            }
-            Err(()) => errors.push(Diagnostic::error(
-                "breg.action.plan-literal-lint-unavailable", format!("{function_path}.source"),
-                "Direct literal inspection could not compile the validated source; use project action-test --expect for its executable branches.",
-            )),
+        for fault in crate::rhai_literal_lint::inspect(
+            script,
+            &function.entrypoint,
+            &declared_refusals,
+            &declared_effects,
+        ) {
+            let location = match (fault.position.line(), fault.position.position()) {
+                (Some(line), Some(column)) => format!(" at line {line}, column {column}"),
+                (Some(line), _) => format!(" at line {line}"),
+                _ => String::new(),
+            };
+            errors.push(Diagnostic::error(
+                fault.code,
+                format!("{function_path}.source"),
+                &format!("{}{location}", fault.message),
+            ));
         }
     }
     let conditioned = target_uses

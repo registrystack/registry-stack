@@ -2255,7 +2255,7 @@ BREG-SEC-166.
   write (record mutations, batches, change-request routes, statistical
   releases, and immediate actions) spends caller keys in the one `mutation`
   scope, so a caller reusing a key on a different write route finds the
-  spent row and is refused `409 idempotency.conflict` by its binding.
+  spent row and is refused `409 idempotency.key-reused` by its binding.
   Ingestion chunk keys use the `ingestion_chunk` scope. A hook proposal
   application is spent by the delivery itself, in the `hook_proposal` scope:
   issuer `urn:registry-breg:hook-delivery`, subject the compiled delivery id,
@@ -2273,7 +2273,7 @@ BREG-SEC-166.
   selected profile, purpose, row boundaries, submitter targets), and the
   task grant, action contract fingerprint, target authority, or handler
   answer digest where they apply. A byte-identical body under a different
-  package, profile, or claims is therefore `409 idempotency.conflict`.
+  package, profile, or claims is therefore `409 idempotency.key-reused`.
 - **Audit key.** Nothing that finds or binds a spent row reads
   `audit.hashKeyRef`. The keyed `request_reference` and principal reference
   stay in revisions and the audit journal as pseudonyms; rotating the key
@@ -2283,7 +2283,7 @@ BREG-SEC-166.
   at most 365, fixed on the row when it commits. Reading a spent key checks
   the binding first, erasure second, and the horizon third, so a changed
   request is told it conflicts, any retry of a key whose held response an
-  erasure removed is `409 idempotency.conflict` on either side of the
+  erasure removed is `409 idempotency.key-reused` on either side of the
   horizon, and any other exact retry past the horizon is
   `410 idempotency.expired`. In every case nothing executes, whether or not
   the held bytes were dropped.
@@ -4234,8 +4234,11 @@ and its value, including the handler ABI's distinction between absent and null.
 The pending manual application predicate uses only the current retained local
 submission and Review result. A required approval must be unexpired and its
 submission must not be withdrawn. Collection authorization, ownership, target
-boundaries, and per-document disclosure still gate each projection. Private
-candidate scans share the request deadline; a successful continuation names
+boundaries, and per-document disclosure still gate each projection. For
+caller-owned collections, the candidate query enforces the principal's owner
+reference before the scan bound and any per-candidate read, so another holder's
+rows cannot consume the request deadline or become cursors. Private candidate
+scans share the request deadline; a successful continuation names
 only an authorized Proposal, and timeout returns failure without a partial
 page. Listing makes no per-Proposal Review request.
 
@@ -4249,5 +4252,8 @@ The PostgreSQL regressions in `postgres_proposal.rs`,
 `postgres_immediate_action_requirements.rs`, and `postgres_action_handlers.rs`
 exercise those boundaries, including withdrawn results, hidden candidate
 prefixes, deadline cancellation, exact input grants, and value-free Invoke and
-Submit diagnostics. Client boundary and language-binding regressions retain
-typed, bounded extensions without rendering their values in errors.
+Submit diagnostics;
+`holder_list_never_reads_other_holders_proposals_or_exposes_them_as_cursors`
+locks other holders' rows while the caller pages through only their own. Client
+boundary and language-binding regressions retain typed, bounded extensions
+without rendering their values in errors.

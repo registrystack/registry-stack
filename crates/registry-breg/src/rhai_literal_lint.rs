@@ -17,13 +17,18 @@ pub(crate) fn inspect(
     entrypoint: &str,
     refusals: &BTreeSet<&str>,
     effects: &BTreeSet<&str>,
-) -> Result<Vec<LiteralFault>, ()> {
+) -> Vec<LiteralFault> {
     // Keep authored computed expressions computed. Optimizing first would
     // turn constant propagation into an accidental, broader lint contract.
-    let mut ast = crate::rhai_planner::engine(None)
+    // The caller inspects only a source the same engine already compiled and
+    // reports compile failures itself; an uncompilable source has no direct
+    // literal to inspect.
+    let Ok(mut ast) = crate::rhai_planner::engine(None)
         .set_optimization_level(rhai::OptimizationLevel::None)
         .compile(script)
-        .map_err(|_| ())?;
+    else {
+        return Vec::new();
+    };
     ast.clear_statements();
     ast.retain_functions(|_, _, name, arity| name == entrypoint && arity == 1);
     let mut returned = Vec::new();
@@ -69,7 +74,7 @@ pub(crate) fn inspect(
             }
         }
     }
-    Ok(faults)
+    faults
 }
 
 fn member(value: &Expr, key: &str) -> Option<Expr> {

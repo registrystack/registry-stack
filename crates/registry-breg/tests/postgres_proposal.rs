@@ -669,6 +669,90 @@ async fn proposal_list_scans_hidden_rows_without_exposing_their_continuation() {
 }
 
 #[tokio::test]
+async fn holder_list_never_reads_other_holders_proposals_or_exposes_them_as_cursors() {
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        registry(false),
+        claims("author", "zone-a"),
+        |mutations| mutations.with_action_timeout_for_test(std::time::Duration::from_secs(2)),
+    )
+    .await;
+    let other = fixture.client_for(claims("other", "zone-a")).await;
+    // More concealed rows than several raw candidate batches, all readable
+    // under the row boundary, so only ownership conceals them.
+    let mut concealed = BTreeSet::new();
+    for index in 0..30 {
+        let draft = start_action_as(
+            &other.client,
+            "correct-name",
+            "Other",
+            &format!("other-holder-{index}"),
+        )
+        .await;
+        concealed.insert(draft.id().to_owned());
+    }
+    let visible = start(&fixture, "Mine", "holder-visible").await;
+    // A row lock on every other holder's Proposal stalls any per-candidate
+    // read of one until the request deadline, so a holder list that walks
+    // them answers 503 instead of a page.
+    let ids = concealed
+        .iter()
+        .map(|id| uuid::Uuid::parse_str(id).unwrap())
+        .collect::<Vec<_>>();
+    let (mut blocker, task) = fixture.database.connect_migration().await;
+    let transaction = blocker.transaction().await.unwrap();
+    let locked = transaction
+        .query(
+            "SELECT proposal_id FROM registry_internal.registry_proposal_state WHERE proposal_id=ANY($1) FOR UPDATE",
+            &[&ids],
+        )
+        .await
+        .unwrap();
+    assert_eq!(locked.len(), concealed.len());
+    let metadata = fixture
+        .http
+        .client
+        .registry_contract(Some("clerk"))
+        .await
+        .unwrap()
+        .value;
+    let collection = metadata.select_proposals("clerk").unwrap();
+    let mut query = BRegProposalQuery {
+        limit: Some(1),
+        ..Default::default()
+    };
+    let mut seen = Vec::new();
+    let mut pages = 0;
+    loop {
+        pages += 1;
+        assert!(pages <= 4, "the holder's list must make progress");
+        let page = fixture
+            .http
+            .client
+            .list_proposals(&collection, &query)
+            .await
+            .expect("other holders' Proposals never time a holder's list out")
+            .value;
+        seen.extend(page.items.iter().map(|item| item.id().to_owned()));
+        if let Some(cursor) = &page.next_cursor {
+            assert!(
+                !concealed.contains(cursor),
+                "a concealed Proposal id never becomes a cursor"
+            );
+        }
+        query.cursor = page.next_cursor;
+        if query.cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(seen, [visible.id().to_owned()]);
+    transaction.rollback().await.unwrap();
+    drop(blocker);
+    task.abort();
+    drop(other);
+    fixture.finish().await;
+}
+
+#[tokio::test]
 async fn proposal_list_deadline_refuses_a_partial_page_and_cancels_the_wait() {
     let fixture = client_http::ClientFixture::start_with_mutations(
         registry(false),
@@ -1025,7 +1109,15 @@ async fn start_action(
     value: &str,
     key_name: &str,
 ) -> registry_breg_client::BRegProposal {
-    let client = &fixture.http.client;
+    start_action_as(&fixture.http.client, action_id, value, key_name).await
+}
+
+async fn start_action_as(
+    client: &registry_breg_client::BaseRegistryClient,
+    action_id: &str,
+    value: &str,
+    key_name: &str,
+) -> registry_breg_client::BRegProposal {
     let metadata = client.registry_contract(Some("clerk")).await.unwrap();
     let BRegDirectWrite::Create(create) = metadata
         .value

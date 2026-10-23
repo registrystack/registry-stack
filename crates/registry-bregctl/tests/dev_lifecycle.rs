@@ -207,29 +207,12 @@ fn poll_report(mut read: impl FnMut() -> Value, ready: impl Fn(&Value) -> bool) 
     }
 }
 
-fn assert_initial_apply_evidence(session: &Session, report: &Value) {
-    let evidence = PathBuf::from(
-        report["initialApplyEvidence"]
-            .as_str()
-            .expect("a first start reports its expected initial apply evidence"),
-    );
-    let evidence_directory = session.project.join(".breg/dev/evidence");
-    assert_eq!(
-        evidence.parent(),
-        Some(evidence_directory.as_path()),
-        "expected startup evidence is kept outside failure logs"
-    );
-    let summary: Value =
-        serde_json::from_slice(&fs::read(&evidence).expect("initial apply evidence is readable"))
-            .expect("initial apply evidence is JSON");
-    assert_eq!(summary["phase"], "initial-apply");
-    assert_eq!(summary["expected"], true);
-    let doctor = evidence
-        .parent()
-        .unwrap()
-        .join(summary["doctorReport"].as_str().expect("a doctor report"));
+fn assert_initial_apply_evidence(session: &Session) {
+    let doctor = session
+        .project
+        .join(".breg/dev/evidence/doctor-before-apply.json");
     let doctor: Value = serde_json::from_slice(
-        &fs::read(doctor).expect("the pre-apply doctor report is preserved"),
+        &fs::read(doctor).expect("the pre-apply doctor report is preserved outside failure logs"),
     )
     .expect("the pre-apply doctor report is JSON");
     assert_eq!(doctor["ok"], false, "the expected pre-apply check refused");
@@ -292,8 +275,8 @@ fn installed_dev_allocates_ports_for_parallel_fresh_projects_and_retains_them() 
         first_report["tokenEndpoint"],
         second_report["tokenEndpoint"]
     );
-    assert_initial_apply_evidence(&first, &first_report);
-    assert_initial_apply_evidence(&second, &second_report);
+    assert_initial_apply_evidence(&first);
+    assert_initial_apply_evidence(&second);
 
     first.stop();
     second.stop();

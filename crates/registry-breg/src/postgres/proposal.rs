@@ -12,8 +12,14 @@ use crate::proposal_store;
 use std::collections::BTreeMap;
 
 // Keep status selection in the single candidate query before its scan bound.
+// Caller ownership is exact here, so another holder's Proposal never reaches a
+// per-candidate read; `$4` pairs each `$1` Action with the caller's owner
+// reference, or NULL when that authority is not ownership-scoped.
 const PROPOSAL_LIST_CANDIDATES: &str = "SELECT p.proposal_id,p.action_id FROM registry_internal.registry_proposal_state p
                 WHERE p.action_id=ANY($1) AND ($2::uuid IS NULL OR p.proposal_id>$2)
+                  AND EXISTS (SELECT 1 FROM unnest($1::text[],$4::text[]) AS a(action_id,owner_reference)
+                    WHERE a.action_id=p.action_id
+                      AND (a.owner_reference IS NULL OR a.owner_reference=p.owner_reference))
                   AND (NOT $3 OR (p.state='submitted' AND p.blocked_reason IS NULL AND EXISTS (
                     SELECT 1 FROM registry_internal.registry_proposal_submissions s
                     LEFT JOIN registry_internal.registry_proposal_review_submissions review
@@ -42,7 +48,12 @@ impl PostgresRecordMutationService {
         let row = client
             .query_one(
                 &format!("EXPLAIN (ANALYZE, FORMAT JSON) {PROPOSAL_LIST_CANDIDATES}"),
-                &[&actions, &Option::<Uuid>::None, &true],
+                &[
+                    &actions,
+                    &Option::<Uuid>::None,
+                    &true,
+                    &vec![None::<String>; actions.len()],
+                ],
             )
             .await
             .map_err(|_| MutationError::Unavailable)?;
@@ -1007,6 +1018,15 @@ impl PostgresRecordMutationService {
             .iter()
             .map(|authority| authority.common.action_id().to_owned())
             .collect::<Vec<_>>();
+        let owner_references = authorities
+            .iter()
+            .map(|authority| {
+                (authority.ownership == Some(crate::model::ProposalOwnership::Caller)).then(|| {
+                    self.coordinator
+                        .proposal_owner_reference(authority.common.principal())
+                })
+            })
+            .collect::<Vec<_>>();
         let mut after = query.after;
         let mut items = Vec::new();
         let mut has_more = false;
@@ -1022,7 +1042,12 @@ impl PostgresRecordMutationService {
             let candidates = client
                 .query(
                     PROPOSAL_LIST_CANDIDATES,
-                    &[&action_ids, &after, &query.pending_manual_application],
+                    &[
+                        &action_ids,
+                        &after,
+                        &query.pending_manual_application,
+                        &owner_references,
+                    ],
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;

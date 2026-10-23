@@ -21,9 +21,11 @@
   startup and unrelated work while its dependent Submit remains unavailable.
 - Select free owned development ports when preferred defaults are occupied,
   retain the assignment across restarts, and preserve borrowed issuer endpoints.
-  Keep the raw pre-apply doctor report as initial-apply evidence.
-- Diagnose incompatible field options, fixture refusal pairs, and directly
-  returned Rhai literal refusal codes and write-slot IDs before execution.
+  Keep the raw pre-apply doctor report as private evidence outside failure logs.
+- BREAKING: diagnose incompatible field options, fixture refusal pairs, and
+  directly returned Rhai literal refusal codes and write-slot IDs before
+  execution. A package whose handler directly returns an undeclared refusal code
+  or write-slot ID now fails `check`, even when that return is unreachable.
   Computed and helper-returned plans retain runtime validation. Executable
   examples cover success, refusal, and exact expected handler failure, including
   complete synthetic Evidence transcripts.
