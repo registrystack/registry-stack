@@ -16,8 +16,8 @@
 //! ```
 //!
 //! The script supplies only the candidate Casework native artifact to each
-//! exact unified Casework facade. Inert sibling namespace stubs stand in for
-//! the other five product bindings, whose package assembly has a separate
+//! exact unified Casework facade. Inert sibling product and authentication
+//! namespace stubs stand in for bindings whose package assembly has a separate
 //! release gate. This is real HTTP/native-facade proof, not installed tarball
 //! or wheel proof.
 
@@ -225,6 +225,7 @@ impl NativeClients {
         )
         .expect("the exact unified Python facade is copied");
         for sibling in [
+            "auth",
             "breg",
             "coordinator",
             "discovery",
