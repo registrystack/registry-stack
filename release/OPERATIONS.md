@@ -25,8 +25,9 @@ the unified SDK retain their existing lifecycle. `release/units.yaml` owns the
 unit and artifact map. Other units remain on the Stack train during the pilot.
 
 Prepare both Discovery package versions, their workspace dependency/lock entries,
-and `release/notes/discovery/vX.Y.Z.md`. Do not bump the Stack or SDK merely to
-publish Discovery. Run:
+and `release/notes/discovery/vX.Y.Z.md`, which must start with
+`# Registry Discovery vX.Y.Z` and name the release ID. Do not bump the Stack or
+SDK merely to publish Discovery. Run:
 
 ```sh
 release/scripts/registry-release prepare --unit discovery --version X.Y.Z --release-id discovery-X.Y.Z
